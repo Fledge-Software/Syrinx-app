@@ -124,6 +124,10 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D9 | Which engine does "Search the web" use, and does the palette fetch suggestions as you type? | Google, with no live suggestions: while typing, the palette ranks only local tabs, bookmarks and history, so keystrokes stay on the machine and results never wait on the network. Suggestions may become a setting later | Google with live suggestions: sends every keystroke to Google and adds network latency to the palette. Another engine: the owner lives in Google | 2026-10-09 |
+| D8 | What pins the sidebar? | Ctrl Alt S, as Zen does; Ctrl S stays free to save in Forge and Notes. The owner approved changing this design decision; `design/README.md` updated | Ctrl S, as Arc does: collides with save in Forge and Notes (`docs/research/02-browser-v1-scope.md`, owner question 3) | 2026-10-09 |
+| D7 | If a live overlay window over the page fails, is a frozen snapshot of the page under the palette acceptable? | No. The palette and the sidebar peek must stay live over the page. The spike tries a borderless GPUI popup window with Acrylic first; if it fails, the next step is WebView2 visual hosting, not a freeze frame | Freeze frame (`docs/research/01-shell-and-engine.md`, recommendation): robust, but a playing video's picture would pause under the palette while its sound continues | 2026-10-09 |
+| D6 | What must Phase 0 prove (go/no-go)? | Hard musts: Google sign-in, YouTube (1080p and fullscreen), Disney+ and Hulu play. Also: at least 13 of the other daily sites pass; the palette and the sidebar peek draw live over a page with correct focus; Ctrl T, W, L and K work while a page has focus; memory with 10 tabs within 10% of Edge's; idle CPU near zero; the GPUI chrome paints before WebView2 finishes starting | Stricter (match Edge, every site): sets a bar no embedded engine is known to meet. Looser (only sign-in and overlays gate): lets a slow or broken base through to every later wave | 2026-10-09 |
 | D5 | How much is v1? | Four plans, each plugin's v1 deliberately thin: (1) engine, browser core and palette; (2) plugin runtime and Fledge on a stand-in client; (3) Notes; (4) Forge (editor, project tree, terminal, basic git, installed language servers; PyCharm is the direction, not the v1 bar). This Super-Pass builds plan 1, which ends at a browser the owner can use daily | Four plans at the spec's full depth: Forge alone would hold v1 back for a very long time (Zed's debugger took 8 months; `docs/research/04-forge-and-notes.md`). Plan 1 only, plugins in v2: drops the plugins that are Atlas's reason to exist | 2026-10-09 |
 | D4 | How is Atlas's own interface (the chrome) drawn? | Rust with GPUI, Zed's GPU-drawn toolkit, pinned to a snapshot. Phase 0 measures it against a Tauri 2 + Svelte control build of the same sidebar and palette before the choice is final | Tauri 2 + Svelte (the spec's plan): the chrome can't paint until WebView2 starts, it adds a renderer and a JS heap, and puts TypeScript in the UI layer, against the owner's wish for Rust (`docs/research/06-engine-and-ui-performance.md`) | 2026-10-09 |
 | D3 | Which engine renders pages in v1? | The system WebView2 (Edge's Chromium, part of Windows), driven from Rust; everything Atlas draws and decides stays Rust. Servo is added later as a per-tab engine once it handles the owner's sites, re-checked about every six months | Servo only: fails Google sign-in, YouTube, Drive and GitHub, has no DRM, downloads, PDF or printing, and runs unsandboxed by default (`docs/research/06-engine-and-ui-performance.md`, "Short answer"). Servo and WebView2 per tab from v1: two engines' plumbing for one developer. CEF: still embedded Chromium for Google, no Widevine without a Google licence, hundreds of MB and a release every 4–8 weeks. A Firefox (Gecko) fork like Zen: no desktop embedding API, so a full fork rebased every Firefox release; the owner dropped it | 2026-10-09 |
@@ -160,11 +164,9 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
 
 - **Platforms and engine:** what to do if
   Google blocks sign-in in WebView2 (research 07 running); whether Disney+ and
-  Hulu play in WebView2 (research 07 running); spike thresholds and the frozen
-  page under the palette; a patched fork of wry or tao.
-- **Browser behaviour:** pinning shortcut (Ctrl S or Ctrl Alt S); default
-  search engine and live suggestions; WebView2's own password saving; the
-  Passwords button; what the CSV import holds and from which tool.
+  Hulu play in WebView2 (research 07 running); a patched fork of wry or tao.
+- **Browser behaviour:** WebView2's own password saving; the Passwords
+  button; what the CSV import holds and from which tool.
 - **Data and search:** third-party plugins ever; indexing page text; Fledge
   data copied or searched live; synced data folder; one store or two; snapshot
   retention.
@@ -189,6 +191,10 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Round 2: the spike's go/no-go bar (D6), overlays must stay
+  live with no freeze-frame fallback (D7), the sidebar pins with Ctrl Alt S and
+  `design/README.md` now says so (D8), and "Search the web" uses Google
+  with no live suggestions (D9).
 - **2026-10-09** — Chrome drawn in Rust with GPUI, to be confirmed by the
   spike's numbers against a Tauri + Svelte control (D4). v1 is four plans
   with thin plugin v1s; this Super-Pass builds plan 1 (D5).

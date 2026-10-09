@@ -31,7 +31,7 @@ pass and can be reversed.
   rows read "New tab".
 - **A hidden sidebar peeks over the page.** Hovering the left edge slides it
   in on top of whatever is showing, on every kind of tab, without resizing
-  anything under it. Pinning it with Ctrl S is the only thing that narrows the
+  anything under it. Pinning it with Ctrl Alt S is the only thing that narrows the
   page. Over a web page the sidebar sits above a separate native web view, so
   it needs the same layering fix as the command palette in Phase 0.
 - **A plugin is a tab that never leaves the Plugins list.** It can be opened
@@ -66,7 +66,7 @@ is copied.
 - **A Forge tab hides the Atlas sidebar by default.** An IDE needs the width:
   with the sidebar hidden the editors get about 875px, enough for two groups
   side by side. Hovering the left edge peeks the sidebar over the editor, as
-  everywhere in Atlas; pinning it with Ctrl S narrows the editor and folds the
+  everywhere in Atlas; pinning it with Ctrl Alt S narrows the editor and folds the
   context rail into a strip of icons.
 - **Back and forward move between code locations** in a Forge tab, as Alt Left
   and Alt Right do in PyCharm. Reload is hidden, because it means nothing there.
