@@ -106,9 +106,16 @@ button,input{font:inherit;color:inherit}
 </div>
 </main>
 </div>
+
+<!-- hover peek: pointing at the left edge slides the hidden sidebar in over the page, without resizing it -->
+<sc-if value="{{peek}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; left: 0; top: 0; z-index: 5; width: 264px; height: 900px; border-radius: 0 12px 12px 0; overflow: hidden; border-right: 1px solid {{k.panelLine}}; box-shadow: {{peekShadow}}">
+<dc-import name="Sidebar" screen="web" theme="{{theme}}" accent="{{accent}}" hint-size="264px,900px" style="width: 264px; height: 900px"></dc-import>
+</div>
+</sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"graphite","options":["graphite","haze","glass","tint","paper"]},"accent":{"editor":"color","default":"#FF8A65","options":["#FF8A65","#6EA8FF","#6FD3A8","#E8C16A"]},"collapsed":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"graphite","options":["graphite","haze","glass","tint","paper"]},"accent":{"editor":"color","default":"#FF8A65","options":["#FF8A65","#6EA8FF","#6FD3A8","#E8C16A"]},"collapsed":{"editor":"boolean","default":false},"peek":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
 class Component extends DCLogic {
   // Base palette tokens. The same method sits in Sidebar, Main, Palette and
   // Browsing (a .dc.html file cannot import code); change all four together.
@@ -244,11 +251,16 @@ class Component extends DCLogic {
   renderVals() {
     const acc = this.props.accent ?? '#FF8A65';
     const theme = this.props.theme ?? 'graphite';
-    const collapsed = !!this.props.collapsed;
+    // peek: the sidebar is hidden and the pointer is at the left edge, so it
+    // floats over the page; this works the same way on every kind of tab.
+    const peek = !!this.props.peek;
+    const collapsed = !!this.props.collapsed || peek;
     return {
       k: this.tokens(theme, acc),
       theme: theme,
       accent: acc,
+      peek: peek,
+      peekShadow: theme === 'paper' ? '16px 0 40px rgba(20,22,30,0.18)' : '16px 0 48px rgba(0,0,0,0.5)',
       collapsed: collapsed,
       expanded: !collapsed,
       yes: true,
