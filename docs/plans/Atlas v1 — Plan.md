@@ -124,6 +124,8 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D5 | How much is v1? | Four plans, each plugin's v1 deliberately thin: (1) engine, browser core and palette; (2) plugin runtime and Fledge on a stand-in client; (3) Notes; (4) Forge (editor, project tree, terminal, basic git, installed language servers; PyCharm is the direction, not the v1 bar). This Super-Pass builds plan 1, which ends at a browser the owner can use daily | Four plans at the spec's full depth: Forge alone would hold v1 back for a very long time (Zed's debugger took 8 months; `docs/research/04-forge-and-notes.md`). Plan 1 only, plugins in v2: drops the plugins that are Atlas's reason to exist | 2026-10-09 |
+| D4 | How is Atlas's own interface (the chrome) drawn? | Rust with GPUI, Zed's GPU-drawn toolkit, pinned to a snapshot. Phase 0 measures it against a Tauri 2 + Svelte control build of the same sidebar and palette before the choice is final | Tauri 2 + Svelte (the spec's plan): the chrome can't paint until WebView2 starts, it adds a renderer and a JS heap, and puts TypeScript in the UI layer, against the owner's wish for Rust (`docs/research/06-engine-and-ui-performance.md`) | 2026-10-09 |
 | D3 | Which engine renders pages in v1? | The system WebView2 (Edge's Chromium, part of Windows), driven from Rust; everything Atlas draws and decides stays Rust. Servo is added later as a per-tab engine once it handles the owner's sites, re-checked about every six months | Servo only: fails Google sign-in, YouTube, Drive and GitHub, has no DRM, downloads, PDF or printing, and runs unsandboxed by default (`docs/research/06-engine-and-ui-performance.md`, "Short answer"). Servo and WebView2 per tab from v1: two engines' plumbing for one developer. CEF: still embedded Chromium for Google, no Widevine without a Google licence, hundreds of MB and a release every 4–8 weeks. A Firefox (Gecko) fork like Zen: no desktop embedding API, so a full fork rebased every Firefox release; the owner dropped it | 2026-10-09 |
 | D2 | Which platforms does v1 run on? | Windows 11 only. macOS is neither built nor tested in v1 (the owner has no Mac and doesn't want Mac testing). ⚠️ Linux is assumed out too: the owner didn't name it, and wry's Linux child web views are X11-only (`docs/research/06-engine-and-ui-performance.md`, "Defer") | macOS in v1: no machine to test on, and it needs far more built (find, downloads, certificate warnings, mute; `docs/research/02-browser-v1-scope.md`). Linux in v1: it would make CEF the plan there | 2026-10-09 |
 | D1 | May the plan be committed while it is being planned? (`CLAUDE.md` says commits only when the owner asks) | Yes: commit as we go, to the local branch `claude/plan-atlas-v1`; no pushes, since there is no remote | Leaving the plan uncommitted until the end: a compaction or a closed session would lose the only record of the decisions | 2026-10-09 |
@@ -156,8 +158,7 @@ To be written (step 5).
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
 
-- **Platforms and engine:** how the chrome is drawn (GPUI or Tauri + Svelte);
-  what to do if
+- **Platforms and engine:** what to do if
   Google blocks sign-in in WebView2 (research 07 running); whether Disney+ and
   Hulu play in WebView2 (research 07 running); spike thresholds and the frozen
   page under the palette; a patched fork of wry or tao.
@@ -188,6 +189,9 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Chrome drawn in Rust with GPUI, to be confirmed by the
+  spike's numbers against a Tauri + Svelte control (D4). v1 is four plans
+  with thin plugin v1s; this Super-Pass builds plan 1 (D5).
 - **2026-10-09** — Engine settled (D3). The owner first asked about a Firefox
   fork like Zen, then about a Rust engine with no reliance on another app.
   Servo was laid out against the owner's needs (Google daily, YouTube,
