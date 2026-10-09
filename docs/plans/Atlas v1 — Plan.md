@@ -155,7 +155,9 @@ To be written (step 5).
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
 
-- **Platforms and engine:** engine and UI (A, B or other); what to do if
+- **Platforms and engine:** the owner asked whether Atlas could be built on
+  Firefox (Gecko) the way Zen is, under a Mozilla-compatible licence
+  (research 08 running); engine and UI (A, B or other); what to do if
   Google blocks sign-in in WebView2 (research 07 running); whether Disney+ and
   Hulu play in WebView2 (research 07 running); spike thresholds and the frozen
   page under the palette; a patched fork of wry or tao.
