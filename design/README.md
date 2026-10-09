@@ -10,11 +10,14 @@ original two-board mockup the spec points at.
 
 - **Home, command palette and customize:** the new-tab page, the palette open
   over it, and the Customize panel where the palette and accent are chosen.
-- **Browsing:** a web page in the page card, with the sidebar open and
-  collapsed. With the sidebar hidden, back, forward, reload and the address
-  move into the title bar.
+- **Browsing:** a web page in the page card, with the sidebar open, hidden,
+  and peeking in from the left edge. With the sidebar hidden, back, forward,
+  reload and the address move into the title bar.
 - **Base palettes:** the home page and a browsing view in each of the five base
   palettes, side by side. Every board also has a `theme` tweak.
+- **Forge, the code plugin:** editing (project tree, split editors, a
+  completion from the language server, terminal, context rail), commit, diff
+  and log, and the editor with the Atlas sidebar open.
 - **Sidebar:** one shared component; the other boards import it.
 
 ## Decisions made after the spec
@@ -26,6 +29,17 @@ pass and can be reversed.
 - **No Extensions button.** Tauri's OS web views cannot run Chrome extensions.
 - **New tab is a `+` on the Open tabs header (Ctrl T)**, not a row, so no two
   rows read "New tab".
+- **A hidden sidebar peeks over the page.** Hovering the left edge slides it
+  in on top of whatever is showing, on every kind of tab, without resizing
+  anything under it. Pinning it with Ctrl S is the only thing that narrows the
+  page. Over a web page the sidebar sits above a separate native web view, so
+  it needs the same layering fix as the command palette in Phase 0.
+- **A plugin is a tab that never leaves the Plugins list.** It can be opened
+  and closed like a tab. Open, its row shows what it has open after its name
+  ("Forge · fledge-core"), and the active one is highlighted with a close
+  button. Closed, it stays in the list, dimmed, with no badge, and opens again
+  on a click. Its views therefore don't also appear under Open tabs, which
+  holds web pages, bookmarks and integrated apps.
 - **A site keeps one tile colour everywhere**, and every unread badge uses the
   accent.
 - **One colour rule:** the accent marks selection and what Enter will do; plugin
@@ -40,6 +54,36 @@ pass and can be reversed.
 - **Open question:** the Passwords button has nothing behind it in v1, because
   password-manager support is out of scope. The recommendation is to drop it
   until it does.
+
+## Forge
+
+Forge takes PyCharm's workflow, not its look: tool windows docked around the
+editor, split editor groups, language-server completions and inline type
+hints, git commit, diff and log, a terminal, and a run control. Everything
+is drawn in Atlas's own visual language; none of JetBrains' icons or styling
+is copied.
+
+- **A Forge tab hides the Atlas sidebar by default.** An IDE needs the width:
+  with the sidebar hidden the editors get about 875px, enough for two groups
+  side by side. Hovering the left edge peeks the sidebar over the editor, as
+  everywhere in Atlas; pinning it with Ctrl S narrows the editor and folds the
+  context rail into a strip of icons.
+- **Back and forward move between code locations** in a Forge tab, as Alt Left
+  and Alt Right do in PyCharm. Reload is hidden, because it means nothing there.
+- **Every tab has an address.** A Forge tab shows its project and file path
+  (`fledge-core/src/core/workspace.rs`) where a web tab shows its URL.
+- **The context rail is the shared index made visible.** For the open file it
+  shows its outline, the notes that mention it and the commits that touched it.
+- **The run control is an addition to the spec.** PyCharm's run configurations
+  are central to how it is used. To stay language-agnostic, Forge would read
+  its runnable tasks from the project (Cargo, npm scripts, pyproject, a
+  justfile) instead of keeping per-language settings.
+- **Git status uses a letter as well as a colour** (M, A, U), so it doesn't
+  rely on hue alone.
+- **Forge's surfaces are opaque in every palette.** Only the Atlas title bar
+  around the card picks up Haze or Glass.
+- **The highlighter on the canvas is a stand-in** for Tree-sitter, and the
+  completion for rust-analyzer over LSP; the code shown is illustrative.
 
 ## Base palettes
 

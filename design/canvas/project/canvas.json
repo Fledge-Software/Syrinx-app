@@ -11,6 +11,7 @@
     "Customize.dc.html": { "x": 3384, "y": 0, "w": 1440, "h": 900, "title": "Customize panel open" },
     "Browsing.dc.html": { "x": 344, "y": 1320, "w": 1440, "h": 900, "title": "Browsing a web page" },
     "BrowsingCollapsed.dc.html": { "x": 1864, "y": 1320, "w": 1440, "h": 900, "title": "Browsing, sidebar collapsed" },
+    "BrowsingPeek.dc.html": { "x": 3384, "y": 1320, "w": 1440, "h": 900, "title": "Browsing · sidebar peeking over the page" },
     "ThemeGraphiteHome.dc.html": { "x": 344, "y": 2640, "w": 1440, "h": 900, "title": "Graphite · home" },
     "ThemeHazeHome.dc.html": { "x": 1864, "y": 2640, "w": 1440, "h": 900, "title": "Haze · home" },
     "ThemeGlassHome.dc.html": { "x": 3384, "y": 2640, "w": 1440, "h": 900, "title": "Glass · home" },
@@ -20,17 +21,22 @@
     "ThemeHazeWeb.dc.html": { "x": 1864, "y": 3660, "w": 1440, "h": 900, "title": "Haze · browsing" },
     "ThemeGlassWeb.dc.html": { "x": 3384, "y": 3660, "w": 1440, "h": 900, "title": "Glass · browsing" },
     "ThemeTintWeb.dc.html": { "x": 4904, "y": 3660, "w": 1440, "h": 900, "title": "Tint · browsing" },
-    "ThemePaperWeb.dc.html": { "x": 6424, "y": 3660, "w": 1440, "h": 900, "title": "Paper · browsing" }
+    "ThemePaperWeb.dc.html": { "x": 6424, "y": 3660, "w": 1440, "h": 900, "title": "Paper · browsing" },
+    "Forge.dc.html": { "x": 344, "y": 4980, "w": 1440, "h": 900, "title": "Forge · editing" },
+    "ForgeGit.dc.html": { "x": 1864, "y": 4980, "w": 1440, "h": 900, "title": "Forge · commit, diff and log" },
+    "ForgeSidebarOpen.dc.html": { "x": 3384, "y": 4980, "w": 1440, "h": 900, "title": "Forge · sidebar peeking over the editor" }
   },
   "order": [
-    "Sidebar.dc.html", "Main.dc.html", "Palette.dc.html", "Customize.dc.html", "Browsing.dc.html", "BrowsingCollapsed.dc.html",
+    "Sidebar.dc.html", "Main.dc.html", "Palette.dc.html", "Customize.dc.html", "Browsing.dc.html", "BrowsingCollapsed.dc.html", "BrowsingPeek.dc.html",
     "ThemeGraphiteHome.dc.html", "ThemeHazeHome.dc.html", "ThemeGlassHome.dc.html", "ThemeTintHome.dc.html", "ThemePaperHome.dc.html",
-    "ThemeGraphiteWeb.dc.html", "ThemeHazeWeb.dc.html", "ThemeGlassWeb.dc.html", "ThemeTintWeb.dc.html", "ThemePaperWeb.dc.html"
+    "ThemeGraphiteWeb.dc.html", "ThemeHazeWeb.dc.html", "ThemeGlassWeb.dc.html", "ThemeTintWeb.dc.html", "ThemePaperWeb.dc.html",
+    "Forge.dc.html", "ForgeGit.dc.html", "ForgeSidebarOpen.dc.html"
   ],
   "notes": {
     "row1": { "x": 0, "y": -300, "text": "Home, command palette and customize", "kind": "title1", "maxW": 4824 },
-    "row2": { "x": 344, "y": 1020, "text": "Browsing", "kind": "title1", "maxW": 2960 },
-    "row3": { "x": 344, "y": 2340, "text": "Base palettes", "kind": "title1", "maxW": 7520 }
+    "row2": { "x": 344, "y": 1020, "text": "Browsing", "kind": "title1", "maxW": 4480 },
+    "row3": { "x": 344, "y": 2340, "text": "Base palettes", "kind": "title1", "maxW": 7520 },
+    "row4": { "x": 344, "y": 4680, "text": "Forge, the code plugin", "kind": "title1", "maxW": 4480 }
   },
   "designSystems": []
 }

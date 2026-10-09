@@ -43,6 +43,12 @@ button,input{font:inherit;color:inherit}
 <button aria-label="Copy link" title="Copy link (Ctrl Shift C)" style="width: 30px; height: 30px; flex-shrink: 0; border: 0; padding: 0; border-radius: 7px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"></path><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"></path></svg></button>
 </div>
 </sc-if>
+<sc-if value="{{isForge}}" hint-placeholder-val="{{ false }}">
+<button style="height: 38px; width: 100%; box-sizing: border-box; border: 0; border-radius: 10px; background: {{k.field}}; box-shadow: {{k.fieldShadow}}; display: flex; align-items: center; padding: 0 12px; gap: 9px; color: {{k.text}}; text-align: left; cursor: text">
+<span aria-hidden="true" style="width: 16px; height: 16px; flex-shrink: 0; border-radius: 4px; background: {{k.plug.forgeBg}}; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.forge}}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"></path></svg></span>
+<span style="min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">fledge-core<span style="color: {{k.text3}}">/src/core/workspace.rs</span></span>
+</button>
+</sc-if>
 
 <!-- pinned apps: a tile keeps the colour it has on the home page -->
 <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
@@ -60,19 +66,17 @@ button,input{font:inherit;color:inherit}
 <!-- plugins -->
 <div style="display: flex; flex-direction: column; gap: 2px">
 <h2 style="margin: 0; height: 22px; display: flex; align-items: center; padding: 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: {{k.text3}}">Plugins</h2>
-<button style="height: 34px; width: 100%; box-sizing: border-box; border: 0; border-radius: 9px; background: transparent; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: {{k.text2b}}; text-align: left; cursor: pointer">
-<span aria-hidden="true" style="width: 22px; height: 22px; border-radius: 7px; background: {{k.plug.forgeBg}}; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.forge}}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"></path></svg></span>
-<span style="flex-grow: 1">Forge</span>
+<!-- a plugin is a tab that never leaves this list: open, it shows what it has open; closed, it stays here, dimmed -->
+<sc-for list="{{plugins}}" as="pl" hint-placeholder-count="3">
+<div style="height: 34px; box-sizing: border-box; border-radius: 9px; background: {{pl.bg}}; box-shadow: {{pl.shadow}}; display: flex; align-items: center; padding: 0 4px 0 0">
+<button aria-label="{{pl.aria}}" aria-current="{{pl.current}}" style="flex-grow: 1; min-width: 0; height: 34px; border: 0; background: transparent; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: {{pl.color}}; font-weight: {{pl.weight}}; text-align: left; cursor: pointer">
+<span aria-hidden="true" style="width: 22px; height: 22px; flex-shrink: 0; border-radius: 7px; background: {{pl.iconBg}}; opacity: {{pl.opacity}}; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{pl.icon}}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="{{pl.d1}}"></path><path d="{{pl.d2}}"></path></svg></span>
+<span style="flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">{{pl.name}}<span style="color: {{pl.subColor}}; font-weight: 400">{{pl.sub}}</span></span>
+<sc-if value="{{pl.hasBadge}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="min-width: 18px; height: 18px; flex-shrink: 0; box-sizing: border-box; padding: 0 5px; border-radius: 9px; background: {{pl.accent}}; color: {{pl.badgeText}}; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center">{{pl.badge}}</span></sc-if>
 </button>
-<button style="height: 34px; width: 100%; box-sizing: border-box; border: 0; border-radius: 9px; background: transparent; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: {{k.text2b}}; text-align: left; cursor: pointer">
-<span aria-hidden="true" style="width: 22px; height: 22px; border-radius: 7px; background: {{k.plug.notesBg}}; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.notes}}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"></path><path d="M9 12h6M9 16h6"></path></svg></span>
-<span style="flex-grow: 1">Notes</span>
-</button>
-<button aria-label="Fledge, 2 new leads" style="height: 34px; width: 100%; box-sizing: border-box; border: 0; border-radius: 9px; background: transparent; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: {{k.text2b}}; text-align: left; cursor: pointer">
-<span aria-hidden="true" style="width: 22px; height: 22px; border-radius: 7px; background: {{k.plug.fledgeBg}}; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.fledge}}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-14 15-14 0 10-6 15-14 15M5 19c3-5 6-8 11-10"></path></svg></span>
-<span style="flex-grow: 1">Fledge</span>
-<span aria-hidden="true" style="min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 5px; border-radius: 9px; background: {{accent}}; color: {{k.badgeText}}; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center">2</span>
-</button>
+<sc-if value="{{pl.closable}}" hint-placeholder-val="{{ false }}"><button aria-label="{{pl.closeLabel}}" title="Close (it stays in this list)" style="width: 26px; height: 26px; flex-shrink: 0; border: 0; padding: 0; border-radius: 7px; background: transparent; color: {{pl.closeColor}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></sc-if>
+</div>
+</sc-for>
 <button style="height: 34px; width: 100%; box-sizing: border-box; border: 0; border-radius: 9px; background: transparent; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: {{k.text3}}; text-align: left; cursor: pointer">
 <span aria-hidden="true" style="width: 22px; height: 22px; box-sizing: border-box; border-radius: 7px; border: 1px dashed {{k.dash}}; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></span>
 <span style="flex-grow: 1">Add plugin</span>
@@ -98,16 +102,7 @@ button,input{font:inherit;color:inherit}
 </div>
 </sc-if>
 
-<button style="height: 34px; width: 100%; box-sizing: border-box; border: 0; border-radius: 9px; background: transparent; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: {{k.text2}}; text-align: left; cursor: pointer">
-<span aria-hidden="true" style="width: 18px; height: 18px; flex-shrink: 0; border-radius: 5px; background: {{k.plug.forgeBg}}; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.forge}}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"></path></svg></span>
-<span style="min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">workspace.rs<span style="color: {{k.text3}}"> · fledge-core</span></span>
-</button>
-<button style="height: 34px; width: 100%; box-sizing: border-box; border: 0; border-radius: 9px; background: transparent; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: {{k.text2}}; text-align: left; cursor: pointer">
-<span aria-hidden="true" style="width: 18px; height: 18px; flex-shrink: 0; border-radius: 5px; background: {{k.plug.notesBg}}; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.notes}}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"></path><path d="M9 12h6M9 16h6"></path></svg></span>
-<span style="min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">Panel design notes</span>
-</button>
-
-<sc-if value="{{isHome}}" hint-placeholder-val="{{ true }}">
+<sc-if value="{{notWeb}}" hint-placeholder-val="{{ true }}">
 <button style="height: 34px; width: 100%; box-sizing: border-box; border: 0; border-radius: 9px; background: transparent; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: {{k.text2}}; text-align: left; cursor: pointer">
 <span aria-hidden="true" style="width: 18px; height: 18px; flex-shrink: 0; border-radius: 5px; background: {{k.plug.neutralBg}}; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="{{k.iconDim}}" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"></path></svg></span>
 <span style="min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">Webview reference</span>
@@ -141,7 +136,7 @@ button,input{font:inherit;color:inherit}
 </div>
 </nav>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"graphite","options":["graphite","haze","glass","tint","paper"]},"screen":{"editor":"enum","default":"home","options":["home","web"]},"accent":{"editor":"color","default":"#FF8A65","options":["#FF8A65","#6EA8FF","#6FD3A8","#E8C16A"]},"embedded":{"editor":null,"default":false},"$preview":{"width":264,"height":900}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"graphite","options":["graphite","haze","glass","tint","paper"]},"screen":{"editor":"enum","default":"home","options":["home","web","forge"]},"accent":{"editor":"color","default":"#FF8A65","options":["#FF8A65","#6EA8FF","#6FD3A8","#E8C16A"]},"embedded":{"editor":null,"default":false},"$preview":{"width":264,"height":900}}'>
 class Component extends DCLogic {
   // Base palette tokens. The same method sits in Sidebar, Main, Palette and
   // Browsing (a .dc.html file cannot import code); change all four together.
@@ -277,7 +272,9 @@ class Component extends DCLogic {
   renderVals() {
     const acc = this.props.accent ?? '#FF8A65';
     const k = this.tokens(this.props.theme ?? 'graphite', acc);
-    const isWeb = (this.props.screen ?? 'home') === 'web';
+    const screen = this.props.screen ?? 'home';
+    const isWeb = screen === 'web';
+    const isForge = screen === 'forge';
     // Same palette index as the home page's Quick access, so a site keeps
     // one colour wherever it appears.
     const src = [
@@ -289,14 +286,39 @@ class Component extends DCLogic {
       hasBadge: !!s[3], badge: s[3] || '', accent: acc, badgeText: k.badgeText, ring: k.badgeRing,
       aria: s[3] ? s[0] + ', ' + s[3] + ' unread' : s[0]
     }));
+    // [name, what it has open, icon tile, icon stroke, icon paths]. On the Forge
+    // screen, Forge is the active tab and Fledge has been closed.
+    const pdef = [
+      ['Forge', ' · fledge-core', k.plug.forgeBg, k.plug.forge, 'M9 7l-5 5 5 5M15 7l5 5-5 5', ''],
+      ['Notes', ' · Panel design notes', k.plug.notesBg, k.plug.notes, 'M6 3h8l4 4v14H6z', 'M9 12h6M9 16h6'],
+      ['Fledge', ' · Leads', k.plug.fledgeBg, k.plug.fledge, 'M5 19c0-8 5-14 15-14 0 10-6 15-14 15M5 19c3-5 6-8 11-10', '']
+    ];
+    const plugins = pdef.map((d) => {
+      const active = isForge && d[0] === 'Forge';
+      const closed = isForge && d[0] === 'Fledge';
+      const badge = d[0] === 'Fledge' && !closed ? '2' : '';
+      return {
+        name: d[0], sub: closed ? '' : d[1], iconBg: d[2], icon: d[3], d1: d[4], d2: d[5],
+        bg: active ? k.rowOn : 'transparent', shadow: active ? k.rowOnShadow : 'none',
+        color: active ? k.strong : (closed ? k.text3 : k.text2b), weight: active ? '500' : '400',
+        subColor: k.text3, opacity: closed ? '0.45' : '1', current: active ? 'page' : false,
+        hasBadge: !!badge, badge: badge, accent: acc, badgeText: k.badgeText,
+        closable: active, closeColor: k.iconDim, closeLabel: 'Close ' + d[0],
+        aria: d[0] + (closed ? ', closed' : ', open') + (badge ? ', ' + badge + ' new leads' : '')
+      };
+    });
     return {
       k: k,
       accent: acc,
-      isHome: !isWeb,
+      plugins: plugins,
+      isHome: !isWeb && !isForge,
       isWeb: isWeb,
+      isForge: isForge,
+      notWeb: !isWeb,
+      notForge: !isForge,
       yes: true,
-      backDisabled: !isWeb,
-      backColor: isWeb ? k.text2 : k.disabled,
+      backDisabled: !isWeb && !isForge,
+      backColor: (isWeb || isForge) ? k.text2 : k.disabled,
       rootBg: this.props.embedded ? 'transparent' : k.ground,
       mailBg: k.tiles[2].bg,
       mailFg: k.tiles[2].fg,

@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Atlas Forge</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+button,input,textarea{font:inherit;color:inherit}
+</style>
+</helmet>
+<div style="position: relative; isolation: isolate; width: 1440px; height: 900px; box-sizing: border-box; display: flex; background: {{k.ground}}; color: {{k.text}}; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px; overflow: hidden">
+
+<sc-if value="{{k.material}}" hint-placeholder-val="{{ false }}">
+<div aria-hidden="true" style="position: absolute; left: 0; top: 0; width: 1440px; height: 900px; z-index: -1; background: {{k.materialBg}}; backdrop-filter: {{k.materialBlur}}"></div>
+</sc-if>
+<sc-if value="{{k.grain}}" hint-placeholder-val="{{ false }}">
+<svg aria-hidden="true" width="1440" height="900" style="position: absolute; left: 0; top: 0; z-index: -1; opacity: 0.09; pointer-events: none"><filter id="atlas-grain-forge"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"></feTurbulence><feColorMatrix type="saturate" values="0"></feColorMatrix></filter><rect width="1440" height="900" filter="url(#atlas-grain-forge)"></rect></svg>
+</sc-if>
+
+<sc-if value="{{sidebar}}" hint-placeholder-val="{{ false }}">
+<dc-import name="Sidebar" screen="forge" theme="{{theme}}" embedded="{{yes}}" accent="{{accent}}" hint-size="264px,900px" style="width: 264px; height: 900px"></dc-import>
+</sc-if>
+
+<div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column">
+
+<!-- Atlas title bar. With the sidebar hidden it carries navigation and the tab's address; in Forge, back and forward move between code locations. -->
+<div style="height: 36px; flex-shrink: 0; box-sizing: border-box; padding-left: 8px; display: flex; align-items: center; gap: 2px; color: {{k.icon}}">
+<sc-if value="{{noSidebar}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; align-items: center; gap: 2px">
+<button aria-label="Show sidebar" title="Show sidebar (Ctrl S)" style="width: 30px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M9 4v16"></path></svg></button>
+<button aria-label="Back to the previous location" title="Back (Alt Left)" style="width: 30px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: {{k.text2}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
+<button aria-label="Forward" disabled="{{yes}}" style="width: 30px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: {{k.disabled}}; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
+<button style="margin-left: 6px; width: 360px; height: 28px; box-sizing: border-box; border: 0; border-radius: 8px; background: {{k.field}}; box-shadow: {{k.fieldShadow}}; padding: 0 6px 0 8px; display: flex; align-items: center; gap: 8px; color: {{k.text}}; font-size: 12.5px; text-align: left; cursor: text">
+<span aria-hidden="true" style="width: 16px; height: 16px; flex-shrink: 0; border-radius: 4px; background: {{k.plug.forgeBg}}; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.forge}}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"></path></svg></span>
+<span style="flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">fledge-core<span style="color: {{k.text3}}">/src/core/workspace.rs</span></span>
+<span style="font-size: 11px; font-weight: 500; line-height: 16px; color: {{k.iconDim}}; border: 1px solid {{k.key}}; border-bottom-width: 2px; border-radius: 5px; padding: 0 5px">Ctrl K</span>
+</button>
+</div>
+</sc-if>
+<span style="flex-grow: 1"></span>
+<button aria-label="Downloads" title="Downloads (Ctrl J)" style="width: 32px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg></button>
+<button aria-label="Atlas menu" style="width: 32px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg></button>
+<span style="width: 8px"></span>
+<button aria-label="Minimize" style="width: 46px; height: 36px; border: 0; padding: 0; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 12h16"></path></svg></button>
+<button aria-label="Maximize" style="width: 46px; height: 36px; border: 0; padding: 0; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1"></rect></svg></button>
+<button aria-label="Close window" style="width: 46px; height: 36px; border: 0; padding: 0; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"></path></svg></button>
+</div>
+
+<!-- page card: the Forge tab. Every surface inside is opaque, whatever the palette. -->
+<main aria-label="Forge, fledge-core" style="flex-grow: 1; min-height: 0; margin: {{cardMargin}}; box-sizing: border-box; border-radius: 12px; background: {{f.editor}}; border: 1px solid {{k.cardLine}}; box-shadow: {{k.webShadow}}; overflow: hidden; display: flex; flex-direction: column">
+
+<!-- Forge toolbar: project, branch, run -->
+<div style="height: 40px; flex-shrink: 0; box-sizing: border-box; padding: 0 8px; display: flex; align-items: center; gap: 4px; background: {{f.panel}}; border-bottom: 1px solid {{k.line}}">
+<button style="height: 28px; padding: 0 8px 0 6px; border: 0; border-radius: 7px; background: transparent; display: flex; align-items: center; gap: 8px; color: {{k.text}}; font-weight: 600; cursor: pointer">
+<span aria-hidden="true" style="width: 20px; height: 20px; border-radius: 6px; background: {{k.plug.forgeBg}}; display: flex; align-items: center; justify-content: center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.forge}}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"></path></svg></span>
+fledge-core
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="{{k.text3}}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+</button>
+<button style="height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; display: flex; align-items: center; gap: 7px; color: {{k.text2}}; cursor: pointer">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="6" r="2.2"></circle><circle cx="7" cy="18" r="2.2"></circle><circle cx="17" cy="8" r="2.2"></circle><path d="M7 8.2v7.6M17 10.2c0 3.5-4 4-9 6"></path></svg>
+main
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="{{k.text3}}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+</button>
+<span style="flex-grow: 1"></span>
+<button aria-label="Run configuration: cargo test" style="height: 28px; padding: 0 8px 0 10px; border: 1px solid {{k.line}}; border-radius: 7px; background: {{f.editor}}; display: flex; align-items: center; gap: 8px; color: {{k.text2}}; font-size: 12.5px; cursor: pointer">
+<span style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px">cargo test</span>
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="{{k.text3}}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+</button>
+<button aria-label="Run" title="Run (Shift F10)" style="width: 30px; height: 28px; border: 0; padding: 0; border-radius: 7px; background: transparent; color: {{k.text}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5l11 7-11 7z"></path></svg></button>
+<button aria-label="Debug" title="Debug (Shift F9)" style="width: 30px; height: 28px; border: 0; padding: 0; border-radius: 7px; background: transparent; color: {{k.icon}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><rect x="8" y="7" width="8" height="12" rx="4"></rect><path d="M12 7V5M8 11H4M20 11h-4M8 16H5M19 16h-3M9.5 4.5L11 6M14.5 4.5L13 6"></path></svg></button>
+<span aria-hidden="true" style="width: 1px; height: 18px; margin: 0 4px; background: {{k.line}}"></span>
+<button aria-label="Find in files" title="Find in files (Ctrl Shift F)" style="width: 30px; height: 28px; border: 0; padding: 0; border-radius: 7px; background: transparent; color: {{k.icon}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg></button>
+</div>
+
+<div style="flex-grow: 1; min-height: 0; display: flex">
+
+<!-- left tool strip -->
+<div style="width: 40px; flex-shrink: 0; box-sizing: border-box; padding: 6px 0; display: flex; flex-direction: column; align-items: center; gap: 4px; background: {{f.panel}}; border-right: 1px solid {{k.line}}">
+<button aria-label="Project" aria-pressed="{{isEditor}}" style="width: 30px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: {{projBg}}; color: {{projColor}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"></path></svg></button>
+<button aria-label="Commit, 3 changes" aria-pressed="{{isGit}}" style="position: relative; width: 30px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: {{commitBg}}; color: {{commitColor}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3.5"></circle><path d="M3 12h5.5M15.5 12H21"></path></svg><span aria-hidden="true" style="position: absolute; top: 2px; right: 1px; min-width: 14px; height: 14px; box-sizing: border-box; padding: 0 3px; border-radius: 7px; background: {{accent}}; color: {{k.badgeText}}; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center">3</span></button>
+<button aria-label="Problems, 2" style="width: 30px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z"></path><path d="M12 10v4M12 17v.01"></path></svg></button>
+<button aria-label="Bookmarks" style="width: 30px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M6 4h12v16l-6-4-6 4z"></path></svg></button>
+<span style="flex-grow: 1"></span>
+<button aria-label="Terminal" aria-pressed="{{isEditor}}" style="width: 30px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: {{projBg}}; color: {{projColor}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 9l3 3-3 3M12 15h5"></path></svg></button>
+<button aria-label="Git log" aria-pressed="{{isGit}}" style="width: 30px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: {{commitBg}}; color: {{commitColor}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="6" r="2.2"></circle><circle cx="7" cy="18" r="2.2"></circle><circle cx="17" cy="8" r="2.2"></circle><path d="M7 8.2v7.6M17 10.2c0 3.5-4 4-9 6"></path></svg></button>
+<button aria-label="Run output" style="width: 30px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M8 5l11 7-11 7z"></path></svg></button>
+</div>
+
+<div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column">
+<div style="flex-grow: 1; min-height: 0; display: flex">
+
+<!-- ===== editor view: project tree ===== -->
+<sc-if value="{{isEditor}}" hint-placeholder-val="{{ true }}">
+<div style="width: 240px; flex-shrink: 0; box-sizing: border-box; display: flex; flex-direction: column; background: {{f.panel}}; border-right: 1px solid {{k.line}}">
+<div style="height: 32px; flex-shrink: 0; box-sizing: border-box; padding: 0 6px 0 12px; display: flex; align-items: center; gap: 2px">
+<h2 style="margin: 0; flex-grow: 1; font-size: 12.5px; font-weight: 600">Project</h2>
+<button aria-label="Select the open file" style="width: 24px; height: 24px; border: 0; padding: 0; border-radius: 6px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7"></circle><circle cx="12" cy="12" r="2"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg></button>
+<button aria-label="Collapse all" style="width: 24px; height: 24px; border: 0; padding: 0; border-radius: 6px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9l5-5 5 5M7 15l5 5 5-5"></path></svg></button>
+</div>
+<div style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 0 6px 8px; display: flex; flex-direction: column; gap: 0; overflow: hidden">
+<sc-for list="{{tree}}" as="r" hint-placeholder-count="19">
+<button style="height: 24px; width: 100%; flex-shrink: 0; box-sizing: border-box; border: 0; border-radius: 6px; background: {{r.bg}}; padding: 0 8px 0 {{r.pad}}; display: flex; align-items: center; gap: 6px; color: {{r.color}}; font-size: 12.5px; text-align: left; cursor: pointer">
+<span aria-hidden="true" style="width: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: {{r.chev}}">
+<sc-if value="{{r.open}}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></sc-if>
+<sc-if value="{{r.closed}}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"></path></svg></sc-if>
+</span>
+<sc-if value="{{r.isDir}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{r.icon}}" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"></path></svg></sc-if>
+<sc-if value="{{r.isFile}}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{r.icon}}" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4"></path></svg></sc-if>
+<span style="flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">{{r.name}}<span style="color: {{r.dimColor}}">{{r.dim}}</span></span>
+<span aria-hidden="true" style="font-size: 11px; font-weight: 600; color: {{r.stColor}}">{{r.st}}</span>
+</button>
+</sc-for>
+</div>
+</div>
+
+<!-- editor groups, split side by side -->
+<div style="flex-grow: 1; min-width: 0; display: flex; background: {{f.editor}}">
+
+<!-- left group: focused -->
+<section aria-label="Editor, workspace.rs" style="flex: 3 1 0; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid {{k.line}}">
+<div style="height: 34px; flex-shrink: 0; display: flex; align-items: stretch; background: {{f.panel}}; border-bottom: 1px solid {{k.line}}">
+<div style="display: flex; align-items: center; gap: 7px; padding: 0 6px 0 12px; background: {{f.editor}}; box-shadow: inset 0 -2px 0 {{accent}}; border-right: 1px solid {{k.line}}">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ft.rs}}" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4"></path></svg>
+<span style="font-size: 12.5px; color: {{g.mod}}; font-weight: 500">workspace.rs</span>
+<span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 4px; background: {{k.text2}}"></span>
+<button aria-label="Close workspace.rs" style="width: 20px; height: 20px; border: 0; padding: 0; border-radius: 5px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+</div>
+<div style="display: flex; align-items: center; gap: 7px; padding: 0 14px 0 12px; border-right: 1px solid {{k.line}}">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ft.rs}}" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4"></path></svg>
+<span style="font-size: 12.5px; color: {{g.mod}}">tab_model.rs</span>
+</div>
+<div style="display: flex; align-items: center; gap: 7px; padding: 0 14px 0 12px; border-right: 1px solid {{k.line}}">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ft.toml}}" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4"></path></svg>
+<span style="font-size: 12.5px; color: {{k.text2}}">Cargo.toml</span>
+</div>
+</div>
+<div style="height: 24px; flex-shrink: 0; box-sizing: border-box; padding: 0 12px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: {{k.text3}}; border-bottom: 1px solid {{k.line}}">
+<span>src</span><span aria-hidden="true">›</span><span>core</span><span aria-hidden="true">›</span><span>workspace.rs</span><span aria-hidden="true">›</span><span>impl Workspace</span><span aria-hidden="true">›</span><span style="color: {{k.text2}}">close_tab</span>
+</div>
+<div style="position: relative; flex-grow: 1; min-height: 0; box-sizing: border-box; padding-top: 6px; overflow: hidden; font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; line-height: 18px">
+<sc-for list="{{codeL}}" as="ln" hint-placeholder-count="28">
+<div style="height: 18px; display: flex; align-items: center; background: {{ln.bg}}">
+<span style="width: 3px; height: 18px; flex-shrink: 0; background: {{ln.mark}}"></span>
+<span style="width: 38px; flex-shrink: 0; box-sizing: border-box; padding-right: 10px; text-align: right; color: {{ln.num}}">{{ln.n}}</span>
+<span style="width: 15px; flex-shrink: 0"></span>
+<span style="white-space: pre"><sc-for list="{{ln.parts}}" as="s" hint-placeholder-count="6"><span style="color: {{s.c}}; font-style: {{s.i}}; background: {{s.bg}}; text-decoration: {{s.dec}}; text-underline-offset: 3px; border-radius: 3px; padding: {{s.pad}}">{{s.t}}</span></sc-for></span>
+</div>
+</sc-for>
+
+<!-- completion from the language server, drawn above the cursor line because there is no room below -->
+<div style="position: absolute; left: 296px; top: 284px; width: 300px; box-sizing: border-box; border-radius: 10px; background: {{f.raised}}; border: 1px solid {{k.panelLine}}; box-shadow: {{f.popShadow}}; padding: 4px; display: flex; flex-direction: column; gap: 1px; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 12px; line-height: 16px">
+<sc-for list="{{completions}}" as="c" hint-placeholder-count="4">
+<div style="height: 24px; box-sizing: border-box; padding: 0 8px 0 6px; border-radius: 6px; background: {{c.bg}}; display: flex; align-items: center; gap: 8px">
+<span aria-hidden="true" style="width: 16px; height: 16px; flex-shrink: 0; border-radius: 4px; background: {{k.plug.forgeBg}}; color: {{k.plug.forge}}; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center">m</span>
+<span style="flex-grow: 1; font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; color: {{c.color}}">{{c.name}}</span>
+<span style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; color: {{k.text3}}">{{c.type}}</span>
+</div>
+</sc-for>
+<div style="margin-top: 3px; padding: 6px 8px 4px; border-top: 1px solid {{k.line}}; color: {{k.text3}}">Returns the last element, or None if the slice is empty.</div>
+</div>
+</div>
+</section>
+
+<!-- right group -->
+<section aria-label="Editor, tab_model_test.rs" style="flex: 2 1 0; min-width: 0; display: flex; flex-direction: column">
+<div style="height: 34px; flex-shrink: 0; display: flex; align-items: stretch; background: {{f.panel}}; border-bottom: 1px solid {{k.line}}">
+<div style="display: flex; align-items: center; gap: 7px; padding: 0 6px 0 12px; background: {{f.editor}}; box-shadow: inset 0 -2px 0 {{k.text3}}; border-right: 1px solid {{k.line}}">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ft.rs}}" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4"></path></svg>
+<span style="font-size: 12.5px; color: {{g.add}}">tab_model_test.rs</span>
+<button aria-label="Close tab_model_test.rs" style="width: 20px; height: 20px; border: 0; padding: 0; border-radius: 5px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+</div>
+<div style="display: flex; align-items: center; gap: 7px; padding: 0 14px 0 12px; border-right: 1px solid {{k.line}}">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ft.rs}}" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4"></path></svg>
+<span style="font-size: 12.5px; color: {{k.text2}}">lib.rs</span>
+</div>
+</div>
+<div style="height: 24px; flex-shrink: 0; box-sizing: border-box; padding: 0 12px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: {{k.text3}}; border-bottom: 1px solid {{k.line}}">
+<span>tests</span><span aria-hidden="true">›</span><span style="color: {{k.text2}}">tab_model_test.rs</span>
+</div>
+<div style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding-top: 6px; overflow: hidden; font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; line-height: 18px">
+<sc-for list="{{codeR}}" as="ln" hint-placeholder-count="18">
+<div style="height: 18px; display: flex; align-items: center; background: {{ln.bg}}">
+<span style="width: 3px; height: 18px; flex-shrink: 0; background: {{ln.mark}}"></span>
+<span style="width: 38px; flex-shrink: 0; box-sizing: border-box; padding-right: 10px; text-align: right; color: {{ln.num}}">{{ln.n}}</span>
+<span style="width: 15px; flex-shrink: 0; display: flex; align-items: center; justify-content: center"><sc-if value="{{ln.pass}}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="{{ln.passColor}}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-label="Test passed" role="img"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></sc-if></span>
+<span style="white-space: pre"><sc-for list="{{ln.parts}}" as="s" hint-placeholder-count="6"><span style="color: {{s.c}}; font-style: {{s.i}}; background: {{s.bg}}; text-decoration: {{s.dec}}; text-underline-offset: 3px; border-radius: 3px; padding: {{s.pad}}">{{s.t}}</span></sc-for></span>
+</div>
+</sc-for>
+</div>
+</section>
+</div>
+</sc-if>
+
+<!-- ===== git view: commit panel ===== -->
+<sc-if value="{{isGit}}" hint-placeholder-val="{{ false }}">
+<div style="width: 280px; flex-shrink: 0; box-sizing: border-box; display: flex; flex-direction: column; background: {{f.panel}}; border-right: 1px solid {{k.line}}">
+<div style="height: 32px; flex-shrink: 0; box-sizing: border-box; padding: 0 6px 0 12px; display: flex; align-items: center; gap: 2px">
+<h2 style="margin: 0; flex-grow: 1; font-size: 12.5px; font-weight: 600">Commit</h2>
+<button aria-label="Refresh" style="width: 24px; height: 24px; border: 0; padding: 0; border-radius: 6px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 11-2.3-5.7M20 4v5h-5"></path></svg></button>
+<button aria-label="Roll back the selected changes" style="width: 24px; height: 24px; border: 0; padding: 0; border-radius: 6px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 010 10h-3"></path></svg></button>
+</div>
+<div style="box-sizing: border-box; padding: 0 6px; display: flex; flex-direction: column">
+<div style="height: 26px; padding: 0 8px; display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: {{k.text2}}">
+<input type="checkbox" aria-label="Include all changes" defaultChecked="{{yes}}" style="margin: 0; accent-color: {{accent}}">
+Changes<span style="font-weight: 400; color: {{k.text3}}">3 files</span>
+</div>
+<sc-for list="{{changes}}" as="ch" hint-placeholder-count="3">
+<label style="height: 24px; box-sizing: border-box; padding: 0 8px 0 22px; border-radius: 6px; background: {{ch.bg}}; display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer">
+<input type="checkbox" defaultChecked="{{ch.on}}" style="margin: 0; accent-color: {{accent}}">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ft.rs}}" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4"></path></svg>
+<span style="min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: {{ch.color}}">{{ch.name}}<span style="color: {{k.text3}}"> {{ch.dir}}</span></span>
+</label>
+</sc-for>
+<div style="height: 26px; margin-top: 6px; padding: 0 8px; display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: {{k.text2}}">
+<input type="checkbox" aria-label="Include unversioned files" style="margin: 0; accent-color: {{accent}}">
+Unversioned files<span style="font-weight: 400; color: {{k.text3}}">1 file</span>
+</div>
+<label style="height: 24px; box-sizing: border-box; padding: 0 8px 0 22px; border-radius: 6px; display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer">
+<input type="checkbox" style="margin: 0; accent-color: {{accent}}">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ft.md}}" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4"></path></svg>
+<span style="min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: {{g.unv}}">scratch.md<span style="color: {{k.text3}}"> docs</span></span>
+</label>
+</div>
+<span style="flex-grow: 1"></span>
+<div style="box-sizing: border-box; padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 10px; border-top: 1px solid {{k.line}}">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: {{k.iconDim}}">Commit message
+<textarea defaultValue="Close tabs by id, not by position&#10;&#10;close_tab now finds the tab by its id, so closing a tab after the sidebar is reordered no longer removes the wrong one." style="height: 132px; box-sizing: border-box; resize: none; border-radius: 9px; background: {{f.editor}}; border: 1px solid {{accent}}; box-shadow: 0 0 0 3px {{k.ring}}; padding: 8px 10px; color: {{k.text}}; font-size: 12.5px; line-height: 1.5; outline: none"></textarea>
+</label>
+<label style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: {{k.text2}}; cursor: pointer"><input type="checkbox" style="margin: 0; accent-color: {{accent}}">Amend the last commit</label>
+<div style="display: flex; align-items: center; gap: 8px">
+<button style="height: 32px; padding: 0 10px 0 14px; border: 0; border-radius: 8px; background: {{accent}}; color: {{k.badgeText}}; font-weight: 600; display: flex; align-items: center; gap: 8px; cursor: pointer">Commit<span style="font-size: 11px; font-weight: 600; line-height: 16px; border: 1px solid rgba(31,18,13,0.4); border-radius: 5px; padding: 0 5px">Ctrl ↵</span></button>
+<button style="height: 32px; padding: 0 12px; border: 1px solid {{k.chipLine}}; border-radius: 8px; background: transparent; color: {{k.text2}}; cursor: pointer">Commit and push</button>
+</div>
+</div>
+</div>
+
+<!-- side-by-side diff -->
+<section aria-label="Diff of workspace.rs" style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; background: {{f.editor}}">
+<div style="height: 36px; flex-shrink: 0; box-sizing: border-box; padding: 0 8px 0 12px; display: flex; align-items: center; gap: 10px; background: {{f.panel}}; border-bottom: 1px solid {{k.line}}; font-size: 12.5px">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ft.rs}}" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4"></path></svg>
+<span style="font-weight: 600; color: {{g.mod}}">workspace.rs</span>
+<span style="color: {{k.text3}}">HEAD → working tree</span>
+<span style="flex-grow: 1"></span>
+<span style="color: {{k.text3}}">Change 1 of 2</span>
+<button aria-label="Previous change" style="width: 24px; height: 24px; border: 0; padding: 0; border-radius: 6px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"></path></svg></button>
+<button aria-label="Next change" style="width: 24px; height: 24px; border: 0; padding: 0; border-radius: 6px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+<div style="display: flex; padding: 2px; border-radius: 8px; background: {{f.editor}}; border: 1px solid {{k.line}}">
+<button aria-pressed="true" style="height: 22px; padding: 0 10px; border: 0; border-radius: 6px; background: {{k.rowOn}}; color: {{k.strong}}; font-size: 12px; cursor: pointer">Side by side</button>
+<button aria-pressed="false" style="height: 22px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: {{k.text2}}; font-size: 12px; cursor: pointer">Unified</button>
+</div>
+</div>
+<div style="flex-grow: 1; min-height: 0; display: flex; font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; line-height: 18px">
+<div style="flex: 1 1 0; min-width: 0; box-sizing: border-box; padding-top: 6px; overflow: hidden; border-right: 1px solid {{k.line}}">
+<sc-for list="{{diffL}}" as="ln" hint-placeholder-count="22">
+<div style="height: 18px; display: flex; align-items: center; background: {{ln.bg}}">
+<span style="width: 40px; flex-shrink: 0; box-sizing: border-box; padding-right: 12px; text-align: right; color: {{k.text3}}">{{ln.n}}</span>
+<span style="white-space: pre"><sc-for list="{{ln.parts}}" as="s" hint-placeholder-count="6"><span style="color: {{s.c}}; font-style: {{s.i}}; background: {{s.bg}}; border-radius: 3px; padding: {{s.pad}}">{{s.t}}</span></sc-for></span>
+</div>
+</sc-for>
+</div>
+<div style="flex: 1 1 0; min-width: 0; box-sizing: border-box; padding-top: 6px; overflow: hidden">
+<sc-for list="{{diffR}}" as="ln" hint-placeholder-count="22">
+<div style="height: 18px; display: flex; align-items: center; background: {{ln.bg}}">
+<span style="width: 40px; flex-shrink: 0; box-sizing: border-box; padding-right: 12px; text-align: right; color: {{k.text3}}">{{ln.n}}</span>
+<span style="white-space: pre"><sc-for list="{{ln.parts}}" as="s" hint-placeholder-count="6"><span style="color: {{s.c}}; font-style: {{s.i}}; background: {{s.bg}}; border-radius: 3px; padding: {{s.pad}}">{{s.t}}</span></sc-for></span>
+</div>
+</sc-for>
+</div>
+</div>
+</section>
+</sc-if>
+</div>
+
+<!-- bottom tool window -->
+<section aria-label="{{bottomLabel}}" style="height: {{bottomH}}; flex-shrink: 0; display: flex; flex-direction: column; background: {{f.panel}}; border-top: 1px solid {{k.line}}">
+<div style="height: 32px; flex-shrink: 0; box-sizing: border-box; padding: 0 6px 0 8px; display: flex; align-items: center; gap: 2px; font-size: 12.5px">
+<button aria-pressed="{{isEditor}}" style="height: 24px; padding: 0 10px; border: 0; border-radius: 6px; background: {{projBg}}; color: {{termColor}}; cursor: pointer">Terminal</button>
+<button style="height: 24px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: {{k.text2}}; cursor: pointer">Run</button>
+<button style="height: 24px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: {{k.text2}}; display: flex; align-items: center; gap: 6px; cursor: pointer">Problems<span style="color: {{p.warn}}">2</span></button>
+<button aria-pressed="{{isGit}}" style="height: 24px; padding: 0 10px; border: 0; border-radius: 6px; background: {{commitBg}}; color: {{logColor}}; cursor: pointer">Git log</button>
+<span style="flex-grow: 1"></span>
+<sc-if value="{{isEditor}}" hint-placeholder-val="{{ true }}">
+<button style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: {{k.text2}}; display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer">PowerShell<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="{{k.text3}}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+<button aria-label="New terminal" style="width: 24px; height: 24px; border: 0; padding: 0; border-radius: 6px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+</sc-if>
+<button aria-label="Hide tool window" style="width: 24px; height: 24px; border: 0; padding: 0; border-radius: 6px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"></path></svg></button>
+</div>
+
+<sc-if value="{{isEditor}}" hint-placeholder-val="{{ true }}">
+<div style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 6px 14px; overflow: hidden; background: {{f.editor}}; font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; line-height: 18px">
+<sc-for list="{{term}}" as="tl" hint-placeholder-count="10">
+<div style="height: 18px; white-space: pre"><sc-for list="{{tl.parts}}" as="s" hint-placeholder-count="2"><span style="color: {{s.c}}; background: {{s.bg}}; padding: {{s.pad}}">{{s.t}}</span></sc-for></div>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{isGit}}" hint-placeholder-val="{{ false }}">
+<div style="flex-grow: 1; min-height: 0; display: flex; background: {{f.editor}}">
+<div style="width: 210px; flex-shrink: 0; box-sizing: border-box; padding: 6px; border-right: 1px solid {{k.line}}; display: flex; flex-direction: column; gap: 1px; font-size: 12.5px">
+<sc-for list="{{branches}}" as="b" hint-placeholder-count="7">
+<div style="height: 24px; box-sizing: border-box; padding: 0 8px 0 {{b.pad}}; border-radius: 6px; display: flex; align-items: center; gap: 7px; color: {{b.color}}; font-weight: {{b.weight}}; font-size: {{b.size}}">
+<sc-if value="{{b.isBranch}}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{b.icon}}" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="6" r="2.2"></circle><circle cx="7" cy="18" r="2.2"></circle><circle cx="17" cy="8" r="2.2"></circle><path d="M7 8.2v7.6M17 10.2c0 3.5-4 4-9 6"></path></svg></sc-if>
+<span style="flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">{{b.name}}</span>
+<sc-if value="{{b.current}}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; color: {{k.text3}}; font-weight: 400">current</span></sc-if>
+</div>
+</sc-for>
+</div>
+
+<div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column">
+<div style="height: 32px; flex-shrink: 0; box-sizing: border-box; padding: 0 8px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid {{k.line}}">
+<label style="width: 220px; height: 24px; box-sizing: border-box; border-radius: 6px; background: {{k.field}}; padding: 0 8px; display: flex; align-items: center; gap: 6px; color: {{k.text3}}">
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
+<input aria-label="Filter commits" placeholder="Filter commits" style="flex-grow: 1; min-width: 0; border: 0; padding: 0; outline: none; background: transparent; color: {{k.text}}; font-size: 12px">
+</label>
+<button style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: {{k.text2}}; font-size: 12px; cursor: pointer">Branch: all</button>
+<button style="height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: {{k.text2}}; font-size: 12px; cursor: pointer">Author: all</button>
+</div>
+<div style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 4px 6px; display: flex; flex-direction: column; gap: 1px; overflow: hidden; font-size: 12.5px">
+<sc-for list="{{commits}}" as="c" hint-placeholder-count="7">
+<div style="height: 24px; flex-shrink: 0; box-sizing: border-box; padding: 0 8px 0 4px; border-radius: 6px; background: {{c.bg}}; display: flex; align-items: center; gap: 8px">
+<svg width="34" height="24" viewBox="0 0 34 24" fill="none" stroke-width="2" aria-hidden="true" style="flex-shrink: 0"><path d="{{c.p0}}" stroke="{{lane0}}"></path><path d="{{c.p1}}" stroke="{{lane1}}"></path><circle cx="10" cy="12" r="{{c.r0}}" fill="{{f.editor}}" stroke="{{lane0}}"></circle><circle cx="24" cy="12" r="{{c.r1}}" fill="{{f.editor}}" stroke="{{lane1}}"></circle></svg>
+<span style="flex-grow: 1; min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden">
+<span style="min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: {{c.color}}">{{c.msg}}</span>
+<sc-for list="{{c.refs}}" as="rf" hint-placeholder-count="1">
+<span style="flex-shrink: 0; height: 18px; box-sizing: border-box; padding: 0 6px; border-radius: 5px; border: 1px solid {{rf.line}}; color: {{rf.color}}; font-size: 11px; display: flex; align-items: center">{{rf.t}}</span>
+</sc-for>
+</span>
+<span style="width: 70px; flex-shrink: 0; color: {{k.text3}}">Landon</span>
+<span style="width: 84px; flex-shrink: 0; color: {{k.text3}}; text-align: right">{{c.date}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="width: 320px; flex-shrink: 0; box-sizing: border-box; padding: 12px 14px; border-left: 1px solid {{k.line}}; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px">
+<h3 style="margin: 0; font-size: 13px; font-weight: 600">Track the active tab in Workspace</h3>
+<span style="font-size: 12px; color: {{k.text3}}"><span style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace">e41a7c2</span> · Landon · Oct 7, 2026 at 11:02</span>
+<p style="margin: 0; line-height: 1.5; color: {{k.text2}}">Workspace now remembers which tab is active, so the sidebar can highlight it and the palette can rank it first.</p>
+<span style="margin-top: 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: {{k.text3}}">2 files changed</span>
+<div style="display: flex; align-items: center; gap: 8px"><span style="flex-grow: 1; color: {{g.mod}}">src/core/workspace.rs</span><span style="color: {{g.add}}">+14</span><span style="color: {{g.del}}">−3</span></div>
+<div style="display: flex; align-items: center; gap: 8px"><span style="flex-grow: 1; color: {{g.mod}}">src/core/tab_model.rs</span><span style="color: {{g.add}}">+2</span><span style="color: {{g.del}}">−0</span></div>
+</div>
+</div>
+</sc-if>
+</section>
+</div>
+
+<!-- context rail: what the rest of Atlas knows about this file, from the shared index -->
+<sc-if value="{{railOpen}}" hint-placeholder-val="{{ true }}">
+<aside aria-label="Context for workspace.rs" style="width: 264px; flex-shrink: 0; box-sizing: border-box; display: flex; flex-direction: column; background: {{f.panel}}; border-left: 1px solid {{k.line}}; overflow: hidden">
+<div style="height: 32px; flex-shrink: 0; box-sizing: border-box; padding: 0 6px 0 12px; display: flex; align-items: center; gap: 8px">
+<h2 style="margin: 0; font-size: 12.5px; font-weight: 600">Context</h2>
+<span style="flex-grow: 1; font-size: 12px; color: {{k.text3}}">workspace.rs</span>
+<button aria-label="Hide context" style="width: 24px; height: 24px; border: 0; padding: 0; border-radius: 6px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
+</div>
+
+<div style="box-sizing: border-box; padding: 4px 6px 10px; display: flex; flex-direction: column; gap: 1px; border-bottom: 1px solid {{k.line}}">
+<h3 style="margin: 0 0 2px; padding: 0 8px; height: 22px; display: flex; align-items: center; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: {{k.text3}}">Outline</h3>
+<sc-for list="{{outline}}" as="o" hint-placeholder-count="6">
+<div style="height: 24px; box-sizing: border-box; padding: 0 8px 0 {{o.pad}}; border-radius: 6px; background: {{o.bg}}; display: flex; align-items: center; gap: 8px; font-size: 12.5px">
+<span aria-hidden="true" style="width: 16px; height: 16px; flex-shrink: 0; border-radius: 4px; background: {{o.badgeBg}}; color: {{o.badgeFg}}; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center">{{o.badge}}</span>
+<span style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; color: {{o.color}}">{{o.name}}</span>
+</div>
+</sc-for>
+</div>
+
+<div style="box-sizing: border-box; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid {{k.line}}">
+<h3 style="margin: 0; display: flex; align-items: center; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: {{k.text3}}">Mentioned in Notes</h3>
+<a href="#" style="box-sizing: border-box; padding: 8px 10px; border-radius: 9px; background: {{f.editor}}; border: 1px solid {{k.line}}; display: flex; flex-direction: column; gap: 4px; color: {{k.text}}; text-decoration: none">
+<span style="display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 500"><span aria-hidden="true" style="width: 16px; height: 16px; border-radius: 4px; background: {{k.plug.notesBg}}; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.notes}}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"></path></svg></span>Panel design notes</span>
+<span style="font-size: 12px; line-height: 1.45; color: {{k.text3}}">…<span style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; color: {{k.text2}}">close_tab</span> should take a TabId, so a reorder never closes the wrong tab.</span>
+</a>
+<a href="#" style="box-sizing: border-box; padding: 8px 10px; border-radius: 9px; background: {{f.editor}}; border: 1px solid {{k.line}}; display: flex; flex-direction: column; gap: 4px; color: {{k.text}}; text-decoration: none">
+<span style="display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 500"><span aria-hidden="true" style="width: 16px; height: 16px; border-radius: 4px; background: {{k.plug.notesBg}}; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.notes}}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"></path></svg></span>Fledge launch checklist</span>
+<span style="font-size: 12px; line-height: 1.45; color: {{k.text3}}">Ship the <span style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; color: {{k.text2}}">Workspace</span> tab model before the palette.</span>
+</a>
+</div>
+
+<div style="box-sizing: border-box; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
+<h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: {{k.text3}}">Recent commits to this file</h3>
+<div style="display: flex; flex-direction: column; gap: 2px; font-size: 12.5px">
+<span style="color: {{k.text2}}">Track the active tab in Workspace</span>
+<span style="font-size: 12px; color: {{k.text3}}"><span style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace">e41a7c2</span> · Oct 7</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px; font-size: 12.5px">
+<span style="color: {{k.text2}}">Add Workspace::open_tab</span>
+<span style="font-size: 12px; color: {{k.text3}}"><span style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace">7d02f11</span> · Oct 4</span>
+</div>
+</div>
+</aside>
+</sc-if>
+<sc-if value="{{railClosed}}" hint-placeholder-val="{{ false }}">
+<div style="width: 36px; flex-shrink: 0; box-sizing: border-box; padding: 6px 0; display: flex; flex-direction: column; align-items: center; gap: 4px; background: {{f.panel}}; border-left: 1px solid {{k.line}}">
+<button aria-label="Show context" style="width: 28px; height: 28px; border: 0; padding: 0; border-radius: 7px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l9 5-9 5-9-5z"></path><path d="M3 14l9 5 9-5"></path></svg></button>
+<button aria-label="Outline" style="width: 28px; height: 28px; border: 0; padding: 0; border-radius: 7px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"></path></svg></button>
+</div>
+</sc-if>
+</div>
+
+<!-- status bar -->
+<div style="height: 24px; flex-shrink: 0; box-sizing: border-box; padding: 0 12px; display: flex; align-items: center; gap: 16px; background: {{f.panel}}; border-top: 1px solid {{k.line}}; font-size: 11.5px; color: {{k.text3}}">
+<span style="display: flex; align-items: center; gap: 5px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="6" r="2.2"></circle><circle cx="7" cy="18" r="2.2"></circle><circle cx="17" cy="8" r="2.2"></circle><path d="M7 8.2v7.6M17 10.2c0 3.5-4 4-9 6"></path></svg>main</span>
+<span>3 changed</span>
+<span style="display: flex; align-items: center; gap: 5px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="{{p.warn}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z"></path><path d="M12 10v4M12 17v.01"></path></svg>2 warnings</span>
+<span style="flex-grow: 1"></span>
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 3px; background: {{g.add}}"></span>rust-analyzer</span>
+<span>{{cursorPos}}</span>
+<span>LF</span>
+<span>UTF-8</span>
+<span>Rust</span>
+<span>4 spaces</span>
+</div>
+</main>
+</div>
+
+<!-- hover peek: pointing at the left edge slides the hidden sidebar in over the tab, without resizing anything under it -->
+<sc-if value="{{peek}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; left: 0; top: 0; z-index: 5; width: 264px; height: 900px; border-radius: 0 12px 12px 0; overflow: hidden; border-right: 1px solid {{k.panelLine}}; box-shadow: {{peekShadow}}">
+<dc-import name="Sidebar" screen="forge" theme="{{theme}}" accent="{{accent}}" hint-size="264px,900px" style="width: 264px; height: 900px"></dc-import>
+</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"graphite","options":["graphite","haze","glass","tint","paper"]},"accent":{"editor":"color","default":"#FF8A65","options":["#FF8A65","#6EA8FF","#6FD3A8","#E8C16A"]},"view":{"editor":"enum","default":"editor","options":["editor","git"]},"sidebar":{"editor":"boolean","default":false},"peek":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  // Base palette tokens. The same method sits in Sidebar, Main, Palette,
+  // Browsing and Forge (a .dc.html file cannot import code); change all
+  // five together.
+  tokens(theme, accent) {
+    const hex = /^#[0-9a-fA-F]{6}$/.test(accent || '') ? accent : '#FF8A65';
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    const mx = Math.max(r, g, b);
+    const mn = Math.min(r, g, b);
+    const d = mx - mn;
+    let hue = 0;
+    if (d > 0) {
+      if (mx === r) hue = ((g - b) / d) % 6;
+      else if (mx === g) hue = (b - r) / d + 2;
+      else hue = (r - g) / d + 4;
+    }
+    const h = Math.round((hue * 60 + 360) % 360);
+    const lit = (mx + mn) / 2;
+    const sat = d > 0 ? Math.round((d / (1 - Math.abs(2 * lit - 1))) * 100) : 0;
+    const hsl = (s, l) => 'hsl(' + h + ', ' + Math.min(s, sat) + '%, ' + l + '%)';
+    const darkTiles = [
+      { bg: '#1E2A44', fg: '#7BA7FF' }, { bg: '#3A2420', fg: '#FF8F7A' },
+      { bg: '#3A3220', fg: '#F2C55C' }, { bg: '#2A2C33', fg: '#D6D8DE' },
+      { bg: '#2A2644', fg: '#A99BFF' }, { bg: '#1F3836', fg: '#5ED3C8' },
+      { bg: '#38331C', fg: '#F5D547' }, { bg: '#3A2430', fg: '#F28BB0' }
+    ];
+    const lightTiles = [
+      { bg: '#DCE6FF', fg: '#2F5BD3' }, { bg: '#FFE1DA', fg: '#B83A25' },
+      { bg: '#FBEBC4', fg: '#8A5A00' }, { bg: '#E4E5EA', fg: '#3E4048' },
+      { bg: '#E6E0FF', fg: '#5A43CF' }, { bg: '#D3F0EC', fg: '#0D7068' },
+      { bg: '#F8EDBE', fg: '#7A6000' }, { bg: '#FADCE8', fg: '#AE2E63' }
+    ];
+    const darkPlug = { forgeBg: '#1E2A44', forge: '#7BA7FF', notesBg: '#2A2644', notes: '#B79AFF', fledgeBg: '#1F3A2E', fledge: '#6FD3A8', neutralBg: '#2A2C33', neutral: '#C9CBD1' };
+    const lightPlug = { forgeBg: '#DCE6FF', forge: '#2F5BD3', notesBg: '#E6E0FF', notes: '#5A43CF', fledgeBg: '#D3F0E2', fledge: '#11774F', neutralBg: '#E4E5EA', neutral: '#3E4048' };
+    const k = {
+      ground: '#141519', grain: false, material: false, materialBg: 'transparent', materialBlur: 'none',
+      text: '#ECEDF0', strong: '#FFFFFF', text2: '#C9CBD1', text2b: '#D5D7DD', text3: '#8B8E98',
+      icon: '#B4B7BF', iconDim: '#A3A6AE', disabled: '#50535C', line: '#24262C',
+      field: 'rgba(255,255,255,0.06)', fieldShadow: 'none',
+      rowOn: 'rgba(255,255,255,0.09)', rowOnShadow: 'none',
+      key: '#383B43', dash: '#43464F', dash2: '#363941',
+      badgeText: '#1F120D', badgeRing: '#141519',
+      card: '#0D0E11', cardLine: '#23252B', cardShadow: 'none', cardRing: '#0D0E11',
+      surf: '#15161B', surfLine: '#24262C', surfShadow: 'none',
+      pill: '#17181D', pillLine: '#2C2F36', pillShadow: '0 12px 32px rgba(0,0,0,0.35)',
+      chipLine: '#2C2F36', chipOn: 'rgba(255,255,255,0.11)',
+      panel: '#1B1C21', panelLine: '#31343C', panelSide: '#17181D', panelDiv: '#282B32',
+      panelShadow: '0 34px 90px rgba(0,0,0,0.6)', input: '#101115', inputLine: '#2C2F36',
+      scrim: 'rgba(6,7,9,0.62)',
+      webShadow: '0 0 0 1px rgba(0,0,0,0.55), 0 10px 30px rgba(0,0,0,0.3)',
+      tiles: darkTiles, plug: darkPlug,
+      ink: hex, soft: hex + '26', softLine: hex + '8C', ring: hex + '33'
+    };
+    if (theme === 'haze') {
+      Object.assign(k, {
+        ground: 'linear-gradient(rgba(26,27,32,0.74), rgba(26,27,32,0.74)), radial-gradient(60% 70% at 10% 15%, #3F52AE 0%, rgba(63,82,174,0) 70%), radial-gradient(55% 60% at 90% 5%, #6B3F94 0%, rgba(107,63,148,0) 70%), radial-gradient(60% 65% at 80% 95%, #1D6F6A 0%, rgba(29,111,106,0) 70%), radial-gradient(50% 55% at 15% 100%, #9C5637 0%, rgba(156,86,55,0) 70%), #1A1F35',
+        text: '#EFF0F4', text2: '#D3D5DC', text2b: '#DCDEE4', text3: '#A3A6B0',
+        icon: '#C0C3CB', iconDim: '#AFB2BC', disabled: 'rgba(255,255,255,0.28)', line: 'rgba(255,255,255,0.09)',
+        field: 'rgba(255,255,255,0.07)', rowOn: 'rgba(255,255,255,0.11)',
+        key: 'rgba(255,255,255,0.2)', dash: 'rgba(255,255,255,0.26)', dash2: 'rgba(255,255,255,0.2)',
+        badgeRing: '#262833',
+        card: 'rgba(10,11,14,0.5)', cardLine: 'rgba(255,255,255,0.08)', cardRing: '#16171C',
+        surf: 'rgba(255,255,255,0.045)', surfLine: 'rgba(255,255,255,0.08)',
+        pill: 'rgba(255,255,255,0.06)', pillLine: 'rgba(255,255,255,0.12)', pillShadow: '0 12px 32px rgba(0,0,0,0.3)',
+        chipLine: 'rgba(255,255,255,0.14)', chipOn: 'rgba(255,255,255,0.14)',
+        panel: '#202127', panelLine: 'rgba(255,255,255,0.12)', panelSide: '#1B1C21', panelDiv: 'rgba(255,255,255,0.08)',
+        input: 'rgba(0,0,0,0.28)', inputLine: 'rgba(255,255,255,0.12)', scrim: 'rgba(6,7,10,0.5)',
+        webShadow: '0 0 0 1px rgba(0,0,0,0.4), 0 10px 30px rgba(0,0,0,0.3)'
+      });
+    } else if (theme === 'glass') {
+      const edge = 'inset 0 1px 0 rgba(255,255,255,0.24), inset 0 0 0 1px rgba(255,255,255,0.07)';
+      Object.assign(k, {
+        ground: 'radial-gradient(circle 230px at 16% 20%, #4A62D6 0%, #4A62D6 98%, rgba(74,98,214,0) 100%), radial-gradient(circle 170px at 80% 26%, #9446B0 0%, #9446B0 98%, rgba(148,70,176,0) 100%), radial-gradient(circle 280px at 64% 92%, #C4623B 0%, #C4623B 98%, rgba(196,98,59,0) 100%), radial-gradient(circle 190px at 6% 90%, #23948A 0%, #23948A 98%, rgba(35,148,138,0) 100%), linear-gradient(160deg, #1B2550 0%, #2A1838 55%, #13252B 100%)',
+        material: true, materialBg: 'rgba(16,17,24,0.46)', materialBlur: 'blur(30px) saturate(1.6)',
+        swatch: 'linear-gradient(rgba(16,17,24,0.3), rgba(16,17,24,0.3)), linear-gradient(135deg, #4A62D6 0%, #9446B0 48%, #C4623B 100%)',
+        text: '#F4F5F8', text2: '#E0E2E8', text2b: '#E6E8ED', text3: '#BCBFCA',
+        icon: '#D0D3DA', iconDim: '#C2C5CE', disabled: 'rgba(255,255,255,0.32)', line: 'rgba(255,255,255,0.14)',
+        field: 'rgba(255,255,255,0.10)', fieldShadow: edge,
+        rowOn: 'rgba(255,255,255,0.16)', rowOnShadow: edge,
+        key: 'rgba(255,255,255,0.28)', dash: 'rgba(255,255,255,0.32)', dash2: 'rgba(255,255,255,0.26)',
+        badgeRing: '#2B2E44',
+        card: 'rgba(255,255,255,0.05)', cardLine: 'rgba(255,255,255,0.16)', cardShadow: 'inset 0 1px 0 rgba(255,255,255,0.18)', cardRing: '#2B2E44',
+        surf: 'rgba(255,255,255,0.08)', surfLine: 'rgba(255,255,255,0.16)', surfShadow: edge + ', 0 10px 28px rgba(0,0,0,0.18)',
+        pill: 'rgba(255,255,255,0.10)', pillLine: 'rgba(255,255,255,0.22)', pillShadow: edge + ', 0 14px 36px rgba(0,0,0,0.25)',
+        chipLine: 'rgba(255,255,255,0.18)', chipOn: 'rgba(255,255,255,0.18)',
+        panel: 'rgba(28,30,42,0.94)', panelLine: 'rgba(255,255,255,0.16)', panelSide: 'rgba(0,0,0,0.18)', panelDiv: 'rgba(255,255,255,0.09)',
+        panelShadow: 'inset 0 1px 0 rgba(255,255,255,0.14), 0 34px 90px rgba(0,0,0,0.5)',
+        input: 'rgba(0,0,0,0.28)', inputLine: 'rgba(255,255,255,0.14)', scrim: 'rgba(6,7,12,0.42)',
+        webShadow: '0 0 0 1px rgba(255,255,255,0.10), 0 16px 44px rgba(0,0,0,0.35)',
+        tiles: darkTiles.map((t) => ({ bg: t.bg + 'C7', fg: t.fg }))
+      });
+    } else if (theme === 'tint') {
+      Object.assign(k, {
+        ground: 'linear-gradient(155deg, ' + hsl(34, 15) + ' 0%, ' + hsl(24, 9) + ' 55%, ' + hsl(20, 6) + ' 100%)',
+        grain: true,
+        text: hsl(18, 95), text2: hsl(12, 83), text2b: hsl(12, 87), text3: hsl(10, 66),
+        icon: hsl(10, 76), iconDim: hsl(9, 70), disabled: hsl(10, 32), line: 'rgba(255,255,255,0.08)',
+        field: 'rgba(255,255,255,0.07)', rowOn: 'rgba(255,255,255,0.11)',
+        key: 'rgba(255,255,255,0.18)', dash: 'rgba(255,255,255,0.26)', dash2: 'rgba(255,255,255,0.18)',
+        badgeRing: hsl(34, 15),
+        card: hsl(22, 6), cardLine: hsl(18, 14), cardRing: hsl(22, 6),
+        surf: hsl(20, 9), surfLine: hsl(16, 15),
+        pill: hsl(20, 10), pillLine: hsl(16, 19),
+        chipLine: hsl(14, 22), chipOn: 'rgba(255,255,255,0.12)',
+        panel: hsl(18, 11), panelLine: hsl(14, 21), panelSide: hsl(18, 9), panelDiv: hsl(14, 16),
+        input: hsl(20, 6), inputLine: hsl(14, 21), scrim: 'rgba(6,5,5,0.6)'
+      });
+    } else if (theme === 'paper') {
+      Object.assign(k, {
+        ground: '#E9EAEE',
+        text: '#1B1C21', strong: '#0E0F12', text2: '#3A3C44', text2b: '#2B2D34', text3: '#5E616A',
+        icon: '#4A4D56', iconDim: '#5E616A', disabled: '#B1B3BA', line: '#D5D7DD',
+        field: 'rgba(20,22,30,0.06)', rowOn: '#FFFFFF', rowOnShadow: '0 1px 2px rgba(20,22,30,0.10)',
+        key: '#C3C5CC', dash: '#B5B8C0', dash2: '#C3C5CC',
+        badgeRing: '#E9EAEE',
+        card: '#F7F7F9', cardLine: '#DADCE2', cardRing: '#F7F7F9',
+        surf: '#FFFFFF', surfLine: '#E0E2E7', surfShadow: '0 1px 2px rgba(20,22,30,0.05)',
+        pill: '#FFFFFF', pillLine: '#D7D9DF', pillShadow: '0 8px 24px rgba(20,22,30,0.08)',
+        chipLine: '#D5D7DD', chipOn: 'rgba(20,22,30,0.08)',
+        panel: '#FFFFFF', panelLine: '#D5D7DD', panelSide: '#F5F6F8', panelDiv: '#E4E5EA',
+        panelShadow: '0 30px 80px rgba(20,22,30,0.22)', input: '#FFFFFF', inputLine: '#D0D2D9',
+        scrim: 'rgba(20,22,30,0.26)',
+        webShadow: '0 0 0 1px rgba(20,22,30,0.10), 0 6px 20px rgba(20,22,30,0.08)',
+        tiles: lightTiles, plug: lightPlug,
+        ink: 'hsl(' + h + ', ' + Math.min(85, sat) + '%, 36%)', soft: hex + '24'
+      });
+    }
+    if (!k.swatch) k.swatch = k.ground;
+    return k;
+  }
+
+  // A small Rust highlighter, standing in for Tree-sitter. Markers in the
+  // source: an inlay hint between angle brackets, a warning between double
+  // parentheses, changed text in a diff between double angle brackets, and
+  // the cursor.
+  hl(src, P, acc) {
+    const KW = ['use', 'pub', 'fn', 'let', 'mut', 'impl', 'struct', 'enum', 'self', 'Self', 'if', 'else', 'match', 'return', 'for', 'in', 'crate', 'mod', 'as', 'true', 'false'];
+    const re = /(⟨[^⟩]*⟩)|(⸨[^⸩]*⸩)|(⟪[^⟫]*⟫)|(‸)|(\/\/.*$)|("(?:[^"\\]|\\.)*")|(#\[[^\]]*\])|(\b\d[\d_]*\b)|([A-Za-z_][A-Za-z0-9_]*!?)|(\s+)|([^\sA-Za-z0-9_"⟨⸨⟪‸]+)/g;
+    const part = (t, c, extra) => Object.assign({ t: t, c: c, i: 'normal', bg: 'transparent', pad: '0', dec: 'none' }, extra || {});
+    const out = [];
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const tok = m[0];
+      if (m[1]) out.push(part(tok.slice(1, -1), P.hint, { bg: P.hintBg, pad: '0 3px' }));
+      else if (m[2]) out.push(part(tok.slice(1, -1), P.ty, { dec: 'underline wavy ' + P.warn }));
+      else if (m[3]) out.push(part(tok.slice(1, -1), P.strong, { bg: P.emph }));
+      else if (m[4]) out.push(part('', P.plain, { bg: acc, pad: '0 1px' }));
+      else if (m[5]) out.push(part(tok, P.com, { i: 'italic' }));
+      else if (m[6]) out.push(part(tok, P.str));
+      else if (m[7]) out.push(part(tok, P.attr));
+      else if (m[8]) out.push(part(tok, P.num));
+      else if (m[9]) {
+        let c = P.plain;
+        if (tok.charAt(tok.length - 1) === '!') c = P.mac;
+        else if (KW.indexOf(tok) >= 0) c = P.kw;
+        else if (/^[A-Z]/.test(tok)) c = P.ty;
+        else if (src.charAt(re.lastIndex) === '(') c = P.fn;
+        out.push(part(tok, c));
+      } else out.push(part(tok, P.plain));
+    }
+    return out;
+  }
+
+  renderVals() {
+    const acc = this.props.accent ?? '#FF8A65';
+    const theme = this.props.theme ?? 'graphite';
+    const k = this.tokens(theme, acc);
+    const light = theme === 'paper';
+    const isGit = (this.props.view ?? 'editor') === 'git';
+    const isEditor = !isGit;
+    // sidebar: pinned open (Ctrl S), so the tab narrows. peek: hidden, but the
+    // pointer is at the left edge, so it floats over the tab instead.
+    const sidebar = !!this.props.sidebar;
+    const peek = !sidebar && !!this.props.peek;
+
+    // Forge's own surfaces stay opaque in every palette: code is read, not glanced at.
+    const surfaces = {
+      graphite: { panel: '#111216', editor: '#0D0E11', raised: '#1A1B20' },
+      haze: { panel: '#17181D', editor: '#121317', raised: '#1F2026' },
+      glass: { panel: '#1A1C26', editor: '#14151D', raised: '#22242F' },
+      paper: { panel: '#F3F4F6', editor: '#FFFFFF', raised: '#FFFFFF' },
+      tint: { panel: k.surf, editor: k.card, raised: k.panel }
+    };
+    const f = Object.assign({}, surfaces[theme] || surfaces.graphite, {
+      popShadow: light ? '0 12px 32px rgba(20,22,30,0.16)' : '0 16px 40px rgba(0,0,0,0.45)'
+    });
+    const p = light
+      ? { plain: '#2B2D34', strong: '#0E0F12', kw: '#6B3FD0', ty: '#2456C7', fn: '#7A5200', str: '#1A7F4B', num: '#B5480F', mac: '#0D7068', attr: '#5E616A', com: '#6B6F7A', hint: '#5E616A', hintBg: 'rgba(20,22,30,0.06)', warn: '#A86A00', emphAdd: 'rgba(17,119,79,0.22)', emphDel: 'rgba(184,58,37,0.20)' }
+      : { plain: '#D5D7DD', strong: '#FFFFFF', kw: '#C3A6FF', ty: '#7FB4FF', fn: '#E9C46A', str: '#8FD3A8', num: '#F5B37A', mac: '#5ED3C8', attr: '#9AA0AC', com: '#7C808C', hint: '#8B8E98', hintBg: 'rgba(255,255,255,0.06)', warn: '#E8C16A', emphAdd: 'rgba(111,211,168,0.30)', emphDel: 'rgba(255,143,122,0.32)' };
+    const g = light
+      ? { mod: '#2456C7', add: '#11774F', unv: '#5E616A', del: '#B83A25', addBg: 'rgba(17,119,79,0.08)', delBg: 'rgba(184,58,37,0.07)', fill: 'repeating-linear-gradient(135deg, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 6px, rgba(0,0,0,0.05) 6px, rgba(0,0,0,0.05) 7px)' }
+      : { mod: '#7BA7FF', add: '#6FD3A8', unv: '#A3A6AE', del: '#FF8F7A', addBg: 'rgba(111,211,168,0.10)', delBg: 'rgba(255,143,122,0.10)', fill: 'repeating-linear-gradient(135deg, rgba(255,255,255,0) 0px, rgba(255,255,255,0) 6px, rgba(255,255,255,0.04) 6px, rgba(255,255,255,0.04) 7px)' };
+    const ft = light
+      ? { rs: '#A45A2A', toml: '#5E616A', md: '#2456C7', lock: '#6B6F7A', dir: '#6B6F7A' }
+      : { rs: '#E0A27C', toml: '#A3A6AE', md: '#7BA7FF', lock: '#8B8E98', dir: '#8B8E98' };
+    const curBg = light ? 'rgba(20,22,30,0.04)' : 'rgba(255,255,255,0.035)';
+
+    // workspace.rs, mid-edit: the cursor is on line 24.
+    const left = [
+      'use std::collections::⸨HashMap⸩;',
+      'use crate::core::tab_model::{Tab, TabId, TabKind};',
+      '',
+      '#[derive(Default)]',
+      'pub struct Workspace {',
+      '    tabs: Vec<Tab>,',
+      '    active: Option<TabId>,',
+      '    next_id: u64,',
+      '}',
+      '',
+      'impl Workspace {',
+      '    pub fn open_tab(&mut self, kind: TabKind) -> TabId {',
+      '        let id⟨: TabId⟩ = TabId(self.next_id);',
+      '        self.next_id += 1;',
+      '        self.tabs.push(Tab::new(id, kind));',
+      '        self.active = Some(id);',
+      '        id',
+      '    }',
+      '',
+      '    pub fn close_tab(&mut self, id: TabId) -> Option<Tab> {',
+      '        let i⟨: usize⟩ = self.index_of(id)?;',
+      '        let tab⟨: Tab⟩ = self.tabs.remove(i);',
+      '        if self.active == Some(id) {',
+      '            self.active = self.tabs.l‸',
+      '        }',
+      '        Some(tab)',
+      '    }',
+      ''
+    ];
+    const marksL = { 19: 'mod', 20: 'mod', 21: 'mod', 22: 'add', 23: 'add', 24: 'add', 25: 'mod' };
+    const codeL = left.map((src, i) => ({
+      n: i + 1, parts: this.hl(src, p, acc),
+      bg: i === 23 ? curBg : 'transparent',
+      mark: marksL[i] ? g[marksL[i]] : 'transparent',
+      num: i === 23 ? k.text2 : k.text3
+    }));
+
+    const right = [
+      'use fledge_core::prelude::*;',
+      '',
+      '#[test]',
+      'fn closing_active_tab_picks_last() {',
+      '    let mut ws = Workspace::default();',
+      '    let a = ws.open_tab(TabKind::Web);',
+      '    let b = ws.open_tab(TabKind::Note);',
+      '    ws.close_tab(b);',
+      '    assert_eq!(ws.active(), Some(a));',
+      '}',
+      '',
+      '#[test]',
+      'fn closing_unknown_tab_does_nothing() {',
+      '    let mut ws = Workspace::default();',
+      '    ws.open_tab(TabKind::Web);',
+      '    let gone = ws.close_tab(TabId(99));',
+      '    assert!(gone.is_none());',
+      '}'
+    ];
+    const codeR = right.map((src, i) => ({
+      n: i + 1, parts: this.hl(src, p, acc), bg: 'transparent',
+      mark: g.add, num: k.text3, pass: i === 3 || i === 12, passColor: g.add
+    }));
+
+    const completions = [
+      ['last()', 'Option<&Tab>'], ['len()', 'usize'], ['last_mut()', 'Option<&mut Tab>'], ['iter()', 'Iter<Tab>']
+    ].map((c, i) => ({ name: c[0], type: c[1], bg: i === 0 ? k.soft : 'transparent', color: i === 0 ? k.strong : k.text2 }));
+
+    // [name, depth, kind, status]; kind is open, closed or a file type
+    const treeSrc = [
+      ['fledge-core', 0, 'open', '', ' C:\\code'], ['src', 1, 'open'], ['core', 2, 'open'],
+      ['mod.rs', 3, 'rs'], ['tab_model.rs', 3, 'rs', 'M'], ['workspace.rs', 3, 'rs', 'M'],
+      ['plugins', 2, 'closed'], ['search', 2, 'closed'], ['lib.rs', 2, 'rs'], ['main.rs', 2, 'rs'],
+      ['tests', 1, 'open'], ['tab_model_test.rs', 2, 'rs', 'A'],
+      ['docs', 1, 'open'], ['scratch.md', 2, 'md', 'U'],
+      ['.gitignore', 1, 'lock'], ['Cargo.lock', 1, 'lock'], ['Cargo.toml', 1, 'toml'], ['README.md', 1, 'md'],
+      ['Dependencies', 0, 'closed']
+    ];
+    const stColor = { M: g.mod, A: g.add, U: g.unv };
+    const tree = treeSrc.map((t) => {
+      const dir = t[2] === 'open' || t[2] === 'closed';
+      const sel = t[0] === 'workspace.rs';
+      return {
+        name: t[0], dim: t[4] || '', dimColor: k.text3,
+        pad: (6 + t[1] * 14) + 'px', isDir: dir, isFile: !dir,
+        open: t[2] === 'open', closed: t[2] === 'closed',
+        icon: dir ? ft.dir : ft[t[2]], chev: k.text3,
+        st: t[3] || '', stColor: stColor[t[3]] || k.text3,
+        color: t[3] ? stColor[t[3]] : (sel ? k.strong : k.text2),
+        bg: sel ? k.rowOn : 'transparent'
+      };
+    });
+
+    const dim = k.text3;
+    const term = [
+      [['PS C:\\code\\fledge-core> ', dim], ['cargo test --test tab_model_test', k.text]],
+      [['    Finished ', g.add], ['`test` profile [unoptimized + debuginfo] target(s) in 3.42s', k.text2]],
+      [['     Running ', g.add], ['tests\\tab_model_test.rs', k.text2]],
+      [['', k.text]],
+      [['running 2 tests', k.text2]],
+      [['test closing_active_tab_picks_last ... ', k.text2], ['ok', g.add]],
+      [['test closing_unknown_tab_does_nothing ... ', k.text2], ['ok', g.add]],
+      [['', k.text]],
+      [['test result: ', k.text2], ['ok', g.add], ['. 2 passed; 0 failed; 0 ignored; finished in 0.01s', k.text2]],
+      [['PS C:\\code\\fledge-core> ', dim], ['', k.text, acc]]
+    ].map((line) => ({
+      parts: line.map((s) => ({ t: s[0], c: s[1], bg: s[2] || 'transparent', pad: s[2] ? '0 4px' : '0' }))
+    }));
+
+    const outline = [
+      ['S', 'Workspace', 0], ['I', 'impl Workspace', 0], ['f', 'open_tab', 1], ['f', 'close_tab', 1, true], ['f', 'index_of', 1], ['f', 'active', 1]
+    ].map((o) => ({
+      badge: o[0], name: o[1], pad: (8 + o[2] * 16) + 'px',
+      badgeBg: o[0] === 'f' ? k.plug.forgeBg : k.plug.notesBg, badgeFg: o[0] === 'f' ? k.plug.forge : k.plug.notes,
+      bg: o[3] ? k.rowOn : 'transparent', color: o[3] ? k.strong : k.text2
+    }));
+
+    // git view
+    const changes = [
+      ['workspace.rs', 'src/core', g.mod, true], ['tab_model.rs', 'src/core', g.mod, false], ['tab_model_test.rs', 'tests', g.add, false]
+    ].map((c) => ({ name: c[0], dir: c[1], color: c[2], on: true, bg: c[3] ? k.rowOn : 'transparent' }));
+
+    const pd = Object.assign({}, p, { emph: p.emphDel });
+    const pa = Object.assign({}, p, { emph: p.emphAdd });
+    const same = (n, src) => ({ n: n, parts: this.hl(src, p, acc), bg: 'transparent' });
+    const del = (n, src) => ({ n: n, parts: this.hl(src, pd, acc), bg: g.delBg });
+    const add = (n, src) => ({ n: n, parts: this.hl(src, pa, acc), bg: g.addBg });
+    const fill = () => ({ n: '', parts: [], bg: g.fill });
+    const ctx = [
+      'impl Workspace {',
+      '    pub fn open_tab(&mut self, kind: TabKind) -> TabId {',
+      '        let id = TabId(self.next_id);',
+      '        self.next_id += 1;',
+      '        self.tabs.push(Tab::new(id, kind));',
+      '        self.active = Some(id);',
+      '        id',
+      '    }',
+      ''
+    ];
+    const rows = ctx.map((s, i) => [same(11 + i, s), same(11 + i, s)]);
+    rows.push([del(20, '    pub fn close_tab(&mut self, ⟪index: usize⟫) -> ⟪Tab⟫ {'), add(20, '    pub fn close_tab(&mut self, ⟪id: TabId⟫) -> ⟪Option<Tab>⟫ {')]);
+    rows.push([fill(), add(21, '        let i = self.index_of(id)?;')]);
+    rows.push([del(21, '        let tab = self.tabs.remove(⟪index⟫);'), add(22, '        let tab = self.tabs.remove(⟪i⟫);')]);
+    rows.push([fill(), add(23, '        if self.active == Some(id) {')]);
+    rows.push([del(22, '        self.active = self.tabs.last().map(|t| t.id);'), add(24, '            self.active = self.tabs.last().map(|t| t.id);')]);
+    rows.push([fill(), add(25, '        }')]);
+    rows.push([del(23, '        ⟪tab⟫'), add(26, '        ⟪Some(tab)⟫')]);
+    rows.push([same(24, '    }'), same(27, '    }')]);
+    rows.push([fill(), add(28, '')]);
+    rows.push([fill(), add(29, '    fn index_of(&self, id: TabId) -> Option<usize> {')]);
+    rows.push([fill(), add(30, '        self.tabs.iter().position(|t| t.id == id)')]);
+    rows.push([fill(), add(31, '    }')]);
+    rows.push([same(25, '}'), same(32, '}')]);
+
+    const branches = [
+      ['Local', 'head'], ['main', 'branch', true], ['feat/customize-panel', 'branch'], ['spike/multi-webview', 'branch'],
+      ['Remote', 'head'], ['origin/main', 'branch']
+    ].map((b) => {
+      const head = b[1] === 'head';
+      return {
+        name: b[0], isBranch: !head, current: !!b[2], pad: head ? '8px' : '14px',
+        color: head ? k.text3 : (b[2] ? k.strong : k.text2), weight: head || b[2] ? '600' : '400',
+        size: head ? '11px' : '12.5px', icon: b[2] ? acc : k.text3
+      };
+    });
+
+    const lane0 = k.plug.forge;
+    const lane1 = k.plug.notes;
+    const refPill = (t, strong) => ({ t: t, line: strong ? acc : k.line, color: strong ? k.strong : k.text2 });
+    const commits = [
+      ['Draft the Customize panel', '', 'M24 12V24', false, true, [refPill('feat/customize-panel')], 'Today 09:40'],
+      ['Track the active tab in Workspace', 'M10 12V24', 'M24 0V24', true, false, [refPill('main', true), refPill('origin/main')], 'Oct 7', true],
+      ['Store the palette choice in settings', 'M10 0V24', 'M24 0V24', false, true, [], 'Oct 6'],
+      ['Add Workspace::open_tab', 'M10 0V24', 'M24 0V24', true, false, [], 'Oct 4'],
+      ['Index tab titles with SQLite FTS5', 'M10 0V24', 'M24 0C24 7 10 7 10 12', true, false, [], 'Oct 3'],
+      ['Describe the tab model', 'M10 0V24', '', true, false, [], 'Sep 30'],
+      ['Start fledge-core', 'M10 0V12', '', true, false, [], 'Sep 25']
+    ].map((c) => ({
+      msg: c[0], p0: c[1], p1: c[2], r0: c[3] ? 4 : 0, r1: c[4] ? 4 : 0, refs: c[5], date: c[6],
+      bg: c[7] ? k.rowOn : 'transparent', color: c[7] ? k.strong : k.text2
+    }));
+
+    const onBg = k.rowOn;
+    return {
+      k: k, f: f, p: p, g: g, ft: ft, theme: theme, accent: acc, yes: true,
+      isEditor: isEditor, isGit: isGit,
+      sidebar: sidebar, noSidebar: !sidebar, peek: peek,
+      peekShadow: light ? '16px 0 40px rgba(20,22,30,0.18)' : '16px 0 48px rgba(0,0,0,0.5)',
+      railOpen: isEditor && !sidebar, railClosed: isGit || sidebar,
+      cardMargin: sidebar ? '0 8px 8px 0' : '0 8px 8px 8px',
+      projBg: isEditor ? onBg : 'transparent', projColor: isEditor ? k.text : k.iconDim,
+      commitBg: isGit ? onBg : 'transparent', commitColor: isGit ? k.text : k.iconDim,
+      termColor: isEditor ? k.strong : k.text2, logColor: isGit ? k.strong : k.text2,
+      bottomH: isGit ? '260px' : '220px', bottomLabel: isGit ? 'Git log' : 'Terminal',
+      cursorPos: isGit ? 'Ln 20, Col 1' : 'Ln 24, Col 38',
+      codeL: codeL, codeR: codeR, completions: completions, tree: tree, term: term, outline: outline,
+      changes: changes, diffL: rows.map((r) => r[0]), diffR: rows.map((r) => r[1]),
+      branches: branches, commits: commits, lane0: lane0, lane1: lane1
+    };
+  }
+}
+</script>
+</body>
+</html>
