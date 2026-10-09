@@ -79,6 +79,13 @@ because it is long; that commit is the unchanged original. In short:
 - ⚠️ The 15 sites in `docs/research/06-engine-and-ui-performance.md` (Phase 0
   checklist, item 4) are the owner's real daily set.
 
+**Facts the owner gave (2026-10-09):**
+- They stay signed into Google every day as part of their normal workflow
+  (Gmail, Calendar, Drive, YouTube). Google sign-in is therefore a must, not a
+  nice-to-have.
+- They watch YouTube, and sometimes Disney+ and Hulu, in the browser.
+- They have no Mac.
+
 **Size:** this is four plans sharing one braindump, as the brief proposes.
 The split is confirmed at step 4, after research.
 
@@ -117,6 +124,7 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D2 | Which platforms does v1 run on? | Windows 11 only. macOS is neither built nor tested in v1 (the owner has no Mac and doesn't want Mac testing). ⚠️ Linux is assumed out too: the owner didn't name it, and wry's Linux child web views are X11-only (`docs/research/06-engine-and-ui-performance.md`, "Defer") | macOS in v1: no machine to test on, and it needs far more built (find, downloads, certificate warnings, mute; `docs/research/02-browser-v1-scope.md`). Linux in v1: it would make CEF the plan there | 2026-10-09 |
 | D1 | May the plan be committed while it is being planned? (`CLAUDE.md` says commits only when the owner asks) | Yes: commit as we go, to the local branch `claude/plan-atlas-v1`; no pushes, since there is no remote | Leaving the plan uncommitted until the end: a compaction or a closed session would lose the only record of the decisions | 2026-10-09 |
 
 ## What exists today
@@ -147,10 +155,10 @@ To be written (step 5).
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
 
-- **Platforms and engine:** engine and UI (A, B or other); platforms (Windows
-  only? Linux? macOS, and is there a Mac?); Google sign-in and the fallback if
-  blocked; Widevine-only services; spike thresholds and the frozen page under
-  the palette; a patched fork of wry or tao; Haze and Glass on macOS.
+- **Platforms and engine:** engine and UI (A, B or other); what to do if
+  Google blocks sign-in in WebView2 (research 07 running); whether Disney+ and
+  Hulu play in WebView2 (research 07 running); spike thresholds and the frozen
+  page under the palette; a patched fork of wry or tao.
 - **Browser behaviour:** pinning shortcut (Ctrl S or Ctrl Alt S); default
   search engine and live suggestions; WebView2's own password saving; the
   Passwords button; what the CSV import holds and from which tool.
@@ -178,6 +186,11 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Round 1 answers: v1 is Windows only, with no macOS work or
+  testing (D2). The owner uses Google daily and streams YouTube, Disney+ and
+  Hulu; a researcher was sent to check Google sign-in and DRM in WebView2
+  as of today (`docs/research/07-google-sign-in-and-drm.md`). Q1 (engine and
+  UI) and Q5 (realism and the four-plan split) are still open.
 - **2026-10-09** — Plan file created from the brief in
   `docs/next-session-prompt.md`. Research notes 01–06 read (summaries,
   recommendations and owner questions). First question round sent (engine
