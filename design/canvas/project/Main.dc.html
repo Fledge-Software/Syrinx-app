@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Atlas home page</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+button,input{font:inherit;color:inherit}
+</style>
+</helmet>
+<div style="position: relative; isolation: isolate; width: 1440px; height: 900px; box-sizing: border-box; display: flex; background: {{k.ground}}; color: {{k.text}}; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px; overflow: hidden">
+
+<!-- window material: stands in for what the OS draws behind a transparent window -->
+<sc-if value="{{k.material}}" hint-placeholder-val="{{ false }}">
+<div aria-hidden="true" style="position: absolute; left: 0; top: 0; width: 1440px; height: 900px; z-index: -1; background: {{k.materialBg}}; backdrop-filter: {{k.materialBlur}}"></div>
+</sc-if>
+<sc-if value="{{k.grain}}" hint-placeholder-val="{{ false }}">
+<svg aria-hidden="true" width="1440" height="900" style="position: absolute; left: 0; top: 0; z-index: -1; opacity: 0.09; pointer-events: none"><filter id="atlas-grain-home"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"></feTurbulence><feColorMatrix type="saturate" values="0"></feColorMatrix></filter><rect width="1440" height="900" filter="url(#atlas-grain-home)"></rect></svg>
+</sc-if>
+
+<dc-import name="Sidebar" screen="home" theme="{{theme}}" embedded="{{yes}}" accent="{{accent}}" hint-size="264px,900px" style="width: 264px; height: 900px"></dc-import>
+
+<div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column">
+
+<!-- title bar: drag region, app actions, window controls -->
+<div style="height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 2px; color: {{k.icon}}">
+<button aria-label="Downloads" title="Downloads (Ctrl J)" style="width: 32px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg></button>
+<button aria-label="Atlas menu" style="width: 32px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg></button>
+<span style="width: 8px"></span>
+<button aria-label="Minimize" style="width: 46px; height: 36px; border: 0; padding: 0; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 12h16"></path></svg></button>
+<button aria-label="Maximize" style="width: 46px; height: 36px; border: 0; padding: 0; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1"></rect></svg></button>
+<button aria-label="Close window" style="width: 46px; height: 36px; border: 0; padding: 0; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"></path></svg></button>
+</div>
+
+<!-- page card -->
+<main aria-label="New tab" style="flex-grow: 1; min-height: 0; margin: 0 8px 8px 0; box-sizing: border-box; border-radius: 14px; background: {{k.card}}; border: 1px solid {{k.cardLine}}; box-shadow: {{k.cardShadow}}; overflow: hidden; padding: 28px 64px 32px; display: flex; flex-direction: column">
+
+<header style="display: flex; align-items: center; gap: 12px">
+<span aria-hidden="true" style="width: 30px; height: 30px; border-radius: 9px; background: {{accent}}; display: flex; align-items: center; justify-content: center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{k.badgeText}}" stroke-width="2.3" stroke-linejoin="round"><path d="M12 3.5l6.5 16.5-6.5-4.2-6.5 4.2z"></path></svg></span>
+<h1 style="margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em">Atlas</h1>
+<span style="margin-left: auto; color: {{k.iconDim}}">Friday, October 9</span>
+<button aria-expanded="{{customize}}" style="height: 30px; padding: 0 12px; border: 1px solid {{k.pillLine}}; border-radius: 15px; background: {{custBg}}; color: {{k.text2}}; display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><circle cx="16" cy="7" r="2"></circle><circle cx="8" cy="17" r="2"></circle></svg>
+Customize
+</button>
+</header>
+
+<!-- search: opens the palette, so it is a button, not a second text field -->
+<div style="display: flex; flex-direction: column; align-items: center; gap: 14px; margin-top: 60px">
+<button style="width: 760px; height: 54px; box-sizing: border-box; border-radius: 27px; background: {{k.pill}}; border: 1px solid {{k.pillLine}}; box-shadow: {{k.pillShadow}}; display: flex; align-items: center; padding: 0 16px 0 22px; gap: 14px; color: {{k.text3}}; text-align: left; cursor: text">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
+<span style="flex-grow: 1; font-size: 15px">Search the web, your tabs, notes and plugins</span>
+<span style="font-size: 11px; font-weight: 500; line-height: 18px; color: {{k.iconDim}}; border: 1px solid {{k.key}}; border-bottom-width: 2px; border-radius: 5px; padding: 0 6px">Ctrl K</span>
+</button>
+<div style="display: flex; gap: 24px; font-size: 12px; color: {{k.text3}}">
+<span style="display: flex; align-items: center; gap: 6px"><kbd style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; color: {{k.text2b}}">&gt;</kbd>commands</span>
+<span style="display: flex; align-items: center; gap: 6px"><kbd style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; color: {{k.text2b}}">@</kbd>plugins</span>
+<span style="display: flex; align-items: center; gap: 6px"><kbd style="font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; color: {{k.text2b}}">/</kbd>open tabs</span>
+</div>
+</div>
+
+<!-- quick access -->
+<section aria-labelledby="atlas-qa" style="margin-top: 48px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; align-items: center; gap: 16px">
+<h2 id="atlas-qa" style="margin: 0; font-size: 14px; font-weight: 600">Quick access</h2>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: {{k.text3}}"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 4px; background: {{accent}}"></span>Integrated app</span>
+<button style="margin-left: auto; height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: {{k.iconDim}}; font-size: 12.5px; cursor: pointer">Edit</button>
+</div>
+<div style="display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 18px 10px">
+<sc-for list="{{tiles}}" as="t" hint-placeholder-count="23">
+<a href="#" aria-label="{{t.aria}}" style="min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; color: {{t.label2}}; text-decoration: none">
+<span aria-hidden="true" style="position: relative; width: 72px; height: 72px; border-radius: 18px; background: {{t.bg}}; color: {{t.fg}}; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 600">{{t.letter}}
+<sc-if value="{{t.integrated}}" hint-placeholder-val="{{ false }}">
+<span style="position: absolute; top: 8px; left: 8px; width: 8px; height: 8px; border-radius: 4px; background: {{t.accent}}"></span>
+</sc-if>
+<sc-if value="{{t.hasBadge}}" hint-placeholder-val="{{ false }}">
+<span style="position: absolute; top: -5px; right: -5px; min-width: 19px; height: 19px; box-sizing: border-box; padding: 0 5px; border-radius: 10px; background: {{t.accent}}; color: {{t.badgeText}}; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px {{t.ring}}">{{t.badge}}</span>
+</sc-if>
+</span>
+<span style="max-width: 100%; font-size: 12px; text-align: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">{{t.label}}</span>
+</a>
+</sc-for>
+<button style="min-width: 0; border: 0; padding: 0; background: transparent; display: flex; flex-direction: column; align-items: center; gap: 8px; color: {{k.text3}}; cursor: pointer">
+<span aria-hidden="true" style="width: 72px; height: 72px; box-sizing: border-box; border-radius: 18px; border: 1.5px dashed {{k.dash2}}; display: flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></span>
+<span style="font-size: 12px">Add shortcut</span>
+</button>
+</div>
+</section>
+
+<!-- plugins: each card shows where you left off, which the sidebar list cannot -->
+<section aria-labelledby="atlas-plugins" style="margin-top: 36px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: baseline; gap: 14px">
+<h2 id="atlas-plugins" style="margin: 0; font-size: 14px; font-weight: 600">Plugins</h2>
+<span style="font-size: 12px; color: {{k.text3}}">Built in. Each opens as a tab.</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px">
+
+<a href="#" style="min-width: 0; box-sizing: border-box; border-radius: 14px; background: {{k.surf}}; border: 1px solid {{k.surfLine}}; box-shadow: {{k.surfShadow}}; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; color: {{k.text}}; text-decoration: none">
+<span style="display: flex; align-items: flex-start; gap: 12px">
+<span aria-hidden="true" style="width: 34px; height: 34px; flex-shrink: 0; border-radius: 10px; background: {{k.plug.forgeBg}}; display: flex; align-items: center; justify-content: center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.forge}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"></path></svg></span>
+<span style="min-width: 0; display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 600">Forge</span><span style="font-size: 12px; line-height: 1.45; color: {{k.text3}}">Code editor, git and terminal.</span></span>
+</span>
+<span aria-hidden="true" style="height: 1px; background: {{k.surfLine}}"></span>
+<span style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: {{k.text2}}">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{k.text3}}" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="6" r="2.2"></circle><circle cx="7" cy="18" r="2.2"></circle><circle cx="17" cy="8" r="2.2"></circle><path d="M7 8.2v7.6M17 10.2c0 3.5-4 4-9 6"></path></svg>
+<span style="flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">fledge-core on main</span>
+<span style="color: {{k.text3}}">3 changed</span>
+</span>
+</a>
+
+<a href="#" style="min-width: 0; box-sizing: border-box; border-radius: 14px; background: {{k.surf}}; border: 1px solid {{k.surfLine}}; box-shadow: {{k.surfShadow}}; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; color: {{k.text}}; text-decoration: none">
+<span style="display: flex; align-items: flex-start; gap: 12px">
+<span aria-hidden="true" style="width: 34px; height: 34px; flex-shrink: 0; border-radius: 10px; background: {{k.plug.notesBg}}; display: flex; align-items: center; justify-content: center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.notes}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"></path><path d="M9 12h6M9 16h6"></path></svg></span>
+<span style="min-width: 0; display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 600">Notes</span><span style="font-size: 12px; line-height: 1.45; color: {{k.text3}}">Linked pages, databases and backlinks.</span></span>
+</span>
+<span aria-hidden="true" style="height: 1px; background: {{k.surfLine}}"></span>
+<span style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: {{k.text2}}">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{k.text3}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg>
+<span style="flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">Panel design notes</span>
+<span style="color: {{k.text3}}">12 min ago</span>
+</span>
+</a>
+
+<a href="#" style="min-width: 0; box-sizing: border-box; border-radius: 14px; background: {{k.surf}}; border: 1px solid {{k.surfLine}}; box-shadow: {{k.surfShadow}}; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; color: {{k.text}}; text-decoration: none">
+<span style="display: flex; align-items: flex-start; gap: 12px">
+<span aria-hidden="true" style="width: 34px; height: 34px; flex-shrink: 0; border-radius: 10px; background: {{k.plug.fledgeBg}}; display: flex; align-items: center; justify-content: center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.fledge}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-14 15-14 0 10-6 15-14 15M5 19c3-5 6-8 11-10"></path></svg></span>
+<span style="min-width: 0; display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 600">Fledge</span><span style="font-size: 12px; line-height: 1.45; color: {{k.text3}}">Leads, mail, calendar and docs.</span></span>
+</span>
+<span aria-hidden="true" style="height: 1px; background: {{k.surfLine}}"></span>
+<span style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: {{k.text2}}">
+<span aria-hidden="true" style="width: 7px; height: 7px; flex-shrink: 0; margin: 0 3px; border-radius: 4px; background: {{accent}}"></span>
+<span style="flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">2 new leads</span>
+<span style="color: {{k.text3}}">Next call 2:30 PM</span>
+</span>
+</a>
+
+<a href="#" style="min-width: 0; box-sizing: border-box; border-radius: 14px; border: 1.5px dashed {{k.dash2}}; padding: 14px 16px; display: flex; align-items: flex-start; gap: 12px; color: {{k.text3}}; text-decoration: none">
+<span aria-hidden="true" style="width: 34px; height: 34px; flex-shrink: 0; box-sizing: border-box; border-radius: 10px; border: 1px solid {{k.dash2}}; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></span>
+<span style="min-width: 0; display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 600; color: {{k.text2}}">Browse plugins</span><span style="font-size: 12px; line-height: 1.45">Add tools from the library or install your own.</span></span>
+</a>
+
+</div>
+</section>
+</main>
+</div>
+
+<!-- customize panel: opened by the Customize button -->
+<sc-if value="{{customize}}" hint-placeholder-val="{{ false }}">
+<section aria-label="Customize" style="position: absolute; right: 72px; top: 104px; z-index: 2; width: 420px; box-sizing: border-box; border-radius: 16px; background: {{k.panel}}; border: 1px solid {{k.panelLine}}; box-shadow: {{k.panelShadow}}; padding: 16px; display: flex; flex-direction: column; gap: 16px; color: {{k.text}}">
+<div style="display: flex; align-items: center; gap: 8px">
+<h2 style="margin: 0; flex-grow: 1; font-size: 15px; font-weight: 600">Customize</h2>
+<button aria-label="Close" style="width: 28px; height: 28px; border: 0; padding: 0; border-radius: 7px; background: transparent; color: {{k.iconDim}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: {{k.text3}}">Palette</h3>
+<sc-for list="{{palettes}}" as="p" hint-placeholder-count="5">
+<button aria-pressed="{{p.selected}}" style="height: 56px; width: 100%; flex-shrink: 0; box-sizing: border-box; border: 1px solid {{p.rowLine}}; border-radius: 12px; background: {{p.rowBg}}; padding: 0 14px 0 8px; display: flex; align-items: center; gap: 12px; color: {{p.text}}; text-align: left; cursor: pointer">
+<span aria-hidden="true" style="position: relative; width: 64px; height: 40px; flex-shrink: 0; box-sizing: border-box; border-radius: 8px; overflow: hidden; background: {{p.swatch}}; border: 1px solid {{p.swatchLine}}">
+<span style="position: absolute; left: 6px; top: 7px; width: 12px; height: 4px; border-radius: 2px; background: {{p.accent}}"></span>
+<span style="position: absolute; left: 6px; top: 15px; width: 14px; height: 3px; border-radius: 2px; background: {{p.bar}}"></span>
+<span style="position: absolute; left: 6px; top: 22px; width: 10px; height: 3px; border-radius: 2px; background: {{p.bar}}"></span>
+<span style="position: absolute; left: 25px; top: 5px; right: 4px; bottom: 4px; border-radius: 4px; background: {{p.card}}; border: 1px solid {{p.cardLine}}"></span>
+</span>
+<span style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">{{p.name}}</span><span style="font-size: 12px; color: {{p.sub}}">{{p.desc}}</span></span>
+<sc-if value="{{p.selected}}" hint-placeholder-val="{{ false }}">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{p.check}}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>
+</sc-if>
+</button>
+</sc-for>
+<span style="font-size: 12px; line-height: 1.45; color: {{k.text3}}">Haze and Glass let your desktop show through. They switch to Graphite when Reduce transparency is on.</span>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: {{k.text3}}">Accent</h3>
+<div style="display: flex; align-items: center; gap: 12px">
+<sc-for list="{{accents}}" as="a" hint-placeholder-count="4">
+<button aria-label="{{a.label}}" aria-pressed="{{a.selected}}" style="width: 28px; height: 28px; flex-shrink: 0; border: 0; padding: 0; border-radius: 14px; background: {{a.color}}; box-shadow: {{a.ring}}; cursor: pointer"></button>
+</sc-for>
+<button aria-label="Custom accent colour" style="width: 28px; height: 28px; flex-shrink: 0; box-sizing: border-box; border: 1.5px dashed {{k.dash}}; padding: 0; border-radius: 14px; background: transparent; color: {{k.text3}}; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+<span style="margin-left: auto; font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; color: {{k.text3}}">{{accentHex}}</span>
+</div>
+</div>
+
+<div style="display: flex; align-items: center; gap: 12px; padding-top: 14px; border-top: 1px solid {{k.panelDiv}}">
+<span style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span id="atlas-reduce-transparency" style="font-weight: 500">Reduce transparency</span><span style="font-size: 12px; color: {{k.text3}}">Follows your system setting.</span></span>
+<button role="switch" aria-checked="false" aria-labelledby="atlas-reduce-transparency" style="width: 36px; height: 20px; flex-shrink: 0; box-sizing: border-box; border: 1px solid {{k.key}}; padding: 2px; border-radius: 10px; background: {{k.field}}; display: flex; align-items: center; cursor: pointer"><span aria-hidden="true" style="width: 14px; height: 14px; border-radius: 7px; background: {{k.iconDim}}"></span></button>
+</div>
+</section>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"graphite","options":["graphite","haze","glass","tint","paper"]},"accent":{"editor":"color","default":"#FF8A65","options":["#FF8A65","#6EA8FF","#6FD3A8","#E8C16A"]},"customize":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  // Base palette tokens. The same method sits in Sidebar, Main, Palette and
+  // Browsing (a .dc.html file cannot import code); change all four together.
+  tokens(theme, accent) {
+    const hex = /^#[0-9a-fA-F]{6}$/.test(accent || '') ? accent : '#FF8A65';
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    const mx = Math.max(r, g, b);
+    const mn = Math.min(r, g, b);
+    const d = mx - mn;
+    let hue = 0;
+    if (d > 0) {
+      if (mx === r) hue = ((g - b) / d) % 6;
+      else if (mx === g) hue = (b - r) / d + 2;
+      else hue = (r - g) / d + 4;
+    }
+    const h = Math.round((hue * 60 + 360) % 360);
+    const lit = (mx + mn) / 2;
+    const sat = d > 0 ? Math.round((d / (1 - Math.abs(2 * lit - 1))) * 100) : 0;
+    const hsl = (s, l) => 'hsl(' + h + ', ' + Math.min(s, sat) + '%, ' + l + '%)';
+    const darkTiles = [
+      { bg: '#1E2A44', fg: '#7BA7FF' }, { bg: '#3A2420', fg: '#FF8F7A' },
+      { bg: '#3A3220', fg: '#F2C55C' }, { bg: '#2A2C33', fg: '#D6D8DE' },
+      { bg: '#2A2644', fg: '#A99BFF' }, { bg: '#1F3836', fg: '#5ED3C8' },
+      { bg: '#38331C', fg: '#F5D547' }, { bg: '#3A2430', fg: '#F28BB0' }
+    ];
+    const lightTiles = [
+      { bg: '#DCE6FF', fg: '#2F5BD3' }, { bg: '#FFE1DA', fg: '#B83A25' },
+      { bg: '#FBEBC4', fg: '#8A5A00' }, { bg: '#E4E5EA', fg: '#3E4048' },
+      { bg: '#E6E0FF', fg: '#5A43CF' }, { bg: '#D3F0EC', fg: '#0D7068' },
+      { bg: '#F8EDBE', fg: '#7A6000' }, { bg: '#FADCE8', fg: '#AE2E63' }
+    ];
+    const darkPlug = { forgeBg: '#1E2A44', forge: '#7BA7FF', notesBg: '#2A2644', notes: '#B79AFF', fledgeBg: '#1F3A2E', fledge: '#6FD3A8', neutralBg: '#2A2C33', neutral: '#C9CBD1' };
+    const lightPlug = { forgeBg: '#DCE6FF', forge: '#2F5BD3', notesBg: '#E6E0FF', notes: '#5A43CF', fledgeBg: '#D3F0E2', fledge: '#11774F', neutralBg: '#E4E5EA', neutral: '#3E4048' };
+    const k = {
+      ground: '#141519', grain: false, material: false, materialBg: 'transparent', materialBlur: 'none',
+      text: '#ECEDF0', strong: '#FFFFFF', text2: '#C9CBD1', text2b: '#D5D7DD', text3: '#8B8E98',
+      icon: '#B4B7BF', iconDim: '#A3A6AE', disabled: '#50535C', line: '#24262C',
+      field: 'rgba(255,255,255,0.06)', fieldShadow: 'none',
+      rowOn: 'rgba(255,255,255,0.09)', rowOnShadow: 'none',
+      key: '#383B43', dash: '#43464F', dash2: '#363941',
+      badgeText: '#1F120D', badgeRing: '#141519',
+      card: '#0D0E11', cardLine: '#23252B', cardShadow: 'none', cardRing: '#0D0E11',
+      surf: '#15161B', surfLine: '#24262C', surfShadow: 'none',
+      pill: '#17181D', pillLine: '#2C2F36', pillShadow: '0 12px 32px rgba(0,0,0,0.35)',
+      chipLine: '#2C2F36', chipOn: 'rgba(255,255,255,0.11)',
+      panel: '#1B1C21', panelLine: '#31343C', panelSide: '#17181D', panelDiv: '#282B32',
+      panelShadow: '0 34px 90px rgba(0,0,0,0.6)', input: '#101115', inputLine: '#2C2F36',
+      scrim: 'rgba(6,7,9,0.62)',
+      webShadow: '0 0 0 1px rgba(0,0,0,0.55), 0 10px 30px rgba(0,0,0,0.3)',
+      tiles: darkTiles, plug: darkPlug,
+      ink: hex, soft: hex + '26', softLine: hex + '8C', ring: hex + '33'
+    };
+    if (theme === 'haze') {
+      Object.assign(k, {
+        ground: 'linear-gradient(rgba(26,27,32,0.74), rgba(26,27,32,0.74)), radial-gradient(60% 70% at 10% 15%, #3F52AE 0%, rgba(63,82,174,0) 70%), radial-gradient(55% 60% at 90% 5%, #6B3F94 0%, rgba(107,63,148,0) 70%), radial-gradient(60% 65% at 80% 95%, #1D6F6A 0%, rgba(29,111,106,0) 70%), radial-gradient(50% 55% at 15% 100%, #9C5637 0%, rgba(156,86,55,0) 70%), #1A1F35',
+        text: '#EFF0F4', text2: '#D3D5DC', text2b: '#DCDEE4', text3: '#A3A6B0',
+        icon: '#C0C3CB', iconDim: '#AFB2BC', disabled: 'rgba(255,255,255,0.28)', line: 'rgba(255,255,255,0.09)',
+        field: 'rgba(255,255,255,0.07)', rowOn: 'rgba(255,255,255,0.11)',
+        key: 'rgba(255,255,255,0.2)', dash: 'rgba(255,255,255,0.26)', dash2: 'rgba(255,255,255,0.2)',
+        badgeRing: '#262833',
+        card: 'rgba(10,11,14,0.5)', cardLine: 'rgba(255,255,255,0.08)', cardRing: '#16171C',
+        surf: 'rgba(255,255,255,0.045)', surfLine: 'rgba(255,255,255,0.08)',
+        pill: 'rgba(255,255,255,0.06)', pillLine: 'rgba(255,255,255,0.12)', pillShadow: '0 12px 32px rgba(0,0,0,0.3)',
+        chipLine: 'rgba(255,255,255,0.14)', chipOn: 'rgba(255,255,255,0.14)',
+        panel: '#202127', panelLine: 'rgba(255,255,255,0.12)', panelSide: '#1B1C21', panelDiv: 'rgba(255,255,255,0.08)',
+        input: 'rgba(0,0,0,0.28)', inputLine: 'rgba(255,255,255,0.12)', scrim: 'rgba(6,7,10,0.5)',
+        webShadow: '0 0 0 1px rgba(0,0,0,0.4), 0 10px 30px rgba(0,0,0,0.3)'
+      });
+    } else if (theme === 'glass') {
+      const edge = 'inset 0 1px 0 rgba(255,255,255,0.24), inset 0 0 0 1px rgba(255,255,255,0.07)';
+      Object.assign(k, {
+        ground: 'radial-gradient(circle 230px at 16% 20%, #4A62D6 0%, #4A62D6 98%, rgba(74,98,214,0) 100%), radial-gradient(circle 170px at 80% 26%, #9446B0 0%, #9446B0 98%, rgba(148,70,176,0) 100%), radial-gradient(circle 280px at 64% 92%, #C4623B 0%, #C4623B 98%, rgba(196,98,59,0) 100%), radial-gradient(circle 190px at 6% 90%, #23948A 0%, #23948A 98%, rgba(35,148,138,0) 100%), linear-gradient(160deg, #1B2550 0%, #2A1838 55%, #13252B 100%)',
+        material: true, materialBg: 'rgba(16,17,24,0.46)', materialBlur: 'blur(30px) saturate(1.6)',
+        swatch: 'linear-gradient(rgba(16,17,24,0.3), rgba(16,17,24,0.3)), linear-gradient(135deg, #4A62D6 0%, #9446B0 48%, #C4623B 100%)',
+        text: '#F4F5F8', text2: '#E0E2E8', text2b: '#E6E8ED', text3: '#BCBFCA',
+        icon: '#D0D3DA', iconDim: '#C2C5CE', disabled: 'rgba(255,255,255,0.32)', line: 'rgba(255,255,255,0.14)',
+        field: 'rgba(255,255,255,0.10)', fieldShadow: edge,
+        rowOn: 'rgba(255,255,255,0.16)', rowOnShadow: edge,
+        key: 'rgba(255,255,255,0.28)', dash: 'rgba(255,255,255,0.32)', dash2: 'rgba(255,255,255,0.26)',
+        badgeRing: '#2B2E44',
+        card: 'rgba(255,255,255,0.05)', cardLine: 'rgba(255,255,255,0.16)', cardShadow: 'inset 0 1px 0 rgba(255,255,255,0.18)', cardRing: '#2B2E44',
+        surf: 'rgba(255,255,255,0.08)', surfLine: 'rgba(255,255,255,0.16)', surfShadow: edge + ', 0 10px 28px rgba(0,0,0,0.18)',
+        pill: 'rgba(255,255,255,0.10)', pillLine: 'rgba(255,255,255,0.22)', pillShadow: edge + ', 0 14px 36px rgba(0,0,0,0.25)',
+        chipLine: 'rgba(255,255,255,0.18)', chipOn: 'rgba(255,255,255,0.18)',
+        panel: 'rgba(28,30,42,0.94)', panelLine: 'rgba(255,255,255,0.16)', panelSide: 'rgba(0,0,0,0.18)', panelDiv: 'rgba(255,255,255,0.09)',
+        panelShadow: 'inset 0 1px 0 rgba(255,255,255,0.14), 0 34px 90px rgba(0,0,0,0.5)',
+        input: 'rgba(0,0,0,0.28)', inputLine: 'rgba(255,255,255,0.14)', scrim: 'rgba(6,7,12,0.42)',
+        webShadow: '0 0 0 1px rgba(255,255,255,0.10), 0 16px 44px rgba(0,0,0,0.35)',
+        tiles: darkTiles.map((t) => ({ bg: t.bg + 'C7', fg: t.fg }))
+      });
+    } else if (theme === 'tint') {
+      Object.assign(k, {
+        ground: 'linear-gradient(155deg, ' + hsl(34, 15) + ' 0%, ' + hsl(24, 9) + ' 55%, ' + hsl(20, 6) + ' 100%)',
+        grain: true,
+        text: hsl(18, 95), text2: hsl(12, 83), text2b: hsl(12, 87), text3: hsl(10, 66),
+        icon: hsl(10, 76), iconDim: hsl(9, 70), disabled: hsl(10, 32), line: 'rgba(255,255,255,0.08)',
+        field: 'rgba(255,255,255,0.07)', rowOn: 'rgba(255,255,255,0.11)',
+        key: 'rgba(255,255,255,0.18)', dash: 'rgba(255,255,255,0.26)', dash2: 'rgba(255,255,255,0.18)',
+        badgeRing: hsl(34, 15),
+        card: hsl(22, 6), cardLine: hsl(18, 14), cardRing: hsl(22, 6),
+        surf: hsl(20, 9), surfLine: hsl(16, 15),
+        pill: hsl(20, 10), pillLine: hsl(16, 19),
+        chipLine: hsl(14, 22), chipOn: 'rgba(255,255,255,0.12)',
+        panel: hsl(18, 11), panelLine: hsl(14, 21), panelSide: hsl(18, 9), panelDiv: hsl(14, 16),
+        input: hsl(20, 6), inputLine: hsl(14, 21), scrim: 'rgba(6,5,5,0.6)'
+      });
+    } else if (theme === 'paper') {
+      Object.assign(k, {
+        ground: '#E9EAEE',
+        text: '#1B1C21', strong: '#0E0F12', text2: '#3A3C44', text2b: '#2B2D34', text3: '#5E616A',
+        icon: '#4A4D56', iconDim: '#5E616A', disabled: '#B1B3BA', line: '#D5D7DD',
+        field: 'rgba(20,22,30,0.06)', rowOn: '#FFFFFF', rowOnShadow: '0 1px 2px rgba(20,22,30,0.10)',
+        key: '#C3C5CC', dash: '#B5B8C0', dash2: '#C3C5CC',
+        badgeRing: '#E9EAEE',
+        card: '#F7F7F9', cardLine: '#DADCE2', cardRing: '#F7F7F9',
+        surf: '#FFFFFF', surfLine: '#E0E2E7', surfShadow: '0 1px 2px rgba(20,22,30,0.05)',
+        pill: '#FFFFFF', pillLine: '#D7D9DF', pillShadow: '0 8px 24px rgba(20,22,30,0.08)',
+        chipLine: '#D5D7DD', chipOn: 'rgba(20,22,30,0.08)',
+        panel: '#FFFFFF', panelLine: '#D5D7DD', panelSide: '#F5F6F8', panelDiv: '#E4E5EA',
+        panelShadow: '0 30px 80px rgba(20,22,30,0.22)', input: '#FFFFFF', inputLine: '#D0D2D9',
+        scrim: 'rgba(20,22,30,0.26)',
+        webShadow: '0 0 0 1px rgba(20,22,30,0.10), 0 6px 20px rgba(20,22,30,0.08)',
+        tiles: lightTiles, plug: lightPlug,
+        ink: 'hsl(' + h + ', ' + Math.min(85, sat) + '%, 36%)', soft: hex + '24'
+      });
+    }
+    if (!k.swatch) k.swatch = k.ground;
+    return k;
+  }
+
+  renderVals() {
+    const acc = this.props.accent ?? '#FF8A65';
+    const theme = this.props.theme ?? 'graphite';
+    const k = this.tokens(theme, acc);
+    // [label, monogram, integrated, unread]
+    const src = [
+      ['Todo List', 'T', 1], ['Drive', 'D', 1], ['Mail', 'M', 1, '4'], ['Calendar', 'C', 1],
+      ['Claude', 'C'], ['Perplexity', 'P'], ['YouTube', 'Y'], ['Stripe', 'S'],
+      ['Canva', 'C'], ['Miro', 'M'], ['Make', 'M'], ['Carrd', 'C'],
+      ['Fillout', 'F'], ['Mercury', 'M'], ['Neon Console', 'N'], ['Plaid', 'P'],
+      ['Goldenmind', 'G'], ['Oddbox', 'O'], ['MMFF', 'M'], ['Portfolio', 'P'],
+      ['Zip Codes', 'Z'], ['VA Jurisdictions', 'V'], ['FAAR', 'F']
+    ];
+    const tiles = src.map((s, i) => {
+      const aria = [s[0]];
+      if (s[3]) aria.push(s[3] + ' unread');
+      if (s[2]) aria.push('integrated app');
+      return {
+        label: s[0], letter: s[1], bg: k.tiles[i % 8].bg, fg: k.tiles[i % 8].fg,
+        integrated: !!s[2], hasBadge: !!s[3], badge: s[3] || '', accent: acc,
+        badgeText: k.badgeText, ring: k.cardRing, label2: k.text2,
+        aria: aria.join(', ')
+      };
+    });
+    // The five base palettes as the Customize panel lists them. Each
+    // thumbnail is drawn from that palette's own tokens.
+    const names = [
+      ['graphite', 'Graphite', 'Solid dark. The default.'],
+      ['haze', 'Haze', 'Dark, softly coloured by your wallpaper.'],
+      ['glass', 'Glass', 'See-through, with light edges.'],
+      ['tint', 'Tint', 'Dark, in your accent colour.'],
+      ['paper', 'Paper', 'Light.']
+    ];
+    const palettes = names.map((n) => {
+      const t = this.tokens(n[0], acc);
+      const on = n[0] === theme;
+      return {
+        name: n[1], desc: n[2], selected: on,
+        swatch: t.swatch, card: t.card, cardLine: t.cardLine, bar: t.disabled, accent: acc,
+        swatchLine: k.panelLine, rowBg: on ? k.rowOn : 'transparent', rowLine: on ? acc : k.panelDiv,
+        text: k.text, sub: k.text3, check: acc
+      };
+    });
+    const accentSrc = [['Coral', '#FF8A65'], ['Blue', '#6EA8FF'], ['Mint', '#6FD3A8'], ['Gold', '#E8C16A']];
+    const accents = accentSrc.map((a) => {
+      const on = a[1].toLowerCase() === String(acc).toLowerCase();
+      return { label: a[0], color: a[1], selected: on, ring: on ? '0 0 0 2px ' + k.panel + ', 0 0 0 4px ' + a[1] : 'none' };
+    });
+    const customize = !!this.props.customize;
+    return {
+      k: k, theme: theme, accent: acc, yes: true, tiles: tiles,
+      customize: customize, custBg: customize ? k.rowOn : 'transparent',
+      palettes: palettes, accents: accents, accentHex: String(acc).toUpperCase()
+    };
+  }
+}
+</script>
+</body>
+</html>

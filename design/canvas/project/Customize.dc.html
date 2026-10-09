@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Atlas customize panel</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+button,input{font:inherit;color:inherit}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; overflow: hidden">
+<dc-import name="Main" theme="{{theme}}" customize="{{yes}}" accent="{{accent}}" hint-size="1440px,900px" style="width: 1440px; height: 900px"></dc-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"graphite","options":["graphite","haze","glass","tint","paper"]},"accent":{"editor":"color","default":"#FF8A65","options":["#FF8A65","#6EA8FF","#6FD3A8","#E8C16A"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'graphite', accent: this.props.accent ?? '#FF8A65', yes: true };
+  }
+}
+</script>
+</body>
+</html>
