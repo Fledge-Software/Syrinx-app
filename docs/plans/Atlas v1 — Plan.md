@@ -124,6 +124,10 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D13 | How many database snapshots, and may the data folder be synced? | A daily `VACUUM INTO` snapshot taken when idle, 7 kept, in the local (not roaming, not synced) app-data folder; Atlas never puts its database in OneDrive or another synced folder | 30 days: more disk for little gain. A synced folder: SQLite's write-ahead log breaks there (`docs/research/03-core-architecture.md`, owner question 4) | 2026-10-09 |
+| D12 | May Atlas carry a patched fork of wry or tao? | Yes, if small: pinned, a handful of patches, each also offered upstream, dropped once upstream merges it | No forks: gaps in shortcut routing or the overlay raise would have to wait or be worked around (`docs/research/01-shell-and-engine.md`, owner question 4) | 2026-10-09 |
+| D11 | The Passwords button, and WebView2's own password saving | No Passwords button in v1, and WebView2's built-in password saving stays off; sites keep the owner signed in through their own cookies | Saving on as a stopgap: passwords would sit in WebView2's profile with no Atlas UI to see or manage them | 2026-10-09 |
+| D10 | Does the import bring in history? | No: history starts empty and fills as the owner browses | Importing history: makes the palette useful on day one, but the owner doesn't want it | 2026-10-09 |
 | D9 | Which engine does "Search the web" use, and does the palette fetch suggestions as you type? | Google, with no live suggestions: while typing, the palette ranks only local tabs, bookmarks and history, so keystrokes stay on the machine and results never wait on the network. Suggestions may become a setting later | Google with live suggestions: sends every keystroke to Google and adds network latency to the palette. Another engine: the owner lives in Google | 2026-10-09 |
 | D8 | What pins the sidebar? | Ctrl Alt S, as Zen does; Ctrl S stays free to save in Forge and Notes. The owner approved changing this design decision; `design/README.md` updated | Ctrl S, as Arc does: collides with save in Forge and Notes (`docs/research/02-browser-v1-scope.md`, owner question 3) | 2026-10-09 |
 | D7 | If a live overlay window over the page fails, is a frozen snapshot of the page under the palette acceptable? | No. The palette and the sidebar peek must stay live over the page. The spike tries a borderless GPUI popup window with Acrylic first; if it fails, the next step is WebView2 visual hosting, not a freeze frame | Freeze frame (`docs/research/01-shell-and-engine.md`, recommendation): robust, but a playing video's picture would pause under the palette while its sound continues | 2026-10-09 |
@@ -164,9 +168,14 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
 
 - **Platforms and engine:** what to do if
   Google blocks sign-in in WebView2 (research 07 running); whether Disney+ and
-  Hulu play in WebView2 (research 07 running); a patched fork of wry or tao.
-- **Browser behaviour:** WebView2's own password saving; the Passwords
-  button; what the CSV import holds and from which tool.
+  Hulu play in WebView2 (research 07 running).
+- **Import (raised in round 3):** the owner wants two separate files exported
+  from another browser, one of bookmarks and one of passwords. Two conflicts
+  to settle: browsers export bookmarks as an HTML file, not a CSV
+  (`docs/research/02b-default-browser-import-signing.md`, "Netscape bookmark
+  HTML"); and passwords imported into Atlas need somewhere to live and a way
+  to be filled in, which is a password manager, out of scope for v1
+  (`docs/spec.md`, "Known limits") and against D11.
 - **Data and search:** third-party plugins ever; indexing page text; Fledge
   data copied or searched live; synced data folder; one store or two; snapshot
   retention.
@@ -191,6 +200,11 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Round 3: no history import (D10); no Passwords button and
+  WebView2 password saving off (D11); small upstreamed forks of wry or tao
+  allowed (D12); 7 daily snapshots, never in a synced folder (D13). The
+  owner's import answer (bookmarks and passwords as separate files from
+  another browser) raised two conflicts, put back to the owner.
 - **2026-10-09** — Round 2: the spike's go/no-go bar (D6), overlays must stay
   live with no freeze-frame fallback (D7), the sidebar pins with Ctrl Alt S and
   `design/README.md` now says so (D8), and "Search the web" uses Google
