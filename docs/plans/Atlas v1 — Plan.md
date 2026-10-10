@@ -112,7 +112,7 @@ Standing decisions, recorded so they are not re-litigated:
 | S4 | Graph view | Excluded | `docs/spec.md` | 2026-10-09 |
 | S5 | Command palette | Central | `docs/spec.md` | 2026-10-09 |
 | S6 | Deciding goal for engine and UI | Performance | `docs/decisions.md` | 2026-10-09 |
-| S7 | Import | A CSV file only | `docs/decisions.md` | 2026-10-09 |
+| S7 | Import | ~~A CSV file only~~ Replaced by D14 with the owner's yes: Atlas doesn't read other browsers' profiles; it imports a file the owner exports | `docs/decisions.md` | 2026-10-09 |
 | S8 | Signing, SmartScreen, Microsoft Store | Deferred until productisation | `docs/decisions.md` | 2026-10-09 |
 | S9 | Distribution | Probably open source, released on GitHub | `docs/decisions.md` | 2026-10-09 |
 | S10 | Design | Every decision in `design/README.md` stands; changing one needs the owner's yes | `design/README.md` | 2026-10-09 |
@@ -124,6 +124,8 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D15 | Does v1 import passwords? | No. There is no password manager in v1, so imported passwords would have nowhere safe to live and nothing to fill them in. The owner signs in once per site and stays signed in through cookies. Password import comes with a password manager after v1 | A small password manager in v1 (encrypted store, autofill, Passwords button back): sizeable and security-sensitive, against the spec's scope. Importing into WebView2's own store: no known import API, and it would turn saving on against D11 | 2026-10-09 |
+| D14 | What does the bookmark import read? | The standard HTML bookmarks file that Edge, Chrome and Firefox export (`<!DOCTYPE NETSCAPE-Bookmark-file-1>`, `docs/research/02b-default-browser-import-signing.md`). Replaces "a CSV file only" (S7) with the owner's yes; `docs/decisions.md` updated | CSV only: no browser exports bookmarks as CSV, so the owner would have to convert by hand. Both: a second format to build and test for no gain | 2026-10-09 |
 | D13 | How many database snapshots, and may the data folder be synced? | A daily `VACUUM INTO` snapshot taken when idle, 7 kept, in the local (not roaming, not synced) app-data folder; Atlas never puts its database in OneDrive or another synced folder | 30 days: more disk for little gain. A synced folder: SQLite's write-ahead log breaks there (`docs/research/03-core-architecture.md`, owner question 4) | 2026-10-09 |
 | D12 | May Atlas carry a patched fork of wry or tao? | Yes, if small: pinned, a handful of patches, each also offered upstream, dropped once upstream merges it | No forks: gaps in shortcut routing or the overlay raise would have to wait or be worked around (`docs/research/01-shell-and-engine.md`, owner question 4) | 2026-10-09 |
 | D11 | The Passwords button, and WebView2's own password saving | No Passwords button in v1, and WebView2's built-in password saving stays off; sites keep the owner signed in through their own cookies | Saving on as a stopgap: passwords would sit in WebView2's profile with no Atlas UI to see or manage them | 2026-10-09 |
@@ -169,13 +171,6 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
 - **Platforms and engine:** what to do if
   Google blocks sign-in in WebView2 (research 07 running); whether Disney+ and
   Hulu play in WebView2 (research 07 running).
-- **Import (raised in round 3):** the owner wants two separate files exported
-  from another browser, one of bookmarks and one of passwords. Two conflicts
-  to settle: browsers export bookmarks as an HTML file, not a CSV
-  (`docs/research/02b-default-browser-import-signing.md`, "Netscape bookmark
-  HTML"); and passwords imported into Atlas need somewhere to live and a way
-  to be filled in, which is a password manager, out of scope for v1
-  (`docs/spec.md`, "Known limits") and against D11.
 - **Data and search:** third-party plugins ever; indexing page text; Fledge
   data copied or searched live; synced data folder; one store or two; snapshot
   retention.
@@ -200,6 +195,9 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Import settled: Atlas reads the browser's HTML bookmarks
+  export, replacing "CSV only" with the owner's yes (D14, `docs/decisions.md`
+  updated), and v1 imports no passwords (D15).
 - **2026-10-09** — Round 3: no history import (D10); no Passwords button and
   WebView2 password saving off (D11); small upstreamed forks of wry or tao
   allowed (D12); 7 daily snapshots, never in a synced folder (D13). The

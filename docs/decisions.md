@@ -7,6 +7,12 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-09
 
+- **Import is the browser's bookmarks export, not a CSV.** Edge, Chrome and
+  Firefox export bookmarks only as the standard HTML bookmarks file, so
+  Atlas imports that file. v1 imports no history and no passwords; password
+  import arrives with a password manager after v1. This replaces "Import is a
+  CSV file only" below. Recorded in `docs/plans/Atlas v1 — Plan.md` (D10,
+  D14, D15).
 - **Performance is the deciding goal for the engine and UI.** The owner wants
   Atlas to be as efficient as possible: low memory per tab, fast start, low
   typing and scrolling latency, low idle CPU. TypeScript and Svelte are
@@ -19,7 +25,7 @@ recorded separately, in `design/README.md`.
   The rule "embed an existing engine, don't build one" still holds.
 - **Import is a CSV file only for v1.** Atlas doesn't read other browsers'
   profiles. What the CSV holds (bookmarks, history or both) is still to be
-  confirmed.
+  confirmed. *(Replaced the same day: see the bookmarks-export entry above.)*
 - **Signing, SmartScreen and the Microsoft Store wait.** They come back only if
   Atlas is productised. The Store's rule that browsers use the Chromium or
   Gecko engine does not constrain the engine choice now.
