@@ -180,7 +180,17 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
 - **Notes:** Obsidian compatibility; native or web-view editor; IME scripts.
 - **Fledge:** third-party OAuth client; REST or MCP; drafts never sent; where a
   lead's Company lives; when Stage C happens.
-- **The project:** licence; GitHub account or organisation, and visibility.
+- **The project:**
+  - **Licence: undecided (owner, 2026-10-09).** Blocks going public. Until it
+    is chosen, Atlas takes in outside code only under permissive licences
+    (MIT, Apache-2.0, BSD) or as whole MPL-2.0 files kept under MPL, and no
+    GPL code (the brief already keeps Zed's GPL-3.0 code out). Decided by
+    the owner before the repository goes public.
+  - **GitHub:** the owner's only account is ZanderOfficial. The repository
+    will probably move to the Fledge Software organisation eventually; for now
+    Atlas is a local project. How the Super-Pass tracks and reviews work while
+    Atlas is local is put to the owner (blocks the breakdown gate, not
+    planning).
 
 ## Issue map
 
