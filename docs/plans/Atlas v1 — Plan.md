@@ -1,9 +1,9 @@
 ---
-title: "Atlas v1 — Plan"
+title: "Atlas v1 — Plan (plan 1: engine, browser core and palette)"
 status: draft
 created: 2026-10-09
-subject: Atlas v1, the owner's daily browser on Windows, with the command palette and the Forge, Notes and Fledge plugins
-relates_to: "docs/spec.md; docs/decisions.md; design/README.md; docs/research/"
+subject: Atlas v1 plan 1 — the engine, the browser core and the command palette; also holds the v1-wide decisions D1–D36 that plans 2–4 share
+relates_to: "docs/spec.md; docs/decisions.md; design/README.md; docs/research/; sibling plans: Atlas v1 — Plugins and Fledge, Atlas v1 — Notes, Atlas v1 — Forge"
 issues_repo: not yet created (the repository is local; the owner creates it before anything is published)
 branch: claude/plan-atlas-v1
 ---
@@ -252,26 +252,270 @@ Decisions made in this plan:
 ## What exists today
 
 No code. The repository holds the spec, the owner's decisions, the design
-snapshot (`design/canvas/project/`, palette tokens in the `tokens()` method of
-`design/canvas/project/Main.dc.html`), the original mockup
-(`design/reference/unified-workspace-mockup.html`) and research notes 01–06.
-The repository is local, with no remote.
+snapshot (`design/canvas/project/`, with the five palettes' tokens in the
+`tokens()` method of `design/canvas/project/Main.dc.html` and one board per
+palette in `Theme*.dc.html`), the original mockup
+(`design/reference/unified-workspace-mockup.html`) and research notes 01–08.
+The repository is local, with no remote. A reader grepping the research will
+find Tauri and Svelte everywhere: notes 01–05 were written when the spec's
+Tauri plan stood, and D3 and D4 replaced it.
 
 ## The design
 
-To be written (step 5).
+This section covers plan 1: the engine, the browser core and the palette.
+Plans 2–4 are outlined in their own files (see "Sibling plans").
+
+### The parts
+
+The crate layout follows note 03's "Rust-toolkit variant", so the toolkit
+decision (D4) stays reversible: only `atlas-app` and `atlas-ui` know GPUI,
+and only `atlas-platform` knows WebView2.
+
+```
+Atlas-app/
+  Cargo.toml          virtual workspace: members = ["crates/*"], resolver 3, shared lints
+  crates/
+    atlas-plugin-api/ the Plugin trait and its data types; depends on no Atlas crate (used from plan 2)
+    atlas-core/       tab model, session, closed-tab stack, command registry, shortcut table, palette logic
+    atlas-store/      rusqlite: migrations, settings, tiles, bookmarks, history, sessions, snapshots
+    atlas-search/     tier 1 catalogue (frizbee + frecency); tier 2 full text (behind a FullText trait)
+    atlas-platform/   everything WebView2 and Win32: the shared environment, page web views,
+                      shortcuts, fullscreen, crash, suspend, popups' owner and backdrop
+    atlas-ui/         GPUI widgets and the design tokens (five palettes, accent)
+    atlas-app/        the binary: window, sidebar, page card, home page, palette, wiring
+    xtask/            check-deps (only atlas-app/atlas-ui may depend on GPUI; only
+                      atlas-platform on wry or webview2-com), bench
+```
+
+`atlas-core`, `atlas-store` and `atlas-search` depend on neither GPUI nor
+WebView2, so they are tested with plain `cargo test`. `atlas-app` calls the
+core directly: with a Rust chrome there is no IPC boundary in plan 1.
+
+### The tab model
+
+One generic model, as the spec asks (`docs/spec.md`, "Core model"). A tab
+has an id, a kind (web, plugin view, note, file, diff, terminal), a title, an
+address, a favicon, a pinned flag, an order and an optional badge. Plan 1
+builds only web tabs, but the kind enum is complete so plugins slot in.
+The sidebar and the palette read this model, never per-feature code. Every
+change to it is written to SQLite as it happens, so a crash loses nothing
+(`docs/research/02-browser-v1-scope.md`, "Crash recovery of the app").
+
+### Pages
+
+- **One shared WebView2 environment,** built by Atlas through `webview2-com`
+  so it can keep crash dumps local (`IsCustomCrashReportingEnabled`) and
+  replace wry's default browser arguments, which switch SmartScreen off
+  (`docs/research/08-gpui-and-wry-on-windows.md`).
+- **Each tab is a wry child web view** of the GPUI window, with no IPC
+  handler and no injected script, no custom user agent, and nothing
+  injected on Google's sites (the rules under "What we found").
+- **Raw WebView2 calls** through `WebViewExtWindows` for shortcuts
+  (`AcceleratorKeyPressed`), fullscreen video
+  (`ContainsFullScreenElementChanged`), crashed tabs (`ProcessFailed`, a
+  "sad tab" with Reload) and hidden tabs (`TrySuspend` after a delay).
+- **Popups become tabs** through wry's new-window handler, in the same
+  environment and profile, so `window.opener` survives OAuth sign-ins.
+- **A permission handler from day one,** with WebView2's own prompt and its
+  per-site memory.
+- **Lean on WebView2's built-in UI** for find (Ctrl F), downloads (Ctrl J),
+  printing, the right-click menu and notifications, and replace each only if
+  it looks wrong in the page card (`docs/research/02-browser-v1-scope.md`,
+  "What this means", item 4).
+
+### Shortcuts
+
+WebView2 never hands browser shortcuts to the host while a page has focus,
+so Atlas catches them with `AcceleratorKeyPressed` on **every** web view it
+creates (pages now; the CodeMirror and terminal web views in plans 3 and 4).
+The handler is synchronous and blocks the browser process, so it only marks
+the key handled and posts a message to the GPUI thread. One command table in
+`atlas-core` maps keys to commands; the palette and menus read from it. The
+pin key is Ctrl Alt S (D8).
+
+### Overlays
+
+The palette (Ctrl K) and the sidebar peek are borderless GPUI popup windows
+above the page, owned by the main window through `GWLP_HWNDPARENT` (GPUI's
+popups are otherwise topmost over every app), near-opaque, with the
+`DWMSBT_TRANSIENTWINDOW` Acrylic backdrop as a bonus. The peek takes no focus;
+the palette does, and Esc returns it to the page with wry's `focus()`.
+Hovering the left edge is detected by a few-pixel strip of chrome or by
+polling the cursor, because a pointer over a page never reaches GPUI. They
+must work over every kind of tab (D7).
+
+### Storage
+
+rusqlite (bundled) with `rusqlite_migration`, WAL, `synchronous=NORMAL`,
+one writer thread and two readers, in `%LOCALAPPDATA%\Atlas\data\atlas.db`
+(never a synced folder), with a daily `VACUUM INTO` snapshot taken when idle
+and 7 kept (D13), and a clean-shutdown flag that triggers a `quick_check`
+after a crash (`docs/research/03-core-architecture.md`, "Storage").
+
+### Search
+
+- **Tier 1, in memory:** one row per titled thing (open tabs, bookmarks,
+  recent history, commands), ranked by `frizbee` with frecency and an
+  open-tab boost on every keystroke, with the scope chips counted in the
+  same pass. Budget: under 5 ms at 100,000 rows.
+- **Tier 2, full text:** page text for 7 days (D18, D35), excluding Google's
+  sites, banking and payment sites and `no-store` pages. The store (tantivy
+  or SQLite FTS5) is chosen by a one-day bake-off, here in plan 1 because
+  page text needs it; the extraction method must inject nothing on excluded
+  sites.
+
+### The palette
+
+Opens with Ctrl K over any tab. Scope chips with counts (Everything, Tabs,
+Bookmarks, History; plugin actions arrive in plan 2), matched characters
+highlighted, a preview of the selected row, keyboard-first (arrows, Enter,
+Esc). It is also the address bar: it always offers "Search the web" (Alt
+Enter) on Google, with no live suggestions (D9).
+
+### Browser memory
+
+History from navigation and title events; bookmarks with folders, imported
+from the browser's HTML bookmarks file (D14); a closed-tab stack (Ctrl
+Shift T); session restore of each tab's address, title, pin and order
+(WebView2 can't restore back/forward lists); no history or password import
+(D10, D15).
+
+### The home page and the design
+
+The new-tab page, sidebar, page card, palette and Customize panel follow the
+design canvas (`design/README.md`); its tokens become `atlas-ui`'s five
+palettes and the accent. The design direction is already chosen: the canvas
+is offered as the direction at the design gate. Haze uses Mica; Glass uses
+Acrylic plus Atlas's styling; both fall back to Graphite when "Reduce
+transparency" is on. Pages stay opaque.
+
+### Privacy and shipping
+
+No telemetry; crash logs and dumps local. SmartScreen stays on. Without
+Tauri, Atlas builds what Tauri gave for free (realism check, objection 6):
+an updater that verifies ed25519/minisign signatures, single-instance
+forwarding of links opened from other apps, default-browser registration,
+and an installer. Code signing waits (S8), so installs show SmartScreen's
+warning. Atlas notices WebView2 runtime changes (D36).
 
 ## Sequencing
 
-To be written (step 5).
+Each phase becomes a milestone. Phase 0 runs locally before the issues for
+phases 1–5 are broken down (D16).
+
+### Phase 0 — Feasibility spike (throwaway, local)
+
+- **Why now:** every later phase stands on the engine, the toolkit and the
+  overlays, and three of them rest on behaviour nobody has run.
+- **Delivers:** a throwaway GPUI + wry app and a Tauri + Svelte control (page
+  tabs through wry in both, and one CodeMirror tab in each), run against
+  note 06's checklist with these additions:
+  - a **measurement protocol written before any number is taken:** private
+    working set of all Atlas or Edge processes; Edge on a fresh profile
+    with sleeping tabs at the same timeout as Atlas's suspend; the median of
+    5 runs; idle CPU under 0.5% of one core over 5 minutes; the sites
+    counted as N of 13 with "pass", "partial" and "fail" defined;
+  - the owner's real Google sign-in on every path they use (D21), and
+    YouTube, Disney+ and Hulu with their accounts;
+  - shortcuts in a page, a CodeMirror and an xterm.js tab;
+  - the popup overlays over a page and over the CodeMirror tab;
+  - the GPUI base chosen and `=`-pinned (`gpui-pre` or `gpui-fast`), with an
+    upgrade budget and a list of the chrome widgets gpui-component lacks.
+- **Exit criteria:** a written Windows verdict
+  (`docs/research/09-phase-0-verdict.md`) with go/no-go against D6, D4's
+  switching rule applied, and the owner told what worked, what didn't and
+  what is recommended. Work stops there, as `CLAUDE.md` asks. The spike's
+  code is never kept.
+
+### Phase 1 — Foundations (W0)
+
+- **Why now:** everything else is built on them.
+- **Delivers:** the scaffold (workspace, `xtask check-deps`, check commands,
+  a first passing test, `docs/LOCAL-DEV.md`); the tab model crate with tests;
+  storage with migrations and snapshots; the tier 1 search crate with
+  benchmarks; the design tokens in `atlas-ui`.
+- **Exit criteria:** `cargo fmt --check`, `cargo clippy -D warnings` and
+  `cargo test` pass; the tab model, migrations and ranking are covered by
+  tests; tier 1 meets 5 ms at 100,000 rows in `xtask bench`; the five
+  palettes render a sample screen matching the canvas.
+
+### Phase 2 — The browser shell
+
+- **Why now:** the first build Atlas can browse with.
+- **Delivers:** the window, sidebar and page card; web tabs (create, switch,
+  close, reorder, pin); navigation and the address; the shortcut router;
+  popups as tabs; fullscreen; crashed-tab recovery; suspend; permissions;
+  WebView2's find, downloads, print and context menu; the sidebar peek.
+- **Exit criteria:** the owner can browse their daily sites for a day in
+  Atlas with no crash; every shortcut in the table works with a page focused.
+
+### Phase 3 — Browser memory and the home page
+
+- **Why now:** without history, bookmarks and restore, Atlas isn't a daily
+  browser.
+- **Delivers:** history, page-text indexing with exclusions (after the
+  tier 2 bake-off), bookmarks with HTML import, the closed-tab stack,
+  session restore, the home page with Quick access tiles, and the Customize
+  panel (palette and accent).
+- **Exit criteria:** quitting and relaunching restores every tab; the owner's
+  exported bookmarks import correctly; excluded sites leave no page text in
+  the database.
+
+### Phase 4 — The command palette
+
+- **Why now:** the palette is central (S5), and it needs the memory of
+  phase 3 to search.
+- **Delivers:** the palette over any tab, scope chips, highlighted matches,
+  preview, Search the web.
+- **Exit criteria:** opening the palette paints within one frame of Ctrl K;
+  each keystroke ranks within 5 ms at 100,000 rows; the overlay tests from
+  Phase 0 pass in the real app.
+
+### Phase 5 — Daily driver
+
+- **Why now:** to make Atlas the owner's default browser.
+- **Delivers:** the signed updater, single-instance link forwarding,
+  default-browser registration, an installer, the WebView2 runtime notice,
+  and an accessibility pass (F6 between panes, NVDA over the chrome).
+- **Exit criteria:** Atlas is set as the default browser and used as the
+  owner's only browser for a week, with memory and start-up within D6's
+  thresholds.
 
 ## What is deliberately not built
 
-To be written (step 5).
+In plan 1: Chrome extensions (WebView2 can't run them); a password manager,
+password import and ad blocking; macOS and Linux; history import; telemetry;
+Servo; picture-in-picture, split view, multiple windows, a site-settings
+page and save-page-as (`docs/research/02-browser-v1-scope.md`, "Later");
+code signing (S8); a frozen-page overlay (D7); live search suggestions
+(D9). In v1 as a whole: the WebAssembly plugin host (D17); the debugger
+(D31); downloading language servers (D30); Fledge beyond the plugin runtime
+and "New lead" until Stage C (D34); a graph view (S4).
 
 ## ⚠️ Still unproven
 
-To be written (step 5).
+- ⚠️ Google sign-in end to end in WebView2, on every path the owner uses;
+  and that WebView2 keeps presenting as Chrome to Google. Proven by Phase 0;
+  watched by D36.
+- ⚠️ A GPUI popup, re-owned with raw Win32, stacks and takes focus correctly
+  over a child WebView2. Proven by Phase 0; no ready fallback.
+- ⚠️ Disney+ and Hulu play with Widevine L3 in an Atlas tab. Proven by
+  Phase 0 with the owner's accounts.
+- ⚠️ GPUI's chrome saves enough start time and memory to justify itself
+  over Svelte (D4's rule). Proven by Phase 0.
+- ⚠️ GPUI's AccessKit works with NVDA on Windows 11. Checked in Phase 0,
+  required in Phase 5.
+- ⚠️ A way to read page text that injects nothing on excluded sites (D35).
+  Chosen in Phase 3.
+
+## Sibling plans
+
+Outlined now; each gets its own question rounds and full detail after the
+Phase 0 verdict (D16):
+
+- `docs/plans/Atlas v1 — Plugins and Fledge — Plan.md` (plan 2)
+- `docs/plans/Atlas v1 — Notes — Plan.md` (plan 3)
+- `docs/plans/Atlas v1 — Forge — Plan.md` (plan 4)
 
 ## Open threads
 
@@ -307,6 +551,10 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Split into four plans as decided in D5 (step 4). This file
+  is plan 1 and keeps the v1-wide decisions; plans 2–4 are outlines. Plan 1's
+  design, phases 0–5 with exit criteria, what is not built and what is
+  unproven were written (step 5).
 - **2026-10-09** — Page text is indexed with exclusions for Google, banking
   and no-store pages (D35); Atlas notices WebView2 runtime changes and offers
   Edge for Google if sign-in breaks (D36); `CLAUDE.md` updated with the
