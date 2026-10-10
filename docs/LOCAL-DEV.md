@@ -191,7 +191,8 @@ the console application launch. Independent reviews passed after correcting
 repeated Windows discovery on ordinary reads/saves, startup validation order
 and long-path compatibility. The latter tests include both native and SQLite
 buffer limits and the journal-suffix boundary. No GUI or production data was
-opened; P1-03 still awaits the owner's commit and merge approval.
+opened. The owner then requested the commit and approved the local merge;
+P1-03 is committed and merged into `claude/plan-atlas-v1` as `c4a6631`.
 
 ## Data and artifacts
 

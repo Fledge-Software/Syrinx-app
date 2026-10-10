@@ -280,8 +280,9 @@ independent review on `codex/p1-02-tab-model`, then was committed and merged
 into `claude/plan-atlas-v1` as `892d3bc` with the owner's approval.
 There is no browser UI yet. P1-03 storage is implemented on
 `codex/p1-03-storage`, based on the P1-02 completion record `9a6ae35`.
-Its 77-test local gate and independent reviews passed; the changes remain
-uncommitted pending the owner's commit and merge approval.
+Its 77-test local gate and independent reviews passed, and the owner then
+requested its commit and approved its local merge, completed as `c4a6631`
+in `claude/plan-atlas-v1`. P1-04 backups and recovery is next.
 The throwaway Phase 0 spikes remain on `spike/gpui` and `spike/tauri`; their
 code has not been copied into the product. The current branch also holds
 the spec, owner decisions, design snapshot (`design/canvas/project/`, with
@@ -919,7 +920,7 @@ started: 2026-10-09   code repo: local Atlas-app (D41; no remote)   plan branch:
 | Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | done: 25/25 in both overlay modes; idle CPU 0.54% | spike/tauri @ 2579d86 | n/a | never (throwaway) |
 | Phase 1 | P1-01: scaffold and architecture gate | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 7 tests and console app launch; optimized executable was blocked once, then passed unchanged | codex/p1-01-scaffold @ ed19d6d; base d79fc29 | independent review passed after restoring default Cargo test selection so future doctests run | merged into claude/plan-atlas-v1 as ed19d6d with owner approval on 2026-10-10 |
 | Phase 1 | P1-02: generic tab and flat saved-page model | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 24 model tests, 7 architecture tests and console app launch; D42/D43 lifecycle implemented without UI or storage | codex/p1-02-tab-model @ 892d3bc; base ed19d6d | independent source/test review and documentation/map audit passed with no findings | merged into claude/plan-atlas-v1 as 892d3bc with owner approval on 2026-10-10 |
-| Phase 1 | P1-03: durable saved pages and session records | local slice | Codex | Implemented: 77-test local gate passed; guarded Windows location, atomic saved/live snapshots and migrations; narrow licence allowances approved | codex/p1-03-storage; uncommitted; base 9a6ae35 | independent core/store, native and documentation reviews passed; long-path regression fixed and retested | owner commit and merge approval pending |
+| Phase 1 | P1-03: durable saved pages and session records | local slice | Codex | Implemented: 77-test local gate passed; guarded Windows location, atomic saved/live snapshots and migrations; narrow licence allowances approved | codex/p1-03-storage @ c4a6631; base 9a6ae35 | independent core/store, native and documentation reviews passed; long-path regression fixed and retested | merged into claude/plan-atlas-v1 as c4a6631 with owner approval on 2026-10-10 |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
 gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
@@ -934,9 +935,16 @@ gates: 2026-10-10 owner explicitly requested the P1-02 commit and approved its l
 gates: 2026-10-10 P1-02 committed as 892d3bc and fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
 gates: 2026-10-10 P1-03 core snapshots passed the full local gate with 37 tests before platform dependencies were introduced; owner approved Unicode-3.0 for unicode-ident 1.0.26 and Zlib for foldhash 0.2.0; these allowances do not select Atlas's own licence
 gates: 2026-10-10 final P1-03 cargo xtask check passed all 77 tests, formatting, Clippy, dependency boundaries and console launch; independent reviews passed; no production database or Windows setting was changed
-current: P1-03 ready on codex/p1-03-storage; uncommitted; no Git remote configured   next: owner's commit and merge approval, then P1-04 backups/recovery; do not skip to search
+gates: 2026-10-10 owner requested the P1-03 commit and approved its local merge; c4a6631 was fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
+current: P1-03 committed and merged as c4a6631; no Git remote configured   next: P1-04 backups/recovery on its own branch; do not skip to search
 
 ## Iteration log
+
+- **2026-10-10** — With the owner's explicit approval, committed P1-03 as
+  `c4a6631` and fast-forward merged it into `claude/plan-atlas-v1`. Recorded
+  the result in the plan, local-development notes and next-session handoff.
+  No product source changed after the passing 77-test gate. P1-04 backups and
+  recovery is next; no remote or push was added.
 
 - **2026-10-10** — Completed P1-03 implementation and verification on
   `codex/p1-03-storage`. The store atomically preserves saved/live records,
@@ -948,7 +956,8 @@ current: P1-03 ready on codex/p1-03-storage; uncommitted; no Git remote configur
   and corrected MSVC SQLite long-path handling, with three boundary cases
   retained in the final 77-test passing gate. The pinned SQLite long-path
   performance caveat remains documented in `docs/dependency-audit.md`.
-  Commit and merge approval is still required; P1-04 has not started.
+  This verification preceded the owner-approved commit and merge recorded
+  above. P1-04 has not started.
 
 - **2026-10-10** — Started P1-03 on `codex/p1-03-storage`. Added the core
   snapshot/restore boundary with structural validation and six new tests;

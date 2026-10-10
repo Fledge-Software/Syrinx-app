@@ -309,8 +309,9 @@ The owner then requested its commit and approved its local merge, completed
 as `892d3bc` in `claude/plan-atlas-v1`. That P1-02 amendment added no
 third-party dependency, registry setting, browser profile or Windows policy.
 P1-03 storage is implemented on `codex/p1-03-storage`, based on the completion
-record `9a6ae35`. Its 77-test local gate and independent reviews passed; it
-awaits the owner's commit and merge approval. Its dependency review and
+record `9a6ae35`. Its 77-test local gate and independent reviews passed; the
+owner requested its commit and approved its local merge, completed as
+`c4a6631` in `claude/plan-atlas-v1`. Its dependency review and
 narrow licence allowances are recorded in `docs/dependency-audit.md`;
 implementation and verification status are tracked in plan 1's Super-Pass
 ledger. No later
