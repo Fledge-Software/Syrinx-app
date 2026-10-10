@@ -161,11 +161,11 @@ objections, and how each was answered:
 3. **Departures from the spec aren't in `docs/decisions.md`, and planning
    all four plans before Phase 0 contradicts `CLAUDE.md`.** Answered: the
    departures are written into `docs/decisions.md`; D16 now runs Phase 0
-   locally first, with plans 2–4 as outlines. `CLAUDE.md` still says "a
-   Tauri 2 desktop browser"; changing it is put to the owner.
+   locally first, with plans 2–4 as outlines. `CLAUDE.md` was
+   updated with the owner's yes.
 4. **Google sign-in rests on undocumented behaviour that can change with any
-   runtime update.** Answered in part: D22 covers breaks after launch. A
-   recurring sign-in check is an Open thread.
+   runtime update.** Answered in part: D22 covers breaks after launch. D36 adds a
+   notice on runtime changes.
 5. **The Phase 0 thresholds can't be measured as written.** To answer: a
    measurement protocol is written before the spike (plan 1, Phase 0).
 6. **Dropping Tauri drops its updater, single-instance link handling and
@@ -177,7 +177,7 @@ objections, and how each was answered:
    states the exception and keeps saves and the language-server client in
    Rust.
 9. **Indexing page text (D18) collides with the rules that keep Google
-   working, and with privacy.** Open thread, put to the owner.
+   working, and with privacy.** Answered: D35's exclusions.
 10. **The Tauri control build has no decision rule.** Answered: D4's rule;
     the control's page tabs use wry directly so the numbers compare.
 11. **Plan 2 outgrew "thin".** Answered: D34.
@@ -213,6 +213,8 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D36 | Does Atlas watch for Google sign-in breaking? | It shows a one-line notice when the WebView2 runtime version changes, so the owner watches for sign-in trouble, and offers to open the current Google page in Edge in one click if sign-in breaks. No automatic sign-in test | An automatic canary that signs in: credentials in a test. Nothing: a silent break would surprise the owner mid-work | 2026-10-09 |
+| D35 | How is page text indexed (D18) without breaking Google? | Indexed locally for 7 days, but never on Google's sites, banking and payment sites, or pages sent with `Cache-Control: no-store`; the owner can add sites to the exclusion list in settings. The extraction method is chosen in plan 1 and must inject nothing on excluded sites | Dropping it for v1: the owner wants recall by content. Indexing everything: breaks the rules that keep Google working (`docs/research/07-google-sign-in-and-drm.md`) and keeps a 7-day record of banking pages in the database and its snapshots | 2026-10-09 |
 | D34 | How big is plan 2 in v1? | Thin: the plugin runtime, the `Plugin` trait, the stand-in Fledge client and the palette's inline "New lead" action. D19's keep-local switches and D20's full Fledge client move to the real-client work after Stage C | Building D19 and D20 in full on the stand-in: design and settings on an API that doesn't exist yet and will change, against D5's "deliberately thin" | 2026-10-09 |
 | D32 | Which input methods must the editors be tested with? | English and Latin scripts only; no IME test matrix in v1 | Chinese, Japanese or Korean IME testing: not used by the owner | 2026-10-09 |
 | D31 | Run control and debugger in Forge v1? | Run control in (an addition to the spec): Forge reads tasks from Cargo, npm scripts, pyproject, just and make and runs them in a terminal. Debugger out of v1. ⚠️ The owner didn't name Python task runners, so v1 reads plain `[project.scripts]` and the common pyproject task tables | Both out: loses the PyCharm workflow the owner relies on. Debugger in: Zed's took 8 months and over 25,000 lines (`docs/research/04-forge-and-notes.md`) | 2026-10-09 |
@@ -278,15 +280,6 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
 - **Google Workspace device checks:** does the owner's Workspace admin
   console turn on Context-Aware Access or Endpoint Verification? Whoever
   administers that Workspace can check; Phase 0 will show it anyway.
-- **Page text indexing (D18) and Google:** reading a page's text needs a
-  script in the page, which the rules for Google forbid; and 7 days of
-  Gmail, Stripe or banking text would sit in the database and its
-  snapshots. Needs: the extraction method, and a default exclusion list.
-  The owner decides.
-- **Google canary:** a recurring check that Google sign-in still works on
-  each new WebView2 runtime. The owner decides whether Atlas runs it.
-- **`CLAUDE.md`** still says "a Tauri 2 desktop browser"; updating it to
-  match D3 and D4 needs the owner's yes.
 - **Data and search:** one store or two (SQLite FTS5 or tantivy), settled by
   the bake-off before Notes.
 - **The project:**
@@ -314,6 +307,11 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Page text is indexed with exclusions for Google, banking
+  and no-store pages (D35); Atlas notices WebView2 runtime changes and offers
+  Edge for Google if sign-in breaks (D36); `CLAUDE.md` updated with the
+  owner's yes to describe WebView2, wry and GPUI and to point at
+  `docs/decisions.md` and this plan.
 - **2026-10-09** — Realism check (step 3): "realistic with changes", twelve
   objections, summarised under "Is it realistic?". Owner's answers: keep
   GPUI but let Phase 0 decide against a written rule (D4 revised); overlays
