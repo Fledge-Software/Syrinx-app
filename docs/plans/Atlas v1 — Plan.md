@@ -124,6 +124,7 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D16 | How does the build phase track and review work while Atlas is local? | Plan now, build later. All four plans are planned locally in this session, up to an approved breakdown written into each Issue map with empty issue numbers; nothing is built, Phase 0 included, until the owner creates a repository (only account: ZanderOfficial; probably the Fledge Software organisation later) | A private repository on ZanderOfficial now: the owner wants Atlas local for now. A fully local build: the Super-Pass's review and PR skills are built for GitHub, so it would run a reduced version of them | 2026-10-09 |
 | D15 | Does v1 import passwords? | No. There is no password manager in v1, so imported passwords would have nowhere safe to live and nothing to fill them in. The owner signs in once per site and stays signed in through cookies. Password import comes with a password manager after v1 | A small password manager in v1 (encrypted store, autofill, Passwords button back): sizeable and security-sensitive, against the spec's scope. Importing into WebView2's own store: no known import API, and it would turn saving on against D11 | 2026-10-09 |
 | D14 | What does the bookmark import read? | The standard HTML bookmarks file that Edge, Chrome and Firefox export (`<!DOCTYPE NETSCAPE-Bookmark-file-1>`, `docs/research/02b-default-browser-import-signing.md`). Replaces "a CSV file only" (S7) with the owner's yes; `docs/decisions.md` updated | CSV only: no browser exports bookmarks as CSV, so the owner would have to convert by hand. Both: a second format to build and test for no gain | 2026-10-09 |
 | D13 | How many database snapshots, and may the data folder be synced? | A daily `VACUUM INTO` snapshot taken when idle, 7 kept, in the local (not roaming, not synced) app-data folder; Atlas never puts its database in OneDrive or another synced folder | 30 days: more disk for little gain. A synced folder: SQLite's write-ahead log breaks there (`docs/research/03-core-architecture.md`, owner question 4) | 2026-10-09 |
@@ -188,9 +189,9 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
     the owner before the repository goes public.
   - **GitHub:** the owner's only account is ZanderOfficial. The repository
     will probably move to the Fledge Software organisation eventually; for now
-    Atlas is a local project. How the Super-Pass tracks and reviews work while
-    Atlas is local is put to the owner (blocks the breakdown gate, not
-    planning).
+    Atlas is a local project, and building waits for a repository (D16).
+    Which account or organisation it is created under is decided when the
+    owner is ready to build.
 
 ## Issue map
 
@@ -205,6 +206,10 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Licence left undecided until Atlas goes public. Atlas
+  stays local: plan all four plans now, build once a repository exists (D16).
+  A researcher was sent on GPUI and wry on Windows
+  (`docs/research/08-gpui-and-wry-on-windows.md`).
 - **2026-10-09** — Import settled: Atlas reads the browser's HTML bookmarks
   export, replacing "CSV only" with the owner's yes (D14, `docs/decisions.md`
   updated), and v1 imports no passwords (D15).
