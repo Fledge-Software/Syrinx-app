@@ -732,6 +732,24 @@ code signing (S8); a frozen-page overlay (D7); live search suggestions
 (D31); downloading language servers (D30); Fledge beyond the plugin runtime
 and "New lead" until Stage C (D34); a graph view (S4).
 
+## Outlined later features
+
+**Mobile sync over Tailscale or Headscale, with optional cloud sync later.**
+The owner requested this direction on 2026-10-10 so a future mobile Atlas
+can exchange selected data with desktop without an Atlas-hosted sync
+server. Setup must offer an easy in-app installation and pairing walkthrough,
+reuse existing Tailscale accounts, and support existing Headscale networks.
+The [mobile sync outline](<Atlas later — Mobile sync outline.md>) records
+the setup flow, proposed data scope, common sync engine, offline and mobile
+limits, encrypted cloud alternative, acceptance criteria and open questions.
+
+This is deferred until the future mobile phase after the four v1 plans.
+It changes neither D2's Windows-only v1 scope nor the current slice order.
+The outline records the feature direction; implementation needs a reviewed
+mobile plan. Tailscale still uses coordination and sometimes relay servers,
+and Headscale requires a user-operated coordination server, so this must
+not be described as eliminating all server infrastructure.
+
 ## ⚠️ Still unproven
 
 - ⚠️ **Remaining Google checks:** the password-and-phone-prompt path and
