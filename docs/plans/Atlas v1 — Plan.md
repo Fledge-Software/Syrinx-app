@@ -561,10 +561,17 @@ started: 2026-10-09   code repo: none yet (local, D16)   plan branch: claude/pla
 | Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | done: 25/25 in both overlay modes; idle CPU 0.54% | spike/tauri @ 2579d86 | n/a | never (throwaway) |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
-current: Phase 0 done; stopped and reported, as CLAUDE.md asks   next: the owner's go-ahead for plan 1 and a repository (D16); then re-read the plan, verify it (step 7 readiness), break plan 1 into issues and the wave map
+gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
+current: Plan 1 go-ahead received; no Git remote configured   next: the owner creates the repository (D16); then re-read the plan, verify it (step 7 readiness), and obtain readiness approval before breaking plan 1 into issues and the wave map
 
 ## Iteration log
 
+- **2026-10-10** — The owner approved proceeding into plan 1 after the
+  handoff review. Repository creation remains the owner's next step (D16);
+  the local repository still has no remote. This approves continuing the
+  handoff sequence, not marking this draft ready or publishing issues. The
+  readiness check and the issue breakdown each return to the owner for
+  approval before implementation begins.
 - **2026-10-10** — Phase 0 verdict (`docs/research/09-phase-0-verdict.md`):
   go with GPUI on two conditions. The owner tested Google sign-in by passkey
   and with the Workspace account, YouTube and Disney+, all passing; Hulu,
