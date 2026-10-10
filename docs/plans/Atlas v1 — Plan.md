@@ -176,6 +176,10 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D28 | Native editors or CodeMirror for Notes and Forge in v1? | CodeMirror 6 in a small local web view inside the tab, for both. Rust owns files, parsing (Tree-sitter, pulldown-cmark), git and language servers. One WebView2 renderer is used only while a Notes or Forge tab is open. A native editor may replace it later | Native GPUI editors: selection, input methods and accessibility to build, no native rich-markdown editor to start from, and Zed's editor is GPL-3.0 (`docs/research/04-forge-and-notes.md`). Native for Forge only: still the bulk of that cost | 2026-10-09 |
+| D27 | Does a Notes vault stay usable in Obsidian? | Yes: plain markdown files, wikilinks, Obsidian's property types, and a subset of its `.base` database-view format | Free to diverge: the owner would lose the way out to Obsidian | 2026-10-09 |
+| D26 | Where does a lead's Company live? | Already decided on the Fledge side and being built, in Nest; Fledge's modules now share one database. The stand-in client models Company on the lead, and the real client reads it from Nest | — (decided in Fledge, not here) | 2026-10-09 |
+| D25 | Which channel does Atlas use for Fledge data? | A small, structured, versioned REST API on the same OAuth tokens, for leads, mail, calendar and docs (Fledge-side routes, on the owner's list) | Fledge's MCP server: returns prose for a model, has no leads tool, and would need structured output added (`docs/research/05-fledge-api.md`) | 2026-10-09 |
 | D24 | When can the real Fledge client be built? | After Fledge's Stage C, which the owner says comes after the Fledge redesign; no date. Plan 2 ships the Fledge plugin on the stand-in client behind the trait, and the real client is its own later work, started when Stage C lands | Targeting the real client in plan 2: nothing it needs is deployed (`docs/research/05-fledge-api.md`, "Short answer") | 2026-10-09 |
 | D23 | How does Atlas authenticate to Fledge? | As an ordinary OAuth client through Fledge's consent screen (OAuth 2.1, PKCE, loopback redirect), with only the permissions the owner grants | A pre-registered first-party client: Fledge would have to build a separate trust path (`docs/research/05-fledge-api.md`, owner questions) | 2026-10-09 |
 | D22 | If the owner's real Google sign-in fails in Phase 0? | Stop and decide with the evidence: where it failed, and the options then (Google in Edge, presenting Atlas differently against Google's policy, or rethinking the engine) | Deciding now: a no-go on the engine, or settling for Google in Edge, before knowing how it fails | 2026-10-09 |
@@ -237,8 +241,8 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
 - **Forge:** git CLI for writes; requiring Git for Windows; language servers
   installed only, downloads later or never; debugger out of v1; run control and
   Python task runners.
-- **Notes:** Obsidian compatibility; native or web-view editor; IME scripts.
-- **Fledge:** REST or MCP as the data channel; where a lead's Company lives.
+- **Notes:** which input-method scripts (Chinese, Japanese, Korean) the
+  editor must be tested with.
 - **The project:**
   - **Licence: undecided (owner, 2026-10-09).** Blocks going public. Until it
     is chosen, Atlas takes in outside code only under permissive licences
@@ -264,6 +268,10 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Fledge and Notes round: Fledge data over a small
+  structured REST API (D25); a lead's Company is already being built in Nest
+  (D26); Notes vaults stay Obsidian-compatible (D27); Notes and Forge edit
+  in CodeMirror 6 inside a local web view for v1 (D28).
 - **2026-10-09** — Google and Fledge round: Phase 0 proves every Google
   sign-in path the owner uses (D21) and stops for a decision if one fails
   (D22); Atlas is an ordinary OAuth client of Fledge (D23); the real Fledge
