@@ -1,2 +1,5 @@
 # Claude Code's local settings and skills never belong in the repository.
 .claude/
+
+# Cargo outputs are reproducible and never belong in the repository.
+/target/

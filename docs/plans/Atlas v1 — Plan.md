@@ -266,9 +266,13 @@ Decisions made in this plan:
 
 ## What exists today
 
-No product code. The throwaway Phase 0 spikes remain on the local
-`spike/gpui` and `spike/tauri` branches; they are not a product scaffold.
-The current branch holds the spec, the owner's decisions, the design
+The owner-requested documentation baseline is committed as `d79fc29` on
+`claude/plan-atlas-v1`. P1-01 is implemented and independently reviewed, with
+owner approval to commit and merge `codex/p1-01-scaffold`: a minimal Cargo
+workspace, runnable console entry point and dependency-boundary gate. It
+does not yet contain the tab model or browser UI. The throwaway Phase 0
+spikes remain on `spike/gpui` and `spike/tauri`; their code has not been copied
+into the product. The current branch also holds the spec, owner decisions, design
 snapshot (`design/canvas/project/`, with the five palettes' tokens in the
 `tokens()` method of `design/canvas/project/Main.dc.html` and one board per
 palette in `Theme*.dc.html`), the original mockup
@@ -725,12 +729,14 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
     will probably move to the Fledge Software organisation eventually; for now
     Atlas is a local project; D41 removes the repository prerequisite.
     Which account or organisation it is created under is decided when the
-    owner is ready to build.
+    owner is ready to create the remote.
   - **Current local workflow, owner, 2026-10-10:** D41 explicitly approves
     the plans, 40-slice map and local branch/review/owner-merge workflow.
-    Readiness does not need another approval. The next boundary is the
-    documentation-baseline commit, which still requires the owner's request;
-    no remote, push or implementation commit is authorized by D41.
+    Readiness does not need another approval. The owner requested the
+    documentation-baseline commit, now `d79fc29`, then explicitly approved
+    committing P1-01 and merging it into `claude/plan-atlas-v1` after its gate
+    and independent review passed. Later commits and merges require their
+    own approval; no remote or push is authorized.
 
 ## Issue map
 
@@ -738,8 +744,8 @@ Approved by the owner on 2026-10-10 (D41). The following table is copied from
 `docs/plans/Atlas v1 — Readiness and implementation breakdown.md`; P1 labels
 identify local slices, not published GitHub issues. Each phase is a future
 milestone, with one branch, independent review and owner-approved merge per
-slice. Q1–Q4 are resolved by D39–D41; the planning-baseline commit remains
-pending. Analytics additions are proposed separately, outside this approved
+slice. Q1–Q4 are resolved by D39–D41; the planning baseline is preserved in
+`d79fc29`. Analytics additions are proposed separately, outside this approved
 map, and do not change the foundation order.
 
 The proposed AN-01/AN-02 amendment is described in the readiness report's
@@ -813,20 +819,35 @@ approved rows until the owner approves the added slice boundaries.
 
 ## Super-Pass ledger
 
-started: 2026-10-09   code repo: none yet (local, D16)   plan branch: claude/plan-atlas-v1
+started: 2026-10-09   code repo: local Atlas-app (D41; no remote)   plan branch: claude/plan-atlas-v1
 | wave | job | route | model | worker result | branch @ sha | review | merged |
 |---|---|---|---|---|---|---|---|
 | Phase 0 | GPUI candidate spike | spike (worktree) | opus | partial: built, 50/50 automated checks; idle CPU 3.75% fails 0.5% bar; owner tests pending | spike/gpui @ bfac1c5 | n/a | never (throwaway) |
 | Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | done: 25/25 in both overlay modes; idle CPU 0.54% | spike/tauri @ 2579d86 | n/a | never (throwaway) |
+| Phase 1 | P1-01: scaffold and architecture gate | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 7 tests and console app launch; optimized executable was blocked once, then passed unchanged | codex/p1-01-scaffold; base d79fc29; commit identified by Git history | independent review passed after restoring default Cargo test selection so future doctests run | owner approved local integration into claude/plan-atlas-v1 on 2026-10-10; result recorded in Git |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
 gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
 gates: 2026-10-10 owner requested detailed local plans 2–4 and deferred repository publication; implementation remains in plan order
 gates: 2026-10-10 owner approved four plans, the 40-slice map and local branch/review/owner-approved merge workflow (D41); retained WebView2, approved local counters with explicit export and reviewed suggestions (D39), and excluded page text from backups (D40)
-current: Four plans active and the local map approved; analytics schema/slice amendment awaits design approval; no Git remote configured   next: owner-requested documentation-baseline commit, then P1-01 scaffold
+gates: 2026-10-10 owner requested the eight-file documentation-baseline commit; preserved as d79fc29 before branching for P1-01
+gates: 2026-10-10 owner explicitly requested the P1-01 commit and approved its local merge into claude/plan-atlas-v1; this authorization covers P1-01 only
+current: P1-01 passed its gate and independent review, with owner approval for local integration; no Git remote configured   next: P1-02 tab model, after integrating P1-01
 
 ## Iteration log
 
+- **2026-10-10** — Preserved the approved documentation in `d79fc29` at the
+  owner's request, then implemented P1-01 on `codex/p1-01-scaffold`. Added
+  the minimal workspace, dependency-boundary check and seven synthetic tests,
+  audited the development-only JSON dependency graph and documented D38's
+  optimized gate in `docs/LOCAL-DEV.md`. The full gate and console app launch
+  passed. Windows blocked the optimized check tool once, then accepted the
+  unchanged executable; recorded that observation without claiming its
+  cause or changing security settings. Independent review caught a gate
+  command that would skip future documentation tests; restored Cargo's
+  default test selection, reran the full gate and obtained a clean review.
+  The owner then explicitly approved committing this slice and merging it
+  locally into `claude/plan-atlas-v1`; Git history records the integration.
 - **2026-10-10** — Recorded the owner's readiness and local-workflow approval
   (D41), seven-day retention including backup exclusion (D40), and revised
   analytics direction (D39). The owner chose local counters and explicit

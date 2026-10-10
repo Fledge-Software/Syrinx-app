@@ -34,29 +34,14 @@ A person reads, reviews and changes everything you write. Write for them.
 - Name things for what they hold or do. No one-letter names outside a tiny
   closure: `tab`, `webview` and `bookmark`, not `t`, `w` and `b`.
 
-There is no Atlas code yet, so the shape to aim for is shown by an
-illustration rather than a real file. Replace it with a real file once the
-scaffold exists:
-
-```rust
-//! Opens Atlas's database in the local app-data folder and brings its schema up to date.
-
-pub fn open(data_dir: &Path) -> Result<Store, StoreError> {
-    // SQLite's write-ahead log breaks in a synced folder (D13), so refuse one.
-    if is_synced_folder(data_dir) {
-        return Err(StoreError::SyncedFolder(data_dir.to_owned()));
-    }
-
-    let mut conn = Connection::open(data_dir.join("atlas.db"))?;
-    apply_pragmas(&conn)?;
-    migrations().to_latest(&mut conn)?;
-    Ok(Store::new(conn))
-}
-```
+The scaffold now provides real examples in `crates/xtask/src/main.rs`:
+`check_workspace` names each step, and `run_cargo` reports spawn and process
+failures instead of swallowing them. Follow the same shape in product code.
 
 ## Layout
 
-There is no code yet. Atlas will be a Rust Cargo workspace on Windows 11.
+Atlas is a Rust Cargo workspace on Windows 11. P1-01 currently provides
+`atlas-app` and `xtask`; later crates are added in their approved slice.
 The layout proposed in `docs/research/03-core-architecture.md` ("Crate
 layout") is the starting point, adjusted for the engine and interface
 decisions made since (D3 and D4 in the plan), and the scaffold settles it:
@@ -66,33 +51,32 @@ decisions made since (D3 and D4 in the plan), and the scaffold settles it:
 - `crates/atlas-core` holds the tab model, session, palette and command
   registry and the plugin host; `crates/atlas-store` holds rusqlite and its
   migrations; `crates/atlas-search` holds the in-memory catalogue (frizbee)
-  and the full-text index (tantivy).
+  and the full-text index (chosen by plan 1's FTS5/Tantivy comparison).
 - `crates/plugin-notes`, `crates/plugin-forge` and `crates/plugin-fledge`
   are the built-in plugins, and `crates/fledge-client` holds the Fledge API
   trait and its stand-in client.
-- The shell crate draws the interface (GPUI, unless Phase 0 switches to
-  Tauri 2 + Svelte) and drives page tabs through `wry` and `webview2-com`.
-  Following note 03's rule, the shell is the only crate that touches the UI
-  toolkit and the web view, so the core stays testable without a window.
+- `atlas-app` and `atlas-ui` draw the interface with the approved GPUI base;
+  `atlas-platform` owns WebView2 and Win32. Other product crates remain free
+  of toolkit/web-view dependencies so the core stays testable without a window.
 - Notes and Forge edit in CodeMirror 6 inside a small local web view (D28).
 - `docs/` holds the spec, the owner's decisions, the plans, the research
-  notes and `docs/trapstoknow.md`. `docs/LOCAL-DEV.md`, created by the
-  scaffold, will say how to run the app and the gate on this machine.
+  notes and `docs/trapstoknow.md`. `docs/LOCAL-DEV.md` says how to run the
+  app and the gate on this machine; dependency audits live beside it.
 - `design/` holds the design snapshot and the original mockup.
 
 Phase 0's spike is throwaway code (D16). Keep it apart from the product
 crates, and carry nothing from it into them without rewriting it to these
 rules.
 
-**The gate** is, until the scaffold defines it in `docs/LOCAL-DEV.md`:
+**The gate** is defined in `docs/LOCAL-DEV.md`:
 
 ```
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo xtask check
 ```
 
-Run it on this machine before calling a change done.
+It runs the dependency check, formatting, Clippy with warnings denied, tests
+and the application smoke run using D38's optimized `local` profile. Run it
+on this machine before calling a change done.
 
 ## Read this first: what is the source of truth
 
@@ -165,8 +149,8 @@ time:
 - **The local workflow is approved (D41).** GitHub is not required before
   implementation. Each approved slice gets one local branch and independent
   review; the owner approves every merge. Commits still need the owner's
-  request. Preserve the planning baseline with a requested documentation
-  commit before starting the scaffold. No remote or push is authorized.
+  request. The owner-requested planning baseline is committed as `d79fc29`.
+  No remote or push is authorized.
 
 - **Always take the next piece of work from the earliest phase or plan that
   still has open work.** Within one, go in the plan's order unless its notes
