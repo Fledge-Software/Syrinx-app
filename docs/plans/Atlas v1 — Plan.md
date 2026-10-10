@@ -557,6 +557,14 @@ current: Phase 0, both spikes building   next: collect both RESULTS.md, run the 
 
 ## Iteration log
 
+- **2026-10-10** — Owner's manual tests on the GPUI spike, first report:
+  Google sign-in, YouTube and Disney+ all work. Not yet reported: which
+  sign-in paths were tried, Hulu, the other daily sites, and staying signed
+  in after a restart. Both spikes' automated results are in the ledger; D4's
+  comparison favours GPUI on start-up (chrome on screen 0.52 s against
+  1.44 s) and memory (27 MB against 175 MB with no tabs; 273 MB against
+  335 MB with one), provided idle CPU is fixed (GPUI 3.75% of a core against
+  the 0.5% bar; the control 0.54%).
 - **2026-10-09** — The owner approved starting Phase 0 locally. Two
   throwaway spikes started in worktrees: the GPUI candidate and the Tauri +
   Svelte control. `CLAUDE.md` and `AGENTS.md` adapted from fledge-template
