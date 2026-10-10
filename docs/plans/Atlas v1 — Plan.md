@@ -150,7 +150,44 @@ plan on 2026-10-09 and correct parts of the earlier notes.
 
 ## Is it realistic?
 
-To be written after research. See Open threads.
+**Verdict: realistic with changes**, from a fresh skeptic on 2026-10-09 who
+saw none of the discussion. The engine choice is sound. Its twelve
+objections, and how each was answered:
+
+1. **GPUI's case is weaker once the editors are web views (D28).** Answered:
+   D4 now stands on a Phase 0 comparison with a rule written in advance.
+2. **Live overlays have no tested fallback.** Answered: D7 gates on a live,
+   near-opaque popup; blur is optional; failure stops for a decision.
+3. **Departures from the spec aren't in `docs/decisions.md`, and planning
+   all four plans before Phase 0 contradicts `CLAUDE.md`.** Answered: the
+   departures are written into `docs/decisions.md`; D16 now runs Phase 0
+   locally first, with plans 2–4 as outlines. `CLAUDE.md` still says "a
+   Tauri 2 desktop browser"; changing it is put to the owner.
+4. **Google sign-in rests on undocumented behaviour that can change with any
+   runtime update.** Answered in part: D22 covers breaks after launch. A
+   recurring sign-in check is an Open thread.
+5. **The Phase 0 thresholds can't be measured as written.** To answer: a
+   measurement protocol is written before the spike (plan 1, Phase 0).
+6. **Dropping Tauri drops its updater, single-instance link handling and
+   installer.** To answer: each becomes a plan 1 item.
+7. **The GPUI base is unchosen and churns weekly.** To answer: choosing and
+   `=`-pinning one base, with an upgrade budget and a list of missing
+   widgets, is a Phase 0 output.
+8. **"Rust owns all state" doesn't hold inside CodeMirror.** Answered: D28
+   states the exception and keeps saves and the language-server client in
+   Rust.
+9. **Indexing page text (D18) collides with the rules that keep Google
+   working, and with privacy.** Open thread, put to the owner.
+10. **The Tauri control build has no decision rule.** Answered: D4's rule;
+    the control's page tabs use wry directly so the numbers compare.
+11. **Plan 2 outgrew "thin".** Answered: D34.
+12. **Shortcuts must work in the editor and terminal web views too, and some
+    keys clash with shell and PyCharm keys.** To answer: Phase 0 tests a
+    CodeMirror and an xterm.js tab; a key-ownership table comes before
+    plan 4.
+
+Cost: about $0 a month to run (no servers; signing deferred). Effort is
+dominated by the GPUI chrome and Forge; plan 1 alone is the largest plan.
 
 ## Decisions taken
 
@@ -176,23 +213,24 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D34 | How big is plan 2 in v1? | Thin: the plugin runtime, the `Plugin` trait, the stand-in Fledge client and the palette's inline "New lead" action. D19's keep-local switches and D20's full Fledge client move to the real-client work after Stage C | Building D19 and D20 in full on the stand-in: design and settings on an API that doesn't exist yet and will change, against D5's "deliberately thin" | 2026-10-09 |
 | D32 | Which input methods must the editors be tested with? | English and Latin scripts only; no IME test matrix in v1 | Chinese, Japanese or Korean IME testing: not used by the owner | 2026-10-09 |
 | D31 | Run control and debugger in Forge v1? | Run control in (an addition to the spec): Forge reads tasks from Cargo, npm scripts, pyproject, just and make and runs them in a terminal. Debugger out of v1. ⚠️ The owner didn't name Python task runners, so v1 reads plain `[project.scripts]` and the common pyproject task tables | Both out: loses the PyCharm workflow the owner relies on. Debugger in: Zed's took 8 months and over 25,000 lines (`docs/research/04-forge-and-notes.md`) | 2026-10-09 |
 | D30 | Where do Forge's language servers come from? | Only servers already installed (on PATH or set in settings) in v1; automatic download and update after v1 | Never downloading: the owner wants it later. Downloading in v1: network access, updates and more work | 2026-10-09 |
 | D29 | How does Forge do git? | The `git` command line for every write and network operation (commit with hooks, checkout, merge, push, fetch with the owner's credential helpers); fast reads (status, diff, log, blame) in process in Rust behind a `GitRead` trait. Requires Git for Windows. Departs from the spec's "use libgit2" with the owner's yes | libgit2 for everything: can't read reftable repositories (Git 3's default) and won't run hooks; Zed removed it on 2026-06-02 (`docs/research/04-forge-and-notes.md`). Bundling a git: a bigger download and Atlas's own update duty | 2026-10-09 |
-| D28 | Native editors or CodeMirror for Notes and Forge in v1? | CodeMirror 6 in a small local web view inside the tab, for both. Rust owns files, parsing (Tree-sitter, pulldown-cmark), git and language servers. One WebView2 renderer is used only while a Notes or Forge tab is open. A native editor may replace it later | Native GPUI editors: selection, input methods and accessibility to build, no native rich-markdown editor to start from, and Zed's editor is GPL-3.0 (`docs/research/04-forge-and-notes.md`). Native for Forge only: still the bulk of that cost | 2026-10-09 |
+| D28 | Native editors or CodeMirror for Notes and Forge in v1? | CodeMirror 6 in a small local web view inside the tab, for both. Rust owns files, parsing (Tree-sitter, pulldown-cmark), git and the language-server client (which stays in Rust). One WebView2 renderer is used only while a Notes or Forge tab is open. **Exception to S3, stated:** CodeMirror owns the live buffer, selection and undo while typing; Rust is the authority for what is on disk and writes a save only after the two copies' checksums match. A native editor may replace it later | Native GPUI editors: selection, input methods and accessibility to build, no native rich-markdown editor to start from, and Zed's editor is GPL-3.0 (`docs/research/04-forge-and-notes.md`). Native for Forge only: still the bulk of that cost | 2026-10-09 |
 | D27 | Does a Notes vault stay usable in Obsidian? | Yes: plain markdown files, wikilinks, Obsidian's property types, and a subset of its `.base` database-view format | Free to diverge: the owner would lose the way out to Obsidian | 2026-10-09 |
 | D26 | Where does a lead's Company live? | Already decided on the Fledge side and being built, in Nest; Fledge's modules now share one database. The stand-in client models Company on the lead, and the real client reads it from Nest | — (decided in Fledge, not here) | 2026-10-09 |
 | D25 | Which channel does Atlas use for Fledge data? | A small, structured, versioned REST API on the same OAuth tokens, for leads, mail, calendar and docs (Fledge-side routes, on the owner's list) | Fledge's MCP server: returns prose for a model, has no leads tool, and would need structured output added (`docs/research/05-fledge-api.md`) | 2026-10-09 |
 | D24 | When can the real Fledge client be built? | After Fledge's Stage C, which the owner says comes after the Fledge redesign; no date. Plan 2 ships the Fledge plugin on the stand-in client behind the trait, and the real client is its own later work, started when Stage C lands | Targeting the real client in plan 2: nothing it needs is deployed (`docs/research/05-fledge-api.md`, "Short answer") | 2026-10-09 |
 | D23 | How does Atlas authenticate to Fledge? | As an ordinary OAuth client through Fledge's consent screen (OAuth 2.1, PKCE, loopback redirect), with only the permissions the owner grants | A pre-registered first-party client: Fledge would have to build a separate trust path (`docs/research/05-fledge-api.md`, owner questions) | 2026-10-09 |
-| D22 | If the owner's real Google sign-in fails in Phase 0? | Stop and decide with the evidence: where it failed, and the options then (Google in Edge, presenting Atlas differently against Google's policy, or rethinking the engine) | Deciding now: a no-go on the engine, or settling for Google in Edge, before knowing how it fails | 2026-10-09 |
+| D22 | If the owner's Google sign-in fails, in Phase 0 or later? | Stop and decide with the evidence: where it failed, and the options then (Google in Edge, presenting Atlas differently against Google's policy, or rethinking the engine). Because WebView2's Chrome presentation toward Google is undocumented and Evergreen updates silently, the same rule covers a break after launch | Deciding now: a no-go on the engine, or settling for Google in Edge, before knowing how it fails | 2026-10-09 |
 | D21 | Which Google sign-in paths must Phase 0 prove? | All the owner uses: password with a phone prompt or code, a passkey (Windows Hello or phone), and a Google Workspace account. ⚠️ If the Workspace admin has device checks (Context-Aware Access or Endpoint Verification), they need a browser extension Atlas can't run (`docs/research/07-google-sign-in-and-drm.md`, new questions) | — | 2026-10-09 |
-| D20 | What may Atlas do in Fledge? | Everything a person can: Atlas is meant to become Fledge's desktop app, and these foundations are what make that possible. Sending mail and invites from Atlas needs Fledge-side consent scopes that don't exist today (`docs/research/05-fledge-api.md`, "Work needed on the Fledge side"); that is a list for the owner, not issues in Fledge's repositories | Draft only (Fledge's current rule for outside apps): the owner wants Atlas to be Fledge's full client | 2026-10-09 |
-| D19 | Is Fledge data copied into Atlas's local index, or searched live? | The owner decides per kind of data. Each plugin has its own settings, and Fledge's has a keep-local switch for each kind (docs, canvases, tables, leads, mail, calendar and so on): on, that kind is copied into the local index; off, it is searched live | All copied: stores everything on the machine whether wanted or not. All live: every keystroke waits on the network | 2026-10-09 |
+| D20 | What may Atlas do in Fledge? | Everything a person can, in the long run: Atlas is meant to become Fledge's desktop app. **Not in v1** (D34): it is built with the real client after Stage C. Sending mail and invites needs Fledge-side consent scopes that don't exist today (`docs/research/05-fledge-api.md`, "Work needed on the Fledge side"); that is a list for the owner, not issues in Fledge's repositories | Draft only (Fledge's current rule for outside apps): the owner wants Atlas to be Fledge's full client | 2026-10-09 |
+| D19 | Is Fledge data copied into Atlas's local index, or searched live? | The owner decides per kind of data: Fledge's plugin settings get a keep-local switch for each kind (docs, canvases, tables, leads, mail, calendar and so on). **Not in v1** (D34): built with the real client after Stage C | All copied: stores everything whether wanted or not. All live: every keystroke waits on the network | 2026-10-09 |
 | D18 | Does Atlas index the text of visited pages? | Yes, locally, for up to 7 days of history, with a setting to turn it off | Title and address only: the owner wants recall by content | 2026-10-09 |
 | D17 | Will Atlas run other people's plugins? | Later, not in v1. Built-ins use the same plugin API a third party would; the WebAssembly sandbox is built only once someone else's plugin exists | Never: closes a door the owner wants open. In v1: a sandbox, permissions and an installer, a large addition | 2026-10-09 |
-| D16 | How does the build phase track and review work while Atlas is local? | Plan now, build later. All four plans are planned locally in this session, up to an approved breakdown written into each Issue map with empty issue numbers; nothing is built, Phase 0 included, until the owner creates a repository (only account: ZanderOfficial; probably the Fledge Software organisation later) | A private repository on ZanderOfficial now: the owner wants Atlas local for now. A fully local build: the Super-Pass's review and PR skills are built for GitHub, so it would run a reduced version of them | 2026-10-09 |
+| D16 | When does building start, and how is work tracked while Atlas is local? | Phase 0 first, locally: plan 1 is written in full and plans 2–4 stay outlines; the Phase 0 spike (throwaway code) runs in this local repository without GitHub, then stops and reports, as `CLAUDE.md` asks. Issues are broken down after its verdict, once the owner creates a repository (only account: ZanderOfficial; probably the Fledge Software organisation later). *Revised after the realism check; was "plan all four plans to an approved breakdown, build nothing until a repository exists"* | Breaking all four plans into issues before Phase 0: its results (GPUI or Tauri, whether overlays work) could invalidate them. A private repository now: the owner wants Atlas local for now | 2026-10-09 |
 | D15 | Does v1 import passwords? | No. There is no password manager in v1, so imported passwords would have nowhere safe to live and nothing to fill them in. The owner signs in once per site and stays signed in through cookies. Password import comes with a password manager after v1 | A small password manager in v1 (encrypted store, autofill, Passwords button back): sizeable and security-sensitive, against the spec's scope. Importing into WebView2's own store: no known import API, and it would turn saving on against D11 | 2026-10-09 |
 | D14 | What does the bookmark import read? | The standard HTML bookmarks file that Edge, Chrome and Firefox export (`<!DOCTYPE NETSCAPE-Bookmark-file-1>`, `docs/research/02b-default-browser-import-signing.md`). Replaces "a CSV file only" (S7) with the owner's yes; `docs/decisions.md` updated | CSV only: no browser exports bookmarks as CSV, so the owner would have to convert by hand. Both: a second format to build and test for no gain | 2026-10-09 |
 | D13 | How many database snapshots, and may the data folder be synced? | A daily `VACUUM INTO` snapshot taken when idle, 7 kept, in the local (not roaming, not synced) app-data folder; Atlas never puts its database in OneDrive or another synced folder | 30 days: more disk for little gain. A synced folder: SQLite's write-ahead log breaks there (`docs/research/03-core-architecture.md`, owner question 4) | 2026-10-09 |
@@ -201,10 +239,10 @@ Decisions made in this plan:
 | D10 | Does the import bring in history? | No: history starts empty and fills as the owner browses | Importing history: makes the palette useful on day one, but the owner doesn't want it | 2026-10-09 |
 | D9 | Which engine does "Search the web" use, and does the palette fetch suggestions as you type? | Google, with no live suggestions: while typing, the palette ranks only local tabs, bookmarks and history, so keystrokes stay on the machine and results never wait on the network. Suggestions may become a setting later | Google with live suggestions: sends every keystroke to Google and adds network latency to the palette. Another engine: the owner lives in Google | 2026-10-09 |
 | D8 | What pins the sidebar? | Ctrl Alt S, as Zen does; Ctrl S stays free to save in Forge and Notes. The owner approved changing this design decision; `design/README.md` updated | Ctrl S, as Arc does: collides with save in Forge and Notes (`docs/research/02-browser-v1-scope.md`, owner question 3) | 2026-10-09 |
-| D7 | If a live overlay window over the page fails, is a frozen snapshot of the page under the palette acceptable? | No. The palette and the sidebar peek must stay live over the page. The spike tries a borderless GPUI popup window with Acrylic first; if it fails, the next step is WebView2 visual hosting, not a freeze frame | Freeze frame (`docs/research/01-shell-and-engine.md`, recommendation): robust, but a playing video's picture would pause under the palette while its sound continues | 2026-10-09 |
+| D7 | What must the overlays achieve, and is a frozen page under the palette acceptable? | The palette and the sidebar peek must stay live, over web pages and over the editor web views. Phase 0 gates on an owned, live, near-opaque popup window with correct focus; the Acrylic blur is a bonus, not a gate. If that fails, stop and decide (WebView2 visual hosting, or a palette that shrinks the page). No freeze frame. *Revised after the realism check; blur was a gate* | Freeze frame (`docs/research/01-shell-and-engine.md`, recommendation): a playing video's picture would pause under the palette. Blur as a gate: a cosmetic effect deciding go/no-go, when the design already keeps the palette near-opaque (`design/README.md`) | 2026-10-09 |
 | D6 | What must Phase 0 prove (go/no-go)? | Hard musts: Google sign-in, YouTube (1080p and fullscreen), Disney+ and Hulu play. Also: at least 13 of the other daily sites pass; the palette and the sidebar peek draw live over a page with correct focus; Ctrl T, W, L and K work while a page has focus; memory with 10 tabs within 10% of Edge's; idle CPU near zero; the GPUI chrome paints before WebView2 finishes starting | Stricter (match Edge, every site): sets a bar no embedded engine is known to meet. Looser (only sign-in and overlays gate): lets a slow or broken base through to every later wave | 2026-10-09 |
 | D5 | How much is v1? | Four plans, each plugin's v1 deliberately thin: (1) engine, browser core and palette; (2) plugin runtime and Fledge on a stand-in client; (3) Notes; (4) Forge (editor, project tree, terminal, basic git, installed language servers; PyCharm is the direction, not the v1 bar). This Super-Pass builds plan 1, which ends at a browser the owner can use daily | Four plans at the spec's full depth: Forge alone would hold v1 back for a very long time (Zed's debugger took 8 months; `docs/research/04-forge-and-notes.md`). Plan 1 only, plugins in v2: drops the plugins that are Atlas's reason to exist | 2026-10-09 |
-| D4 | How is Atlas's own interface (the chrome) drawn? | Rust with GPUI, Zed's GPU-drawn toolkit, pinned to a snapshot. Phase 0 measures it against a Tauri 2 + Svelte control build of the same sidebar and palette before the choice is final | Tauri 2 + Svelte (the spec's plan): the chrome can't paint until WebView2 starts, it adds a renderer and a JS heap, and puts TypeScript in the UI layer, against the owner's wish for Rust (`docs/research/06-engine-and-ui-performance.md`) | 2026-10-09 |
+| D4 | How is Atlas's own interface (the chrome) drawn? | Rust with GPUI, pinned to one snapshot base chosen in Phase 0. Phase 0 compares "GPUI chrome + a CodeMirror tab" with "Svelte chrome + a CodeMirror tab" (both with page tabs through wry directly), against a rule written before the spike: switch to Tauri 2 + Svelte if GPUI saves less than about 50 MB and 150 ms at start, or if the overlays work only in Tauri. *Revised after the realism check, because D28 moved the editors into web views* | Tauri 2 + Svelte now: gives up GPUI's start-time and memory lead before measuring it. GPUI with no comparison: commits to a pre-1.0 toolkit without evidence | 2026-10-09 |
 | D3 | Which engine renders pages in v1? | The system WebView2 (Edge's Chromium, part of Windows), driven from Rust; everything Atlas draws and decides stays Rust. Servo is added later as a per-tab engine once it handles the owner's sites, re-checked about every six months | Servo only: fails Google sign-in, YouTube, Drive and GitHub, has no DRM, downloads, PDF or printing, and runs unsandboxed by default (`docs/research/06-engine-and-ui-performance.md`, "Short answer"). Servo and WebView2 per tab from v1: two engines' plumbing for one developer. CEF: still embedded Chromium for Google, no Widevine without a Google licence, hundreds of MB and a release every 4–8 weeks. A Firefox (Gecko) fork like Zen: no desktop embedding API, so a full fork rebased every Firefox release; the owner dropped it | 2026-10-09 |
 | D2 | Which platforms does v1 run on? | Windows 11 only. macOS is neither built nor tested in v1 (the owner has no Mac and doesn't want Mac testing). ⚠️ Linux is assumed out too: the owner didn't name it, and wry's Linux child web views are X11-only (`docs/research/06-engine-and-ui-performance.md`, "Defer") | macOS in v1: no machine to test on, and it needs far more built (find, downloads, certificate warnings, mute; `docs/research/02-browser-v1-scope.md`). Linux in v1: it would make CEF the plan there | 2026-10-09 |
 | D1 | May the plan be committed while it is being planned? (`CLAUDE.md` says commits only when the owner asks) | Yes: commit as we go, to the local branch `claude/plan-atlas-v1`; no pushes, since there is no remote | Leaving the plan uncommitted until the end: a compaction or a closed session would lose the only record of the decisions | 2026-10-09 |
@@ -240,6 +278,15 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
 - **Google Workspace device checks:** does the owner's Workspace admin
   console turn on Context-Aware Access or Endpoint Verification? Whoever
   administers that Workspace can check; Phase 0 will show it anyway.
+- **Page text indexing (D18) and Google:** reading a page's text needs a
+  script in the page, which the rules for Google forbid; and 7 days of
+  Gmail, Stripe or banking text would sit in the database and its
+  snapshots. Needs: the extraction method, and a default exclusion list.
+  The owner decides.
+- **Google canary:** a recurring check that Google sign-in still works on
+  each new WebView2 runtime. The owner decides whether Atlas runs it.
+- **`CLAUDE.md`** still says "a Tauri 2 desktop browser"; updating it to
+  match D3 and D4 needs the owner's yes.
 - **Data and search:** one store or two (SQLite FTS5 or tantivy), settled by
   the bake-off before Notes.
 - **The project:**
@@ -267,6 +314,14 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Realism check (step 3): "realistic with changes", twelve
+  objections, summarised under "Is it realistic?". Owner's answers: keep
+  GPUI but let Phase 0 decide against a written rule (D4 revised); overlays
+  gate on a live popup, blur optional (D7 revised); Phase 0 runs locally
+  first, plans 2–4 stay outlines until its verdict (D16 revised); plan 2 is
+  thin, with D19 and D20 moved after Stage C (D34). D22 now covers Google
+  breaking after launch; D28 states its exception to "Rust owns all state".
+  The departures from the spec were written into `docs/decisions.md`.
 - **2026-10-09** — Forge round: git command line for writes with in-process
   reads, needing Git for Windows (D29, departs from the spec with the owner's
   yes); installed language servers only, downloads after v1 (D30); run
