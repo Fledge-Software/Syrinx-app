@@ -24,9 +24,19 @@ mean every later feature must be prototyped before the scaffold. The first
 implementation was plan 1's scaffold. The owner-requested documentation
 baseline is `d79fc29`. P1-01 passed its gate and independent review and was
 merged with owner approval as `ed19d6d` into `claude/plan-atlas-v1`.
-P1-02 is in progress on `codex/p1-02-tab-model`; its validation/review are
-pending. No remote, issue or pull request has been created. Analytics still
-requires the proposed amendment below before collection is implemented.
+P1-02 and P1-03 passed their gates and independent reviews and were merged
+with owner approval as `892d3bc` and `c4a6631`. For P1-04, the owner chose
+confirmed restoration (D46), a local deletion record (D47), and the pinned
+SQLite 3.53.4 patch. The patch is applied and passed the full 78-test gate;
+the complete lifecycle, backup, rotation, confirmed/resumable recovery and
+deletion-contract implementation now passes the full 138-test gate and
+independent source reviews. The owner approved P1-04's commit and local merge;
+Plan 1's ledger records their completion.
+The reviewed design is
+in `docs/p1-04-recovery-preflight.md`. No remote, issue or pull request has
+been created.
+Analytics still requires the proposed amendment below before collection is
+implemented.
 
 ## What this review established
 
@@ -40,7 +50,7 @@ Phase 0 numbers below are reported evidence, not new measurements.
 The machine currently reports Windows `10.0.26300.0`, Rust `1.97.1`,
 Cargo `1.97.1`, Node `24.15.0`, pnpm `10.34.4` and Git for Windows
 `2.55.0.windows.2`. P1-01 now provides the product `Cargo.toml` and
-`docs/LOCAL-DEV.md`; the working branch is `codex/p1-02-tab-model`, with no remote.
+`docs/LOCAL-DEV.md`; the working branch is `codex/p1-04-backups`, with no remote.
 
 “Verified” below means the cited source supports that particular API or
 fact. It does not certify Atlas's future implementation. “Conditional”
@@ -61,7 +71,7 @@ not yet available. Owner choices are requirements, not facts to re-decide.
 | Suspension and process recovery | [TrySuspend](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_3) is conditional and needs a hidden view. [Process failure](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/process-related-events) distinguishes reloadable renderer loss from browser-process loss affecting all its views. | Test failed/late suspend callbacks and both crash paths. D28's “one renderer” is an aim: the [runtime controls process sharing](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/process-model). |
 | Built-in browser facilities | Find/print accelerators, [download-dialog APIs](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_9), [notification UI](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2notificationreceivedeventargs) and [persisted permissions](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2permissionrequestedeventargs3) exist. | Runtime tests remain necessary. Route Ctrl J explicitly. Include research note 02's omitted Musts: zoom, HTTPS/certificate handling and clear browsing data. |
 | Zoom and certificates | Pinned wry disables zoom hotkeys by default; use `with_hotkeys_zoom(true)`. The native [controller](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2controller) supports zoom. Default [certificate handling](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_14) preserves the TLS warning. ⚠️ No complete successful-page security-state API was established. | Test focused-page Ctrl plus/minus/0. Do not promise per-site zoom persistence. Use a limited scheme/error indicator unless stronger evidence exists; never label an HTTPS URL alone “secure” or set `ALWAYS_ALLOW`. |
-| Clear browsing data | [Profile2](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2profile2) supports kinds and Unix-time intervals `[start,end)` across the profile. Aborted operations can be partial; closing the view can suppress completion. | Keep the controller alive, await completion and clear matching Atlas copies. No user-data-folder deletion. Define deletion-journal or snapshot treatment before recovery design is finalized so clearing survives older snapshots. |
+| Clear browsing data | [Profile2](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2profile2) supports kinds and Unix-time intervals `[start,end)` across the profile. Aborted operations can be partial; closing the view can suppress completion. | Keep the controller alive, await completion and clear matching Atlas copies. No user-data-folder deletion. The owner chose a local deletion record (D47); validate its replay contract so restoration cannot reintroduce cleared history. |
 | D13: SQLite durability and snapshots | [WAL](https://www.sqlite.org/wal.html) needs same-machine coordination. [NORMAL synchronization](https://www.sqlite.org/pragma.html#pragma_synchronous) does not guarantee recent commits survive power/OS failure. [VACUUM INTO](https://www.sqlite.org/lang_vacuum.html) creates a snapshot, but interrupted output can be invalid. | The plan now promises the last committed session after application crash, not zero loss. Validate a completed snapshot before rotating seven copies; test only disposable stores. |
 | Tier 1 speed | [frizbee](https://github.com/saghen/frizbee) supplies fuzzy matching; its microbenchmarks do not measure Atlas's ranking, boosts, counts and highlights. ⚠️ The 5 ms / 100,000-row result is unmeasured. | Benchmark the full path and record distributions, corpus and machine conditions. No personal history corpus. |
 | Tier 2 choice and D18/D35 | [SQLite FTS5](https://www.sqlite.org/fts5.html) and [Tantivy](https://docs.rs/tantivy/latest/tantivy/) are candidates. ⚠️ Neither a winning benchmark nor an approved extraction method exists. | Phase 3 bake-off measures build/query/update/expiry/recovery on one synthetic corpus. Verify eligibility before extraction, including redirects, frames and `no-store`; do not add scripts/filters to excluded sites. |
@@ -171,7 +181,7 @@ is direction only; no personal image is copied into this repository.
 | P1-01 | A reproducible local build prevents later work resting on an unusable toolchain. Create the minimal Cargo workspace, dependency-boundary check, passing test and runnable app; document and execute the D38 gate. Audit maintenance, security and licences for the resolved graph before adding dependencies, here and in every later slice. Record the approved local workflow. Do not define the future Plugin trait early. | `Cargo.toml`, `crates/xtask`, `docs/LOCAL-DEV.md`, `CLAUDE.md`, `AGENTS.md`; D16/D38. | Q3/Q4, a preserved planning baseline and the dependency pre-add audit. |
 | P1-02 | One model prevents sidebar/palette disagreement and replacing temporary pins later. Implement live tab identity/kinds, a flat saved-page lifecycle with independent saved identity and live association, selection/order, save/unpin, unload/open-or-focus and a 20-entry closure stack for ordinary and saved web instances. Test D42/D43 without a window; folders and plugin registration remain later work. | `crates/atlas-core`; S3, D42/D43. | P1-01. |
 | P1-03 | Saved destinations must survive independently of live pages. Open a local unsynced store, migrate it and persist/reload flat saved entries plus live-tab snapshots and their associations through a serialized writer. Prove rollback, unloaded-entry preservation and errors on disposable databases. | `crates/atlas-store`, core persistence boundary, filesystem-only `atlas-platform` directory guard; D13/D43. | P1-02; Q2 for durable/cache separation. |
-| P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and a tested recovery path; interruption leaves the last valid copy usable. Establish how later explicit history clearing survives restoring older snapshots. | `crates/atlas-store`; D13. | P1-03. |
+| P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and an owner-confirmed recovery path; interruption leaves the last valid copy usable. Define and test the local deletion-journal contract so later history clearing survives restoring older snapshots. | `crates/atlas-store`, filesystem lifecycle in `atlas-platform`; D13/D46/D47. | P1-03; approved SQLite maintenance prerequisite, now verified. |
 | P1-05 | The palette needs fast local ranking before UI work. Add the tier 1 catalogue, boosts, counts and match positions with incremental updates and a reproducible 100,000-row benchmark. | `crates/atlas-search`, `crates/xtask`; D9. | P1-04. |
 | P1-06 | Continuous repainting defeats the performance goal. Implement the small pinned GPUI idle patch, add focused regression evidence and remeasure eight suspended tabs and equivalent first-page startup in both throwaway candidates using fresh synthetic profiles. Prepare a reviewable upstream patch. | Pinned GPUI patch and measurement report; D37/D12. | P1-05; passing measurements. Public offer requires separate owner approval. |
 | P1-07 | Shared tokens and width states keep the shell consistent. Render the five palettes, accent and transparency fallback with wide, favicon-only, hidden and peek sidebar samples. Review D44 drag thresholds with the owner and inspect contrast against the authorized design direction. | `crates/atlas-ui`; S10/D44, `design/README.md`. | P1-06; live-canvas comparison or owner-approved snapshot, with D43–D45 amendments. |

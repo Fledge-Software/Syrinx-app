@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Preserve the approved SQLite vendor source byte for byte for provenance checks.
+/vendor/libsqlite3-sys-0.38.2/** -text

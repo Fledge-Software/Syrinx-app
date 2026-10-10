@@ -17,7 +17,7 @@ use atlas_core::{
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
-use super::{SaveRequest, Store, WriterHandle};
+use super::{SaveRequest, Store, WriterHandle, WriterRequest};
 use crate::{DirectoryLease, EncodingField, LocationError, StoreError, StoreOperation, schema};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -547,17 +547,18 @@ fn lease_revalidation_checks_connection_lifecycle_without_repeating_for_snapshot
 #[test]
 fn abandoned_write_reply_is_reported_at_shutdown_and_committed_revision_is_recoverable() {
     let directory = TestDirectory::new();
-    let writer = WriterHandle::start(directory.lease()).expect("writer starts");
+    let writer = WriterHandle::start(directory.lease(), crate::ShutdownState::Unclean)
+        .expect("writer starts");
     let (reply, receiver) = mpsc::sync_channel(1);
     drop(receiver);
     assert!(
         writer
             .sender
-            .send(SaveRequest {
+            .send(WriterRequest::Save(SaveRequest {
                 expected_revision: 0,
                 snapshot: one_tab(1),
                 reply
-            })
+            }))
             .is_ok()
     );
     assert_eq!(writer.stop(), Err(StoreError::ReplyAbandoned));
@@ -603,3 +604,5 @@ fn store_and_snapshot_debug_redact_paths_and_all_metadata_fields() {
     store.shutdown().expect("store closes");
     directory.cleanup();
 }
+
+mod lifecycle;

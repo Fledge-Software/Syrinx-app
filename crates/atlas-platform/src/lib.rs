@@ -2,4 +2,6 @@
 
 mod storage;
 
-pub use storage::WindowsDirectoryLease;
+pub use storage::{
+    RecoveryError, RecoveryOffer, RecoveryOutcome, WindowsDirectoryLease, offer_recovery,
+};

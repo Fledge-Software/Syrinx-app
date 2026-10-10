@@ -11,9 +11,13 @@ use std::thread::{self, JoinHandle};
 use atlas_core::TabModelSnapshot;
 use rusqlite::{Connection, OpenFlags};
 
-use crate::DirectoryLease;
 use crate::error::{StoreError, StoreOperation, combine_results, database_error, with_cleanup};
-use crate::{records, schema};
+use crate::{BackupOutcome, DirectoryLease, ShutdownState};
+use crate::{backup, records, schema};
+
+mod session;
+
+use session::HeldSession;
 
 /// A durable snapshot and its compare-and-save revision; debug output redacts metadata.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,6 +32,8 @@ pub struct StoredSnapshot {
 pub struct Store {
     readers: Option<[Mutex<LeasedConnection>; 2]>,
     writer: Option<WriterHandle>,
+    session: Option<HeldSession>,
+    previous_shutdown: ShutdownState,
     next_reader: AtomicUsize,
 }
 
@@ -44,24 +50,35 @@ impl fmt::Debug for Store {
 impl Store {
     /// Opens only a supplied checked lease; this does not discover or open the owner's data.
     pub fn open(lease: Arc<dyn DirectoryLease>) -> Result<Self, StoreError> {
-        // Finish writer initialization before allowing any reader to observe the schema.
-        let writer = WriterHandle::start(Arc::clone(&lease))?;
-        let first = match LeasedConnection::open(Arc::clone(&lease), false) {
-            Ok(connection) => connection,
-            Err(error) => return Err(with_cleanup(error, writer.stop())),
-        };
-        let second = match LeasedConnection::open(lease, false) {
-            Ok(connection) => connection,
-            Err(error) => {
-                let cleanup = combine_results(first.close(false), writer.stop());
-                return Err(with_cleanup(error, cleanup));
-            }
-        };
+        // Claim the session before any thread can open SQLite, then initialize the writer first.
+        let session = HeldSession::begin(lease)?;
+        let previous_shutdown = session.previous_shutdown();
+        let writer = WriterHandle::start(Arc::clone(session.lease()), previous_shutdown)?;
+        let first =
+            match LeasedConnection::open(Arc::clone(session.lease()), ConnectionRole::Reader) {
+                Ok(connection) => connection,
+                Err(error) => return Err(with_cleanup(error, writer.stop())),
+            };
+        let second =
+            match LeasedConnection::open(Arc::clone(session.lease()), ConnectionRole::Reader) {
+                Ok(connection) => connection,
+                Err(error) => {
+                    let cleanup = combine_results(first.close(false), writer.stop());
+                    return Err(with_cleanup(error, cleanup));
+                }
+            };
         Ok(Self {
             readers: Some([Mutex::new(first), Mutex::new(second)]),
             writer: Some(writer),
+            session: Some(session),
+            previous_shutdown,
             next_reader: AtomicUsize::new(0),
         })
+    }
+
+    /// Reports the previous session's evidence; an untracked lease is conservatively unclean.
+    pub fn previous_shutdown(&self) -> ShutdownState {
+        self.previous_shutdown
     }
 
     /// Reads one committed revision. This blocks on a reader lock and SQLite's busy timeout.
@@ -87,9 +104,28 @@ impl Store {
         let (reply, result) = mpsc::sync_channel(1);
         writer
             .sender
-            .send(SaveRequest {
+            .send(WriterRequest::Save(SaveRequest {
                 expected_revision,
                 snapshot,
+                reply,
+            }))
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
+    }
+
+    /// Creates a daily validated backup only while idle. This blocks on the existing writer queue.
+    pub fn backup_if_due(
+        &self,
+        now_utc_seconds: i64,
+        idle: bool,
+    ) -> Result<BackupOutcome, StoreError> {
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::Backup {
+                now_utc_seconds,
+                idle,
                 reply,
             })
             .map_err(|_| StoreError::WorkerUnavailable)?;
@@ -98,10 +134,10 @@ impl Store {
 
     /// Closes readers, drains the writer and reports all shutdown failures. This blocks.
     pub fn shutdown(mut self) -> Result<(), StoreError> {
-        self.close_all()
+        self.close_all(true)
     }
 
-    fn close_all(&mut self) -> Result<(), StoreError> {
+    fn close_all(&mut self, complete_session: bool) -> Result<(), StoreError> {
         // Close readers first so the writer can finish the final WAL cleanup while leased.
         let mut result = Ok(());
         if let Some(readers) = self.readers.take() {
@@ -112,6 +148,14 @@ impl Store {
         if let Some(writer) = self.writer.take() {
             result = combine_results(result, writer.stop());
         }
+        // Only explicit, fully successful shutdown can turn the external marker clean.
+        if let Some(session) = self.session.take() {
+            if complete_session && result.is_ok() {
+                result = session.complete();
+            } else {
+                drop(session);
+            }
+        }
         result
     }
 }
@@ -119,7 +163,7 @@ impl Store {
 impl Drop for Store {
     fn drop(&mut self) {
         // Explicit shutdown returns errors; this fallback still surfaces structural failures.
-        if let Err(error) = self.close_all() {
+        if let Err(error) = self.close_all(false) {
             eprintln!("Atlas store shutdown failed: {error}");
         }
     }
@@ -131,19 +175,31 @@ struct SaveRequest {
     reply: mpsc::SyncSender<Result<u64, StoreError>>,
 }
 
+enum WriterRequest {
+    Save(SaveRequest),
+    Backup {
+        now_utc_seconds: i64,
+        idle: bool,
+        reply: mpsc::SyncSender<Result<BackupOutcome, StoreError>>,
+    },
+}
+
 struct WriterHandle {
-    sender: mpsc::SyncSender<SaveRequest>,
+    sender: mpsc::SyncSender<WriterRequest>,
     thread: JoinHandle<Result<(), StoreError>>,
 }
 
 impl WriterHandle {
-    fn start(lease: Arc<dyn DirectoryLease>) -> Result<Self, StoreError> {
+    fn start(
+        lease: Arc<dyn DirectoryLease>,
+        previous_shutdown: ShutdownState,
+    ) -> Result<Self, StoreError> {
         // Bound retained snapshots; callers already run off the GUI thread and may wait.
         let (sender, requests) = mpsc::sync_channel(8);
         let (ready, initialized) = mpsc::sync_channel(1);
         let thread = thread::Builder::new()
             .name("atlas-store-writer".to_owned())
-            .spawn(move || writer_main(lease, requests, ready))
+            .spawn(move || writer_main(lease, previous_shutdown, requests, ready))
             .map_err(|error| StoreError::WorkerStart {
                 code: error.raw_os_error(),
             })?;
@@ -164,10 +220,12 @@ impl WriterHandle {
 
 fn writer_main(
     lease: Arc<dyn DirectoryLease>,
-    requests: mpsc::Receiver<SaveRequest>,
+    previous_shutdown: ShutdownState,
+    requests: mpsc::Receiver<WriterRequest>,
     ready: mpsc::SyncSender<Result<(), StoreError>>,
 ) -> Result<(), StoreError> {
-    let mut writer = match LeasedConnection::open(lease, true) {
+    let mut writer = match LeasedConnection::open(lease, ConnectionRole::Writer(previous_shutdown))
+    {
         Ok(connection) => connection,
         Err(error) => {
             return ready
@@ -187,23 +245,51 @@ fn writer_main(
 
 fn serve_writes(
     writer: &mut LeasedConnection,
-    requests: mpsc::Receiver<SaveRequest>,
+    requests: mpsc::Receiver<WriterRequest>,
 ) -> Result<(), StoreError> {
+    let mut schedule = backup::BackupSchedule::default();
     loop {
         // Sender disconnection is the shutdown signal, not an ignored receive failure.
         let request = match requests.recv() {
             Ok(request) => request,
             Err(mpsc::RecvError) => return Ok(()),
         };
-        let result = records::save(
-            &mut writer.connection,
-            request.expected_revision,
-            &request.snapshot,
-        );
-        request
-            .reply
-            .send(result)
-            .map_err(|_| StoreError::ReplyAbandoned)?;
+        match request {
+            WriterRequest::Save(request) => {
+                let result = records::save(
+                    &mut writer.connection,
+                    request.expected_revision,
+                    &request.snapshot,
+                );
+                request
+                    .reply
+                    .send(result)
+                    .map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::Backup {
+                now_utc_seconds,
+                idle,
+                reply,
+            } => {
+                let result = if !idle {
+                    Ok(BackupOutcome::NotIdle)
+                } else {
+                    writer
+                        .lease
+                        .backup_archive()
+                        .ok_or(StoreError::BackupUnavailable)
+                        .and_then(|archive| {
+                            schedule.create_if_due(
+                                &mut writer.connection,
+                                archive.as_ref(),
+                                now_utc_seconds,
+                                idle,
+                            )
+                        })
+                };
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+        }
     }
 }
 
@@ -213,10 +299,16 @@ struct LeasedConnection {
     lease: Arc<dyn DirectoryLease>,
 }
 
+#[derive(Clone, Copy)]
+enum ConnectionRole {
+    Writer(ShutdownState),
+    Reader,
+}
+
 impl LeasedConnection {
-    fn open(lease: Arc<dyn DirectoryLease>, writer: bool) -> Result<Self, StoreError> {
+    fn open(lease: Arc<dyn DirectoryLease>, role: ConnectionRole) -> Result<Self, StoreError> {
         lease.revalidate()?;
-        let access = if writer {
+        let access = if matches!(role, ConnectionRole::Writer(_)) {
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE
         } else {
             OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -229,20 +321,21 @@ impl LeasedConnection {
         )
         .map_err(|error| database_error(StoreOperation::Open, error))?;
         let mut leased = Self { connection, lease };
-        let prepared = leased.prepare(writer);
+        let prepared = leased.prepare(role);
         match prepared {
             Ok(()) => Ok(leased),
             Err(error) => Err(with_cleanup(error, leased.close(false))),
         }
     }
 
-    fn prepare(&mut self, writer: bool) -> Result<(), StoreError> {
+    fn prepare(&mut self, role: ConnectionRole) -> Result<(), StoreError> {
         self.lease.revalidate()?;
         schema::configure_connection(&self.connection)?;
-        if writer {
-            schema::prepare_writer(&mut self.connection)?;
-        } else {
-            schema::prepare_reader(&self.connection)?;
+        match role {
+            ConnectionRole::Writer(previous_shutdown) => {
+                schema::prepare_writer(&mut self.connection, previous_shutdown)?;
+            }
+            ConnectionRole::Reader => schema::prepare_reader(&self.connection)?,
         }
         self.lease.revalidate()?;
         Ok(())

@@ -105,6 +105,19 @@ you found it in the commit message, not here.
 
 ## Storage
 
+- **Read-only inspection can refuse a rollback before reporting corruption.**
+  A primary accompanied by a rollback journal can return
+  `SQLITE_READONLY_ROLLBACK` (776) during schema inspection. That error alone
+  does not prove damage: do not turn ordinary read-only or I/O failures into
+  permission to restore a backup. P1-04's synthetic sidecar-preservation
+  tests exposed this before its recovery gate passed.
+- **SQLite inspection and DELETE-capable Windows handles cannot overlap.**
+  The pinned Windows VFS shares reads and writes, but not deletion. Validate
+  with read-only guards, close them, reacquire movable handles and compare
+  identities before renaming. Close movable handles before validating the
+  installed copy. Source: the pinned SQLite Windows open path and P1-04's
+  native recovery implementation.
+
 - **SQLite's write-ahead log breaks in a synced folder.** In OneDrive or a
   network folder the `-wal` file separates from the database. Keep the
   database in the local, not roaming, app-data folder. Source:
@@ -129,10 +142,13 @@ you found it in the commit message, not here.
   The platform lease supplies it when the database or longest sidecar needs
   it, and every store connection selects the locking `win32-longpath` VFS
   (SQLite's file-access layer). That VFS also avoids the ordinary VFS's
-  smaller pathname buffer. Keep ordinary DOS spelling for shorter paths:
-  bundled SQLite 3.53.2 has a documented extended-path locking performance
-  regression. Sources: P1-03's failing native/SQLite integration test and
-  the exact bundled source, recorded in `docs/dependency-audit.md` (high).
+  smaller pathname buffer. Keep ordinary DOS spelling for shorter paths.
+  P1-03 also exposed SQLite 3.53.2's extended-path locking regression;
+  P1-04's approved 3.53.4 source patch includes its upstream fix, without
+  removing the need for the prefix or long-path VFS. Sources: P1-03's failing
+  native/SQLite integration test and the source reviews recorded in
+  `docs/dependency-audit.md` and `docs/p1-04-sqlite-maintenance-review.md`
+  (high on source behavior; no performance remeasurement claimed).
 
 ## Repository and research
 

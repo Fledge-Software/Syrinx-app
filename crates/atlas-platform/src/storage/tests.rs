@@ -331,6 +331,48 @@ fn lease_diagnostics_redact_location_and_lease_is_send_and_sync() {
     );
 }
 
+#[test]
+fn a_refused_begin_releases_the_session_claim_without_marking_clean() {
+    let fixture = Fixture::new();
+    let destination = fixture.root.join("data");
+    let lease = prepare(&destination);
+    let control = lease.session_control().expect("native session control");
+    let intent = destination.join(super::session::RECOVERY_INTENT_NAME);
+    fs::write(&intent, b"synthetic recovery intent").expect("write synthetic intent");
+
+    assert!(matches!(
+        control.begin(),
+        Err(LocationError::RecoveryPending)
+    ));
+    fs::remove_file(&intent).expect("remove synthetic intent");
+    let token = control.begin().expect("release claim after refused begin");
+    assert_eq!(
+        token.previous_shutdown(),
+        atlas_store::ShutdownState::Unclean
+    );
+}
+
+#[test]
+fn a_refused_completion_releases_the_claim_and_preserves_dirty_state() {
+    let fixture = Fixture::new();
+    let destination = fixture.root.join("data");
+    let lease = prepare(&destination);
+    let control = lease.session_control().expect("native session control");
+    let token = control.begin().expect("begin synthetic session");
+    let intent = destination.join(super::session::RECOVERY_INTENT_NAME);
+    fs::write(&intent, b"synthetic recovery intent").expect("write synthetic intent");
+
+    assert_eq!(token.complete(), Err(LocationError::RecoveryPending));
+    fs::remove_file(&intent).expect("remove synthetic intent");
+    let reopened = control
+        .begin()
+        .expect("release claim after refused completion");
+    assert_eq!(
+        reopened.previous_shutdown(),
+        atlas_store::ShutdownState::Unclean
+    );
+}
+
 fn regular_file_info() -> EntryInfo {
     EntryInfo {
         identity: FileIdentity {
@@ -389,12 +431,12 @@ impl LocationProbe for StubProbe {
     }
 }
 
-struct Fixture {
-    root: PathBuf,
+pub(super) struct Fixture {
+    pub(super) root: PathBuf,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         // A fresh name confines creation and cleanup to this test's own directory.
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let time = SystemTime::now()

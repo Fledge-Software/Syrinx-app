@@ -1,6 +1,11 @@
 //! Retains checked directory and database identities for the store's lifetime.
 
+mod backup;
 mod native;
+mod recovery;
+mod session;
+
+pub use recovery::{RecoveryError, RecoveryOffer, RecoveryOutcome, offer_recovery};
 
 #[cfg(test)]
 mod tests;
@@ -15,7 +20,9 @@ use std::{
     sync::Arc,
 };
 
-use atlas_store::{DirectoryLease, LocationError, LocationOperation};
+use atlas_store::{
+    BackupArchive, DirectoryLease, LocationError, LocationOperation, SessionControl,
+};
 use windows::Win32::{Foundation::MAX_PATH, System::WindowsProgramming::DRIVE_FIXED};
 
 const DATABASE_NAME: &str = "atlas.db";
@@ -25,7 +32,17 @@ const SIDECAR_NAMES: [&str; 3] = ["atlas.db-wal", "atlas.db-shm", "atlas.db-jour
 pub struct WindowsDirectoryLease {
     database: GuardedEntry,
     sqlite_path: PathBuf,
-    directories: Vec<GuardedEntry>,
+    directories: Arc<Vec<GuardedEntry>>,
+    control: session::LifecycleControl,
+    probe: Arc<dyn LocationProbe>,
+    archive: Arc<backup::WindowsBackupArchive>,
+}
+
+#[derive(Clone)]
+struct PreparedDirectory {
+    path: PathBuf,
+    directories: Arc<Vec<GuardedEntry>>,
+    control: session::LifecycleControl,
     probe: Arc<dyn LocationProbe>,
 }
 
@@ -47,33 +64,16 @@ impl WindowsDirectoryLease {
         data_directory: &Path,
         probe: Arc<dyn LocationProbe>,
     ) -> Result<Self, LocationError> {
-        // Check the supplied path before any directory or database is created.
-        let requested = normal_absolute_path(data_directory)?;
-        if requested.file_name().is_none() {
-            return Err(LocationError::InvalidPath);
-        }
-        require_local_drive(&requested, probe.as_ref())?;
-        let (mut directories, missing) = lock_existing_ancestors(&requested)?;
-        let nearest = directories.last().ok_or(LocationError::InvalidPath)?;
-
-        // A drive alias can hide physical ancestors, including a sync root.
-        let physical_parent = normal_absolute_path(&native::final_path(&nearest.file)?)?;
-        require_local_drive(&physical_parent, probe.as_ref())?;
-        let (physical_directories, physical_missing) = lock_existing_ancestors(&physical_parent)?;
-        if !physical_missing.is_empty() {
-            return Err(LocationError::IdentityChanged);
-        }
-        directories.extend(physical_directories);
-        refuse_sync_roots(&directories, probe.as_ref())?;
-
-        // Create one checked child at a time while retaining every parent handle.
-        let mut destination = physical_parent;
-        for component in missing {
-            destination.push(component);
-            create_directory(&destination)?;
-            directories.push(GuardedEntry::directory(&destination)?);
-        }
-        refuse_sync_roots(&directories, probe.as_ref())?;
+        let prepared = prepare_directory(data_directory, probe)?;
+        let archive = Arc::new(backup::WindowsBackupArchive::new(prepared.clone()));
+        let PreparedDirectory {
+            path: destination,
+            directories,
+            control,
+            probe,
+        } = prepared;
+        // Normal startup must refuse unfinished recovery before it can create a primary.
+        control.revalidate()?;
         inspect_sidecars(&destination)?;
 
         // Preserve an existing database; exclusive creation handles a missing one.
@@ -83,12 +83,14 @@ impl WindowsDirectoryLease {
                 Some(file) => file,
                 None => native::create_database(&database_path)?,
             };
-        let database = GuardedEntry::database(database_path, database_file)?;
+        let database = GuardedEntry::regular_file(database_path, database_file)?;
         let lease = Self {
             sqlite_path: sqlite_database_path(&database.path),
             database,
             directories,
+            control,
             probe,
+            archive,
         };
         lease.revalidate_entries()?;
         Ok(lease)
@@ -96,10 +98,9 @@ impl WindowsDirectoryLease {
 
     fn revalidate_entries(&self) -> Result<(), LocationError> {
         // Both the retained handle and its current name must identify the same entry.
-        for directory in &self.directories {
-            directory.revalidate(true)?;
-        }
-        self.database.revalidate(false)?;
+        self.control.revalidate()?;
+        self.database
+            .revalidate(false, LocationOperation::OpenDatabase)?;
         inspect_sidecars(
             self.database
                 .path
@@ -120,12 +121,76 @@ impl DirectoryLease for WindowsDirectoryLease {
         self.revalidate_entries()?;
         refuse_sync_roots(&self.directories, self.probe.as_ref())
     }
+
+    fn session_control(&self) -> Option<&dyn SessionControl> {
+        Some(&self.control)
+    }
+
+    fn backup_archive(&self) -> Option<Arc<dyn BackupArchive>> {
+        Some(self.archive.clone())
+    }
 }
 
 impl fmt::Debug for WindowsDirectoryLease {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("WindowsDirectoryLease { location: [redacted] }")
     }
+}
+
+impl PreparedDirectory {
+    fn revalidate(&self) -> Result<(), LocationError> {
+        self.revalidate_entries()?;
+        refuse_sync_roots(&self.directories, self.probe.as_ref())
+    }
+
+    fn revalidate_entries(&self) -> Result<(), LocationError> {
+        require_local_drive(&self.path, self.probe.as_ref())?;
+        self.control.revalidate_location()
+    }
+}
+
+fn prepare_directory(
+    data_directory: &Path,
+    probe: Arc<dyn LocationProbe>,
+) -> Result<PreparedDirectory, LocationError> {
+    // Check the supplied path before any directory or database is created.
+    let requested = normal_absolute_path(data_directory)?;
+    if requested.file_name().is_none() {
+        return Err(LocationError::InvalidPath);
+    }
+    require_local_drive(&requested, probe.as_ref())?;
+    let (mut directories, missing) = lock_existing_ancestors(&requested)?;
+    let nearest = directories.last().ok_or(LocationError::InvalidPath)?;
+
+    // A drive alias can hide physical ancestors, including a registered sync root.
+    let physical_parent = normal_absolute_path(&native::final_path(&nearest.file)?)?;
+    require_local_drive(&physical_parent, probe.as_ref())?;
+    let (physical_directories, physical_missing) = lock_existing_ancestors(&physical_parent)?;
+    if !physical_missing.is_empty() {
+        return Err(LocationError::IdentityChanged);
+    }
+    directories.extend(physical_directories);
+    refuse_sync_roots(&directories, probe.as_ref())?;
+
+    // Create one checked child at a time while retaining every parent handle.
+    let mut destination = physical_parent;
+    for component in missing {
+        destination.push(component);
+        create_directory(&destination)?;
+        directories.push(GuardedEntry::directory(&destination)?);
+    }
+    refuse_sync_roots(&directories, probe.as_ref())?;
+
+    // Maintenance can inspect an interrupted recovery without creating an empty primary.
+    let directories = Arc::new(directories);
+    let control = session::LifecycleControl::acquire(&destination, Arc::clone(&directories))?;
+    control.revalidate_location()?;
+    Ok(PreparedDirectory {
+        path: destination,
+        directories,
+        control,
+        probe,
+    })
 }
 
 trait LocationProbe: Send + Sync {
@@ -169,7 +234,7 @@ impl GuardedEntry {
         })
     }
 
-    fn database(path: PathBuf, file: File) -> Result<Self, LocationError> {
+    fn regular_file(path: PathBuf, file: File) -> Result<Self, LocationError> {
         let information = native::entry_info(&file)?;
         check_entry(&information, false)?;
         Ok(Self {
@@ -179,14 +244,17 @@ impl GuardedEntry {
         })
     }
 
-    fn revalidate(&self, directory: bool) -> Result<(), LocationError> {
+    fn revalidate(
+        &self,
+        directory: bool,
+        operation: LocationOperation,
+    ) -> Result<(), LocationError> {
         let retained = native::entry_info(&self.file)?;
         check_entry(&retained, directory)?;
         let named_file = if directory {
             native::open_directory(&self.path, false)?
         } else {
-            native::optional_file(&self.path, LocationOperation::OpenDatabase)?
-                .ok_or(LocationError::IdentityChanged)?
+            native::optional_file(&self.path, operation)?.ok_or(LocationError::IdentityChanged)?
         };
         let named = native::entry_info(&named_file)?;
         check_entry(&named, directory)?;
@@ -277,6 +345,11 @@ fn refuse_sync_roots(
     directories: &[GuardedEntry],
     probe: &dyn LocationProbe,
 ) -> Result<(), LocationError> {
+    refuse_root_identities(directories, &sync_root_identities(probe)?)
+}
+
+fn sync_root_identities(probe: &dyn LocationProbe) -> Result<Vec<FileIdentity>, LocationError> {
+    let mut identities = Vec::new();
     for root in probe.sync_roots()? {
         // Resolve registered roots by identity, including aliases of a checked ancestor.
         let root = normal_absolute_path(&root)?;
@@ -286,12 +359,20 @@ fn refuse_sync_roots(
         if !information.directory || information.delete_pending {
             return Err(LocationError::UnexpectedEntryKind);
         }
-        if directories
-            .iter()
-            .any(|entry| entry.identity == information.identity)
-        {
-            return Err(LocationError::SyncedDirectory);
-        }
+        identities.push(information.identity);
+    }
+    Ok(identities)
+}
+
+fn refuse_root_identities(
+    directories: &[GuardedEntry],
+    roots: &[FileIdentity],
+) -> Result<(), LocationError> {
+    if directories
+        .iter()
+        .any(|entry| roots.contains(&entry.identity))
+    {
+        return Err(LocationError::SyncedDirectory);
     }
     Ok(())
 }
@@ -321,8 +402,8 @@ fn normal_absolute_path(path: &Path) -> Result<PathBuf, LocationError> {
 }
 
 fn sqlite_database_path(path: &Path) -> PathBuf {
-    // SQLite 3.53.2 gives extended paths slower WAL locking; use them only when required.
-    // Include its longest sidecar suffix and the terminator in Windows's limit.
+    // Keep ordinary DOS spelling when the database and its longest sidecar fit.
+    // Include the sidecar suffix and terminator before choosing extended-path spelling.
     let longest_name_units = path.as_os_str().encode_wide().count() + "-journal".len() + 1;
     if longest_name_units <= MAX_PATH as usize {
         return path.to_owned();

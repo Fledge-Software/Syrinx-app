@@ -194,6 +194,79 @@ buffer limits and the journal-suffix boundary. No GUI or production data was
 opened. The owner then requested the commit and approved the local merge;
 P1-03 is committed and merged into `claude/plan-atlas-v1` as `c4a6631`.
 
+## P1-04 SQLite prerequisite
+
+The owner approved a pinned SQLite 3.53.4 maintenance patch before backup
+recovery handles damaged files. `Cargo.toml` selects the local
+`vendor/libsqlite3-sys-0.38.2` package; Rust dependency versions and features
+remain unchanged. Keep the vendor files byte-identical to their recorded
+hashes. Its provenance and omitted optional sources are documented in
+`vendor/libsqlite3-sys-0.38.2.provenance.md` and the rationale is in
+`docs/p1-04-sqlite-maintenance-review.md`.
+
+The full `cargo xtask check` passed with this patch on 2026-10-10: 78 tests,
+Clippy, formatting, dependency boundaries and the console launch. The added
+engine-identity test checks the version and source ID of the actual linked
+SQLite library. This is a verified prerequisite, not completion of P1-04.
+The 78-test result above applies to the maintenance prerequisite alone; the
+complete 138-test result is recorded below. No production database has been opened.
+
+## P1-04 storage lifecycle and maintenance
+
+`WindowsDirectoryLease` now holds an exclusive `atlas.lifecycle` control
+file. A second process or a second store using the same lease cannot start
+an overlapping session. The store flushes running status before opening
+SQLite. Explicit shutdown marks clean only after both readers close and the
+writer finishes; fallback destruction leaves unclean evidence. Missing or
+malformed evidence causes conservative checking of an existing database.
+An `atlas.recovery-intent` entry prevents normal startup from creating a
+missing primary database after an interrupted restoration.
+
+A lifecycle write or flush failure is returned to the caller and poisons
+that control against reuse. A failed final flush can leave readable cached
+bytes; it provides no guarantee about what survives a later process restart.
+The clean record is attempted only after the database connections have
+already closed successfully. No Windows durability setting is changed.
+
+`atlas-store::deletion` defines D47's content-free journal format and replay
+contract. Records contain a category, half-open Unix-second range and
+generation, with damage detection and paired request/completion records.
+Pending clears, missing required generations and malformed records refuse
+replay. Diagnostic output redacts the ranges. This module performs no file
+I/O or history collection. P1-27 must persist the external generation barrier
+and connect all clearing participants before history clearing ships.
+
+`Store::backup_if_due(utc_seconds, idle)` is a blocking host-worker call on
+the existing writer queue. It takes a daily `VACUUM INTO` snapshot only when
+idle and due. Complete read-only validation precedes publication; the exact
+new candidate must validate again before seven-copy rotation. Failed output
+and unknown entries remain preserved. A failed attempt remains due in the
+current session; restart discovers valid completion evidence again. Routine
+not-due calls use a cached timestamp and perform no archive enumeration.
+
+`atlas_platform::offer_recovery(directory, deletions)` returns a dated offer
+for the newest verified backup when the primary is missing or demonstrably
+damaged. The UI must obtain the owner's confirmation before calling
+`RecoveryOffer::confirm`. An offer retains exclusive storage ownership; drop
+it to cancel. Restoration preserves the old primary and sidecars locally,
+stages and validates a copy, and never replaces an unexpected destination.
+Known interrupted moves yield a renewed offer for the same source. Damaged
+intent or changed identities remain refused rather than guessed away.
+Schema-1 recovery refuses nonzero or pending deletion state until P1-27
+implements the actual replay participants.
+
+On 2026-10-10, P1-04 passed the complete `cargo xtask check`: dependency
+boundaries, formatting, Clippy, **138 tests**, documentation-test selection
+and console launch. The tests comprise 30 core, 40 native unit, 4 native
+backup integration, 18 native storage integration, 38 store and one linked
+engine identity test, plus seven architecture tests. No tests were ignored
+or filtered. Independent source reviews passed for the SQLite patch, store
+ordering, native backup/recovery and deletion contract. Final documentation
+review also passed, including agreement between both 40-row issue maps. The application
+remains the console scaffold until its approved UI slices; no production
+database or profile was opened. The owner explicitly approved P1-04's commit
+and local merge on 2026-10-10; Plan 1's ledger records their completion.
+
 ## Data and artifacts
 
 The scaffold opens no database, browser profile, account, note vault or

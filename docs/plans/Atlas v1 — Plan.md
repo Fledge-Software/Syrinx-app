@@ -27,8 +27,11 @@ palette and one search over everything (`docs/spec.md`, "What this is").
 
 The spec's phased plan (`docs/spec.md`, "Phased plan") and the research in
 `docs/research/` provide the reasoning for work built in order. The engine
-decision reopened on 2026-10-09 is settled, and the P1-01 product scaffold
-is merged. P1-02 now establishes the tab model before storage or browser UI.
+decision reopened on 2026-10-09 is settled. P1-01's scaffold, P1-02's tab
+model and P1-03's storage are merged. P1-04's SQLite maintenance prerequisite
+and complete backup/recovery slice passed the 138-test local gate and
+independent source reviews. The owner approved P1-04's commit and local merge. There is
+no browser UI yet.
 
 If nothing is done, the research goes stale. It is dated 2026-10-09 and
 tracks fast-moving projects (Tauri's unstable multi-webview, GPUI snapshot
@@ -224,6 +227,8 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D47 | How does explicit history clearing survive restoring an older backup? | Keep a local deletion record containing only cleared date ranges and data categories, never URLs or page contents. Restoration honors it, preserving older recovery points without reintroducing cleared history. | Discarding all older backups whenever history is cleared: loses their recovery depth. Restoring deleted history: undoes the owner's clearing request. | 2026-10-10 |
+| D46 | May Atlas restore a damaged database automatically? | Offer the newest verified backup with its date and ask the owner before replacing the current database. Preserve damaged files locally. | Automatic restoration: the owner wants to confirm a replacement that may lose newer state. | 2026-10-10 |
 | D45 | What are the top square sidebar tiles? | Favorites, separate from inline saved pages/folders. They may target websites, plugin pages and other supported Atlas destinations. Plugin targets use the normal plugin lifecycle; until implemented, show the existing unavailable indication. | Website-only tiles exclude the owner's plugin destinations. Treating tiles as saved-page records conflates two navigation surfaces. An early plugin host or fake successful opening skips plan 2. | 2026-10-10 |
 | D44 | Can the sidebar adapt to the space the owner wants? | Add smooth width dragging from wide with labels to favicon-only to hidden, with reverse dragging restoring it. Preserve hidden-sidebar hover peek and Ctrl Alt S. The owner's screenshot supplies direction; do not copy it into the repository. UI thresholds and compact-folder affordances remain for later review. | A fixed-width sidebar cannot provide the requested space control. Replacing hover peek or the shortcut removes settled navigation. Guessing thresholds before the UI prototype hides an undecided interaction. | 2026-10-10 |
 | D43 | How do saved pages fit among tabs? | Pin means Save: persistent inline rows and folders. Closing unloads only the live page; opening focuses an existing instance or loads the saved address. Live navigation leaves saved title/address unchanged. Remove/Unpin leaves a live page ordinary. Saved rows come first; saving appends to their group and removing an open saved page puts it at the start of ordinary tabs. HTML import preserves folders and starts unloaded. The owner approved the revised 40-slice map, with a flat foundation now and full folders/import later. | A separate bookmark destination misses the requested inline workflow. A temporary pin flag would require replacing P1-09's behavior later. Opening every imported page wastes memory. Updating saved addresses on navigation changes the destination without an explicit edit. D42's original live-pin behavior is superseded; its web-tab close/history rules remain. | 2026-10-10 |
@@ -282,7 +287,14 @@ There is no browser UI yet. P1-03 storage is implemented on
 `codex/p1-03-storage`, based on the P1-02 completion record `9a6ae35`.
 Its 77-test local gate and independent reviews passed, and the owner then
 requested its commit and approved its local merge, completed as `c4a6631`
-in `claude/plan-atlas-v1`. P1-04 backups and recovery is next.
+in `claude/plan-atlas-v1`. For P1-04, the owner approved confirmed restoration
+(D46), a local history-deletion record (D47), and the pinned SQLite 3.53.4
+maintenance patch. The patch passed the full 78-test gate; its source audit
+and hashes are recorded in `docs/p1-04-sqlite-maintenance-review.md` and
+the vendor provenance. The complete P1-04 backup/recovery implementation
+subsequently passed the 138-test gate and independent source reviews;
+`docs/p1-04-recovery-preflight.md` records the design and result. Commit and
+merge approval remain pending.
 The throwaway Phase 0 spikes remain on `spike/gpui` and `spike/tauri`; their
 code has not been copied into the product. The current branch also holds
 the spec, owner decisions, design snapshot (`design/canvas/project/`, with
@@ -475,9 +487,25 @@ snapshots and D18's seven-day page-text retention is settled by D40: the
 page-text cache and index stay outside these backups, with at most seven
 days retained. ⚠️ Prove expiry and restart/replay/restore behavior before
 enabling capture.
-Before finalizing recovery, define how explicit history clearing survives
-restoring an older snapshot: a deletion journal outside restored state or
-tested snapshot treatment must prevent reintroducing cleared records.
+The owner must confirm restoration before Atlas replaces the current
+database with the newest verified backup, shown with its date; damaged files
+remain preserved locally (D46). Keep a local deletion record containing only
+cleared date ranges and data categories, never URLs or page contents, so
+restoring an older snapshot cannot reintroduce explicitly cleared history
+(D47) while preserving older recovery points. The proposed engineering design keeps
+that journal outside restored state and applies it to a staged recovery
+copy. P1-04 now defines the content-free format and refusal/replay contract;
+P1-27 must persist the journal and generation barrier and connect actual
+clearing participants before history clearing ships. No history collection
+or history tables belong in P1-04.
+The owner-approved SQLite 3.53.4 patch now supplies the reviewed damaged-input
+fixes and passed the full 78-test gate. The P1-04 backup and recovery design is in
+`docs/p1-04-recovery-preflight.md`: an external clean-shutdown record finalized
+after all database connections close, guarded snapshot publication, an
+interruption-aware restore protocol and the deletion-journal boundary.
+Lifecycle ownership, snapshots, rotation, confirmed recovery with interruption
+resume and the deletion-log contract are implemented. The complete 138-test
+gate and independent source reviews passed; the owner approved its commit and merge.
 
 P1-03's Windows directory guard belongs in `atlas-platform`, even though
 the browser engine is introduced later. The store accepts a directory lease
@@ -871,7 +899,7 @@ approved rows until the owner approves the added slice boundaries.
 | P1-01 | A reproducible local build prevents later work resting on an unusable toolchain. Create the minimal Cargo workspace, dependency-boundary check, passing test and runnable app; document and execute the D38 gate. Audit maintenance, security and licences for the resolved graph before adding dependencies, here and in every later slice. Record the approved local workflow. Do not define the future Plugin trait early. | `Cargo.toml`, `crates/xtask`, `docs/LOCAL-DEV.md`, `CLAUDE.md`, `AGENTS.md`; D16/D38. | Q3/Q4, a preserved planning baseline and the dependency pre-add audit. |
 | P1-02 | One model prevents sidebar/palette disagreement and replacing temporary pins later. Implement live tab identity/kinds, a flat saved-page lifecycle with independent saved identity and live association, selection/order, save/unpin, unload/open-or-focus and a 20-entry closure stack for ordinary and saved web instances. Test D42/D43 without a window; folders and plugin registration remain later work. | `crates/atlas-core`; S3, D42/D43. | P1-01. |
 | P1-03 | Saved destinations must survive independently of live pages. Open a local unsynced store, migrate it and persist/reload flat saved entries plus live-tab snapshots and their associations through a serialized writer. Prove rollback, unloaded-entry preservation and errors on disposable databases. | `crates/atlas-store`, core persistence boundary, filesystem-only `atlas-platform` directory guard; D13/D43. | P1-02; Q2 for durable/cache separation. |
-| P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and a tested recovery path; interruption leaves the last valid copy usable. Establish how later explicit history clearing survives restoring older snapshots. | `crates/atlas-store`; D13. | P1-03. |
+| P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and an owner-confirmed recovery path; interruption leaves the last valid copy usable. Define and test the local deletion-journal contract so later history clearing survives restoring older snapshots. | `crates/atlas-store`, filesystem lifecycle in `atlas-platform`; D13/D46/D47. | P1-03; approved SQLite maintenance prerequisite, now verified. |
 | P1-05 | The palette needs fast local ranking before UI work. Add the tier 1 catalogue, boosts, counts and match positions with incremental updates and a reproducible 100,000-row benchmark. | `crates/atlas-search`, `crates/xtask`; D9. | P1-04. |
 | P1-06 | Continuous repainting defeats the performance goal. Implement the small pinned GPUI idle patch, add focused regression evidence and remeasure eight suspended tabs and equivalent first-page startup in both throwaway candidates using fresh synthetic profiles. Prepare a reviewable upstream patch. | Pinned GPUI patch and measurement report; D37/D12. | P1-05; passing measurements. Public offer requires separate owner approval. |
 | P1-07 | Shared tokens and width states keep the shell consistent. Render the five palettes, accent and transparency fallback with wide, favicon-only, hidden and peek sidebar samples. Review D44 drag thresholds with the owner and inspect contrast against the authorized design direction. | `crates/atlas-ui`; S10/D44, `design/README.md`. | P1-06; live-canvas comparison or owner-approved snapshot, with D43–D45 amendments. |
@@ -939,6 +967,7 @@ started: 2026-10-09   code repo: local Atlas-app (D41; no remote)   plan branch:
 | Phase 1 | P1-01: scaffold and architecture gate | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 7 tests and console app launch; optimized executable was blocked once, then passed unchanged | codex/p1-01-scaffold @ ed19d6d; base d79fc29 | independent review passed after restoring default Cargo test selection so future doctests run | merged into claude/plan-atlas-v1 as ed19d6d with owner approval on 2026-10-10 |
 | Phase 1 | P1-02: generic tab and flat saved-page model | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 24 model tests, 7 architecture tests and console app launch; D42/D43 lifecycle implemented without UI or storage | codex/p1-02-tab-model @ 892d3bc; base ed19d6d | independent source/test review and documentation/map audit passed with no findings | merged into claude/plan-atlas-v1 as 892d3bc with owner approval on 2026-10-10 |
 | Phase 1 | P1-03: durable saved pages and session records | local slice | Codex | Implemented: 77-test local gate passed; guarded Windows location, atomic saved/live snapshots and migrations; narrow licence allowances approved | codex/p1-03-storage @ c4a6631; base 9a6ae35 | independent core/store, native and documentation reviews passed; long-path regression fixed and retested | merged into claude/plan-atlas-v1 as c4a6631 with owner approval on 2026-10-10 |
+| Phase 1 | P1-04: Backups and confirmed recovery | local slice, ready | Codex | Approved SQLite patch, lifecycle ownership, idle daily snapshots, seven-copy rotation, confirmed/resumable recovery and deletion contract; full 138-test gate passed | codex/p1-04-backups; uncommitted after 8cc0e50 | independent SQLite, store, native backup/recovery, deletion-contract and documentation reviews passed | not merged; owner commit and merge approval required |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
 gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
@@ -954,9 +983,36 @@ gates: 2026-10-10 P1-02 committed as 892d3bc and fast-forward merged into claude
 gates: 2026-10-10 P1-03 core snapshots passed the full local gate with 37 tests before platform dependencies were introduced; owner approved Unicode-3.0 for unicode-ident 1.0.26 and Zlib for foldhash 0.2.0; these allowances do not select Atlas's own licence
 gates: 2026-10-10 final P1-03 cargo xtask check passed all 77 tests, formatting, Clippy, dependency boundaries and console launch; independent reviews passed; no production database or Windows setting was changed
 gates: 2026-10-10 owner requested the P1-03 commit and approved its local merge; c4a6631 was fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
-current: P1-03 committed and merged as c4a6631; no Git remote configured   next: P1-04 backups/recovery on its own branch; do not skip to search
+gates: 2026-10-10 owner chose confirmation before restoring a damaged database (D46) and a local deletion record that prevents restored backups from resurrecting cleared history (D47)
+gates: 2026-10-10 owner approved the pinned SQLite 3.53.4 source patch and vendor-comment exception; source identities and unchanged dependency graph verified; full cargo xtask check passed 78 tests and console launch
+current: P1-04 implemented and verified, uncommitted; no Git remote configured   next: owner-approved commit/merge, then P1-05 tier 1 search; preserve strict slice order
 
 ## Iteration log
+
+- **2026-10-10** — Completed P1-04 implementation and the full 138-test local
+  gate. Exclusive lifecycle ownership, idle daily validated snapshots,
+  seven-copy rotation and confirmed recovery now work on disposable Windows
+  stores. Known interruptions resume only after renewed confirmation for
+  the same source. The deletion-log codec defines the later history-clear
+  boundary; persistence and actual replay participants remain P1-27 work.
+  Independent source reviews passed. No P1-04 commit or merge is authorized.
+  The owner reconfirmed strict slice order despite limited remaining usage;
+  the console scaffold is not yet a browser UI.
+
+- **2026-10-10** — Applied the owner-approved SQLite maintenance patch for
+  P1-04. Seventeen vendored files retain thirteen original archive inputs
+  and four exact upstream replacements. Rust versions and features remain
+  unchanged; only libsqlite3-sys's source changes in the lockfile. The full
+  gate passed 78 tests, including a linked-engine identity check. Recorded
+  the source provenance and recovery design. No P1-04 commit or merge is
+  authorized, and the backup/recovery implementation remains next.
+
+- **2026-10-10** — Began P1-04 preflight after the P1-03 merge. The owner
+  chose confirmation before database restoration (D46) and a local deletion
+  record that restored backups must honor (D47). Recorded these choices in
+  both issue-map copies. Filesystem replacement, journal replay and backup
+  publication remain engineering proposals; corruption processing awaits
+  the SQLite source patch review. No P1-04 code or production data was changed.
 
 - **2026-10-10** — With the owner's explicit approval, committed P1-03 as
   `c4a6631` and fast-forward merged it into `claude/plan-atlas-v1`. Recorded

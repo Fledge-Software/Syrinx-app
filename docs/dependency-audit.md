@@ -253,3 +253,36 @@ Clippy, formatting, dependency boundaries and the console launch. Independent
 implementation review passed. These runtime results include long-path and
 sidecar-boundary persistence, not a benchmark of the known locking slowdown
 or coverage of every later SQLite damaged-input fix.
+
+### P1-04 approved SQLite maintenance patch
+
+Recovery deliberately handles damaged input, so the owner approved a narrow
+SQLite 3.53.4 source patch on 2026-10-10 before that work proceeds. The
+earlier 3.53.2 discussion above records P1-03's historical build. Atlas now
+uses `vendor/libsqlite3-sys-0.38.2` through Cargo's path patch: the same
+audited Rust wrapper and build script, with four full files from exact
+upstream revision `901f9946efdaaa289e6b1c5bd56dc67f4b651e51`. It includes
+the reviewed journal, damaged-page and Windows path-classification fixes.
+
+`docs/p1-04-sqlite-maintenance-review.md` records the defects, alternatives,
+approval scope and verification. `vendor/libsqlite3-sys-0.38.2.provenance.md`
+records the 17-file inventory, omissions, licences and all hashes. Thirteen
+files match the published archive byte for byte; four replacements identify
+3.53.4, and the C source matches SQLite's independently published SHA3-256.
+The dormant SQLCipher source is omitted. No new feature or licence category
+is enabled, and the owner-approved upstream-comment exception applies only
+inside this dependency directory.
+
+All package versions, active Windows features and dependency edges are
+unchanged. Cargo.lock only removes libsqlite3-sys's registry source/checksum
+when selecting the local path. The vendor package is excluded from workspace
+membership; the complete product gate remains unchanged. No SQLite build
+environment override was present.
+
+The 2026-10-10 `cargo xtask check` passed all 78 tests, including a new
+runtime version/source-ID assertion and the existing native long-path cases,
+plus formatting, Clippy, dependency checks and console launch. This proves
+the patched engine builds and preserves existing behavior. It does not claim
+full P1-04 recovery tests or a new locking-performance measurement. Replace
+the path patch only through a reviewed, owner-approved maintenance change
+to an appropriate published dependency.
