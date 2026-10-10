@@ -176,6 +176,10 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D24 | When can the real Fledge client be built? | After Fledge's Stage C, which the owner says comes after the Fledge redesign; no date. Plan 2 ships the Fledge plugin on the stand-in client behind the trait, and the real client is its own later work, started when Stage C lands | Targeting the real client in plan 2: nothing it needs is deployed (`docs/research/05-fledge-api.md`, "Short answer") | 2026-10-09 |
+| D23 | How does Atlas authenticate to Fledge? | As an ordinary OAuth client through Fledge's consent screen (OAuth 2.1, PKCE, loopback redirect), with only the permissions the owner grants | A pre-registered first-party client: Fledge would have to build a separate trust path (`docs/research/05-fledge-api.md`, owner questions) | 2026-10-09 |
+| D22 | If the owner's real Google sign-in fails in Phase 0? | Stop and decide with the evidence: where it failed, and the options then (Google in Edge, presenting Atlas differently against Google's policy, or rethinking the engine) | Deciding now: a no-go on the engine, or settling for Google in Edge, before knowing how it fails | 2026-10-09 |
+| D21 | Which Google sign-in paths must Phase 0 prove? | All the owner uses: password with a phone prompt or code, a passkey (Windows Hello or phone), and a Google Workspace account. ⚠️ If the Workspace admin has device checks (Context-Aware Access or Endpoint Verification), they need a browser extension Atlas can't run (`docs/research/07-google-sign-in-and-drm.md`, new questions) | — | 2026-10-09 |
 | D20 | What may Atlas do in Fledge? | Everything a person can: Atlas is meant to become Fledge's desktop app, and these foundations are what make that possible. Sending mail and invites from Atlas needs Fledge-side consent scopes that don't exist today (`docs/research/05-fledge-api.md`, "Work needed on the Fledge side"); that is a list for the owner, not issues in Fledge's repositories | Draft only (Fledge's current rule for outside apps): the owner wants Atlas to be Fledge's full client | 2026-10-09 |
 | D19 | Is Fledge data copied into Atlas's local index, or searched live? | The owner decides per kind of data. Each plugin has its own settings, and Fledge's has a keep-local switch for each kind (docs, canvases, tables, leads, mail, calendar and so on): on, that kind is copied into the local index; off, it is searched live | All copied: stores everything on the machine whether wanted or not. All live: every keystroke waits on the network | 2026-10-09 |
 | D18 | Does Atlas index the text of visited pages? | Yes, locally, for up to 7 days of history, with a setting to turn it off | Title and address only: the owner wants recall by content | 2026-10-09 |
@@ -225,19 +229,16 @@ To be written (step 5).
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
 
-- **Google sign-in:** how the owner signs in (password and phone code,
-  passkey, hardware key) and whether the account is personal or Google
-  Workspace with device checks; both shape the Phase 0 test. And what
-  happens if the default fails, now that research 07 shows there is no
-  sanctioned fallback. Blocks the spike's test script; the owner decides.
+- **Google Workspace device checks:** does the owner's Workspace admin
+  console turn on Context-Aware Access or Endpoint Verification? Whoever
+  administers that Workspace can check; Phase 0 will show it anyway.
 - **Data and search:** one store or two (SQLite FTS5 or tantivy), settled by
   the bake-off before Notes.
 - **Forge:** git CLI for writes; requiring Git for Windows; language servers
   installed only, downloads later or never; debugger out of v1; run control and
   Python task runners.
 - **Notes:** Obsidian compatibility; native or web-view editor; IME scripts.
-- **Fledge:** third-party OAuth client or first-party; REST or MCP; where a
-  lead's Company lives; when Stage C happens.
+- **Fledge:** REST or MCP as the data channel; where a lead's Company lives.
 - **The project:**
   - **Licence: undecided (owner, 2026-10-09).** Blocks going public. Until it
     is chosen, Atlas takes in outside code only under permissive licences
@@ -263,6 +264,10 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Google and Fledge round: Phase 0 proves every Google
+  sign-in path the owner uses (D21) and stops for a decision if one fails
+  (D22); Atlas is an ordinary OAuth client of Fledge (D23); the real Fledge
+  client waits for Stage C, after the Fledge redesign (D24).
 - **2026-10-09** — Research 07 and 08 reported (summarised under "What we
   found"). WebView2 ships Widevine, correcting notes 02 and 06; Google's
   sign-in page loads in WebView2 and the full sign-in is a Phase 0 test; GPUI
