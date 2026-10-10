@@ -547,10 +547,20 @@ Written when the owner approves the breakdown.
 
 ## Super-Pass ledger
 
-Empty until phase B starts.
+started: 2026-10-09   code repo: none yet (local, D16)   plan branch: claude/plan-atlas-v1
+| wave | job | route | model | worker result | branch @ sha | review | merged |
+|---|---|---|---|---|---|---|---|
+| Phase 0 | GPUI candidate spike | spike (worktree) | opus | running | spike/gpui | n/a | never (throwaway) |
+| Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | running | spike/tauri | n/a | never (throwaway) |
+gates: 2026-10-09 owner approved starting Phase 0 locally
+current: Phase 0, both spikes building   next: collect both RESULTS.md, run the owner's manual tests, write docs/research/09-phase-0-verdict.md, stop and report
 
 ## Iteration log
 
+- **2026-10-09** — The owner approved starting Phase 0 locally. Two
+  throwaway spikes started in worktrees: the GPUI candidate and the Tauri +
+  Svelte control. `CLAUDE.md` and `AGENTS.md` adapted from fledge-template
+  at the owner's request, with `docs/trapstoknow.md`.
 - **2026-10-09** — Split into four plans as decided in D5 (step 4). This file
   is plan 1 and keeps the v1-wide decisions; plans 2–4 are outlines. Plan 1's
   design, phases 0–5 with exit criteria, what is not built and what is
