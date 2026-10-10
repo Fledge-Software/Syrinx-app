@@ -176,6 +176,10 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D32 | Which input methods must the editors be tested with? | English and Latin scripts only; no IME test matrix in v1 | Chinese, Japanese or Korean IME testing: not used by the owner | 2026-10-09 |
+| D31 | Run control and debugger in Forge v1? | Run control in (an addition to the spec): Forge reads tasks from Cargo, npm scripts, pyproject, just and make and runs them in a terminal. Debugger out of v1. ⚠️ The owner didn't name Python task runners, so v1 reads plain `[project.scripts]` and the common pyproject task tables | Both out: loses the PyCharm workflow the owner relies on. Debugger in: Zed's took 8 months and over 25,000 lines (`docs/research/04-forge-and-notes.md`) | 2026-10-09 |
+| D30 | Where do Forge's language servers come from? | Only servers already installed (on PATH or set in settings) in v1; automatic download and update after v1 | Never downloading: the owner wants it later. Downloading in v1: network access, updates and more work | 2026-10-09 |
+| D29 | How does Forge do git? | The `git` command line for every write and network operation (commit with hooks, checkout, merge, push, fetch with the owner's credential helpers); fast reads (status, diff, log, blame) in process in Rust behind a `GitRead` trait. Requires Git for Windows. Departs from the spec's "use libgit2" with the owner's yes | libgit2 for everything: can't read reftable repositories (Git 3's default) and won't run hooks; Zed removed it on 2026-06-02 (`docs/research/04-forge-and-notes.md`). Bundling a git: a bigger download and Atlas's own update duty | 2026-10-09 |
 | D28 | Native editors or CodeMirror for Notes and Forge in v1? | CodeMirror 6 in a small local web view inside the tab, for both. Rust owns files, parsing (Tree-sitter, pulldown-cmark), git and language servers. One WebView2 renderer is used only while a Notes or Forge tab is open. A native editor may replace it later | Native GPUI editors: selection, input methods and accessibility to build, no native rich-markdown editor to start from, and Zed's editor is GPL-3.0 (`docs/research/04-forge-and-notes.md`). Native for Forge only: still the bulk of that cost | 2026-10-09 |
 | D27 | Does a Notes vault stay usable in Obsidian? | Yes: plain markdown files, wikilinks, Obsidian's property types, and a subset of its `.base` database-view format | Free to diverge: the owner would lose the way out to Obsidian | 2026-10-09 |
 | D26 | Where does a lead's Company live? | Already decided on the Fledge side and being built, in Nest; Fledge's modules now share one database. The stand-in client models Company on the lead, and the real client reads it from Nest | — (decided in Fledge, not here) | 2026-10-09 |
@@ -238,11 +242,6 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
   administers that Workspace can check; Phase 0 will show it anyway.
 - **Data and search:** one store or two (SQLite FTS5 or tantivy), settled by
   the bake-off before Notes.
-- **Forge:** git CLI for writes; requiring Git for Windows; language servers
-  installed only, downloads later or never; debugger out of v1; run control and
-  Python task runners.
-- **Notes:** which input-method scripts (Chinese, Japanese, Korean) the
-  editor must be tested with.
 - **The project:**
   - **Licence: undecided (owner, 2026-10-09).** Blocks going public. Until it
     is chosen, Atlas takes in outside code only under permissive licences
@@ -268,6 +267,11 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Forge round: git command line for writes with in-process
+  reads, needing Git for Windows (D29, departs from the spec with the owner's
+  yes); installed language servers only, downloads after v1 (D30); run
+  control in, debugger out (D31); no IME testing (D32). The discussion
+  frontier is empty; next is the realism check and writing the plans.
 - **2026-10-09** — Fledge and Notes round: Fledge data over a small
   structured REST API (D25); a lead's Company is already being built in Nest
   (D26); Notes vaults stay Obsidian-compatible (D27); Notes and Forge edit
