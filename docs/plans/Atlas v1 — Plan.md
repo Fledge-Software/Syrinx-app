@@ -551,7 +551,7 @@ started: 2026-10-09   code repo: none yet (local, D16)   plan branch: claude/pla
 | wave | job | route | model | worker result | branch @ sha | review | merged |
 |---|---|---|---|---|---|---|---|
 | Phase 0 | GPUI candidate spike | spike (worktree) | opus | partial: built, 50/50 automated checks; idle CPU 3.75% fails 0.5% bar; owner tests pending | spike/gpui @ bfac1c5 | n/a | never (throwaway) |
-| Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | running | spike/tauri | n/a | never (throwaway) |
+| Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | done: 25/25 in both overlay modes; idle CPU 0.54% | spike/tauri @ 2579d86 | n/a | never (throwaway) |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 current: Phase 0, both spikes building   next: collect both RESULTS.md, run the owner's manual tests, write docs/research/09-phase-0-verdict.md, stop and report
 
