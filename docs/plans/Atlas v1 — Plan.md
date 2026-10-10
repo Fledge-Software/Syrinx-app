@@ -1,8 +1,8 @@
 ---
 title: "Atlas v1 — Plan (plan 1: engine, browser core and palette)"
-status: draft
+status: active
 created: 2026-10-09
-subject: Atlas v1 plan 1 — the engine, the browser core and the command palette; also holds the v1-wide decisions D1–D36 that plans 2–4 share
+subject: Atlas v1 plan 1 — the engine, the browser core and the command palette; also holds the v1-wide decisions that plans 2–4 share
 relates_to: "docs/spec.md; docs/decisions.md; design/README.md; docs/research/; sibling plans: Atlas v1 — Plugins and Fledge, Atlas v1 — Notes, Atlas v1 — Forge"
 issues_repo: not yet created (the repository is local; the owner creates it before anything is published)
 branch: claude/plan-atlas-v1
@@ -10,7 +10,8 @@ branch: claude/plan-atlas-v1
 
 # Atlas v1
 
-> **Status: draft.** Not a source of truth until it is marked `active`.
+> **Status: active.** The owner approved all four plans, this plan's 40-slice
+> breakdown and the local implementation/review workflow on 2026-10-10 (D41).
 > Where it disagrees with `docs/decisions.md`, `docs/spec.md` or
 > `design/README.md`, those win, and the disagreement belongs under Open
 > threads.
@@ -24,7 +25,7 @@ code, notes and Fledge as built-in plugins that open as tabs, and one command
 palette and one search over everything (`docs/spec.md`, "What this is").
 
 The spec's phased plan (`docs/spec.md`, "Phased plan") and the research in
-`docs/research/` are done; there is no code yet. This plan turns them into
+`docs/research/` are written; there is no product code yet. This plan turns them into
 work that can be built, in order, starting with the engine decision that the
 owner reopened on 2026-10-09 (`docs/decisions.md`).
 
@@ -70,12 +71,12 @@ because it is long; that commit is the unchanged original. In short:
 - Performance is the deciding goal (`docs/decisions.md`).
 - Standing decisions are listed under "Decisions taken" and are not reopened.
 
+**Confirmed by the owner's handoff on 2026-10-10:** v1 is for the owner on
+Windows 11, build 26300, with agents assisting. The repository remains local.
+
 **What this plan assumes, until the owner confirms (⚠️):**
-- ⚠️ The only user for v1 is the owner, on their Windows 11 machine (build
-  26300). Open source comes later.
 - ⚠️ Success means Atlas is the owner's default browser for daily use, with
   memory and start-up close to Edge's.
-- ⚠️ The work is done by the owner with Claude Code agents; there is no team.
 - ⚠️ The 15 sites in `docs/research/06-engine-and-ui-performance.md` (Phase 0
   checklist, item 4) are the owner's real daily set.
 
@@ -95,6 +96,15 @@ Research notes 01 to 06 in `docs/research/` cover the engine, browser scope,
 Tauri and wry facts, import and signing, the core architecture, Forge and
 Notes, the Fledge API and performance. Notes 07 and 08 were written for this
 plan on 2026-10-09 and correct parts of the earlier notes.
+
+The findings below record the pre-spike reasoning. For measured results and
+the owner's completed tests, `docs/research/09-phase-0-verdict.md` supersedes
+their untested-runtime statements; outstanding checks are listed below.
+⚠️ Historical comparisons with rejected engines, service resolution caps,
+DRM security levels and third-party project timelines have not been
+re-established by the readiness review. They are not current guarantees or
+permission to reopen D3/D4. The current evidence is in
+`docs/plans/Atlas v1 — Readiness and implementation breakdown.md`.
 
 **WebView2 is a better fit than the earlier notes said**
 (`docs/research/07-google-sign-in-and-drm.md`):
@@ -213,13 +223,16 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D41 | May implementation proceed while the repository stays local? | Yes. The four plans and plan 1's 40-slice breakdown are approved. One local branch per slice, independent review, and the owner's approval before every merge replace D16's GitHub prerequisite. Commits still require the owner's request; first preserve the planning baseline with an explicitly requested documentation commit. No remote or pushes. | Waiting for GitHub: the owner wants to continue locally. Treating workflow approval as permission for commits or merges: those remain separate owner controls. | 2026-10-10 |
+| D40 | Does the seven-day page-text limit include Atlas backups? | Yes. Keep page text and its index in an expiring cache outside D13's seven daily durable-state snapshots. Expiry applies to active storage and must survive restart, replay and restore. This is an Atlas-managed retention policy, not forensic erasure. | Only hiding older text from search while keeping it in snapshots: exceeds the retention the owner chose. | 2026-10-10 |
+| D39 | Keep WebView2 despite its diagnostics, and may Atlas have analytics? | Keep WebView2 and SmartScreen and disclose the runtime's collection; crash dumps stay local. Replace the blanket no-analytics rule with local aggregate feature/command counts, timings and error categories, explicitly exported by the owner. No account/device IDs, URLs, searches, paths, document text or detailed event timeline; no automatic uploads. A model may suggest changes from a report the owner chooses to share, and the owner reviews changes. Review the concrete schema, retention/control behavior and added implementation slices before collection. | No analytics: the owner wants evidence to improve Atlas. Automatic uploads and an automatically adapting interface: the owner selected local counters, explicit export and reviewed suggestions. Removing IDs as an absolute anonymity guarantee: one person's report can remain identifiable by context. | 2026-10-10 |
 | D38 | How do development builds run, given Smart App Control blocks unsigned debug builds? | A release-style profile with debug info for the gate and dev runs; no change to Windows settings | The owner adjusting Smart App Control: changes a security setting for convenience (`docs/research/09-phase-0-verdict.md`) | 2026-10-10 |
 | D37 | May Atlas carry a patched GPUI? | Yes, on D12's rules: small, `=`-pinned, offered upstream, dropped once merged. First use: GPUI's Windows idle loop, which repaints every window each frame (idle CPU 3.75% of a core against the 0.5% bar). If the patch can't reach 0.5%, GPUI against Tauri returns to the owner | Switching to Tauri now: gives up about 0.9 s of start-up and 60–150 MB. Accepting high idle CPU: battery and heat for a browser left open all day | 2026-10-10 |
 | D36 | Does Atlas watch for Google sign-in breaking? | It shows a one-line notice when the WebView2 runtime version changes, so the owner watches for sign-in trouble, and offers to open the current Google page in Edge in one click if sign-in breaks. No automatic sign-in test | An automatic canary that signs in: credentials in a test. Nothing: a silent break would surprise the owner mid-work | 2026-10-09 |
 | D35 | How is page text indexed (D18) without breaking Google? | Indexed locally for 7 days, but never on Google's sites, banking and payment sites, or pages sent with `Cache-Control: no-store`; the owner can add sites to the exclusion list in settings. The extraction method is chosen in plan 1 and must inject nothing on excluded sites | Dropping it for v1: the owner wants recall by content. Indexing everything: breaks the rules that keep Google working (`docs/research/07-google-sign-in-and-drm.md`) and keeps a 7-day record of banking pages in the database and its snapshots | 2026-10-09 |
 | D34 | How big is plan 2 in v1? | Thin: the plugin runtime, the `Plugin` trait, the stand-in Fledge client and the palette's inline "New lead" action. D19's keep-local switches and D20's full Fledge client move to the real-client work after Stage C | Building D19 and D20 in full on the stand-in: design and settings on an API that doesn't exist yet and will change, against D5's "deliberately thin" | 2026-10-09 |
 | D32 | Which input methods must the editors be tested with? | English and Latin scripts only; no IME test matrix in v1 | Chinese, Japanese or Korean IME testing: not used by the owner | 2026-10-09 |
-| D31 | Run control and debugger in Forge v1? | Run control in (an addition to the spec): Forge reads tasks from Cargo, npm scripts, pyproject, just and make and runs them in a terminal. Debugger out of v1. ⚠️ The owner didn't name Python task runners, so v1 reads plain `[project.scripts]` and the common pyproject task tables | Both out: loses the PyCharm workflow the owner relies on. Debugger in: Zed's took 8 months and over 25,000 lines (`docs/research/04-forge-and-notes.md`) | 2026-10-09 |
+| D31 | Run control and debugger in Forge v1? | Run control in (an addition to the spec): Forge reads tasks from Cargo, npm scripts, pyproject, just and make and runs them in a terminal. Debugger out of v1. On 2026-10-10 the owner confirmed standard installed Python entry points plus terminal commands are enough; runner-specific uv, Poetry, tox and nox adapters wait for a stated need. `[project.scripts]` values are entry-point references, not shell commands (see plan 4) | Both out: loses the PyCharm workflow the owner relies on. Debugger in: Zed's took 8 months and over 25,000 lines (`docs/research/04-forge-and-notes.md`). Guessing common Python task tables: adds adapters the owner has not requested | 2026-10-09; Python scope confirmed 2026-10-10 |
 | D30 | Where do Forge's language servers come from? | Only servers already installed (on PATH or set in settings) in v1; automatic download and update after v1 | Never downloading: the owner wants it later. Downloading in v1: network access, updates and more work | 2026-10-09 |
 | D29 | How does Forge do git? | The `git` command line for every write and network operation (commit with hooks, checkout, merge, push, fetch with the owner's credential helpers); fast reads (status, diff, log, blame) in process in Rust behind a `GitRead` trait. Requires Git for Windows. Departs from the spec's "use libgit2" with the owner's yes | libgit2 for everything: can't read reftable repositories (Git 3's default) and won't run hooks; Zed removed it on 2026-06-02 (`docs/research/04-forge-and-notes.md`). Bundling a git: a bigger download and Atlas's own update duty | 2026-10-09 |
 | D28 | Native editors or CodeMirror for Notes and Forge in v1? | CodeMirror 6 in a small local web view inside the tab, for both. Rust owns files, parsing (Tree-sitter, pulldown-cmark), git and the language-server client (which stays in Rust). One WebView2 renderer is used only while a Notes or Forge tab is open. **Exception to S3, stated:** CodeMirror owns the live buffer, selection and undo while typing; Rust is the authority for what is on disk and writes a save only after the two copies' checksums match. A native editor may replace it later | Native GPUI editors: selection, input methods and accessibility to build, no native rich-markdown editor to start from, and Zed's editor is GPL-3.0 (`docs/research/04-forge-and-notes.md`). Native for Forge only: still the bulk of that cost | 2026-10-09 |
@@ -234,7 +247,7 @@ Decisions made in this plan:
 | D19 | Is Fledge data copied into Atlas's local index, or searched live? | The owner decides per kind of data: Fledge's plugin settings get a keep-local switch for each kind (docs, canvases, tables, leads, mail, calendar and so on). **Not in v1** (D34): built with the real client after Stage C | All copied: stores everything whether wanted or not. All live: every keystroke waits on the network | 2026-10-09 |
 | D18 | Does Atlas index the text of visited pages? | Yes, locally, for up to 7 days of history, with a setting to turn it off | Title and address only: the owner wants recall by content | 2026-10-09 |
 | D17 | Will Atlas run other people's plugins? | Later, not in v1. Built-ins use the same plugin API a third party would; the WebAssembly sandbox is built only once someone else's plugin exists | Never: closes a door the owner wants open. In v1: a sandbox, permissions and an installer, a large addition | 2026-10-09 |
-| D16 | When does building start, and how is work tracked while Atlas is local? | Phase 0 first, locally: plan 1 is written in full and plans 2–4 stay outlines; the Phase 0 spike (throwaway code) runs in this local repository without GitHub, then stops and reports, as `CLAUDE.md` asks. Issues are broken down after its verdict, once the owner creates a repository (only account: ZanderOfficial; probably the Fledge Software organisation later). *Revised after the realism check; was "plan all four plans to an approved breakdown, build nothing until a repository exists"* | Breaking all four plans into issues before Phase 0: its results (GPUI or Tauri, whether overlays work) could invalidate them. A private repository now: the owner wants Atlas local for now | 2026-10-09 |
+| D16 | When does building start, and how is work tracked while Atlas is local? | Phase 0 first, locally, then stop for the owner. The original post-spike GitHub prerequisite and outline-only restriction are superseded by D41: all four plans and plan 1's local slice map are approved, and implementation may use local branches with independent review and owner-approved merges. GitHub creation remains the owner's action when wanted. *Earlier wording required a repository before issue breakdown; the 2026-10-10 approval explicitly changes that gate.* | Breaking all four plans into implementation issues before Phase 0: its results could invalidate them. Requiring a repository now: the owner approved local implementation and deferred publication. | 2026-10-09; revised 2026-10-10 |
 | D15 | Does v1 import passwords? | No. There is no password manager in v1, so imported passwords would have nowhere safe to live and nothing to fill them in. The owner signs in once per site and stays signed in through cookies. Password import comes with a password manager after v1 | A small password manager in v1 (encrypted store, autofill, Passwords button back): sizeable and security-sensitive, against the spec's scope. Importing into WebView2's own store: no known import API, and it would turn saving on against D11 | 2026-10-09 |
 | D14 | What does the bookmark import read? | The standard HTML bookmarks file that Edge, Chrome and Firefox export (`<!DOCTYPE NETSCAPE-Bookmark-file-1>`, `docs/research/02b-default-browser-import-signing.md`). Replaces "a CSV file only" (S7) with the owner's yes; `docs/decisions.md` updated | CSV only: no browser exports bookmarks as CSV, so the owner would have to convert by hand. Both: a second format to build and test for no gain | 2026-10-09 |
 | D13 | How many database snapshots, and may the data folder be synced? | A daily `VACUUM INTO` snapshot taken when idle, 7 kept, in the local (not roaming, not synced) app-data folder; Atlas never puts its database in OneDrive or another synced folder | 30 days: more disk for little gain. A synced folder: SQLite's write-ahead log breaks there (`docs/research/03-core-architecture.md`, owner question 4) | 2026-10-09 |
@@ -253,11 +266,13 @@ Decisions made in this plan:
 
 ## What exists today
 
-No code. The repository holds the spec, the owner's decisions, the design
+No product code. The throwaway Phase 0 spikes remain on the local
+`spike/gpui` and `spike/tauri` branches; they are not a product scaffold.
+The current branch holds the spec, the owner's decisions, the design
 snapshot (`design/canvas/project/`, with the five palettes' tokens in the
 `tokens()` method of `design/canvas/project/Main.dc.html` and one board per
 palette in `Theme*.dc.html`), the original mockup
-(`design/reference/unified-workspace-mockup.html`) and research notes 01–08.
+(`design/reference/unified-workspace-mockup.html`) and research notes 01–09.
 The repository is local, with no remote. A reader grepping the research will
 find Tauri and Svelte everywhere: notes 01–05 were written when the spec's
 Tauri plan stood, and D3 and D4 replaced it.
@@ -265,7 +280,14 @@ Tauri plan stood, and D3 and D4 replaced it.
 ## The design
 
 This section covers plan 1: the engine, the browser core and the palette.
-Plans 2–4 are outlined in their own files (see "Sibling plans").
+Plans 2–4 have approved detailed plans in their own files (see "Sibling plans").
+
+The Phase 0 GPUI manifest pins `gpui-pre =0.3.8`,
+`gpui-pre-platform =0.3.8`, `gpui-component =0.7.1`, `wry =0.57.0`,
+`webview2-com =0.39.1` and direct `windows =0.62.2`. These are the existing
+baseline, not permission to upgrade. Audit the resolved dependency graph
+before adding it to the product; exact versions alone do not prove licence
+or security suitability.
 
 ### The parts
 
@@ -299,41 +321,78 @@ One generic model, as the spec asks (`docs/spec.md`, "Core model"). A tab
 has an id, a kind (web, plugin view, note, file, diff, terminal), a title, an
 address, a favicon, a pinned flag, an order and an optional badge. Plan 1
 builds only web tabs, but the kind enum is complete so plugins slot in.
-The sidebar and the palette read this model, never per-feature code. Every
-change to it is written to SQLite as it happens, so a crash loses nothing
-(`docs/research/02-browser-v1-scope.md`, "Crash recovery of the app").
+The sidebar and the palette read this model, never per-feature code. Persist
+changes as they happen rather than only on exit. Restore the last committed
+session after an application crash; queued changes may not have committed.
+With WAL and `synchronous=NORMAL`, a power loss or operating-system crash
+can roll back recent commits. This is not a zero-loss guarantee
+([SQLite durability settings](https://www.sqlite.org/pragma.html#pragma_synchronous)).
 
 ### Pages
 
 - **One shared WebView2 environment,** built by Atlas through `webview2-com`
   so it can keep crash dumps local (`IsCustomCrashReportingEnabled`) and
   replace wry's default browser arguments, which switch SmartScreen off
-  (`docs/research/08-gpui-and-wry-on-windows.md`).
+  (`docs/research/08-gpui-and-wry-on-windows.md`). Set options on the supplied
+  environment itself; a later wry builder argument does not reconfigure it.
+  Explicitly disable password autosave (D11). This does not erase existing
+  passwords. Check that the Evergreen Runtime and required interfaces exist;
+  explain a missing runtime without downloading or installing it automatically.
 - **Each tab is a wry child web view** of the GPUI window, with no IPC
   handler and no injected script, no custom user agent, and nothing
   injected on Google's sites (the rules under "What we found").
 - **Raw WebView2 calls** through `WebViewExtWindows` for shortcuts
   (`AcceleratorKeyPressed`), fullscreen video
-  (`ContainsFullScreenElementChanged`), crashed tabs (`ProcessFailed`, a
-  "sad tab" with Reload) and hidden tabs (`TrySuspend` after a delay).
+  (`ContainsFullScreenElementChanged`), process failure (`ProcessFailed`)
+  and hidden tabs (`TrySuspend` after a delay). A main-frame renderer failure
+  can offer Reload; loss of the shared browser process requires recreating
+  all affected views. Deduplicate recovery events and keep the core tab state.
+  Hide before suspending, check the completion's success value, and reject a
+  late completion for a tab that has since become active. Do not combine
+  suspension with a memory-target policy on the same view.
 - **Popups become tabs** through wry's new-window handler, in the same
-  environment and profile, so `window.opener` survives OAuth sign-ins.
+  environment and profile. The target has not navigated before adoption
+  through the new-window result; merely opening the requested URL does not
+  preserve `window.opener`.
 - **A permission handler from day one,** with WebView2's own prompt and its
-  per-site memory.
+  per-site memory. Keep clipboard auto-grant disabled; never infer a
+  requesting origin from whichever tab happens to be active.
 - **Lean on WebView2's built-in UI** for find (Ctrl F), downloads (Ctrl J),
   printing, the right-click menu and notifications, and replace each only if
   it looks wrong in the page card (`docs/research/02-browser-v1-scope.md`,
   "What this means", item 4).
+  Route Ctrl J explicitly to `OpenDefaultDownloadDialog`; test notification
+  delivery and saved permission choices on this runtime. Include the scope's
+  existing Musts: zoom, a truthful HTTPS indicator and certificate warnings.
+  wry 0.57 disables zoom hotkeys by default; explicitly enable
+  `with_hotkeys_zoom(true)` and test Ctrl plus/minus/0. Per-site persistence
+  is not promised. Preserve native certificate-error handling; never choose
+  `ALWAYS_ALLOW`. ⚠️ A complete successful-page security-state API has not
+  been established in the pinned bindings, so the indicator can describe
+  scheme and observed errors, not promise a verified secure connection.
+  Never bypass a certificate error or treat an HTTPS URL alone as proof of
+  a secure loaded page.
+
+One environment does not guarantee one renderer process. D28's editor
+resource aim must be measured; Chromium decides process sharing and isolation
+([WebView2 process model](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/process-model)).
 
 ### Shortcuts
 
-WebView2 never hands browser shortcuts to the host while a page has focus,
-so Atlas catches them with `AcceleratorKeyPressed` on **every** web view it
+Ordinary GPUI key handlers do not receive keys while a page has focus,
+so Atlas uses WebView2's `AcceleratorKeyPressed` on **every** web view it
 creates (pages now; the CodeMirror and terminal web views in plans 3 and 4).
 The handler is synchronous and blocks the browser process, so it only marks
-the key handled and posts a message to the GPUI thread. One command table in
+the key handled and posts a message to the GPUI thread, filtering repeats
+where appropriate. One command table in
 `atlas-core` maps keys to commands; the palette and menus read from it. The
 pin key is Ctrl Alt S (D8).
+
+Phase 2 supplies a minimal owned address-entry popup for Ctrl L and Ctrl K,
+and in-session reopen-closed tabs for Ctrl Shift T. Phase 4 extends that same
+popup with ranked search, scopes and previews; it does not build a second
+overlay. This keeps the Phase 2 shortcut gate executable before full search
+UI exists. Phase 3 adds durable session recovery to the earlier tab behavior.
 
 ### Overlays
 
@@ -342,6 +401,9 @@ above the page, owned by the main window through `GWLP_HWNDPARENT` (GPUI's
 popups are otherwise topmost over every app), near-opaque, with the
 `DWMSBT_TRANSIENTWINDOW` Acrylic backdrop as a bonus. The peek takes no focus;
 the palette does, and Esc returns it to the page with wry's `focus()`.
+Set ownership on the popup, not on the child page window; remove topmost
+behavior and retest Alt Tab, minimize, restore and closing the main window.
+A successful backdrop API call does not prove visible blur (Phase 0).
 Hovering the left edge is detected by a few-pixel strip of chrome or by
 polling the cursor, because a pointer over a page never reaches GPUI. They
 must work over every kind of tab (D7).
@@ -353,6 +415,17 @@ one writer thread and two readers, in `%LOCALAPPDATA%\Atlas\data\atlas.db`
 (never a synced folder), with a daily `VACUUM INTO` snapshot taken when idle
 and 7 kept (D13), and a clean-shutdown flag that triggers a `quick_check`
 after a crash (`docs/research/03-core-architecture.md`, "Storage").
+Write each snapshot to a fresh destination; only a completed, validated
+snapshot enters the seven-copy rotation. An interrupted `VACUUM INTO` can
+leave unusable output ([SQLite snapshot behavior](https://www.sqlite.org/lang_vacuum.html)).
+Test recovery on disposable databases. The interaction between the seven
+snapshots and D18's seven-day page-text retention is settled by D40: the
+page-text cache and index stay outside these backups, with at most seven
+days retained. ⚠️ Prove expiry and restart/replay/restore behavior before
+enabling capture.
+Before finalizing recovery, define how explicit history clearing survives
+restoring an older snapshot: a deletion journal outside restored state or
+tested snapshot treatment must prevent reintroducing cleared records.
 
 ### Search
 
@@ -365,6 +438,10 @@ after a crash (`docs/research/03-core-architecture.md`, "Storage").
   or SQLite FTS5) is chosen by a one-day bake-off, here in plan 1 because
   page text needs it; the extraction method must inject nothing on excluded
   sites.
+  ⚠️ Decide eligibility before any extraction, including redirects and frame
+  boundaries. A response-header observation is not permission to install a
+  request filter. Prove `no-store` handling and exclusion coverage with
+  synthetic sites before asking the owner to enable capture on daily browsing.
 
 ### The palette
 
@@ -393,17 +470,58 @@ transparency" is on. Pages stay opaque.
 
 ### Privacy and shipping
 
-No telemetry; crash logs and dumps local. SmartScreen stays on. Without
+The owner kept WebView2 and SmartScreen after reviewing their collection
+(D39). Disclose the runtime behavior: the custom-crash flag covers crash
+submission, not every required diagnostic. Crash logs and dumps stay local
+([Microsoft's privacy description](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/data-privacy)).
+
+To guide improvements, D39 replaces the blanket no-analytics rule with
+local aggregate counters and explicit report export. Count Atlas feature
+use, built-in commands, timings and error categories without identifiers,
+URLs, searches, paths, text or an event timeline. Use fixed metric names and
+coarse timing buckets; never collect content merely to strip it out later.
+No upload service or model call is authorized. The owner chooses whether to
+share a report for suggestions, and reviews product changes. A single-user
+report is not guaranteed anonymous merely because it contains no account ID
+([NIST's de-identification guidance](https://csrc.nist.gov/pubs/sp/800/188/final)).
+
+⚠️ Before analytics implementation, present the bounded schema, synthetic
+example report, enable/reset/retention behavior, export preview and performance
+budget for the owner to approve. The added analytics slices are a proposed
+amendment outside the already approved 40-row map; they do not block the
+scaffold. Tests remain synthetic, and no real usage is read or exported here.
+
+Without
 Tauri, Atlas builds what Tauri gave for free (realism check, objection 6):
 an updater that verifies ed25519/minisign signatures, single-instance
 forwarding of links opened from other apps, default-browser registration,
-and an installer. Code signing waits (S8), so installs show SmartScreen's
-warning. Atlas notices WebView2 runtime changes (D36).
+and an installer. Update-file signatures are distinct from Windows code
+signing, which waits (S8). Unsigned builds can be blocked, not merely warned
+about; D38 records a locally working profile, not a security-policy exemption.
+The scaffold must run both its application and test executables under the
+unchanged Windows policy. Atlas notices WebView2 runtime changes (D36).
+⚠️ The update host, check cadence and installation/restart behavior need
+owner approval before any updater network call is implemented. Verify the
+signature before installation, and test rejection using synthetic packages.
 
 ## Sequencing
 
 Each phase becomes a milestone. Phase 0 runs locally before the issues for
 phases 1–5 are broken down (D16).
+
+**Planning exception, owner, 2026-10-10:** finish the detailed drafts for
+plans 2–4 locally before moving toward implementation. The owner is not
+publishing the repository yet. This permits the planning work below to be
+described in advance; implementation still proceeds through plan 1, then
+plans 2, 3 and 4, one phase at a time. It does not authorize a remote,
+published issues or an implementation shortcut around an unfinished gate.
+
+**Local implementation approved, owner, 2026-10-10 (D41):** the four plans
+and plan 1's 40-slice map are approved. Use local branches, independent review
+and owner-approved merges without waiting for GitHub. Commits remain by
+explicit request; first preserve the planning baseline. Existing technical
+and operator gates still apply. Analytics under D39 receives its own bounded
+amendment before implementation, without moving ahead of the foundations.
 
 ### Phase 0 — Feasibility spike (throwaway, local)
 
@@ -439,8 +557,15 @@ phases 1–5 are broken down (D16).
 - **Also delivers (Phase 0 verdict):** the GPUI idle-loop patch (D37) with
   idle CPU re-measured under 0.5% of a core, and start-to-first-page
   re-measured the same way for GPUI and Tauri.
-- **Exit criteria:** `cargo fmt --check`, `cargo clippy -D warnings` and
-  `cargo test` pass; idle CPU under 0.5% with 8 tabs suspended; the tab model, migrations and ranking are covered by
+- **Order:** scaffold, tab model, storage, tier 1 search, GPUI idle patch,
+  design tokens. Complete one review before the next. The idle measurement
+  uses the retained throwaway harness with fresh synthetic profiles; it does
+  not require building the Phase 2 product shell early or copying spike code
+  into the product. Repeat the measurement on the product shell in Phase 2.
+- **Exit criteria:** `cargo fmt --check`,
+  `cargo clippy --all-targets -- -D warnings` and `cargo test` pass using
+  D38's profile as documented by the scaffold, with assertions and overflow
+  checks retained; idle CPU under 0.5% with 8 tabs suspended; the tab model, migrations and ranking are covered by
   tests; tier 1 meets 5 ms at 100,000 rows in `xtask bench`; the five
   palettes render a sample screen matching the canvas.
 
@@ -449,12 +574,21 @@ phases 1–5 are broken down (D16).
 - **Why now:** the first build Atlas can browse with.
 - **Delivers:** the window, sidebar and page card; web tabs (create, switch,
   close, reorder, pin); navigation and the address; the shortcut router;
+  in-session reopen-closed tabs and minimal address entry for Ctrl L/K;
   popups as tabs; fullscreen; crashed-tab recovery; suspend; permissions;
-  WebView2's find, downloads, print and context menu; the sidebar peek.
+  WebView2's find, downloads, print and context menu; zoom; HTTPS/certificate
+  status; the sidebar peek. The Musts come from research note 02; its old
+  engine capability claims are not accepted without the current checks.
 - **Exit criteria:** the owner has tested what Phase 0 left untested (Hulu,
   Google sign-in with a password and phone prompt, staying signed in after a
   restart, and the 13 other daily sites, at least 13 passing); the owner can
-  browse their daily sites for a day in Atlas with no crash; every shortcut in the table works with a page focused.
+  browse their daily sites for a day in Atlas with no crash. With a page
+  focused, Ctrl T/W/L/K, Ctrl Tab/Shift Tab, Ctrl Shift T, Ctrl Alt S and the
+  delivered navigation/find/print/download/zoom keys work. Palette result
+  selection and scope keys are tested once Phase 4 adds them. Synthetic tests separately cover
+  renderer and shared-browser-process failure, permission persistence,
+  certificate errors and suspend/resume races. Product-shell idle performance
+  still meets D37 after integration.
 
 ### Phase 3 — Browser memory and the home page
 
@@ -463,10 +597,17 @@ phases 1–5 are broken down (D16).
 - **Delivers:** history, page-text indexing with exclusions (after the
   tier 2 bake-off), bookmarks with HTML import, the closed-tab stack,
   session restore, the home page with Quick access tiles, and the Customize
-  panel (palette and accent).
+  panel (palette and accent); clear-browsing-data controls that cover both
+  WebView2 data and Atlas history/search copies, with partial failures shown.
+  WebView2 clearing applies to the shared profile, not only the active tab.
+  Keep its controller alive and await completion; an aborted operation or
+  missing callback cannot be reported as success. Never clear by deleting
+  the owner's user-data directory.
 - **Exit criteria:** quitting and relaunching restores every tab; the owner's
-  exported bookmarks import correctly; excluded sites leave no page text in
-  the database.
+  exported bookmarks import correctly in an owner-operated check; automated
+  import tests use synthetic exports. Excluded sites leave no page text in
+  the database or index; clearing data and expiry cannot reintroduce it via
+  replay or restore. Retention behavior follows the owner's clarification.
 
 ### Phase 4 — The command palette
 
@@ -487,11 +628,18 @@ phases 1–5 are broken down (D16).
 - **Exit criteria:** Atlas is set as the default browser and used as the
   owner's only browser for a week, with memory and start-up within D6's
   thresholds.
+- **Proposed addition after D39:** local aggregate counters and explicit
+  report preview/export, split into AN-01 and AN-02 in the readiness report.
+  The owner approved the feature direction, but its concrete schema/control
+  proposal and added slice map still need approval before analytics work.
+  The proposal places them after P1-39 and before the week of use (P1-40).
 
 ## What is deliberately not built
 
-In plan 1: Chrome extensions (WebView2 can't run them); a password manager,
-password import and ad blocking; macOS and Linux; history import; telemetry;
+In plan 1: Chrome extensions (an Atlas scope choice, even though current
+WebView2 has optional extension APIs); a password manager,
+password import and ad blocking; macOS and Linux; history import; automatic
+analytics uploads and remote crash reports;
 Servo; picture-in-picture, split view, multiple windows, a site-settings
 page and save-page-as (`docs/research/02-browser-v1-scope.md`, "Later");
 code signing (S8); a frozen-page overlay (D7); live search suggestions
@@ -501,24 +649,39 @@ and "New lead" until Stage C (D34); a graph view (S4).
 
 ## ⚠️ Still unproven
 
-- ⚠️ Google sign-in end to end in WebView2, on every path the owner uses;
-  and that WebView2 keeps presenting as Chrome to Google. Proven by Phase 0;
-  watched by D36.
-- ⚠️ A GPUI popup, re-owned with raw Win32, stacks and takes focus correctly
-  over a child WebView2. Proven by Phase 0; no ready fallback.
-- ⚠️ Disney+ and Hulu play with Widevine L3 in an Atlas tab. Proven by
-  Phase 0 with the owner's accounts.
-- ⚠️ GPUI's chrome saves enough start time and memory to justify itself
-  over Svelte (D4's rule). Proven by Phase 0.
-- ⚠️ GPUI's AccessKit works with NVDA on Windows 11. Checked in Phase 0,
-  required in Phase 5.
+- ⚠️ **Remaining Google checks:** the password-and-phone-prompt path and
+  staying signed in after restart await the owner in Phase 2. Passkey and
+  Workspace sign-in passed in Phase 0. Future Evergreen behavior is not
+  guaranteed; D36 watches runtime changes.
+- **Live popups passed in both spikes**, including stacking and focus
+  return. Repeat those checks in the production shell; the throwaway
+  implementation is evidence, not reusable product code.
+- ⚠️ **Hulu and the 13 other daily sites** remain owner tests in Phase 2.
+  YouTube and Disney+ passed. Playback does not establish an unmeasured
+  resolution or DRM-security-level guarantee.
+- **GPUI cleared D4's chrome startup and memory comparison**, but idle CPU
+  failed. Phase 1 must prove D37's patch reaches the 0.5% bar and remeasure
+  start-to-first-page using the same endpoint in both candidates.
+- ⚠️ **NVDA accessibility on Windows 11:** the Phase 0 verdict does not
+  establish a completed screen-reader test. Verify the product shell in
+  Phase 5; do not mark this passed from the toolkit's stated support.
 - ⚠️ A way to read page text that injects nothing on excluded sites (D35).
   Chosen in Phase 3.
+- ⚠️ Numerical targets are acceptance criteria, not benchmark results:
+  5 ms for the complete 100,000-row rank/count/highlight path, one-frame
+  palette paint, and the real product's D6 memory/startup comparisons remain
+  to be measured. Upstream matcher microbenchmarks do not establish them.
+- ⚠️ The private live design canvas has not been compared with the local
+  snapshot in this review. Resolve that at the design-token gate using
+  owner-authorized access; no integration app is authorized by this review.
 
 ## Sibling plans
 
-Outlined now; each gets its own question rounds and full detail after the
-Phase 0 verdict (D16):
+Expanded locally after the Phase 0 verdict, at the owner's request on
+2026-10-10. Each records its own product answers, ordered implementation
+phases, acceptance criteria and remaining technical checks. The owner
+approved all four on 2026-10-10; their implementation remains queued after
+this plan, in order:
 
 - `docs/plans/Atlas v1 — Plugins and Fledge — Plan.md` (plan 2)
 - `docs/plans/Atlas v1 — Notes — Plan.md` (plan 3)
@@ -528,9 +691,28 @@ Phase 0 verdict (D16):
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
 
-- **Google Workspace device checks:** does the owner's Workspace admin
-  console turn on Context-Aware Access or Endpoint Verification? Whoever
-  administers that Workspace can check; Phase 0 will show it anyway.
+- **Google Workspace device checks:** Workspace sign-in passed in Phase 0,
+  but that does not establish the admin configuration or all protected
+  resources. Only the owner/admin checks those settings. D21's extension
+  warning is a possible deployment constraint, not proof this account has it.
+- **Analytics design (D39):** local counters, explicit export and reviewed
+  model suggestions are approved. The concrete schema, enable/reset controls,
+  retention, export preview and performance budget still need a proposal
+  before collector implementation. No automatic upload or model integration
+  is authorized, and actual usage stays out of development artifacts.
+- **Retention implementation (D40):** the owner chose seven days with page
+  text excluded from daily backups. Prove expiry across cache/index and
+  restart/replay/restore; do not treat search invisibility as deletion.
+- **Historical wording:** `design/README.md` and the spec explain the lack
+  of an Extensions button using an obsolete engine limitation. The approved
+  v1 scope still excludes extensions. D28's renderer count is a resource
+  intention rather than an API guarantee; D29's rejected-library and
+  future-Git claims remain dated research until verified for an actual pin.
+  This review does not change the recorded decisions or the design source.
+- **Shipping:** update delivery settings, signing/installation feasibility
+  and browser registration need their Phase 5 owner gates. D37's upstream
+  patch offer also requires approval for the actual public submission while
+  the repository is local; prepare it for review without publishing it.
 - **Data and search:** one store or two (SQLite FTS5 or tantivy), settled by
   the bake-off before Notes.
 - **The project:**
@@ -541,16 +723,93 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
     the owner before the repository goes public.
   - **GitHub:** the owner's only account is ZanderOfficial. The repository
     will probably move to the Fledge Software organisation eventually; for now
-    Atlas is a local project, and building waits for a repository (D16).
+    Atlas is a local project; D41 removes the repository prerequisite.
     Which account or organisation it is created under is decided when the
     owner is ready to build.
+  - **Current local workflow, owner, 2026-10-10:** D41 explicitly approves
+    the plans, 40-slice map and local branch/review/owner-merge workflow.
+    Readiness does not need another approval. The next boundary is the
+    documentation-baseline commit, which still requires the owner's request;
+    no remote, push or implementation commit is authorized by D41.
 
 ## Issue map
 
-Written when the owner approves the breakdown.
+Approved by the owner on 2026-10-10 (D41). The following table is copied from
+`docs/plans/Atlas v1 — Readiness and implementation breakdown.md`; P1 labels
+identify local slices, not published GitHub issues. Each phase is a future
+milestone, with one branch, independent review and owner-approved merge per
+slice. Q1–Q4 are resolved by D39–D41; the planning-baseline commit remains
+pending. Analytics additions are proposed separately, outside this approved
+map, and do not change the foundation order.
 
-| Plan section | Title | Labels | Blocked by | Epic | Milestone | Issue |
-|---|---|---|---|---|---|---|
+The proposed AN-01/AN-02 amendment is described in the readiness report's
+"Proposed analytics amendment (D39)" section. It is not part of these 40
+approved rows until the owner approves the added slice boundaries.
+
+### Phase 1 milestone: foundations
+
+| ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
+|---|---|---|---|
+| P1-01 | A reproducible local build prevents later work resting on an unusable toolchain. Create the minimal Cargo workspace, dependency-boundary check, passing test and runnable app; document and execute the D38 gate. Audit maintenance, security and licences for the resolved graph before adding dependencies, here and in every later slice. Record the approved local workflow. Do not define the future Plugin trait early. | `Cargo.toml`, `crates/xtask`, `docs/LOCAL-DEV.md`, `CLAUDE.md`, `AGENTS.md`; D16/D38. | Q3/Q4, a preserved planning baseline and the dependency pre-add audit. |
+| P1-02 | One model prevents sidebar/palette disagreement. Implement tab identity, kinds, active selection, ordering, pinning and close/reopen transitions with an in-session closed-tab stack, tested without a window. | `crates/atlas-core`; S3, generic tab model. | P1-01. |
+| P1-03 | State needs one reliable write path. Open a local unsynced store, migrate it and persist/reload a tab-model snapshot through a serialized writer; prove rollback and error reporting on disposable databases. | `crates/atlas-store`, core persistence boundary; D13. | P1-02; Q2 for durable/cache separation. |
+| P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and a tested recovery path; interruption leaves the last valid copy usable. Establish how later explicit history clearing survives restoring older snapshots. | `crates/atlas-store`; D13. | P1-03. |
+| P1-05 | The palette needs fast local ranking before UI work. Add the tier 1 catalogue, boosts, counts and match positions with incremental updates and a reproducible 100,000-row benchmark. | `crates/atlas-search`, `crates/xtask`; D9. | P1-04. |
+| P1-06 | Continuous repainting defeats the performance goal. Implement the small pinned GPUI idle patch, add focused regression evidence and remeasure eight suspended tabs and equivalent first-page startup in both throwaway candidates using fresh synthetic profiles. Prepare a reviewable upstream patch. | Pinned GPUI patch and measurement report; D37/D12. | P1-05; passing measurements. Public offer requires separate owner approval. |
+| P1-07 | Shared tokens keep subsequent screens consistent. Render a small GPUI sample of the five palettes, accent and transparency fallback; inspect contrast and compare with the authorized design source. | `crates/atlas-ui`; S10, `design/README.md`. | P1-06; live-canvas comparison or owner-approved snapshot. |
+
+### Phase 2 milestone: browser shell
+
+| ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
+|---|---|---|---|
+| P1-08 | Browsing needs a safe engine boundary. Create the shared environment and one page in a GPUI card with correct resize/DPI handling; verify page-constructor guardrails, runtime detection and owner-approved privacy disclosure. Preserve native permission prompts and keep clipboard auto-grant disabled from this first constructor. | `crates/atlas-platform`, `crates/atlas-app`; D3/D11, Q1. | P1-07; Q1. |
+| P1-09 | Real tabs must follow the model. Wire sidebar creation, selection, closure/reopening, reordering and pins to page lifetimes; run repeated lifecycle checks without leaking views. | `atlas-core`, `atlas-app`, `atlas-ui`; generic tabs. | P1-08. |
+| P1-10 | The owner must navigate and type from a focused page. Wire address/title updates, back/forward/reload, a minimal owned address-entry popup and the native shortcut router. Ctrl L/K opens this entry surface; Ctrl T/W/Tab/Shift T acts on the existing model. Phase 4 extends the same popup with ranked search. | `atlas-core`, `atlas-platform`, `atlas-app`; D8/D9. | P1-09. |
+| P1-11 | OAuth popups require an opener relationship. Adopt new-window requests as tabs without previous navigation; synthetic opener/focus tests pass. | `atlas-platform`, `atlas-app`; page rules. | P1-10. |
+| P1-12 | Sites need usable permission prompts without automatic grants. Integrate engine permission and notification UI; test decisions and persistence using disposable profiles. | `atlas-platform`; privacy guardrails. | P1-11. |
+| P1-13 | Browser essentials must be reachable. Wire find, downloads, print, context menu and zoom controls, including explicit Ctrl J routing and focused-page tests. | `atlas-platform`, command registry; note 02 Musts. | P1-12. |
+| P1-14 | The address display must not misstate security. Implement a truthful scheme/status display and native certificate-error behavior; verify invalid certificates never silently succeed. | `atlas-platform`, `atlas-ui`; note 02 Musts. | P1-13; supported native security-state approach. |
+| P1-15 | Streaming and long-lived tabs need correct lifecycle handling. Add fullscreen and hidden-tab suspension with late-callback guards; test video layout and resume. | `atlas-platform`, `atlas-app`; D6. | P1-14. |
+| P1-16 | Losing one process must not lose the session model. Recover renderer and shared-browser-process failures distinctly; synthetic fault checks prove no duplicate recovery or missing tabs. | `atlas-platform`, `atlas-app`; crash recovery. | P1-15. |
+| P1-17 | A hidden sidebar must remain usable over live pages. Add the owned peek popup and Ctrl Alt S pinning, with focus, stacking, Alt Tab and window-lifecycle checks. Back/forward/reload and address controls move into the title bar while the sidebar is hidden. | `atlas-ui`, `atlas-platform`, `atlas-app`; D7/D8, `design/README.md`. | P1-16. |
+| P1-18 | The Phase 0 conditions must hold in the product. Record shell idle/startup checks and the owner's remaining site/sign-in tests plus one day of browsing. This is an evidence/report slice; failures return to their owning implementation slice. | Phase 2 acceptance report; D6/D21/D22/D37. | P1-17; owner account tests and day of use. |
+
+### Phase 3 milestone: browser memory and home
+
+| ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
+|---|---|---|---|
+| P1-19 | Tabs must survive a normal exit or app crash. Wire committed session persistence and restore address/title/pin/order, retaining the earlier in-session reopen behavior; disposable crash/restart checks pass. Back/forward lists are not promised. | `atlas-core`, `atlas-store`, `atlas-app`; D13. | P1-18. |
+| P1-20 | Navigation must become searchable memory. Persist history events and update tier 1 incrementally, with a usable history list and no duplicate entries from stale events. | `atlas-store`, `atlas-search`, `atlas-ui`; D10. | P1-19. |
+| P1-21 | Bookmarks need one source of truth. Add folders and bookmark CRUD through the UI/store/search path; mutations and restarts agree. | `atlas-store`, `atlas-search`, `atlas-ui`. | P1-20. |
+| P1-22 | Import must work without reading another browser's profile. Parse bounded HTML exports, preview/confirm the import and preserve folders; test synthetic Chrome/Edge/Firefox-shaped files and malformed input. | Bookmark import and UI; D14/D15. | P1-21. |
+| P1-23 | Full-text selection needs evidence. Run the FTS5/Tantivy bake-off on one synthetic corpus, including update/delete/expiry and recovery costs. Deliver the benchmark and reasoned choice for review before production integration. | Benchmark harness/report; D18. | P1-22; candidate dependency audits. |
+| P1-24 | Search needs a tested implementation of the chosen store. Implement the `FullText` adapter and durable recovery against synthetic documents; interrupted writes, deletions and replay preserve the intended results. | `atlas-search`; reviewed P1-23 choice. | P1-23. |
+| P1-25 | Capture must be safe before real browsing can enable it. Prepare the concrete page-access method for owner approval before any guarded page API use; then prove eligibility/extraction on synthetic pages, redirects, frames and `no-store`. Deliver evidence and the production recommendation. | Synthetic feasibility harness/report; D18/D35. | P1-24; owner approval of the concrete page-access method before prototype use. |
+| P1-26 | Page recall needs bounded, expiring data. Integrate the proven extraction path with the page-text cache/index, disable setting, expiry and restart/restore rules; excluded content never enters storage. | `atlas-platform`, `atlas-search`, cache store; D18/D35, Q2. | P1-25 and review of its evidence; Q2. |
+| P1-27 | Clearing browsing data must include Atlas's copies. Add explicit kind/time choices and coordinated WebView2/history/search clearing; partial failures remain visible, and replay/restore does not silently resurrect cleared entries. | `atlas-platform`, `atlas-store`, `atlas-search`, settings UI. | P1-26; retention-aware backup/recovery design. |
+| P1-28 | New tabs need useful destinations. Build the canvas home page, editable Quick access tiles and sidebar pinned-app tile grid, with durable ordering/labels and normal navigation. Plugin cards reflect their not-yet-implemented state. | `atlas-app`, `atlas-ui`, `atlas-store`; spec home/sidebar. | P1-27. |
+| P1-29 | The chosen appearance must persist. Wire Customize palette/accent settings and Reduce transparency to the tokens; inspect all five palettes across restart. | `atlas-ui`, settings; S10. | P1-28. |
+
+### Phase 4 milestone: command palette
+
+| ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
+|---|---|---|---|
+| P1-30 | Ctrl K needs one command source and predictable focus. Extend P1-10's live owned entry popup into the full command palette with registry-backed rows, keyboard selection, Esc and focus restoration. Do not create a second overlay mechanism. | `atlas-core`, `atlas-ui`, `atlas-platform`; S5/D7. | P1-29. |
+| P1-31 | Search must expose all browser memory accurately. Add scope counts, highlights and bounded previews across tier 1/tier 2; stale results cannot replace newer queries and result actions target stable IDs. | `atlas-search`, `atlas-core`, palette UI. | P1-30. |
+| P1-32 | The palette is also the address bar. Add explicit URL navigation, command prefixes and Google Search the web via Alt Enter; verify typing sends no suggestion requests. | Command parsing and palette actions; D9. | P1-31. |
+| P1-33 | Central UI speed must be measured after composition. Verify one-frame opening, complete ranking latency and live-overlay focus/stacking regressions. Record methodology and failures without hiding slow cases. | Palette performance/acceptance report; D6/D7. | P1-32; measured budgets pass. |
+
+### Phase 5 milestone: daily driver
+
+| ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
+|---|---|---|---|
+| P1-34 | External links must reach one running Atlas. Implement single-instance forwarding with validated URL arguments and startup-race tests. | `atlas-platform`, `atlas-app`; external links. | P1-33. |
+| P1-35 | Evergreen changes can affect sign-in. Store the last observed runtime version, show D36's notice on change and provide the explicit open-in-Edge action; no sign-in canary. | `atlas-store`, `atlas-app`, `atlas-ui`; D22/D36. | P1-34. |
+| P1-36 | The owner needs complete keyboard access. Implement F6 focus traversal and correct accessible names/states, and record an NVDA pass across the chrome. | `atlas-ui`, `atlas-platform`; accessibility Musts. | P1-35; owner authorization if software installation is required. |
+| P1-37 | Installation must be reproducible without secretly changing Windows. Prepare and validate the installer and registration path; owner performs/approves installation and default-browser selection. Preserve data on upgrade. | Packaging, installation documentation; S8. | P1-36; packaging/policy feasibility and owner operator actions. |
+| P1-38 | Updates must reject tampering. Implement local signed-package verification and failure handling first, using synthetic packages and an independently pinned verification key. | Updater core/tests; signed updates. | P1-37; reviewed format and key-handling design. |
+| P1-39 | Delivery needs explicit network and restart behavior. Connect the verifier to the owner-approved host/check/install policy; prove failed download, invalid signature and interrupted install preserve the working version. | Updater delivery/UI. | P1-38; owner approval of host, network calls and install/restart behavior. |
+| P1-40 | “Daily driver” needs evidence from use. Record one week as the owner's default browser and the product's D6 memory/startup results; reconcile failures before closing plan 1. | Final acceptance report; D6. | P1-39; owner default-browser action and week of use. |
 
 ## Super-Pass ledger
 
@@ -562,10 +821,38 @@ started: 2026-10-09   code repo: none yet (local, D16)   plan branch: claude/pla
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
 gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
-current: Plan 1 go-ahead received; no Git remote configured   next: the owner creates the repository (D16); then re-read the plan, verify it (step 7 readiness), and obtain readiness approval before breaking plan 1 into issues and the wave map
+gates: 2026-10-10 owner requested detailed local plans 2–4 and deferred repository publication; implementation remains in plan order
+gates: 2026-10-10 owner approved four plans, the 40-slice map and local branch/review/owner-approved merge workflow (D41); retained WebView2, approved local counters with explicit export and reviewed suggestions (D39), and excluded page text from backups (D40)
+current: Four plans active and the local map approved; analytics schema/slice amendment awaits design approval; no Git remote configured   next: owner-requested documentation-baseline commit, then P1-01 scaffold
 
 ## Iteration log
 
+- **2026-10-10** — Recorded the owner's readiness and local-workflow approval
+  (D41), seven-day retention including backup exclusion (D40), and revised
+  analytics direction (D39). The owner chose local counters and explicit
+  report export, with model suggestions reviewed by the owner. Marked all
+  plans active and populated this Issue map from the approved 40 slices.
+  Collector details and added slices remain a separate design amendment;
+  no collection, upload, commit or implementation started from this approval.
+- **2026-10-10** — Readiness review corrected durability guarantees,
+  WebView2 process and popup behavior, extension capability, build-policy
+  assumptions and missing browser Musts. Recorded exact spike pins and
+  implementation evidence gates. Microsoft runtime diagnostics and the
+  interaction of backups with retention were put to the owner. A separate
+  local report holds the proposed review-sized breakdown; the Issue map
+  remains unapproved, and no product code or remote was created.
+- **2026-10-10** — Completed detailed drafts of plans 2–4 after four owner
+  question rounds. The sibling plans record their accepted demonstration,
+  vault, save, attachment, project, shortcut, Git and language-tool scope.
+  D31's Python assumption is resolved by the owner's entry-points-and-terminal
+  answer. Independent cross-plan review checked the host boundary, shared
+  editor ownership and search checkpoint/restart behavior. Technical checks
+  and measured acceptance remain prerequisites, not claimed results.
+- **2026-10-10** — The owner deferred repository publication and asked to
+  finish the outlines for Plugins and Fledge, Notes and Forge locally,
+  asking questions where needed. This is an explicit planning exception to
+  the immediate repository-creation step recorded earlier. Implementation
+  order, readiness approval and publication permissions remain separate.
 - **2026-10-10** — The owner approved proceeding into plan 1 after the
   handoff review. Repository creation remains the owner's next step (D16);
   the local repository still has no remote. This approves continuing the

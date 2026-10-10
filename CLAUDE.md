@@ -27,8 +27,9 @@ above, and `docs/spec.md` below. Before picking up work, also read:
 - `docs/decisions.md`: the owner's decisions since the spec, which win over
   it.
 - `docs/plans/Atlas v1 — Plan.md`: its "Decisions taken" table, its "Open
-  threads" and the part of the plan the work you are taking comes from. It is
-  a draft; where it disagrees with the files above, they win.
+  threads" and the part of the plan the work you are taking comes from. The
+  owner approved all four plans on 2026-10-10; their decisions are settled.
+  Where they disagree with the files above, those files still win.
 - `design/README.md`, before changing anything the owner sees.
 - The research note in `docs/research/` behind the area you are working in,
   for the reasoning (notes 07 and 08 correct parts of the earlier ones).
@@ -49,6 +50,11 @@ above, and `docs/spec.md` below. Before picking up work, also read:
 ## Working agreements
 
 - **This repository is local only for now: no git remote and no pushes.**
+- **Local implementation is approved (D41).** Use one branch per approved
+  slice, independent review and the owner's approval before each merge.
+  GitHub is not a prerequisite. First preserve the planning baseline with
+  an owner-requested documentation commit; the scaffold records the exact
+  development commands in `docs/LOCAL-DEV.md`.
 - **Commit only when the owner asks.** (The v1 plan may be committed as it
   is written, to its local branch.)
 - **Work the phases in order.** Phase 0, the feasibility spike, comes first;
@@ -79,5 +85,10 @@ above, and `docs/spec.md` below. Before picking up work, also read:
   agent. Generate test values that cannot belong to anyone. The owner, not an
   agent, signs in to real accounts. The full rule is under "Test data" in
   `AGENTS.md`.
+- **Usage analytics stays local (D39).** The owner approved aggregate
+  feature/command counts, timings and error categories, with explicit report
+  export and model suggestions reviewed by the owner. No automatic uploads,
+  identifiers, content or detailed event timeline. Do not collect or export
+  real usage while developing; review the schema and slice breakdown first.
 
 @docs/spec.md
