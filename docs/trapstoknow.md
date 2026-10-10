@@ -65,11 +65,20 @@ you found it in the commit message, not here.
 
 ## The interface: GPUI on Windows
 
-- **Anything GPUI paints under a page web view is hidden.** A windowed
-  WebView2 sits in a child window moved to the top, so it draws over the GPUI
-  window's own content. The palette and the sidebar peek must be separate
-  windows above the page. Source: note 08, section 2.3 (medium, code-read
-  only).
+- **GPUI draws above a WebView2 child window, not below it.** Note 08 read
+  the code as the page covering GPUI; the Phase 0 spike found the opposite
+  on this machine. Don't rely on either for layout: keep the page card's
+  region free of GPUI content and put the palette and the sidebar peek in
+  separate owned popup windows, which work. Source:
+  `docs/research/09-phase-0-verdict.md` (observed in the spike; high).
+- **GPUI's Windows backend repaints every window on every display refresh,**
+  even when nothing changed, so an idle Atlas uses about 3.75% of a core.
+  Patch the idle loop (D37) and measure idle CPU after any GPUI upgrade.
+  Source: note 09 (measured; high).
+- **Smart App Control blocks unsigned debug builds on this machine** ("An
+  Application Control policy has blocked this file", os error 4551); release
+  builds run. Build with the release-style dev profile (D38) and never change
+  the policy. Source: note 09 (observed by both spikes; high).
 - **GPUI's popup window floats over every app.** `WindowKind::PopUp` is
   created `WS_EX_TOOLWINDOW | WS_EX_TOPMOST` and is not owned by the main
   window, so the palette would stay on top when Atlas loses focus. Set its
