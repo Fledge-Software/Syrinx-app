@@ -273,6 +273,14 @@ style problem.
 - **Approved narrow licence exception, 2026-10-10:** `foldhash 0.2.0` may use
   Zlib for the pinned SQLite prepared-statement cache's dependency. The owner
   approved that package and version, not a general licence-policy expansion.
+- **Approved narrow source patch, 2026-10-10:** P1-04 may vendor the audited
+  `libsqlite3-sys 0.38.2` wrapper with SQLite 3.53.4 and matching bindings from
+  upstream commit `901f9946efdaaa289e6b1c5bd56dc67f4b651e51`. Preserve the
+  existing Rust dependency versions/features and verify the source identities
+  as specified in `docs/p1-04-sqlite-maintenance-review.md`. Unchanged upstream
+  `TODO`/`FIXME` comments are permitted only inside
+  `vendor/libsqlite3-sys-0.38.2`; Atlas-authored work remains subject to the
+  ordinary rule. This approval covers neither commits nor merges.
 - **Pin GPUI exactly with `=`.** Snapshot releases change its API weekly, and
   a caret requirement has already broken builds (note 08, 1.2). A patched
   fork of wry or tao is allowed only if small, pinned and offered upstream

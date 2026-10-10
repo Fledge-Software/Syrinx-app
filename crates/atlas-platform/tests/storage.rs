@@ -14,7 +14,7 @@ use std::{
 
 use atlas_core::{Activation, TabId, TabKind, TabMetadata, TabModel};
 use atlas_platform::WindowsDirectoryLease;
-use atlas_store::{DirectoryLease, LocationError, Store, StoreError};
+use atlas_store::{DirectoryLease, LocationError, ShutdownState, Store, StoreError};
 
 const DATABASE_FILES: [&str; 4] = [
     "atlas.db",
@@ -22,6 +22,7 @@ const DATABASE_FILES: [&str; 4] = [
     "atlas.db-shm",
     "atlas.db-journal",
 ];
+const CONTROL_FILES: [&str; 2] = ["atlas.lifecycle", "atlas.recovery-intent"];
 const SENTINEL: &[u8] = b"synthetic target bytes: retain until refusal is verified";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -47,7 +48,7 @@ impl DisposableDirectory {
 
     fn cleanup(self) {
         // Remove only known test-owned files after store and lease handles have closed.
-        for name in DATABASE_FILES {
+        for name in DATABASE_FILES.into_iter().chain(CONTROL_FILES) {
             remove_file_if_present(&self.path.join(name));
         }
         checked_io(fs::remove_dir(self.path), "remove disposable directory");
@@ -397,7 +398,7 @@ fn roundtrip_at_path_length(database_units: usize, verify_path: impl FnOnce(&Pat
     assert!(!exists(&destination.join("atlas.db-shm")));
 
     // Delete only the known database files, then the exact children this test created.
-    for name in DATABASE_FILES {
+    for name in DATABASE_FILES.into_iter().chain(CONTROL_FILES) {
         remove_file_if_present(&destination.join(name));
     }
     for child in children.into_iter().rev() {
@@ -506,5 +507,330 @@ fn native_guard_refuses_a_junction_at_the_destination_and_in_its_ancestors() {
         "remove verified junction sentinel",
     );
     checked_io(fs::remove_dir(&target), "remove synthetic junction target");
+    directory.cleanup();
+}
+
+#[test]
+fn native_session_excludes_an_alias_and_retains_ownership_after_lease_drop() {
+    let directory = DisposableDirectory::new();
+    let alias = checked_io(fs::canonicalize(&directory.path), "resolve synthetic alias");
+    let lease = WindowsDirectoryLease::prepare(&directory.path)
+        .expect("native guard accepts disposable directory");
+
+    // A distinct path spelling must resolve to the same exclusive control file.
+    assert_eq!(
+        WindowsDirectoryLease::prepare(&alias).expect_err("an alias cannot acquire a second lease"),
+        LocationError::StorageBusy
+    );
+    let session = lease
+        .session_control()
+        .expect("native lease supplies session tracking")
+        .begin()
+        .expect("first synthetic session begins");
+    assert_eq!(session.previous_shutdown(), ShutdownState::Unclean);
+    drop(lease);
+    assert_eq!(
+        WindowsDirectoryLease::prepare(&alias)
+            .expect_err("an outstanding session token retains exclusive ownership"),
+        LocationError::StorageBusy
+    );
+
+    // Consuming the final token releases the file while preserving its clean evidence.
+    session.complete().expect("synthetic session completes");
+    let reopened = open_store(&alias);
+    assert_eq!(reopened.previous_shutdown(), ShutdownState::Clean);
+    reopened.shutdown().expect("synthetic alias store closes");
+    directory.cleanup();
+}
+
+#[test]
+fn one_lease_refuses_overlapping_sessions_but_allows_a_later_session() {
+    let directory = DisposableDirectory::new();
+    let lease = WindowsDirectoryLease::prepare(&directory.path)
+        .expect("native guard accepts disposable directory");
+    let control = lease
+        .session_control()
+        .expect("native lease supplies session tracking");
+    let first = control.begin().expect("first synthetic session begins");
+
+    // Sharing one Arc cannot bypass the separate in-process session claim.
+    assert!(matches!(
+        control.begin(),
+        Err(LocationError::SessionAlreadyActive)
+    ));
+    first.complete().expect("first synthetic session completes");
+    let second = control.begin().expect("later synthetic session begins");
+    assert_eq!(second.previous_shutdown(), ShutdownState::Clean);
+    drop(second);
+    let third = control.begin().expect("dropped session releases its claim");
+    assert_eq!(third.previous_shutdown(), ShutdownState::Unclean);
+    third.complete().expect("final synthetic session completes");
+    drop(lease);
+    directory.cleanup();
+}
+
+#[test]
+fn a_second_store_on_the_same_lease_cannot_change_the_first_stores_records() {
+    let directory = DisposableDirectory::new();
+    let lease = Arc::new(
+        WindowsDirectoryLease::prepare(&directory.path)
+            .expect("native guard accepts disposable directory"),
+    );
+    let store = Store::open(lease.clone()).expect("first synthetic store opens");
+    let mut model = TabModel::new();
+    open_tab(&mut model, 60);
+    let expected = model.snapshot();
+    let revision = store
+        .save(0, expected.clone())
+        .expect("synthetic state commits");
+
+    // Refuse before the second writer can open SQLite or change lifecycle state.
+    let error = Store::open(lease.clone()).expect_err("one lease cannot open overlapping stores");
+    assert_eq!(
+        error,
+        StoreError::Location(LocationError::SessionAlreadyActive)
+    );
+    let unchanged = store
+        .load()
+        .expect("original synthetic store remains readable");
+    assert_eq!(unchanged.revision, revision);
+    assert_eq!(unchanged.snapshot, expected);
+    store.shutdown().expect("first synthetic store closes");
+    let reopened = Store::open(lease.clone()).expect("same lease permits a later store");
+    assert_eq!(reopened.previous_shutdown(), ShutdownState::Clean);
+    assert_eq!(reopened.load().expect("synthetic state reopens"), unchanged);
+    reopened.shutdown().expect("later synthetic store closes");
+    drop(lease);
+    directory.cleanup();
+}
+
+#[test]
+fn restart_distinguishes_explicit_shutdown_drop_and_malformed_lifecycle_evidence() {
+    let directory = DisposableDirectory::new();
+    let store = open_store(&directory.path);
+    assert_eq!(store.previous_shutdown(), ShutdownState::Unclean);
+    let mut model = TabModel::new();
+    open_tab(&mut model, 61);
+    let expected = model.snapshot();
+    let revision = store
+        .save(0, expected.clone())
+        .expect("synthetic state commits");
+    store.shutdown().expect("first synthetic store closes");
+
+    // A normal shutdown is clean; fallback Drop closes connections but leaves dirty evidence.
+    let clean_restart = open_store(&directory.path);
+    assert_eq!(clean_restart.previous_shutdown(), ShutdownState::Clean);
+    drop(clean_restart);
+    let dirty_restart = open_store(&directory.path);
+    assert_eq!(dirty_restart.previous_shutdown(), ShutdownState::Unclean);
+    assert_eq!(
+        dirty_restart
+            .load()
+            .expect("unclean store validates")
+            .snapshot,
+        expected
+    );
+    dirty_restart
+        .shutdown()
+        .expect("validated synthetic store closes");
+
+    // Neither absent nor malformed evidence can suppress the next startup's validation.
+    let lifecycle = directory.path.join("atlas.lifecycle");
+    remove_file_if_present(&lifecycle);
+    for malformed in [
+        None,
+        Some(b"".as_slice()),
+        Some(b"synthetic-invalid-record".as_slice()),
+    ] {
+        if let Some(bytes) = malformed {
+            checked_io(
+                fs::write(&lifecycle, bytes),
+                "write synthetic malformed lifecycle",
+            );
+        }
+        let reopened = open_store(&directory.path);
+        assert_eq!(reopened.previous_shutdown(), ShutdownState::Unclean);
+        let stored = reopened
+            .load()
+            .expect("synthetic records survive lifecycle uncertainty");
+        assert_eq!(stored.revision, revision);
+        assert_eq!(stored.snapshot, expected);
+        reopened
+            .shutdown()
+            .expect("synthetic store closes after validation");
+    }
+    directory.cleanup();
+}
+
+#[test]
+fn pending_recovery_intent_refuses_startup_before_creating_a_missing_database() {
+    let directory = DisposableDirectory::new();
+    let intent = directory.path.join("atlas.recovery-intent");
+    checked_io(
+        fs::write(&intent, SENTINEL),
+        "write synthetic recovery intent",
+    );
+
+    // Any existing intent requires recovery handling, even when its bytes are unrecognized.
+    let error = WindowsDirectoryLease::prepare(&directory.path)
+        .expect_err("pending recovery must prevent ordinary startup");
+    assert_eq!(error, LocationError::RecoveryPending);
+    assert!(!exists(&directory.path.join("atlas.db")));
+    assert_eq!(
+        checked_io(fs::read(&intent), "read synthetic intent"),
+        SENTINEL
+    );
+    directory.cleanup();
+}
+
+#[test]
+fn native_guard_refuses_hardlinked_control_files_without_modifying_their_targets() {
+    for name in CONTROL_FILES {
+        let directory = DisposableDirectory::new();
+        let original = directory.path.join("synthetic-control-target.bin");
+        let linked = directory.path.join(name);
+        checked_io(
+            fs::write(&original, SENTINEL),
+            "write synthetic control target",
+        );
+        checked_io(
+            fs::hard_link(&original, &linked),
+            "hardlink synthetic control target",
+        );
+
+        // Control metadata must be checked before interpreting or rewriting its bytes.
+        let error = WindowsDirectoryLease::prepare(&directory.path)
+            .expect_err("hardlinked control file must be refused");
+        assert_eq!(error, LocationError::HardLinkedFile);
+        assert!(!exists(&directory.path.join("atlas.db")));
+        assert_eq!(
+            checked_io(fs::read(&original), "read synthetic control target"),
+            SENTINEL
+        );
+        checked_io(
+            fs::remove_file(&linked),
+            "remove synthetic control hardlink",
+        );
+        assert_eq!(
+            checked_io(fs::read(&original), "recheck synthetic control target"),
+            SENTINEL
+        );
+        checked_io(
+            fs::remove_file(&original),
+            "remove verified synthetic control target",
+        );
+        directory.cleanup();
+    }
+}
+
+#[test]
+fn native_guard_refuses_directories_in_place_of_control_files() {
+    for name in CONTROL_FILES {
+        let directory = DisposableDirectory::new();
+        let control = directory.path.join(name);
+        checked_io(
+            fs::create_dir(&control),
+            "create synthetic control directory",
+        );
+        let marker = control.join("sentinel.bin");
+        checked_io(
+            fs::write(&marker, SENTINEL),
+            "write synthetic control sentinel",
+        );
+
+        let error = WindowsDirectoryLease::prepare(&directory.path)
+            .expect_err("a control path must be a regular file");
+        assert_eq!(error, LocationError::UnexpectedEntryKind);
+        assert!(!exists(&directory.path.join("atlas.db")));
+        assert_eq!(
+            checked_io(fs::read(&marker), "read synthetic control sentinel"),
+            SENTINEL
+        );
+        checked_io(fs::remove_file(&marker), "remove verified control sentinel");
+        checked_io(
+            fs::remove_dir(&control),
+            "remove synthetic control directory",
+        );
+        directory.cleanup();
+    }
+}
+
+#[test]
+fn native_guard_refuses_junctions_in_place_of_control_files() {
+    for name in CONTROL_FILES {
+        let directory = DisposableDirectory::new();
+        let target = directory.path.join("synthetic-control-target");
+        let link = directory.path.join(name);
+        checked_io(
+            fs::create_dir(&target),
+            "create synthetic control junction target",
+        );
+        let marker = target.join("sentinel.bin");
+        checked_io(
+            fs::write(&marker, SENTINEL),
+            "write synthetic control junction sentinel",
+        );
+        create_junction(&link, &target);
+
+        let error = WindowsDirectoryLease::prepare(&directory.path)
+            .expect_err("a control path must not redirect to another entry");
+        assert_eq!(error, LocationError::ReparsePoint);
+        assert!(!exists(&directory.path.join("atlas.db")));
+        assert_eq!(
+            checked_io(fs::read(&marker), "read control junction sentinel"),
+            SENTINEL
+        );
+        checked_io(fs::remove_dir(&link), "remove synthetic control junction");
+        assert_eq!(
+            checked_io(fs::read(&marker), "recheck control junction sentinel"),
+            SENTINEL
+        );
+        checked_io(
+            fs::remove_file(&marker),
+            "remove verified control junction sentinel",
+        );
+        checked_io(
+            fs::remove_dir(&target),
+            "remove synthetic control junction target",
+        );
+        directory.cleanup();
+    }
+}
+
+#[test]
+fn refused_foreign_database_keeps_its_bytes_and_leaves_unclean_lifecycle_evidence() {
+    let directory = DisposableDirectory::new();
+    let store = open_store(&directory.path);
+    store.shutdown().expect("synthetic seed database closes");
+    let database = directory.path.join("atlas.db");
+
+    // Change only the SQLite header's application ID in this test-owned, closed database.
+    let mut foreign_bytes = checked_io(fs::read(&database), "read synthetic database header");
+    assert!(foreign_bytes.len() >= 100);
+    foreign_bytes[68..72].copy_from_slice(&0x5359_4e54_u32.to_be_bytes());
+    checked_io(
+        fs::write(&database, &foreign_bytes),
+        "write synthetic foreign database ID",
+    );
+    let lease = WindowsDirectoryLease::prepare(&directory.path)
+        .expect("foreign synthetic file passes native path checks");
+    let error = Store::open(Arc::new(lease)).expect_err("foreign application ID must be refused");
+    assert_eq!(error, StoreError::ForeignDatabase);
+    assert_eq!(
+        checked_io(fs::read(&database), "recheck synthetic foreign database"),
+        foreign_bytes
+    );
+
+    // Failed startup must release ownership without turning its lifecycle record clean.
+    let lease = WindowsDirectoryLease::prepare(&directory.path)
+        .expect("failed store startup releases its directory lease");
+    let session = lease
+        .session_control()
+        .expect("native lease supplies session tracking")
+        .begin()
+        .expect("synthetic session starts after refusal");
+    assert_eq!(session.previous_shutdown(), ShutdownState::Unclean);
+    drop(session);
+    drop(lease);
     directory.cleanup();
 }

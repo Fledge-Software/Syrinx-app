@@ -5,6 +5,7 @@ use std::time::Duration;
 use rusqlite::{Connection, TransactionBehavior};
 use rusqlite_migration::{M, Migrations};
 
+use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x4154_4c53;
@@ -54,12 +55,18 @@ pub(crate) fn configure_connection(connection: &Connection) -> Result<(), StoreE
     Ok(())
 }
 
-pub(crate) fn prepare_writer(connection: &mut Connection) -> Result<(), StoreError> {
+pub(crate) fn prepare_writer(
+    connection: &mut Connection,
+    previous_shutdown: ShutdownState,
+) -> Result<(), StoreError> {
     // Refuse foreign, altered and future schemas before changing persistent settings.
     let new_database = inspect_identity(connection)?;
     if !new_database {
         validate_schema(connection)?;
         crate::records::load(connection)?;
+        if previous_shutdown == ShutdownState::Unclean {
+            quick_check(connection)?;
+        }
     }
     let journal: String = connection
         .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
@@ -80,6 +87,71 @@ pub(crate) fn prepare_writer(connection: &mut Connection) -> Result<(), StoreErr
     }
     validate_schema(connection)?;
     optimize(connection)
+}
+
+fn quick_check(connection: &Connection) -> Result<(), StoreError> {
+    integrity_check(connection, "PRAGMA quick_check", StoreOperation::QuickCheck)
+}
+
+pub(crate) fn validate_backup(
+    connection: &mut Connection,
+) -> Result<crate::StoredSnapshot, StoreError> {
+    // A backup is already complete; validation never migrates it or enables a writable journal.
+    configure_connection(connection)?;
+    prepare_reader(connection)?;
+    integrity_check(
+        connection,
+        "PRAGMA integrity_check",
+        StoreOperation::IntegrityCheck,
+    )?;
+    let mut statement = connection
+        .prepare("PRAGMA foreign_key_check")
+        .map_err(|error| database_error(StoreOperation::IntegrityCheck, error))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| database_error(StoreOperation::IntegrityCheck, error))?;
+    if rows
+        .next()
+        .map_err(|error| database_error(StoreOperation::IntegrityCheck, error))?
+        .is_some()
+    {
+        return Err(StoreError::IntegrityCheckFailed);
+    }
+    drop(rows);
+    drop(statement);
+    crate::records::load(connection)
+}
+
+fn integrity_check(
+    connection: &Connection,
+    pragma: &str,
+    operation: StoreOperation,
+) -> Result<(), StoreError> {
+    // SQLite's diagnostic rows can contain record details; accept only one exact success row.
+    let mut statement = connection
+        .prepare(pragma)
+        .map_err(|error| database_error(operation, error))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| database_error(operation, error))?;
+    let row = rows
+        .next()
+        .map_err(|error| database_error(operation, error))?
+        .ok_or(StoreError::IntegrityCheckFailed)?;
+    let result = row
+        .get_ref(0)
+        .map_err(|error| database_error(operation, error))?;
+    if result != rusqlite::types::ValueRef::Text(b"ok") {
+        return Err(StoreError::IntegrityCheckFailed);
+    }
+    if rows
+        .next()
+        .map_err(|error| database_error(operation, error))?
+        .is_some()
+    {
+        return Err(StoreError::IntegrityCheckFailed);
+    }
+    Ok(())
 }
 
 pub(crate) fn prepare_reader(connection: &Connection) -> Result<(), StoreError> {

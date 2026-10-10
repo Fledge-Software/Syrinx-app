@@ -7,6 +7,17 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-10
 
+- **History clearing survives backup restoration (D47).** To keep deleted
+  history from returning while preserving older recovery points, the owner
+  chose a local deletion record containing only cleared date ranges and data
+  categories, never URLs or page contents. Restoration must honor that
+  record. This replaces the alternative of discarding all older backups
+  whenever history is cleared.
+- **Restoring a damaged database requires confirmation (D46).** Because an
+  older backup can lose newer state, Atlas offers the newest verified backup
+  with its date and asks the owner before replacing the current database.
+  Damaged files remain preserved locally. The owner chose confirmation rather
+  than automatic restoration.
 - **The top square tiles are Favorites (D45).** They provide quick access
   to websites, plugin pages and other supported Atlas destinations, separate
   from inline saved pages and folders. A plugin Favorite uses the normal

@@ -1,5 +1,11 @@
 //! Queries Windows filesystem and registered sync-root metadata without reading content.
 
+mod maintenance;
+
+pub(super) use maintenance::{
+    open_movable, open_readonly, remove_checked_directory, remove_checked_file, rename_no_replace,
+};
+
 use std::{
     ffi::OsString,
     fs::File,
@@ -15,17 +21,17 @@ use windows::{
     Storage::Provider::StorageProviderSyncRootManager,
     Win32::{
         Foundation::{
-            ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, GENERIC_READ,
-            GENERIC_WRITE, HANDLE,
+            ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SHARING_VIOLATION,
+            GENERIC_READ, GENERIC_WRITE, HANDLE,
         },
         Storage::FileSystem::{
             CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
             FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAGS_AND_ATTRIBUTES,
             FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
-            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileAttributeTagInfo,
-            FileIdInfo, FileStandardInfo, GETFINALPATHNAMEBYHANDLE_FLAGS, GetDriveTypeW,
-            GetFileInformationByHandleEx, GetFinalPathNameByHandleW, OPEN_EXISTING,
-            VOLUME_NAME_DOS,
+            FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO,
+            FileAttributeTagInfo, FileIdInfo, FileStandardInfo, GETFINALPATHNAMEBYHANDLE_FLAGS,
+            GetDriveTypeW, GetFileInformationByHandleEx, GetFinalPathNameByHandleW, OPEN_ALWAYS,
+            OPEN_EXISTING, VOLUME_NAME_DOS,
         },
         System::{
             Com::CoTaskMemFree,
@@ -134,6 +140,56 @@ pub(super) fn create_database(path: &Path) -> Result<File, LocationError> {
                 .ok_or(LocationError::IdentityChanged)
         }
         Err(error) => Err(os_error(LocationOperation::CreateDatabase, error)),
+    }
+}
+
+pub(super) fn create_new_file(
+    path: &Path,
+    operation: LocationOperation,
+    shared_write: bool,
+) -> Result<File, LocationError> {
+    // Fresh archive outputs must never adopt a pre-existing file after a creation race.
+    let share = if shared_write {
+        FILE_SHARE_READ | FILE_SHARE_WRITE
+    } else {
+        FILE_SHARE_READ
+    };
+    let wide = wide_file_path(path);
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            GENERIC_READ.0 | GENERIC_WRITE.0,
+            share,
+            None,
+            CREATE_NEW,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    }
+    .map_err(|error| os_error(operation, error))?;
+    Ok(unsafe { File::from_raw_handle(handle.0) })
+}
+
+pub(super) fn open_control(path: &Path) -> Result<File, LocationError> {
+    // No sharing excludes another reader, writer or deleter until this gate closes.
+    let wide = wide_file_path(path);
+    let opened = unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            GENERIC_READ.0 | GENERIC_WRITE.0,
+            FILE_SHARE_MODE(0),
+            None,
+            OPEN_ALWAYS,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            None,
+        )
+    };
+    match opened {
+        Ok(handle) => Ok(unsafe { File::from_raw_handle(handle.0) }),
+        Err(error) if error.code() == HRESULT::from_win32(ERROR_SHARING_VIOLATION.0) => {
+            Err(LocationError::StorageBusy)
+        }
+        Err(error) => Err(os_error(LocationOperation::OpenControl, error)),
     }
 }
 
