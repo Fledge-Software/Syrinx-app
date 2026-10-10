@@ -3,6 +3,6 @@
 mod tabs;
 
 pub use tabs::{
-    Activation, SavedPage, SavedPageId, SidebarRow, Tab, TabError, TabId, TabKind, TabMetadata,
-    TabModel,
+    Activation, SavedPage, SavedPageId, SavedPageSnapshot, SidebarRow, SnapshotError, Tab,
+    TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, TabSnapshot,
 };

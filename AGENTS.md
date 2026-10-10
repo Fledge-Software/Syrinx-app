@@ -266,6 +266,13 @@ style problem.
   under permissive licences (MIT, Apache-2.0, BSD) or as whole MPL-2.0 files
   kept under MPL (the plan's "Open threads"). Zed's editor and `languages`
   crate are GPL-3.0 and stay out.
+- **Approved narrow licence exception, 2026-10-10:** `unicode-ident 1.0.26`
+  may carry Unicode-3.0 alongside its MIT/Apache-2.0 terms. The owner approved
+  it for the pinned Windows bindings' build dependency. This does not choose
+  Atlas's licence or approve unrelated packages; see `docs/dependency-audit.md`.
+- **Approved narrow licence exception, 2026-10-10:** `foldhash 0.2.0` may use
+  Zlib for the pinned SQLite prepared-statement cache's dependency. The owner
+  approved that package and version, not a general licence-policy expansion.
 - **Pin GPUI exactly with `=`.** Snapshot releases change its API weekly, and
   a caret requirement has already broken builds (note 08, 1.2). A patched
   fork of wry or tao is allowed only if small, pinned and offered upstream

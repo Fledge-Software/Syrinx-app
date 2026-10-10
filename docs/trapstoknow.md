@@ -110,6 +110,29 @@ you found it in the commit message, not here.
   database in the local, not roaming, app-data folder. Source:
   `docs/research/03-core-architecture.md`, "Speed and safety settings", and
   D13 in the plan (high).
+- **A storage lease's full revalidation is not a cheap row check.** The
+  Windows guard opens ancestor handles and enumerates registered sync roots
+  on a dedicated WinRT thread. Do this when opening connections and at
+  lifecycle boundaries, not for every tab read or save. Retained handles
+  preserve the checked identities; later sync registration remains the
+  documented limitation. Source: P1-03 source review and
+  `docs/storage-path-preflight.md` (high on the work performed; no timing
+  claim).
+- **Holding sidecar handles can prevent SQLite's normal cleanup.** Refuse
+  unsafe `atlas.db-wal`, `-shm` and `-journal` entries before opening SQLite,
+  then release their inspection handles. Keep the directory/main-database
+  lease through connection close, rather than holding sidecars without delete
+  sharing. Source: P1-03 design review and SQLite's WAL lifecycle, linked in
+  `docs/storage-path-preflight.md` (high on the lifecycle contract).
+- **A native long-path check can pass while SQLite still refuses the open.**
+  The MSVC build does not automatically add Windows' extended DOS prefix.
+  The platform lease supplies it when the database or longest sidecar needs
+  it, and every store connection selects the locking `win32-longpath` VFS
+  (SQLite's file-access layer). That VFS also avoids the ordinary VFS's
+  smaller pathname buffer. Keep ordinary DOS spelling for shorter paths:
+  bundled SQLite 3.53.2 has a documented extended-path locking performance
+  regression. Sources: P1-03's failing native/SQLite integration test and
+  the exact bundled source, recorded in `docs/dependency-audit.md` (high).
 
 ## Repository and research
 
