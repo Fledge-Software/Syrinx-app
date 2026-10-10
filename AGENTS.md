@@ -96,7 +96,7 @@ Run it on this machine before calling a change done.
 
 ## Read this first: what is the source of truth
 
-Atlas has no single plan of record yet. Read these, in this order of
+The owner approved the four plans on 2026-10-10. Read these in this order of
 authority:
 
 1. **`docs/decisions.md`**, the owner's decisions since the spec. Where it
@@ -107,11 +107,11 @@ authority:
    the owner sees. When the canvas and the snapshot in `design/canvas/`
    disagree, the canvas wins.
 4. **`docs/plans/Atlas v1 — Plan.md`**, the v1 plan. Its "Decisions taken"
-   table argues every decision (S1 to S10, D1 to D36) with what was rejected
-   and why. It is marked `status: draft`, so where it disagrees with the
-   three above, they win and the disagreement goes under its "Open threads".
-   Once the owner marks it `active`, its "Decisions taken" are settled too.
-   Later plans also live in `docs/plans/`.
+   table argues the standing and later decisions with what was rejected and
+   why. It is `active`, and its "Decisions taken" are settled. Where it
+   disagrees with the three above, they win and the disagreement goes under
+   its "Open threads". Plans 2–4 are also approved, with implementation
+   queued in order; they live in `docs/plans/`.
 
 - **Settled decisions stay settled.** If code or a task seems to need a
   different decision, stop and ask; do not quietly build around one.
@@ -162,6 +162,11 @@ time:
   plan 2, the plugin runtime and the Fledge plugin on its stand-in client
   (spec phase 3, kept thin by D34); plan 3, Notes (spec phase 4); plan 4,
   Forge (spec phase 5).
+- **The local workflow is approved (D41).** GitHub is not required before
+  implementation. Each approved slice gets one local branch and independent
+  review; the owner approves every merge. Commits still need the owner's
+  request. Preserve the planning baseline with a requested documentation
+  commit before starting the scaffold. No remote or push is authorized.
 
 - **Always take the next piece of work from the earliest phase or plan that
   still has open work.** Within one, go in the plan's order unless its notes
@@ -229,8 +234,18 @@ style problem.
 
 **Privacy and the owner's data:**
 
-- **No telemetry.** Atlas sends nothing home: no analytics, no usage pings, no
-  remote crash reports.
+- **Only the approved local analytics scope (D39).** To help improve Atlas,
+  the owner approved aggregate feature/command counts, timings and error
+  categories with explicit report export. Exclude account/device identifiers,
+  URLs, searches, paths, document text and detailed event timelines. No
+  automatic uploads or remote crash reports. A model supplies suggestions
+  from a report the owner chooses to share; the owner reviews changes.
+  Review the schema and implementation slices before collecting anything;
+  real usage data stays out of development tools, fixtures and chats.
+- **Disclose the runtime limitation.** The owner kept WebView2 and
+  SmartScreen after reviewing their data collection. Local crash dumps do
+  not disable every required runtime diagnostic. Do not promise complete
+  anonymity for one person's exported usage report or change Windows settings.
 - **Crash dumps stay local.** Atlas builds its own WebView2 environment with
   `IsCustomCrashReportingEnabled` set, because wry never sets it and the
   default uploads dumps to Microsoft (note 08, section 5).
@@ -241,6 +256,9 @@ style problem.
 - **Never put the database in a synced folder.** It lives in the local, not
   roaming, app-data folder, with a daily `VACUUM INTO` snapshot, seven kept
   (D13). SQLite's write-ahead log breaks in OneDrive and similar folders.
+- **Page text expires after seven days and is excluded from those backups**
+  (D40). Its cache/index must not restore expired content through replay or
+  recovery. This is separate from the durable settings/bookmark/session store.
 - The owner's history, page text, bookmarks, notes, cookies and Fledge data
   never go into logs, panic messages, test fixtures, commits, issues or a
   chat with an agent.
@@ -293,9 +311,10 @@ a page card resized, a popup stacked correctly or focus came back to the page.
 ## Where outstanding work goes
 
 **While Atlas is local:** in the plan. Open questions go under the plan's
-"Open threads", Phase 0's results go in its report, and issues are broken
-down only after the Phase 0 verdict, once the owner has created a repository
-(D16).
+"Open threads" and Phase 0's results go in its report. Plan 1's approved
+40-slice breakdown is its local "Issue map"; each phase is a future milestone.
+Use the local branch/review workflow in D41. Later plans get approved slice
+breakdowns before implementation; creating GitHub is no longer a prerequisite.
 
 **Once Atlas is on GitHub:** in that repository's issue tracker, and nowhere
 else. Each plan entry gets an issue under its milestone, and the plan's
@@ -336,6 +355,7 @@ the task description seems to imply it or a script or tool makes it easy:
 - Force-pushing, or rewriting history (rebase, amend, filter-branch) that
   someone else may have
 - Deleting branches or tags
+- Merging any implementation branch without the owner's approval
 - Once on GitHub: committing directly to a protected branch instead of
   opening a pull request, or merging your own pull request
 

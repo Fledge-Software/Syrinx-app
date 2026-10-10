@@ -5,6 +5,39 @@ Each entry says what changed and why. The spec's "Decisions already made"
 still stand unless an entry here says otherwise. Design decisions are
 recorded separately, in `design/README.md`.
 
+## 2026-10-10
+
+- **Keep the current WebView2 engine and SmartScreen.** The owner confirmed
+  the engine works after reviewing Microsoft's required runtime diagnostics
+  and SmartScreen collection. Disclose those runtime behaviors separately
+  from Atlas's own analytics; the custom-crash setting still keeps crash
+  dumps local (D39).
+- **Atlas may measure its own use locally to guide improvements.** This
+  replaces the earlier blanket "no telemetry" rule. The owner chose local
+  aggregate counters and explicit report export: feature usage, command
+  counts, timings and error categories, without account/device identifiers,
+  URLs, searches, file paths, document text or a detailed event timeline.
+  There are no automatic uploads. A model may suggest changes from a report
+  the owner chooses to share; the owner reviews product changes, and Atlas
+  does not adapt its interface automatically. With one v1 user, removing
+  identifiers cannot guarantee that a report's author is unknown by context.
+  Collection and export need a reviewed schema and implementation breakdown
+  before they are built; this is not permission to read or share real usage
+  data during development (D39).
+- **Seven days applies to retained page text, not just search visibility.**
+  Keep the expiring page-text cache and its index outside Atlas's seven daily
+  durable-state backups. Remove expired content from active storage and
+  prevent restart, replay or restore from reintroducing it. This covers
+  Atlas-managed retention, not forensic erasure or owner-managed backups
+  (D40, clarifying D13/D18/D35).
+- **The four plans and plan 1's 40-slice breakdown are approved.** The owner
+  also approved local implementation: one branch per slice, independent
+  review and the owner's approval before every merge. This supersedes D16's
+  GitHub-before-implementation gate. The repository remains local with no
+  remote or pushes; commits still require the owner's request. Preserve the
+  planning baseline with an explicitly requested documentation commit before
+  scaffolding. Implementation remains in phase order (D41).
+
 ## 2026-10-09
 
 These entries depart from `docs/spec.md`. Each is argued in
