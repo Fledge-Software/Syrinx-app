@@ -213,6 +213,8 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D38 | How do development builds run, given Smart App Control blocks unsigned debug builds? | A release-style profile with debug info for the gate and dev runs; no change to Windows settings | The owner adjusting Smart App Control: changes a security setting for convenience (`docs/research/09-phase-0-verdict.md`) | 2026-10-10 |
+| D37 | May Atlas carry a patched GPUI? | Yes, on D12's rules: small, `=`-pinned, offered upstream, dropped once merged. First use: GPUI's Windows idle loop, which repaints every window each frame (idle CPU 3.75% of a core against the 0.5% bar). If the patch can't reach 0.5%, GPUI against Tauri returns to the owner | Switching to Tauri now: gives up about 0.9 s of start-up and 60–150 MB. Accepting high idle CPU: battery and heat for a browser left open all day | 2026-10-10 |
 | D36 | Does Atlas watch for Google sign-in breaking? | It shows a one-line notice when the WebView2 runtime version changes, so the owner watches for sign-in trouble, and offers to open the current Google page in Edge in one click if sign-in breaks. No automatic sign-in test | An automatic canary that signs in: credentials in a test. Nothing: a silent break would surprise the owner mid-work | 2026-10-09 |
 | D35 | How is page text indexed (D18) without breaking Google? | Indexed locally for 7 days, but never on Google's sites, banking and payment sites, or pages sent with `Cache-Control: no-store`; the owner can add sites to the exclusion list in settings. The extraction method is chosen in plan 1 and must inject nothing on excluded sites | Dropping it for v1: the owner wants recall by content. Indexing everything: breaks the rules that keep Google working (`docs/research/07-google-sign-in-and-drm.md`) and keeps a 7-day record of banking pages in the database and its snapshots | 2026-10-09 |
 | D34 | How big is plan 2 in v1? | Thin: the plugin runtime, the `Plugin` trait, the stand-in Fledge client and the palette's inline "New lead" action. D19's keep-local switches and D20's full Fledge client move to the real-client work after Stage C | Building D19 and D20 in full on the stand-in: design and settings on an API that doesn't exist yet and will change, against D5's "deliberately thin" | 2026-10-09 |
@@ -434,8 +436,11 @@ phases 1–5 are broken down (D16).
   a first passing test, `docs/LOCAL-DEV.md`); the tab model crate with tests;
   storage with migrations and snapshots; the tier 1 search crate with
   benchmarks; the design tokens in `atlas-ui`.
+- **Also delivers (Phase 0 verdict):** the GPUI idle-loop patch (D37) with
+  idle CPU re-measured under 0.5% of a core, and start-to-first-page
+  re-measured the same way for GPUI and Tauri.
 - **Exit criteria:** `cargo fmt --check`, `cargo clippy -D warnings` and
-  `cargo test` pass; the tab model, migrations and ranking are covered by
+  `cargo test` pass; idle CPU under 0.5% with 8 tabs suspended; the tab model, migrations and ranking are covered by
   tests; tier 1 meets 5 ms at 100,000 rows in `xtask bench`; the five
   palettes render a sample screen matching the canvas.
 
@@ -446,8 +451,10 @@ phases 1–5 are broken down (D16).
   close, reorder, pin); navigation and the address; the shortcut router;
   popups as tabs; fullscreen; crashed-tab recovery; suspend; permissions;
   WebView2's find, downloads, print and context menu; the sidebar peek.
-- **Exit criteria:** the owner can browse their daily sites for a day in
-  Atlas with no crash; every shortcut in the table works with a page focused.
+- **Exit criteria:** the owner has tested what Phase 0 left untested (Hulu,
+  Google sign-in with a password and phone prompt, staying signed in after a
+  restart, and the 13 other daily sites, at least 13 passing); the owner can
+  browse their daily sites for a day in Atlas with no crash; every shortcut in the table works with a page focused.
 
 ### Phase 3 — Browser memory and the home page
 
@@ -553,10 +560,17 @@ started: 2026-10-09   code repo: none yet (local, D16)   plan branch: claude/pla
 | Phase 0 | GPUI candidate spike | spike (worktree) | opus | partial: built, 50/50 automated checks; idle CPU 3.75% fails 0.5% bar; owner tests pending | spike/gpui @ bfac1c5 | n/a | never (throwaway) |
 | Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | done: 25/25 in both overlay modes; idle CPU 0.54% | spike/tauri @ 2579d86 | n/a | never (throwaway) |
 gates: 2026-10-09 owner approved starting Phase 0 locally
-current: Phase 0, both spikes building   next: collect both RESULTS.md, run the owner's manual tests, write docs/research/09-phase-0-verdict.md, stop and report
+gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
+current: Phase 0 done; stopped and reported, as CLAUDE.md asks   next: the owner's go-ahead for plan 1 and a repository (D16); then re-read the plan, verify it (step 7 readiness), break plan 1 into issues and the wave map
 
 ## Iteration log
 
+- **2026-10-10** — Phase 0 verdict (`docs/research/09-phase-0-verdict.md`):
+  go with GPUI on two conditions. The owner tested Google sign-in by passkey
+  and with the Workspace account, YouTube and Disney+, all passing; Hulu,
+  the password path, staying signed in and the other sites move to Phase 2's
+  exit criteria. The owner allowed a patched GPUI for the idle loop (D37)
+  and release-style dev builds (D38).
 - **2026-10-10** — Owner's manual tests on the GPUI spike, first report:
   Google sign-in, YouTube and Disney+ all work. Not yet reported: which
   sign-in paths were tried, Hulu, the other daily sites, and staying signed
