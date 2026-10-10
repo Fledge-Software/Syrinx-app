@@ -1,7 +1,7 @@
 # P1-03 storage-path preflight
 
 Date: 2026-10-10. Status: implemented, local gate and independent review passed;
-owner commit and merge approval pending.
+committed and merged as `c4a6631` with the owner's approval.
 The source review used no owner database or provider listing. Runtime tests
 query registered-root metadata through the guard, keep it out of output and
 open only newly created synthetic databases. Results are recorded below.
