@@ -278,7 +278,10 @@ Cargo workspace, runnable console entry point and dependency-boundary gate.
 The scaffold branch remains at that commit. P1-02 passed its gate and
 independent review on `codex/p1-02-tab-model`, then was committed and merged
 into `claude/plan-atlas-v1` as `892d3bc` with the owner's approval.
-There is no browser UI yet; P1-03 storage is next.
+There is no browser UI yet. P1-03 storage is implemented on
+`codex/p1-03-storage`, based on the P1-02 completion record `9a6ae35`.
+Its 77-test local gate and independent reviews passed; the changes remain
+uncommitted pending the owner's commit and merge approval.
 The throwaway Phase 0 spikes remain on `spike/gpui` and `spike/tauri`; their
 code has not been copied into the product. The current branch also holds
 the spec, owner decisions, design snapshot (`design/canvas/project/`, with
@@ -474,6 +477,17 @@ enabling capture.
 Before finalizing recovery, define how explicit history clearing survives
 restoring an older snapshot: a deletion journal outside restored state or
 tested snapshot treatment must prevent reintroducing cleared records.
+
+P1-03's Windows directory guard belongs in `atlas-platform`, even though
+the browser engine is introduced later. The store accepts a directory lease
+through its own interface; it never depends on the platform crate. This
+filesystem prerequisite enforces D13 without weakening the headless boundary.
+`docs/storage-path-preflight.md` records registered sync-root detection,
+handle lifetimes, refusal tests and the limits of that check. No Windows API
+proves that an unregistered program never copies a folder. The core snapshot
+format preserves full-width IDs, saved/live order and allocation watermarks;
+closed history is not persisted. SQLite encodes IDs as eight-byte values,
+since its signed integer range cannot represent all valid model IDs.
 
 ### Search
 
@@ -837,7 +851,7 @@ approved rows until the owner approves the added slice boundaries.
 |---|---|---|---|
 | P1-01 | A reproducible local build prevents later work resting on an unusable toolchain. Create the minimal Cargo workspace, dependency-boundary check, passing test and runnable app; document and execute the D38 gate. Audit maintenance, security and licences for the resolved graph before adding dependencies, here and in every later slice. Record the approved local workflow. Do not define the future Plugin trait early. | `Cargo.toml`, `crates/xtask`, `docs/LOCAL-DEV.md`, `CLAUDE.md`, `AGENTS.md`; D16/D38. | Q3/Q4, a preserved planning baseline and the dependency pre-add audit. |
 | P1-02 | One model prevents sidebar/palette disagreement and replacing temporary pins later. Implement live tab identity/kinds, a flat saved-page lifecycle with independent saved identity and live association, selection/order, save/unpin, unload/open-or-focus and a 20-entry closure stack for ordinary and saved web instances. Test D42/D43 without a window; folders and plugin registration remain later work. | `crates/atlas-core`; S3, D42/D43. | P1-01. |
-| P1-03 | Saved destinations must survive independently of live pages. Open a local unsynced store, migrate it and persist/reload flat saved entries plus live-tab snapshots and their associations through a serialized writer. Prove rollback, unloaded-entry preservation and errors on disposable databases. | `crates/atlas-store`, core persistence boundary; D13/D43. | P1-02; Q2 for durable/cache separation. |
+| P1-03 | Saved destinations must survive independently of live pages. Open a local unsynced store, migrate it and persist/reload flat saved entries plus live-tab snapshots and their associations through a serialized writer. Prove rollback, unloaded-entry preservation and errors on disposable databases. | `crates/atlas-store`, core persistence boundary, filesystem-only `atlas-platform` directory guard; D13/D43. | P1-02; Q2 for durable/cache separation. |
 | P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and a tested recovery path; interruption leaves the last valid copy usable. Establish how later explicit history clearing survives restoring older snapshots. | `crates/atlas-store`; D13. | P1-03. |
 | P1-05 | The palette needs fast local ranking before UI work. Add the tier 1 catalogue, boosts, counts and match positions with incremental updates and a reproducible 100,000-row benchmark. | `crates/atlas-search`, `crates/xtask`; D9. | P1-04. |
 | P1-06 | Continuous repainting defeats the performance goal. Implement the small pinned GPUI idle patch, add focused regression evidence and remeasure eight suspended tabs and equivalent first-page startup in both throwaway candidates using fresh synthetic profiles. Prepare a reviewable upstream patch. | Pinned GPUI patch and measurement report; D37/D12. | P1-05; passing measurements. Public offer requires separate owner approval. |
@@ -905,6 +919,7 @@ started: 2026-10-09   code repo: local Atlas-app (D41; no remote)   plan branch:
 | Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | done: 25/25 in both overlay modes; idle CPU 0.54% | spike/tauri @ 2579d86 | n/a | never (throwaway) |
 | Phase 1 | P1-01: scaffold and architecture gate | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 7 tests and console app launch; optimized executable was blocked once, then passed unchanged | codex/p1-01-scaffold @ ed19d6d; base d79fc29 | independent review passed after restoring default Cargo test selection so future doctests run | merged into claude/plan-atlas-v1 as ed19d6d with owner approval on 2026-10-10 |
 | Phase 1 | P1-02: generic tab and flat saved-page model | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 24 model tests, 7 architecture tests and console app launch; D42/D43 lifecycle implemented without UI or storage | codex/p1-02-tab-model @ 892d3bc; base ed19d6d | independent source/test review and documentation/map audit passed with no findings | merged into claude/plan-atlas-v1 as 892d3bc with owner approval on 2026-10-10 |
+| Phase 1 | P1-03: durable saved pages and session records | local slice | Codex | Implemented: 77-test local gate passed; guarded Windows location, atomic saved/live snapshots and migrations; narrow licence allowances approved | codex/p1-03-storage; uncommitted; base 9a6ae35 | independent core/store, native and documentation reviews passed; long-path regression fixed and retested | owner commit and merge approval pending |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
 gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
@@ -917,10 +932,32 @@ gates: 2026-10-10 owner approved D43–D45 and the revised 40-slice map; P1-02 i
 gates: 2026-10-10 P1-02 passed the full local gate (31 tests and console launch), independent code review and documentation/map audit
 gates: 2026-10-10 owner explicitly requested the P1-02 commit and approved its local merge into claude/plan-atlas-v1; this authorization covers P1-02 and its documentation only
 gates: 2026-10-10 P1-02 committed as 892d3bc and fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
-current: P1-02 merged; no Git remote configured   next: P1-03 storage on its own local slice branch
+gates: 2026-10-10 P1-03 core snapshots passed the full local gate with 37 tests before platform dependencies were introduced; owner approved Unicode-3.0 for unicode-ident 1.0.26 and Zlib for foldhash 0.2.0; these allowances do not select Atlas's own licence
+gates: 2026-10-10 final P1-03 cargo xtask check passed all 77 tests, formatting, Clippy, dependency boundaries and console launch; independent reviews passed; no production database or Windows setting was changed
+current: P1-03 ready on codex/p1-03-storage; uncommitted; no Git remote configured   next: owner's commit and merge approval, then P1-04 backups/recovery; do not skip to search
 
 ## Iteration log
 
+- **2026-10-10** — Completed P1-03 implementation and verification on
+  `codex/p1-03-storage`. The store atomically preserves saved/live records,
+  selection, full-width identities and revisions; failures roll back and
+  stale writers cannot replace newer state. The native lease refuses unsafe
+  locations while preserving SQLite cleanup. Independent review removed
+  repeated Windows discovery from ordinary reads/saves and moved existing
+  record validation before persistent configuration. Runtime testing found
+  and corrected MSVC SQLite long-path handling, with three boundary cases
+  retained in the final 77-test passing gate. The pinned SQLite long-path
+  performance caveat remains documented in `docs/dependency-audit.md`.
+  Commit and merge approval is still required; P1-04 has not started.
+
+- **2026-10-10** — Started P1-03 on `codex/p1-03-storage`. Added the core
+  snapshot/restore boundary with structural validation and six new tests;
+  the full 37-test gate passed before introducing platform dependencies.
+  Audited the downloaded SQLite/Windows graph separately from product
+  compilation. The owner approved Unicode-3.0 for `unicode-ident 1.0.26`
+  and Zlib for the statement cache's `foldhash 0.2.0`.
+  Windows path validation is a filesystem-only prerequisite within P1-03,
+  documented in `docs/storage-path-preflight.md`, not early browser work.
 - **2026-10-10** — With the owner's explicit commit and merge approval,
   committed P1-02 as `892d3bc` and fast-forward merged it into
   `claude/plan-atlas-v1`. Updated the development record and next-session

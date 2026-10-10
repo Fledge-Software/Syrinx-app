@@ -150,12 +150,56 @@ saved/live lifetimes, ordering, history, stale identities, atomic failures,
 redacted diagnostics and a 600-operation invariant sequence. No GUI behavior
 or persistence is claimed by this result.
 
+## Durable saved pages and session records
+
+P1-03 adds `atlas-store` and the filesystem part of `atlas-platform`. The
+console application still does not open a production database. The later
+application composition will obtain a `WindowsDirectoryLease` from the
+platform and pass it to `Store::open`; the store never imports Windows APIs.
+`docs/storage-path-preflight.md` explains the location checks and their limits.
+
+`Store` is a blocking interface for host worker threads, not the future UI
+event thread. One writer thread owns all changes; two separately locked
+readers observe committed snapshots. `load` returns a snapshot and revision.
+`save` accepts that expected revision and rejects stale writes, so a delayed
+caller cannot replace newer state. Call `shutdown` to observe close errors.
+
+The initial migration stores flat saved rows, live tabs, their associations,
+selection and allocation watermarks together. Saved and live metadata stay
+separate, preserving D43's fixed destination while its open page navigates.
+Identities and counters use eight-byte values to retain their full unsigned
+range. The closed-tab history remains in memory. Daily backups and recovery
+are P1-04; folders, history and browser restoration integration remain in
+their approved later slices.
+
+For focused storage development, use:
+
+```powershell
+cargo test --package atlas-store --package atlas-platform --profile local --offline --locked
+```
+
+Native integration tests prepare fresh disposable directories. They query
+registered sync-root metadata without printing provider names or paths;
+they never discover or open the owner's Atlas database. Synthetic junctions
+and hardlinks stay inside test-owned directories, and their target bytes are
+checked before cleanup. No Windows settings are changed.
+
+On 2026-10-10, P1-03 passed `cargo xtask check`: dependency boundaries,
+formatting, Clippy, all 77 tests (30 core, 18 native guard, 9 native/SQLite
+integration, 13 store and 7 architecture), documentation-test selection and
+the console application launch. Independent reviews passed after correcting
+repeated Windows discovery on ordinary reads/saves, startup validation order
+and long-path compatibility. The latter tests include both native and SQLite
+buffer limits and the journal-suffix boundary. No GUI or production data was
+opened; P1-03 still awaits the owner's commit and merge approval.
+
 ## Data and artifacts
 
 The scaffold opens no database, browser profile, account, note vault or
 project folder. It collects no analytics and makes no application network
-calls. Tests use synthetic dependency metadata. Cargo output stays under
-the ignored `target/` directory; `Cargo.lock` is intentionally versioned.
+calls. Tests use synthetic dependency metadata and disposable tab/store data.
+Cargo output stays under the ignored `target/` directory; `Cargo.lock` is
+intentionally versioned.
 
 Later product data belongs in local app data, outside synced folders (D13).
 Page text and its index expire after seven days and stay outside daily

@@ -170,7 +170,7 @@ is direction only; no personal image is copied into this repository.
 |---|---|---|---|
 | P1-01 | A reproducible local build prevents later work resting on an unusable toolchain. Create the minimal Cargo workspace, dependency-boundary check, passing test and runnable app; document and execute the D38 gate. Audit maintenance, security and licences for the resolved graph before adding dependencies, here and in every later slice. Record the approved local workflow. Do not define the future Plugin trait early. | `Cargo.toml`, `crates/xtask`, `docs/LOCAL-DEV.md`, `CLAUDE.md`, `AGENTS.md`; D16/D38. | Q3/Q4, a preserved planning baseline and the dependency pre-add audit. |
 | P1-02 | One model prevents sidebar/palette disagreement and replacing temporary pins later. Implement live tab identity/kinds, a flat saved-page lifecycle with independent saved identity and live association, selection/order, save/unpin, unload/open-or-focus and a 20-entry closure stack for ordinary and saved web instances. Test D42/D43 without a window; folders and plugin registration remain later work. | `crates/atlas-core`; S3, D42/D43. | P1-01. |
-| P1-03 | Saved destinations must survive independently of live pages. Open a local unsynced store, migrate it and persist/reload flat saved entries plus live-tab snapshots and their associations through a serialized writer. Prove rollback, unloaded-entry preservation and errors on disposable databases. | `crates/atlas-store`, core persistence boundary; D13/D43. | P1-02; Q2 for durable/cache separation. |
+| P1-03 | Saved destinations must survive independently of live pages. Open a local unsynced store, migrate it and persist/reload flat saved entries plus live-tab snapshots and their associations through a serialized writer. Prove rollback, unloaded-entry preservation and errors on disposable databases. | `crates/atlas-store`, core persistence boundary, filesystem-only `atlas-platform` directory guard; D13/D43. | P1-02; Q2 for durable/cache separation. |
 | P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and a tested recovery path; interruption leaves the last valid copy usable. Establish how later explicit history clearing survives restoring older snapshots. | `crates/atlas-store`; D13. | P1-03. |
 | P1-05 | The palette needs fast local ranking before UI work. Add the tier 1 catalogue, boosts, counts and match positions with incremental updates and a reproducible 100,000-row benchmark. | `crates/atlas-search`, `crates/xtask`; D9. | P1-04. |
 | P1-06 | Continuous repainting defeats the performance goal. Implement the small pinned GPUI idle patch, add focused regression evidence and remeasure eight suspended tabs and equivalent first-page startup in both throwaway candidates using fresh synthetic profiles. Prepare a reviewable upstream patch. | Pinned GPUI patch and measurement report; D37/D12. | P1-05; passing measurements. Public offer requires separate owner approval. |
@@ -306,8 +306,14 @@ audit confirmed their identity/order and agreement with D42–D45. Separately,
 P1-02's headless implementation passed the full local gate (24 model tests,
 seven architecture tests and console launch) and independent code review.
 The owner then requested its commit and approved its local merge, completed
-as `892d3bc` in `claude/plan-atlas-v1`. P1-03 storage is next; no later
-product behavior is claimed complete. No new third-party dependency,
-registry setting, browser profile or Windows policy is part of this work.
+as `892d3bc` in `claude/plan-atlas-v1`. That P1-02 amendment added no
+third-party dependency, registry setting, browser profile or Windows policy.
+P1-03 storage is implemented on `codex/p1-03-storage`, based on the completion
+record `9a6ae35`. Its 77-test local gate and independent reviews passed; it
+awaits the owner's commit and merge approval. Its dependency review and
+narrow licence allowances are recorded in `docs/dependency-audit.md`;
+implementation and verification status are tracked in plan 1's Super-Pass
+ledger. No later
+product behavior is claimed complete.
 The analytics amendment remains proposed separately; no collector or real
 usage report has been created.

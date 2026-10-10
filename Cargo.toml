@@ -12,6 +12,9 @@ publish = false
 
 [workspace.dependencies]
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+windows = { version = "=0.62.2", default-features = false }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache"] }
+rusqlite_migration = { version = "=2.6.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

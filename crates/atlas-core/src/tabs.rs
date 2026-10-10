@@ -1,5 +1,9 @@
 //! Keeps open tabs and persistent saved destinations in one sidebar and palette model.
 
+mod snapshot;
+
+pub use snapshot::{SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot};
+
 use std::collections::VecDeque;
 use std::fmt;
 use std::num::NonZeroU64;
