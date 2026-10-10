@@ -4,7 +4,7 @@ Atlas's first scaffold supplies the build and architecture checks (P1-01);
 P1-02 adds the tab and saved-page model without a window. Work on this machine,
 in the local repository, one approved slice at a time. The planning baseline
 is `d79fc29`; P1-01 was merged into `claude/plan-atlas-v1` as `ed19d6d`, and
-P1-02 uses `codex/p1-02-tab-model`. D41 permits local branches and
+P1-02 as `892d3bc` from `codex/p1-02-tab-model`. D41 permits local branches and
 independent review, with the owner's approval before each merge. Product
 commits still require the owner's request. There is no remote or push.
 
