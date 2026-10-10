@@ -30,7 +30,7 @@ The spec's phased plan (`docs/spec.md`, "Phased plan") and the research in
 decision reopened on 2026-10-09 is settled. P1-01's scaffold, P1-02's tab
 model and P1-03's storage are merged. P1-04's SQLite maintenance prerequisite
 and complete backup/recovery slice passed the 138-test local gate and
-independent source reviews. The owner approved P1-04's commit and local merge. There is
+independent source reviews. P1-04 is committed and locally merged as `7710c06`. There is
 no browser UI yet.
 
 If nothing is done, the research goes stale. It is dated 2026-10-09 and
@@ -293,8 +293,8 @@ maintenance patch. The patch passed the full 78-test gate; its source audit
 and hashes are recorded in `docs/p1-04-sqlite-maintenance-review.md` and
 the vendor provenance. The complete P1-04 backup/recovery implementation
 subsequently passed the 138-test gate and independent source reviews;
-`docs/p1-04-recovery-preflight.md` records the design and result. Commit and
-merge approval remain pending.
+`docs/p1-04-recovery-preflight.md` records the design and result. With the owner's
+explicit approval, `7710c06` was committed and fast-forward merged locally.
 The throwaway Phase 0 spikes remain on `spike/gpui` and `spike/tauri`; their
 code has not been copied into the product. The current branch also holds
 the spec, owner decisions, design snapshot (`design/canvas/project/`, with
@@ -967,7 +967,7 @@ started: 2026-10-09   code repo: local Atlas-app (D41; no remote)   plan branch:
 | Phase 1 | P1-01: scaffold and architecture gate | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 7 tests and console app launch; optimized executable was blocked once, then passed unchanged | codex/p1-01-scaffold @ ed19d6d; base d79fc29 | independent review passed after restoring default Cargo test selection so future doctests run | merged into claude/plan-atlas-v1 as ed19d6d with owner approval on 2026-10-10 |
 | Phase 1 | P1-02: generic tab and flat saved-page model | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 24 model tests, 7 architecture tests and console app launch; D42/D43 lifecycle implemented without UI or storage | codex/p1-02-tab-model @ 892d3bc; base ed19d6d | independent source/test review and documentation/map audit passed with no findings | merged into claude/plan-atlas-v1 as 892d3bc with owner approval on 2026-10-10 |
 | Phase 1 | P1-03: durable saved pages and session records | local slice | Codex | Implemented: 77-test local gate passed; guarded Windows location, atomic saved/live snapshots and migrations; narrow licence allowances approved | codex/p1-03-storage @ c4a6631; base 9a6ae35 | independent core/store, native and documentation reviews passed; long-path regression fixed and retested | merged into claude/plan-atlas-v1 as c4a6631 with owner approval on 2026-10-10 |
-| Phase 1 | P1-04: Backups and confirmed recovery | local slice, ready | Codex | Approved SQLite patch, lifecycle ownership, idle daily snapshots, seven-copy rotation, confirmed/resumable recovery and deletion contract; full 138-test gate passed | codex/p1-04-backups; uncommitted after 8cc0e50 | independent SQLite, store, native backup/recovery, deletion-contract and documentation reviews passed | not merged; owner commit and merge approval required |
+| Phase 1 | P1-04: Backups and confirmed recovery | local slice, complete | Codex | Approved SQLite patch, lifecycle ownership, idle daily snapshots, seven-copy rotation, confirmed/resumable recovery and deletion contract; full 138-test gate passed | codex/p1-04-backups; 7710c06 | independent SQLite, store, native backup/recovery, deletion-contract and documentation reviews passed | owner-approved commit and fast-forward merge into claude/plan-atlas-v1 |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
 gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
@@ -985,9 +985,17 @@ gates: 2026-10-10 final P1-03 cargo xtask check passed all 77 tests, formatting,
 gates: 2026-10-10 owner requested the P1-03 commit and approved its local merge; c4a6631 was fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
 gates: 2026-10-10 owner chose confirmation before restoring a damaged database (D46) and a local deletion record that prevents restored backups from resurrecting cleared history (D47)
 gates: 2026-10-10 owner approved the pinned SQLite 3.53.4 source patch and vendor-comment exception; source identities and unchanged dependency graph verified; full cargo xtask check passed 78 tests and console launch
-current: P1-04 implemented and verified, uncommitted; no Git remote configured   next: owner-approved commit/merge, then P1-05 tier 1 search; preserve strict slice order
+gates: 2026-10-10 owner explicitly requested the P1-04 commit and approved its local merge; 7710c06 was fast-forward merged into claude/plan-atlas-v1 after the 138-test gate and independent reviews; upstream vendor whitespace preserved with all 17 source hashes verified
+current: P1-04 committed and merged; no Git remote configured   next: P1-05 tier 1 search; preserve strict slice order
 
 ## Iteration log
+
+- **2026-10-10** — With the owner's explicit commit and merge approval,
+  committed P1-04 as `7710c06` and fast-forward merged it into
+  `claude/plan-atlas-v1`. This also preserves the existing `8cc0e50`
+  mobile-sync outline without starting that later work. No product source
+  changed after the passing 138-test gate. P1-05 tier 1 search is next;
+  its eventual commit and merge need separate owner approval.
 
 - **2026-10-10** — Completed P1-04 implementation and the full 138-test local
   gate. Exclusive lifecycle ownership, idle daily validated snapshots,
