@@ -93,8 +93,60 @@ The split is confirmed at step 4, after research.
 
 Research notes 01 to 06 in `docs/research/` cover the engine, browser scope,
 Tauri and wry facts, import and signing, the core architecture, Forge and
-Notes, the Fledge API and performance. The findings that shape this plan are
-filled in after the first question rounds and the gap research (step 3).
+Notes, the Fledge API and performance. Notes 07 and 08 were written for this
+plan on 2026-10-09 and correct parts of the earlier notes.
+
+**WebView2 is a better fit than the earlier notes said**
+(`docs/research/07-google-sign-in-and-drm.md`):
+- **Widevine is there.** The WebView2 runtime on the owner's machine (154)
+  ships Google's Widevine module, identical to Edge's, at the software-only
+  level (L3), and played a Widevine test stream with no setting. Notes 02 and
+  06 say WebView2 has no Widevine; that is wrong for this runtime. Disney+ and
+  Hulu accept Firefox and are Widevine partners, so Widevine should be
+  enough, capped at 720p in a browser (Hulu: 480p unless HDCP is verified).
+  Ordinary YouTube uses no DRM at all. PlayReady is advertised but failed to
+  start on this machine, in Edge too. (High that Widevine plays here; medium
+  for Disney+ and Hulu until tried with the owner's accounts.)
+- **Google sign-in is untested, not known blocked.** Google's written rules
+  name CEF and Embedded Internet Explorer, never WebView2; only Microsoft's
+  docs say Google blocks WebView2. On runtime 154 the engine presents itself
+  to Google's sites as Google Chrome (and as Edge plus a "WebView2" brand
+  everywhere else), and Google's sign-in page loads normally. The step where
+  the 2021 block appeared (after entering an email) was not tried, because no
+  credentials were used. (Medium.) If the default fails, there is no
+  sanctioned fallback.
+- **Rules that keep Google working:** Atlas must never set a custom user
+  agent on page web views (that removes the Chrome presentation toward Google
+  and exposes the WebView2 brand), must not attach an IPC handler to page web
+  views (wry's injected `window.ipc` was reported to break Google Docs and
+  Sheets), and must not inject scripts, rewrite requests or open a remote
+  debugging port on Google's sites.
+
+**GPUI with wry works, with platform code** (`docs/research/08-gpui-and-wry-on-windows.md`):
+- GPUI has no current crates.io release under its own name (`gpui` 0.2.2,
+  2025-10-22). Apps outside Zed pin Longbridge's weekly `gpui-pre` snapshot
+  (0.3.8, 2026-10-05) exactly, through `gpui-kit`/`gpui-component` 0.7.1
+  (Apache-2.0), or depend on Zed's git repository. Longbridge is also moving
+  to a second fork, `gpui-fast`.
+- GPUI exposes the window's raw handle, so wry can build WebView2 tabs as
+  child windows of a GPUI window.
+- GPUI's popup windows on Windows float above every app and use the old
+  Acrylic call, so Atlas sets the owner window and the
+  `DWMSBT_TRANSIENTWINDOW` backdrop itself through raw Win32 calls, and hands
+  focus back to the page with wry's `focus()`.
+- wry 0.57 covers the shared WebView2 environment, popups that keep
+  `window.opener`, permissions, the memory level and downloads. Shortcuts
+  (`AcceleratorKeyPressed`), fullscreen video, crashed tabs (`ProcessFailed`)
+  and `TrySuspend` need raw WebView2 calls through `webview2-com`. Atlas
+  builds its own environment to keep crash dumps local, and overrides wry's
+  default browser arguments, which switch SmartScreen off.
+- **The fallback for overlays is not ready.** WebView2 visual hosting in wry
+  is an open pull request, and Longbridge's Windows work on it is
+  incomplete. With frozen snapshots ruled out (D7), a failed popup spike is a
+  real schedule risk.
+- Runtime behaviour (popup stacking, Acrylic under a GPUI popup, focus
+  hand-off, GPUI with a screen reader) was read from source, not run; the
+  spike tests it.
 
 ## Is it realistic?
 
@@ -124,6 +176,10 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D20 | What may Atlas do in Fledge? | Everything a person can: Atlas is meant to become Fledge's desktop app, and these foundations are what make that possible. Sending mail and invites from Atlas needs Fledge-side consent scopes that don't exist today (`docs/research/05-fledge-api.md`, "Work needed on the Fledge side"); that is a list for the owner, not issues in Fledge's repositories | Draft only (Fledge's current rule for outside apps): the owner wants Atlas to be Fledge's full client | 2026-10-09 |
+| D19 | Is Fledge data copied into Atlas's local index, or searched live? | The owner decides per kind of data. Each plugin has its own settings, and Fledge's has a keep-local switch for each kind (docs, canvases, tables, leads, mail, calendar and so on): on, that kind is copied into the local index; off, it is searched live | All copied: stores everything on the machine whether wanted or not. All live: every keystroke waits on the network | 2026-10-09 |
+| D18 | Does Atlas index the text of visited pages? | Yes, locally, for up to 7 days of history, with a setting to turn it off | Title and address only: the owner wants recall by content | 2026-10-09 |
+| D17 | Will Atlas run other people's plugins? | Later, not in v1. Built-ins use the same plugin API a third party would; the WebAssembly sandbox is built only once someone else's plugin exists | Never: closes a door the owner wants open. In v1: a sandbox, permissions and an installer, a large addition | 2026-10-09 |
 | D16 | How does the build phase track and review work while Atlas is local? | Plan now, build later. All four plans are planned locally in this session, up to an approved breakdown written into each Issue map with empty issue numbers; nothing is built, Phase 0 included, until the owner creates a repository (only account: ZanderOfficial; probably the Fledge Software organisation later) | A private repository on ZanderOfficial now: the owner wants Atlas local for now. A fully local build: the Super-Pass's review and PR skills are built for GitHub, so it would run a reduced version of them | 2026-10-09 |
 | D15 | Does v1 import passwords? | No. There is no password manager in v1, so imported passwords would have nowhere safe to live and nothing to fill them in. The owner signs in once per site and stays signed in through cookies. Password import comes with a password manager after v1 | A small password manager in v1 (encrypted store, autofill, Passwords button back): sizeable and security-sensitive, against the spec's scope. Importing into WebView2's own store: no known import API, and it would turn saving on against D11 | 2026-10-09 |
 | D14 | What does the bookmark import read? | The standard HTML bookmarks file that Edge, Chrome and Firefox export (`<!DOCTYPE NETSCAPE-Bookmark-file-1>`, `docs/research/02b-default-browser-import-signing.md`). Replaces "a CSV file only" (S7) with the owner's yes; `docs/decisions.md` updated | CSV only: no browser exports bookmarks as CSV, so the owner would have to convert by hand. Both: a second format to build and test for no gain | 2026-10-09 |
@@ -169,17 +225,18 @@ To be written (step 5).
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
 
-- **Platforms and engine:** what to do if
-  Google blocks sign-in in WebView2 (research 07 running); whether Disney+ and
-  Hulu play in WebView2 (research 07 running).
-- **Data and search:** third-party plugins ever; indexing page text; Fledge
-  data copied or searched live; synced data folder; one store or two; snapshot
-  retention.
+- **Google sign-in:** how the owner signs in (password and phone code,
+  passkey, hardware key) and whether the account is personal or Google
+  Workspace with device checks; both shape the Phase 0 test. And what
+  happens if the default fails, now that research 07 shows there is no
+  sanctioned fallback. Blocks the spike's test script; the owner decides.
+- **Data and search:** one store or two (SQLite FTS5 or tantivy), settled by
+  the bake-off before Notes.
 - **Forge:** git CLI for writes; requiring Git for Windows; language servers
   installed only, downloads later or never; debugger out of v1; run control and
   Python task runners.
 - **Notes:** Obsidian compatibility; native or web-view editor; IME scripts.
-- **Fledge:** third-party OAuth client; REST or MCP; drafts never sent; where a
+- **Fledge:** third-party OAuth client or first-party; REST or MCP; where a
   lead's Company lives; when Stage C happens.
 - **The project:**
   - **Licence: undecided (owner, 2026-10-09).** Blocks going public. Until it
@@ -206,6 +263,14 @@ Empty until phase B starts.
 
 ## Iteration log
 
+- **2026-10-09** — Research 07 and 08 reported (summarised under "What we
+  found"). WebView2 ships Widevine, correcting notes 02 and 06; Google's
+  sign-in page loads in WebView2 and the full sign-in is a Phase 0 test; GPUI
+  and wry work together with raw Win32 and WebView2 calls, and the overlay
+  fallback is not ready. Plan 2 round: no third-party plugins in v1 (D17);
+  page text indexed locally for 7 days (D18); Fledge data local or live per
+  kind, by switch (D19); Atlas may do everything in Fledge and becomes its
+  desktop app (D20).
 - **2026-10-09** — Licence left undecided until Atlas goes public. Atlas
   stays local: plan all four plans now, build once a repository exists (D16).
   A researcher was sent on GPUI and wry on Windows
