@@ -4,10 +4,9 @@ These are the mistakes that look fine, often pass the gate, and then fail
 somewhere else. Read this before you start work and before you debug a build,
 a test or a window. `AGENTS.md` holds the rules; this file holds the traps.
 
-Atlas has no code yet, so every trap below comes from the research notes or
-from this machine rather than from time already lost. Each names its source
-and how sure it is. When the Phase 0 spike confirms or disproves one, update
-it. When a new trap costs you real time, add it in the same shape: one
+These traps come from research, the Phase 0 spikes and local implementation.
+Each names its source and how sure it is. Update a trap when new evidence
+confirms or disproves it. When a new trap costs you real time, add it in the same shape: one
 bullet, symptom first, then the fix, then the source. Put the story of how
 you found it in the commit message, not here.
 
@@ -75,10 +74,13 @@ you found it in the commit message, not here.
   even when nothing changed, so an idle Atlas uses about 3.75% of a core.
   Patch the idle loop (D37) and measure idle CPU after any GPUI upgrade.
   Source: note 09 (measured; high).
-- **Smart App Control blocks unsigned debug builds on this machine** ("An
-  Application Control policy has blocked this file", os error 4551); release
-  builds run. Build with the release-style dev profile (D38) and never change
-  the policy. Source: note 09 (observed by both spikes; high).
+- **Application Control can block locally built executables** (os error
+  4551). Phase 0's debug builds were blocked and optimized builds ran. During
+  P1-01, an optimized `xtask` was also blocked once; an unchanged retry passed
+  the full gate without rebuilding or changing settings. The transient
+  failure's cause is unproved. Use D38's profile, preserve failures, and never
+  change Windows security settings to make a build run. Sources: note 09 and
+  the P1-01 gate recorded in `docs/LOCAL-DEV.md` (observed; high).
 - **GPUI's popup window floats over every app.** `WindowKind::PopUp` is
   created `WS_EX_TOOLWINDOW | WS_EX_TOPMOST` and is not owned by the main
   window, so the palette would stay on top when Atlas loses focus. Set its

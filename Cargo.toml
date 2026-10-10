@@ -1,0 +1,29 @@
+# Keep the product and its checks on one Windows development profile (D38).
+[workspace]
+members = ["crates/*"]
+default-members = ["crates/atlas-app"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[workspace.dependencies]
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+
+# Optimized executables ran under this machine's unchanged security policy.
+[profile.local]
+inherits = "release"
+debug = "line-tables-only"
+debug-assertions = true
+overflow-checks = true
+incremental = true

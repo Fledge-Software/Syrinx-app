@@ -17,9 +17,12 @@ The plans are active; implementation is not complete.
 The approval retains the plans' explicit evidence gates. A gate means
 the relevant feature cannot be built on an unproved assumption; it does not
 mean every later feature must be prototyped before the scaffold. The first
-implementation remains plan 1's scaffold, after an explicitly requested
-documentation-baseline commit. No remote, issue, pull request, new commit or
-product code was created by this review. The new analytics scope receives
+implementation is plan 1's scaffold. The owner subsequently requested the
+documentation baseline, committed as `d79fc29`, and P1-01 is now on
+`codex/p1-01-scaffold`, with a passing gate, independent review and the owner's
+explicit approval to commit and merge it locally into `claude/plan-atlas-v1`.
+No remote, issue or pull request has been
+created. The new analytics scope receives
 the proposed amendment below before collection is implemented.
 
 ## What this review established
@@ -121,14 +124,16 @@ D41 explicitly replaces D16's GitHub prerequisite. Use one local `codex/`
 branch per approved row, a diff small enough to review in
 one sitting, an independent review, then the owner's approval before merge.
 Commits still require the owner to ask; approving this workflow alone does
-not authorize automatic commits. Do not mix the uncommitted planning bundle
-into the scaffold: first ask for a documentation commit when the owner is
-ready to preserve it, then establish the agreed local base without rewriting
-history. No remote, push, hosted issue or PR is part of this exception.
+not authorize automatic commits. The owner requested the documentation
+baseline, preserved as `d79fc29` before creating `codex/p1-01-scaffold`.
+After the gate and independent review passed, the owner explicitly approved
+P1-01's commit and local merge into `claude/plan-atlas-v1`. That approval does
+not authorize later commits or merges. No remote, push, hosted issue or PR is
+part of this exception.
 
 `CLAUDE.md` and the workflow references in `AGENTS.md` now record the approved
-exception while preserving “no remote, no pushes.” The scaffold will verify
-them against its concrete development commands.
+exception while preserving “no remote, no pushes.” The scaffold records
+its concrete development commands and gate results in `docs/LOCAL-DEV.md`.
 Once the owner creates GitHub, each row becomes one issue and one PR under
 its phase milestone; the owner still approves every merge. A materially
 larger slice is split and re-shown before work, rather than stretching the

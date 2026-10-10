@@ -6,8 +6,8 @@
 Atlas (working name) is a browser-first workspace app: a Windows desktop
 browser with a vertical-tab sidebar, where Forge (code), Notes and Fledge run
 as built-in plugins that open as tabs. Pages render in WebView2 driven from
-Rust through wry, and Atlas's own interface is drawn in Rust with GPUI,
-unless Phase 0 decides otherwise.
+Rust through wry, and Atlas's own interface is drawn in Rust with the
+conditionally approved GPUI base (D37's idle-patch gate still applies).
 
 - The product spec, the decisions already made and the phased plan are in
   `docs/spec.md`, loaded below. Its "Decisions already made" are not to be
@@ -52,9 +52,9 @@ above, and `docs/spec.md` below. Before picking up work, also read:
 - **This repository is local only for now: no git remote and no pushes.**
 - **Local implementation is approved (D41).** Use one branch per approved
   slice, independent review and the owner's approval before each merge.
-  GitHub is not a prerequisite. First preserve the planning baseline with
-  an owner-requested documentation commit; the scaffold records the exact
-  development commands in `docs/LOCAL-DEV.md`.
+  GitHub is not a prerequisite. The owner-requested planning baseline is
+  committed as `d79fc29`; the scaffold records the exact development commands
+  in `docs/LOCAL-DEV.md`.
 - **Commit only when the owner asks.** (The v1 plan may be committed as it
   is written, to its local branch.)
 - **Work the phases in order.** Phase 0, the feasibility spike, comes first;
@@ -72,10 +72,10 @@ above, and `docs/spec.md` below. Before picking up work, also read:
   the PR branch and push; do not rebase, amend or force-push somebody else's
   branch.
 - **Build and test on this machine.** Atlas is a Windows desktop app with no
-  server or deploy. Until the scaffold defines the gate in
-  `docs/LOCAL-DEV.md`, it is `cargo fmt --check`,
-  `cargo clippy --all-targets -- -D warnings` and `cargo test`. After
-  changing anything the owner sees, run the app and look at the window.
+  server or deploy. Run `cargo xtask check` as defined in `docs/LOCAL-DEV.md`:
+  dependency checks, formatting, Clippy, tests and an application smoke run
+  under D38's `local` profile. After changing anything the owner sees, run
+  the app and look at the window.
 - **Hands off Google's pages.** Never set a custom user agent, attach an IPC
   handler or inject scripts on a page web view; the rules and their reasons
   are under "Page web views and Google" in `AGENTS.md`.
