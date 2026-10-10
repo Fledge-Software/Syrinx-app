@@ -22,24 +22,54 @@ original two-board mockup the spec points at.
 
 ## Decisions made after the spec
 
-These change or add to `docs/spec.md`. Each was made in the 2026-10-09 design
-pass and can be reversed.
+These change or add to `docs/spec.md`. The original decisions were made in
+the 2026-10-09 design pass. The owner-approved 2026-10-10 additions below
+(D43–D45) supersede the affected parts of the older canvas snapshot; changing
+them again requires the owner's approval.
 
 - **The browser is named Atlas** in the chrome (the mockup said "Perch").
 - **No Extensions button.** Tauri's OS web views cannot run Chrome extensions.
 - **New tab is a `+` on the Open tabs header (Ctrl T)**, not a row, so no two
   rows read "New tab".
+- **Saved pages and folders live inline with ordinary tabs (D43).** Pin
+  means Save. A saved row remains after its live page closes; clicking it
+  opens the saved address or focuses its existing open page. Navigation does
+  not replace the saved title or address. Remove/Unpin deletes the saved
+  entry while leaving an open page as an ordinary tab. Saved entries come
+  first; saving appends to that group, and removing an open saved entry
+  places its page at the start of ordinary tabs. Imported HTML bookmarks
+  preserve their folder hierarchy here and start unloaded. They are not a
+  second list of automatically opened tabs.
+  D42's 20-entry closed-web-tab history includes saved-page instances.
+  Reopen focuses an existing instance or opens the fixed saved destination
+  when the saved row survives. If it was removed, history can reopen an
+  ordinary page but cannot recreate the saved row. Plugins stay outside
+  this history and reopen through their permanent rows.
+- **The top square tiles are Favorites (D45).** They remain separate from
+  the inline saved-page/folder records and may target websites, plugin pages
+  or other supported Atlas destinations. Plugin Favorites use the normal
+  plugin lifecycle; before implementation, they show that the plugin is not
+  yet available. This renames the spec's sidebar "pinned app tiles", not
+  the home page's Quick access section.
+- **The sidebar supports smooth width dragging (D44).** It moves from wide
+  with labels to favicon-only to hidden; reverse dragging restores it. This
+  is an additional way to size/show the sidebar, preserving hover peek and
+  Ctrl Alt S. The owner's screenshot is visual direction only and is not
+  copied into the repository. Exact width thresholds and compact-folder
+  affordances are open for the relevant UI slice; no pixel values are fixed
+  by this decision.
 - **A hidden sidebar peeks over the page.** Hovering the left edge slides it
   in on top of whatever is showing, on every kind of tab, without resizing
-  anything under it. Pinning it with Ctrl Alt S is the only thing that narrows the
-  page. Over a web page the sidebar sits above a separate native web view, so
+  anything under it. A persistently visible sidebar, set by Ctrl Alt S or
+  the D44 drag control, reserves its current width beside the page. Over a
+  web page the sidebar sits above a separate native web view, so
   it needs the same layering fix as the command palette in Phase 0.
 - **A plugin is a tab that never leaves the Plugins list.** It can be opened
   and closed like a tab. Open, its row shows what it has open after its name
   ("Forge · fledge-core"), and the active one is highlighted with a close
   button. Closed, it stays in the list, dimmed, with no badge, and opens again
   on a click. Its views therefore don't also appear under Open tabs, which
-  holds web pages, bookmarks and integrated apps.
+  holds web pages, inline saved pages/folders and integrated apps.
 - **A site keeps one tile colour everywhere**, and every unread badge uses the
   accent.
 - **One colour rule:** the accent marks selection and what Enter will do; plugin

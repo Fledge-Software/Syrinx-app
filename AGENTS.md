@@ -40,8 +40,9 @@ failures instead of swallowing them. Follow the same shape in product code.
 
 ## Layout
 
-Atlas is a Rust Cargo workspace on Windows 11. P1-01 currently provides
-`atlas-app` and `xtask`; later crates are added in their approved slice.
+Atlas is a Rust Cargo workspace on Windows 11. P1-01 provides `atlas-app`
+and `xtask`; P1-02 adds the window-independent `atlas-core` model. Later
+crates are added in their approved slice.
 The layout proposed in `docs/research/03-core-architecture.md` ("Crate
 layout") is the starting point, adjusted for the engine and interface
 decisions made since (D3 and D4 in the plan), and the scaffold settles it:
