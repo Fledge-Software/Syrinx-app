@@ -7,6 +7,22 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-09
 
+These entries depart from `docs/spec.md`. Each is argued in
+`docs/plans/Atlas v1 — Plan.md`, decision number in brackets.
+
+- **v1 runs on Windows 11 only** (D2). No macOS or Linux work or testing in
+  v1, so the Phase 0 verdict is for Windows, not per OS.
+- **Pages render in WebView2, driven from Rust through wry, without Tauri**
+  (D3). Servo is added later as a per-tab engine.
+- **Atlas's interface is drawn in Rust with GPUI, not Svelte** (D4), unless
+  Phase 0's comparison with a Tauri + Svelte build trips the rule written
+  in the plan.
+- **Notes and Forge edit in CodeMirror 6 inside a local web view** (D28).
+  CodeMirror owns the live buffer and undo while typing; Rust owns disk,
+  saves, parsing, git and the language-server client.
+- **Forge writes through the git command line, not libgit2** (D29), with
+  fast reads in process. It requires Git for Windows.
+- **Phase 0 runs locally before anything else is planned in detail** (D16).
 - **Import is the browser's bookmarks export, not a CSV.** Edge, Chrome and
   Firefox export bookmarks only as the standard HTML bookmarks file, so
   Atlas imports that file. v1 imports no history and no passwords; password
