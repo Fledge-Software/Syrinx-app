@@ -305,8 +305,9 @@ scope and keeps both 40-row maps identical. An independent documentation
 audit confirmed their identity/order and agreement with D42–D45. Separately,
 P1-02's headless implementation passed the full local gate (24 model tests,
 seven architecture tests and console launch) and independent code review.
-It remains uncommitted pending the owner's commit and merge approval; no
-later product behavior is claimed complete. No new third-party dependency,
+The owner then requested its commit and approved its local merge, completed
+as `892d3bc` in `claude/plan-atlas-v1`. P1-03 storage is next; no later
+product behavior is claimed complete. No new third-party dependency,
 registry setting, browser profile or Windows policy is part of this work.
 The analytics amendment remains proposed separately; no collector or real
 usage report has been created.

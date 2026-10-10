@@ -275,9 +275,10 @@ The owner-requested documentation baseline is committed as `d79fc29` on
 `claude/plan-atlas-v1`. P1-01 passed its gate and independent review, then
 was committed and merged with the owner's approval as `ed19d6d`: a minimal
 Cargo workspace, runnable console entry point and dependency-boundary gate.
-Both `claude/plan-atlas-v1` and `codex/p1-01-scaffold` point to that commit.
-P1-02 passed its gate and independent review on `codex/p1-02-tab-model`;
-its commit and merge await the owner's approval. There is no browser UI yet.
+The scaffold branch remains at that commit. P1-02 passed its gate and
+independent review on `codex/p1-02-tab-model`, then was committed and merged
+into `claude/plan-atlas-v1` as `892d3bc` with the owner's approval.
+There is no browser UI yet; P1-03 storage is next.
 The throwaway Phase 0 spikes remain on `spike/gpui` and `spike/tauri`; their
 code has not been copied into the product. The current branch also holds
 the spec, owner decisions, design snapshot (`design/canvas/project/`, with
@@ -805,9 +806,10 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
     documentation-baseline commit, now `d79fc29`, then explicitly approved
     committing P1-01 and merging it into `claude/plan-atlas-v1` after its gate
     and independent review passed. That merge is complete at `ed19d6d`.
-    P1-02 passed its gate and independent review on `codex/p1-02-tab-model`.
-    Its commit and merge require their own approval; no remote or push is
-    authorized.
+    P1-02 also passed its gate and independent review; the owner requested
+    its commit and approved its local merge, completed as `892d3bc`.
+    Later commits and merges require their own approval; no remote or push
+    is authorized.
 
 ## Issue map
 
@@ -902,7 +904,7 @@ started: 2026-10-09   code repo: local Atlas-app (D41; no remote)   plan branch:
 | Phase 0 | GPUI candidate spike | spike (worktree) | opus | partial: built, 50/50 automated checks; idle CPU 3.75% fails 0.5% bar; owner tests pending | spike/gpui @ bfac1c5 | n/a | never (throwaway) |
 | Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | done: 25/25 in both overlay modes; idle CPU 0.54% | spike/tauri @ 2579d86 | n/a | never (throwaway) |
 | Phase 1 | P1-01: scaffold and architecture gate | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 7 tests and console app launch; optimized executable was blocked once, then passed unchanged | codex/p1-01-scaffold @ ed19d6d; base d79fc29 | independent review passed after restoring default Cargo test selection so future doctests run | merged into claude/plan-atlas-v1 as ed19d6d with owner approval on 2026-10-10 |
-| Phase 1 | P1-02: generic tab and flat saved-page model | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 24 model tests, 7 architecture tests and console app launch; D42/D43 lifecycle implemented without UI or storage | codex/p1-02-tab-model; uncommitted; base ed19d6d | independent source/test review and documentation/map audit passed with no findings | pending owner commit and merge approval |
+| Phase 1 | P1-02: generic tab and flat saved-page model | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 24 model tests, 7 architecture tests and console app launch; D42/D43 lifecycle implemented without UI or storage | codex/p1-02-tab-model @ 892d3bc; base ed19d6d | independent source/test review and documentation/map audit passed with no findings | merged into claude/plan-atlas-v1 as 892d3bc with owner approval on 2026-10-10 |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
 gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
@@ -914,10 +916,16 @@ gates: 2026-10-10 P1-01 merged as ed19d6d; P1-02 started on codex/p1-02-tab-mode
 gates: 2026-10-10 owner approved D43–D45 and the revised 40-slice map; P1-02 includes flat saved entries, while folders, sidebar UI and Favorites remain in their approved later slices
 gates: 2026-10-10 P1-02 passed the full local gate (31 tests and console launch), independent code review and documentation/map audit
 gates: 2026-10-10 owner explicitly requested the P1-02 commit and approved its local merge into claude/plan-atlas-v1; this authorization covers P1-02 and its documentation only
-current: P1-02 commit and merge authorized; no Git remote configured   next: finish the approved local merge before P1-03
+gates: 2026-10-10 P1-02 committed as 892d3bc and fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
+current: P1-02 merged; no Git remote configured   next: P1-03 storage on its own local slice branch
 
 ## Iteration log
 
+- **2026-10-10** — With the owner's explicit commit and merge approval,
+  committed P1-02 as `892d3bc` and fast-forward merged it into
+  `claude/plan-atlas-v1`. Updated the development record and next-session
+  handoff to start P1-03 storage. No product source changed after the passing
+  gate and review; the repository remains local.
 - **2026-10-10** — Implemented D42/D43 in the dependency-free
   `crates/atlas-core`: distinct saved/live identities, one sidebar projection,
   fixed saved destinations, unload/open-or-focus, unpin and bounded history.
