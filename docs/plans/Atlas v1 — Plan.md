@@ -12,6 +12,7 @@ branch: claude/plan-atlas-v1
 
 > **Status: active.** The owner approved all four plans, this plan's 40-slice
 > breakdown and the local implementation/review workflow on 2026-10-10 (D41).
+> The same day's D43–D45 amendment preserves all 40 slice IDs and their order.
 > Where it disagrees with `docs/decisions.md`, `docs/spec.md` or
 > `design/README.md`, those win, and the disagreement belongs under Open
 > threads.
@@ -25,9 +26,9 @@ code, notes and Fledge as built-in plugins that open as tabs, and one command
 palette and one search over everything (`docs/spec.md`, "What this is").
 
 The spec's phased plan (`docs/spec.md`, "Phased plan") and the research in
-`docs/research/` are written; there is no product code yet. This plan turns them into
-work that can be built, in order, starting with the engine decision that the
-owner reopened on 2026-10-09 (`docs/decisions.md`).
+`docs/research/` provide the reasoning for work built in order. The engine
+decision reopened on 2026-10-09 is settled, and the P1-01 product scaffold
+is merged. P1-02 now establishes the tab model before storage or browser UI.
 
 If nothing is done, the research goes stale. It is dated 2026-10-09 and
 tracks fast-moving projects (Tauri's unstable multi-webview, GPUI snapshot
@@ -223,6 +224,10 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D45 | What are the top square sidebar tiles? | Favorites, separate from inline saved pages/folders. They may target websites, plugin pages and other supported Atlas destinations. Plugin targets use the normal plugin lifecycle; until implemented, show the existing unavailable indication. | Website-only tiles exclude the owner's plugin destinations. Treating tiles as saved-page records conflates two navigation surfaces. An early plugin host or fake successful opening skips plan 2. | 2026-10-10 |
+| D44 | Can the sidebar adapt to the space the owner wants? | Add smooth width dragging from wide with labels to favicon-only to hidden, with reverse dragging restoring it. Preserve hidden-sidebar hover peek and Ctrl Alt S. The owner's screenshot supplies direction; do not copy it into the repository. UI thresholds and compact-folder affordances remain for later review. | A fixed-width sidebar cannot provide the requested space control. Replacing hover peek or the shortcut removes settled navigation. Guessing thresholds before the UI prototype hides an undecided interaction. | 2026-10-10 |
+| D43 | How do saved pages fit among tabs? | Pin means Save: persistent inline rows and folders. Closing unloads only the live page; opening focuses an existing instance or loads the saved address. Live navigation leaves saved title/address unchanged. Remove/Unpin leaves a live page ordinary. Saved rows come first; saving appends to their group and removing an open saved page puts it at the start of ordinary tabs. HTML import preserves folders and starts unloaded. The owner approved the revised 40-slice map, with a flat foundation now and full folders/import later. | A separate bookmark destination misses the requested inline workflow. A temporary pin flag would require replacing P1-09's behavior later. Opening every imported page wastes memory. Updating saved addresses on navigation changes the destination without an explicit edit. D42's original live-pin behavior is superseded; its web-tab close/history rules remain. | 2026-10-10 |
+| D42 | How do tabs close, reorder and reopen predictably? | Closing the active page selects the next open page to its right, otherwise its left, skipping unloaded saved rows. Closing the last live page shows Home and keeps Atlas open. New ordinary web tabs append and become active. Reorder stays within saved/ordinary groups. Keep the 20 most recent web-tab closures, including saved-page instances. Ordinary reopen restores metadata/position. Under D43, saved reopen focuses its live instance or loads its fixed saved target if the row survives; if removed, history may reopen an ordinary page but never recreates the saved record. Plugins are excluded. No live page or form contents are retained. | Most-recently-used selection: the owner chose visible adjacency. Closing Atlas with its last page loses Home. A 100-entry stack: the owner chose 20. Retaining live pages/forms exceeds metadata-only reopen. Plugin reopen is already available through permanent rows. Restoring a deleted saved row would undo an explicit removal. | 2026-10-10; clarified by D43 |
 | D41 | May implementation proceed while the repository stays local? | Yes. The four plans and plan 1's 40-slice breakdown are approved. One local branch per slice, independent review, and the owner's approval before every merge replace D16's GitHub prerequisite. Commits still require the owner's request; first preserve the planning baseline with an explicitly requested documentation commit. No remote or pushes. | Waiting for GitHub: the owner wants to continue locally. Treating workflow approval as permission for commits or merges: those remain separate owner controls. | 2026-10-10 |
 | D40 | Does the seven-day page-text limit include Atlas backups? | Yes. Keep page text and its index in an expiring cache outside D13's seven daily durable-state snapshots. Expiry applies to active storage and must survive restart, replay and restore. This is an Atlas-managed retention policy, not forensic erasure. | Only hiding older text from search while keeping it in snapshots: exceeds the retention the owner chose. | 2026-10-10 |
 | D39 | Keep WebView2 despite its diagnostics, and may Atlas have analytics? | Keep WebView2 and SmartScreen and disclose the runtime's collection; crash dumps stay local. Replace the blanket no-analytics rule with local aggregate feature/command counts, timings and error categories, explicitly exported by the owner. No account/device IDs, URLs, searches, paths, document text or detailed event timeline; no automatic uploads. A model may suggest changes from a report the owner chooses to share, and the owner reviews changes. Review the concrete schema, retention/control behavior and added implementation slices before collection. | No analytics: the owner wants evidence to improve Atlas. Automatic uploads and an automatically adapting interface: the owner selected local counters, explicit export and reviewed suggestions. Removing IDs as an absolute anonymity guarantee: one person's report can remain identifiable by context. | 2026-10-10 |
@@ -267,13 +272,16 @@ Decisions made in this plan:
 ## What exists today
 
 The owner-requested documentation baseline is committed as `d79fc29` on
-`claude/plan-atlas-v1`. P1-01 is implemented and independently reviewed, with
-owner approval to commit and merge `codex/p1-01-scaffold`: a minimal Cargo
-workspace, runnable console entry point and dependency-boundary gate. It
-does not yet contain the tab model or browser UI. The throwaway Phase 0
-spikes remain on `spike/gpui` and `spike/tauri`; their code has not been copied
-into the product. The current branch also holds the spec, owner decisions, design
-snapshot (`design/canvas/project/`, with the five palettes' tokens in the
+`claude/plan-atlas-v1`. P1-01 passed its gate and independent review, then
+was committed and merged with the owner's approval as `ed19d6d`: a minimal
+Cargo workspace, runnable console entry point and dependency-boundary gate.
+Both `claude/plan-atlas-v1` and `codex/p1-01-scaffold` point to that commit.
+P1-02 passed its gate and independent review on `codex/p1-02-tab-model`;
+its commit and merge await the owner's approval. There is no browser UI yet.
+The throwaway Phase 0 spikes remain on `spike/gpui` and `spike/tauri`; their
+code has not been copied into the product. The current branch also holds
+the spec, owner decisions, design snapshot (`design/canvas/project/`, with
+the five palettes' tokens in the
 `tokens()` method of `design/canvas/project/Main.dc.html` and one board per
 palette in `Theme*.dc.html`), the original mockup
 (`design/reference/unified-workspace-mockup.html`) and research notes 01–09.
@@ -321,16 +329,51 @@ core directly: with a Rust chrome there is no IPC boundary in plan 1.
 
 ### The tab model
 
-One generic model, as the spec asks (`docs/spec.md`, "Core model"). A tab
-has an id, a kind (web, plugin view, note, file, diff, terminal), a title, an
-address, a favicon, a pinned flag, an order and an optional badge. Plan 1
-builds only web tabs, but the kind enum is complete so plugins slot in.
+One generic model, as the spec asks (`docs/spec.md`, "Core model"). A live
+tab has an id, a kind (web, plugin view, note, file, diff, terminal), a title,
+address, favicon, order and optional badge. D43 replaces a temporary pinned
+flag with an optional association to an independently identified saved page.
+A saved page has its own stable title, address and position even when it has
+no live tab. Plan 1 builds only web behavior, but the kind enum is complete
+so plugins slot in.
 The sidebar and the palette read this model, never per-feature code. Persist
 changes as they happen rather than only on exit. Restore the last committed
 session after an application crash; queued changes may not have committed.
 With WAL and `synchronous=NORMAL`, a power loss or operating-system crash
 can roll back recent commits. This is not a zero-loss guarantee
 ([SQLite durability settings](https://www.sqlite.org/pragma.html#pragma_synchronous)).
+
+The owner's D42/D43 rules make transitions follow the visible list. Closing
+the active page selects the next open page to its right, otherwise its left;
+unloaded saved rows are skipped. Closing the last live page shows Home
+without exiting Atlas. Saved entries precede ordinary tabs. Saving appends
+to the saved group; Remove/Unpin puts any remaining live page at the start
+of ordinary tabs. Reorder stays within each group. New ordinary web tabs
+append and become active. The in-session stack keeps the 20 most recent
+web-tab closures, including saved-page instances, but never retains live
+pages or form contents. Ordinary reopen restores metadata and position.
+
+A saved row survives closing its page. Opening it focuses its existing
+instance or creates a page at the saved address; navigation cannot overwrite
+its saved title/address. For a saved-page history entry, reopen uses this
+same open/focus path if the saved row survives. If the row was removed,
+history may reopen an ordinary page from the closure metadata but must not
+resurrect the saved record. Plugins do not enter the closed-tab stack.
+P1-02 implements only flat saved-entry lifecycle and its association with
+live tabs. P1-03 persists both; P1-21 adds full inline folder
+management, and P1-22 imports HTML bookmarks into that same model unloaded.
+The sidebar is a projection of these records, not a second source of state.
+
+The following are implementation safeguards, not additional owner choices.
+Opening a new live instance assigns a fresh tab identity so an old page's
+late events cannot affect its replacement; saved-page identity survives
+unloading. Clamp an ordinary reopen position to the current ordinary group
+length; a surviving saved entry keeps its own position. With no live pages the
+model has no active tab, even if saved rows remain; the later shell shows
+Home for that state. Explicit foreground/background opening modes keep the
+API usable for later callers; ordinary new-tab actions use foreground mode.
+P1-02 does not build a runtime
+plugin registry early; that remains plan 2 work.
 
 ### Pages
 
@@ -390,7 +433,7 @@ The handler is synchronous and blocks the browser process, so it only marks
 the key handled and posts a message to the GPUI thread, filtering repeats
 where appropriate. One command table in
 `atlas-core` maps keys to commands; the palette and menus read from it. The
-pin key is Ctrl Alt S (D8).
+sidebar pin key is Ctrl Alt S (D8/D44); it is distinct from saving a page.
 
 Phase 2 supplies a minimal owned address-entry popup for Ctrl L and Ctrl K,
 and in-session reopen-closed tabs for Ctrl Shift T. Phase 4 extends that same
@@ -457,11 +500,14 @@ Enter) on Google, with no live suggestions (D9).
 
 ### Browser memory
 
-History from navigation and title events; bookmarks with folders, imported
-from the browser's HTML bookmarks file (D14); a closed-tab stack (Ctrl
-Shift T); session restore of each tab's address, title, pin and order
-(WebView2 can't restore back/forward lists); no history or password import
-(D10, D15).
+History comes from navigation and title events. D43's inline saved pages
+and folders are the bookmark source of truth; HTML import (D14) populates
+them without loading pages. Ctrl Shift T uses D42's web closed-tab stack,
+including saved-page closures through D43's open/focus rules.
+Session restore preserves live tabs' addresses/titles/order and
+their saved-page associations; it restores saved rows without loading every
+saved destination. WebView2 back/forward lists are not promised. No history
+or password import is added (D10, D15).
 
 ### The home page and the design
 
@@ -471,6 +517,21 @@ palettes and the accent. The design direction is already chosen: the canvas
 is offered as the direction at the design gate. Haze uses Mica; Glass uses
 Acrylic plus Atlas's styling; both fall back to Graphite when "Reduce
 transparency" is on. Pages stay opaque.
+
+D43–D45 amend the older snapshot: inline saved pages/folders share the
+sidebar with ordinary tabs, while the separate top square tiles are named
+Favorites and can target supported websites, plugin pages or other Atlas
+destinations. Plugin Favorites use the normal plugin lifecycle once it
+exists; before then they stay visibly unavailable. The home page's Quick
+access remains its own surface.
+
+D44 adds smooth sidebar dragging through wide, favicon-only and hidden
+states, and reverse dragging restores it. Persistent sidebar width changes
+resize the page card; the existing hover peek overlays it without resizing.
+Ctrl Alt S remains available. P1-07 reviews the interaction thresholds;
+P1-08–P1-10 apply width states, row rendering and focus, with the owned live
+peek delivered by P1-17. P1-29 persists width/presentation. The owner's
+screenshot supplies direction without becoming a repository asset.
 
 ### Privacy and shipping
 
@@ -576,8 +637,9 @@ amendment before implementation, without moving ahead of the foundations.
 ### Phase 2 — The browser shell
 
 - **Why now:** the first build Atlas can browse with.
-- **Delivers:** the window, sidebar and page card; web tabs (create, switch,
-  close, reorder, pin); navigation and the address; the shortcut router;
+- **Delivers:** the window, sidebar and page card with D44 width states;
+  ordinary web tabs and flat inline saved rows (create, switch, close/unload,
+  reopen, reorder, save/unpin); navigation and the address; the shortcut router;
   in-session reopen-closed tabs and minimal address entry for Ctrl L/K;
   popups as tabs; fullscreen; crashed-tab recovery; suspend; permissions;
   WebView2's find, downloads, print and context menu; zoom; HTTPS/certificate
@@ -599,19 +661,22 @@ amendment before implementation, without moving ahead of the foundations.
 - **Why now:** without history, bookmarks and restore, Atlas isn't a daily
   browser.
 - **Delivers:** history, page-text indexing with exclusions (after the
-  tier 2 bake-off), bookmarks with HTML import, the closed-tab stack,
-  session restore, the home page with Quick access tiles, and the Customize
-  panel (palette and accent); clear-browsing-data controls that cover both
+  tier 2 bake-off), full inline saved-page/folder management and unloaded
+  HTML import, the closed-tab stack, session restore, the home page with
+  Quick access, separate sidebar Favorites, and Customize settings for
+  palette/accent and sidebar width/presentation; clearing controls cover both
   WebView2 data and Atlas history/search copies, with partial failures shown.
   WebView2 clearing applies to the shared profile, not only the active tab.
   Keep its controller alive and await completion; an aborted operation or
   missing callback cannot be reported as success. Never clear by deleting
   the owner's user-data directory.
-- **Exit criteria:** quitting and relaunching restores every tab; the owner's
-  exported bookmarks import correctly in an owner-operated check; automated
-  import tests use synthetic exports. Excluded sites leave no page text in
-  the database or index; clearing data and expiry cannot reintroduce it via
-  replay or restore. Retention behavior follows the owner's clarification.
+- **Exit criteria:** quitting and relaunching restores the committed live
+  session and saved rows without opening every saved destination. The owner's
+  exported bookmarks import into inline folders in an owner-operated check;
+  automated imports use synthetic exports and create no live pages. Excluded
+  sites leave no page text in the database or index; clearing data and expiry
+  cannot reintroduce it via replay or restore. Retention follows the owner's
+  clarification.
 
 ### Phase 4 — The command palette
 
@@ -695,6 +760,10 @@ this plan, in order:
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
 
+- **Sidebar UI details (D44):** the wide/compact/hidden progression,
+  reversible drag, hover peek and Ctrl Alt S are approved. Review exact
+  widths, transition thresholds and compact-folder controls with the owner
+  at the relevant UI slice; do not infer pixel values from the screenshot.
 - **Google Workspace device checks:** Workspace sign-in passed in Phase 0,
   but that does not establish the admin configuration or all protected
   resources. Only the owner/admin checks those settings. D21's extension
@@ -735,8 +804,10 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
     Readiness does not need another approval. The owner requested the
     documentation-baseline commit, now `d79fc29`, then explicitly approved
     committing P1-01 and merging it into `claude/plan-atlas-v1` after its gate
-    and independent review passed. Later commits and merges require their
-    own approval; no remote or push is authorized.
+    and independent review passed. That merge is complete at `ed19d6d`.
+    P1-02 passed its gate and independent review on `codex/p1-02-tab-model`.
+    Its commit and merge require their own approval; no remote or push is
+    authorized.
 
 ## Issue map
 
@@ -748,6 +819,12 @@ slice. Q1–Q4 are resolved by D39–D41; the planning baseline is preserved in
 `d79fc29`. Analytics additions are proposed separately, outside this approved
 map, and do not change the foundation order.
 
+The owner also approved the D43–D45 amendment on 2026-10-10: flat saved-page
+lifecycle in P1-02, persistence in P1-03, width-aware shell/unified rows,
+later folders/import, Favorites and accessible compact/hidden states. Both
+copies below and in the readiness report use the same 40 IDs and order.
+This changes the approved deliverables, not the one-slice-at-a-time workflow.
+
 The proposed AN-01/AN-02 amendment is described in the readiness report's
 "Proposed analytics amendment (D39)" section. It is not part of these 40
 approved rows until the owner approves the added slice boundaries.
@@ -757,51 +834,51 @@ approved rows until the owner approves the added slice boundaries.
 | ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
 |---|---|---|---|
 | P1-01 | A reproducible local build prevents later work resting on an unusable toolchain. Create the minimal Cargo workspace, dependency-boundary check, passing test and runnable app; document and execute the D38 gate. Audit maintenance, security and licences for the resolved graph before adding dependencies, here and in every later slice. Record the approved local workflow. Do not define the future Plugin trait early. | `Cargo.toml`, `crates/xtask`, `docs/LOCAL-DEV.md`, `CLAUDE.md`, `AGENTS.md`; D16/D38. | Q3/Q4, a preserved planning baseline and the dependency pre-add audit. |
-| P1-02 | One model prevents sidebar/palette disagreement. Implement tab identity, kinds, active selection, ordering, pinning and close/reopen transitions with an in-session closed-tab stack, tested without a window. | `crates/atlas-core`; S3, generic tab model. | P1-01. |
-| P1-03 | State needs one reliable write path. Open a local unsynced store, migrate it and persist/reload a tab-model snapshot through a serialized writer; prove rollback and error reporting on disposable databases. | `crates/atlas-store`, core persistence boundary; D13. | P1-02; Q2 for durable/cache separation. |
+| P1-02 | One model prevents sidebar/palette disagreement and replacing temporary pins later. Implement live tab identity/kinds, a flat saved-page lifecycle with independent saved identity and live association, selection/order, save/unpin, unload/open-or-focus and a 20-entry closure stack for ordinary and saved web instances. Test D42/D43 without a window; folders and plugin registration remain later work. | `crates/atlas-core`; S3, D42/D43. | P1-01. |
+| P1-03 | Saved destinations must survive independently of live pages. Open a local unsynced store, migrate it and persist/reload flat saved entries plus live-tab snapshots and their associations through a serialized writer. Prove rollback, unloaded-entry preservation and errors on disposable databases. | `crates/atlas-store`, core persistence boundary; D13/D43. | P1-02; Q2 for durable/cache separation. |
 | P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and a tested recovery path; interruption leaves the last valid copy usable. Establish how later explicit history clearing survives restoring older snapshots. | `crates/atlas-store`; D13. | P1-03. |
 | P1-05 | The palette needs fast local ranking before UI work. Add the tier 1 catalogue, boosts, counts and match positions with incremental updates and a reproducible 100,000-row benchmark. | `crates/atlas-search`, `crates/xtask`; D9. | P1-04. |
 | P1-06 | Continuous repainting defeats the performance goal. Implement the small pinned GPUI idle patch, add focused regression evidence and remeasure eight suspended tabs and equivalent first-page startup in both throwaway candidates using fresh synthetic profiles. Prepare a reviewable upstream patch. | Pinned GPUI patch and measurement report; D37/D12. | P1-05; passing measurements. Public offer requires separate owner approval. |
-| P1-07 | Shared tokens keep subsequent screens consistent. Render a small GPUI sample of the five palettes, accent and transparency fallback; inspect contrast and compare with the authorized design source. | `crates/atlas-ui`; S10, `design/README.md`. | P1-06; live-canvas comparison or owner-approved snapshot. |
+| P1-07 | Shared tokens and width states keep the shell consistent. Render the five palettes, accent and transparency fallback with wide, favicon-only, hidden and peek sidebar samples. Review D44 drag thresholds with the owner and inspect contrast against the authorized design direction. | `crates/atlas-ui`; S10/D44, `design/README.md`. | P1-06; live-canvas comparison or owner-approved snapshot, with D43–D45 amendments. |
 
 ### Phase 2 milestone: browser shell
 
 | ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
 |---|---|---|---|
-| P1-08 | Browsing needs a safe engine boundary. Create the shared environment and one page in a GPUI card with correct resize/DPI handling; verify page-constructor guardrails, runtime detection and owner-approved privacy disclosure. Preserve native permission prompts and keep clipboard auto-grant disabled from this first constructor. | `crates/atlas-platform`, `crates/atlas-app`; D3/D11, Q1. | P1-07; Q1. |
-| P1-09 | Real tabs must follow the model. Wire sidebar creation, selection, closure/reopening, reordering and pins to page lifetimes; run repeated lifecycle checks without leaking views. | `atlas-core`, `atlas-app`, `atlas-ui`; generic tabs. | P1-08. |
-| P1-10 | The owner must navigate and type from a focused page. Wire address/title updates, back/forward/reload, a minimal owned address-entry popup and the native shortcut router. Ctrl L/K opens this entry surface; Ctrl T/W/Tab/Shift T acts on the existing model. Phase 4 extends the same popup with ranked search. | `atlas-core`, `atlas-platform`, `atlas-app`; D8/D9. | P1-09. |
+| P1-08 | Browsing needs a safe engine boundary that follows sidebar size. Create the shared environment and one page in a GPUI card; wire smooth drag transitions through wide, favicon-only and hidden states, including reverse drag, resize and DPI changes. Verify page guardrails, runtime detection and approved privacy disclosure; retain native permission prompts and disable clipboard auto-grant. | `crates/atlas-platform`, `crates/atlas-app`; D3/D11/D44, Q1. | P1-07; Q1. |
+| P1-09 | One sidebar must represent saved rows and live pages without duplicates. Wire flat saved and ordinary rows to D42/D43 creation, save/unpin, unload/open-or-focus, ordering and close/reopen. Render wide/compact states, retain hidden-state selection, and prove repeated lifecycle changes create no duplicate or leaked views. Full folders remain P1-21. | `atlas-core`, `atlas-app`, `atlas-ui`; D42–D44. | P1-08. |
+| P1-10 | Navigation must work from a focused page in every sidebar width state. Wire live address/title updates without rewriting saved targets, back/forward/reload, the owned address-entry popup and native shortcut router. Ctrl L/K opens entry; Ctrl T/W/Tab/Shift T follows D42/D43. Test focus through drag/hidden transitions; Phase 4 extends this same popup. | `atlas-core`, `atlas-platform`, `atlas-app`; D8/D9/D42–D44. | P1-09. |
 | P1-11 | OAuth popups require an opener relationship. Adopt new-window requests as tabs without previous navigation; synthetic opener/focus tests pass. | `atlas-platform`, `atlas-app`; page rules. | P1-10. |
 | P1-12 | Sites need usable permission prompts without automatic grants. Integrate engine permission and notification UI; test decisions and persistence using disposable profiles. | `atlas-platform`; privacy guardrails. | P1-11. |
 | P1-13 | Browser essentials must be reachable. Wire find, downloads, print, context menu and zoom controls, including explicit Ctrl J routing and focused-page tests. | `atlas-platform`, command registry; note 02 Musts. | P1-12. |
 | P1-14 | The address display must not misstate security. Implement a truthful scheme/status display and native certificate-error behavior; verify invalid certificates never silently succeed. | `atlas-platform`, `atlas-ui`; note 02 Musts. | P1-13; supported native security-state approach. |
 | P1-15 | Streaming and long-lived tabs need correct lifecycle handling. Add fullscreen and hidden-tab suspension with late-callback guards; test video layout and resume. | `atlas-platform`, `atlas-app`; D6. | P1-14. |
 | P1-16 | Losing one process must not lose the session model. Recover renderer and shared-browser-process failures distinctly; synthetic fault checks prove no duplicate recovery or missing tabs. | `atlas-platform`, `atlas-app`; crash recovery. | P1-15. |
-| P1-17 | A hidden sidebar must remain usable over live pages. Add the owned peek popup and Ctrl Alt S pinning, with focus, stacking, Alt Tab and window-lifecycle checks. Back/forward/reload and address controls move into the title bar while the sidebar is hidden. | `atlas-ui`, `atlas-platform`, `atlas-app`; D7/D8, `design/README.md`. | P1-16. |
+| P1-17 | Dragging the sidebar hidden must preserve access over live pages. Add the owned hover-peek popup and Ctrl Alt S sidebar pinning, integrated with D44 width states, without resizing the page during peek. Test focus, stacking, Alt Tab and window lifecycle; move navigation/address controls to the title bar while hidden. | `atlas-ui`, `atlas-platform`, `atlas-app`; D7/D8/D44, `design/README.md`. | P1-16. |
 | P1-18 | The Phase 0 conditions must hold in the product. Record shell idle/startup checks and the owner's remaining site/sign-in tests plus one day of browsing. This is an evidence/report slice; failures return to their owning implementation slice. | Phase 2 acceptance report; D6/D21/D22/D37. | P1-17; owner account tests and day of use. |
 
 ### Phase 3 milestone: browser memory and home
 
 | ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
 |---|---|---|---|
-| P1-19 | Tabs must survive a normal exit or app crash. Wire committed session persistence and restore address/title/pin/order, retaining the earlier in-session reopen behavior; disposable crash/restart checks pass. Back/forward lists are not promised. | `atlas-core`, `atlas-store`, `atlas-app`; D13. | P1-18. |
+| P1-19 | Session recovery must not load every saved destination. Restore committed live-tab addresses/titles/order and saved associations, preserving saved rows that were unloaded. Retain D42's in-session reopen behavior and prove crash/restart recovery on disposable data. Back/forward lists are not promised. | `atlas-core`, `atlas-store`, `atlas-app`; D13/D42/D43. | P1-18. |
 | P1-20 | Navigation must become searchable memory. Persist history events and update tier 1 incrementally, with a usable history list and no duplicate entries from stale events. | `atlas-store`, `atlas-search`, `atlas-ui`; D10. | P1-19. |
-| P1-21 | Bookmarks need one source of truth. Add folders and bookmark CRUD through the UI/store/search path; mutations and restarts agree. | `atlas-store`, `atlas-search`, `atlas-ui`. | P1-20. |
-| P1-22 | Import must work without reading another browser's profile. Parse bounded HTML exports, preview/confirm the import and preserve folders; test synthetic Chrome/Edge/Firefox-shaped files and malformed input. | Bookmark import and UI; D14/D15. | P1-21. |
+| P1-21 | Saved destinations need inline organization without a second bookmark model. Extend the flat D43 foundation with folder and saved-page creation, editing, moves, ordering and removal through core/UI/store/search. Review compact-folder controls, and prove lifecycle, hierarchy and restart consistency. | `atlas-core`, `atlas-store`, `atlas-search`, `atlas-ui`; D43/D44. | P1-20. |
+| P1-22 | Imported bookmarks must join the same inline saved-page model without opening every page. Parse bounded HTML exports, preview/confirm and preserve folder hierarchy/order as unloaded saved entries. Test synthetic Chrome/Edge/Firefox-shaped exports, nested folders and malformed input; read no browser profile. | Saved-page import and UI; D14/D15/D43. | P1-21. |
 | P1-23 | Full-text selection needs evidence. Run the FTS5/Tantivy bake-off on one synthetic corpus, including update/delete/expiry and recovery costs. Deliver the benchmark and reasoned choice for review before production integration. | Benchmark harness/report; D18. | P1-22; candidate dependency audits. |
 | P1-24 | Search needs a tested implementation of the chosen store. Implement the `FullText` adapter and durable recovery against synthetic documents; interrupted writes, deletions and replay preserve the intended results. | `atlas-search`; reviewed P1-23 choice. | P1-23. |
 | P1-25 | Capture must be safe before real browsing can enable it. Prepare the concrete page-access method for owner approval before any guarded page API use; then prove eligibility/extraction on synthetic pages, redirects, frames and `no-store`. Deliver evidence and the production recommendation. | Synthetic feasibility harness/report; D18/D35. | P1-24; owner approval of the concrete page-access method before prototype use. |
 | P1-26 | Page recall needs bounded, expiring data. Integrate the proven extraction path with the page-text cache/index, disable setting, expiry and restart/restore rules; excluded content never enters storage. | `atlas-platform`, `atlas-search`, cache store; D18/D35, Q2. | P1-25 and review of its evidence; Q2. |
 | P1-27 | Clearing browsing data must include Atlas's copies. Add explicit kind/time choices and coordinated WebView2/history/search clearing; partial failures remain visible, and replay/restore does not silently resurrect cleared entries. | `atlas-platform`, `atlas-store`, `atlas-search`, settings UI. | P1-26; retention-aware backup/recovery design. |
-| P1-28 | New tabs need useful destinations. Build the canvas home page, editable Quick access tiles and sidebar pinned-app tile grid, with durable ordering/labels and normal navigation. Plugin cards reflect their not-yet-implemented state. | `atlas-app`, `atlas-ui`, `atlas-store`; spec home/sidebar. | P1-27. |
-| P1-29 | The chosen appearance must persist. Wire Customize palette/accent settings and Reduce transparency to the tokens; inspect all five palettes across restart. | `atlas-ui`, settings; S10. | P1-28. |
+| P1-28 | Quick destinations need one truthful action path. Build the canvas home page, editable Quick access tiles and separate square sidebar Favorites, with durable ordering/labels. Favorites can target websites, plugin pages or other supported Atlas destinations. Plugin targets retain their unavailable indication until the normal plugin lifecycle exists; add no early host. | `atlas-app`, `atlas-ui`, `atlas-store`; D45, spec home/sidebar. | P1-27. |
+| P1-29 | Appearance and sidebar space should remain as chosen. Persist Customize palette/accent, Reduce transparency and sidebar width/presentation state. Inspect all five palettes and wide/compact/hidden restoration across restart without changing hover-peek behavior. | `atlas-ui`, settings; S10/D44. | P1-28. |
 
 ### Phase 4 milestone: command palette
 
 | ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
 |---|---|---|---|
 | P1-30 | Ctrl K needs one command source and predictable focus. Extend P1-10's live owned entry popup into the full command palette with registry-backed rows, keyboard selection, Esc and focus restoration. Do not create a second overlay mechanism. | `atlas-core`, `atlas-ui`, `atlas-platform`; S5/D7. | P1-29. |
-| P1-31 | Search must expose all browser memory accurately. Add scope counts, highlights and bounded previews across tier 1/tier 2; stale results cannot replace newer queries and result actions target stable IDs. | `atlas-search`, `atlas-core`, palette UI. | P1-30. |
+| P1-31 | Search and sidebar must act on the same destinations. Add scope counts, highlights and bounded previews across tier 1/tier 2. Shared stable targets open/focus saved rows, live tabs and supported Favorite destinations through the same actions; stale results cannot replace newer queries or duplicate a saved row's open instance. | `atlas-search`, `atlas-core`, palette UI; D43/D45. | P1-30. |
 | P1-32 | The palette is also the address bar. Add explicit URL navigation, command prefixes and Google Search the web via Alt Enter; verify typing sends no suggestion requests. | Command parsing and palette actions; D9. | P1-31. |
 | P1-33 | Central UI speed must be measured after composition. Verify one-frame opening, complete ranking latency and live-overlay focus/stacking regressions. Record methodology and failures without hiding slow cases. | Palette performance/acceptance report; D6/D7. | P1-32; measured budgets pass. |
 
@@ -811,7 +888,7 @@ approved rows until the owner approves the added slice boundaries.
 |---|---|---|---|
 | P1-34 | External links must reach one running Atlas. Implement single-instance forwarding with validated URL arguments and startup-race tests. | `atlas-platform`, `atlas-app`; external links. | P1-33. |
 | P1-35 | Evergreen changes can affect sign-in. Store the last observed runtime version, show D36's notice on change and provide the explicit open-in-Edge action; no sign-in canary. | `atlas-store`, `atlas-app`, `atlas-ui`; D22/D36. | P1-34. |
-| P1-36 | The owner needs complete keyboard access. Implement F6 focus traversal and correct accessible names/states, and record an NVDA pass across the chrome. | `atlas-ui`, `atlas-platform`; accessibility Musts. | P1-35; owner authorization if software installation is required. |
+| P1-36 | Compact or hidden chrome must remain usable without dragging or reading an icon alone. Implement F6 traversal, accessible names/states and keyboard access across wide/compact/hidden/peek modes, inline folders and Favorites. Record an NVDA pass across the chrome. | `atlas-ui`, `atlas-platform`; accessibility Musts, D43–D45. | P1-35; owner authorization if software installation is required. |
 | P1-37 | Installation must be reproducible without secretly changing Windows. Prepare and validate the installer and registration path; owner performs/approves installation and default-browser selection. Preserve data on upgrade. | Packaging, installation documentation; S8. | P1-36; packaging/policy feasibility and owner operator actions. |
 | P1-38 | Updates must reject tampering. Implement local signed-package verification and failure handling first, using synthetic packages and an independently pinned verification key. | Updater core/tests; signed updates. | P1-37; reviewed format and key-handling design. |
 | P1-39 | Delivery needs explicit network and restart behavior. Connect the verifier to the owner-approved host/check/install policy; prove failed download, invalid signature and interrupted install preserve the working version. | Updater delivery/UI. | P1-38; owner approval of host, network calls and install/restart behavior. |
@@ -824,7 +901,8 @@ started: 2026-10-09   code repo: local Atlas-app (D41; no remote)   plan branch:
 |---|---|---|---|---|---|---|---|
 | Phase 0 | GPUI candidate spike | spike (worktree) | opus | partial: built, 50/50 automated checks; idle CPU 3.75% fails 0.5% bar; owner tests pending | spike/gpui @ bfac1c5 | n/a | never (throwaway) |
 | Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | done: 25/25 in both overlay modes; idle CPU 0.54% | spike/tauri @ 2579d86 | n/a | never (throwaway) |
-| Phase 1 | P1-01: scaffold and architecture gate | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 7 tests and console app launch; optimized executable was blocked once, then passed unchanged | codex/p1-01-scaffold; base d79fc29; commit identified by Git history | independent review passed after restoring default Cargo test selection so future doctests run | owner approved local integration into claude/plan-atlas-v1 on 2026-10-10; result recorded in Git |
+| Phase 1 | P1-01: scaffold and architecture gate | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 7 tests and console app launch; optimized executable was blocked once, then passed unchanged | codex/p1-01-scaffold @ ed19d6d; base d79fc29 | independent review passed after restoring default Cargo test selection so future doctests run | merged into claude/plan-atlas-v1 as ed19d6d with owner approval on 2026-10-10 |
+| Phase 1 | P1-02: generic tab and flat saved-page model | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 24 model tests, 7 architecture tests and console app launch; D42/D43 lifecycle implemented without UI or storage | codex/p1-02-tab-model; uncommitted; base ed19d6d | independent source/test review and documentation/map audit passed with no findings | pending owner commit and merge approval |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
 gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
@@ -832,10 +910,35 @@ gates: 2026-10-10 owner requested detailed local plans 2–4 and deferred reposi
 gates: 2026-10-10 owner approved four plans, the 40-slice map and local branch/review/owner-approved merge workflow (D41); retained WebView2, approved local counters with explicit export and reviewed suggestions (D39), and excluded page text from backups (D40)
 gates: 2026-10-10 owner requested the eight-file documentation-baseline commit; preserved as d79fc29 before branching for P1-01
 gates: 2026-10-10 owner explicitly requested the P1-01 commit and approved its local merge into claude/plan-atlas-v1; this authorization covers P1-01 only
-current: P1-01 passed its gate and independent review, with owner approval for local integration; no Git remote configured   next: P1-02 tab model, after integrating P1-01
+gates: 2026-10-10 P1-01 merged as ed19d6d; P1-02 started on codex/p1-02-tab-model with owner-approved D42 transition rules
+gates: 2026-10-10 owner approved D43–D45 and the revised 40-slice map; P1-02 includes flat saved entries, while folders, sidebar UI and Favorites remain in their approved later slices
+gates: 2026-10-10 P1-02 passed the full local gate (31 tests and console launch), independent code review and documentation/map audit
+gates: 2026-10-10 owner explicitly requested the P1-02 commit and approved its local merge into claude/plan-atlas-v1; this authorization covers P1-02 and its documentation only
+current: P1-02 commit and merge authorized; no Git remote configured   next: finish the approved local merge before P1-03
 
 ## Iteration log
 
+- **2026-10-10** — Implemented D42/D43 in the dependency-free
+  `crates/atlas-core`: distinct saved/live identities, one sidebar projection,
+  fixed saved destinations, unload/open-or-focus, unpin and bounded history.
+  The full local gate passed 24 model tests and seven architecture tests,
+  with formatting, Clippy and the console launch. Independent code and
+  documentation reviews found no issues; both maps contain the same 40 rows.
+  P1-02 remains uncommitted pending the owner's commit and merge approval.
+- **2026-10-10** — The owner approved Pin=Save with persistent inline rows
+  and folders (D43), reversible sidebar width dragging (D44), and separate
+  Favorites for supported Atlas destinations (D45). Updated both copies of
+  the approved map without adding or reordering its 40 slices. Clarified
+  that D42's 20-entry history includes saved-page web closures and resolves
+  them through surviving saved rows without recreating removed records.
+  P1-02 remains in progress; no later slice is implemented by this amendment.
+- **2026-10-10** — Recorded D42 before implementing tab transitions: visible
+  right-then-left selection, Home after the last close, pinned-first groups
+  with normal closure, new web tabs appended and activated, and 20 recent
+  web-tab closures with metadata-only reopen. Documented the fresh-identity
+  and position-clamping safeguards separately from the owner's choices.
+  Verified P1-01's merge at `ed19d6d` and started P1-02 on
+  `codex/p1-02-tab-model`; its gate and review are pending.
 - **2026-10-10** — Preserved the approved documentation in `d79fc29` at the
   owner's request, then implemented P1-01 on `codex/p1-01-scaffold`. Added
   the minimal workspace, dependency-boundary check and seven synthetic tests,
@@ -847,7 +950,7 @@ current: P1-01 passed its gate and independent review, with owner approval for l
   command that would skip future documentation tests; restored Cargo's
   default test selection, reran the full gate and obtained a clean review.
   The owner then explicitly approved committing this slice and merging it
-  locally into `claude/plan-atlas-v1`; Git history records the integration.
+  locally into `claude/plan-atlas-v1`; that integration is `ed19d6d`.
 - **2026-10-10** — Recorded the owner's readiness and local-workflow approval
   (D41), seven-day retention including backup exclusion (D40), and revised
   analytics direction (D39). The owner chose local counters and explicit

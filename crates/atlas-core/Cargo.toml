@@ -1,0 +1,11 @@
+# Keep Atlas's state independent of the window and browser engine.
+[package]
+name = "atlas-core"
+description = "Atlas's window-independent tab model and application state"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

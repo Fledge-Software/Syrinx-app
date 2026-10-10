@@ -7,6 +7,43 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-10
 
+- **The top square tiles are Favorites (D45).** They provide quick access
+  to websites, plugin pages and other supported Atlas destinations, separate
+  from inline saved pages and folders. A plugin Favorite uses the normal
+  plugin open/focus lifecycle. Before that plugin exists, its tile keeps the
+  not-yet-implemented indication rather than pretending to open it.
+- **The sidebar can be resized by dragging (D44).** To give the page more
+  room without losing navigation, dragging smoothly changes the sidebar
+  from wide with labels, to favicon-only, to hidden; dragging back restores
+  it. The existing hidden-sidebar hover peek and Ctrl Alt S remain. The
+  owner's screenshot supplies direction, not a new image asset in the
+  repository. Exact width thresholds and compact-folder controls will be
+  reviewed with the later UI slice.
+- **Pin means Save, with saved pages and folders inline (D43).** To keep
+  useful destinations beside ordinary tabs, saving creates a persistent
+  sidebar row. Closing it unloads only its live page; opening an unloaded
+  row uses its saved address, while opening an already-live row focuses it.
+  Live navigation does not rewrite the saved title or address. Remove or
+  Unpin removes the saved row and leaves an open page as an ordinary tab.
+  Saved rows precede ordinary tabs; saving appends to the saved group and
+  removing an open saved page puts its tab at the start of ordinary tabs.
+  HTML bookmark import preserves folder hierarchy in this same model and
+  leaves imported pages unloaded. This replaces D42's temporary pin flag,
+  while preserving its web-tab close/history rules. The owner approved
+  the revised 40-slice map: flat saved-page lifecycle now, folder management
+  and import in their existing later slices.
+- **Tab transitions follow visible order and keep Atlas open (D42,
+  clarified by D43).** Closing the active page selects the next open page
+  to its right, otherwise its left, skipping unloaded saved rows. Closing
+  the last live page shows Home and leaves Atlas open. New ordinary web tabs
+  append and become active. Reordering stays within saved or ordinary groups.
+  Keep the 20 most recent web-tab closures, including saved-page instances,
+  not 100. Reopen selects the restored ordinary tab with its metadata and
+  position, without live page or form contents. For a saved-page closure,
+  reopen focuses its existing live instance or opens its fixed saved target
+  if the row still exists. If the row was removed, history may reopen the
+  page as ordinary but never recreates the saved record. Plugins reopen from
+  their permanent rows and do not enter this history.
 - **Keep the current WebView2 engine and SmartScreen.** The owner confirmed
   the engine works after reviewing Microsoft's required runtime diagnostics
   and SmartScreen collection. Disclose those runtime behaviors separately

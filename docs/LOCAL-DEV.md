@@ -1,9 +1,10 @@
 # Local development on Windows 11
 
-Atlas's first scaffold makes the build and architecture checks runnable
-before the tab model or browser shell exists (P1-01). Work on this machine,
-in the local repository, one approved slice at a time. The baseline is
-`d79fc29`; P1-01 uses `codex/p1-01-scaffold`. D41 permits local branches and
+Atlas's first scaffold supplies the build and architecture checks (P1-01);
+P1-02 adds the tab and saved-page model without a window. Work on this machine,
+in the local repository, one approved slice at a time. The planning baseline
+is `d79fc29`; P1-01 was merged into `claude/plan-atlas-v1` as `ed19d6d`, and
+P1-02 uses `codex/p1-02-tab-model`. D41 permits local branches and
 independent review, with the owner's approval before each merge. Product
 commits still require the owner's request. There is no remote or push.
 
@@ -17,6 +18,11 @@ commits still require the owner's request. There is no remote or push.
 - `crates/xtask` runs the gate and dependency-boundary check. Add product
   crates when their approved slices begin; there are no placeholder Plugin
   APIs or copied spike implementations.
+- `crates/atlas-core` owns live tab identities, selection and ordering, a
+  20-entry closed-web-tab history, and saved-page identities that survive
+  closing their live page. It has no third-party dependency. The sidebar and
+  palette will consume its shared row projection; this slice adds no UI,
+  database, folder manager or importer.
 
 Use the installed Windows MSVC Rust toolchain. This scaffold was developed
 with Rust/Cargo 1.97.1 and the `x86_64-pc-windows-msvc` target. Node 24.15.0
@@ -101,10 +107,48 @@ dependencies for an Atlas boundary violation. Before introducing ambiguous
 same-name internal/external packages, extend the matcher to resolve their
 paths. Dependency audit details are in `docs/dependency-audit.md`.
 
-The synthetic tests cover allowed shell composition, aliased and inactive
-forbidden imports, internal facade/cycle handling, plugin/API isolation and
-malformed metadata. Core model and search tests arrive with P1-02 and P1-05;
-this scaffold does not fake those implementations to produce a test count.
+The architecture tests use synthetic Cargo metadata to cover allowed shell
+composition, aliased and inactive forbidden imports, internal facade/cycle
+handling, plugin/API isolation and malformed metadata. Core model tests use
+made-up titles and reserved domains; search tests arrive with P1-05.
+
+## The tab and saved-page model
+
+A saved destination and a running page have different lifetimes (D43).
+`SavedPageId` identifies a saved row; `TabId` identifies one live instance.
+Closing a saved page removes that instance while leaving its saved row.
+Opening it again uses a fresh live identity, so delayed events from the
+closed page cannot change the replacement. Opening an already-open saved
+page focuses its existing instance instead of duplicating it.
+
+Saving captures the destination's title/address. Navigation changes only
+live metadata. Unpinning removes the saved record and keeps an open page as
+an ordinary tab. The model's sidebar projection presents saved rows, including
+unopened ones, followed by ordinary live tabs. Folders and HTML import will
+extend this same model in P1-21/P1-22; they do not create a second bookmark list.
+
+The 20-entry reopen history is in memory only. An ordinary tab restores its
+closed metadata; a still-saved page uses its saved destination and existing
+row. Reopening history must never recreate a saved record the owner removed.
+Content-bearing debug output is redacted, and errors carry structural values
+rather than titles, addresses or page contents.
+
+For focused model development, use:
+
+```powershell
+cargo test --package atlas-core --profile local --offline --locked
+```
+
+Run the full gate before calling the slice done. The library contains no
+plugin lifecycle, window or web-view code; its complete tab-kind enum leaves
+room for those later approved slices.
+
+On 2026-10-10, P1-02 passed `cargo xtask check`: dependency boundaries,
+formatting, Clippy, four library tests, twenty integration tests, the seven
+architecture tests and the console application launch. The model tests cover
+saved/live lifetimes, ordering, history, stale identities, atomic failures,
+redacted diagnostics and a 600-operation invariant sequence. No GUI behavior
+or persistence is claimed by this result.
 
 ## Data and artifacts
 
