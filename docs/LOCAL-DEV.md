@@ -12,9 +12,11 @@ commits still require the owner's request. There is no remote or push.
 
 - `Cargo.toml` defines the virtual workspace, resolver 3, shared package
   settings/lints and the `local` executable profile.
-- `crates/atlas-app` is the runnable entry point. It currently prints its
-  version and exits; the first GUI sample belongs to P1-07, and the browser
-  shell begins in P1-08.
+- `crates/atlas-app` now contains D49's integrated preview window, session
+  worker and Ctrl K palette. The owner approved bringing this integration
+  forward; it does not mark the remaining slices complete. Its native page
+  host lives in `atlas-platform`. See `docs/integrated-browser-preview.md`
+  for the implementation and validation status.
 - `crates/xtask` runs the gate and dependency-boundary check. Add product
   crates when their approved slices begin; there are no placeholder Plugin
   APIs or copied spike implementations.
@@ -51,14 +53,23 @@ cargo xtask check-deps
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --profile local --offline --locked -- -D warnings
 cargo test --workspace --profile local --offline --locked
-cargo run --package atlas-app --profile local --offline --locked
+cargo run --package atlas-app --profile local --offline --locked -- --smoke
 ```
 
 The first line shows the standalone equivalent of the check that `xtask`
 runs internally. The test command retains Cargo's default target selection,
 including documentation tests when library crates arrive; `--all-targets`
 would omit those tests. The final application launch verifies that the executable
-actually runs; compiling alone does not establish D38. Fix formatting with
+actually runs: `--smoke` opens a GPUI window and a WebView2 `about:blank`
+page in a fresh temporary profile, then closes the native workers and store.
+It returns failure on startup errors or timeout. The generated directory is
+reserved with exclusive creation before startup; an existing path is refused.
+A separate watchdog bounds this synthetic test at 30 seconds even if GPUI
+stalls or orderly shutdown never finishes. Normal launches have no watchdog.
+Normal `cargo atlas` uses
+`%LOCALAPPDATA%\AtlasProductPreview`, separate from the Phase 0 profiles;
+its State and WebView2 subfolders persist between launches. Compiling alone
+does not establish D38. Fix formatting with
 `cargo fmt --all`. A passing gate is required before review and merge, and
 it does not replace inspecting a window once a slice introduces UI.
 
@@ -68,6 +79,9 @@ Smart App Control blocked unsigned debug builds during Phase 0. D38 keeps
 the Windows policy unchanged and uses an optimized profile with line-table
 debug information. The workspace's `local` profile inherits `release` but
 explicitly keeps debug assertions and overflow checks enabled for the gate.
+Its build override also sets optimization level 3 for build scripts and
+their dependencies: Cargo otherwise leaves those helpers unoptimized even
+under a release profile. Assertions and overflow checks still inherit `local`.
 Use it for application runs, tests and Clippy. Plain `cargo test` chooses a
 different profile and is not the gate on this machine.
 
@@ -76,6 +90,25 @@ every future executable. If execution is blocked, preserve the error and
 bring it to the owner; never change Smart App Control, SmartScreen or signing
 settings to get past it. Child Cargo commands also set `RUSTUP_AUTO_INSTALL=0`
 for that process, without changing the user's persistent environment.
+
+The owner requires local Atlas to run unsigned and has no signing certificate.
+A certificate is not an application requirement. `xtask.exe` is a separate
+development tool that runs the quality checks listed above; "optimized" means
+compiled with the release-style `local` profile. It is not the browser.
+On 2026-10-10, signature inspection reported `NotSigned` for
+`target/local/atlas-app.exe`, and launching that exact file printed
+`Atlas 0.1.0` and exited successfully. This proves the current console
+scaffold starts unsigned, not that the later browser window is implemented.
+
+During P1-05, Windows blocked `target/local/xtask.exe` and the store unit-test
+executable even on unchanged retries. Atlas-specific Code Integrity event
+3077 identifies policy `VerifiedAndReputableDesktop` and status `0xc0e90002`.
+Microsoft explains that Smart App Control can accept unsigned code it judges
+safe and block unsigned code it cannot confidently classify; optimization
+does not grant an exemption. See the
+[Microsoft FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions).
+Preserve those failures, keep development unsigned and verify each changed
+app build. Do not claim a complete gate while tests remain blocked.
 
 On 2026-10-10, P1-01's full `cargo xtask check` passed: dependency boundaries,
 formatting, Clippy, all seven architecture tests and the application launch
@@ -109,8 +142,8 @@ paths. Dependency audit details are in `docs/dependency-audit.md`.
 
 The architecture tests use synthetic Cargo metadata to cover allowed shell
 composition, aliased and inactive forbidden imports, internal facade/cycle
-handling, plugin/API isolation and malformed metadata. Core model tests use
-made-up titles and reserved domains; search tests arrive with P1-05.
+handling, plugin/API isolation and malformed metadata. Core and search tests
+use made-up titles and reserved domains.
 
 ## The tab and saved-page model
 
@@ -266,6 +299,40 @@ review also passed, including agreement between both 40-row issue maps. The appl
 remains the console scaffold until its approved UI slices; no production
 database or profile was opened. The owner explicitly approved P1-04's commit
 and local merge on 2026-10-10; Plan 1's ledger records their completion.
+
+## P1-05 local catalogue search
+
+`atlas-search` gives the later palette a derived in-memory catalogue. Rust
+callers provide typed tab, saved-page, history and command records; the crate
+collects no history and performs no I/O. Queries return ranked, highlighted
+results and uncapped scope counts. Saved destinations and live pages remain
+distinct, preserving D43 when the running page navigates elsewhere. See
+`crates/atlas-search/README.md` for the input policy and matching limits.
+
+For focused development and the separate performance gate, use:
+
+```powershell
+cargo test --package atlas-search --profile local --offline --locked
+cargo xtask bench > target/p1-05-search-run.json
+```
+
+Choose a fresh output name for every benchmark run so failures remain
+available. `bench` prints a JSON report containing every synthetic sample,
+per-case median, 95th percentile and maximum, and the overall maximum. It
+returns failure if any case's 95th percentile reaches 5 ms (D48). Its 100,000
+records exercise the complete matching, ranking, counting and highlighting
+path. Do not run it alongside a build. Keep the audited `frizbee =0.13.0`
+pin and `safe_read` feature; `docs/p1-05-search.md` records the protocol and
+verification status. The full local gate remains required separately.
+
+Current P1-05 validation is partial: formatting and the full workspace Clippy
+command passed. Across the workspace attempt and focused xtask run, 132 tests
+passed: 30 core, 40 native unit, 4 backup integration, 18 storage integration,
+26 search and 14 xtask. Windows blocked the store unit-test executable before
+its 38 tests ran; the subsequent engine-identity test and workspace
+documentation-test stage were not reached. The console launch passed unsigned.
+The complete quality gate and D48 performance gate remain unresolved;
+`docs/p1-05-search.md` records both failures and the separate CPU diagnostic.
 
 ## Data and artifacts
 

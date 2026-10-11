@@ -1,7 +1,7 @@
 # Keep the product and its checks on one Windows development profile (D38).
 [workspace]
 members = ["crates/*"]
-exclude = ["vendor/libsqlite3-sys-0.38.2"]
+exclude = ["vendor/libsqlite3-sys-0.38.2", "vendor/wry-0.57.0", "vendor/frizbee-0.13.0"]
 default-members = ["crates/atlas-app"]
 resolver = "3"
 
@@ -16,10 +16,23 @@ serde_json = { version = "=1.0.151", default-features = false, features = ["std"
 windows = { version = "=0.62.2", default-features = false }
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache"] }
 rusqlite_migration = { version = "=2.6.0", default-features = false }
+frizbee = { version = "=0.13.0", default-features = false, features = ["std", "safe_read"] }
+gpui = { package = "gpui-pre", version = "=0.3.8", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", default-features = false }
+gpui-component = { version = "=0.7.1", default-features = false }
+wry = { version = "=0.57.0", default-features = false }
+webview2-com = "=0.39.1"
+raw-window-handle = "=0.6.2"
+futures = "=0.3.34"
+url = "=2.5.8"
 
 # P1-04 needs SQLite's damaged-input fixes before validating recovery candidates.
 [patch.crates-io]
 libsqlite3-sys = { path = "vendor/libsqlite3-sys-0.38.2" }
+# The approved close callback lets Atlas persist tab closure before native teardown.
+wry = { path = "vendor/wry-0.57.0" }
+# The approved padding correction keeps ASCII scores and highlights inside real text.
+frizbee = { path = "vendor/frizbee-0.13.0" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -35,3 +48,7 @@ debug = "line-tables-only"
 debug-assertions = true
 overflow-checks = true
 incremental = true
+
+# Cargo otherwise leaves build helpers unoptimized, contrary to D38's local build route.
+[profile.local.build-override]
+opt-level = 3

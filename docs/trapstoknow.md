@@ -12,6 +12,15 @@ you found it in the commit message, not here.
 
 ## Page tabs: WebView2 through wry
 
+- **A page closes its native window while its Atlas tab still looks open.**
+  Published wry 0.57.0 destroys the child window directly on
+  `WindowCloseRequested`. Atlas's approved two-file patch delegates this
+  request to its session worker, which saves the logical close before native
+  teardown. Keep the callback queue-only, handle duplicate/stale live IDs,
+  and leave saved rows intact. Source: `docs/page-close-event-review.md`
+  (source-confirmed; synthetic native delivery and deferred destruction
+  passed). This does not establish the owner's breakpoint crash cause.
+
 - **Browser shortcuts never reach Atlas while a page has focus.** Ctrl T,
   Ctrl W, Ctrl L and Ctrl K go to the page, and wry has no event for them
   (wry issue #451, open since 2021). Register WebView2's
@@ -64,6 +73,31 @@ you found it in the commit message, not here.
 
 ## The interface: GPUI on Windows
 
+- **A hidden launch cannot establish visible-window readiness.** Fresh
+  non-smoke Atlas processes started with `Start-Process -WindowStyle Hidden`
+  remained alive without a targetable window in both execution contexts.
+  The same frozen executable opened Home when launched normally for the
+  owner's explicitly approved interactive test. Keep hidden launch for
+  noninteractive checks, but use a visible launch for authorized window
+  inspection. Source: continuation interactive-crash/desktop/visible launch
+  records under `target/` (observed; not a breakpoint diagnosis).
+
+- **A delayed Home snapshot reopens an already finished palette.** A new
+  blank tab can reach the UI after its entry was submitted or dismissed.
+  A boolean pending flag is insufficient: opening another saved page can
+  rearm it for the old snapshot. Correlate each app-private Home action with
+  its own committed acknowledgement, cancel superseded intent and consume
+  matching no-op results too. Source: independent integrated-preview review
+  of `ui/home_palette.rs` and the session worker (code-confirmed).
+
+- **A smoke-test timeout on the GUI thread cannot bound a frozen GUI.** The
+  earlier orderly timer also did nothing once shutdown began, so a missing
+  worker-stop notification could hang the test. Keep an independent standard
+  thread deadline for `--smoke` only, alongside orderly shutdown. A hard exit
+  applies only to its freshly generated synthetic profile; it is not crash
+  recovery or proof that a window is visible. Source: integrated-preview
+  timeout review in `crates/atlas-app/src/main.rs` and `ui.rs` (code-confirmed).
+
 - **GPUI draws above a WebView2 child window, not below it.** Note 08 read
   the code as the page covering GPUI; the Phase 0 spike found the opposite
   on this machine. Don't rely on either for layout: keep the page card's
@@ -80,7 +114,16 @@ you found it in the commit message, not here.
   the full gate without rebuilding or changing settings. The transient
   failure's cause is unproved. Use D38's profile, preserve failures, and never
   change Windows security settings to make a build run. Sources: note 09 and
-  the P1-01 gate recorded in `docs/LOCAL-DEV.md` (observed; high).
+  the P1-01 gate recorded in `docs/LOCAL-DEV.md` (observed; high). During
+  P1-05, unchanged retries of optimized executables also remained blocked;
+  do not assume retrying always resolves the policy.
+- **Cargo leaves build helpers unoptimized even under a release profile.**
+  D38's local profile therefore needs `build-override.opt-level = 3` as well
+  as the application's release inheritance. Assertions and overflow checks
+  still inherit the local profile. This corrects the configuration, but does
+  not establish the cause of Application Control blocks or guarantee that
+  Windows accepts every rebuilt executable. Sources: Cargo's profile defaults
+  and P1-05's local build-helper investigation.
 - **GPUI's popup window floats over every app.** `WindowKind::PopUp` is
   created `WS_EX_TOOLWINDOW | WS_EX_TOPMOST` and is not owned by the main
   window, so the palette would stay on top when Atlas loses focus. Set its
@@ -102,6 +145,41 @@ you found it in the commit message, not here.
   come weekly and may change the API; a `^` requirement has already moved apps
   onto a snapshot their components did not compile with. Pin with `=`.
   Source: note 08, section 1.2 (high).
+
+## Local search
+
+- **A NUL query can match padding beyond a field's text.** In the pinned
+  frizbee 0.13.0 matcher, synthetic `\0` queries returned highlight indices
+  equal to the field's byte length. Both the exhaustive and ASCII-filtered
+  catalogue paths reproduced the invalid range. The approved three-file
+  vendor correction now masks invalid ASCII lanes; both original regressions,
+  public boundary tests and all eight available backend variants pass. Keep
+  range validation and the regressions, including zero-score membership.
+  Source: `docs/p1-05-frizbee-maintenance-review.md` and
+  `target/continuation-frizbee-desktop-gate.log` (verified on this machine).
+- **A valid frizbee match can have no highlight positions.** Its candidate
+  filter and best-score traceback are separate; the latter can exhaust the
+  typo budget before visiting a matching character. For an accepted field
+  with an empty trace, retry only highlighting without that trace budget,
+  retaining the original membership and score. Never use the retry to admit
+  a rejected field. Zero-score and long greedy matches can still lack a
+  trace; preserve them without inventing highlights. P1-05's synthetic
+  long-near-match benchmark exposed this in the audited 0.13.0 source.
+- **Different string wrapper types multiply frizbee's compiled kernels.**
+  Pass `&str` consistently to the generic score, batch and highlighting APIs,
+  including test references. Both `match_one` and `match_one_indices` accept
+  generic wrappers; passing `&String` adds specializations alongside
+  the library's internal `&str` path, across SIMD backends and matching
+  modes. P1-05's first optimized build spent several minutes in code
+  generation. Source inspection proves the duplicate instantiations; the
+  compile-time improvement from normalizing calls is not yet measured. Two
+  later score-reference tests repeated this trap: their optimized compiler
+  run was stopped after more than ten CPU minutes and restarted with `&str`.
+- **frizbee's highlight positions can point into UTF-8 continuation bytes.**
+  They arrive in reverse byte order, not character order. Widen to complete
+  Unicode scalars, sort and merge before slicing original display strings.
+  P1-05 checks accented, emoji and distant multibyte positions against the
+  audited 0.13.0 source; this does not promise grapheme-cluster boundaries.
 
 ## Storage
 
