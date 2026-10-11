@@ -7,6 +7,26 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-10
 
+- **Build the integrated browser next (D49).** After finding that the
+  morning's product libraries had no browser window, the owner explicitly
+  approved bringing integration forward: connect the existing tab model,
+  saved-page storage, backups and search to GPUI vertical tabs, WebView2
+  navigation and Ctrl K. This replaces strict slice order for this preview,
+  without dropping remaining features or performance requirements. The
+  owner still approves commits and merges. The target is daily use of the
+  full planned browser before Monday, 2026-10-12; that date is a goal, not a
+  claim that incomplete or untested features are ready.
+- **Local Atlas must run unsigned for now (D38 clarification).** The owner
+  has no signing certificate and explicitly requires development to continue
+  without one. Signing remains deferred; it is not an application prerequisite.
+  Keep Windows security settings unchanged and verify the actual application
+  executable. A successful unsigned launch does not guarantee that Windows
+  accepts every rebuilt application or development tool.
+- **Search's 5 ms target uses the 95th percentile (D48).** The owner chose
+  requiring 95% of repeated searches to finish within 5 ms, with the worst
+  sample also reported. This accounts for occasional Windows scheduling
+  interruptions without hiding them. Measure the complete 100,000-row
+  ranking, scope-count and highlight path, not only the underlying matcher.
 - **History clearing survives backup restoration (D47).** To keep deleted
   history from returning while preserving older recovery points, the owner
   chose a local deletion record containing only cleared date ranges and data

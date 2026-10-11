@@ -281,6 +281,37 @@ style problem.
   `TODO`/`FIXME` comments are permitted only inside
   `vendor/libsqlite3-sys-0.38.2`; Atlas-authored work remains subject to the
   ordinary rule. This approval covers neither commits nor merges.
+- **Approved narrow source patch, 2026-10-10:** wry remains exactly 0.57.0
+  with the Windows close callback proposed in `docs/page-close-event-review.md`.
+  The owner approved that two-file dependency patch and its Atlas close-event
+  API so page-requested closure follows the durable tab lifecycle. Unchanged
+  upstream `TODO`/`FIXME` comments and existing lint annotations are permitted
+  only inside `vendor/wry-0.57.0`; no new Atlas-authored suppression is allowed.
+  Preserve all other archive files, dependency versions and features. This
+  approval does not cover another dependency patch, commits, merges,
+  publication or sending an upstream message; prepare the upstream diff locally.
+- **Approved additional narrow source patch, 2026-10-10:** the owner explicitly
+  approved applying the frozen wry failed-construction patch in the parallel
+  investigation chat, including its documented limitations. The exact patch
+  SHA-256 is `a87ca514149545576a25a39a390a444234d6db9159bcde751e7806aafc959042`;
+  it changes `vendor/wry-0.57.0/src/webview2/mod.rs` and adds its private
+  `construction.rs`. Preserve pins, features and all other vendor files.
+  `docs/wry-failed-construction-patch-review.md` records temporary native
+  ownership, delayed parent attachment and limited structural cleanup
+  diagnostics. Validation is serialized through the integration chat, with
+  independent subagent review. Fault hooks stay in disposable test copies,
+  never the release patch. This grants no additional dependency patch, COM
+  teardown change, security change, commit, merge or publication.
+- **Approved narrow source patch, 2026-10-10:** P1-05 may vendor the audited
+  `frizbee 0.13.0` package with exactly the three-file padding correction in
+  `docs/p1-05-frizbee-maintenance-review.md`. Preserve the pin, features
+  (`default-features=false`, `std` and `safe_read`), licence and other package
+  files. Unchanged upstream `TODO`/`FIXME` comments and existing lint
+  annotations are permitted only inside `vendor/frizbee-0.13.0`; no new
+  Atlas-authored suppression or deferred-work marker is allowed. Record the
+  archive inventory, exact diff and modified hashes, and validate the unchanged
+  dependency graph. This approval covers neither another dependency patch nor
+  commits, merges, pushes, publication or an upstream message.
 - **Pin GPUI exactly with `=`.** Snapshot releases change its API weekly, and
   a caret requirement has already broken builds (note 08, 1.2). A patched
   fork of wry or tao is allowed only if small, pinned and offered upstream

@@ -1,0 +1,88 @@
+--- a/src/smith_waterman/algo/ascii.rs
++++ b/src/smith_waterman/algo/ascii.rs
+@@ -1,4 +1,4 @@
+-use super::MAX_HAYSTACK_LEN;
++use super::{MAX_HAYSTACK_LEN, valid_haystack_lanes};
+ use crate::smith_waterman::{
+     SmithWaterman,
+     backend::{Backend, BytesVec, MaskVec, ScoreVec},
+@@ -61,6 +61,11 @@
+                     B::Bytes::load_partial(haystack.as_ptr(), col_idx * B::LANES, haystack.len());
+                 (col_idx + 1, haystack_chunk)
+             }) {
++                // Exclude zero-filled padding from matches and matrix scores.
++                let valid_mask =
++                    valid_haystack_lanes::<B>(haystack.len(), (col_idx - 1) * B::LANES);
++                let valid_score_mask = B::widen_mask(valid_mask);
++
+                 // Bonus for matching a capital letter after a lowercase letter
+                 let is_upper_mask = haystack_chunk
+                     .lt(B::Bytes::splat(b'Z' + 1))
+@@ -108,8 +113,9 @@
+                     self.needle_simd.iter().enumerate().map(|(i, c)| (i + 1, c))
+                 {
+                     // Match needle char against the chunk (case insensitive)
+-                    let exact_case_match_mask = needle_char.eq(haystack_chunk);
+-                    let flipped_case_match_mask = flipped_case_needle_char.eq(haystack_chunk);
++                    let exact_case_match_mask = needle_char.eq(haystack_chunk).and(valid_mask);
++                    let flipped_case_match_mask =
++                        flipped_case_needle_char.eq(haystack_chunk).and(valid_mask);
+                     let match_mask =
+                         B::widen_mask(exact_case_match_mask.or(flipped_case_match_mask));
+                     let exact_case_match_mask = B::widen_mask(exact_case_match_mask);
+@@ -140,7 +146,8 @@
+                         match_masks.get(row_idx, col_idx - 1),
+                         gap_open_penalty,
+                         gap_extend_penalty,
+-                    );
++                    )
++                    .and(valid_score_mask);
+ 
+                     score_matrix.set(row_idx, col_idx, row_scores);
+                     match_masks.set(row_idx, col_idx, match_mask);
+--- a/src/smith_waterman/algo/mod.rs
++++ b/src/smith_waterman/algo/mod.rs
+@@ -17,6 +17,19 @@
+ pub(crate) mod unicode_gap;
+ 
+ pub(crate) const MAX_HAYSTACK_LEN: usize = 1024;
++
++#[inline(always)]
++unsafe fn valid_haystack_lanes<B: Backend>(haystack_len: usize, start: usize) -> B::Mask {
++    unsafe {
++        let valid_lanes = haystack_len.saturating_sub(start).min(B::LANES);
++        let mut bytes = [0u8; 64];
++        for byte in bytes.iter_mut().take(valid_lanes) {
++            *byte = u8::MAX;
++        }
++        let valid_bytes = B::Bytes::load_partial(bytes.as_ptr(), 0, B::LANES);
++        valid_bytes.gt(B::Bytes::splat(0))
++    }
++}
+ 
+ impl<B: Backend> Kernel for SmithWaterman<B> {
+     fn new(needle: &str, scoring: &Scoring, case_sensitive: bool) -> Self {
+--- a/src/smith_waterman/algo/unicode.rs
++++ b/src/smith_waterman/algo/unicode.rs
+@@ -1,4 +1,4 @@
+-use super::MAX_HAYSTACK_LEN;
++use super::{MAX_HAYSTACK_LEN, valid_haystack_lanes};
+ use crate::smith_waterman::{
+     SmithWaterman,
+     backend::{Backend, BytesVec, MaskVec, ScoreVec},
+@@ -259,15 +259,3 @@
+     }
+ }
+ 
+-#[inline(always)]
+-unsafe fn valid_haystack_lanes<B: Backend>(haystack_len: usize, start: usize) -> B::Mask {
+-    unsafe {
+-        let valid_lanes = haystack_len.saturating_sub(start).min(B::LANES);
+-        let mut bytes = [0u8; 64];
+-        for byte in bytes.iter_mut().take(valid_lanes) {
+-            *byte = u8::MAX;
+-        }
+-        let valid_bytes = B::Bytes::load_partial(bytes.as_ptr(), 0, B::LANES);
+-        valid_bytes.gt(B::Bytes::splat(0))
+-    }
+-}

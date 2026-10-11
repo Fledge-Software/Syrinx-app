@@ -1,0 +1,1221 @@
+//! Connects the shared session to browser chrome without running storage or search on the UI thread.
+
+mod home_palette;
+mod navigation_intents;
+mod navigation_status;
+mod page_lifecycle;
+
+use std::{
+    cell::RefCell,
+    collections::HashSet,
+    num::NonZeroU64,
+    path::PathBuf,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+};
+
+use atlas_core::{TabId, TabModelSnapshot};
+use atlas_platform::browser::{
+    BrowserCommand, BrowserEvent, BrowserHost, BrowserShortcut, PageBounds, set_overlay_owner,
+};
+use atlas_search::{BlankQuery, BoostWeights, Scope, SearchPolicy, Target};
+use futures::{StreamExt, channel::mpsc::unbounded};
+use gpui::StatefulInteractiveElement;
+use gpui::{
+    App, AppContext, Bounds, Context, Div, Entity, FocusHandle, InteractiveElement, IntoElement,
+    KeyBinding, ParentElement, Render, Stateful, Styled, Window, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, actions, div, point, px, rgb, size,
+};
+use gpui_component::Root;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+use home_palette::HomePaletteIntent;
+use navigation_intents::NavigationIntents;
+use navigation_status::NavigationStatus;
+
+use crate::{
+    navigation,
+    palette::{PaletteEvent, PaletteView},
+    session::{self, SessionCommand, SessionEvent, SessionHandle},
+};
+
+const SIDEBAR_WIDTH: f32 = 264.;
+const TOOLBAR_HEIGHT: f32 = 48.;
+const FOOTER_HEIGHT: f32 = 28.;
+
+actions!(
+    browser,
+    [
+        NewTab,
+        CloseTab,
+        Address,
+        Palette,
+        NextTab,
+        PreviousTab,
+        ReopenTab,
+        SavePage,
+        Back,
+        Forward,
+        Reload
+    ]
+);
+
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("ctrl-t", NewTab, None),
+        KeyBinding::new("ctrl-w", CloseTab, None),
+        KeyBinding::new("ctrl-l", Address, None),
+        KeyBinding::new("ctrl-k", Palette, None),
+        KeyBinding::new("ctrl-tab", NextTab, None),
+        KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
+        KeyBinding::new("ctrl-shift-t", ReopenTab, None),
+        KeyBinding::new("ctrl-d", SavePage, None),
+        KeyBinding::new("alt-left", Back, None),
+        KeyBinding::new("alt-right", Forward, None),
+        KeyBinding::new("ctrl-r", Reload, None),
+    ]);
+    crate::palette::bind_keys(cx);
+}
+
+struct PalettePopup {
+    window: WindowHandle<Root>,
+    view: Entity<PaletteView>,
+}
+
+pub struct BrowserView {
+    model: TabModelSnapshot,
+    session_revision: Option<u64>,
+    session: Option<SessionHandle>,
+    browser: Option<BrowserHost>,
+    session_stopped: bool,
+    browser_stopped: bool,
+    browser_ready: bool,
+    closing: bool,
+    loaded: HashSet<TabId>,
+    pending_pages: HashSet<TabId>,
+    navigation_intents: NavigationIntents,
+    navigation_status: NavigationStatus,
+    shown: Option<TabId>,
+    bounds: Option<(i32, i32, u32, u32)>,
+    message: String,
+    failure: Option<String>,
+    focus: FocusHandle,
+    palette: Option<PalettePopup>,
+    home_palette: HomePaletteIntent,
+    parent_hwnd: isize,
+    query_sequence: u64,
+    pending_query: Option<(u64, u64)>,
+    smoke: bool,
+    smoke_navigation: bool,
+    smoke_waiting: bool,
+    outcome: Arc<AtomicU8>,
+}
+
+impl BrowserView {
+    pub fn new(
+        data_dir: PathBuf,
+        smoke: bool,
+        outcome: Arc<AtomicU8>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut view = Self {
+            model: TabModelSnapshot::default(),
+            session_revision: None,
+            session: None,
+            browser: None,
+            session_stopped: true,
+            browser_stopped: true,
+            browser_ready: false,
+            closing: false,
+            loaded: HashSet::new(),
+            pending_pages: HashSet::new(),
+            navigation_intents: NavigationIntents::default(),
+            navigation_status: NavigationStatus::default(),
+            shown: None,
+            bounds: None,
+            message: "Opening your workspace…".to_owned(),
+            failure: None,
+            focus: cx.focus_handle(),
+            palette: None,
+            home_palette: HomePaletteIntent::default(),
+            parent_hwnd: 0,
+            query_sequence: 0,
+            pending_query: None,
+            smoke,
+            smoke_navigation: false,
+            smoke_waiting: false,
+            outcome,
+        };
+        window.focus(&view.focus, cx);
+        match native_handle(window) {
+            Ok(handle) => view.parent_hwnd = handle,
+            Err(error) => {
+                view.fail(error);
+                return view;
+            }
+        }
+        view.start_session(data_dir.join("State"), window, cx);
+        view.start_browser(data_dir.join("WebView2"), window, cx);
+        view
+    }
+
+    fn start_session(&mut self, directory: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let (session, mut events) = match session::spawn(directory) {
+            Ok(started) => started,
+            Err(error) => {
+                self.fail(error.to_string());
+                return;
+            }
+        };
+        self.session = Some(session);
+        self.session_stopped = false;
+        cx.spawn_in(window, async move |view, cx| {
+            while let Some(event) = events.next().await {
+                if view
+                    .update_in(cx, |view, window, cx| view.session_event(event, window, cx))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            if view
+                .update_in(cx, |view, window, cx| {
+                    if !view.session_stopped {
+                        view.fail("The session worker stopped unexpectedly.");
+                        view.session_event(SessionEvent::Stopped, window, cx);
+                    }
+                })
+                .is_err()
+            {
+                eprintln!("Session event stream closed after its window was removed.");
+            }
+        })
+        .detach();
+    }
+
+    fn start_browser(&mut self, profile: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let (browser, mut events) = match BrowserHost::spawn(self.parent_hwnd, profile) {
+            Ok(started) => started,
+            Err(error) => {
+                self.fail(error.to_string());
+                return;
+            }
+        };
+        self.browser = Some(browser);
+        self.browser_stopped = false;
+        cx.spawn_in(window, async move |view, cx| {
+            while let Some(event) = events.next().await {
+                if view
+                    .update_in(cx, |view, window, cx| view.browser_event(event, window, cx))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            if view
+                .update_in(cx, |view, window, cx| {
+                    if !view.browser_stopped {
+                        view.fail("The page host stopped unexpectedly.");
+                        view.browser_event(BrowserEvent::Stopped, window, cx);
+                    }
+                })
+                .is_err()
+            {
+                eprintln!("Browser event stream closed after its window was removed.");
+            }
+        })
+        .detach();
+    }
+
+    fn session_event(&mut self, event: SessionEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            SessionEvent::State(snapshot) => {
+                // Restored sessions already have saved revisions; only the first state is startup.
+                let initial = self.session_revision.replace(snapshot.revision).is_none();
+                let saved_message = if initial
+                    && !snapshot.model.tabs.is_empty()
+                    && snapshot.previous_shutdown == atlas_store::ShutdownState::Unclean
+                {
+                    "Recovered the saved session after an interrupted exit."
+                } else {
+                    "Saved locally"
+                };
+                let new_home = self.home_palette.acknowledge(
+                    &snapshot.model,
+                    &snapshot.created,
+                    snapshot.home_entry,
+                );
+                self.model = snapshot.model;
+                self.navigation_status.retain(&self.model);
+                if !self.closing {
+                    if let Some(id) = snapshot.navigate {
+                        self.navigation_status.forget(id);
+                    }
+                    self.message = self
+                        .navigation_status
+                        .active_message(&self.model)
+                        .unwrap_or(saved_message)
+                        .to_owned();
+                }
+                if let Some(id) = snapshot.navigate
+                    && !self.closing
+                {
+                    self.navigate_committed(id);
+                }
+                self.sync_pages();
+                if self.smoke && self.model.tabs.is_empty() && !self.closing {
+                    self.command(SessionCommand::NewTab {
+                        address: "about:blank".to_owned(),
+                    });
+                }
+                if new_home && !self.closing && !self.smoke {
+                    self.open_palette(false, window, cx);
+                }
+            }
+            SessionEvent::Search { request_id, result } => {
+                if let Some((pending, local)) = self.pending_query
+                    && pending == request_id
+                    && let Some(palette) = &self.palette
+                {
+                    let failed = result.is_err();
+                    let accepted = palette
+                        .view
+                        .update(cx, |palette, cx| palette.receive(local, result, cx));
+                    if self.smoke && accepted && failed {
+                        self.outcome.store(2, Ordering::Release);
+                    }
+                }
+            }
+            SessionEvent::Failure { error, fatal } => {
+                if self.smoke {
+                    self.outcome.store(2, Ordering::Release);
+                }
+                if fatal {
+                    self.fail(format!("Storage stopped: {error}"));
+                } else {
+                    self.message = error.to_string();
+                }
+            }
+            SessionEvent::Stopped => {
+                if !self.closing && self.failure.is_none() {
+                    self.fail("Local storage stopped. Restart Atlas before continuing.");
+                }
+                self.session_stopped = true;
+                if let Some(session) = self.session.take()
+                    && let Err(error) = session.join()
+                {
+                    self.fail(error.to_string());
+                }
+                self.finish_close(cx);
+            }
+        }
+        if self.closing {
+            window.refresh();
+        }
+        cx.notify();
+    }
+
+    fn browser_event(&mut self, event: BrowserEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(message) = self.navigation_status.observe(
+            &event,
+            &self.model,
+            &self.loaded,
+            &self.pending_pages,
+            self.closing,
+        ) {
+            self.message = message.to_owned();
+        }
+        match event {
+            BrowserEvent::Ready => {
+                self.browser_ready = true;
+                self.resize_pages(window);
+                self.sync_pages();
+            }
+            BrowserEvent::Title { id, title } => self.metadata(id, Some(title), None),
+            BrowserEvent::CloseRequested { id } => {
+                if let Some(command) = page_lifecycle::observed_close(id, self.closing) {
+                    self.command(command);
+                }
+            }
+            BrowserEvent::Created { id } => {
+                if let Ok(id) = TabId::new(id)
+                    && page_lifecycle::created(id, &mut self.pending_pages, &mut self.loaded)
+                {
+                    self.sync_pages();
+                    self.finish_smoke(cx);
+                }
+            }
+            BrowserEvent::CreationFailed { id, error } => {
+                let active = self.active_page_feedback(id);
+                if let Ok(id) = TabId::new(id) {
+                    self.pending_pages.remove(&id);
+                    self.navigation_status.forget(id);
+                }
+                if active {
+                    self.message = format!("{error}. Select the tab to retry.");
+                }
+                if self.smoke {
+                    self.outcome.store(2, Ordering::Release);
+                    self.request_close(cx);
+                }
+            }
+            BrowserEvent::NavigationCompleted { id, success } => {
+                if self.smoke
+                    && self
+                        .model
+                        .active_id
+                        .is_some_and(|active| active.get() == id)
+                {
+                    self.smoke_navigation = success;
+                    if !success {
+                        self.outcome.store(2, Ordering::Release);
+                        self.request_close(cx);
+                    } else {
+                        self.finish_smoke(cx);
+                    }
+                }
+            }
+            BrowserEvent::ProcessFailed { kind, .. } => {
+                self.fail(format!(
+                    "The page engine reported failure {kind}. Restart Atlas if the page does not recover."
+                ));
+                if self.smoke {
+                    self.request_close(cx);
+                }
+            }
+            BrowserEvent::Url { id, url } => self.metadata(id, None, Some(url)),
+            BrowserEvent::Loading { .. } => {}
+            BrowserEvent::Shortcut(shortcut) => self.shortcut(shortcut, window, cx),
+            BrowserEvent::PopupBlocked { id } => {
+                if self.active_page_feedback(id) {
+                    self.message = "This preview cannot open this site's popup yet.".to_owned();
+                }
+            }
+            BrowserEvent::Error { tab, error } => {
+                if tab.is_none() {
+                    self.fail(error.to_string());
+                } else if tab.is_some_and(|id| self.active_page_feedback(id)) {
+                    self.message = error.to_string();
+                }
+                if self.smoke {
+                    self.outcome.store(2, Ordering::Release);
+                    self.request_close(cx);
+                }
+            }
+            BrowserEvent::Stopped => {
+                if !self.closing && self.failure.is_none() {
+                    self.fail("The page host stopped. Restart Atlas before continuing.");
+                }
+                self.browser_stopped = true;
+                self.browser_ready = false;
+                if let Some(browser) = self.browser.take()
+                    && let Err(error) = browser.join()
+                {
+                    self.fail(error.to_string());
+                }
+                if self.closing && !self.session_stopped {
+                    self.command(SessionCommand::Shutdown);
+                }
+                self.finish_close(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn active_page_feedback(&self, raw_id: u64) -> bool {
+        !self.closing
+            && navigation_status::owned_page(raw_id, &self.model, &self.loaded, &self.pending_pages)
+                .is_some_and(|id| self.model.active_id == Some(id))
+    }
+
+    fn fail(&mut self, message: impl Into<String>) {
+        // Normal loading and save notices must not conceal a stopped worker or engine failure.
+        self.outcome.store(2, Ordering::Release);
+        self.failure = Some(message.into());
+    }
+
+    fn metadata(&mut self, id: u64, title: Option<String>, address: Option<String>) {
+        let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id) else {
+            return;
+        };
+        self.command(SessionCommand::ObserveMetadata {
+            id: tab.id,
+            title,
+            address,
+        });
+    }
+
+    fn command(&mut self, command: SessionCommand) {
+        let Some(session) = &self.session else {
+            self.message = "Local storage is unavailable.".to_owned();
+            return;
+        };
+        if self.home_palette.send(&session.commands, command).is_err() {
+            self.message = "The session worker is unavailable.".to_owned();
+        }
+    }
+
+    fn page_command(&mut self, command: BrowserCommand) -> bool {
+        let Some(browser) = &self.browser else {
+            self.message = "The page host is unavailable.".to_owned();
+            return false;
+        };
+        match browser.send(command) {
+            Ok(()) => true,
+            Err(error) => {
+                self.message = error.to_string();
+                false
+            }
+        }
+    }
+
+    fn sync_pages(&mut self) {
+        let desired =
+            self.navigation_intents
+                .desired_page(&self.model, self.browser_ready, self.smoke);
+        if !self.browser_ready {
+            return;
+        }
+        let removed = page_lifecycle::removed(&self.model, &self.loaded, &self.pending_pages);
+        for id in removed {
+            if self.page_command(BrowserCommand::Close { id: id.get() }) {
+                self.loaded.remove(&id);
+                self.pending_pages.remove(&id);
+            }
+        }
+        if let Some((id, url)) = &desired
+            && !self.loaded.contains(id)
+            && !self.pending_pages.contains(id)
+        {
+            let queued = self.page_command(BrowserCommand::Create {
+                id: id.get(),
+                url: url.clone(),
+            });
+            if queued {
+                self.pending_pages.insert(*id);
+            }
+            self.navigation_intents.creation_queued(*id, queued);
+        }
+        let next = desired
+            .map(|(id, _)| id)
+            .filter(|id| self.loaded.contains(id));
+        if next != self.shown && self.page_command(BrowserCommand::ShowActive(next.map(TabId::get)))
+        {
+            self.shown = next;
+            if self.palette.is_none()
+                && let Some(id) = next
+            {
+                self.page_command(BrowserCommand::Focus { id: id.get() });
+            }
+        }
+    }
+
+    fn navigate(&mut self, text: String, force_search: bool) {
+        let url = match navigation::destination(&text, force_search) {
+            Ok(url) => url,
+            Err(message) => {
+                self.message = message.to_owned();
+                return;
+            }
+        };
+        self.command(SessionCommand::NavigateActive { address: url });
+    }
+
+    fn navigate_committed(&mut self, id: TabId) {
+        let Some(tab) = self.model.tabs.iter().find(|tab| tab.id == id) else {
+            self.fail("The acknowledged navigation has no live tab.");
+            return;
+        };
+        let url = tab.metadata.address.clone();
+        // The browser queue preserves Create before a second address submitted during loading.
+        if self.loaded.contains(&id) || self.pending_pages.contains(&id) {
+            self.page_command(BrowserCommand::Navigate { id: id.get(), url });
+        } else {
+            // Keep the committed destination until this tab can create its native page.
+            self.navigation_intents.remember(id, url);
+        }
+    }
+
+    fn switch_tab(&mut self, backwards: bool) {
+        self.command(SessionCommand::CycleActive { backwards });
+    }
+
+    fn close_tab(&mut self) {
+        self.command(SessionCommand::CloseActive);
+    }
+
+    fn shortcut(&mut self, shortcut: BrowserShortcut, window: &mut Window, cx: &mut Context<Self>) {
+        match shortcut {
+            BrowserShortcut::NewTab => self.command(SessionCommand::NewTab {
+                address: "about:blank".to_owned(),
+            }),
+            BrowserShortcut::CloseTab => self.close_tab(),
+            BrowserShortcut::Address => self.open_palette(true, window, cx),
+            BrowserShortcut::Palette => self.open_palette(false, window, cx),
+            BrowserShortcut::NextTab => self.switch_tab(false),
+            BrowserShortcut::PreviousTab => self.switch_tab(true),
+            BrowserShortcut::ReopenTab => self.command(SessionCommand::ReopenClosed),
+            BrowserShortcut::SavePage => self.command(SessionCommand::SaveActive),
+            BrowserShortcut::Back => {
+                if let Some(id) = self.shown {
+                    self.page_command(BrowserCommand::Back { id: id.get() });
+                }
+            }
+            BrowserShortcut::Forward => {
+                if let Some(id) = self.shown {
+                    self.page_command(BrowserCommand::Forward { id: id.get() });
+                }
+            }
+            BrowserShortcut::Reload => {
+                if let Some(id) = self.shown {
+                    self.page_command(BrowserCommand::Reload { id: id.get() });
+                }
+            }
+        }
+    }
+
+    fn open_palette(&mut self, address: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(palette) = &self.palette {
+            let view = palette.view.clone();
+            if palette
+                .window
+                .update(cx, |_, popup, cx| {
+                    popup.activate_window();
+                    view.update(cx, |palette, cx| palette.focus_input(popup, cx));
+                })
+                .is_err()
+            {
+                self.palette = None;
+                self.pending_query = None;
+                self.home_palette.finish_entry();
+                self.message =
+                    "The palette window is no longer available. Open it again.".to_owned();
+                cx.notify();
+            }
+            return;
+        }
+        // A new popup restarts its local request IDs; results from its predecessor are obsolete.
+        self.pending_query = None;
+        let initial = if address {
+            self.active_address()
+        } else {
+            String::new()
+        };
+        let (events, mut receiver) = unbounded();
+        let parent = self.parent_hwnd;
+        let retained = Rc::new(RefCell::new(None));
+        let popup_retained = retained.clone();
+        let ownership_error = Rc::new(RefCell::new(None));
+        let popup_error = ownership_error.clone();
+        let main_bounds = window.bounds();
+        let width = f32::from(main_bounds.size.width).min(680.);
+        let popup_bounds = Bounds::new(
+            point(
+                main_bounds.origin.x + px((f32::from(main_bounds.size.width) - width) / 2.),
+                main_bounds.origin.y + px(100.),
+            ),
+            size(px(width), px(480.)),
+        );
+        let popup = cx.open_window(
+            WindowOptions {
+                kind: WindowKind::PopUp,
+                titlebar: None,
+                window_bounds: Some(WindowBounds::Windowed(popup_bounds)),
+                focus: true,
+                ..Default::default()
+            },
+            move |popup, cx| {
+                popup.set_window_title("Atlas command palette");
+                let ownership = native_handle(popup)
+                    .map_err(str::to_owned)
+                    .and_then(|handle| {
+                        set_overlay_owner(handle, parent).map_err(|error| error.to_string())
+                    });
+                if let Err(error) = ownership {
+                    *popup_error.borrow_mut() = Some(error);
+                }
+                let close_events = events.clone();
+                popup.on_window_should_close(cx, move |_, _| {
+                    if close_events.unbounded_send(PaletteEvent::Closed).is_err() {
+                        eprintln!("Palette closed after its browser receiver stopped.");
+                    }
+                    true
+                });
+                let palette = cx.new(|cx| PaletteView::new(initial, events, popup, cx));
+                *popup_retained.borrow_mut() = Some(palette.clone());
+                let root = cx.new(|cx| Root::new(palette.clone(), popup, cx));
+                popup.defer(cx, move |popup, cx| {
+                    popup.activate_window();
+                    palette.update(cx, |palette, cx| palette.focus_input(popup, cx));
+                });
+                root
+            },
+        );
+        match popup {
+            Ok(handle) => {
+                if let Some(error) = ownership_error.borrow_mut().take() {
+                    self.message = error;
+                    if handle
+                        .update(cx, |_, window, _| window.remove_window())
+                        .is_err()
+                    {
+                        self.message = "Cannot close the failed palette window.".to_owned();
+                    }
+                    return;
+                }
+                self.palette = Some(PalettePopup {
+                    window: handle,
+                    view: retained.borrow_mut().take().expect("opened palette view"),
+                });
+                self.message = "Palette open".to_owned();
+            }
+            Err(_) => {
+                self.message = "Cannot open the command palette.".to_owned();
+                return;
+            }
+        }
+        let palette_id = self
+            .palette
+            .as_ref()
+            .expect("opened palette")
+            .view
+            .entity_id();
+        cx.spawn_in(window, async move |view, cx| {
+            while let Some(event) = receiver.next().await {
+                let closed = !matches!(event, PaletteEvent::Query { .. });
+                // A late event from a closed popup must not act on a replacement popup.
+                let delivered = view.update_in(cx, |view, window, cx| {
+                    if view
+                        .palette
+                        .as_ref()
+                        .is_none_or(|palette| palette.view.entity_id() != palette_id)
+                    {
+                        return false;
+                    }
+                    view.palette_event(event, window, cx);
+                    true
+                });
+                if !matches!(delivered, Ok(true)) {
+                    break;
+                }
+                if closed {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn palette_event(&mut self, event: PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(event, PaletteEvent::Query { .. }) {
+            self.pending_query = None;
+            self.home_palette.finish_entry();
+        }
+        match event {
+            PaletteEvent::Query { request_id, text } => {
+                self.query_sequence = self
+                    .query_sequence
+                    .checked_add(1)
+                    .expect("search request IDs exhausted");
+                self.pending_query = Some((self.query_sequence, request_id));
+                self.command(SessionCommand::Query {
+                    request_id: self.query_sequence,
+                    policy: search_policy(&text),
+                    text,
+                    scope: Scope::Everything,
+                });
+            }
+            PaletteEvent::Submit { text, force_search } => {
+                self.palette = None;
+                self.navigate(text, force_search);
+                self.focus_page(window);
+            }
+            PaletteEvent::Activate(target) => {
+                self.palette = None;
+                match target {
+                    Target::Tab(id) => self.command(SessionCommand::FocusTab(id)),
+                    Target::Saved(id) => self.command(SessionCommand::OpenSaved(id)),
+                    _ => {
+                        self.message =
+                            "This destination is not available in the preview.".to_owned()
+                    }
+                }
+                self.focus_page(window);
+            }
+            PaletteEvent::Closed => {
+                self.palette = None;
+                self.focus_page(window);
+            }
+        }
+        cx.notify();
+    }
+
+    fn focus_page(&mut self, window: &mut Window) {
+        window.activate_window();
+        if let Some(id) = self.shown {
+            self.page_command(BrowserCommand::Focus { id: id.get() });
+        }
+    }
+
+    fn active_address(&self) -> String {
+        self.model
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.id) == self.model.active_id)
+            .map_or_else(String::new, |tab| {
+                if tab.metadata.address == "about:blank" {
+                    String::new()
+                } else {
+                    tab.metadata.address.clone()
+                }
+            })
+    }
+
+    pub fn request_close(&mut self, cx: &mut Context<Self>) {
+        if self.closing {
+            return;
+        }
+        self.closing = true;
+        self.message = "Saving and closing…".to_owned();
+        if self.browser_stopped && !self.session_stopped {
+            self.command(SessionCommand::Shutdown);
+        }
+        if !self.browser_stopped {
+            self.page_command(BrowserCommand::Shutdown);
+        }
+        self.finish_close(cx);
+        cx.notify();
+    }
+
+    pub fn smoke_timeout(&mut self, cx: &mut Context<Self>) {
+        if !self.closing {
+            self.outcome.store(2, Ordering::Release);
+            self.request_close(cx);
+        }
+    }
+
+    fn finish_smoke(&mut self, cx: &mut Context<Self>) {
+        if self.smoke
+            && self.smoke_navigation
+            && !self.smoke_waiting
+            && !self.closing
+            && self
+                .model
+                .active_id
+                .is_some_and(|id| self.loaded.contains(&id))
+            && self.outcome.load(Ordering::Acquire) == 0
+        {
+            self.smoke_waiting = true;
+            cx.spawn(async move |view, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
+                if view
+                    .update(cx, |view, cx| {
+                        if !view.closing && view.outcome.load(Ordering::Acquire) == 0 {
+                            view.outcome.store(1, Ordering::Release);
+                            view.request_close(cx);
+                        }
+                    })
+                    .is_err()
+                {
+                    eprintln!("Smoke window closed during its runtime health check.");
+                }
+            })
+            .detach();
+        }
+    }
+
+    fn finish_close(&self, cx: &mut Context<Self>) {
+        if self.closing && self.session_stopped && self.browser_stopped {
+            cx.quit();
+        }
+    }
+
+    fn resize_pages(&mut self, window: &Window) {
+        let viewport = window.viewport_size();
+        let scale = window.scale_factor();
+        let bounds = (
+            ((SIDEBAR_WIDTH + 8.) * scale) as i32,
+            ((TOOLBAR_HEIGHT + 8.) * scale) as i32,
+            ((f32::from(viewport.width) - SIDEBAR_WIDTH - 16.).max(1.) * scale) as u32,
+            ((f32::from(viewport.height) - TOOLBAR_HEIGHT - FOOTER_HEIGHT - 16.).max(1.) * scale)
+                as u32,
+        );
+        if self.bounds != Some(bounds)
+            && self.page_command(BrowserCommand::Resize(PageBounds {
+                x: bounds.0,
+                y: bounds.1,
+                width: bounds.2,
+                height: bounds.3,
+            }))
+        {
+            self.bounds = Some(bounds);
+        }
+    }
+
+    fn toolbar(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .h(px(TOOLBAR_HEIGHT))
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_2()
+            .bg(rgb(0x141519))
+            .child(button("back", "‹").on_click(cx.listener(|this, _, _, cx| {
+                if let Some(id) = this.shown {
+                    this.page_command(BrowserCommand::Back { id: id.get() });
+                }
+                cx.notify();
+            })))
+            .child(
+                button("forward", "›").on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(id) = this.shown {
+                        this.page_command(BrowserCommand::Forward { id: id.get() });
+                    }
+                    cx.notify();
+                })),
+            )
+            .child(
+                button("reload", "↻").on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(id) = this.shown {
+                        this.page_command(BrowserCommand::Reload { id: id.get() });
+                    }
+                    cx.notify();
+                })),
+            )
+            .child(
+                div()
+                    .id("address")
+                    .flex_1()
+                    .h(px(34.))
+                    .px_3()
+                    .rounded_md()
+                    .bg(rgb(0x24262c))
+                    .flex()
+                    .items_center()
+                    .overflow_hidden()
+                    .cursor_text()
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_palette(true, window, cx)),
+                    )
+                    .child(if self.active_address().is_empty() {
+                        "Search or enter address · Ctrl K".to_owned()
+                    } else {
+                        self.active_address()
+                    }),
+            )
+            .child(
+                button("save", "Save page").on_click(cx.listener(|this, _, _, cx| {
+                    this.command(SessionCommand::SaveActive);
+                    cx.notify();
+                })),
+            )
+    }
+
+    fn sidebar(&self, cx: &mut Context<Self>) -> Div {
+        let mut rows = div().flex().flex_col().gap_1();
+        for page in &self.model.saved_pages {
+            let saved_id = page.id;
+            let live = self
+                .model
+                .tabs
+                .iter()
+                .find(|tab| tab.saved_page_id == Some(saved_id))
+                .map(|tab| tab.id);
+            let active = live.is_some() && live == self.model.active_id;
+            let title = if page.metadata.title.is_empty() {
+                page.metadata.address.clone()
+            } else {
+                page.metadata.title.clone()
+            };
+            let mut row = div()
+                .id(("saved", saved_id.get()))
+                .h(px(36.))
+                .px_2()
+                .rounded_md()
+                .flex()
+                .items_center()
+                .gap_2()
+                .bg(rgb(if active { 0x343037 } else { 0x141519 }))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.command(SessionCommand::OpenSaved(saved_id));
+                    cx.notify();
+                }))
+                .child(div().text_color(rgb(0xff8a65)).child("◆"))
+                .child(div().flex_1().overflow_hidden().child(title));
+            if let Some(id) = live {
+                row = row.child(div().id(("unload", id.get())).px_1().child("×").on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.command(SessionCommand::CloseTab(id));
+                        cx.notify();
+                    }),
+                ));
+            }
+            row = row.child(
+                div()
+                    .id(("unsave", saved_id.get()))
+                    .px_1()
+                    .text_color(rgb(0xa3a6ae))
+                    .child("−")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.command(SessionCommand::Unsave(saved_id));
+                        cx.notify();
+                    })),
+            );
+            rows = rows.child(row);
+        }
+        for tab in self
+            .model
+            .tabs
+            .iter()
+            .filter(|tab| tab.saved_page_id.is_none())
+        {
+            let id = tab.id;
+            let title = if tab.metadata.address == "about:blank" {
+                "Home".to_owned()
+            } else if tab.metadata.title.is_empty() {
+                tab.metadata.address.clone()
+            } else {
+                tab.metadata.title.clone()
+            };
+            rows =
+                rows.child(
+                    div()
+                        .id(("tab", id.get()))
+                        .h(px(36.))
+                        .px_2()
+                        .rounded_md()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .cursor_pointer()
+                        .bg(rgb(if Some(id) == self.model.active_id {
+                            0x343037
+                        } else {
+                            0x141519
+                        }))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.command(SessionCommand::FocusTab(id));
+                            cx.notify();
+                        }))
+                        .child("○")
+                        .child(div().flex_1().overflow_hidden().child(title))
+                        .child(div().id(("close", id.get())).px_1().child("×").on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.command(SessionCommand::CloseTab(id));
+                                cx.notify();
+                            }),
+                        )),
+                );
+        }
+        div()
+            .w(px(SIDEBAR_WIDTH))
+            .h_full()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .bg(rgb(0x141519))
+            .child(
+                div()
+                    .px_2()
+                    .text_lg()
+                    .text_color(rgb(0xff8a65))
+                    .child("Atlas"),
+            )
+            .child(
+                button("palette", "Search · Ctrl K").on_click(
+                    cx.listener(|this, _, window, cx| this.open_palette(false, window, cx)),
+                ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(0xa3a6ae))
+                    .px_2()
+                    .child("PLUGINS"),
+            )
+            .children(["Forge", "Notes", "Fledge"].map(|name| {
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_color(rgb(0xa3a6ae))
+                    .child(format!("{name} · coming soon"))
+            }))
+            .child(div().h(px(1.)).bg(rgb(0x24262c)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .px_2()
+                            .text_xs()
+                            .text_color(rgb(0xa3a6ae))
+                            .child("SAVED & OPEN TABS"),
+                    )
+                    .child(
+                        button("new-tab", "+").on_click(cx.listener(|this, _, _, cx| {
+                            this.command(SessionCommand::NewTab {
+                                address: "about:blank".to_owned(),
+                            });
+                            cx.notify();
+                        })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("tab-scroll")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .child(rows),
+            )
+    }
+}
+
+impl Render for BrowserView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.browser_ready && !self.closing {
+            self.resize_pages(window);
+        }
+        let mut page = div().flex_1().h_full();
+        if self.shown.is_none() {
+            page = page
+                .bg(rgb(0x141519))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_4()
+                .child(div().text_3xl().child("Your workspace, together."))
+                .child(
+                    div()
+                        .text_color(rgb(0xa3a6ae))
+                        .child("Open a page, or press Ctrl K to find your tabs and saved pages."),
+                )
+                .child(button("home-search", "Search or enter address").on_click(
+                    cx.listener(|this, _, window, cx| this.open_palette(false, window, cx)),
+                ));
+        }
+        div()
+            .size_full()
+            .text_color(rgb(0xecedf0))
+            .text_sm()
+            .font_family("Segoe UI Variable Text")
+            .track_focus(&self.focus)
+            .flex()
+            .flex_col()
+            .on_action(cx.listener(|this, _: &NewTab, _, cx| {
+                this.command(SessionCommand::NewTab {
+                    address: "about:blank".to_owned(),
+                });
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
+                this.close_tab();
+                cx.notify();
+            }))
+            .on_action(
+                cx.listener(|this, _: &Address, window, cx| this.open_palette(true, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Palette, window, cx| this.open_palette(false, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NextTab, _, cx| {
+                this.switch_tab(false);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &PreviousTab, _, cx| {
+                this.switch_tab(true);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ReopenTab, _, cx| {
+                this.command(SessionCommand::ReopenClosed);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SavePage, _, cx| {
+                this.command(SessionCommand::SaveActive);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Back, _, _| {
+                if let Some(id) = this.shown {
+                    this.page_command(BrowserCommand::Back { id: id.get() });
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Forward, _, _| {
+                if let Some(id) = this.shown {
+                    this.page_command(BrowserCommand::Forward { id: id.get() });
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Reload, _, _| {
+                if let Some(id) = this.shown {
+                    this.page_command(BrowserCommand::Reload { id: id.get() });
+                }
+            }))
+            .child(self.toolbar(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .min_h_0()
+                    .child(self.sidebar(cx))
+                    .child(page),
+            )
+            .child(
+                div()
+                    .h(px(FOOTER_HEIGHT))
+                    .px_3()
+                    .bg(rgb(0x141519))
+                    .flex()
+                    .items_center()
+                    .text_xs()
+                    .text_color(rgb(0xb4b7bf))
+                    .child(self.failure.as_ref().unwrap_or(&self.message).clone()),
+            )
+    }
+}
+
+fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .bg(rgb(0x24262c))
+        .cursor_pointer()
+        .child(label)
+}
+
+fn native_handle(window: &Window) -> Result<isize, &'static str> {
+    let handle =
+        HasWindowHandle::window_handle(window).map_err(|_| "The native window is unavailable.")?;
+    match handle.as_raw() {
+        RawWindowHandle::Win32(handle) => Ok(handle.hwnd.get()),
+        _ => Err("Atlas requires a Windows window."),
+    }
+}
+
+fn search_policy(text: &str) -> SearchPolicy {
+    // These are preview tuning values; the core policy remains an explicit caller input.
+    SearchPolicy {
+        limit: 8,
+        max_typos: u16::from(text.chars().count() >= 4),
+        blank: BlankQuery::All,
+        boosts: BoostWeights {
+            open: 120,
+            frequency: 30,
+            recency: 30,
+            recency_window_secs: NonZeroU64::new(604_800).expect("positive recency window"),
+        },
+    }
+}

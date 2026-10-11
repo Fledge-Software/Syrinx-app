@@ -286,3 +286,198 @@ the patched engine builds and preserves existing behavior. It does not claim
 full P1-04 recovery tests or a new locking-performance measurement. Replace
 the path patch only through a reviewed, owner-approved maintenance change
 to an appropriate published dependency.
+
+## P1-05: the in-memory matcher, 2026-10-10
+
+The palette must search locally on each keystroke (D9), without rebuilding
+its catalogue or sending the query elsewhere. Frizbee supplies the fuzzy
+matching score; `atlas-search` remains responsible for catalogue updates,
+frecency, the open-tab boost, scope counts and the final result limit.
+Upstream's matcher benchmarks do not establish Atlas's complete 5 ms budget
+at 100,000 rows.
+
+The selected pin makes the memory-read policy explicit:
+
+```toml
+frizbee = { version = "=0.13.0", default-features = false, features = ["std", "safe_read"] }
+```
+
+No frizbee archive, source or index entry was found in the existing Cargo
+cache. The published archive was downloaded only for inspection under
+ignored `target/dependency-audit/frizbee-0.13.0/`; that inspection did not
+build it or change the product lockfile. Its SHA-256 is
+`19435f276a44d90570cb403d22fbe4b20c80eabc134f718d6ec0ae888eb47edc`,
+matching the [crates.io version record](https://crates.io/api/v1/crates/frizbee/0.13.0).
+That record identifies 0.13.0 as non-yanked, published on 2026-08-13, with
+Rust 1.89.0 as its minimum. The installed Rust 1.97.1 satisfies it. The
+archive's `.cargo_vcs_info.json` identifies upstream commit
+`d608923f526c57c7ac90b79c0cb1b8619b449179`.
+
+| Active package | Version | Enabled features | Allowed licence | Dependency closure |
+|---|---|---|---|---|
+| frizbee | 0.13.0 | `std`, `safe_read` | MIT | No active normal or build dependencies. |
+
+The published [manifest](https://docs.rs/crate/frizbee/0.13.0/source/Cargo.toml)
+declares no build script. Its only normal dependency is optional serde,
+which stays disabled; `std` forwards to serde only when serde is already
+enabled. The package's dev dependencies are for its own tests and
+benchmarks and do not enter Atlas by depending on the library. The archive's
+MIT licence grants use with its copyright and licence notice retained. No
+new licence exception is required for the selected configuration.
+
+**Product resolution is verified.** The product fetch and lockfile review
+add `atlas-search` and frizbee 0.13.0 with the audited checksum; every
+pre-existing package version remains unchanged. The active Windows graph
+contains only `atlas-core` and frizbee with `std` and `safe_read` beneath
+`atlas-search`. This was checked offline after fetching:
+
+```powershell
+cargo tree -p atlas-search --target x86_64-pc-windows-msvc --edges normal,build,features --offline --locked
+```
+
+Cargo.lock also records frizbee's optional serde edge and serde's derive
+edge, using packages already present in the lockfile. Neither enters the
+active search graph; their appearance does not enable serde or derive for
+frizbee. These are resolution and feature checks, not a passing compilation
+or implementation gate. Enabling serde, bindings or other features requires
+a fresh review of their active closure.
+
+### Maintenance and security evidence
+
+The [upstream repository](https://github.com/saghen/frizbee) is not archived
+and its latest push was 2026-09-18. The
+[release history](https://github.com/saghen/frizbee/blob/main/CHANGELOG.md)
+records recent matching, Unicode and arithmetic fixes. The newest commit
+titled ["fix windows build"](https://github.com/saghen/frizbee/commit/5fa0fa4cb05ad64178af8f21038e8ae135419438)
+changes the C binding's packaging script, not the Rust library used here.
+Do not replace the published pin with unreleased main to pick up that title.
+
+On the review date, the complete, nontruncated
+[RustSec database tree](https://api.github.com/repos/RustSec/advisory-db/git/trees/main?recursive=1)
+contained no `crates/frizbee/` entries, and the
+[upstream published security-advisory list](https://github.com/saghen/frizbee/security/advisories)
+was empty. These are scoped checks for published advisories, not a guarantee
+that no vulnerability or correctness defect exists.
+
+The [upstream safety documentation](https://github.com/saghen/frizbee#safety)
+describes intentional reads beyond a haystack's allocation when a SIMD
+load stays within a memory page. `safe_read` disables that optimization;
+the published `src/prefilter/algo/load.rs` returns false from
+`can_overread` with this feature. Other unsafe SIMD code remains. Upstream
+reports a performance cost without AVX-512, so Atlas's measurements must
+include this feature rather than quoting the faster default configuration.
+
+### API behavior the implementation must preserve
+
+The published [matcher source](https://docs.rs/crate/frizbee/0.13.0/source/src/matcher/mod.rs)
+accepts borrowed lists and returns every match; it is not a persistent
+catalogue and has no Rust top-K parameter. `SortStrategy::IndexAsc` avoids
+sorting by the unmodified fuzzy score before Atlas applies its own ranking.
+Count all matching records before limiting results, then calculate match
+positions only for the finalists. Query changes rebuild the compiled
+matcher when needed; incremental record updates belong to Atlas. Scores
+are `u16`, and input-row indexes are `u32`; excessively large input lists
+panic rather than returning a structured error.
+
+The [Unicode API tests](https://docs.rs/crate/frizbee/0.13.0/source/tests/api_properties.rs)
+confirm that match positions are reverse-ordered UTF-8 byte indexes,
+including continuation bytes. For example, `éx` against `é😀x` returns
+`[6, 1, 0]`. Atlas must produce valid byte ranges in the original displayed
+field rather than treating those values as character or UTF-16 indexes.
+They do not identify complete grapheme clusters.
+
+`Matcher::new` treats query text literally; `from_query` additionally parses
+operators and whitespace-separated patterns. That distinction is visible
+in the [pattern source](https://docs.rs/crate/frizbee/0.13.0/source/src/pattern.rs).
+The default is smart-case matching. The default Unicode mode selects its
+Unicode path only for non-ASCII queries. Frizbee provides no normalization,
+accent folding or complete Unicode case folding; case changes with a
+different byte length or multiple code points are excluded. Record and
+test the chosen behavior rather than promising language-independent matches.
+[Unicode limitations](https://github.com/saghen/frizbee#limitations).
+
+The [scoring implementation](https://docs.rs/crate/frizbee/0.13.0/source/src/smith_waterman/algo/mod.rs)
+uses a greedy fallback when the haystack window remaining after prefiltering
+exceeds 1,024 bytes. It does not guarantee optimal alignment for every long
+title. Very long queries can also saturate scores and increase matrix
+allocation. Preserve valid zero-score matches, test long inputs and
+Unicode highlights, and measure complete ranking, counts and finalist
+highlights with synthetic data before calling P1-05 complete.
+
+## Approved wry close-event patch — 2026-10-10
+
+Page-requested closure must save Atlas's logical tab state before releasing
+the native window. The owner approved the two-file wry 0.57.0 correction in
+`docs/page-close-event-review.md` and the scoped exception for unchanged
+upstream comments and lint annotations. `vendor/wry-0.57.0.provenance.md`
+records the checksum-verified published archive and all 84 baseline/final
+file hashes; only `src/lib.rs` and `src/webview2/mod.rs` differ. The existing
+Apache-2.0/MIT licence files remain byte-for-byte unchanged.
+
+The workspace excludes that directory and selects it through a path patch.
+Comparison with the immediately preceding lockfile confirms that only wry's
+registry source and checksum lines were removed. No version, feature or
+dependency edge changed. The exact dependency pin remains `=0.57.0`.
+`vendor/wry-0.57.0.window-close-requested.patch` is the prepared local
+upstream diff; it has not been sent or published. The separate frizbee and
+COM findings remain outside this approval. Runtime verification is recorded
+in the close-event report, not inferred from source provenance.
+
+## Approved frizbee padding correction — 2026-10-10
+
+The owner approved the exact three-file frizbee 0.13.0 correction and a narrow
+exception for unchanged upstream comments and lint annotations. Zero-filled
+SIMD padding must not become a match or an out-of-range highlight for a NUL
+query. The workspace now selects `vendor/frizbee-0.13.0` through a path patch,
+with the exact `=0.13.0` pin, MIT licence, `std` and `safe_read` unchanged.
+No new dependency or feature is required by this correction.
+
+Independent archive/provenance review verifies all 76 packaged files: exactly
+`src/smith_waterman/algo/ascii.rs`, `mod.rs` and `unicode.rs` differ, and the
+other 73 files remain byte-identical. The complete inventory and final hashes
+are in `vendor/frizbee-0.13.0.provenance.md`; the adjacent `.padding.patch`
+reproduces the exact approved diff. This is a package-specific authorization,
+not permission to patch another dependency or publish an upstream message.
+
+Root's edit record identifies the lockfile change as removal of only
+frizbee's registry source/checksum lines; every subsequent Cargo invocation
+uses `--locked`, and the gate's dependency check passes. No immediate pre-patch
+lockfile snapshot was retained, so this is not an independent whole-lock
+before/after comparison. The large preceding uncommitted dependency graph
+is preserved; do not mistake its diff from HEAD for changes from this patch.
+
+Five public regressions and all eight available scalar/SIMD backend variants
+pass. The private backend harness uses a separately hashed ignored overlay
+and adds no test dependency; it does not modify vendor or disable Atlas tests.
+All 1,040 unchanged benchmark samples preserve their exact checksums and
+counts, but only 9/26 timing cases pass D48. The initial full gate exposed one
+fixture that expected the corrected bug; its test-only replacement preserves
+explicit invalid-range rejection, and all workspace tests now pass. Restricted-context smoke fails; the
+unchanged normal-desktop full gate subsequently passes. Full logs,
+hashes, source scope and limitations are recorded in
+`docs/p1-05-frizbee-maintenance-review.md`.
+
+### Full test pass and restricted-context smoke failure
+
+`target/continuation-frizbee-final-gate.log` (SHA-256
+`d897444e3aafd474f20251e7739f27e7912f437cac9e6fe19896b6fd6a6a72ce`)
+passes dependency checks,
+formatting, workspace Clippy and all 341 workspace tests, including all 147
+search tests and five public matcher regressions. No tests are ignored or
+filtered, and all documentation-test stages pass. The reviewed fixture
+correction preserves strict invalid-range validation; both original NUL
+regressions now pass.
+
+The gate rebuilds `target/local/atlas-app.exe` in 18.05 seconds, SHA-256
+`6edfe4113ccc7b0d5995faccaf7cb23e66541af147712443eb1b17bd9adddf1c`, then fails
+its restricted-context smoke run at the 30-second watchdog. A subsequent
+`Chrome_WidgetWin_0` unregister error reports 1411. This is a failed gate,
+not a passing application check. The unchanged complete gate subsequently
+passes on the normal desktop in `target/continuation-frizbee-desktop-gate.log`,
+ending with `Local gate passed.` Its 341 tests, including 147 search and five
+public matcher regressions, have zero failed, ignored or filtered cases;
+documentation-test stages and application smoke also pass. The log SHA-256 is
+`043845edb8374f2141a6d69935494a473bc51bd216c21969523dee5db6891c5f`.
+The binary hash is unchanged. No security setting or test was relaxed, and no
+continuation job remains active.
+The original WebView2 crash and remaining interactive acceptance stay open.

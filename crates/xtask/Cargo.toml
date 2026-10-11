@@ -7,6 +7,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+atlas-core = { path = "../atlas-core" }
+atlas-search = { path = "../atlas-search" }
 serde_json.workspace = true
 
 [lints]

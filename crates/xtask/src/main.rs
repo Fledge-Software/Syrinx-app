@@ -1,5 +1,6 @@
 //! Runs the local development gate and checks the workspace's dependency boundaries.
 
+mod benchmark;
 mod dependency_policy;
 
 use std::env;
@@ -9,7 +10,7 @@ use std::process::{Command, ExitCode, Stdio};
 #[cfg(not(target_os = "windows"))]
 compile_error!("Atlas's development gate supports Windows 11 only.");
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps>";
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | bench>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.
@@ -36,6 +37,7 @@ fn run() -> Result<(), String> {
     match command.to_str() {
         Some("check") => check_workspace(&root),
         Some("check-deps") => check_dependencies(&root),
+        Some("bench") => benchmark::run(),
         Some("--help" | "-h") => {
             println!("{USAGE}");
             Ok(())
@@ -135,6 +137,8 @@ fn check_workspace(root: &Path) -> Result<(), String> {
             "local",
             "--offline",
             "--locked",
+            "--",
+            "--smoke",
         ],
     )?;
 
