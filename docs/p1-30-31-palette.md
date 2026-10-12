@@ -22,8 +22,12 @@ the built-in commands and `Plugin { plugin, action }` for the plugin host that
 Plan 2 builds. The registry rejects malformed identifiers, empty titles, a
 duplicate identifier and, importantly, a second command claiming the same
 shortcut, so one keystroke can never run two commands depending on
-registration order. It is generic on purpose; it is not a plugin host and no
-plugin can reach it yet.
+registration order. Shortcuts are normalized first (lowercase, modifiers in
+one fixed order, `cmd`/`super` read as `win`), so `Shift-Ctrl-T` conflicts
+with `ctrl-shift-t`. The palette's own keys are reserved: Ctrl K, Esc, Up,
+Down, Enter, Alt Enter, Ctrl Enter and Tab can never be claimed, and Ctrl L
+belongs only to Edit address. It is generic on purpose; it is not a plugin
+host and no plugin can reach it yet.
 
 The ten existing browser commands are registered with the same shortcuts as
 before: New tab (Ctrl T), Close tab (Ctrl W), Reopen closed tab (Ctrl Shift
@@ -56,7 +60,9 @@ mechanism was added (D7). It now has:
   shows a "No plugins yet" empty state;
 - keyboard selection with Up and Down (the list scrolls to keep the selection
   visible), Enter to run or open the selected row, Esc to close and Alt Enter
-  for Search the web, as before;
+  for Search the web, as before. After a prefix, Enter only runs or opens a
+  listed row: `>rel` never becomes a web search for ">rel", and a prefix that
+  matches nothing does nothing. Alt Enter is still an explicit web search;
 - focus restoration through the existing path: after a command, an activation
   or Esc, the main window is activated and the shown page is focused. Edit
   address is the one exception: it reopens the entry popup with the current
@@ -70,7 +76,10 @@ entries. Tab, saved-page and history search stays on the worker as before.
 The alternative, indexing commands in the worker's catalogue, was rejected
 because the worker cannot judge enablement and because its single command
 count cannot tell browser commands from plugin actions, which the Plugin
-actions chip needs.
+actions chip needs. Nothing yet limits how many commands a plugin may add, so
+the deferred-work register's DW-5 (owned by Plan 2, phase 1) requires capping
+the registry or moving this ranking off the UI thread before plugins can
+register commands; a `TODO(DW-5)` marks the ranking site.
 
 ## P1-31: chips, highlights, previews and one activation path
 
@@ -101,20 +110,30 @@ a very long address cannot stall layout. Previews use only the catalogue's
 title and address; page-text previews (tier 2) need the full-text slices
 (P1-23 onwards) and are not part of this work.
 
-**One activation path.** `crates/atlas-core/src/destinations.rs` resolves a
-destination (a tab or a saved page) into one action: focus a live tab, or load
-an unloaded saved page. A saved page that is already open is focused, never
-loaded again (D43). `BrowserView::activate` follows that route for the
-palette, and the sidebar's saved and tab rows now call the same function. The
-session worker's `open_saved` also focuses an existing instance, so even an
-activation racing a model change cannot produce a duplicate. In the results,
-a saved page's live tab is shown once, as its saved row, instead of twice.
+**One activation path.** `crates/atlas-core/src/activation.rs` resolves an
+`ActivationTarget` (a tab or a saved page) into one action: focus a live tab,
+or load an unloaded saved page. A saved page that is already open is focused,
+never loaded again (D43). `BrowserView::activate` is the one path for the
+palette and the sidebar's saved and tab rows. A saved page always goes to the
+session worker as `OpenSaved`, whose `open_saved` focuses an existing instance
+against the worker's own current model; the UI's snapshot can be stale (a
+queued Ctrl W may not have landed yet), so deciding there could turn a click
+into an unknown-tab error. In the results, a saved page's live tab is shown
+once, as its saved row, instead of twice.
 
-**Stale results.** Each query has a request identity. Command rows for a
-query are staged and appear only together with that query's own worker reply,
-so neither the rows nor the chip counts of an older query can replace a newer
-one. Model changes re-run the current query and keep the selected destination
-by identity, as P1-10 already did.
+**Ranking commands against pages.** In Everything a command leads the pages
+only when the typed text is its whole title ("close tab"); otherwise pages come
+first and matching commands follow them, so typing "close" and pressing Enter
+opens a matching page rather than closing the current tab. `>` remains the
+explicit commands-only path.
+
+**Stale results.** Each query has a request identity. Commands are local, so
+rows that will lead the list (every row after a prefix, an exact-title
+command in Everything) show at once; the rest appear only together with that
+query's own worker reply. Neither rows nor chip counts of an older query can
+replace a newer one. A selection the owner moved stays on the same row when
+the reply arrives. Model changes re-run the current query and keep the
+selected destination by identity, as P1-10 already did.
 
 No search request leaves the machine: commands and catalogue rows are ranked
 locally, and the palette adds no network call (D9). P1-32's address-bar work,
@@ -122,7 +141,7 @@ Alt Enter web search changes and D48's speed target are out of scope here.
 
 ## Files
 
-- `crates/atlas-core/src/commands.rs`, `destinations.rs` (new, with tests).
+- `crates/atlas-core/src/commands.rs`, `activation.rs` (new, with tests).
 - `crates/atlas-app/src/palette.rs` and `palette/` (`choices.rs`,
   `commands.rs`, `display.rs`, `query.rs`, `render.rs`).
 - `crates/atlas-app/src/ui.rs`: key bindings from the registry, command
@@ -145,8 +164,12 @@ needs a signed-in account.
    page titled "Café 😀" from a local test file) and search for "café". The
    highlight covers whole characters, never half of one.
 4. Type `>`. Every available command is listed with its shortcut. Type `>rel`
-   and press Enter: the page reloads and keyboard focus is back in the page
-   (type in a text field to confirm).
+   and press Enter straight away: the page reloads and keyboard focus is back
+   in the page (type in a text field to confirm). Type `>zzz` and press Enter:
+   nothing happens, and no Google search opens.
+4a. Without a prefix, type `close` and press Enter while a page titled with
+   "close" is open: that page opens and your tab is not closed. Typing the
+   whole title `close tab` lists the command first.
 5. Type `@`. "No plugins yet" is shown and the Plugin actions chip reads 0.
 6. Type `/` and part of a tab title: only open tabs are listed.
 7. Click the Bookmarks chip, then the Everything chip: the list narrows and

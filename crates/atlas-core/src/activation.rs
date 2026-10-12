@@ -1,10 +1,10 @@
-//! Resolves a destination the sidebar, palette or Favorites can open into one model action (D43/D45).
+//! Resolves a tab or saved page the sidebar, palette or Favorites can open into one model action (D43).
 
 use crate::{SavedPageId, TabId, TabModelSnapshot};
 
 /// Something the owner can open from any surface.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum Destination {
+pub enum ActivationTarget {
     Tab(TabId),
     Saved(SavedPageId),
 }
@@ -19,14 +19,14 @@ pub enum Route {
 }
 
 /// Returns `None` when the destination no longer exists in this snapshot.
-pub fn route(snapshot: &TabModelSnapshot, destination: Destination) -> Option<Route> {
-    match destination {
-        Destination::Tab(id) => snapshot
+pub fn route(snapshot: &TabModelSnapshot, target: ActivationTarget) -> Option<Route> {
+    match target {
+        ActivationTarget::Tab(id) => snapshot
             .tabs
             .iter()
             .any(|tab| tab.id == id)
             .then_some(Route::Focus(id)),
-        Destination::Saved(id) => {
+        ActivationTarget::Saved(id) => {
             // An open saved page is focused, never loaded a second time.
             if let Some(tab) = live_instance(snapshot, id) {
                 return Some(Route::Focus(tab));
@@ -75,11 +75,11 @@ mod tests {
         let saved = model.save_page(tab).expect("save synthetic tab");
         let snapshot = model.snapshot();
         assert_eq!(
-            route(&snapshot, Destination::Saved(saved)),
+            route(&snapshot, ActivationTarget::Saved(saved)),
             Some(Route::Focus(tab))
         );
         assert_eq!(
-            route(&snapshot, Destination::Tab(tab)),
+            route(&snapshot, ActivationTarget::Tab(tab)),
             Some(Route::Focus(tab))
         );
         assert_eq!(live_instance(&snapshot, saved), Some(tab));
@@ -88,10 +88,10 @@ mod tests {
         model.close(tab).expect("close synthetic tab");
         let snapshot = model.snapshot();
         assert_eq!(
-            route(&snapshot, Destination::Saved(saved)),
+            route(&snapshot, ActivationTarget::Saved(saved)),
             Some(Route::Load(saved))
         );
-        assert_eq!(route(&snapshot, Destination::Tab(tab)), None);
+        assert_eq!(route(&snapshot, ActivationTarget::Tab(tab)), None);
 
         // Following the route through the model keeps exactly one live instance.
         let opened = model
@@ -99,7 +99,7 @@ mod tests {
             .expect("load saved page");
         let snapshot = model.snapshot();
         assert_eq!(
-            route(&snapshot, Destination::Saved(saved)),
+            route(&snapshot, ActivationTarget::Saved(saved)),
             Some(Route::Focus(opened))
         );
         let instances = snapshot
@@ -123,10 +123,10 @@ mod tests {
         let saved = model.save_page(tab).expect("save synthetic tab");
         model.remove_saved(saved).expect("remove saved row");
         let snapshot = model.snapshot();
-        assert_eq!(route(&snapshot, Destination::Saved(saved)), None);
+        assert_eq!(route(&snapshot, ActivationTarget::Saved(saved)), None);
         // Removing the saved row leaves its page open as an ordinary tab (D43).
         assert_eq!(
-            route(&snapshot, Destination::Tab(tab)),
+            route(&snapshot, ActivationTarget::Tab(tab)),
             Some(Route::Focus(tab))
         );
     }

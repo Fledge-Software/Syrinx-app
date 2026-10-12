@@ -99,21 +99,62 @@ pub enum CommandAction {
     },
 }
 
-/// A keyboard shortcut in GPUI keystroke syntax, such as `ctrl-shift-t`.
+/// Modifiers in the one order a normalized shortcut spells them; `win` also covers `cmd`/`super`.
+const MODIFIERS: [&str; 5] = ["ctrl", "alt", "shift", "win", "fn"];
+
+/// Keys the palette itself owns while it is open, so no command may claim them.
+const PALETTE_KEYS: [&str; 8] = [
+    "ctrl-k",
+    "escape",
+    "up",
+    "down",
+    "enter",
+    "alt-enter",
+    "ctrl-enter",
+    "tab",
+];
+
+/// Opens the address entry; only the built-in Edit address command may use it.
+const ADDRESS_KEY: &str = "ctrl-l";
+
+/// A keyboard shortcut in GPUI keystroke syntax, normalized so that equal keys compare equal:
+/// `Shift-Ctrl-T` and `ctrl-shift-t` are the same shortcut.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Shortcut(String);
 
 impl Shortcut {
     pub fn new(keystroke: impl Into<String>) -> Result<Self, CommandError> {
-        let keystroke = keystroke.into();
-        let valid = !keystroke.is_empty()
-            && keystroke
-                .split('-')
-                .all(|key| !key.is_empty() && key.bytes().all(|byte| byte.is_ascii_alphanumeric()));
-        if !valid {
+        let keystroke = keystroke.into().to_ascii_lowercase();
+        let parts: Vec<&str> = keystroke.split('-').collect();
+        let Some((key, modifiers)) = parts.split_last() else {
+            return Err(CommandError::InvalidShortcut);
+        };
+        if !is_key_name(key) || modifier_index(key).is_some() {
             return Err(CommandError::InvalidShortcut);
         }
-        Ok(Self(keystroke))
+        let mut present = [false; MODIFIERS.len()];
+        for modifier in modifiers {
+            let index = modifier_index(modifier).ok_or(CommandError::InvalidShortcut)?;
+            // A repeated modifier is a typo, not a different shortcut.
+            if std::mem::replace(&mut present[index], true) {
+                return Err(CommandError::InvalidShortcut);
+            }
+        }
+        let mut normalized: Vec<&str> = MODIFIERS
+            .iter()
+            .zip(present)
+            .filter_map(|(name, on)| on.then_some(*name))
+            .collect();
+        normalized.push(key);
+        Ok(Self(normalized.join("-")))
+    }
+
+    /// Whether only the palette (or, for Ctrl L, Edit address) may use this key.
+    fn is_reserved_for(&self, action: &CommandAction) -> bool {
+        if PALETTE_KEYS.contains(&self.0.as_str()) {
+            return true;
+        }
+        self.0 == ADDRESS_KEY && *action != CommandAction::Browser(BrowserAction::EditAddress)
     }
 
     /// The keystroke as GPUI's key binding parser expects it.
@@ -129,6 +170,18 @@ impl Shortcut {
             .collect::<Vec<_>>()
             .join(" ")
     }
+}
+
+fn is_key_name(key: &str) -> bool {
+    !key.is_empty() && key.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+fn modifier_index(modifier: &str) -> Option<usize> {
+    let canonical = match modifier {
+        "cmd" | "super" => "win",
+        other => other,
+    };
+    MODIFIERS.iter().position(|name| *name == canonical)
 }
 
 fn capitalize(key: &str) -> String {
@@ -169,6 +222,7 @@ pub enum CommandError {
     InvalidTitle,
     DuplicateId,
     DuplicateShortcut,
+    ReservedShortcut,
     TooManyCommands,
 }
 
@@ -180,6 +234,7 @@ impl fmt::Display for CommandError {
             Self::InvalidTitle => "command titles must be non-empty and short",
             Self::DuplicateId => "a command with this identifier is already registered",
             Self::DuplicateShortcut => "another command already uses this shortcut",
+            Self::ReservedShortcut => "this shortcut belongs to the command palette",
             Self::TooManyCommands => "the command registry is full",
         };
         formatter.write_str(message)
@@ -233,12 +288,17 @@ impl CommandRegistry {
         {
             return Err(CommandError::DuplicateId);
         }
+        let Some(shortcut) = &command.shortcut else {
+            return Ok(());
+        };
+        if shortcut.is_reserved_for(&command.action) {
+            return Err(CommandError::ReservedShortcut);
+        }
         // One keystroke must not run two commands depending on registration order.
-        if let Some(shortcut) = &command.shortcut
-            && self
-                .commands
-                .iter()
-                .any(|existing| existing.shortcut.as_ref() == Some(shortcut))
+        if self
+            .commands
+            .iter()
+            .any(|existing| existing.shortcut.as_ref() == Some(shortcut))
         {
             return Err(CommandError::DuplicateShortcut);
         }
@@ -486,7 +546,15 @@ mod tests {
             );
         }
         assert_eq!(CommandId::new("a".repeat(65)), Err(CommandError::InvalidId));
-        for invalid in ["", "ctrl--t", "ctrl-", "ctrl t"] {
+        for invalid in [
+            "",
+            "ctrl--t",
+            "ctrl-",
+            "ctrl t",
+            "hyper-t",
+            "ctrl-ctrl-t",
+            "ctrl-shift",
+        ] {
             assert_eq!(
                 Shortcut::new(invalid),
                 Err(CommandError::InvalidShortcut),
@@ -499,6 +567,34 @@ mod tests {
             Shortcut::new("alt-left").expect("shortcut").label(),
             "Alt Left"
         );
+        // Modifier order and case do not make a different shortcut.
+        assert_eq!(Shortcut::new("Shift-Ctrl-T"), Shortcut::new("ctrl-shift-t"));
+        assert_eq!(
+            Shortcut::new("cmd-k").expect("shortcut").keystroke(),
+            "win-k"
+        );
+    }
+
+    #[test]
+    fn reordered_or_reserved_shortcuts_cannot_be_registered() {
+        let mut registry = CommandRegistry::browser();
+        let before = registry.len();
+        for (keys, error) in [
+            ("shift-ctrl-t", CommandError::DuplicateShortcut),
+            ("ctrl-k", CommandError::ReservedShortcut),
+            ("ctrl-l", CommandError::ReservedShortcut),
+            ("escape", CommandError::ReservedShortcut),
+            ("enter", CommandError::ReservedShortcut),
+            ("alt-enter", CommandError::ReservedShortcut),
+            ("down", CommandError::ReservedShortcut),
+        ] {
+            assert_eq!(
+                registry.register(plugin_command("synthetic.keys", Some(keys))),
+                Err(error),
+                "{keys}"
+            );
+        }
+        assert_eq!(registry.len(), before);
     }
 
     #[test]
