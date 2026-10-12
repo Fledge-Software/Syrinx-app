@@ -109,6 +109,13 @@ you found it in the commit message, not here.
   matching no-op results too. Source: independent integrated-preview review
   of `ui/home_palette.rs` and the session worker (code-confirmed).
 
+- **A hidden non-smoke launch can wait forever on an invisible message
+  box.** Since P1-34, start-up failures and dropped forwarded links show a
+  Windows message box; only `--smoke` suppresses it. A `--test-data-dir`
+  run started with `Start-Process -WindowStyle Hidden` then blocks on a box
+  nobody can see. Use `--smoke` for unattended runs, or launch visibly.
+  Source: P1-34/35 review of `atlas_platform::notice` (code-confirmed).
+
 - **A smoke-test timeout on the GUI thread cannot bound a frozen GUI.** The
   earlier orderly timer also did nothing once shutdown began, so a missing
   worker-stop notification could hang the test. Keep an independent standard

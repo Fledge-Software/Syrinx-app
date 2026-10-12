@@ -33,6 +33,14 @@ use std::{
 #[cfg(not(target_os = "windows"))]
 compile_error!("Atlas v1 supports Windows 11 only.");
 
+/// Profile folder under `%LOCALAPPDATA%`: the installed package (owner decision, 2026-10-12)
+/// uses `Atlas\data`; development and preview runs keep `AtlasProductPreview`.
+const DATA_FOLDER: &str = if cfg!(feature = "installed") {
+    r"Atlas\data"
+} else {
+    "AtlasProductPreview"
+};
+
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     let smoke_requested = arguments.iter().any(|argument| argument == "--smoke");
@@ -284,7 +292,7 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
         PathBuf::from(
             std::env::var_os("LOCALAPPDATA").ok_or("Windows local app data is unavailable.")?,
         )
-        .join("AtlasProductPreview")
+        .join(DATA_FOLDER)
     };
     if smoke {
         reserve_smoke_directory(&directory)?;
