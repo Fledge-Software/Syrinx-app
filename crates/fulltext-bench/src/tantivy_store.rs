@@ -6,19 +6,24 @@ use crate::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ops::Bound,
     path::Path,
 };
 use tantivy::{
     Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term,
     collector::{Count, TopDocs},
     indexer::NoMergePolicy,
-    query::{BooleanQuery, Occur, PhrasePrefixQuery, Query, QueryParser, TermQuery},
+    query::{BooleanQuery, Occur, PhrasePrefixQuery, Query, QueryParser, RangeQuery, TermQuery},
     schema::{
-        Field, INDEXED, IndexRecordOption, STORED, Schema, TextFieldIndexing, TextOptions, Value,
+        FAST, Field, INDEXED, IndexRecordOption, STORED, Schema, TextFieldIndexing, TextOptions,
+        Value,
     },
     snippet::SnippetGenerator,
     tokenizer::{AsciiFoldingFilter, LowerCaser, SimpleTokenizer, TextAnalyzer},
 };
+
+/// Tantivy bounds snippets by characters; FTS5's 16 tokens are roughly 110 to 180 here.
+const SNIPPET_CHARACTERS: usize = 120;
 
 pub struct TantivyStore {
     index: Index,
@@ -45,7 +50,8 @@ impl TantivyStore {
         let title = schema.add_text_field("title", text.clone());
         let url = schema.add_text_field("url", STORED);
         let body = schema.add_text_field("body", text);
-        let captured = schema.add_i64_field("captured", STORED);
+        // A fast, indexed capture time lets expiry select old pages without loading them.
+        let captured = schema.add_i64_field("captured", INDEXED | STORED | FAST);
         let index = if directory.join("meta.json").exists() {
             Index::open_in_dir(directory)?
         } else {
@@ -131,28 +137,49 @@ impl TantivyStore {
         for document in documents {
             self.insert(document)?;
         }
-        self.maintain()
+        self.commit_and_expunge()
     }
 
-    fn maintain(&mut self) -> Result<()> {
-        // Release old readers; even a single segment needs merging if it has deletions.
+    fn commit_and_expunge(&mut self) -> Result<()> {
+        // Rewrite only segments holding deleted documents, so their text leaves the disk.
         self.reader = None;
         self.writer.commit()?;
-        let segments = self.index.searchable_segment_metas()?;
-        if segments.len() > 1
-            || segments
-                .iter()
-                .any(|segment| segment.num_deleted_docs() > 0)
-        {
-            let ids: Vec<_> = segments.iter().map(|segment| segment.id()).collect();
-            self.writer.merge(&ids).wait()?;
+        let dirty: Vec<_> = self
+            .index
+            .searchable_segment_metas()?
+            .iter()
+            .filter(|segment| segment.num_deleted_docs() > 0)
+            .map(|segment| segment.id())
+            .collect();
+        if !dirty.is_empty() {
+            self.writer.merge(&dirty).wait()?;
         }
-        drop(segments);
+        self.collect_garbage()?;
+        self.reload()
+    }
+
+    pub fn optimize(&mut self) -> Result<()> {
+        // Consolidate every segment once, timed apart from ordinary mutations.
+        self.reader = None;
+        let segments: Vec<_> = self
+            .index
+            .searchable_segment_metas()?
+            .iter()
+            .map(|segment| segment.id())
+            .collect();
+        if segments.len() > 1 {
+            self.writer.merge(&segments).wait()?;
+        }
+        self.collect_garbage()?;
+        self.reload()
+    }
+
+    fn collect_garbage(&mut self) -> Result<()> {
         let garbage = self.writer.garbage_collect_files().wait()?;
         if !garbage.failed_to_delete_files.is_empty() {
             return Err("Tantivy retention garbage collection failed".into());
         }
-        self.reload()
+        Ok(())
     }
 
     fn rows(&self) -> Result<Vec<TantivyDocument>> {
@@ -171,25 +198,16 @@ impl TantivyStore {
     }
 
     pub fn expire(&mut self) -> Result<usize> {
-        let mut expired = 0;
-        for row in self.rows()? {
-            if row.get_first(self.deleted).is_some() {
-                continue;
-            }
-            let captured = row
-                .get_first(self.captured)
-                .and_then(|value| value.as_i64())
-                .ok_or("missing captured timestamp")?;
-            if captured <= CUTOFF {
-                let id = row
-                    .get_first(self.id)
-                    .and_then(|value| value.as_u64())
-                    .ok_or("missing id")?;
-                self.remove(id as usize);
-                expired += 1;
-            }
-        }
-        self.maintain()?;
+        // Tombstones carry no capture time, so the range selects only expired pages.
+        let expired_range = || {
+            RangeQuery::new(
+                Bound::Unbounded,
+                Bound::Included(Term::from_field_i64(self.captured, CUTOFF)),
+            )
+        };
+        let expired = self.searcher()?.search(&expired_range(), &Count)?;
+        self.writer.delete_query(Box::new(expired_range()))?;
+        self.commit_and_expunge()?;
         Ok(expired)
     }
 
@@ -209,12 +227,13 @@ impl TantivyStore {
         Ok(QueryParser::for_index(&self.index, vec![self.title, self.body]).parse_query(query)?)
     }
 
-    pub fn query(&self, text: &str) -> Result<usize> {
+    pub fn query(&self, text: &str) -> Result<Vec<u64>> {
         let searcher = self.searcher()?;
         let query = self.parse(text)?;
         let results = searcher.search(&query, &TopDocs::with_limit(20).order_by_score())?;
         let mut snippets = self.snippets(&searcher, &*query, text)?;
-        snippets.set_max_num_chars(120);
+        snippets.set_max_num_chars(SNIPPET_CHARACTERS);
+        let mut ids = Vec::with_capacity(results.len());
         for (_, address) in &results {
             let row: TantivyDocument = searcher.doc(*address)?;
             let id = row
@@ -225,9 +244,10 @@ impl TantivyStore {
             if snippet.is_empty() {
                 return Err("body query returned an empty snippet".into());
             }
-            std::hint::black_box((id, snippet));
+            std::hint::black_box(snippet);
+            ids.push(id);
         }
-        Ok(results.len())
+        Ok(ids)
     }
 
     fn snippets(
@@ -261,7 +281,7 @@ impl TantivyStore {
             weights,
             self.index.tokenizer_for_field(self.body)?,
             self.body,
-            120,
+            SNIPPET_CHARACTERS,
         ))
     }
 
@@ -324,7 +344,7 @@ impl TantivyStore {
             }
         }
         drop(searcher);
-        self.maintain()
+        self.commit_and_expunge()
     }
 
     pub fn crash_prepare(&mut self) -> Result<()> {

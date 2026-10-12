@@ -17,11 +17,49 @@ The raw polling evidence is `target/p1-23-comparison-20261012-load.csv`; the dea
 
 Before P1-24, complete and review the same-corpus performance comparison and its retention/recovery costs. If Tantivy is chosen, resolve RUSTSEC-2026-0253 in an audited upstream dependency graph before production integration. Its integer-key store cache does not expose the inspected trigger, but that observation is not permission to ship the affected package. No lru patch or vendor change was made.
 
-Shared tracked files changed are `Cargo.lock`, the P1-23 row only in `docs/implementation-status.md`, and two full-text findings in `docs/trapstoknow.md`. Other changes are confined to the benchmark crate and its two P1-23 documents. No workspace manifest, dependency-policy, product, decision or vendor source changed. No deferred-work marker was added. This is a verified implementation checkpoint, not slice completion; independent review and any owner-approved merge remain outstanding. Nothing was merged, rebased or pushed, and P1-24 remains unstarted.
+Shared tracked files changed are `Cargo.lock`, the P1-23 row only in `docs/implementation-status.md`, two full-text findings in `docs/trapstoknow.md`, and (since the review corrections below) the Tantivy/benchmark quarantine in `crates/xtask/src/dependency_policy.rs`. Other changes are confined to the benchmark crate and its two P1-23 documents. No workspace manifest, product, decision or vendor source changed. No deferred-work marker was added. This is a verified implementation checkpoint, not slice completion; independent review and any owner-approved merge remain outstanding. Nothing was merged, rebased or pushed, and P1-24 remains unstarted.
+
+## Review corrections, 2026-10-12
+
+An independent review found that the harness could not yet produce a fair or complete comparison. The corrections below change what each run measures, so the quiet-machine runs must use this source; the earlier 2,000-document smokes and the FTS5-only baseline further down were taken with the old protocol and are not comparable with new results.
+
+**Memory is now measured.** The plan asks for memory beside latency, and nothing recorded it. After each benchmark process exits, `run-comparison.ps1` reads the process's peak working set and peak private (pagefile-backed) bytes, the counters .NET exposes as `PeakWorkingSet64` and `PeakPagedMemorySize64`. .NET clears those properties once a process exits, so the script holds the process handle and reads the same counters through `K32GetProcessMemoryInfo` in an inline PowerShell type; `windows-sys` stays out of the benchmark crate because the dependency policy reserves it for `atlas-platform`. Each run's CSV gains `process_peak_working_set_bytes` and `process_peak_paged_memory_bytes` lines, and `target/<label>-memory.csv` collects one row per process, including failed ones. The forced-kill crash writer is a separate grandchild process and is not included. A 2,000-document Tantivy probe read the counters successfully after exit.
+
+**The dependency is quarantined.** `crates/xtask/src/dependency_policy.rs` now rejects any workspace crate that depends on `fulltext-bench`, and any crate other than `fulltext-bench` that depends on `tantivy`, in every dependency kind and under renames. `quarantines_the_fulltext_bench_and_tantivy` checks that the benchmark is permitted and that three violations fail. Without this, a product crate could pick up Tantivy, and with it the unresolved lru advisory, without anyone deciding to.
+
+**Expiry is compared on equal terms (D40).** Previously Tantivy expiry loaded every stored document to find old ones, and FTS5 ran `optimize` after every batch, so both expiry figures mostly measured work a production design would not do. Now:
+
+- Tantivy indexes `captured` as an indexed fast field and expires with one range delete. After each commit it merges only segments that hold deleted documents, because that merge is how Tantivy physically removes their text.
+- FTS5 keeps a small `captured(id, at)` table with an index on `at`, maintained with every insert and delete, and expires through it instead of scanning page bodies. It relies on FTS5 `secure-delete` and SQLite `secure_delete` to remove deleted text, and truncates the WAL after every mutation so old frames do not keep it.
+- Each engine consolidates its index exactly once, in a new `maintenance_once` operation after bulk ingestion and before the queries, reported with `disk_after_maintenance`. The expiry operation is now `expiry` rather than `expiry_and_maintenance`. Queries therefore still run on a consolidated index, as they did before.
+
+**Reopen and verification are timed apart.** `reopen_and_verify` became `reopen` and `verify_after_reopen`, and `stale_replay_and_verify` became `stale_replay` and `verify_after_replay`; the stale documents are now generated outside timing. Reopen includes each engine's own crash recovery (SQLite's WAL recovery during the opening statements, Tantivy's garbage collection of the killed writer's prepared segments) and is comparable across engines. The two verifications check different structures (SQLite and FTS5 integrity checks against Tantivy checksums and a scan of every stored document), so compare each only with itself.
+
+**Smaller points.**
+
+- Snippet sizes still differ in unit: FTS5 returns 16 tokens and Tantivy 120 characters, named `SNIPPET_CHARACTERS` in `tantivy_store.rs`. In these corpora 16 tokens are roughly 110 to 180 characters, so the work is similar but not identical. Neither engine offers the other's unit.
+- The engine-agreement test now uses 1,000 documents and compares top-20 rankings as well as hit counts. Where all matches fit in 20, both engines must return the same set; on the broad corpus, larger result sets must share at least 60% of their top 20 (the lowest observed share is 14 of 20, for `lexeme000*`). Each run's CSV now lists the ranked top-20 IDs per query, outside timing, so the quiet runs can be compared across engines.
+- The overlap corpus is a degenerate case: nearly every page contains every query term, so ranking reduces to near-ties and the hit counts are the whole corpus. Its rankings are not asserted; the prefix query `orb*` shares 0 of 20 there, a tie-breaking difference rather than a relevance finding. The broad corpus is the meaningful comparison, and its results should decide the engine.
+- Tests now create their directories under the system temporary folder and remove them when each test ends, instead of leaving them in a hard-coded `target/p1-23-tests`.
+
+**Validation.** All four benchmark tests and the eight dependency-policy tests pass, `cargo xtask check-deps` passes on the real workspace, and four 2,000-document correctness smokes (both engines, both corpora) expired 800 pages, recovered after the forced kill, rejected stale replay and kept 1,200, with identical hit counts across engines. These smokes overlapped other work and are not performance evidence. The full gate result is recorded in the commit message. No timing benchmark was run.
+
+**Recommendation unchanged.** Keep FTS5 as the control and defer the engine choice until the quiet measurement. If Tantivy is chosen, RUSTSEC-2026-0253 in `lru 0.16.4` still blocks its production use until an audited upstream graph resolves it.
+
+### Commands for the quiet machine
+
+Run these from this worktree with no other builds running, using a fresh label each time:
+
+```powershell
+cargo build -p fulltext-bench --profile local --offline --locked
+powershell -NoProfile -File crates/fulltext-bench/run-comparison.ps1 -Label p1-23-quiet-<date> -QuietWaitMinutes 20
+```
+
+The results are `target/p1-23-quiet-<date>-<corpus>-<engine>-<run>.csv`, the memory summary `target/p1-23-quiet-<date>-memory.csv` and the build-load log `target/p1-23-quiet-<date>-load.csv`. Record the logical processor count (`$env:NUMBER_OF_PROCESSORS`) beside them.
 
 ## 2026-10-12 continuation: comparison method
 
-The benchmark now pins Tantivy 0.26.2 with only `mmap` and `lz4-compression` enabled. Its already-audited 36 additional registry packages enter Cargo.lock without upgrading/removing any existing version. `fulltext-bench` alone declares Tantivy; the workspace manifest, dependency policy, product crates and vendor patches are unchanged.
+The benchmark now pins Tantivy 0.26.2 with only `mmap` and `lz4-compression` enabled. Its already-audited 36 additional registry packages enter Cargo.lock without upgrading/removing any existing version. `fulltext-bench` alone declares Tantivy, and since the review corrections the dependency policy enforces that; the workspace manifest, product crates and vendor patches are unchanged.
 
 Both engines use the shared orchestration in `crates/fulltext-bench/src/main.rs` and `engine.rs`. Every run starts from a newly created directory, materializes the same deterministic corpus before timing bulk ingestion, commits 1,000 adds, replaces 1,000 documents and checks the update marker and an added ID, deletes 1,000 documents with durable integer tombstones, then expires all documents at or before the seven-day boundary. The fixed clock, seed `71830312407843`, original high-overlap generator and 100,000-document assumption remain as described below. The two extra queries `lexeme0001` and `lexeme000*` probe the broader vocabulary; they correctly return no matches in the original corpus.
 
