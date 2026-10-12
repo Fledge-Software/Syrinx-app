@@ -8,6 +8,7 @@ mod page;
 pub use lifecycle::CallbackTicket;
 mod permissions;
 mod popups;
+mod recovery;
 mod security;
 pub use security::{ConnectionScheme, ConnectionState, ConnectionStatus};
 
@@ -125,6 +126,21 @@ impl fmt::Debug for BrowserCommand {
 }
 
 pub enum BrowserEvent {
+    PageCrashed {
+        id: u64,
+    },
+    PageRestored {
+        id: u64,
+    },
+    RecoveryStarted {
+        sequence: u64,
+        tabs: Vec<u64>,
+    },
+    RecoveryFinished {
+        sequence: u64,
+        restored: Vec<u64>,
+        failed: Vec<u64>,
+    },
     /// Unwrap with into_current before handling a native callback.
     Callback {
         ticket: CallbackTicket,
@@ -260,6 +276,7 @@ pub enum BrowserError {
     Settings,
     EventRegistration,
     Navigation,
+    Recovery,
     Suspension,
     Visibility,
     Bounds,
@@ -442,14 +459,14 @@ impl Drop for HostCompletion {
 }
 
 #[derive(Clone)]
-struct ShortcutSink {
+struct NativeSink {
     send: Sender<BrowserEvent>,
     thread_id: u32,
 }
 
-impl ShortcutSink {
-    fn post(&self, shortcut: BrowserShortcut, events: EventSink) -> Result<(), BrowserError> {
-        let Some(event) = events.prepare(BrowserEvent::Shortcut(shortcut)) else {
+impl NativeSink {
+    fn post(&self, event: BrowserEvent, events: &EventSink) -> Result<(), BrowserError> {
+        let Some(event) = events.prepare(event) else {
             return Ok(());
         };
         self.send
@@ -473,11 +490,15 @@ fn run(
     let mut state = BrowserState {
         pages: HashMap::new(),
         popups: popups::PopupRequests::default(),
-        environment,
+        environment: Some(environment),
+        profile,
+        unavailable: HashMap::new(),
+        active: None,
+        recovery_sequence: 0,
         bounds: PageBounds::default(),
         parent,
         events: events.clone(),
-        shortcuts: ShortcutSink {
+        shortcuts: NativeSink {
             send: shortcut_send,
             thread_id,
         },
@@ -487,17 +508,14 @@ fn run(
     let mut timer = lifecycle::WakeTimer::default();
     loop {
         // Creation pumps messages internally; drain commands before blocking again.
-        if !drain_commands(&incoming, events, |command| state.apply(command)) {
+        if !drain_commands(&incoming, events, |command| {
+            drain_native(&shortcuts, &mut state)?;
+            state.apply(command)
+        }) {
             return Ok(());
         }
-        // Nested controller creation can consume wake messages, but cannot consume this queue.
-        loop {
-            match shortcuts.try_recv() {
-                Ok(event) => events.emit(event),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return Err(BrowserError::QueueClosed),
-            }
-        }
+        // Handle native callbacks even when there are no commands to drain.
+        drain_native(&shortcuts, &mut state)?;
         for (id, page) in &state.pages {
             if let Err(error) = page.tick() {
                 events.emit(BrowserEvent::Error {
@@ -512,6 +530,19 @@ fn run(
             -1 => return Err(BrowserError::MessageLoop),
             0 => return Ok(()),
             _ => dispatch(message),
+        }
+    }
+}
+
+fn drain_native(
+    incoming: &Receiver<BrowserEvent>,
+    state: &mut BrowserState,
+) -> Result<(), BrowserError> {
+    loop {
+        match incoming.try_recv() {
+            Ok(event) => state.native_event(event),
+            Err(TryRecvError::Empty) => return Ok(()),
+            Err(TryRecvError::Disconnected) => return Err(BrowserError::QueueClosed),
         }
     }
 }
@@ -547,11 +578,15 @@ fn drain_commands(
 struct BrowserState {
     pages: HashMap<u64, Page>,
     popups: popups::PopupRequests,
-    environment: ICoreWebView2Environment,
+    environment: Option<ICoreWebView2Environment>,
+    profile: PathBuf,
+    unavailable: HashMap<u64, String>,
+    active: Option<u64>,
+    recovery_sequence: u64,
     bounds: PageBounds,
     parent: isize,
     events: EventSink,
-    shortcuts: ShortcutSink,
+    shortcuts: NativeSink,
 }
 
 impl BrowserState {
@@ -559,13 +594,17 @@ impl BrowserState {
         if id == 0 {
             return Err(BrowserError::InvalidTab);
         }
-        if self.pages.contains_key(&id) {
+        if self.pages.contains_key(&id) || self.unavailable.contains_key(&id) {
             return Err(BrowserError::DuplicateTab);
         }
+        self.build_page(id)
+    }
+
+    fn build_page(&self, id: u64) -> Result<Page, BrowserError> {
         Page::new(
             id,
             self.parent,
-            &self.environment,
+            self.environment.as_ref().ok_or(BrowserError::Environment)?,
             self.bounds,
             self.events.clone(),
             self.shortcuts.clone(),
@@ -576,6 +615,7 @@ impl BrowserState {
     fn apply(&mut self, command: BrowserCommand) -> Result<(), BrowserError> {
         match command {
             BrowserCommand::Create { id, url } => {
+                self.ensure_environment()?;
                 let page = self.new_page(id)?;
                 page.navigate(&url)?;
                 self.pages.insert(id, page);
@@ -595,15 +635,25 @@ impl BrowserState {
             }
             BrowserCommand::Close { id } => {
                 self.popups.cancel_opener(id);
-                self.pages.remove(&id).ok_or(BrowserError::UnknownTab)?;
+                let page = self.pages.remove(&id);
+                let unavailable = self.unavailable.remove(&id);
+                if page.is_none() && unavailable.is_none() {
+                    return Err(BrowserError::UnknownTab);
+                }
+                if self.active == Some(id) {
+                    self.active = None;
+                }
             }
             BrowserCommand::ShowActive(active) => {
-                if active.is_some_and(|id| !self.pages.contains_key(&id)) {
+                if active.is_some_and(|id| {
+                    !self.pages.contains_key(&id) && !self.unavailable.contains_key(&id)
+                }) {
                     return Err(BrowserError::UnknownTab);
                 }
                 for (id, page) in &self.pages {
                     page.show(Some(*id) == active)?;
                 }
+                self.active = active;
             }
             BrowserCommand::Resize(next) => {
                 next.validate()?;
@@ -612,6 +662,23 @@ impl BrowserState {
                 }
                 self.bounds = next;
             }
+            BrowserCommand::Reload { id } if self.unavailable.contains_key(&id) => {
+                if self.environment.is_none() {
+                    self.recover_browser();
+                } else {
+                    self.restore_page(id)?;
+                }
+            }
+            BrowserCommand::Navigate { id, url } if self.unavailable.contains_key(&id) => {
+                page::validate_url(&url)?;
+                self.unavailable.insert(id, url);
+                if self.environment.is_none() {
+                    self.recover_browser();
+                } else {
+                    self.restore_page(id)?;
+                }
+            }
+            BrowserCommand::Focus { id } if self.unavailable.contains_key(&id) => {}
             command => {
                 let id = command.tab_id().ok_or(BrowserError::InvalidTab)?;
                 let page = self.pages.get(&id).ok_or(BrowserError::UnknownTab)?;

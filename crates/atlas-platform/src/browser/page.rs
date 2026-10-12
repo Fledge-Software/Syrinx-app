@@ -27,8 +27,7 @@ use wry::{
 };
 
 use super::{
-    BrowserCommand, BrowserError, BrowserEvent, BrowserShortcut, EventSink, PageBounds,
-    ShortcutSink,
+    BrowserCommand, BrowserError, BrowserEvent, BrowserShortcut, EventSink, NativeSink, PageBounds,
 };
 
 struct Parent(NonZeroIsize);
@@ -43,6 +42,7 @@ impl HasWindowHandle for Parent {
 }
 
 pub(super) struct Page {
+    destination: std::rc::Rc<std::cell::RefCell<String>>,
     lifecycle: super::lifecycle::Lifecycle,
     permissions: super::permissions::Permissions,
     essentials: super::essentials::Essentials,
@@ -56,9 +56,10 @@ impl Page {
         environment: &ICoreWebView2Environment,
         bounds: PageBounds,
         events: EventSink,
-        shortcuts: ShortcutSink,
+        shortcuts: NativeSink,
         popups: super::popups::PopupRequests,
     ) -> Result<Self, BrowserError> {
+        let destination = std::rc::Rc::new(std::cell::RefCell::new("about:blank".to_owned()));
         let life = super::lifecycle::CallbackLife::new();
         let events = events.for_page(life.clone());
         let lifecycle = super::lifecycle::Lifecycle::new(id, life, events.clone());
@@ -100,13 +101,14 @@ impl Page {
         super::security::register(&view, id, events.clone())?;
         popups.register(&view, id, events.clone())?;
         super::lifecycle::register_fullscreen(&view, id, events.clone())?;
-        register_source(&view, id, events.clone())?;
+        register_source(&view, id, events.clone(), destination.clone())?;
         register_navigation(&view, id, events.clone())?;
-        register_process_failure(&view, id, events.clone())?;
+        register_process_failure(&view, id, events.clone(), shortcuts.clone())?;
         let permissions = super::permissions::Permissions::register(&view, id, events.clone())?;
         let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
         register_shortcuts(&view, shortcuts, id, events)?;
         Ok(Self {
+            destination,
             lifecycle,
             permissions,
             essentials,
@@ -118,12 +120,26 @@ impl Page {
         self.view.webview()
     }
 
+    #[cfg(test)]
+    pub(super) fn synthetic_failure(&self, id: u64, kind: i32) -> BrowserEvent {
+        BrowserEvent::Callback {
+            ticket: self.lifecycle.life.ticket(true),
+            event: Box::new(BrowserEvent::ProcessFailed { id, kind }),
+        }
+    }
+
+    pub(super) fn destination(&self) -> String {
+        self.destination.borrow().clone()
+    }
+
     pub(super) fn navigate(&self, url: &str) -> Result<(), BrowserError> {
         validate_url(url)?;
         self.lifecycle.resume(&self.view)?;
         self.view
             .load_url(url)
-            .map_err(|_| BrowserError::Navigation)
+            .map_err(|_| BrowserError::Navigation)?;
+        *self.destination.borrow_mut() = url.to_owned();
+        Ok(())
     }
 
     pub(super) fn show(&self, visible: bool) -> Result<(), BrowserError> {
@@ -215,7 +231,12 @@ fn rect(bounds: PageBounds) -> Rect {
     }
 }
 
-fn register_source(view: &WebView, id: u64, events: EventSink) -> Result<(), BrowserError> {
+fn register_source(
+    view: &WebView,
+    id: u64,
+    events: EventSink,
+    destination: std::rc::Rc<std::cell::RefCell<String>>,
+) -> Result<(), BrowserError> {
     let handler = SourceChangedEventHandler::create(Box::new(move |core, _args| {
         let core = core.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
         let mut raw = PWSTR::null();
@@ -228,10 +249,11 @@ fn register_source(view: &WebView, id: u64, events: EventSink) -> Result<(), Bro
             });
             return Err(error);
         }
-        events.emit(BrowserEvent::Url {
-            id,
-            url: owned.to_string(),
-        });
+        let url = owned.to_string();
+        if events.accepts_callbacks() && validate_url(&url).is_ok() {
+            *destination.borrow_mut() = url.clone();
+        }
+        events.emit(BrowserEvent::Url { id, url });
         Ok(())
     }));
     let mut token = 0;
@@ -266,6 +288,7 @@ fn register_process_failure(
     view: &WebView,
     id: u64,
     events: EventSink,
+    native: NativeSink,
 ) -> Result<(), BrowserError> {
     let handler = ProcessFailedEventHandler::create(Box::new(move |_core, args| {
         let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
@@ -278,7 +301,12 @@ fn register_process_failure(
             return Err(error);
         }
         // Forward only the structural kind; frame details and process descriptions stay unread.
-        events.emit(BrowserEvent::ProcessFailed { id, kind: kind.0 });
+        if let Err(error) = native.post(BrowserEvent::ProcessFailed { id, kind: kind.0 }, &events) {
+            events.emit(BrowserEvent::Error {
+                tab: Some(id),
+                error,
+            });
+        }
         Ok(())
     }));
     let mut token = 0;
@@ -288,7 +316,7 @@ fn register_process_failure(
 
 fn register_shortcuts(
     view: &WebView,
-    shortcuts: ShortcutSink,
+    shortcuts: NativeSink,
     id: u64,
     events: EventSink,
 ) -> Result<(), BrowserError> {
@@ -317,7 +345,7 @@ fn register_shortcuts(
                 return Ok(());
             }
             // Accelerator callbacks block WebView2: defer all actions to our message loop.
-            if let Err(error) = shortcuts.post(shortcut, events.clone()) {
+            if let Err(error) = shortcuts.post(BrowserEvent::Shortcut(shortcut), &events) {
                 events.emit(BrowserEvent::Error {
                     tab: Some(id),
                     error,

@@ -9,6 +9,7 @@ mod navigation_status;
 mod page_lifecycle;
 mod permissions;
 mod popups;
+mod process_recovery;
 mod recovery;
 mod security;
 mod suspended_fixture;
@@ -102,6 +103,7 @@ struct PalettePopup {
 
 pub struct BrowserView {
     fullscreen: Option<(u64, bool)>,
+    crashes: process_recovery::CrashState,
     suspended_fixture: suspended_fixture::SuspendedFixture,
     connections: std::collections::HashMap<u64, atlas_platform::browser::ConnectionState>,
     find: Option<find::FindBar>,
@@ -149,6 +151,7 @@ impl BrowserView {
     ) -> Self {
         let mut view = Self {
             fullscreen: None,
+            crashes: process_recovery::CrashState::default(),
             suspended_fixture: suspended_fixture::SuspendedFixture::new(suspended_tabs),
             connections: std::collections::HashMap::new(),
             find: None,
@@ -295,6 +298,7 @@ impl BrowserView {
                     snapshot.home_entry,
                 );
                 self.model = snapshot.model;
+                self.crashes.retain(&self.model);
                 self.zoom_levels
                     .retain(|id, _| self.model.tabs.iter().any(|tab| tab.id.get() == *id));
                 self.navigation_status.retain(&self.model);
@@ -404,6 +408,26 @@ impl BrowserView {
             self.message = message.to_owned();
         }
         match event {
+            BrowserEvent::PageCrashed { id } => self.page_crashed(id, window),
+            BrowserEvent::PageRestored { id } => {
+                self.crashes.restored(id);
+            }
+            BrowserEvent::RecoveryStarted { sequence, tabs } => {
+                self.browser_recovering(sequence, tabs, window)
+            }
+            BrowserEvent::RecoveryFinished {
+                sequence,
+                restored: _,
+                failed,
+            } => {
+                if self.crashes.finished(sequence) {
+                    self.message = if failed.is_empty() {
+                        "Page engine recovered. Your tabs are intact.".into()
+                    } else {
+                        "Some pages could not be restored. Reload an affected tab to retry.".into()
+                    };
+                }
+            }
             BrowserEvent::Callback { .. } => unreachable!("callback envelopes are unwrapped once"),
             BrowserEvent::Fullscreen { id, active } => self.page_fullscreen(id, active, window),
             BrowserEvent::Suspended { id, suspended } => {
@@ -475,12 +499,13 @@ impl BrowserView {
                     }
                 }
             }
-            BrowserEvent::ProcessFailed { kind, .. } => {
-                self.fail(format!(
-                    "The page engine reported failure {kind}. Restart Atlas if the page does not recover."
-                ));
-                if self.smoke {
-                    self.request_close(cx);
+            BrowserEvent::ProcessFailed { id, kind } => {
+                if self.active_page_feedback(id) {
+                    self.message = if kind == 2 {
+                        "This page is not responding. You can wait or reload it.".into()
+                    } else {
+                        "A page component failed; the engine is handling its recovery.".into()
+                    };
                 }
             }
             BrowserEvent::Url { id, url } => {
@@ -1300,7 +1325,9 @@ impl Render for BrowserView {
                 }));
         }
         let mut page = div().flex_1().h_full();
-        if self.shown.is_none() {
+        if let Some(card) = self.crashed_page(cx) {
+            page = card;
+        } else if self.shown.is_none() {
             page = page
                 .bg(rgb(0x141519))
                 .flex()
