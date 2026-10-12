@@ -530,3 +530,11 @@ and `Win32_Security_Cryptography`, with default features disabled; any other
 feature, including a networking namespace, fails the check. The
 staging-directory payload uses only `std::fs` with Windows open flags, so it
 needs no further feature.
+
+This limits what `atlas-update` declares, not what it can call. Cargo
+merges the features every workspace crate requests for the same package,
+so `atlas-update` is compiled against a `windows` build that also has
+`atlas-platform`'s namespaces enabled, and code in it could call those APIs
+without the check noticing. The check stops the verifier from asking for a
+networking or other namespace itself; review of its source is what keeps it
+to CNG.
