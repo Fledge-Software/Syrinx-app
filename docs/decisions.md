@@ -5,6 +5,42 @@ Each entry says what changed and why. The spec's "Decisions already made"
 still stand unless an entry here says otherwise. Design decisions are
 recorded separately, in `design/README.md`.
 
+## 2026-10-12
+
+- **Folder removal keeps saved pages by default (P1-21).** Removing a folder
+  moves its contents up one level unless the owner explicitly chooses to
+  delete them, and deleting contents asks for confirmation first. That way,
+  tidying folders can never silently lose saved pages. Empty folder names
+  are refused.
+- **Bookmark import defaults (P1-22).** Exported toolbar folders import as
+  ordinary folders, not as Favorites (D45 Favorites stay a deliberate
+  choice). Only UTF-8 files are accepted; anything else is refused with a
+  request to re-export, rather than guessing the encoding. The parser's
+  default limits (32 MiB, 50,000 entries, 32 levels of nesting) stand.
+- **`atlas-core` may depend on `url` (DW-1).** So that import and navigation
+  share one address rule instead of two copies, the core crate may take the
+  `url` crate as its first outside dependency when the import step is built.
+- **The recorded contrast shortfalls are accepted for now (P1-07).** Sixteen
+  colour pairs in the canvas palettes miss WCAG minimums, mostly muted text
+  and worst in Glass. The owner accepted them for now rather than changing
+  the canvas. `atlas-ui`'s test keeps the list fixed, so any new shortfall
+  fails the gate.
+
+## 2026-10-11
+
+- **Plan 1 slices may run in parallel.** To speed up delivery, the owner
+  approved working independent Plan 1 slices at the same time, each on its
+  own branch with independent review. Plans 2–4 still wait for Plan 1's
+  acceptance.
+- **Deferred-work markers are allowed when tracked.** `TODO`, `FIXME` and
+  `HACK` may appear in Atlas code if they carry a `DW-n` tag listed in the
+  plan's "Deferred work" register; each becomes an issue once on GitHub.
+  `cargo xtask check` enforces this.
+- **Two dependency approvals.** Vendoring `gpui-pre-windows 0.3.8` for the
+  D37 idle patch, with its unchanged upstream TODO comments, and adding
+  Tantivy for the full-text bake-off. `AGENTS.md` records both, with their
+  limits.
+
 ## 2026-10-10
 
 - **Build the integrated browser next (D49).** After finding that the
