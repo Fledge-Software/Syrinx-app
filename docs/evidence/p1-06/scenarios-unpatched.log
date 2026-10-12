@@ -1,0 +1,17 @@
+﻿PASS initial paint (two windows): Some(16.5µs)
+INFO idle window A: 55.0 WM_PAINT/s, 0 GPUI renders over 3 s
+FAIL idle paints below 1/s: 55.0/s
+PASS no idle GPUI renders: 0
+PASS idle-to-notify renders A only: A after Some(307.5659ms), B renders +0
+PASS next-frame callback runs while idle: Some(64.1742ms)
+PASS demand raised mid-frame gets a frame: Some(116.0734ms)
+PASS 60-frame animation completes: Some(2.577062s)
+PASS animation returns to no renders: 0 renders
+FAIL animation returns to idle paints: 42.0/s
+PASS second window notify: B after Some(52.166ms), A renders +0
+PASS minimize/restore delivers pending work: 0 renders while minimized, restored after Some(1.2µs)
+PASS native resize renders: Some(56.7098ms)
+INFO final idle window A: 18.0 WM_PAINT/s, 0 renders
+PASS final idle without renders: 0
+FAIL final idle paints below 1/s: 18.0/s
+FAILURES 3

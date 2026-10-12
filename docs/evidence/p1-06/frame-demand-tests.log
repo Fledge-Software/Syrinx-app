@@ -1,0 +1,13 @@
+﻿
+running 8 tests
+test tests::take_consumes_demand_once ... ok
+test tests::clones_share_one_latch ... ok
+test tests::demand_raised_during_a_frame_survives_that_frame ... ok
+test tests::hidden_or_minimized_windows_keep_demand_without_invalidation ... ok
+test tests::idle_window_stays_idle_until_requested ... ok
+test tests::new_window_demands_its_first_frame ... ok
+test tests::reading_demand_does_not_consume_it ... ok
+test tests::requests_from_another_thread_are_visible ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+

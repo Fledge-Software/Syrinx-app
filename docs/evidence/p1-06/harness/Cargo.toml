@@ -1,0 +1,23 @@
+[package]
+name = "p1-06-idle-harness"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.8", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", default-features = false }
+raw-window-handle = "=0.6.2"
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+
+[profile.local]
+inherits = "release"
+debug = "line-tables-only"
+debug-assertions = true
+overflow-checks = true
+incremental = true
+
+[profile.local.build-override]
+opt-level = 3
