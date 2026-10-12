@@ -63,11 +63,64 @@ impl Pane {
         }
     }
 
-    fn position(self) -> usize {
-        Pane::ORDER
-            .iter()
-            .position(|pane| *pane == self)
-            .expect("every pane is in ORDER")
+    /// The pane's index in `ORDER`; a test keeps the two in step.
+    const fn position(self) -> usize {
+        match self {
+            Pane::Address => 0,
+            Pane::RuntimeNotice => 1,
+            Pane::Permission => 2,
+            Pane::Find => 3,
+            Pane::Sidebar => 4,
+            Pane::Page => 5,
+        }
+    }
+}
+
+/// Which end of a pane focus enters from: F6 and Tab enter at the first control, Shift Tab
+/// out of a page enters the previous pane at its last control.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    First,
+    Last,
+}
+
+/// Where focus goes on entering a pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Landing {
+    /// The native web page, focused through WebView2.
+    WebPage,
+    /// The address field itself, not the toolbar's buttons.
+    AddressField,
+    /// A control inside the pane's region, from the given end.
+    Control(Entry),
+}
+
+/// Decides where entering `pane` puts focus. `web_page_shown` says the page card holds a
+/// native web page rather than Atlas's own content.
+pub const fn landing(pane: Pane, entry: Entry, web_page_shown: bool) -> Landing {
+    match pane {
+        Pane::Page if web_page_shown => Landing::WebPage,
+        Pane::Address => Landing::AddressField,
+        _ => Landing::Control(entry),
+    }
+}
+
+/// What stepping through Tab order from a pane's region found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Settle {
+    /// Keep the control the step reached.
+    Control,
+    /// Focus the region itself: the step left the pane, which has no Tab stops.
+    Region,
+}
+
+/// Keeps a stepped-to control only while it lies inside the target pane, so a pane with no
+/// Tab stops never hands focus to a control in another pane.
+pub const fn settle(reached_control_inside_pane: bool) -> Settle {
+    if reached_control_inside_pane {
+        Settle::Control
+    } else {
+        Settle::Region
     }
 }
 
@@ -266,6 +319,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn positions_match_the_order() {
+        for (index, pane) in Pane::ORDER.into_iter().enumerate() {
+            assert_eq!(pane.position(), index, "{pane:?}");
+        }
+    }
+
+    #[test]
+    fn landing_puts_focus_where_the_pane_starts() {
+        for entry in [Entry::First, Entry::Last] {
+            assert_eq!(landing(Pane::Page, entry, true), Landing::WebPage);
+            assert_eq!(landing(Pane::Page, entry, false), Landing::Control(entry));
+            assert_eq!(landing(Pane::Address, entry, true), Landing::AddressField);
+            assert_eq!(landing(Pane::Sidebar, entry, true), Landing::Control(entry));
+        }
+    }
+
+    #[test]
+    fn a_pane_without_tab_stops_keeps_focus_on_its_region() {
+        assert_eq!(settle(true), Settle::Control);
+        assert_eq!(settle(false), Settle::Region);
     }
 
     #[test]

@@ -207,12 +207,17 @@ you found it in the commit message, not here.
   page's `GotFocus` event (`BrowserEvent::PageFocused`) covers clicks.
   Source: P1-36 (code-confirmed; owner visual check pending).
 - **GPUI's accessibility tree can panic the `local` build, but only with a
-  screen reader attached.** The `local` profile keeps debug assertions, and
-  the tree builder panics on, for example, two nodes claiming focus in one
-  frame. It runs only while a UI Automation client is attached, so the gate
-  never exercises it; test with NVDA or Narrator after changing roles, ids or
-  focus handles. Source: `gpui-pre-0.3.8/src/window/a11y.rs`, lines 230–240
-  and 530–536 (source-confirmed).
+  UI Automation client attached.** The `local` profile keeps debug
+  assertions, and the tree builder panics if one `FocusHandle` is tracked by
+  two elements in a frame (both report focus), if two siblings with roles
+  share an element id, or on a stray active descendant. Nested regions with
+  their own handles are safe: only the element whose handle *is* focused
+  reports. The tree runs only while a client (a screen reader, some password
+  managers) is attached, so the gate never builds it; after changing roles,
+  ids or focus handles, rerun the UI Automation probe recorded in
+  `docs/p1-36-accessibility.md`. Source: `gpui-pre-0.3.8/src/window/a11y.rs`,
+  lines 232–243, 411–423 and 530–542, and `elements/div.rs`, lines 2326–2335
+  (source-confirmed; P1-36 probe survived).
 - **GPUI draws above a WebView2 child window, not below it.** Note 08 read
   the code as the page covering GPUI; the Phase 0 spike found the opposite
   on this machine. Don't rely on either for layout: keep the page card's

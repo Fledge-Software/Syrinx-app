@@ -63,10 +63,59 @@ Known limits of that provider, each checked in source:
   the runtime notice, the status line) with labelled nodes.
 - **Debug assertions panic on a malformed tree.** The `local` profile keeps
   `debug-assertions = true` (`Cargo.toml`, line 55), and the a11y builder
-  panics in debug builds on, for example, two nodes claiming focus in one
-  frame (`a11y.rs`, lines 230–240 and 530–536). It runs only while a UIA
-  client is attached, so a gate run does not exercise it; the NVDA checks
-  below do.
+  panics in debug builds on a second focus claim in one frame, a duplicate
+  node id, or a stray active descendant (`a11y.rs`, lines 232–243, 411–423,
+  513–542 and 564–573). It runs only while a UIA client is attached, which
+  includes screen readers and some password managers, so a gate run does not
+  build it. The next section shows why Atlas cannot make two focus claims,
+  and records a probe that built the tree.
+
+## Why two nodes cannot report focus
+
+GPUI reports focus from exactly one place: during prepaint, an element that
+tracks a focus handle calls `A11y::set_focus` only if **that handle is the
+window's focused handle** (`gpui-pre-0.3.8/src/elements/div.rs`, lines
+2326–2335: `if focus_handle.is_focused(window)`). `is_focused` compares one
+`FocusId` with the window's single `focus` value, not containment. So two
+claims in a frame need one handle tracked by two elements in that frame.
+
+- **Nested regions are not a risk.** A pane region (`panes.rs`, `as_pane`)
+  and the address field or a sidebar row inside it track *different* handles.
+  When the field is focused, only the field's element claims; the region's
+  handle is not the focused one, so its element only registers itself as
+  focusable (`set_focusable`), which never panics.
+- **Each handle is tracked once per frame.** Every `track_focus` in
+  `atlas-app` was checked: the seven pane handles are private to
+  `PaneFocus` and reach elements only through `as_pane`, which `render` calls
+  once per pane (the toolbar is drawn either in the title bar or under it,
+  never both); the window root's `self.focus` is tracked by the fullscreen
+  root or the chrome root, which are alternative early returns; the import
+  preview tracks its `focus` on the Import button or on the frame, never both
+  (`import.rs`); peek, recovery and the palette are separate windows with
+  their own trees.
+- **Active descendant is not used.** DW-60 removed it, so the two panics
+  around it cannot trigger.
+- **A GPUI-level unit test is not possible without a dependency change.**
+  `A11yNodeBuilder` is `pub(crate)` and GPUI's test harness needs its
+  `test-support` feature, which would change the lockfile; the builder's own
+  tests (`a11y.rs`, lines 812–823) already pin that a second claim panics.
+
+**The probe.** To build the tree without a screen reader, an agent attached a
+UI Automation client (.NET `System.Windows.Automation` from PowerShell) to the
+`local` build on fresh synthetic profiles `target\p1-36-uia-1` and
+`target\p1-36-uia-2` (logs `target\p1-36-uia-probe-*.log`). Attaching
+activates GPUI's AccessKit adapter, so every frame then built the tree with
+debug assertions on. Run 2 posted F6 seven times and Tab twelve times to
+Atlas's own window only, then called UIA `SetFocus` on twelve elements,
+including the "Address" toolbar region and its buttons. Atlas stayed up with
+an empty stderr, the tree had 35 nodes on Home, and focus followed as
+designed: F6 went address field → sidebar "Search · Ctrl K" → Home
+"Customize" → address field; Tab went through the toolbar and into the
+sidebar. Run 1 also survived, but sent its keys with `SendKeys` to whatever
+window was in the foreground, so its key results are not evidence; run 2
+replaced that with messages posted to Atlas's window. Rerun the probe after
+changing roles, ids or focus handles: the script is short and is described
+here instead of committed, because it drives a window and is not a test.
 - **The web page is a separate HWND.** The AccessKit tree covers GPUI's own
   elements. WebView2 joins UI Automation through its own child window
   (`docs/research/02-browser-v1-scope.md`, line 156). Whether NVDA's object
@@ -96,13 +145,19 @@ including a bar that closes while focused handing focus to its neighbour.
   key, sets `Handled` and posts; there is no COM call beyond the event
   arguments, and Ctrl F, Ctrl H, Ctrl P and the zoom keys still reach the page
   first (a new test pins that, per the 2026-10-12 decision).
-- **Tab past a page's last element** (or Shift Tab before its first) moves to
-  the next (previous) pane: WebView2's `MoveFocusRequested` is marked handled
-  and posted the same way; a scripted focus move stays in the page
-  (`register_focus_departure`, `departure_shortcut`, tested).
-- Landing: the address pane focuses the address field itself; a web page is
-  focused natively (`focus_page`); any other pane focuses its region and then
-  its first control (`Window::focus_next`).
+- **Tab past a page's last element** moves to the next pane, and **Shift Tab
+  before its first** moves to the previous pane's *last* control, as Tab
+  order would: WebView2's `MoveFocusRequested` is marked handled and posted
+  the same way (`BrowserShortcut::LeavePageBackward` for Shift Tab); a
+  scripted focus move stays in the page (`register_focus_departure`,
+  `departure_shortcut`, tested).
+- Landing (`atlas_ui::focus::landing`, tested): the address pane focuses the
+  address field itself; a web page is focused natively (`focus_page`); any
+  other pane focuses its region and steps to its first (or last) control. If
+  the step leaves the region, because the pane has no Tab stops (an Atlas
+  page card with nothing to press), focus stays on the region instead of
+  escaping to another pane (`atlas_ui::focus::settle`, tested).
+- **F6 is always Atlas's.** The page never sees F6; see owner question 5.
 
 **Tab and Shift Tab move between every Atlas control** in each Atlas window
 (the main window, the palette and the import preview). The main window's
@@ -166,8 +221,10 @@ portable copy also works). Then record pass/fail for each:
    the find bar after the toolbar. Shift F6 runs in reverse.
 3. **F6 from a page.** Open `https://example.com/`, click into the page,
    press F6: focus leaves the page for the address field and NVDA says so.
-   Shift F6 from the page goes to the sidebar. Tab repeatedly inside the page
-   until past its last link: focus comes back to the address field.
+   Shift F6 from the page goes to the sidebar's first control. Tab repeatedly
+   inside the page until past its last link: focus comes back to the address
+   field. Shift Tab from the page's first link lands on the sidebar's last
+   control (New tab).
 4. **Page keys still the page's.** In a page, Ctrl F opens the page's find
    (or the engine's) as before, Ctrl P prints, and Ctrl plus or minus zooms;
    none of them is taken by Atlas.
@@ -179,8 +236,11 @@ portable copy also works). Then record pass/fail for each:
 6. **Edge.** Tab to "Resize sidebar"; NVDA reads it as a splitter with its
    state; Left and Right change the width.
 7. **Palette.** Ctrl K: NVDA reads "Command palette" and the field. Type a
-   query; Tab reaches the scope chips (each reads its count and whether it is
-   selected) and "Search the web". Known gap DW-60: arrowing through results
+   query; Tab leaves the query field for the scope chips (each reads its
+   count and whether it is selected) and "Search the web", and Shift Tab
+   returns to the field. This is deliberate: the palette has no inline forms
+   yet, so Tab has nothing else to do there; when plan 2 adds forms, Tab will
+   be scoped to the form's fields. Known gap DW-60: arrowing through results
    is probably not announced. Record what NVDA actually says.
 8. **Permission bar.** On a synthetic page that asks for the camera (any test
    page you trust), NVDA reads the question when you F6 to the bar;
@@ -218,6 +278,11 @@ portable copy also works). Then record pass/fail for each:
 4. **Installing NVDA.** The checks above need NVDA on your machine; agents
    do not install software. Narrator, which ships with Windows, is an
    acceptable first pass if you prefer not to install NVDA yet.
+5. **F6 belongs to Atlas, before the page.** WebView2's accelerator handler
+   takes F6 and Shift F6 before a page sees them, so a web app that uses F6
+   itself (rare; some spreadsheet and IDE pages do) never gets it. Edge and
+   Chrome make the same choice. Recommendation: keep it, because few pages use
+   F6 and the alternative leaves keyboard users stuck in a page.
 
 ## Files
 
