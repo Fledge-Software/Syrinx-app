@@ -52,13 +52,13 @@ you found it in the commit message, not here.
   Source: P1-12 independent review, stale-action regression and native fixture
   in `docs/p1-12-permissions.md`.
 
-- **The original lifecycle fixture sometimes times out during navigation.**
-  Its fixture-navigation wait has failed before popups and during repeated
-  cycles. P1-12's run passed, which does not establish a fix. Preserve its
-  assertions and deadlines, record the individual suite result, and keep the
-  original timeout separate from new slice failures. The owner explicitly
-  authorized P1-12 through P1-14 despite this pre-existing intermittent failure.
-  Sources: `docs/fixture-transport-timing-review.md` and `docs/p1-11-popups.md`.
+- **The original lifecycle fixture sometimes timed out during navigation.**
+  Diagnosed on 2026-10-12: its hidden close page was suspended mid-load (see
+  the `TrySuspend` trap below). A passing run never established a fix; a
+  deliberately held response did. Preserve the suite's assertions and
+  deadlines, and keep any new timeout separate from this one until it is
+  diagnosed the same way. Sources: `docs/p1-11-popups.md` and
+  `docs/fixture-transport-timing-review.md`.
 
 - **A native fixture rejects popup focus before trying it.** Windows may
   deny `SetForegroundWindow` for a background process even though WebView2's
