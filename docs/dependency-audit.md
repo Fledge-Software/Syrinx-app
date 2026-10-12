@@ -481,3 +481,60 @@ documentation-test stages and application smoke also pass. The log SHA-256 is
 The binary hash is unchanged. No security setting or test was relaxed, and no
 continuation job remains active.
 The original WebView2 crash and remaining interactive acceptance stay open.
+
+## P1-38: update verification through Windows CNG, 2026-10-12
+
+Updates must be checked against a pinned key before anything is installed
+(`docs/p1-38-update-format.md`). The verifier needs SHA-256 and ECDSA P-256
+signature verification. It uses Windows CNG (`bcrypt.dll`, part of Windows)
+through the `windows =0.62.2` bindings that P1-03 already audited, instead of
+adding a Rust cryptography library. The rejected alternative, RustCrypto's
+`p256`/`sha2` or `ring`, would add a new package closure (and, for `ring`,
+assembly and a build script) for functions the operating system already
+provides and Microsoft maintains.
+
+The new crate `crates/atlas-update` declares:
+
+```toml
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+```
+
+`Win32_Security_Cryptography` enables `Win32_Security`, `Win32` and
+`Win32_Foundation`; `atlas-platform` already enables the last three. Cargo
+features are not recorded in `Cargo.lock`, and these namespace features gate
+only generated bindings inside the `windows` package; they activate no
+optional dependency. The lockfile diff is exactly the new workspace member's
+own seven-line entry (`atlas-update 0.1.0`, depending on `windows 0.62.2`).
+No package was added, removed or moved. Verify with:
+
+```powershell
+cargo tree -p atlas-update --target x86_64-pc-windows-msvc --edges normal,build,features --offline --locked
+```
+
+Its output lists only packages already in the P1-03 table above, at the same
+versions: `windows`, `windows-collections`, `windows-core`, `windows-future`,
+`windows-numerics`, `windows-result`, `windows-strings`, `windows-threading`,
+`windows-link`, `windows-implement`, `windows-interface`, `proc-macro2`,
+`quote`, `syn` and `unicode-ident 1.0.26` (under its approved Unicode-3.0
+exception). The licences, maintenance and advisory findings recorded there
+are unchanged by enabling a namespace feature. Because Cargo unifies
+features, `atlas-platform` now also compiles the cryptography bindings; it
+does not call them.
+
+The dependency check (`crates/xtask/src/dependency_policy.rs`) still allows
+only `atlas-platform` to use WebView2, wry and `windows-sys`; `atlas-update`
+is the single other crate allowed `windows`, and every workspace crate is
+refused a dependency on `atlas-update` until P1-39 is approved.
+`atlas-update` may request only the `windows` features `Win32_Foundation`
+and `Win32_Security_Cryptography`, with default features disabled; any other
+feature, including a networking namespace, fails the check. The
+staging-directory payload uses only `std::fs` with Windows open flags, so it
+needs no further feature.
+
+This limits what `atlas-update` declares, not what it can call. Cargo
+merges the features every workspace crate requests for the same package,
+so `atlas-update` is compiled against a `windows` build that also has
+`atlas-platform`'s namespaces enabled, and code in it could call those APIs
+without the check noticing. The check stops the verifier from asking for a
+networking or other namespace itself; review of its source is what keeps it
+to CNG.
