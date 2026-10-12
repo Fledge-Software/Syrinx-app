@@ -76,6 +76,10 @@ pub enum BrowserShortcut {
     Reload,
     ToggleSidebar,
     DismissPeek(u64),
+    /// F6 from a focused page: move to Atlas's next pane (P1-36).
+    FocusNextPane,
+    /// Shift F6 from a focused page: move to Atlas's previous pane.
+    FocusPreviousPane,
 }
 
 pub enum BrowserCommand {
@@ -230,6 +234,10 @@ pub enum BrowserEvent {
         kind: i32,
     },
     Shortcut(BrowserShortcut),
+    /// The page took keyboard focus (WebView2 `GotFocus`).
+    PageFocused {
+        id: u64,
+    },
     PopupRequested {
         id: u64,
         request: u64,

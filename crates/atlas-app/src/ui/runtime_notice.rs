@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use atlas_core::web_address;
 use atlas_platform::edge::open_in_edge;
-use gpui::{Context, Div, ParentElement, StatefulInteractiveElement, Styled, div, px};
+use gpui::{
+    Context, Div, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled, div, px,
+};
 
 use super::{BrowserView, button};
 use crate::{session::SessionCommand, theme};
@@ -127,6 +129,7 @@ impl BrowserView {
     /// The one-line notice under the toolbar, or nothing when the runtime is unchanged.
     pub(super) fn runtime_banner(&self, cx: &mut Context<Self>) -> Option<Div> {
         let change = self.runtime.change()?;
+        let text = notice_text(change);
         let mut banner = div()
             .h(px(NOTICE_HEIGHT))
             .px_3()
@@ -136,12 +139,16 @@ impl BrowserView {
             .bg(theme::panel())
             .text_xs()
             .child(
+                // Named so a screen reader can read the whole notice, not just its buttons.
                 div()
+                    .id("runtime-notice-text")
+                    .role(gpui::Role::Label)
+                    .aria_label(text.clone())
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .child(notice_text(change)),
+                    .child(text),
             );
         // Edge is offered only for a web page, and opens only when the owner clicks.
         if self.active_web_address().is_some() {

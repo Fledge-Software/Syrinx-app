@@ -451,8 +451,13 @@ fn choice_row(
     cx: &mut Context<BrowserView>,
 ) -> impl gpui::IntoElement {
     let mark = if dialog.chosen(kind) { "☑" } else { "☐" };
-    div()
-        .id(label)
+    crate::controls::control(div().id(label), gpui::Role::CheckBox, label)
+        .aria_description(detail)
+        .aria_toggled(if dialog.chosen(kind) {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
         .h(px(44.))
         .px_2()
         .rounded_md()
@@ -481,22 +486,30 @@ fn period_chip(
     cx: &mut Context<BrowserView>,
 ) -> impl gpui::IntoElement {
     let chosen = dialog.period == period;
-    div()
-        .id(period.label())
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .cursor_pointer()
-        .bg(if chosen {
-            theme::accent()
-        } else {
-            theme::line()
-        })
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.clear_data.period = period;
-            cx.notify();
-        }))
-        .child(period.label())
+    crate::controls::control(
+        div().id(period.label()),
+        gpui::Role::RadioButton,
+        period.label(),
+    )
+    .aria_toggled(if chosen {
+        gpui::Toggled::True
+    } else {
+        gpui::Toggled::False
+    })
+    .px_3()
+    .py_1()
+    .rounded_md()
+    .cursor_pointer()
+    .bg(if chosen {
+        theme::accent()
+    } else {
+        theme::line()
+    })
+    .on_click(cx.listener(move |this, _, _, cx| {
+        this.clear_data.period = period;
+        cx.notify();
+    }))
+    .child(period.label())
 }
 
 /// Dims an action that cannot run yet; clicks still reach the handler, which refuses them.

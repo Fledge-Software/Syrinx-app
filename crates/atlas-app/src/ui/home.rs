@@ -6,8 +6,8 @@ use atlas_core::{
 use atlas_ui::metrics::{chrome, radius, text};
 use atlas_ui::{Color, Palette};
 use gpui::{
-    Context, Div, FontWeight, InteractiveElement, ParentElement, Stateful,
-    StatefulInteractiveElement, Styled, div, px,
+    Context, Div, FontWeight, InteractiveElement, ParentElement, Role, Stateful,
+    StatefulInteractiveElement, Styled, Toggled, div, px,
 };
 
 use super::BrowserView;
@@ -15,6 +15,7 @@ use super::customize::CustomAccent;
 use super::tile_editor::TileEditor;
 use super::tiles::{self, TileAction};
 use crate::appearance::Appearance;
+use crate::controls::control;
 use crate::session::SessionCommand;
 use crate::theme::{self, rgba};
 
@@ -124,8 +125,8 @@ impl BrowserView {
             // crate allowed to call Win32; a UTC date would be wrong each evening.
             .child(div().flex_1())
             .child(
-                div()
-                    .id("customize")
+                control(div().id("customize"), Role::Button, "Customize")
+                    .aria_expanded(self.home.customize_open)
                     .h(px(30.))
                     .px(px(12.))
                     .rounded(px(15.))
@@ -148,8 +149,9 @@ impl BrowserView {
 
     fn search_pill(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
         // The pill opens the palette, so it is a button, not a second text field.
-        let pill = div()
-            .id("home-search")
+        let pill = control(div().id("home-search"), Role::Button, "Search")
+            .aria_description("Search the web, your tabs, notes and plugins")
+            .aria_keyshortcuts("Control+K")
             .w_full()
             .max_w(px(SEARCH_PILL_MAX_WIDTH))
             .h(px(54.))
@@ -238,8 +240,12 @@ impl BrowserView {
     ) -> Stateful<Div> {
         let surface = DestinationSurface::QuickAccess;
         let opened = tile.clone();
-        let mut cell = div()
-            .id(("quick-tile", index))
+        let name = if editing {
+            format!("Edit {}", tile.label)
+        } else {
+            tile.label.to_string()
+        };
+        let mut cell = control(div().id(("quick-tile", index)), Role::Button, name)
             .min_w_0()
             .flex()
             .flex_col()
@@ -280,8 +286,7 @@ impl BrowserView {
     }
 
     fn add_quick_tile(&self, palette: &Palette, cx: &mut Context<Self>) -> Stateful<Div> {
-        div()
-            .id("quick-add")
+        control(div().id("quick-add"), Role::Button, "Add shortcut")
             .min_w_0()
             .flex()
             .flex_col()
@@ -307,13 +312,18 @@ impl BrowserView {
         cx: &mut Context<Self>,
     ) -> Div {
         let edit_button = |id: &'static str, glyph: &'static str, edit: DestinationEdit| {
-            small_button((id, index), glyph, palette).on_click(cx.listener(
-                move |this, _, _, cx| {
+            let name = match id {
+                "tile-left" => format!("Move {} left", tile.label),
+                "tile-right" => format!("Move {} right", tile.label),
+                _ => format!("Remove {}", tile.label),
+            };
+            small_button((id, index), glyph, palette)
+                .aria_label(name)
+                .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     this.edit_tiles(surface, edit.clone());
                     cx.notify();
-                },
-            ))
+                }))
         };
         let moved = |to: usize| DestinationEdit::Move {
             from: index,
@@ -344,8 +354,17 @@ impl BrowserView {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let editing = self.home.editing == Some(surface);
-        div()
-            .id(id)
+        let name = match (editing, surface) {
+            (true, _) => "Done editing",
+            (false, DestinationSurface::Favorites) => "Edit Favorites",
+            (false, DestinationSurface::QuickAccess) => "Edit Quick access",
+        };
+        control(div().id(id), Role::Button, name)
+            .aria_toggled(if editing {
+                Toggled::True
+            } else {
+                Toggled::False
+            })
             .h(px(28.))
             .px(px(10.))
             .rounded(px(radius::CONTROL))
@@ -401,8 +420,9 @@ fn plugin_card(palette: &Palette, plugin: BuiltInPlugin) -> Stateful<Div> {
         ),
         BuiltInPlugin::Fledge => (palette.plugins.fledge, "Leads, mail, calendar and docs."),
     };
-    div()
-        .id(plugin.id())
+    let name = format!("{} · not available yet", plugin.name());
+    control(div().id(plugin.id()), Role::Button, name)
+        .aria_description(description)
         .min_w_0()
         .rounded(px(radius::HOME_CARD))
         .bg(rgba(palette.surface))
@@ -492,8 +512,7 @@ pub(super) fn small_button(
     label: &'static str,
     palette: &Palette,
 ) -> Stateful<Div> {
-    div()
-        .id(id)
+    control(div().id(id), Role::Button, label)
         .min_w(px(20.))
         .h(px(20.))
         .px(px(4.))
