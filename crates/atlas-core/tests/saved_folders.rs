@@ -166,6 +166,50 @@ fn folders_are_created_renamed_and_listed_in_visible_order() -> Result<(), TabEr
     Ok(())
 }
 
+/// Live identities, associations and selection, independent of display order.
+fn live_state(model: &TabModel) -> (BTreeSet<(TabId, Option<SavedPageId>)>, Option<TabId>) {
+    let tabs = model
+        .tabs()
+        .iter()
+        .map(|tab| (tab.id(), tab.saved_page_id()))
+        .collect();
+    (tabs, model.active_id())
+}
+
+#[test]
+fn moving_or_dissolving_a_folder_keeps_its_open_tabs_and_selection() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let top = model.add_saved_page(metadata(1), None)?;
+    let group = folder(&mut model, "group", None);
+    let nested = folder(&mut model, "nested", Some(group));
+    let first = model.add_saved_page(metadata(2), Some(group))?;
+    let second = model.add_saved_page(metadata(3), Some(nested))?;
+    let target = folder(&mut model, "target", None);
+    open_web(&mut model, 4)?;
+    let first_tab = model.open_saved(first, Activation::Background)?;
+    let second_tab = model.open_saved(second, Activation::Foreground)?;
+    model.open_saved(top, Activation::Background)?;
+    let before = live_state(&model);
+    assert_eq!(before.1, Some(second_tab));
+
+    // Moving the folder carries both open pages; nothing closes, reopens or changes focus.
+    model.move_saved_entry(dir(group), Some(target), 0)?;
+    assert_eq!(live_state(&model), before);
+    assert_eq!(
+        model.get(first_tab).and_then(Tab::saved_page_id),
+        Some(first)
+    );
+    assert_tree_invariants(&model);
+
+    // Dissolving it keeps the same instances, associations and selection.
+    model.remove_folder(group, FolderRemoval::MoveContentsUp)?;
+    assert_eq!(live_state(&model), before);
+    assert_eq!(model.saved_parent(page(first))?, Some(target));
+    assert_eq!(model.saved_parent(dir(nested))?, Some(target));
+    assert_tree_invariants(&model);
+    Ok(())
+}
+
 #[test]
 fn moving_a_saved_page_keeps_its_open_instance_identity_and_selection() -> Result<(), TabError> {
     let mut model = TabModel::new();
@@ -515,7 +559,7 @@ fn exercise_folder_transition(model: &mut TabModel, step: usize) -> Result<(), T
     };
 
     // Interleave tree edits with the existing live-tab lifecycle deterministically.
-    match step % 10 {
+    match step % 13 {
         0 | 1 => {
             folder(model, "generated", parent);
         }
@@ -553,11 +597,35 @@ fn exercise_folder_transition(model: &mut TabModel, step: usize) -> Result<(), T
                 model.remove_saved(id)?;
             }
         }
-        _ => {
-            if let Some(id) = model.tabs().first().map(Tab::id) {
-                model.close(id)?;
-            }
+        9 => {
             open_web(model, step)?;
+        }
+        10 => {
+            // Save an ordinary live page while folders exist; it joins the top level.
+            if let Some(id) = model
+                .tabs()
+                .iter()
+                .find(|tab| tab.saved_page_id().is_none() && tab.kind() == TabKind::Web)
+                .map(Tab::id)
+            {
+                model.save_page(id)?;
+            }
+        }
+        11 => {
+            // Close an open saved page; its row, inside any folder, must survive.
+            if let Some(id) = model
+                .tabs()
+                .iter()
+                .find(|tab| tab.saved_page_id().is_some())
+                .map(Tab::id)
+            {
+                let saved = model.get(id).and_then(Tab::saved_page_id);
+                model.close(id)?;
+                assert!(saved.is_some_and(|saved| model.get_saved(saved).is_some()));
+            }
+        }
+        _ => {
+            model.reopen_closed()?;
         }
     }
     Ok(())
