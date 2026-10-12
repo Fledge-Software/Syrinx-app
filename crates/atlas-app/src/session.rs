@@ -1,5 +1,6 @@
 //! Keeps model, persistence and catalogue work off the browser's event thread.
 
+mod history;
 mod preferences;
 mod recovery;
 
@@ -8,10 +9,11 @@ pub use recovery::RecoveryPrompt;
 use std::{
     collections::{BTreeMap, HashSet},
     fmt,
+    num::NonZeroU64,
     path::PathBuf,
     sync::{Arc, mpsc},
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use atlas_core::{
@@ -22,8 +24,9 @@ use atlas_platform::{StartupStorage, WindowsDirectoryLease};
 use atlas_search::{
     Catalogue, Entry, Scope, SearchError, SearchPolicy, SearchResults, Target, Usage,
 };
-use atlas_store::{LocationError, ShutdownState, Store, StoreError};
+use atlas_store::{HistoryVisit, LocationError, ShutdownState, Store, StoreError};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use history::{HistoryRecorder, Observation};
 
 const IDLE_DELAY: Duration = Duration::from_secs(5);
 const BACKUP_CHECK_INTERVAL: Duration = Duration::from_secs(60);
@@ -81,6 +84,18 @@ pub enum SessionCommand {
         scope: Scope,
         policy: SearchPolicy,
     },
+    /// A page's navigation finished; a failure retracts the visit its address change recorded.
+    ObserveNavigation {
+        id: TabId,
+        success: bool,
+    },
+    /// Opens a remembered history address in a new tab (P1-20).
+    OpenHistory(NonZeroU64),
+    /// Reads at most `limit` recent visits for the history list.
+    RecentHistory {
+        request_id: u64,
+        limit: usize,
+    },
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -119,6 +134,10 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<SearchResults, SessionError>,
     },
+    History {
+        request_id: u64,
+        result: Result<Vec<HistoryVisit>, SessionError>,
+    },
     Failure {
         error: SessionError,
         fatal: bool,
@@ -136,6 +155,7 @@ pub enum SessionError {
     Search(SearchError),
     Destination(DestinationError),
     NoActiveTab,
+    HistoryUnavailable,
     ClockUnavailable,
     WorkerStart {
         code: Option<i32>,
@@ -165,6 +185,9 @@ impl fmt::Display for SessionError {
             Self::Search(error) => write!(formatter, "Local search failed: {error}"),
             Self::Destination(error) => write!(formatter, "Cannot change this tile: {error}"),
             Self::NoActiveTab => formatter.write_str("There is no active page to save"),
+            Self::HistoryUnavailable => {
+                formatter.write_str("This history entry is no longer available")
+            }
             Self::ClockUnavailable => formatter.write_str("The system clock is unavailable"),
             Self::WorkerStart { code } => {
                 write!(formatter, "Cannot start the session worker ({code:?})")
@@ -306,6 +329,7 @@ fn finish_store<T>(
 struct Worker {
     model: TabModel,
     catalogue: Catalogue,
+    history: HistoryRecorder,
     revision: u64,
     previous_shutdown: ShutdownState,
     destinations: QuickDestinations,
@@ -317,16 +341,21 @@ impl Worker {
     fn restore(store: &Store) -> Result<Self, SessionError> {
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
+        let snapshot = model.snapshot();
         let mut catalogue = Catalogue::new();
-        sync_catalogue(
-            &mut catalogue,
-            &TabModelSnapshot::default(),
-            &model.snapshot(),
-        )?;
+        sync_catalogue(&mut catalogue, &TabModelSnapshot::default(), &snapshot)?;
+        // Durable history joins the catalogue once; later visits update it row by row.
+        // TODO(DW-4): bound this load by history retention before D48's 100,000-row scale.
+        for entry in store.history_entries().map_err(SessionError::Store)? {
+            catalogue
+                .upsert(history::history_entry(&entry))
+                .map_err(SessionError::Search)?;
+        }
         let stored_preferences = preferences::restore(store)?;
         Ok(Self {
             model,
             catalogue,
+            history: HistoryRecorder::restored(&snapshot),
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
@@ -350,13 +379,23 @@ impl Worker {
         self.publish(events, Vec::new(), None, None)?;
         let mut delay = IDLE_DELAY;
         loop {
-            match commands.recv_timeout(delay) {
+            // Held page titles are written once they settle, even while nothing else happens.
+            let wait = if self.history.has_pending_titles() {
+                delay.min(history::TITLE_SETTLE)
+            } else {
+                delay
+            };
+            match commands.recv_timeout(wait) {
                 Ok(SessionCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Ok(());
+                    // A title still held at exit most likely names the tab's current page.
+                    return self.settle_titles(store, true, events);
                 }
                 Ok(command) => {
                     self.handle(store, command, events)?;
                     delay = IDLE_DELAY;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
+                    self.settle_titles(store, false, events)?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     // The store retains its daily due state; retries remain idle and bounded.
@@ -367,30 +406,59 @@ impl Worker {
         }
     }
 
+    fn settle_titles(
+        &mut self,
+        store: &Store,
+        force: bool,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let result = self.history.settle(
+            store,
+            &mut self.catalogue,
+            Instant::now(),
+            force,
+            utc_seconds,
+        );
+        route_history_result(result, events)
+    }
+
     fn handle(
         &mut self,
         store: &Store,
         command: SessionCommand,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        if matches!(command, SessionCommand::ConfirmRecovery { .. }) {
-            return recovery::reject_command(events);
-        }
-        if let SessionCommand::Query {
-            request_id,
-            text,
-            scope,
-            policy,
-        } = command
-        {
-            let result = utc_seconds().and_then(|now| {
-                self.catalogue
-                    .query(&text, scope, now, policy)
-                    .map_err(SessionError::Search)
-            });
-            // Failures carry the same identity as successful replies, so stale queries stay silent.
-            return emit(events, SessionEvent::Search { request_id, result });
-        }
+        // Titles that settled before this command name the page they were reported on.
+        self.settle_titles(store, false, events)?;
+        let command = match command {
+            SessionCommand::ConfirmRecovery { .. } => return recovery::reject_command(events),
+            SessionCommand::ObserveNavigation { id, success } => {
+                let result = self.history.navigation(
+                    store,
+                    &mut self.catalogue,
+                    id,
+                    success,
+                    Instant::now(),
+                    utc_seconds,
+                );
+                return route_history_result(result, events);
+            }
+            SessionCommand::Query {
+                request_id,
+                text,
+                scope,
+                policy,
+            } => return self.answer_query(request_id, &text, scope, policy, events),
+            SessionCommand::RecentHistory { request_id, limit } => {
+                let result = store.recent_visits(limit).map_err(SessionError::Store);
+                return emit(events, SessionEvent::History { request_id, result });
+            }
+            SessionCommand::OpenHistory(id) => match self.history_destination(id) {
+                Ok(command) => command,
+                Err(error) => return emit_recoverable(events, error),
+            },
+            command => command,
+        };
         let Some(command) = preferences::intercept(store, &mut self.destinations, command, events)?
         else {
             return Ok(());
@@ -402,15 +470,17 @@ impl Worker {
             SessionCommand::HomeEntry { request_id, .. } => Some(*request_id),
             _ => None,
         };
+        let observation = match &command {
+            SessionCommand::ObserveMetadata { id, title, address } => Some(Observation {
+                id: *id,
+                title: title.clone(),
+                address: address.clone(),
+            }),
+            _ => None,
+        };
         let before = self.model.snapshot();
         if let Err(error) = apply_model(&mut self.model, command) {
-            return emit(
-                events,
-                SessionEvent::Failure {
-                    error,
-                    fatal: false,
-                },
-            );
+            return emit_recoverable(events, error);
         }
         let after = self.model.snapshot();
         if before != after {
@@ -418,6 +488,10 @@ impl Worker {
                 .save(self.revision, after.clone())
                 .map_err(SessionError::Store)?;
             sync_catalogue(&mut self.catalogue, &before, &after)?;
+        }
+        self.history.retain(&after);
+        if let Some(observation) = observation {
+            self.record_history(store, &after, observation, events)?;
         }
         let created = after
             .tabs
@@ -427,6 +501,52 @@ impl Worker {
             .collect();
         let navigate = if navigating { after.active_id } else { None };
         self.publish(events, created, navigate, home_entry)
+    }
+
+    fn answer_query(
+        &mut self,
+        request_id: u64,
+        text: &str,
+        scope: Scope,
+        policy: SearchPolicy,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let result = utc_seconds().and_then(|now| {
+            self.catalogue
+                .query(text, scope, now, policy)
+                .map_err(SessionError::Search)
+        });
+        // Failures carry the same identity as successful replies, so stale queries stay silent.
+        emit(events, SessionEvent::Search { request_id, result })
+    }
+
+    fn history_destination(&self, id: NonZeroU64) -> Result<SessionCommand, SessionError> {
+        // The catalogue mirrors durable history, so it already holds the address to open.
+        let entry = self
+            .catalogue
+            .get(Target::History(id))
+            .ok_or(SessionError::HistoryUnavailable)?;
+        Ok(SessionCommand::NewTab {
+            address: entry.address.clone(),
+        })
+    }
+
+    fn record_history(
+        &mut self,
+        store: &Store,
+        model: &TabModelSnapshot,
+        observation: Observation,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let result = self.history.observe(
+            store,
+            &mut self.catalogue,
+            model,
+            observation,
+            Instant::now(),
+            utc_seconds,
+        );
+        route_history_result(result, events)
     }
 
     fn publish(
@@ -567,7 +687,11 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
             model.reopen_closed().map_err(SessionError::Model)?;
         }
         SessionCommand::ConfirmRecovery { .. } => return Err(SessionError::RecoveryUnavailable),
+        // Reads, history lookups and preferences are answered before the model is consulted.
         SessionCommand::Query { .. }
+        | SessionCommand::RecentHistory { .. }
+        | SessionCommand::OpenHistory(_)
+        | SessionCommand::ObserveNavigation { .. }
         | SessionCommand::SaveSettings(_)
         | SessionCommand::EditDestinations { .. }
         | SessionCommand::Shutdown => {}
@@ -654,13 +778,39 @@ fn entry(target: Target, metadata: &TabMetadata, open: bool) -> Entry {
     }
 }
 
+/// Storage failures stop the session as saves do; an unindexable row or clock does not.
+fn route_history_result(
+    result: Result<(), SessionError>,
+    events: &UnboundedSender<SessionEvent>,
+) -> Result<(), SessionError> {
+    match result {
+        Err(SessionError::Store(error)) => Err(SessionError::Store(error)),
+        Err(error) => emit_recoverable(events, error),
+        Ok(()) => Ok(()),
+    }
+}
+
+/// Reports a failure that leaves the session running.
+fn emit_recoverable(
+    events: &UnboundedSender<SessionEvent>,
+    error: SessionError,
+) -> Result<(), SessionError> {
+    emit(
+        events,
+        SessionEvent::Failure {
+            error,
+            fatal: false,
+        },
+    )
+}
+
 fn emit(events: &UnboundedSender<SessionEvent>, event: SessionEvent) -> Result<(), SessionError> {
     events
         .unbounded_send(event)
         .map_err(|_| SessionError::EventReceiverClosed)
 }
 
-fn utc_seconds() -> Result<i64, SessionError> {
+pub(crate) fn utc_seconds() -> Result<i64, SessionError> {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| SessionError::ClockUnavailable)?
