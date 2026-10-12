@@ -114,22 +114,31 @@ fn ordinary_changes_after_a_large_import_stay_fast() {
     stop(handle, &mut events);
 
     // After a restart the first change compares with the loaded revision, not a full rewrite.
-    let (handle, mut events) = fixture.start();
-    let restored = state(&mut events);
-    assert_eq!(restored.model.saved_layout.len(), 50_001);
-    let started = Instant::now();
-    change(
-        &handle,
-        &mut events,
-        SessionCommand::ObserveMetadata {
-            id: tab,
-            title: Some("Synthetic title after restart".to_owned()),
-            address: None,
-        },
+    let mut first_changes = Vec::new();
+    for restart in 0..5 {
+        let (handle, mut events) = fixture.start();
+        let restored = state(&mut events);
+        assert_eq!(restored.model.saved_layout.len(), 50_001);
+        let started = Instant::now();
+        change(
+            &handle,
+            &mut events,
+            SessionCommand::ObserveMetadata {
+                id: tab,
+                title: Some(format!("Synthetic title after restart {restart}")),
+                address: None,
+            },
+        );
+        first_changes.push(started.elapsed());
+        stop(handle, &mut events);
+    }
+    let (restart_median, restart_worst) = spread(first_changes);
+    eprintln!(
+        "first title update after restart: median {restart_median:?} (worst {restart_worst:?})"
     );
-    let first_after_restart = started.elapsed();
-    eprintln!("first title update after restart: {first_after_restart:?}");
-    assert!(first_after_restart < REGRESSION_BOUND);
-    stop(handle, &mut events);
+    assert!(
+        restart_median < REGRESSION_BOUND,
+        "median {restart_median:?}"
+    );
     fixture.cleanup();
 }

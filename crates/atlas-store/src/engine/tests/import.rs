@@ -5,8 +5,32 @@ use atlas_core::{
     parse_bookmark_html,
 };
 
-use super::{TestDirectory, close, fixture};
-use crate::{Store, StoreError, StoreOperation};
+use super::{TestDirectory, WriterRequest, close, fixture};
+use crate::{Store, StoreError, StoreOperation, StoredSnapshot};
+
+/// Records every saved-page deletion, so a test can tell a full rewrite from kept rows.
+const COUNT_REWRITES: &str = "CREATE TABLE synthetic_rewrites(page BLOB);
+     CREATE TRIGGER synthetic_count_rewrites AFTER DELETE ON saved_pages
+     BEGIN INSERT INTO synthetic_rewrites VALUES (OLD.id); END;";
+const STOP_COUNTING: &str = "DROP TRIGGER synthetic_count_rewrites; DROP TABLE synthetic_rewrites;";
+
+fn rewritten_pages(connection: &rusqlite::Connection) -> i64 {
+    connection
+        .query_row("SELECT count(*) FROM synthetic_rewrites", [], |row| {
+            row.get(0)
+        })
+        .expect("count synthetic rewrites")
+}
+
+/// The same state with the first live tab's title changed, so only live rows differ.
+fn retitled(snapshot: &TabModelSnapshot, title: &str) -> TabModelSnapshot {
+    let mut model = TabModel::from_snapshot(snapshot.clone()).expect("state restores");
+    let tab = model.tabs()[0].id();
+    let mut metadata = model.tabs()[0].metadata().clone();
+    metadata.title = title.to_owned();
+    model.update_metadata(tab, metadata).expect("title changes");
+    model.snapshot()
+}
 
 /// A synthetic export: 30 pages over two nested folders, so failures can land mid-import.
 fn synthetic_import() -> BookmarkImport {
@@ -158,4 +182,88 @@ fn an_interrupted_import_leaves_nothing_written() {
         store.shutdown().expect("store closes");
         directory.cleanup();
     }
+}
+
+#[test]
+fn a_failed_save_makes_the_next_save_rewrite_everything() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store opens");
+    let previous = fixture();
+    assert_eq!(store.save(0, previous.clone()), Ok(1));
+    let after = imported(&previous);
+    assert_eq!(store.save(1, after.clone()), Ok(2));
+    let connection = directory.connection();
+    connection
+        .execute_batch(COUNT_REWRITES)
+        .expect("install synthetic rewrite counter");
+
+    // Fail a live-tab-only save part-way through its transaction.
+    connection
+        .execute_batch("CREATE TRIGGER synthetic_failure BEFORE INSERT ON live_tabs BEGIN SELECT RAISE(ABORT, 'synthetic-failure'); END;")
+        .expect("install synthetic failure");
+    let changed = retitled(&after, "Synthetic title after a failure");
+    assert!(store.save(2, changed.clone()).is_err());
+    connection
+        .execute_batch("DROP TRIGGER synthetic_failure")
+        .expect("remove synthetic failure");
+    assert_eq!(
+        rewritten_pages(&connection),
+        0,
+        "rolled back with the failure"
+    );
+
+    // The writer forgot its snapshot, so the same save now rewrites every saved row.
+    assert_eq!(store.save(2, changed.clone()), Ok(3));
+    assert_eq!(
+        rewritten_pages(&connection),
+        i64::try_from(changed.saved_pages.len()).expect("page count fits")
+    );
+    connection
+        .execute_batch(STOP_COUNTING)
+        .expect("remove synthetic rewrite counter");
+    close(connection);
+    store.shutdown().expect("store closes");
+
+    let reopened = Store::open(directory.lease()).expect("synthetic store reopens");
+    let stored = reopened.load().expect("rewritten state loads");
+    assert_eq!(stored.revision, 3);
+    assert_eq!(stored.snapshot, changed);
+    reopened.shutdown().expect("store closes");
+    directory.cleanup();
+}
+
+#[test]
+fn an_older_remembered_revision_never_replaces_a_newer_commit() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store opens");
+    let previous = fixture();
+    assert_eq!(store.save(0, previous.clone()), Ok(1));
+    let after = imported(&previous);
+    assert_eq!(store.save(1, after.clone()), Ok(2));
+
+    // A load of revision 1 that reaches the writer late must not displace revision 2.
+    store
+        .writer
+        .as_ref()
+        .expect("writer runs")
+        .sender
+        .send(WriterRequest::Remember(StoredSnapshot {
+            revision: 1,
+            snapshot: previous,
+        }))
+        .expect("writer accepts a late snapshot");
+    let connection = directory.connection();
+    connection
+        .execute_batch(COUNT_REWRITES)
+        .expect("install synthetic rewrite counter");
+    let changed = retitled(&after, "Synthetic title after a late load");
+    assert_eq!(store.save(2, changed.clone()), Ok(3));
+    assert_eq!(rewritten_pages(&connection), 0, "revision 2 rows were kept");
+    connection
+        .execute_batch(STOP_COUNTING)
+        .expect("remove synthetic rewrite counter");
+    assert_eq!(store.load().expect("latest state loads").snapshot, changed);
+    close(connection);
+    store.shutdown().expect("store closes");
+    directory.cleanup();
 }
