@@ -7,6 +7,18 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
+- **History is kept for 90 days (DW-4).** Older visits are deleted
+  automatically through the same path as Clear browsing data, so they stay
+  deleted after a backup is restored (D47). Ninety days matches Chrome: long
+  enough for the palette to recall a page, short enough to keep the database
+  small. The owner rejected keeping history forever, a year and 30 days.
+
+- **The installed Atlas keeps its data in `%LOCALAPPDATA%\Atlas\data` (P1-37).**
+  Development and preview builds keep using `AtlasProductPreview`, so test
+  runs never mix with the owner's real browsing data. Nothing is moved or
+  deleted between them; the installed app starts empty and bookmarks are
+  imported again. Keeping the preview folder was rejected for that reason.
+
 - **Page text is read with one DevTools snapshot, never a script (P1-25).**
   The owner approved `docs/proposals/p1-25-page-text-extraction.md` as
   recommended. Atlas captures an eligible page's visible text with a single
