@@ -7,6 +7,11 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
+- **The five palettes are approved (P1-07).** The owner reviewed the
+  `--palette-sample` window against the design and approved it. The D44
+  drag thresholds stay proposed until they can be tried in a draggable
+  sidebar, because a static sample can't show how a drag feels.
+
 - **Folder removal keeps saved pages by default (P1-21).** Removing a folder
   moves its contents up one level unless the owner explicitly chooses to
   delete them, and deleting contents asks for confirmation first. That way,
