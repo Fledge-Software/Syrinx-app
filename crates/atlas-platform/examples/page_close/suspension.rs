@@ -21,10 +21,69 @@ addEventListener('keydown',e=>{if(e.key==='Enter')v.requestFullscreen().catch(()
 addEventListener('fullscreenchange',()=>document.title=document.fullscreenElement?'video-full':'video-exited');
 </script>"#;
 
+const SLOW: &str = "<!doctype html><meta charset=utf-8><title>slow-hidden</title>\
+    <link rel=icon href=data:,><p>Synthetic slow hidden page</p>";
+const SLOW_ID: u64 = 1490;
+
 pub(super) fn response(request: &[u8]) -> Option<&'static str> {
+    if is_slow(request) {
+        return Some(SLOW);
+    }
     request
         .starts_with(b"GET /synthetic-video ")
         .then_some(VIDEO)
+}
+
+/// The slow page's body is always held past the hidden-page grace.
+pub(super) fn is_slow(request: &[u8]) -> bool {
+    request.starts_with(b"GET /slow-hidden ")
+}
+
+/// A hidden page whose load outlasts the grace must finish loading before it is suspended.
+fn exercise_slow_hidden_load(
+    host: &BrowserHost,
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    url: &str,
+    deadline: Instant,
+) -> Result<(), String> {
+    let base = url
+        .strip_suffix("/close")
+        .ok_or("Synthetic fixture URL shape changed.")?;
+    send(
+        host,
+        BrowserCommand::Create {
+            id: SLOW_ID,
+            url: format!("{base}/slow-hidden"),
+        },
+    )?;
+    let started = Instant::now();
+    let mut completed = None;
+    loop {
+        match checked_event(events, deadline)? {
+            BrowserEvent::NavigationCompleted {
+                id: SLOW_ID,
+                success: true,
+            } => completed = Some(started.elapsed()),
+            BrowserEvent::Suspended {
+                id: SLOW_ID,
+                suspended: true,
+            } => break,
+            _ => {}
+        }
+    }
+    let Some(loaded) = completed else {
+        return Err("Slow hidden page was suspended before it finished loading.".into());
+    };
+    if loaded < STALL_PAST_SUSPENSION_GRACE {
+        return Err("Slow hidden page finished before its held body was sent.".into());
+    }
+    println!(
+        "Slow hidden page loaded after {:.1} s and was suspended only afterwards.",
+        loaded.as_secs_f64()
+    );
+    // Release it so the eight-tab phase below starts from an empty parent.
+    send(host, BrowserCommand::Close { id: SLOW_ID })?;
+    lifecycle::barrier(host, events, deadline)
 }
 
 pub(super) fn exercise(
@@ -35,6 +94,7 @@ pub(super) fn exercise(
     deadline: Instant,
 ) -> Result<(), String> {
     while !matches!(checked_event(events, deadline)?, BrowserEvent::Ready) {}
+    exercise_slow_hidden_load(host, events, url, deadline)?;
     for id in 1500..1508 {
         send(
             host,

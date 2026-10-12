@@ -848,6 +848,17 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
   CPU-specific diagnostic also missed D48 in 25 of 26 cases with identical
   result checksums, so changing CPU flags is not the performance fix. The
   slice cannot be presented as complete or merged with either gate unresolved.
+- **Suspending a hidden page that is still loading (P1-15), resolved by the
+  owner 2026-10-12:** the native lifecycle-timeout diagnosis in
+  `docs/p1-11-popups.md` showed that `TrySuspend` succeeded five seconds
+  after a hidden page started navigating even with its load still in
+  flight, leaving the page frozen half-loaded until shown. The owner decided
+  that the five-second countdown starts when the navigation finishes
+  (success or failure). It is implemented on
+  `claude/diagnose-lifecycle-timeout` in `browser/hidden_timer.rs`, with a
+  60-second limit for loads that never finish; see
+  `docs/p1-15-suspension-fullscreen.md`. The decision record itself is in
+  `docs/decisions.md`.
 - **Sidebar UI details (D44):** the wide/compact/hidden progression,
   reversible drag, hover peek and Ctrl Alt S are approved. Review exact
   widths, transition thresholds and compact-folder controls with the owner
