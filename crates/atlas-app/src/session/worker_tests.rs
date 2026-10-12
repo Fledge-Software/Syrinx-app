@@ -1613,3 +1613,6 @@ fn healthy_existing_primary_starts_directly_with_its_saved_state() {
 
 #[path = "preference_tests.rs"]
 mod preference_tests;
+
+#[path = "import_tests.rs"]
+mod import_tests;

@@ -1,6 +1,6 @@
 //! Draws the sidebar at its current D44 width and lets the owner drag its edge (P1-08, P1-09).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use atlas_core::{
     SavedFolderId, SavedFolderSnapshot, SavedPageId, SavedPageSnapshot, TabId, TabSnapshot,
@@ -189,10 +189,20 @@ impl BrowserView {
 
     /// Saved rows in layout order (skipping collapsed folders), then ordinary tabs.
     fn rows(&self, labels: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        // Index only the visible rows: a large collapsed import must not cost a map per frame.
+        let visible = visible_saved_rows(&self.model.saved_layout, &self.collapsed_folders);
+        let visible_pages: HashSet<SavedPageId> = visible
+            .iter()
+            .filter_map(|row| match row {
+                SavedRow::Page { id, .. } => Some(*id),
+                SavedRow::Folder { .. } => None,
+            })
+            .collect();
         let pages: HashMap<SavedPageId, &SavedPageSnapshot> = self
             .model
             .saved_pages
             .iter()
+            .filter(|page| visible_pages.contains(&page.id))
             .map(|page| (page.id, page))
             .collect();
         let folders: HashMap<SavedFolderId, &SavedFolderSnapshot> = self
@@ -208,7 +218,7 @@ impl BrowserView {
             .flex()
             .flex_col()
             .gap_1();
-        for row in visible_saved_rows(&self.model.saved_layout, &self.collapsed_folders) {
+        for row in visible {
             let element = match row {
                 SavedRow::Folder {
                     id,

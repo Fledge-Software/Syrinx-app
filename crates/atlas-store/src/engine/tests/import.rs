@@ -65,6 +65,59 @@ fn an_import_is_one_revision_and_survives_restart_unloaded() {
 }
 
 #[test]
+fn live_tab_changes_after_an_import_keep_saved_rows_and_round_trip() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store opens");
+    let previous = fixture();
+    assert_eq!(store.save(0, previous.clone()), Ok(1));
+    let after = imported(&previous);
+    assert_eq!(store.save(1, after.clone()), Ok(2));
+    // Saved rows are kept from here on; a trigger proves none is rewritten.
+    let connection = directory.connection();
+    connection
+        .execute_batch("CREATE TRIGGER synthetic_no_rewrite BEFORE DELETE ON saved_pages BEGIN SELECT RAISE(ABORT, 'synthetic-rewrite'); END;")
+        .expect("install synthetic rewrite guard");
+    let mut model = TabModel::from_snapshot(after).expect("imported state restores");
+    let tab = model.tabs()[0].id();
+    let mut metadata = model.tabs()[0].metadata().clone();
+    metadata.title = "Synthetic changed title".to_owned();
+    model.update_metadata(tab, metadata).expect("title changes");
+    let changed = model.snapshot();
+    assert_eq!(store.save(2, changed.clone()), Ok(3));
+    connection
+        .execute_batch("DROP TRIGGER synthetic_no_rewrite")
+        .expect("remove synthetic rewrite guard");
+    close(connection);
+    store.shutdown().expect("store closes");
+
+    // A reopened store learns the committed revision from its load and keeps the rows too.
+    let reopened = Store::open(directory.lease()).expect("synthetic store reopens");
+    let stored = reopened.load().expect("changed state loads");
+    let connection = directory.connection();
+    connection
+        .execute_batch("CREATE TRIGGER synthetic_no_rewrite BEFORE DELETE ON saved_pages BEGIN SELECT RAISE(ABORT, 'synthetic-rewrite'); END;")
+        .expect("install synthetic rewrite guard");
+    assert_eq!(stored.revision, 3);
+    assert_eq!(stored.snapshot, changed);
+    let mut model = TabModel::from_snapshot(changed).expect("changed state restores");
+    let mut metadata = model.tabs()[0].metadata().clone();
+    metadata.title = "Synthetic title after reopening".to_owned();
+    model.update_metadata(tab, metadata).expect("title changes");
+    let reopened_change = model.snapshot();
+    assert_eq!(reopened.save(3, reopened_change.clone()), Ok(4));
+    assert_eq!(
+        reopened.load().expect("latest state loads").snapshot,
+        reopened_change
+    );
+    connection
+        .execute_batch("DROP TRIGGER synthetic_no_rewrite")
+        .expect("remove synthetic rewrite guard");
+    close(connection);
+    reopened.shutdown().expect("store closes");
+    directory.cleanup();
+}
+
+#[test]
 fn an_interrupted_import_leaves_nothing_written() {
     // Fail part-way through the page rows, then on the last layout row of the import.
     for trigger in [

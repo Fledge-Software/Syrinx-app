@@ -102,7 +102,9 @@ Review fixes (2026-10-12):
 giving each row its depth and skipping everything inside a collapsed folder.
 The wide sidebar indents each level by 12 px; a folder row shows ▾ or ▸,
 reports `aria_expanded` and toggles on click. Collapsing is view state in
-`BrowserView::collapsed_folders`, not a model change, and every folder starts
+`BrowserView::collapsed_folders`, not a model change. Folders restored at start-up
+and imported folders start collapsed (P1-22, so a large import never builds
+every row); folders created during the session start
 expanded. No folder editing UI was added; that remains P1-21's.
 
 ## Decisions made here, for review

@@ -14,13 +14,15 @@ pub enum NewSavedItem {
 }
 
 /// What [`TabModel::append_saved_folder`] added.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppendedSavedTree {
     /// The new top-level folder holding everything else.
     pub folder: SavedFolderId,
     /// Folders added inside it, not counting it.
     pub folders: usize,
     pub pages: usize,
+    /// Every added folder, the new top-level one first, in depth-first order.
+    pub folder_ids: Vec<SavedFolderId>,
 }
 
 impl TabModel {
@@ -37,12 +39,14 @@ impl TabModel {
         self.reserve_identities(folders + 1, pages)?;
         let root = self.allocate_folder_id()?;
         self.push_folder(root, title, None);
-        self.push_items(root, items)?;
+        let mut folder_ids = vec![root];
+        self.push_items(root, items, &mut folder_ids)?;
         self.sync_saved_order();
         Ok(AppendedSavedTree {
             folder: root,
             folders,
             pages,
+            folder_ids,
         })
     }
 
@@ -68,6 +72,7 @@ impl TabModel {
         &mut self,
         root: SavedFolderId,
         items: Vec<NewSavedItem>,
+        folder_ids: &mut Vec<SavedFolderId>,
     ) -> Result<(), TabError> {
         let mut pending = vec![(root, items.into_iter())];
         while let Some((parent, rows)) = pending.last_mut() {
@@ -88,6 +93,7 @@ impl TabModel {
                 NewSavedItem::Folder { title, items } => {
                     let id = self.allocate_folder_id()?;
                     self.push_folder(id, title, Some(parent));
+                    folder_ids.push(id);
                     pending.push((id, items.into_iter()));
                 }
             }
