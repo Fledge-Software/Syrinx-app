@@ -20,10 +20,10 @@ pub const DATA_FOLDER: &str = r"Atlas\data";
 /// Development and preview runs' data folder; uninstall only offers it behind a separate switch.
 pub const PREVIEW_DATA_FOLDER: &str = "AtlasProductPreview";
 
-/// Switch Windows passes before a link; P1-34 must treat the rest of the command line as one URL.
-pub const OPEN_URL_SWITCH: &str = "--open-url";
+/// Marker Windows passes before a link; P1-34 accepts a link only as the single argument after it.
+pub const LINK_MARKER: &str = "--";
 
-/// Whether `atlas-app.exe` accepts `OPEN_URL_SWITCH` yet. P1-34 sets this when it lands.
+/// Whether `atlas-app.exe` accepts a link after `LINK_MARKER` yet. P1-34 sets this when it lands.
 pub const ACCEPTS_OPEN_URL: bool = false;
 
 /// Generated PowerShell file shared by the install, register and unregister scripts.
@@ -142,7 +142,7 @@ pub const VALUES: [RegistryValue; 26] = [
     string(
         r"Software\Classes\AtlasBrowserURL\shell\open\command",
         "",
-        "\"{exe}\" --open-url %1",
+        "\"{exe}\" -- \"%1\"",
     ),
     // The Installed apps entry, whose Uninstall button runs the unregister script.
     marker(UNINSTALL),
@@ -174,7 +174,7 @@ pub fn render_script(package_files: &[&str]) -> String {
         format!("$AtlasDataFolder = {}", quote(DATA_FOLDER)),
         format!("$AtlasPreviewDataFolder = {}", quote(PREVIEW_DATA_FOLDER)),
         format!("$AtlasPackageFiles = @({})", quoted_list(package_files)),
-        format!("$AtlasOpenUrlSwitch = {}", quote(OPEN_URL_SWITCH)),
+        format!("$AtlasLinkMarker = {}", quote(LINK_MARKER)),
         format!("$AtlasAcceptsOpenUrl = ${ACCEPTS_OPEN_URL}"),
         format!("$AtlasOwnerMarkerName = {}", quote(OWNER_MARKER_NAME)),
         format!("$AtlasOwnerMarkerData = {}", quote(OWNER_MARKER_DATA)),
@@ -304,8 +304,8 @@ mod tests {
     }
 
     #[test]
-    fn link_command_uses_the_single_argument_switch() {
-        // The link stays unquoted and last, so P1-34 can take the raw remainder as one URL.
+    fn link_command_passes_the_link_as_one_argument_after_the_marker() {
+        // P1-34 accepts a link only as the single quoted argument after `--`.
         let command = VALUES
             .iter()
             .find(|value| value.key == r"Software\Classes\AtlasBrowserURL\shell\open\command")
@@ -313,7 +313,17 @@ mod tests {
         let Some(Data::String(command)) = command else {
             panic!("the link command must be a string value");
         };
-        assert_eq!(command, format!("\"{{exe}}\" {OPEN_URL_SWITCH} %1"));
+        assert_eq!(command, "\"{exe}\" -- \"%1\"");
+        assert_eq!(command, format!("\"{{exe}}\" {LINK_MARKER} \"%1\""));
+    }
+
+    #[test]
+    fn browser_launch_command_takes_no_arguments() {
+        assert!(VALUES.contains(&string(
+            r"Software\Clients\StartMenuInternet\AtlasBrowser\shell\open\command",
+            "",
+            "\"{exe}\"",
+        )));
     }
 
     #[test]

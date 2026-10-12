@@ -180,7 +180,7 @@ from it, and the gate fails if either differs.
 | `Software\Classes\AtlasBrowserURL\Application` | `ApplicationDescription` | `Atlas web browser` |
 | `Software\Classes\AtlasBrowserURL\Application` | `ApplicationIcon` | `{exe},0` |
 | `Software\Classes\AtlasBrowserURL\DefaultIcon` | `(default)` | `{exe},0` |
-| `Software\Classes\AtlasBrowserURL\shell\open\command` | `(default)` | `"{exe}" --open-url %1` |
+| `Software\Classes\AtlasBrowserURL\shell\open\command` | `(default)` | `"{exe}" -- "%1"` |
 | `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `AtlasPackagingOwner` | `atlas-packaging-v1` |
 | `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `DisplayName` | `Atlas` |
 | `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `DisplayVersion` | `{version}` |
@@ -237,13 +237,15 @@ What is deliberately absent:
 
 ### The link command and P1-34
 
-When the owner clicks a link elsewhere, Windows runs
-`"{exe}" --open-url <link>`. The link is deliberately unquoted and last,
-following Chrome's `--single-argument` pattern: P1-34 must read the raw
-command line after `--open-url ` as exactly one URL, so a crafted link
-containing quotes or spaces cannot smuggle extra switches into Atlas. P1-34
+When the owner clicks a link elsewhere, Windows runs the `AtlasBrowserURL`
+ProgID's command, `"{exe}" -- "%1"`, with `%1` replaced by the link. This
+is the argument form P1-34 decided: Atlas accepts a link only as the single
+argument after the `--` marker. Anything after `--` is never read as a
+switch, so a crafted link cannot smuggle options into Atlas, and P1-34
+refuses a command line with more than one argument after the marker. P1-34
 also accepts only http and https links and forwards them to an
-already-running Atlas.
+already-running Atlas. Starting Atlas from the Start menu or Default apps
+uses the `StartMenuInternet` command, `"{exe}"`, with no arguments.
 
 **Today's `atlas-app.exe` refuses any argument it does not know**
 (`run_mode` in `crates/atlas-app/src/main.rs`), so a registered build would
@@ -252,6 +254,13 @@ registration table is therefore `false`; it is copied into the generated
 script and the manifest, and `register-atlas.ps1` warns the owner not to
 choose Atlas as default until a build that accepts links is installed.
 P1-34 sets it to `true` when it lands.
+
+**P1-34 and P1-37 must land together, before the owner registers.** The
+registration written here already passes links as `-- "%1"`. Registered
+against a build without P1-34, every link from another app would fail to
+open; merged without this registration, P1-34's link handling would never
+be reached. The owner should register only from a package built after both
+are merged, when the warning no longer appears.
 
 ## Script safeguards
 
