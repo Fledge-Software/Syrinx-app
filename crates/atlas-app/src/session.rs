@@ -44,6 +44,11 @@ pub enum SessionCommand {
     NewTab {
         address: String,
     },
+    AdoptPopup {
+        request: u64,
+        opener: TabId,
+        address: String,
+    },
     NavigateActive {
         address: String,
     },
@@ -93,12 +98,17 @@ pub struct SessionSnapshot {
     pub navigate: Option<TabId>,
     /// UI intent acknowledged by this command only, never restored from storage.
     pub home_entry: Option<u64>,
+    /// Native popup request correlated only after durable tab allocation.
+    pub popup: Option<(u64, Option<TabId>)>,
     pub previous_shutdown: ShutdownState,
 }
 
 #[derive(Debug)]
 pub enum SessionEvent {
     RecoveryOffered(RecoveryPrompt),
+    PopupRejected {
+        request: u64,
+    },
     State(SessionSnapshot),
     Search {
         request_id: u64,
@@ -317,7 +327,7 @@ impl Worker {
         commands: mpsc::Receiver<SessionCommand>,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        self.publish(events, Vec::new(), None, None)?;
+        self.publish(events, Vec::new(), None, None, None)?;
         let mut delay = IDLE_DELAY;
         loop {
             match commands.recv_timeout(delay) {
@@ -368,8 +378,15 @@ impl Worker {
             SessionCommand::HomeEntry { request_id, .. } => Some(*request_id),
             _ => None,
         };
+        let popup_request = match &command {
+            SessionCommand::AdoptPopup { request, .. } => Some(*request),
+            _ => None,
+        };
         let before = self.model.snapshot();
         if let Err(error) = apply_model(&mut self.model, command) {
+            if let Some(request) = popup_request {
+                emit(events, SessionEvent::PopupRejected { request })?;
+            }
             return emit(
                 events,
                 SessionEvent::Failure {
@@ -385,14 +402,15 @@ impl Worker {
                 .map_err(SessionError::Store)?;
             sync_catalogue(&mut self.catalogue, &before, &after)?;
         }
-        let created = after
+        let created: Vec<_> = after
             .tabs
             .iter()
             .filter(|tab| tab.id.get() > before.last_tab_id)
             .map(|tab| tab.id)
             .collect();
         let navigate = if navigating { after.active_id } else { None };
-        self.publish(events, created, navigate, home_entry)
+        let popup = popup_request.map(|request| (request, created.first().copied()));
+        self.publish(events, created, navigate, home_entry, popup)
     }
 
     fn publish(
@@ -401,6 +419,7 @@ impl Worker {
         created: Vec<TabId>,
         navigate: Option<TabId>,
         home_entry: Option<u64>,
+        popup: Option<(u64, Option<TabId>)>,
     ) -> Result<(), SessionError> {
         emit(
             events,
@@ -410,6 +429,7 @@ impl Worker {
                 created,
                 navigate,
                 home_entry,
+                popup,
                 previous_shutdown: self.previous_shutdown,
             }),
         )
@@ -464,6 +484,17 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
                 None => SessionCommand::NewTab { address },
             };
             apply_model(model, resolved)?;
+        }
+        SessionCommand::AdoptPopup {
+            opener, address, ..
+        } => {
+            if model
+                .tabs()
+                .iter()
+                .any(|tab| tab.id() == opener && tab.kind() == TabKind::Web)
+            {
+                apply_model(model, SessionCommand::NewTab { address })?;
+            }
         }
         SessionCommand::NewTab { address } => {
             model
@@ -809,6 +840,7 @@ mod tests {
             created: Vec::new(),
             navigate: None,
             home_entry: None,
+            popup: None,
             previous_shutdown: ShutdownState::Clean,
         });
         assert!(!format!("{event:?}").contains(address));

@@ -4,6 +4,7 @@ mod home_palette;
 mod navigation_intents;
 mod navigation_status;
 mod page_lifecycle;
+mod popups;
 mod recovery;
 
 #[cfg(test)]
@@ -101,6 +102,7 @@ pub struct BrowserView {
     closing: bool,
     loaded: HashSet<TabId>,
     pending_pages: HashSet<TabId>,
+    popup_pages: HashSet<TabId>,
     navigation_intents: NavigationIntents,
     navigation_status: NavigationStatus,
     shown: Option<TabId>,
@@ -139,6 +141,7 @@ impl BrowserView {
             closing: false,
             loaded: HashSet::new(),
             pending_pages: HashSet::new(),
+            popup_pages: HashSet::new(),
             navigation_intents: NavigationIntents::default(),
             navigation_status: NavigationStatus::default(),
             shown: None,
@@ -283,6 +286,9 @@ impl BrowserView {
                 {
                     self.navigate_committed(id);
                 }
+                if let Some((request, target)) = snapshot.popup {
+                    self.commit_popup(request, target);
+                }
                 self.sync_pages();
                 // Only committed model changes invalidate an open palette's catalogue snapshot.
                 if changed
@@ -300,6 +306,9 @@ impl BrowserView {
                 if new_home && !self.closing && !self.smoke {
                     self.open_palette(false, window, cx);
                 }
+            }
+            SessionEvent::PopupRejected { request } => {
+                self.page_command(BrowserCommand::CancelPopup { request });
             }
             SessionEvent::Search { request_id, result } => {
                 if let Some((pending, local)) = self.pending_query
@@ -320,6 +329,7 @@ impl BrowserView {
                     self.outcome.store(2, Ordering::Release);
                 }
                 if fatal {
+                    self.page_command(BrowserCommand::Shutdown);
                     self.fail(format!("Storage stopped: {error}"));
                 } else {
                     self.message = error.to_string();
@@ -415,9 +425,12 @@ impl BrowserView {
             BrowserEvent::Url { id, url } => self.metadata(id, None, Some(url)),
             BrowserEvent::Loading { .. } => {}
             BrowserEvent::Shortcut(shortcut) => self.shortcut(shortcut, window, cx),
+            BrowserEvent::PopupRequested { id, request, url } => {
+                self.request_popup(id, request, url);
+            }
             BrowserEvent::PopupBlocked { id } => {
                 if self.active_page_feedback(id) {
-                    self.message = "This preview cannot open this site's popup yet.".to_owned();
+                    self.message = "This popup could not be opened.".to_owned();
                 }
             }
             BrowserEvent::Error { tab, error } => {
@@ -516,9 +529,12 @@ impl BrowserView {
         if self.closing || self.session_revision.is_none() {
             return;
         }
-        let desired =
-            self.navigation_intents
-                .desired_page(&self.model, self.browser_ready, self.smoke);
+        self.popup_pages
+            .retain(|id| self.model.tabs.iter().any(|tab| tab.id == *id));
+        let desired = self
+            .navigation_intents
+            .desired_page(&self.model, self.browser_ready, self.smoke)
+            .or_else(|| self.blank_popup());
         if !self.browser_ready {
             return;
         }
@@ -830,7 +846,7 @@ impl BrowserView {
             .iter()
             .find(|tab| Some(tab.id) == self.model.active_id)
             .map_or_else(String::new, |tab| {
-                if tab.metadata.address == "about:blank" {
+                if tab.metadata.address == "about:blank" && !self.popup_pages.contains(&tab.id) {
                     String::new()
                 } else {
                     tab.metadata.address.clone()
@@ -1063,13 +1079,14 @@ impl BrowserView {
             .filter(|tab| tab.saved_page_id.is_none())
         {
             let id = tab.id;
-            let title = if tab.metadata.address == "about:blank" {
-                "Home".to_owned()
-            } else if tab.metadata.title.is_empty() {
-                tab.metadata.address.clone()
-            } else {
-                tab.metadata.title.clone()
-            };
+            let title =
+                if tab.metadata.address == "about:blank" && !self.popup_pages.contains(&tab.id) {
+                    "Home".to_owned()
+                } else if tab.metadata.title.is_empty() {
+                    tab.metadata.address.clone()
+                } else {
+                    tab.metadata.title.clone()
+                };
             rows =
                 rows.child(
                     div()

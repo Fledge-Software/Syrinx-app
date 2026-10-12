@@ -2,6 +2,7 @@
 
 mod environment;
 mod page;
+mod popups;
 
 use std::{
     collections::HashMap,
@@ -56,6 +57,8 @@ pub enum BrowserShortcut {
 
 pub enum BrowserCommand {
     Create { id: u64, url: String },
+    AdoptPopup { request: u64, id: u64 },
+    CancelPopup { request: u64 },
     Navigate { id: u64, url: String },
     Close { id: u64 },
     ShowActive(Option<u64>),
@@ -107,6 +110,11 @@ pub enum BrowserEvent {
         kind: i32,
     },
     Shortcut(BrowserShortcut),
+    PopupRequested {
+        id: u64,
+        request: u64,
+        url: String,
+    },
     PopupBlocked {
         id: u64,
     },
@@ -157,6 +165,7 @@ pub enum BrowserError {
     DuplicateTab,
     UnknownTab,
     CreatePage,
+    Popup,
     Settings,
     EventRegistration,
     Navigation,
@@ -323,6 +332,7 @@ fn run(
     let (shortcut_send, shortcuts) = mpsc::channel();
     let mut state = BrowserState {
         pages: HashMap::new(),
+        popups: popups::PopupRequests::default(),
         environment,
         bounds: PageBounds::default(),
         parent,
@@ -369,7 +379,7 @@ fn drain_commands(
         };
         let tab = command.tab_id();
         let creating = match &command {
-            BrowserCommand::Create { id, .. } => Some(*id),
+            BrowserCommand::Create { id, .. } | BrowserCommand::AdoptPopup { id, .. } => Some(*id),
             _ => None,
         };
         let event = match (creating, apply(command)) {
@@ -386,6 +396,7 @@ fn drain_commands(
 
 struct BrowserState {
     pages: HashMap<u64, Page>,
+    popups: popups::PopupRequests,
     environment: ICoreWebView2Environment,
     bounds: PageBounds,
     parent: isize,
@@ -394,27 +405,46 @@ struct BrowserState {
 }
 
 impl BrowserState {
+    fn new_page(&self, id: u64) -> Result<Page, BrowserError> {
+        if id == 0 {
+            return Err(BrowserError::InvalidTab);
+        }
+        if self.pages.contains_key(&id) {
+            return Err(BrowserError::DuplicateTab);
+        }
+        Page::new(
+            id,
+            self.parent,
+            &self.environment,
+            self.bounds,
+            self.events.clone(),
+            self.shortcuts.clone(),
+            self.popups.clone(),
+        )
+    }
+
     fn apply(&mut self, command: BrowserCommand) -> Result<(), BrowserError> {
         match command {
             BrowserCommand::Create { id, url } => {
-                if id == 0 {
-                    return Err(BrowserError::InvalidTab);
-                }
-                if self.pages.contains_key(&id) {
-                    return Err(BrowserError::DuplicateTab);
-                }
-                let page = Page::new(
-                    id,
-                    self.parent,
-                    &self.environment,
-                    self.bounds,
-                    self.events.clone(),
-                    self.shortcuts.clone(),
-                )?;
+                let page = self.new_page(id)?;
                 page.navigate(&url)?;
                 self.pages.insert(id, page);
             }
+            BrowserCommand::AdoptPopup { request, id } => {
+                let pending = self.popups.take(request).ok_or(BrowserError::Popup)?;
+                if !self.pages.contains_key(&pending.opener) {
+                    return Err(BrowserError::UnknownTab);
+                }
+                // Every page uses this environment and the default profile; do not navigate the target.
+                let page = self.new_page(id)?;
+                pending.adopt(&page.webview())?;
+                self.pages.insert(id, page);
+            }
+            BrowserCommand::CancelPopup { request } => {
+                drop(self.popups.take(request));
+            }
             BrowserCommand::Close { id } => {
+                self.popups.cancel_opener(id);
                 self.pages.remove(&id).ok_or(BrowserError::UnknownTab)?;
             }
             BrowserCommand::ShowActive(active) => {
@@ -442,6 +472,13 @@ impl BrowserState {
     }
 }
 
+impl Drop for BrowserState {
+    fn drop(&mut self) {
+        // Complete pending requests while their openers and the COM apartment still exist.
+        self.popups.clear();
+    }
+}
+
 fn dispatch(message: MSG) {
     unsafe {
         // A false result means this message needed no keyboard translation, not a failure.
@@ -453,7 +490,8 @@ fn dispatch(message: MSG) {
 impl BrowserCommand {
     fn tab_id(&self) -> Option<u64> {
         match self {
-            Self::Create { id, .. }
+            Self::AdoptPopup { id, .. }
+            | Self::Create { id, .. }
             | Self::Navigate { id, .. }
             | Self::Close { id }
             | Self::Back { id }
@@ -461,7 +499,7 @@ impl BrowserCommand {
             | Self::Reload { id }
             | Self::Focus { id } => Some(*id),
             Self::ShowActive(id) => *id,
-            Self::Resize(_) | Self::Shutdown => None,
+            Self::CancelPopup { .. } | Self::Resize(_) | Self::Shutdown => None,
         }
     }
 }
@@ -606,6 +644,39 @@ mod tests {
     }
 
     #[test]
+    fn popup_acknowledgment_follows_native_adoption_and_reports_failure() {
+        for result in [Ok(()), Err(BrowserError::Popup)] {
+            let (commands, incoming) = mpsc::channel();
+            let (events, mut received) = unbounded();
+            commands
+                .send(BrowserCommand::AdoptPopup { request: 41, id: 8 })
+                .expect("queue synthetic popup adoption");
+            assert!(drain_commands(&incoming, &EventSink(events), |command| {
+                assert!(matches!(
+                    command,
+                    BrowserCommand::AdoptPopup { request: 41, id: 8 }
+                ));
+                assert!(received.try_recv().is_err(), "no premature acknowledgment");
+                result
+            }));
+            match result {
+                Ok(()) => assert!(matches!(
+                    received.try_recv(),
+                    Ok(BrowserEvent::Created { id: 8 })
+                )),
+                Err(_) => assert!(matches!(
+                    received.try_recv(),
+                    Ok(BrowserEvent::CreationFailed {
+                        id: 8,
+                        error: BrowserError::Popup,
+                    })
+                )),
+            }
+            assert!(received.try_recv().is_err());
+        }
+    }
+
+    #[test]
     fn disconnect_drains_existing_commands_then_ends_the_host_loop() {
         let (commands, incoming) = mpsc::channel();
         let (events, mut received) = unbounded();
@@ -665,6 +736,14 @@ mod tests {
     fn browser_diagnostics_do_not_include_page_content() {
         let sentinel = "https://private-debug-sentinel.example.test/";
         for debug in [
+            format!(
+                "{:?}",
+                BrowserEvent::PopupRequested {
+                    id: 1,
+                    request: 41,
+                    url: sentinel.into()
+                }
+            ),
             format!(
                 "{:?}",
                 BrowserCommand::Create {
