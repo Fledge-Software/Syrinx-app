@@ -208,12 +208,12 @@ mod tests {
         let all = matcher
             .matches("", View::Commands, PAGE)
             .expect("blank command query");
-        // Eleven navigation and history commands plus P1-13's six page essentials.
-        assert_eq!(all.hits.len(), 17);
+        // Eleven navigation and history commands, P1-13's six page essentials and P1-27's clear data.
+        assert_eq!(all.hits.len(), 18);
         assert_eq!(
             all.counts,
             CommandCounts {
-                browser: 17,
+                browser: 18,
                 plugin: 0
             }
         );
@@ -254,7 +254,7 @@ mod tests {
             .matches("", View::Everything, PAGE)
             .expect("blank query");
         assert!(blank.hits.is_empty());
-        assert_eq!(blank.counts.browser, 17);
+        assert_eq!(blank.counts.browser, 18);
 
         let tab = matcher
             .matches("tab", View::Everything, PAGE)

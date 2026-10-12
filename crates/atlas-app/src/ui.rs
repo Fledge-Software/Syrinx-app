@@ -98,6 +98,7 @@ actions!(
         Forward,
         Reload,
         ShowHistory,
+        ClearBrowsingData,
         ToggleSidebar,
         DismissPeek,
         Fullscreen
@@ -160,6 +161,7 @@ fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
         BrowserAction::ZoomIn => KeyBinding::new(keystroke, essentials::ZoomIn, None),
         BrowserAction::ZoomOut => KeyBinding::new(keystroke, essentials::ZoomOut, None),
         BrowserAction::ResetZoom => KeyBinding::new(keystroke, essentials::ZoomReset, None),
+        BrowserAction::ClearBrowsingData => KeyBinding::new(keystroke, ClearBrowsingData, None),
     }
 }
 
@@ -180,8 +182,8 @@ fn activation_command(
     }
 }
 
-/// Runs a browser command through the same handler as its keyboard shortcut; history has no
-/// native page shortcut, so it is handled by `toggle_history` directly.
+/// Runs a browser command through the same handler as its keyboard shortcut; history and clear
+/// browsing data have no native page shortcut, so they open their page-card views directly.
 fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
     Some(match action {
         BrowserAction::NewTab => BrowserShortcut::NewTab,
@@ -200,7 +202,7 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
         BrowserAction::ZoomIn => BrowserShortcut::ZoomIn,
         BrowserAction::ZoomOut => BrowserShortcut::ZoomOut,
         BrowserAction::ResetZoom => BrowserShortcut::ZoomReset,
-        BrowserAction::ShowHistory => return None,
+        BrowserAction::ShowHistory | BrowserAction::ClearBrowsingData => return None,
     })
 }
 
@@ -1259,6 +1261,7 @@ impl BrowserView {
         }
         match browser_shortcut(action) {
             Some(shortcut) => self.shortcut(shortcut, window, cx),
+            None if action == BrowserAction::ClearBrowsingData => self.open_clear_data(),
             None => self.toggle_history(),
         }
         // Edit address reopens the palette and Find focuses its bar; the rest return to the page.
@@ -1465,10 +1468,11 @@ impl BrowserView {
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_palette(true, window, cx)),
                     )
+                    // Shown decoded where safe, host kept as punycode; Ctrl L edits the raw address.
                     .child(if self.active_address().is_empty() {
                         "Search or enter address · Ctrl K".to_owned()
                     } else {
-                        self.active_address()
+                        atlas_core::readable_address(&self.active_address())
                     }),
             )
             .child(self.essential_controls(cx))
@@ -1620,6 +1624,10 @@ impl Render for BrowserView {
             }))
             .on_action(cx.listener(|this, _: &ShowHistory, _, cx| {
                 this.toggle_history();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ClearBrowsingData, _, cx| {
+                this.open_clear_data();
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Fullscreen, window, cx| {
@@ -1787,9 +1795,12 @@ mod palette_shortcut_tests {
             let CommandAction::Browser(action) = command.action else {
                 panic!("built-in commands are browser actions");
             };
-            // History opens in the page card through `toggle_history`, not a page shortcut.
+            // History and clear data open in the page card, not through a page shortcut.
             let Some(shortcut) = browser_shortcut(action) else {
-                assert_eq!(action, BrowserAction::ShowHistory);
+                assert!(matches!(
+                    action,
+                    BrowserAction::ShowHistory | BrowserAction::ClearBrowsingData
+                ));
                 continue;
             };
             assert!(

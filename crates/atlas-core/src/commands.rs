@@ -93,6 +93,8 @@ pub enum BrowserAction {
     ZoomIn,
     ZoomOut,
     ResetZoom,
+    /// Opens P1-27's clear browsing data dialog; the dialog itself asks before deleting.
+    ClearBrowsingData,
 }
 
 /// What running a command does.
@@ -481,6 +483,14 @@ fn browser_commands() -> Vec<Command> {
             ResetZoom,
             Some("ctrl-0"),
         ),
+        (
+            "browser.clear-data",
+            "Clear browsing data…",
+            "delete history cookies cache privacy erase",
+            Always,
+            ClearBrowsingData,
+            None,
+        ),
     ]
     .into_iter()
     .map(
@@ -551,6 +561,7 @@ mod tests {
                 (browser(BrowserAction::ZoomIn), None),
                 (browser(BrowserAction::ZoomOut), None),
                 (browser(BrowserAction::ResetZoom), Some("ctrl-0")),
+                (browser(BrowserAction::ClearBrowsingData), None),
             ]
         );
         // Keys follow registration order, so both the palette and search agree on them.
@@ -698,8 +709,9 @@ mod tests {
                 .filter(|(_, command)| command.is_enabled(context))
                 .count()
         };
-        assert_eq!(enabled(empty), 4);
-        assert_eq!(enabled(home), 6);
+        // Always: new tab, reopen, edit address, history and clear browsing data.
+        assert_eq!(enabled(empty), 5);
+        assert_eq!(enabled(home), 7);
         assert_eq!(enabled(page), registry.len());
     }
 }
