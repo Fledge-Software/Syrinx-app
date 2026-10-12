@@ -74,7 +74,7 @@ Update-AtlasShellAssociations
 
 Write-Host "Registered Atlas $($manifest.version) at $executable for this Windows user."
 if (-not $AtlasAcceptsOpenUrl) {
-    Write-Warning ("This Atlas build cannot open links passed by Windows yet (P1-34 adds $AtlasOpenUrlSwitch). " +
+    Write-Warning ("This Atlas build cannot open links passed by Windows yet (P1-34 adds links after '$AtlasLinkMarker'). " +
         'Do not choose it as the default browser until a build that can is installed.')
 }
 Write-Host 'To make Atlas the default: Settings > Apps > Default apps > Atlas > Set default.'

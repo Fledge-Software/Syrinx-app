@@ -9,7 +9,7 @@ $AtlasInstallFolder = 'Programs\Atlas'
 $AtlasDataFolder = 'Atlas\data'
 $AtlasPreviewDataFolder = 'AtlasProductPreview'
 $AtlasPackageFiles = @('atlas-app.exe', 'atlas-common.ps1', 'atlas-registration.ps1', 'install-atlas.ps1', 'register-atlas.ps1', 'unregister-atlas.ps1')
-$AtlasOpenUrlSwitch = '--open-url'
+$AtlasLinkMarker = '--'
 $AtlasAcceptsOpenUrl = $false
 $AtlasOwnerMarkerName = 'AtlasPackagingOwner'
 $AtlasOwnerMarkerData = 'atlas-packaging-v1'
@@ -33,7 +33,7 @@ $AtlasRegistryValues = @(
     @{ Key = 'Software\Classes\AtlasBrowserURL\Application'; Name = 'ApplicationDescription'; Kind = 'String'; Data = 'Atlas web browser' }
     @{ Key = 'Software\Classes\AtlasBrowserURL\Application'; Name = 'ApplicationIcon'; Kind = 'String'; Data = '{exe},0' }
     @{ Key = 'Software\Classes\AtlasBrowserURL\DefaultIcon'; Name = ''; Kind = 'String'; Data = '{exe},0' }
-    @{ Key = 'Software\Classes\AtlasBrowserURL\shell\open\command'; Name = ''; Kind = 'String'; Data = '"{exe}" --open-url %1' }
+    @{ Key = 'Software\Classes\AtlasBrowserURL\shell\open\command'; Name = ''; Kind = 'String'; Data = '"{exe}" -- "%1"' }
     @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'AtlasPackagingOwner'; Kind = 'String'; Data = 'atlas-packaging-v1' }
     @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'DisplayName'; Kind = 'String'; Data = 'Atlas' }
     @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'DisplayVersion'; Kind = 'String'; Data = '{version}' }
