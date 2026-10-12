@@ -420,8 +420,11 @@ impl BrowserView {
         };
         let row = row_frame(("folder", id.get()), look, labels)
             .aria_expanded(expanded)
-            .on_click(cx.listener(move |this, _, _, cx| {
+            // A click lets go of focus, as page rows do, so Alt Left then means Back; a
+            // keyboard toggle keeps focus on the row so the tree can still be walked.
+            .on_click(cx.listener(move |this, _, window, cx| {
                 this.toggle_folder(id);
+                window.blur(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(move |this, _: &OpenRow, _, cx| {

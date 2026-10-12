@@ -42,7 +42,7 @@ impl FolderCommand {
                 .remove_folder(id, FolderRemoval::MoveContentsUp)
                 .map(|_| ()),
             Self::DeleteWithContents { id, expected } => {
-                model.delete_folder_confirmed(id, expected).map(|_| ())
+                model.delete_folder_confirmed(id, &expected).map(|_| ())
             }
             Self::Move {
                 entry,
@@ -140,10 +140,7 @@ mod tests {
         .apply(&mut model)?;
         let live = model.tabs()[0].id();
         // A count taken before another page arrived no longer matches, so nothing is deleted.
-        let stale = FolderContents {
-            pages: 0,
-            folders: 0,
-        };
+        let stale = FolderContents::default();
         let before = model.snapshot();
         assert_eq!(
             FolderCommand::DeleteWithContents {
@@ -156,10 +153,7 @@ mod tests {
         assert_eq!(model.snapshot(), before);
         FolderCommand::DeleteWithContents {
             id: folder,
-            expected: FolderContents {
-                pages: 1,
-                folders: 0,
-            },
+            expected: [page].into_iter().collect(),
         }
         .apply(&mut model)?;
         assert!(model.saved_pages().is_empty());

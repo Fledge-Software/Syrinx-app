@@ -2,8 +2,8 @@
 //! moves, and where focus goes after a row is used (P1-21).
 
 use atlas_core::{
-    ActivationTarget, FolderContents, SavedEntryId, SavedFolderId, SavedPageId,
-    saved_folder_contents,
+    ActivationTarget, FolderContents, SavedEntryId, SavedFolderId, SavedPageId, TabId,
+    TabModelSnapshot, saved_folder_contents,
 };
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, IntoElement, KeyBinding, ParentElement, Render,
@@ -107,14 +107,41 @@ pub(super) struct PageCard {
     pub(super) focus: FocusHandle,
 }
 
-/// What a removal card does when its folder changes underneath it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// What a removal card does when its folder or page changes underneath it.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum CardFollow {
     Keep,
-    /// The default removal loses nothing, so it just shows the new counts.
+    /// The default removal loses nothing, so it just shows the new contents.
     Refresh(FolderContents),
-    /// A delete confirmation for contents the owner did not see is withdrawn.
-    Close,
+    /// The card closes, and the status line says why.
+    Close(Withdrawn),
+}
+
+/// Why an open removal card closed without doing anything.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Withdrawn {
+    FolderGone,
+    /// A delete confirmation for contents the owner did not see.
+    FolderChanged,
+    PageGone,
+    /// An opened page no longer needs the confirmation: removing it keeps its tab.
+    PageOpened,
+}
+
+impl Withdrawn {
+    pub(super) fn message(self) -> &'static str {
+        match self {
+            Self::FolderGone => "That folder was removed elsewhere, so its card closed.",
+            Self::FolderChanged => {
+                "That folder's contents changed, so nothing was deleted. Choose again."
+            }
+            Self::PageGone => "That saved page was removed elsewhere, so its card closed.",
+            Self::PageOpened => {
+                "That page is open now, so removing it would keep its tab. Remove it again if you \
+                 still want to."
+            }
+        }
+    }
 }
 
 /// Where keyboard focus goes after a saved page or tab row is activated.
@@ -163,7 +190,11 @@ impl BrowserView {
             }
             RowFocus::Page => {
                 window.blur(cx);
-                self.focus_page(window);
+                // A page that is not shown yet is focused by `sync_pages` when it appears;
+                // focusing now would reach the page that was showing before.
+                if target_is_shown(&self.model, target, self.shown) {
+                    self.focus_page(window);
+                }
             }
         }
         cx.notify();
@@ -320,7 +351,7 @@ impl BrowserView {
         }
         let command = FolderCommand::DeleteWithContents {
             id: card.id,
-            expected: card.shown,
+            expected: card.shown.clone(),
         };
         self.folder_editor = None;
         self.command(SessionCommand::Folder(command));
@@ -365,9 +396,8 @@ impl BrowserView {
     /// Keeps an open form or card true to the latest state: it closes when its folder or
     /// page is gone or a delete confirmation no longer matches, and otherwise refreshes.
     pub(super) fn follow_folder_editor(&mut self) {
-        const CHANGED: &str = "That changed before it was removed, so nothing was removed.";
         let folders = &self.model.saved_folders;
-        let (close, message) = match &mut self.folder_editor {
+        let (close, withdrawn) = match &mut self.folder_editor {
             Some(FolderEditor::Name(NameForm {
                 target: NameTarget::Rename(id),
                 ..
@@ -377,13 +407,13 @@ impl BrowserView {
                     .iter()
                     .any(|folder| folder.id == card.id)
                     .then(|| saved_folder_contents(&self.model.saved_layout, card.id));
-                match follow_removal(card.step, card.shown, now) {
+                match follow_removal(card.step, &card.shown, now) {
                     CardFollow::Keep => (false, None),
                     CardFollow::Refresh(contents) => {
                         card.shown = contents;
                         (false, None)
                     }
-                    CardFollow::Close => (true, Some(CHANGED)),
+                    CardFollow::Close(reason) => (true, Some(reason)),
                 }
             }
             Some(FolderEditor::RemovePage(card)) => {
@@ -394,7 +424,8 @@ impl BrowserView {
                     .tabs
                     .iter()
                     .any(|tab| tab.saved_page_id == Some(id));
-                (!saved || live, Some(CHANGED))
+                let reason = follow_page_removal(saved, live);
+                (reason.is_some(), reason)
             }
             _ => (false, None),
         };
@@ -402,8 +433,8 @@ impl BrowserView {
             return;
         }
         self.folder_editor = None;
-        if let Some(message) = message {
-            self.message = message.to_owned();
+        if let Some(reason) = withdrawn {
+            self.message = reason.message().to_owned();
         }
     }
 
@@ -456,20 +487,46 @@ pub(super) fn enter_removes(step: RemoveStep) -> bool {
     step == RemoveStep::Choose
 }
 
-/// How a removal card follows a change: `now` is the folder's contents, or `None` if it is gone.
+/// Whether the activated destination is already the shown page, so focusing now reaches it.
+pub(super) fn target_is_shown(
+    model: &TabModelSnapshot,
+    target: ActivationTarget,
+    shown: Option<TabId>,
+) -> bool {
+    let live = match target {
+        ActivationTarget::Tab(id) => Some(id),
+        ActivationTarget::Saved(saved) => model
+            .tabs
+            .iter()
+            .find(|tab| tab.saved_page_id == Some(saved))
+            .map(|tab| tab.id),
+    };
+    live.is_some() && live == shown
+}
+
+/// How a folder removal card follows a change: `now` is the folder's contents, or `None`
+/// if the folder is gone. The rows themselves are compared, so a swap is noticed.
 pub(super) fn follow_removal(
     step: RemoveStep,
-    shown: FolderContents,
+    shown: &FolderContents,
     now: Option<FolderContents>,
 ) -> CardFollow {
     match now {
-        None => CardFollow::Close,
-        Some(now) if now == shown => CardFollow::Keep,
+        None => CardFollow::Close(Withdrawn::FolderGone),
+        Some(now) if now == *shown => CardFollow::Keep,
         Some(now) => match step {
             RemoveStep::Choose => CardFollow::Refresh(now),
-            RemoveStep::ConfirmDelete => CardFollow::Close,
+            RemoveStep::ConfirmDelete => CardFollow::Close(Withdrawn::FolderChanged),
         },
     }
+}
+
+/// Why an unopened-page card closes, if it does: the page is gone, or it is open now.
+pub(super) fn follow_page_removal(saved: bool, live: bool) -> Option<Withdrawn> {
+    if !saved {
+        return Some(Withdrawn::PageGone);
+    }
+    live.then_some(Withdrawn::PageOpened)
 }
 
 /// The trimmed name to save, or what to tell the owner instead.
@@ -482,13 +539,13 @@ pub(super) fn folder_name(text: &str) -> Result<String, &'static str> {
 }
 
 /// "3 saved pages and 2 folders", naming only the kinds the folder holds.
-pub(super) fn contents_phrase(contents: FolderContents) -> String {
+pub(super) fn contents_phrase(contents: &FolderContents) -> String {
     let count = |number: usize, one: &str, many: &str| {
         format!("{number} {}", if number == 1 { one } else { many })
     };
     let parts: Vec<String> = [
-        (contents.pages, "saved page", "saved pages"),
-        (contents.folders, "folder", "folders"),
+        (contents.pages(), "saved page", "saved pages"),
+        (contents.folders(), "folder", "folders"),
     ]
     .into_iter()
     .filter(|(number, _, _)| *number > 0)
@@ -504,8 +561,20 @@ pub(super) fn contents_phrase(contents: FolderContents) -> String {
 mod tests {
     use super::*;
 
-    fn held(pages: usize, folders: usize) -> FolderContents {
-        FolderContents { pages, folders }
+    /// Synthetic contents with `pages` pages (IDs from 1) and `folders` folders (IDs from 100).
+    fn held(pages: u64, folders: u64) -> FolderContents {
+        let pages = (1..=pages).map(|id| SavedEntryId::Page(page_id(id)));
+        let folders = (100..100 + folders)
+            .map(|id| SavedEntryId::Folder(SavedFolderId::new(id).expect("synthetic folder id")));
+        pages.chain(folders).collect()
+    }
+
+    fn page_id(id: u64) -> SavedPageId {
+        SavedPageId::new(id).expect("synthetic page id")
+    }
+
+    fn tab_id(id: u64) -> TabId {
+        TabId::new(id).expect("synthetic tab id")
     }
 
     #[test]
@@ -525,10 +594,10 @@ mod tests {
 
     #[test]
     fn the_removal_card_names_only_what_the_folder_holds() {
-        assert_eq!(contents_phrase(held(1, 0)), "1 saved page");
-        assert_eq!(contents_phrase(held(0, 1)), "1 folder");
-        assert_eq!(contents_phrase(held(3, 2)), "3 saved pages and 2 folders");
-        assert_eq!(contents_phrase(held(0, 0)), "nothing");
+        assert_eq!(contents_phrase(&held(1, 0)), "1 saved page");
+        assert_eq!(contents_phrase(&held(0, 1)), "1 folder");
+        assert_eq!(contents_phrase(&held(3, 2)), "3 saved pages and 2 folders");
+        assert_eq!(contents_phrase(&held(0, 0)), "nothing");
     }
 
     #[test]
@@ -553,20 +622,111 @@ mod tests {
     fn a_delete_confirmation_closes_when_the_folder_changes() {
         let shown = held(2, 0);
         assert_eq!(
-            follow_removal(RemoveStep::ConfirmDelete, shown, Some(shown)),
+            follow_removal(RemoveStep::ConfirmDelete, &shown, Some(shown.clone())),
             CardFollow::Keep
         );
         assert_eq!(
-            follow_removal(RemoveStep::ConfirmDelete, shown, Some(held(3, 0))),
-            CardFollow::Close
+            follow_removal(RemoveStep::ConfirmDelete, &shown, Some(held(3, 0))),
+            CardFollow::Close(Withdrawn::FolderChanged)
         );
         assert_eq!(
-            follow_removal(RemoveStep::Choose, shown, Some(held(3, 0))),
+            follow_removal(RemoveStep::Choose, &shown, Some(held(3, 0))),
             CardFollow::Refresh(held(3, 0))
         );
+    }
+
+    #[test]
+    fn a_swap_with_equal_counts_still_withdraws_the_delete() {
+        let shown = held(2, 0);
+        // Page 2 left and page 3 arrived: still two pages, but not the ones shown.
+        let swapped: FolderContents = [1, 3]
+            .into_iter()
+            .map(|id| SavedEntryId::Page(page_id(id)))
+            .collect();
         assert_eq!(
-            follow_removal(RemoveStep::Choose, shown, None),
-            CardFollow::Close
+            (swapped.pages(), swapped.folders()),
+            (shown.pages(), shown.folders())
         );
+        assert_eq!(
+            follow_removal(RemoveStep::ConfirmDelete, &shown, Some(swapped)),
+            CardFollow::Close(Withdrawn::FolderChanged)
+        );
+    }
+
+    #[test]
+    fn a_folder_removed_elsewhere_is_reported_as_removed_not_changed() {
+        for step in [RemoveStep::Choose, RemoveStep::ConfirmDelete] {
+            assert_eq!(
+                follow_removal(step, &held(1, 0), None),
+                CardFollow::Close(Withdrawn::FolderGone)
+            );
+        }
+        assert_eq!(
+            Withdrawn::FolderGone.message(),
+            "That folder was removed elsewhere, so its card closed."
+        );
+        assert!(!Withdrawn::FolderGone.message().contains("changed"));
+    }
+
+    #[test]
+    fn an_unopened_page_card_closes_with_the_right_reason() {
+        assert_eq!(follow_page_removal(true, false), None);
+        assert_eq!(follow_page_removal(false, false), Some(Withdrawn::PageGone));
+        assert_eq!(follow_page_removal(true, true), Some(Withdrawn::PageOpened));
+    }
+
+    #[test]
+    fn focus_waits_until_the_activated_page_is_the_shown_one() {
+        let mut model = atlas_core::TabModel::new();
+        let open = |model: &mut atlas_core::TabModel, number: u64| {
+            model
+                .open(
+                    atlas_core::TabKind::Web,
+                    atlas_core::TabMetadata {
+                        title: format!("Synthetic focus {number}"),
+                        address: format!("https://focus-{number}.example.test/"),
+                        ..atlas_core::TabMetadata::default()
+                    },
+                    atlas_core::Activation::Foreground,
+                )
+                .expect("synthetic tab opens")
+        };
+        let first = open(&mut model, 1);
+        let saved = model.save_page(first).expect("synthetic page saves");
+        let second = open(&mut model, 2);
+        let snapshot = model.snapshot();
+
+        // The old page is still shown, so focusing now would reach it, not the target.
+        assert!(!target_is_shown(
+            &snapshot,
+            ActivationTarget::Tab(second),
+            Some(first)
+        ));
+        assert!(!target_is_shown(
+            &snapshot,
+            ActivationTarget::Tab(second),
+            None
+        ));
+        assert!(target_is_shown(
+            &snapshot,
+            ActivationTarget::Tab(second),
+            Some(second)
+        ));
+        // A saved page is shown through its live tab; an unopened one never is yet.
+        assert!(target_is_shown(
+            &snapshot,
+            ActivationTarget::Saved(saved),
+            Some(first)
+        ));
+        assert!(!target_is_shown(
+            &snapshot,
+            ActivationTarget::Saved(page_id(99)),
+            Some(first)
+        ));
+        assert!(!target_is_shown(
+            &snapshot,
+            ActivationTarget::Tab(tab_id(99)),
+            Some(first)
+        ));
     }
 }

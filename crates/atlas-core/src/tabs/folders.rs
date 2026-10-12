@@ -73,23 +73,46 @@ pub enum FolderRemoval {
     RemoveContents,
 }
 
-/// How many saved pages and folders sit inside a folder, at any depth.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// Every saved page and folder inside a folder, at any depth. A confirmed delete carries the
+/// exact set the owner was shown, so a swap (one row in, another out) is still noticed.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FolderContents {
-    pub pages: usize,
-    pub folders: usize,
+    entries: BTreeSet<SavedEntryId>,
 }
 
 impl FolderContents {
-    pub fn is_empty(self) -> bool {
-        self == Self::default()
+    pub fn entries(&self) -> &BTreeSet<SavedEntryId> {
+        &self.entries
+    }
+
+    pub fn pages(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry, SavedEntryId::Page(_)))
+            .count()
+    }
+
+    pub fn folders(&self) -> usize {
+        self.entries.len() - self.pages()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 
-/// Counts everything nested inside `folder` in a depth-first layout (empty if it is unknown).
+impl FromIterator<SavedEntryId> for FolderContents {
+    fn from_iter<I: IntoIterator<Item = SavedEntryId>>(entries: I) -> Self {
+        Self {
+            entries: entries.into_iter().collect(),
+        }
+    }
+}
+
+/// Collects everything nested inside `folder` in a depth-first layout (empty if it is unknown).
 pub fn saved_folder_contents(layout: &[SavedPlacement], folder: SavedFolderId) -> FolderContents {
     let mut inside = BTreeSet::from([folder]);
-    let mut contents = FolderContents::default();
+    let mut entries = BTreeSet::new();
     // Each parent comes before its contents, so one pass finds every nested row.
     for placement in layout {
         if !placement
@@ -98,15 +121,12 @@ pub fn saved_folder_contents(layout: &[SavedPlacement], folder: SavedFolderId) -
         {
             continue;
         }
-        match placement.entry {
-            SavedEntryId::Page(_) => contents.pages += 1,
-            SavedEntryId::Folder(id) => {
-                contents.folders += 1;
-                inside.insert(id);
-            }
+        if let SavedEntryId::Folder(id) = placement.entry {
+            inside.insert(id);
         }
+        entries.insert(placement.entry);
     }
-    contents
+    FolderContents { entries }
 }
 
 /// The saved records a folder removal deleted, in visible order.
@@ -259,10 +279,10 @@ impl TabModel {
     pub fn delete_folder_confirmed(
         &mut self,
         id: SavedFolderId,
-        expected: FolderContents,
+        expected: &FolderContents,
     ) -> Result<RemovedSavedEntries, TabError> {
         self.placement_index(SavedEntryId::Folder(id))?;
-        if saved_folder_contents(&self.layout, id) != expected {
+        if saved_folder_contents(&self.layout, id) != *expected {
             return Err(TabError::FolderContentsChanged(id));
         }
         self.remove_folder(id, FolderRemoval::RemoveContents)
