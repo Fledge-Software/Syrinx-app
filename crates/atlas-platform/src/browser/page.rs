@@ -43,6 +43,7 @@ impl HasWindowHandle for Parent {
 }
 
 pub(super) struct Page {
+    permissions: super::permissions::Permissions,
     view: WebView,
 }
 
@@ -66,6 +67,7 @@ impl Page {
             .with_visible(false)
             .with_focused(false)
             .with_devtools(false)
+            .with_clipboard(false)
             .with_bounds(rect(bounds))
             .with_document_title_changed_handler(move |title| {
                 titles.emit(BrowserEvent::Title { id, title })
@@ -93,8 +95,9 @@ impl Page {
         register_source(&view, id, events.clone())?;
         register_navigation(&view, id, events.clone())?;
         register_process_failure(&view, id, events.clone())?;
+        let permissions = super::permissions::Permissions::register(&view, id, events.clone())?;
         register_shortcuts(&view, shortcuts, id, events)?;
-        Ok(Self { view })
+        Ok(Self { permissions, view })
     }
 
     pub(super) fn webview(&self) -> webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2 {
@@ -122,6 +125,9 @@ impl Page {
 
     pub(super) fn apply(&self, command: BrowserCommand) -> Result<(), BrowserError> {
         match command {
+            BrowserCommand::ResolvePermission {
+                request, allowed, ..
+            } => self.permissions.resolve(request, allowed),
             BrowserCommand::Navigate { url, .. } => self.navigate(&url),
             BrowserCommand::Focus { .. } => self.view.focus().map_err(|_| BrowserError::Focus),
             BrowserCommand::Back { .. } => self.history(true),
@@ -153,6 +159,12 @@ impl Page {
             }
             .map_err(|_| BrowserError::Navigation)
         }
+    }
+}
+
+impl Drop for Page {
+    fn drop(&mut self) {
+        self.permissions.clear();
     }
 }
 

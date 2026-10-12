@@ -387,13 +387,13 @@ fn future_schema_refusal_does_not_rewrite_the_backup() {
     let connection =
         Connection::open(file.database_path()).unwrap_or_else(|_| panic!("open synthetic backup"));
     connection
-        .execute_batch("PRAGMA user_version = 2")
+        .execute_batch("PRAGMA user_version = 3")
         .expect("create future schema marker");
     assert!(connection.close().is_ok(), "close synthetic connection");
     let original = fs::read(file.database_path()).expect("read synthetic bytes");
     assert_eq!(
         validate_backup(&file),
-        Err(StoreError::FutureSchema { version: 2 })
+        Err(StoreError::FutureSchema { version: 3 })
     );
     assert_eq!(
         fs::read(file.database_path()).expect("read unchanged synthetic bytes"),

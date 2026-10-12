@@ -34,6 +34,19 @@ pub enum HomeEntryAction {
 }
 
 pub enum SessionCommand {
+    CheckPermission {
+        id: u64,
+        request: u64,
+        origin: String,
+        kind: atlas_store::PermissionKind,
+    },
+    RememberPermission {
+        id: u64,
+        request: u64,
+        origin: String,
+        kind: atlas_store::PermissionKind,
+        allowed: bool,
+    },
     ConfirmRecovery {
         offer_id: u64,
     },
@@ -105,6 +118,11 @@ pub struct SessionSnapshot {
 
 #[derive(Debug)]
 pub enum SessionEvent {
+    Permission {
+        id: u64,
+        request: u64,
+        result: Result<Option<bool>, StoreError>,
+    },
     RecoveryOffered(RecoveryPrompt),
     PopupRejected {
         request: u64,
@@ -353,6 +371,43 @@ impl Worker {
         command: SessionCommand,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        let command = match command {
+            SessionCommand::CheckPermission {
+                id,
+                request,
+                origin,
+                kind,
+            } => {
+                return emit(
+                    events,
+                    SessionEvent::Permission {
+                        id,
+                        request,
+                        result: store.permission(&origin, kind),
+                    },
+                );
+            }
+            SessionCommand::RememberPermission {
+                id,
+                request,
+                origin,
+                kind,
+                allowed,
+            } => {
+                let result = store
+                    .remember_permission(origin, kind, allowed)
+                    .map(|()| Some(allowed));
+                return emit(
+                    events,
+                    SessionEvent::Permission {
+                        id,
+                        request,
+                        result,
+                    },
+                );
+            }
+            command => command,
+        };
         if matches!(command, SessionCommand::ConfirmRecovery { .. }) {
             return recovery::reject_command(events);
         }
@@ -564,7 +619,10 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
             model.reopen_closed().map_err(SessionError::Model)?;
         }
         SessionCommand::ConfirmRecovery { .. } => return Err(SessionError::RecoveryUnavailable),
-        SessionCommand::Query { .. } | SessionCommand::Shutdown => {}
+        SessionCommand::CheckPermission { .. }
+        | SessionCommand::RememberPermission { .. }
+        | SessionCommand::Query { .. }
+        | SessionCommand::Shutdown => {}
     }
     Ok(())
 }

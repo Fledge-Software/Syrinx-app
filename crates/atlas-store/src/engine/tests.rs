@@ -279,10 +279,10 @@ fn foreign_future_and_altered_schemas_are_refused_without_rewriting_the_file() {
         ),
         (
             format!(
-                "PRAGMA application_id = {}; PRAGMA user_version = 2; CREATE TABLE future_data(value TEXT);",
+                "PRAGMA application_id = {}; PRAGMA user_version = 3; CREATE TABLE future_data(value TEXT);",
                 schema::APPLICATION_ID
             ),
-            StoreError::FutureSchema { version: 2 },
+            StoreError::FutureSchema { version: 3 },
         ),
     ] {
         let directory = TestDirectory::new();
@@ -606,3 +606,172 @@ fn store_and_snapshot_debug_redact_paths_and_all_metadata_fields() {
 }
 
 mod lifecycle;
+
+#[test]
+fn permission_migration_preserves_session_and_remembered_choices_survive_restart() {
+    use crate::PermissionKind;
+    let directory = TestDirectory::new();
+    let mut connection = directory.connection();
+    schema::configure_connection(&connection).expect("configure synthetic v1");
+    let initial = schema::initial_schema();
+    schema::apply_migrations(&mut connection, &Migrations::new(vec![M::up(&initial)]))
+        .expect("create synthetic old schema");
+    let snapshot = one_tab(7);
+    crate::records::save(&mut connection, 0, &snapshot).expect("save old session");
+    close(connection);
+    let store = Store::open(directory.lease()).expect("migrate old schema");
+    assert_eq!(
+        store.load().expect("read preserved session").snapshot,
+        snapshot
+    );
+    assert_eq!(
+        store.permission(
+            "https://consent.example.test",
+            PermissionKind::Notifications
+        ),
+        Ok(None)
+    );
+    store
+        .remember_permission(
+            "https://consent.example.test".into(),
+            PermissionKind::Notifications,
+            true,
+        )
+        .expect("remember allow");
+    store
+        .remember_permission(
+            "https://consent.example.test".into(),
+            PermissionKind::Clipboard,
+            false,
+        )
+        .expect("remember deny");
+    assert_eq!(store.load().expect("session revision").revision, 1);
+    store.shutdown().expect("close first store");
+    let store = Store::open(directory.lease()).expect("reopen migrated store");
+    assert_eq!(
+        store.permission(
+            "https://consent.example.test",
+            PermissionKind::Notifications
+        ),
+        Ok(Some(true))
+    );
+    assert_eq!(
+        store.permission("https://consent.example.test", PermissionKind::Clipboard),
+        Ok(Some(false))
+    );
+    assert_eq!(
+        store.permission("http://consent.example.test", PermissionKind::Notifications),
+        Ok(None)
+    );
+    assert_eq!(
+        store.permission(
+            "https://consent.example.test:8443",
+            PermissionKind::Notifications
+        ),
+        Ok(None)
+    );
+    store
+        .remember_permission(
+            "https://consent.example.test".into(),
+            PermissionKind::Notifications,
+            false,
+        )
+        .expect("replace choice");
+    assert_eq!(
+        store.permission(
+            "https://consent.example.test",
+            PermissionKind::Notifications
+        ),
+        Ok(Some(false))
+    );
+    assert!(
+        store
+            .remember_permission(
+                "https://consent.example.test/private".into(),
+                PermissionKind::Notifications,
+                true
+            )
+            .is_err()
+    );
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn old_backup_validation_is_read_only_and_permissions_survive_vacuum_snapshot() {
+    let directory = TestDirectory::new();
+    let mut connection = directory.connection();
+    schema::configure_connection(&connection).expect("configure old backup");
+    let initial = schema::initial_schema();
+    schema::apply_migrations(&mut connection, &Migrations::new(vec![M::up(&initial)]))
+        .expect("create old backup");
+    close(connection);
+    let before = fs::read(directory.database_path()).expect("old backup bytes");
+    let mut connection = directory.connection();
+    schema::validate_backup(&mut connection).expect("validate schema 1 backup");
+    close(connection);
+    assert_eq!(
+        fs::read(directory.database_path()).expect("validated bytes"),
+        before
+    );
+    let store = Store::open(directory.lease()).expect("migrate restored old backup");
+    store
+        .remember_permission(
+            "https://backup.example.test".into(),
+            crate::PermissionKind::Camera,
+            false,
+        )
+        .expect("save consent");
+    store.shutdown().expect("close restored store");
+    let connection = directory.connection();
+    let snapshot = TestDirectory::new();
+    connection
+        .execute(
+            "VACUUM INTO ?1",
+            [snapshot.database_path().to_str().expect("synthetic path")],
+        )
+        .expect("snapshot permission state");
+    close(connection);
+    let mut saved = snapshot.connection();
+    schema::validate_backup(&mut saved).expect("validate permission snapshot");
+    assert_eq!(
+        crate::permissions::load(
+            &saved,
+            "https://backup.example.test",
+            crate::PermissionKind::Camera
+        ),
+        Ok(Some(false))
+    );
+    close(saved);
+    directory.cleanup();
+    snapshot.cleanup();
+}
+
+#[test]
+fn corrupted_permission_is_never_interpreted_as_a_grant() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    store
+        .remember_permission(
+            "https://corrupt.example.test".into(),
+            crate::PermissionKind::Camera,
+            false,
+        )
+        .expect("save deny");
+    let connection = directory.connection();
+    connection
+        .execute_batch(
+            "PRAGMA ignore_check_constraints = ON; UPDATE site_permissions SET allowed = 2;",
+        )
+        .expect("damage synthetic choice");
+    close(connection);
+    assert_eq!(
+        store.permission(
+            "https://corrupt.example.test",
+            crate::PermissionKind::Camera
+        ),
+        Err(StoreError::InvalidEncoding(EncodingField::Permission))
+    );
+    store.shutdown().expect("close corrupt synthetic store");
+    directory.cleanup();
+}
