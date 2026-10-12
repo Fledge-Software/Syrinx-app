@@ -833,6 +833,12 @@ this plan, in order:
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
 
+- **P1-25 repeated `Cache-Control` lines (2026-10-12):** the synthetic harness
+  found that WebView2 reports only the first line of a repeated response
+  header, so a page sending `no-store` only on a later `Cache-Control` line
+  is read (F2 in `docs/p1-25-page-text.md`). The owner decides whether to
+  accept this residual of D35 before P1-26 lets capture be switched on.
+
 - **Owner's target date:** on 2026-10-10 the owner requested the full planned
   browser, including the built-in plugins, usable for their daily workflow
   before Monday, 2026-10-12. This is the delivery target, not evidence of
