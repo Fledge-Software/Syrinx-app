@@ -116,9 +116,14 @@ fn check_direct_dependencies(
                 "{name} -> {dependency}: only atlas-app and atlas-ui may directly depend on GPUI"
             ));
         }
-        if is_platform_library(dependency) && name != "atlas-platform" {
+        if is_platform_library(dependency) && !may_use_platform_library(name, dependency) {
             violations.insert(format!(
                 "{name} -> {dependency}: only atlas-platform may directly depend on WebView2 or raw Win32"
+            ));
+        }
+        if dependency == UPDATE_VERIFIER {
+            violations.insert(format!(
+                "{name} -> {dependency}: nothing may use the update verifier before P1-39 is approved"
             ));
         }
         check_plugin_dependency(name, dependency, workspace, violations);
@@ -159,6 +164,14 @@ fn is_platform_library(name: &str) -> bool {
     )
 }
 
+/// The P1-38 update verifier, which no crate may use until P1-39's delivery is approved.
+const UPDATE_VERIFIER: &str = "atlas-update";
+
+/// The platform crate owns Win32; the update verifier may also call CNG through `windows`.
+fn may_use_platform_library(name: &str, dependency: &str) -> bool {
+    name == "atlas-platform" || (name == UPDATE_VERIFIER && dependency == "windows")
+}
+
 fn is_atlas_dependency(name: &str, workspace: &Workspace) -> bool {
     workspace.contains_key(name)
         || name.starts_with("atlas-")
@@ -169,7 +182,7 @@ fn is_atlas_dependency(name: &str, workspace: &Workspace) -> bool {
 fn needs_shell_isolation(name: &str) -> bool {
     matches!(
         name,
-        "atlas-core" | "atlas-store" | "atlas-search" | "atlas-plugin-api"
+        "atlas-core" | "atlas-store" | "atlas-search" | "atlas-plugin-api" | "atlas-update"
     ) || name.starts_with("plugin-")
 }
 
@@ -265,6 +278,43 @@ mod tests {
             package("atlas-plugin-api", json!([{"name": "serde"}])),
         ]);
         assert!(check_metadata(&input)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn confines_the_update_verifier() -> Result<(), String> {
+        // The verifier may call CNG through `windows`, but not WebView2, and nothing may use it yet.
+        let permitted = metadata(vec![package("atlas-update", json!([{"name": "windows"}]))]);
+        assert!(check_metadata(&permitted)?.is_empty());
+
+        let input = metadata(vec![
+            package(
+                "atlas-update",
+                json!([{"name": "windows"}, {"name": "wry"}, {"name": "atlas-platform"}]),
+            ),
+            package(
+                "atlas-app",
+                json!([{"name": "atlas-update", "kind": "dev"}]),
+            ),
+            package("atlas-platform", json!([])),
+        ]);
+        let violations = check_metadata(&input)?;
+        assert_eq!(violations.len(), 3);
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("atlas-update -> wry"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("atlas-app -> atlas-update"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("atlas-update -> atlas-platform"))
+        );
         Ok(())
     }
 

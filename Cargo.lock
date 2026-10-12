@@ -471,6 +471,13 @@ name = "atlas-ui"
 version = "0.1.0"
 
 [[package]]
+name = "atlas-update"
+version = "0.1.0"
+dependencies = [
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "atomic"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
