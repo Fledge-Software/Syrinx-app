@@ -51,7 +51,8 @@ kept as named, unchanged values for the sidebar slices to replace:
 
 - the opaque selected-row grey `#343037` (the canvas uses translucent
   `row_selected`, white at 9% on Graphite), and
-- the palette's "Search the web" button grey `#29272A`.
+- the palette's "Search the web" button grey `#29272A` (removed by P1-30,
+  whose palette draws only from tokens; see `docs/p1-30-31-palette.md`).
 
 `crates/atlas-app/src/ui/recovery.rs` still has its three hex values
 (including the error text `#F2B5B5`, which is not in the design). It was left

@@ -1,0 +1,536 @@
+//! Lists every command the palette and shortcuts can run, so built-in and plugin commands share one source.
+
+use std::{fmt, num::NonZeroU64};
+
+const MAX_ID_LENGTH: usize = 64;
+const MAX_TITLE_LENGTH: usize = 120;
+
+/// A stable command name such as `browser.new-tab`; plugins will prefix theirs with the plugin name.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct CommandId(String);
+
+impl CommandId {
+    pub fn new(value: impl Into<String>) -> Result<Self, CommandError> {
+        let value = value.into();
+        if !is_valid_id(&value) {
+            return Err(CommandError::InvalidId);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Dot-separated lowercase ASCII segments keep identifiers stable and safe to log.
+fn is_valid_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_ID_LENGTH
+        && value.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+}
+
+/// Who provides a command; the palette's Plugin actions chip counts only plugin commands.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CommandScope {
+    Browser,
+    Plugin { plugin: String },
+}
+
+/// The browser state a command needs before it can run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Enablement {
+    Always,
+    /// Any selected tab, including Home.
+    ActiveTab,
+    /// A loaded web page is showing.
+    ActivePage,
+    /// More than one tab is open, so switching means something.
+    SeveralTabs,
+}
+
+/// Facts about the browser that decide which commands are enabled.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CommandContext {
+    pub active_tab: bool,
+    pub active_page: bool,
+    pub tab_count: usize,
+}
+
+impl Enablement {
+    pub fn allows(self, context: CommandContext) -> bool {
+        match self {
+            Self::Always => true,
+            Self::ActiveTab => context.active_tab,
+            Self::ActivePage => context.active_page,
+            Self::SeveralTabs => context.tab_count > 1,
+        }
+    }
+}
+
+/// A built-in browser action; the application maps each to its handler and key binding.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum BrowserAction {
+    NewTab,
+    CloseTab,
+    ReopenTab,
+    Reload,
+    Back,
+    Forward,
+    EditAddress,
+    NextTab,
+    PreviousTab,
+    SavePage,
+}
+
+/// What running a command does.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CommandAction {
+    Browser(BrowserAction),
+    /// Handled by the owning plugin through the plugin host (Plan 2); no host exists yet.
+    Plugin {
+        plugin: String,
+        action: String,
+    },
+}
+
+/// A keyboard shortcut in GPUI keystroke syntax, such as `ctrl-shift-t`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Shortcut(String);
+
+impl Shortcut {
+    pub fn new(keystroke: impl Into<String>) -> Result<Self, CommandError> {
+        let keystroke = keystroke.into();
+        let valid = !keystroke.is_empty()
+            && keystroke
+                .split('-')
+                .all(|key| !key.is_empty() && key.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+        if !valid {
+            return Err(CommandError::InvalidShortcut);
+        }
+        Ok(Self(keystroke))
+    }
+
+    /// The keystroke as GPUI's key binding parser expects it.
+    pub fn keystroke(&self) -> &str {
+        &self.0
+    }
+
+    /// The label the palette shows, such as `Ctrl Shift T`.
+    pub fn label(&self) -> String {
+        self.0
+            .split('-')
+            .map(capitalize)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+fn capitalize(key: &str) -> String {
+    let mut characters = key.chars();
+    let Some(first) = characters.next() else {
+        return String::new();
+    };
+    first.to_ascii_uppercase().to_string() + characters.as_str()
+}
+
+/// One runnable command.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Command {
+    pub id: CommandId,
+    pub title: String,
+    /// Extra words the palette also matches, such as "refresh" for Reload.
+    pub keywords: String,
+    pub scope: CommandScope,
+    pub enablement: Enablement,
+    pub action: CommandAction,
+    pub shortcut: Option<Shortcut>,
+}
+
+impl Command {
+    pub fn is_enabled(&self, context: CommandContext) -> bool {
+        self.enablement.allows(context)
+    }
+
+    pub fn is_plugin_action(&self) -> bool {
+        matches!(self.scope, CommandScope::Plugin { .. })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandError {
+    InvalidId,
+    InvalidShortcut,
+    InvalidTitle,
+    DuplicateId,
+    DuplicateShortcut,
+    TooManyCommands,
+}
+
+impl fmt::Display for CommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::InvalidId => "command identifiers are dotted lowercase ASCII names",
+            Self::InvalidShortcut => "command shortcuts use GPUI keystroke syntax",
+            Self::InvalidTitle => "command titles must be non-empty and short",
+            Self::DuplicateId => "a command with this identifier is already registered",
+            Self::DuplicateShortcut => "another command already uses this shortcut",
+            Self::TooManyCommands => "the command registry is full",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for CommandError {}
+
+/// The registered commands in registration order; each gets a stable numeric key for search.
+#[derive(Clone, Debug, Default)]
+pub struct CommandRegistry {
+    commands: Vec<Command>,
+}
+
+impl CommandRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The browser's own commands, with the shortcuts Atlas binds.
+    pub fn browser() -> Self {
+        let mut registry = Self::new();
+        for command in browser_commands() {
+            registry
+                .register(command)
+                .expect("built-in browser commands are valid and distinct");
+        }
+        registry
+    }
+
+    /// Adds a command and returns its key; an invalid or conflicting command changes nothing.
+    pub fn register(&mut self, command: Command) -> Result<NonZeroU64, CommandError> {
+        self.validate(&command)?;
+        let key = u64::try_from(self.commands.len() + 1)
+            .ok()
+            .and_then(NonZeroU64::new)
+            .ok_or(CommandError::TooManyCommands)?;
+        self.commands.push(command);
+        Ok(key)
+    }
+
+    fn validate(&self, command: &Command) -> Result<(), CommandError> {
+        let title = command.title.trim();
+        if title.is_empty() || command.title.chars().count() > MAX_TITLE_LENGTH {
+            return Err(CommandError::InvalidTitle);
+        }
+        if self
+            .commands
+            .iter()
+            .any(|existing| existing.id == command.id)
+        {
+            return Err(CommandError::DuplicateId);
+        }
+        // One keystroke must not run two commands depending on registration order.
+        if let Some(shortcut) = &command.shortcut
+            && self
+                .commands
+                .iter()
+                .any(|existing| existing.shortcut.as_ref() == Some(shortcut))
+        {
+            return Err(CommandError::DuplicateShortcut);
+        }
+        Ok(())
+    }
+
+    pub fn get(&self, key: NonZeroU64) -> Option<&Command> {
+        let index = usize::try_from(key.get() - 1).ok()?;
+        self.commands.get(index)
+    }
+
+    pub fn find(&self, id: &str) -> Option<(NonZeroU64, &Command)> {
+        self.iter().find(|(_, command)| command.id.as_str() == id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (NonZeroU64, &Command)> {
+        self.commands.iter().enumerate().map(|(index, command)| {
+            let key = NonZeroU64::new(index as u64 + 1).expect("index plus one is non-zero");
+            (key, command)
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.commands.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
+}
+
+/// The built-in commands, in the order the palette lists them for `>`.
+fn browser_commands() -> Vec<Command> {
+    use BrowserAction::*;
+    use Enablement::*;
+    [
+        (
+            "browser.new-tab",
+            "New tab",
+            "open blank home",
+            Always,
+            NewTab,
+            "ctrl-t",
+        ),
+        (
+            "browser.close-tab",
+            "Close tab",
+            "unload",
+            ActiveTab,
+            CloseTab,
+            "ctrl-w",
+        ),
+        (
+            "browser.reopen-tab",
+            "Reopen closed tab",
+            "restore undo",
+            Always,
+            ReopenTab,
+            "ctrl-shift-t",
+        ),
+        (
+            "browser.reload",
+            "Reload page",
+            "refresh",
+            ActivePage,
+            Reload,
+            "ctrl-r",
+        ),
+        (
+            "browser.back",
+            "Go back",
+            "previous page history",
+            ActivePage,
+            Back,
+            "alt-left",
+        ),
+        (
+            "browser.forward",
+            "Go forward",
+            "next page history",
+            ActivePage,
+            Forward,
+            "alt-right",
+        ),
+        (
+            "browser.edit-address",
+            "Edit address",
+            "url location navigate",
+            Always,
+            EditAddress,
+            "ctrl-l",
+        ),
+        (
+            "browser.next-tab",
+            "Next tab",
+            "switch",
+            SeveralTabs,
+            NextTab,
+            "ctrl-tab",
+        ),
+        (
+            "browser.previous-tab",
+            "Previous tab",
+            "switch",
+            SeveralTabs,
+            PreviousTab,
+            "ctrl-shift-tab",
+        ),
+        (
+            "browser.save-page",
+            "Save page",
+            "pin bookmark",
+            ActiveTab,
+            SavePage,
+            "ctrl-d",
+        ),
+    ]
+    .into_iter()
+    .map(
+        |(id, title, keywords, enablement, action, shortcut)| Command {
+            id: CommandId::new(id).expect("built-in identifier"),
+            title: title.to_owned(),
+            keywords: keywords.to_owned(),
+            scope: CommandScope::Browser,
+            enablement,
+            action: CommandAction::Browser(action),
+            shortcut: Some(Shortcut::new(shortcut).expect("built-in shortcut")),
+        },
+    )
+    .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plugin_command(id: &str, shortcut: Option<&str>) -> Command {
+        Command {
+            id: CommandId::new(id).expect("synthetic identifier"),
+            title: "Synthetic plugin action".to_owned(),
+            keywords: String::new(),
+            scope: CommandScope::Plugin {
+                plugin: "synthetic".to_owned(),
+            },
+            enablement: Enablement::Always,
+            action: CommandAction::Plugin {
+                plugin: "synthetic".to_owned(),
+                action: "create".to_owned(),
+            },
+            shortcut: shortcut.map(|keys| Shortcut::new(keys).expect("synthetic shortcut")),
+        }
+    }
+
+    #[test]
+    fn browser_registry_keeps_existing_shortcuts_and_stable_keys() {
+        let registry = CommandRegistry::browser();
+        let bindings: Vec<_> = registry
+            .iter()
+            .map(|(_, command)| {
+                (
+                    command.action.clone(),
+                    command.shortcut.as_ref().map(Shortcut::keystroke),
+                )
+            })
+            .collect();
+        let browser = |action| CommandAction::Browser(action);
+        assert_eq!(
+            bindings,
+            [
+                (browser(BrowserAction::NewTab), Some("ctrl-t")),
+                (browser(BrowserAction::CloseTab), Some("ctrl-w")),
+                (browser(BrowserAction::ReopenTab), Some("ctrl-shift-t")),
+                (browser(BrowserAction::Reload), Some("ctrl-r")),
+                (browser(BrowserAction::Back), Some("alt-left")),
+                (browser(BrowserAction::Forward), Some("alt-right")),
+                (browser(BrowserAction::EditAddress), Some("ctrl-l")),
+                (browser(BrowserAction::NextTab), Some("ctrl-tab")),
+                (browser(BrowserAction::PreviousTab), Some("ctrl-shift-tab")),
+                (browser(BrowserAction::SavePage), Some("ctrl-d")),
+            ]
+        );
+        // Keys follow registration order, so both the palette and search agree on them.
+        let (key, command) = registry.find("browser.reload").expect("reload command");
+        assert_eq!(key.get(), 4);
+        assert_eq!(registry.get(key), Some(command));
+        assert!(
+            registry
+                .get(NonZeroU64::new(99).expect("synthetic key"))
+                .is_none()
+        );
+        assert!(
+            registry
+                .iter()
+                .all(|(_, command)| !command.is_plugin_action())
+        );
+    }
+
+    #[test]
+    fn registration_rejects_invalid_or_conflicting_commands_without_changes() {
+        let mut registry = CommandRegistry::browser();
+        let before = registry.len();
+        let mut duplicate = plugin_command("browser.new-tab", None);
+        assert_eq!(
+            registry.register(duplicate.clone()),
+            Err(CommandError::DuplicateId)
+        );
+        duplicate.id = CommandId::new("synthetic.create").expect("synthetic identifier");
+        duplicate.shortcut = Some(Shortcut::new("ctrl-t").expect("synthetic shortcut"));
+        assert_eq!(
+            registry.register(duplicate.clone()),
+            Err(CommandError::DuplicateShortcut)
+        );
+        duplicate.shortcut = None;
+        duplicate.title = "   ".to_owned();
+        assert_eq!(
+            registry.register(duplicate),
+            Err(CommandError::InvalidTitle)
+        );
+        assert_eq!(registry.len(), before);
+
+        let key = registry
+            .register(plugin_command("synthetic.create", Some("ctrl-alt-n")))
+            .expect("plugin command registers");
+        assert_eq!(key.get(), before as u64 + 1);
+        assert!(registry.get(key).is_some_and(Command::is_plugin_action));
+    }
+
+    #[test]
+    fn identifiers_and_shortcuts_are_validated() {
+        for valid in ["browser.new-tab", "synthetic", "plugin2.action-3"] {
+            assert!(CommandId::new(valid).is_ok(), "{valid}");
+        }
+        for invalid in [
+            "",
+            "Browser.New",
+            "browser..tab",
+            "browser.",
+            "tab name",
+            "é.tab",
+        ] {
+            assert_eq!(
+                CommandId::new(invalid),
+                Err(CommandError::InvalidId),
+                "{invalid}"
+            );
+        }
+        assert_eq!(CommandId::new("a".repeat(65)), Err(CommandError::InvalidId));
+        for invalid in ["", "ctrl--t", "ctrl-", "ctrl t"] {
+            assert_eq!(
+                Shortcut::new(invalid),
+                Err(CommandError::InvalidShortcut),
+                "{invalid}"
+            );
+        }
+        let shortcut = Shortcut::new("ctrl-shift-tab").expect("synthetic shortcut");
+        assert_eq!(shortcut.label(), "Ctrl Shift Tab");
+        assert_eq!(
+            Shortcut::new("alt-left").expect("shortcut").label(),
+            "Alt Left"
+        );
+    }
+
+    #[test]
+    fn enablement_follows_the_browser_context() {
+        let home = CommandContext {
+            active_tab: true,
+            active_page: false,
+            tab_count: 1,
+        };
+        let page = CommandContext {
+            active_page: true,
+            tab_count: 2,
+            ..home
+        };
+        let empty = CommandContext::default();
+        assert!(Enablement::Always.allows(empty));
+        assert!(!Enablement::ActiveTab.allows(empty));
+        assert!(Enablement::ActiveTab.allows(home));
+        assert!(!Enablement::ActivePage.allows(home));
+        assert!(Enablement::ActivePage.allows(page));
+        assert!(!Enablement::SeveralTabs.allows(home));
+        assert!(Enablement::SeveralTabs.allows(page));
+
+        let registry = CommandRegistry::browser();
+        let enabled = |context| {
+            registry
+                .iter()
+                .filter(|(_, command)| command.is_enabled(context))
+                .count()
+        };
+        assert_eq!(enabled(empty), 3);
+        assert_eq!(enabled(home), 5);
+        assert_eq!(enabled(page), registry.len());
+    }
+}

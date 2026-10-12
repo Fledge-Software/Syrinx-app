@@ -1,23 +1,49 @@
-//! Presents local catalogue results in an owned window above native page views.
+//! Presents commands and local catalogue results in an owned window above native page views.
 
+mod choices;
+mod commands;
+mod display;
+mod query;
+mod render;
+
+use std::rc::Rc;
+
+use atlas_core::{CommandAction, CommandContext, CommandRegistry};
 use atlas_platform::browser::BrowserShortcut;
-use atlas_search::{SearchHit, SearchResults, Target};
+use atlas_search::{Scope, SearchResults, Target};
 use futures::channel::mpsc::UnboundedSender;
-use gpui::StatefulInteractiveElement;
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, ParentElement,
-    Render, Styled, Subscription, Window, actions, div, px,
+    Render, ScrollHandle, Styled, Subscription, Window, actions, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
 
-use crate::{navigation, session::SessionError, theme, ui};
+pub use display::arrange;
+
+use choices::PaletteChoices;
+use commands::{CommandMatcher, CommandMatches};
+use display::Preview;
+use query::{Chip, ParsedQuery, View};
+
+use crate::{session::SessionError, theme, ui};
 
 actions!(palette, [Dismiss, NextResult, PreviousResult, SearchWeb]);
 
+/// The preview pane is drawn only when the popup is at least this wide.
+const PREVIEW_MIN_WIDTH: f32 = 720.;
+
 pub enum PaletteEvent {
-    Query { request_id: u64, text: String },
-    Submit { text: String, force_search: bool },
+    Query {
+        request_id: u64,
+        text: String,
+        scope: Scope,
+    },
+    Submit {
+        text: String,
+        force_search: bool,
+    },
     Activate(Target),
+    Run(CommandAction),
     Shortcut(BrowserShortcut),
     Closed,
 }
@@ -25,7 +51,7 @@ pub enum PaletteEvent {
 impl PaletteEvent {
     pub fn finishes_entry(&self) -> bool {
         match self {
-            Self::Submit { .. } | Self::Activate(_) | Self::Closed => true,
+            Self::Submit { .. } | Self::Activate(_) | Self::Run(_) | Self::Closed => true,
             Self::Query { .. } | Self::Shortcut(_) => false,
         }
     }
@@ -35,185 +61,12 @@ pub struct PaletteView {
     input: Entity<InputState>,
     events: UnboundedSender<PaletteEvent>,
     choices: PaletteChoices,
+    commands: CommandMatcher,
+    context: CommandContext,
+    chip: Chip,
+    view: View,
+    scroll: ScrollHandle,
     _subscription: Subscription,
-}
-
-#[derive(Default)]
-struct PaletteChoices {
-    request_id: u64,
-    address: Option<String>,
-    results: Vec<SearchHit>,
-    selected: Option<usize>,
-    refresh_selection: Option<RefreshSelection>,
-    status: String,
-}
-
-#[derive(Clone, Copy)]
-enum RefreshSelection {
-    Default,
-    Target(Target),
-    Unselected,
-}
-
-impl PaletteChoices {
-    fn begin_query(&mut self) -> u64 {
-        self.request_id = self
-            .request_id
-            .checked_add(1)
-            .expect("palette request IDs exhausted");
-        self.status = "Searching locally…".to_owned();
-        self.results.clear();
-        self.request_id
-    }
-
-    fn query(&mut self, text: &str) -> u64 {
-        self.begin_query();
-        // Refused input has no address row; submission still uses the existing validator.
-        self.address = match navigation::recognized_address(text) {
-            Ok(address) => address,
-            Err(error) => {
-                self.status = error.to_owned();
-                None
-            }
-        };
-        self.selected = Some(0);
-        self.refresh_selection = None;
-        self.request_id
-    }
-
-    fn selection(&self) -> RefreshSelection {
-        if let Some(hit) = self.selected_hit() {
-            return RefreshSelection::Target(hit.target);
-        }
-        if self.selected.is_some() {
-            RefreshSelection::Default
-        } else {
-            RefreshSelection::Unselected
-        }
-    }
-
-    fn refresh(&mut self) -> u64 {
-        // Repeated model changes retain intent even after the visible rows were invalidated.
-        let selection = self.refresh_selection.unwrap_or_else(|| self.selection());
-        self.begin_query();
-        self.selected = if matches!(selection, RefreshSelection::Default) && self.address.is_some()
-        {
-            Some(0)
-        } else {
-            None
-        };
-        self.refresh_selection = Some(selection);
-        self.request_id
-    }
-
-    fn receive(&mut self, request_id: u64, result: Result<SearchResults, SessionError>) -> bool {
-        if request_id != self.request_id {
-            return false;
-        }
-        let selected_target = self.selected_hit().map(|hit| hit.target);
-        let refresh_selection = self.refresh_selection.take();
-        let succeeded = result.is_ok();
-        match result {
-            Ok(results) => {
-                self.status = format!(
-                    "{} tabs · {} saved pages",
-                    results.counts.tabs, results.counts.saved
-                );
-                self.results = results.hits;
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                self.results.clear();
-            }
-        }
-        // A removed local selection cannot silently activate the row that inherited its index.
-        self.selected = match refresh_selection {
-            Some(RefreshSelection::Target(target)) => self.target_row(target),
-            Some(RefreshSelection::Unselected) => None,
-            Some(RefreshSelection::Default) if !succeeded && self.address.is_none() => None,
-            Some(RefreshSelection::Default) => Some(0),
-            None if self.address.is_some() => selected_target
-                .and_then(|target| self.target_row(target))
-                .or(Some(0)),
-            None => Some(0),
-        };
-        true
-    }
-
-    fn target_row(&self, target: Target) -> Option<usize> {
-        self.results
-            .iter()
-            .position(|hit| hit.target == target)
-            .map(|index| index + self.address_rows())
-            .or_else(|| self.address.as_ref().map(|_| 0))
-    }
-
-    fn address_rows(&self) -> usize {
-        usize::from(self.address.is_some())
-    }
-
-    fn selected_hit(&self) -> Option<&SearchHit> {
-        self.selected
-            .and_then(|selected| selected.checked_sub(self.address_rows()))
-            .and_then(|index| self.results.get(index))
-    }
-
-    fn select(&mut self, selected: usize) {
-        self.selected = Some(selected);
-        // An explicit choice while waiting supersedes the retained pre-refresh selection.
-        if self.refresh_selection.is_some() {
-            self.refresh_selection = Some(self.selection());
-        }
-    }
-
-    fn next(&mut self) {
-        let rows = self.results.len() + self.address_rows();
-        if rows == 0 {
-            return;
-        }
-        self.select(
-            self.selected
-                .map_or(0, |selected| selected.saturating_add(1).min(rows - 1)),
-        );
-    }
-
-    fn previous(&mut self) {
-        if self.results.is_empty() && self.address.is_none() {
-            return;
-        }
-        self.select(
-            self.selected
-                .map_or(0, |selected| selected.saturating_sub(1)),
-        );
-    }
-
-    fn activation(&self, request_id: u64, target: Target) -> Option<PaletteEvent> {
-        if request_id != self.request_id || self.refresh_selection.is_some() {
-            return None;
-        }
-        self.results
-            .iter()
-            .any(|hit| hit.target == target)
-            .then_some(PaletteEvent::Activate(target))
-    }
-
-    fn submission(&self, text: String, force_search: bool) -> Option<PaletteEvent> {
-        if !force_search {
-            self.selected?;
-            if let Some(hit) = self.selected_hit() {
-                return Some(PaletteEvent::Activate(hit.target));
-            }
-            if self.selected == Some(0)
-                && let Some(address) = &self.address
-            {
-                return Some(PaletteEvent::Submit {
-                    text: address.clone(),
-                    force_search: false,
-                });
-            }
-        }
-        Some(PaletteEvent::Submit { text, force_search })
-    }
 }
 
 pub fn bind_keys(cx: &mut App) {
@@ -233,11 +86,14 @@ impl PaletteView {
     pub fn new(
         initial: String,
         events: UnboundedSender<PaletteEvent>,
+        registry: Rc<CommandRegistry>,
+        context: CommandContext,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Search tabs, saved pages, or enter an address")
+            InputState::new(window, cx)
+                .placeholder("Search tabs and bookmarks, run > commands, or enter an address")
         });
         input.update(cx, |input, cx| {
             input.set_value(initial, window, cx);
@@ -250,28 +106,68 @@ impl PaletteView {
                 InputEvent::PressEnter { .. } => this.submit(false, window, cx),
                 _ => {}
             });
+        let (commands, status) = match CommandMatcher::new(registry) {
+            Ok(commands) => (commands, None),
+            Err(error) => (
+                CommandMatcher::empty(),
+                Some(format!("Commands are unavailable: {error}")),
+            ),
+        };
         let mut view = Self {
             input,
             events,
             choices: PaletteChoices::default(),
+            commands,
+            context,
+            chip: Chip::default(),
+            view: View::Everything,
+            scroll: ScrollHandle::new(),
             _subscription: subscription,
         };
         view.query(cx);
+        if let Some(status) = status {
+            view.choices.status = status;
+        }
         view
     }
 
     fn query(&mut self, cx: &mut Context<Self>) {
-        let text = self.input.read(cx).value().to_string();
-        let request_id = self.choices.query(&text);
-        self.emit(PaletteEvent::Query { request_id, text });
+        let input = self.input.read(cx).value().to_string();
+        let parsed = ParsedQuery::parse(&input);
+        self.view = parsed.view(self.chip);
+        let request_id = self
+            .choices
+            .query_scoped(&input, self.view.accepts_address());
+        self.send_query(request_id, parsed.text);
         cx.notify();
     }
 
-    pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        let text = self.input.read(cx).value().to_string();
+    /// Re-runs the current text after the tab model or command context changed.
+    pub fn refresh(&mut self, context: CommandContext, cx: &mut Context<Self>) {
+        self.context = context;
+        let input = self.input.read(cx).value().to_string();
+        let parsed = ParsedQuery::parse(&input);
         let request_id = self.choices.refresh();
-        self.emit(PaletteEvent::Query { request_id, text });
+        self.send_query(request_id, parsed.text);
         cx.notify();
+    }
+
+    /// Stages this request's commands, then asks the worker for its page rows and counts.
+    fn send_query(&mut self, request_id: u64, text: &str) {
+        let matches = match self.commands.matches(text, self.view, self.context) {
+            Ok(matches) => matches,
+            Err(error) => {
+                // The worker reports the same refusal for its rows; commands simply show none.
+                self.choices.status = error.to_string();
+                CommandMatches::default()
+            }
+        };
+        self.choices.stage_commands(matches, !text.is_empty());
+        self.emit(PaletteEvent::Query {
+            request_id,
+            text: text.to_owned(),
+            scope: self.view.search_scope(),
+        });
     }
 
     pub fn receive(
@@ -283,6 +179,7 @@ impl PaletteView {
         if !self.choices.receive(request_id, result) {
             return false;
         }
+        self.scroll_to_selection();
         cx.notify();
         true
     }
@@ -300,115 +197,120 @@ impl PaletteView {
         else {
             return;
         };
+        self.finish(event, window, cx);
+    }
+
+    /// Sends the entry's final event and closes the popup; command rows become their action.
+    fn finish(&mut self, event: PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let event = match event {
+            PaletteEvent::Activate(target @ Target::Command(_)) => {
+                let Some(command) = self.commands.command(target) else {
+                    self.choices.status = "This command is no longer available.".to_owned();
+                    cx.notify();
+                    return;
+                };
+                PaletteEvent::Run(command.action.clone())
+            }
+            event => event,
+        };
         self.emit(event);
         window.remove_window();
+    }
+
+    /// Choosing a chip drops a typed prefix, since the prefix would otherwise override it.
+    fn choose_chip(&mut self, chip: Chip, window: &mut Window, cx: &mut Context<Self>) {
+        self.chip = chip;
+        let input = self.input.read(cx).value().to_string();
+        let parsed = ParsedQuery::parse(&input);
+        if parsed.prefix.is_some() {
+            let text = parsed.text.to_owned();
+            self.input
+                .update(cx, |input, cx| input.set_value(text, window, cx));
+        }
+        self.focus_input(window, cx);
+        // `set_value` does not emit a change event, so query explicitly.
+        self.query(cx);
+    }
+
+    fn move_selection(&mut self, forwards: bool, cx: &mut Context<Self>) {
+        if forwards {
+            self.choices.next();
+        } else {
+            self.choices.previous();
+        }
+        self.scroll_to_selection();
+        cx.notify();
+    }
+
+    fn scroll_to_selection(&self) {
+        let Some(row) = self.choices.selected else {
+            return;
+        };
+        let child = render::child_index(&self.choices, row);
+        self.scroll.scroll_to_item(child);
+    }
+
+    fn preview(&self) -> Option<Preview> {
+        let selected = self.choices.selected?;
+        if selected == 0
+            && let Some(address) = &self.choices.address
+        {
+            return Some(Preview::address(address));
+        }
+        let hit = self.choices.selected_hit()?;
+        let Some(command) = self.commands.command(hit.target) else {
+            return Some(Preview::page(hit));
+        };
+        let plugin = match &command.scope {
+            atlas_core::CommandScope::Plugin { plugin } => Some(plugin.as_str()),
+            atlas_core::CommandScope::Browser => None,
+        };
+        let shortcut = command.shortcut.as_ref().map(atlas_core::Shortcut::label);
+        Some(Preview::command(hit, plugin, shortcut))
     }
 }
 
 impl Render for PaletteView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut rows = div().flex().flex_col().gap_1();
-        if let Some(address) = &self.choices.address {
-            let request_id = self.choices.request_id;
-            rows = rows.child(
-                div()
-                    .id("go-to-address")
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .bg(if self.choices.selected == Some(0) {
-                        theme::preview_row_selected()
-                    } else {
-                        theme::panel()
-                    })
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if this.choices.request_id != request_id {
-                            return;
-                        }
-                        this.choices.select(0);
-                        this.submit(false, window, cx);
-                    }))
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .overflow_hidden()
-                            .child(format!("Go to {address}")),
-                    ),
-            );
-        }
-        for (index, hit) in self.choices.results.iter().enumerate() {
-            let target = hit.target;
-            let request_id = self.choices.request_id;
-            let title = if hit.title.is_empty() {
-                hit.address.clone()
-            } else {
-                hit.title.clone()
-            };
-            rows = rows.child(
-                div()
-                    .id(("result", index))
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .bg(
-                        if Some(index + self.choices.address_rows()) == self.choices.selected {
-                            theme::preview_row_selected()
-                        } else {
-                            theme::panel()
-                        },
-                    )
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, window, _| {
-                        let Some(event) = this.choices.activation(request_id, target) else {
-                            return;
-                        };
-                        this.emit(event);
-                        window.remove_window();
-                    }))
-                    .child(div().text_color(theme::text()).child(title))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::icon_dim())
-                            .overflow_hidden()
-                            .child(hit.address.clone()),
-                    ),
-            );
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tokens = theme::tokens();
+        let wide = f32::from(window.viewport_size().width) >= PREVIEW_MIN_WIDTH;
+        let list = render::list(self, wide, cx);
+        let mut body = div()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .border_t_1()
+            .border_color(theme::rgba(tokens.panel_divider))
+            .child(list);
+        if wide {
+            body = body.child(render::preview(self.preview()));
         }
         div()
             .key_context("AtlasPalette")
             .size_full()
             .bg(theme::panel())
-            .text_color(theme::text())
-            .p_3()
-            .rounded_lg()
+            .border_1()
+            .border_color(theme::rgba(tokens.panel_line))
+            .text_color(theme::rgba(tokens.text))
             .flex()
             .flex_col()
-            .gap_3()
             // The focused Input consumes these actions before parent key bindings can run.
             .capture_action(cx.listener(|this, _: &MoveDown, _, cx| {
-                this.choices.next();
+                this.move_selection(true, cx);
                 cx.stop_propagation();
-                cx.notify();
             }))
             .capture_action(cx.listener(|this, _: &MoveUp, _, cx| {
-                this.choices.previous();
+                this.move_selection(false, cx);
                 cx.stop_propagation();
-                cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Dismiss, window, _| {
                 this.emit(PaletteEvent::Closed);
                 window.remove_window();
             }))
-            .on_action(cx.listener(|this, _: &NextResult, _, cx| {
-                this.choices.next();
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &PreviousResult, _, cx| {
-                this.choices.previous();
-                cx.notify();
-            }))
+            .on_action(cx.listener(|this, _: &NextResult, _, cx| this.move_selection(true, cx)))
+            .on_action(
+                cx.listener(|this, _: &PreviousResult, _, cx| this.move_selection(false, cx)),
+            )
             .on_action(cx.listener(|this, _: &SearchWeb, window, cx| this.submit(true, window, cx)))
             // The popup queues browser actions without replacing its focused input or results.
             .on_action(cx.listener(|this, _: &ui::NewTab, _, _| {
@@ -444,36 +346,25 @@ impl Render for PaletteView {
             .on_action(cx.listener(|this, _: &ui::Reload, _, _| {
                 this.emit(PaletteEvent::Shortcut(BrowserShortcut::Reload));
             }))
-            .child(Input::new(&self.input))
             .child(
                 div()
-                    .text_xs()
-                    .text_color(theme::icon())
-                    .child(self.choices.status.clone()),
-            )
-            .child(div().id("results").flex_1().overflow_y_scroll().child(rows))
-            .child(
-                div()
-                    .id("web-search")
-                    .h(px(36.))
-                    .px_3()
+                    .h(px(56.))
+                    .px_4()
                     .flex()
                     .items_center()
-                    .rounded_md()
-                    .bg(theme::preview_secondary_button())
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, window, cx| this.submit(true, window, cx)))
-                    .child("Search the web")
-                    .child(div().flex_1())
-                    .child(div().text_xs().child("Alt Enter")),
+                    .gap_3()
+                    .child(div().flex_1().child(Input::new(&self.input)))
+                    .child(render::key_hint("Esc")),
             )
+            .child(render::chips(self, cx))
+            .child(body)
+            .child(render::footer(&self.choices.status))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use atlas_core::{SavedPageId, TabId};
-    use atlas_search::{ScopeCounts, SearchError};
+    use atlas_core::{BrowserAction, TabId};
     use futures::{FutureExt, StreamExt, channel::mpsc::unbounded};
 
     use super::*;
@@ -481,7 +372,7 @@ mod tests {
     const ADDRESS: &str = "https://palette.example.test/Case?Key=Value";
 
     #[test]
-    fn shortcut_stream_keeps_queries_until_submit_activation_or_close() {
+    fn shortcut_stream_keeps_queries_until_submit_activation_run_or_close() {
         let shortcuts = [
             BrowserShortcut::NewTab,
             BrowserShortcut::CloseTab,
@@ -504,7 +395,8 @@ mod tests {
                 text: "synthetic search".to_owned(),
                 force_search: true,
             },
-            PaletteEvent::Activate(targets()[0]),
+            PaletteEvent::Activate(Target::Tab(TabId::new(1).expect("synthetic tab"))),
+            PaletteEvent::Run(CommandAction::Browser(BrowserAction::Reload)),
             PaletteEvent::Closed,
         ] {
             let (sender, mut receiver) = unbounded();
@@ -517,6 +409,7 @@ mod tests {
                     .unbounded_send(PaletteEvent::Query {
                         request_id: index as u64,
                         text: ADDRESS.to_owned(),
+                        scope: Scope::Everything,
                     })
                     .expect("queue synthetic query");
             }
@@ -534,7 +427,9 @@ mod tests {
                 }
                 match event {
                     PaletteEvent::Shortcut(shortcut) => received_shortcuts.push(shortcut),
-                    PaletteEvent::Query { request_id, text } => {
+                    PaletteEvent::Query {
+                        request_id, text, ..
+                    } => {
                         assert_eq!(text, ADDRESS);
                         received_queries.push(request_id);
                     }
@@ -549,343 +444,5 @@ mod tests {
                 Some(Some(PaletteEvent::Shortcut(BrowserShortcut::NewTab)))
             ));
         }
-    }
-
-    fn targets() -> [Target; 2] {
-        [
-            Target::Tab(TabId::new(1).expect("synthetic tab identity")),
-            Target::Saved(SavedPageId::new(1).expect("synthetic saved identity")),
-        ]
-    }
-
-    fn results(targets: &[Target]) -> SearchResults {
-        let tabs = targets
-            .iter()
-            .filter(|target| matches!(target, Target::Tab(_)))
-            .count();
-        let saved = targets
-            .iter()
-            .filter(|target| matches!(target, Target::Saved(_)))
-            .count();
-        SearchResults {
-            generation: 1,
-            counts: ScopeCounts {
-                tabs,
-                saved,
-                ..ScopeCounts::default()
-            },
-            hits: targets
-                .iter()
-                .map(|target| SearchHit {
-                    target: *target,
-                    score: 1,
-                    title: "Synthetic palette match".to_owned(),
-                    address: ADDRESS.to_owned(),
-                    title_matches: Vec::new(),
-                    address_matches: Vec::new(),
-                })
-                .collect(),
-        }
-    }
-
-    fn assert_submit(choices: &PaletteChoices, input: &str, force_search: bool, expected: &str) {
-        match choices.submission(input.to_owned(), force_search) {
-            Some(PaletteEvent::Submit {
-                text,
-                force_search: actual_force,
-            }) => {
-                assert_eq!(text, expected);
-                assert_eq!(actual_force, force_search);
-            }
-            _ => panic!("expected explicit address or search submission"),
-        }
-    }
-
-    fn assert_target(choices: &PaletteChoices, expected: Target) {
-        assert!(matches!(
-            choices.submission(ADDRESS.to_owned(), false),
-            Some(PaletteEvent::Activate(target)) if target == expected
-        ));
-    }
-
-    #[test]
-    fn literal_enter_stays_on_go_to_across_local_results_empty_and_failure() {
-        let mut choices = PaletteChoices::default();
-        let request = choices.query(ADDRESS);
-        assert_eq!(choices.address.as_deref(), Some(ADDRESS));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
-        choices.next();
-        assert_eq!(
-            choices.selected,
-            Some(0),
-            "Down cannot select an unavailable local row"
-        );
-        assert!(choices.receive(request, Ok(results(&targets()))));
-        assert_eq!(choices.selected, Some(0));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
-        assert!(choices.receive(request, Ok(results(&[]))));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
-        assert!(choices.receive(
-            request,
-            Err(SessionError::Search(SearchError::QueryTooLong))
-        ));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
-    }
-
-    #[test]
-    fn deliberate_local_selection_tracks_target_and_arrows_return_to_go_to() {
-        let [tab, saved] = targets();
-        let mut choices = PaletteChoices::default();
-        let request = choices.query(ADDRESS);
-        assert!(choices.receive(request, Ok(results(&[tab, saved]))));
-        choices.next();
-        assert_eq!(choices.selected, Some(1));
-        assert_target(&choices, tab);
-        choices.previous();
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
-        choices.previous();
-        assert_eq!(choices.selected, Some(0));
-        choices.next();
-        choices.next();
-        choices.next();
-        assert_eq!(choices.selected, Some(2));
-        assert_target(&choices, saved);
-
-        // An updated ranking must not quietly change the chosen destination.
-        assert!(choices.receive(request, Ok(results(&[saved, tab]))));
-        assert_eq!(choices.selected, Some(1));
-        assert_target(&choices, saved);
-        assert!(choices.receive(request, Ok(results(&[tab]))));
-        assert_eq!(choices.selected, Some(0));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
-    }
-
-    #[test]
-    fn input_changes_reject_stale_replies_and_reopening_resets_selection() {
-        let mut choices = PaletteChoices::default();
-        let old = choices.query(ADDRESS);
-        assert!(choices.receive(old, Ok(results(&targets()))));
-        choices.next();
-        assert_target(&choices, targets()[0]);
-        let next_address = "https://next-palette.example.test/";
-        let next = choices.query(next_address);
-        assert_ne!(next, old);
-        assert_eq!(choices.selected, Some(0));
-        let status = choices.status.clone();
-        assert!(!choices.receive(old, Ok(results(&targets()))));
-        assert!(!choices.receive(old, Err(SessionError::Search(SearchError::QueryTooLong))));
-        assert_eq!(choices.status, status);
-        assert!(choices.results.is_empty());
-        assert_submit(&choices, next_address, false, next_address);
-        assert!(choices.receive(next, Ok(results(&targets()))));
-        assert_submit(&choices, next_address, false, next_address);
-
-        // The owning UI correlates popup identities; a new popup starts fresh local state.
-        let mut reopened = PaletteChoices::default();
-        assert_eq!(reopened.query(ADDRESS), old);
-        assert!(reopened.results.is_empty());
-        assert_eq!(reopened.selected, Some(0));
-        assert_submit(&reopened, ADDRESS, false, ADDRESS);
-    }
-
-    #[test]
-    fn ordinary_and_refused_input_keep_existing_submission_behavior() {
-        for input in [
-            "ordinary search terms",
-            "",
-            "JAVASCRIPT:1",
-            "https://synthetic@example.test/",
-            "https://[invalid]",
-        ] {
-            let mut choices = PaletteChoices::default();
-            let request = choices.query(input);
-            assert_eq!(choices.address, None);
-            assert_submit(&choices, input, false, input);
-            if let Err(error) = navigation::recognized_address(input) {
-                assert_eq!(choices.status, error);
-            }
-            assert!(choices.receive(request, Ok(results(&targets()))));
-            assert_target(&choices, targets()[0]);
-            choices.next();
-            assert_target(&choices, targets()[1]);
-            choices.previous();
-            assert_target(&choices, targets()[0]);
-            assert!(choices.receive(
-                request,
-                Err(SessionError::Search(SearchError::QueryTooLong))
-            ));
-            assert_submit(&choices, input, false, input);
-        }
-    }
-
-    #[test]
-    fn go_to_uses_canonical_address_but_forced_search_preserves_input() {
-        let input = "  HTTPS://palette.example.test/Case?Key=Value  ";
-        let mut choices = PaletteChoices::default();
-        let request = choices.query(input);
-        assert_eq!(choices.address.as_deref(), Some(ADDRESS));
-        assert_submit(&choices, input, false, ADDRESS);
-        assert_submit(&choices, input, true, input);
-        assert!(choices.receive(request, Ok(results(&targets()))));
-        choices.next();
-        assert_target(&choices, targets()[0]);
-        assert_submit(&choices, input, true, input);
-
-        // Clicking Go to explicitly selects its row, regardless of the previous local choice.
-        choices.select(0);
-        assert_submit(&choices, input, false, ADDRESS);
-    }
-
-    #[test]
-    fn model_refresh_replaces_counts_and_rows_without_an_input_change() {
-        let [first, _] = targets();
-        let second = Target::Tab(TabId::new(2).expect("second synthetic Home"));
-        let mut choices = PaletteChoices::default();
-        let old = choices.query("");
-        assert!(choices.receive(old, Ok(results(&[first, second]))));
-        assert_eq!(choices.status, "2 tabs · 0 saved pages");
-
-        let refreshed = choices.refresh();
-        assert!(choices.results.is_empty());
-        assert_eq!(choices.status, "Searching locally…");
-        assert!(choices.submission(String::new(), false).is_none());
-        assert!(choices.activation(old, second).is_none());
-        assert!(!choices.receive(old, Ok(results(&[first, second]))));
-        assert!(choices.receive(refreshed, Ok(results(&[first]))));
-        assert_eq!(choices.status, "1 tabs · 0 saved pages");
-        assert_eq!(choices.results.len(), 1);
-        assert_target(&choices, first);
-        assert!(choices.activation(refreshed, second).is_none());
-    }
-
-    #[test]
-    fn repeated_refreshes_preserve_target_identity_and_reject_earlier_replies() {
-        let [tab, saved] = targets();
-        for input in [ADDRESS, "synthetic"] {
-            let mut choices = PaletteChoices::default();
-            let initial = choices.query(input);
-            assert!(choices.receive(initial, Ok(results(&[tab, saved]))));
-            choices.select(choices.address_rows() + 1);
-            assert_target(&choices, saved);
-
-            let first_refresh = choices.refresh();
-            let latest_refresh = choices.refresh();
-            assert!(choices.results.is_empty());
-            assert!(choices.submission(input.to_owned(), false).is_none());
-            assert!(choices.activation(initial, saved).is_none());
-            assert!(!choices.receive(first_refresh, Ok(results(&[tab]))));
-            assert!(!choices.receive(
-                initial,
-                Err(SessionError::Search(SearchError::QueryTooLong))
-            ));
-            assert!(choices.receive(latest_refresh, Ok(results(&[saved, tab]))));
-            assert_target(&choices, saved);
-            assert_eq!(choices.selected, Some(choices.address_rows()));
-            assert!(matches!(
-                choices.activation(latest_refresh, saved),
-                Some(PaletteEvent::Activate(target)) if target == saved
-            ));
-        }
-    }
-
-    #[test]
-    fn removed_local_selection_never_activates_its_replacement_row() {
-        let [tab, saved] = targets();
-        for input in [ADDRESS, "synthetic"] {
-            let mut choices = PaletteChoices::default();
-            let request = choices.query(input);
-            assert!(choices.receive(request, Ok(results(&[tab, saved]))));
-            choices.select(choices.address_rows());
-            let refresh = choices.refresh();
-            assert!(choices.receive(refresh, Ok(results(&[saved]))));
-            assert!(choices.activation(request, tab).is_none());
-            assert!(choices.activation(refresh, tab).is_none());
-            if input == ADDRESS {
-                assert_submit(&choices, input, false, ADDRESS);
-                choices.next();
-            } else {
-                assert_eq!(choices.selected, None);
-                assert!(choices.submission(input.to_owned(), false).is_none());
-                let again = choices.refresh();
-                assert!(choices.receive(again, Ok(results(&[saved]))));
-                assert!(choices.submission(input.to_owned(), false).is_none());
-                choices.next();
-            }
-            assert_target(&choices, saved);
-        }
-    }
-
-    #[test]
-    fn refresh_failure_and_input_change_keep_submission_intent_distinct() {
-        let [tab, saved] = targets();
-        let mut choices = PaletteChoices::default();
-        let initial = choices.query("synthetic");
-        assert!(choices.receive(initial, Ok(results(&[tab, saved]))));
-        let refresh = choices.refresh();
-        assert!(choices.receive(
-            refresh,
-            Err(SessionError::Search(SearchError::QueryTooLong))
-        ));
-        assert!(choices.results.is_empty());
-        assert!(choices.submission("synthetic".to_owned(), false).is_none());
-        assert_submit(&choices, "synthetic", true, "synthetic");
-
-        // A new input query keeps the established no-result submission behavior.
-        let current = choices.query("new synthetic query");
-        assert_submit(
-            &choices,
-            "new synthetic query",
-            false,
-            "new synthetic query",
-        );
-        assert!(!choices.receive(refresh, Ok(results(&[saved]))));
-        assert!(choices.receive(current, Ok(results(&[saved]))));
-        assert_target(&choices, saved);
-    }
-
-    #[test]
-    fn go_to_selection_survives_refresh_and_supersedes_pending_local_intent() {
-        let [tab, saved] = targets();
-        let mut choices = PaletteChoices::default();
-        let initial = choices.query(ADDRESS);
-        assert!(choices.receive(initial, Ok(results(&[tab, saved]))));
-        let refresh = choices.refresh();
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
-        assert!(choices.receive(refresh, Ok(results(&[saved, tab]))));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
-
-        choices.next();
-        assert_target(&choices, saved);
-        let pending = choices.refresh();
-        assert!(choices.submission(ADDRESS.to_owned(), false).is_none());
-        // Only Go to is available while local rows are being refreshed.
-        choices.previous();
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
-        let latest = choices.refresh();
-        assert!(!choices.receive(pending, Ok(results(&[saved, tab]))));
-        assert!(choices.receive(latest, Ok(results(&[saved, tab]))));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
-    }
-
-    #[test]
-    fn refresh_updates_saved_counts_and_metadata_from_current_results() {
-        let [tab, saved] = targets();
-        let mut choices = PaletteChoices::default();
-        let initial = choices.query("synthetic");
-        assert!(choices.receive(initial, Ok(results(&[tab]))));
-        let refresh = choices.refresh();
-        let mut current = results(&[tab, saved]);
-        current.hits[0].title = "Changed synthetic title".to_owned();
-        current.hits[0].address = "https://changed.example.test/".to_owned();
-        assert!(choices.receive(refresh, Ok(current)));
-        assert_eq!(choices.status, "1 tabs · 1 saved pages");
-        assert_eq!(choices.results[0].title, "Changed synthetic title");
-        assert_eq!(choices.results[0].address, "https://changed.example.test/");
-        assert_target(&choices, tab);
-
-        let removed = choices.refresh();
-        assert!(choices.receive(removed, Ok(results(&[tab]))));
-        assert_eq!(choices.status, "1 tabs · 0 saved pages");
-        assert!(choices.activation(removed, saved).is_none());
     }
 }
