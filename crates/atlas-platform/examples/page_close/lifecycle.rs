@@ -99,9 +99,11 @@ fn lifecycle_cycle(
     deadline: Instant,
 ) -> Result<(), String> {
     require_children(parent, &[survivor])?;
-    create_close_fixture(host, events, id, url, deadline)?;
+    create_close_fixture(host, events, parent, &[survivor], id, url, deadline)?;
     let child = other_child(parent, survivor)?;
-    require_visible(child, false)?;
+    // The fixture showed the new page so suspension could not delay its close.
+    require_visible(child, true)?;
+    require_visible(survivor, false)?;
 
     // Deferred close must leave each newly created controller usable through further commands.
     for active in [Some(id), None, Some(3), Some(id)] {
@@ -119,10 +121,12 @@ fn lifecycle_cycle(
         width: 320 + offset as u32,
         height: 240 + offset as u32,
     };
+    // A hidden page keeps its bounds through a resize and takes the card's when shown again.
+    let survivor_before = window_rect(survivor)?;
     let actual = resize(host, events, child, bounds, deadline)
         .map_err(|error| format!("Resize for synthetic tab {id}: {error}"))?;
-    if window_rect(survivor)? != actual {
-        return Err("Repeated resize did not preserve matching survivor bounds.".into());
+    if window_rect(survivor)? != survivor_before {
+        return Err("Repeated resize moved the hidden survivor.".into());
     }
     send(
         host,
@@ -142,7 +146,11 @@ fn lifecycle_cycle(
     barrier(host, events, deadline).map_err(|error| {
         format!("Survivor activation after closing synthetic tab {id}: {error}")
     })?;
-    require_visible(survivor, true)
+    require_visible(survivor, true)?;
+    if window_rect(survivor)? != actual {
+        return Err("Shown survivor did not take the bounds set while it was hidden.".into());
+    }
+    Ok(())
 }
 
 fn exercise_visibility_and_bounds(
@@ -434,6 +442,20 @@ pub(super) fn only_child(parent: HWND) -> Result<HWND, String> {
     match children.as_slice() {
         [child] => Ok(*child),
         _ => Err("Synthetic parent does not have exactly one page child.".into()),
+    }
+}
+
+/// The one page child that is not among `existing`; any other change to the set is a failure.
+pub(super) fn new_child(parent: HWND, existing: &[HWND]) -> Result<HWND, String> {
+    let children = children(parent)?;
+    let added: Vec<HWND> = children
+        .iter()
+        .copied()
+        .filter(|child| !existing.contains(child))
+        .collect();
+    match added.as_slice() {
+        [child] if children.len() == existing.len() + 1 => Ok(*child),
+        _ => Err("Synthetic creation did not add exactly one page child.".into()),
     }
 }
 
