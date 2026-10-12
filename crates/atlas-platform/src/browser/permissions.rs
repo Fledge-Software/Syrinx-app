@@ -17,7 +17,6 @@ use super::{BrowserError, BrowserEvent, EventSink};
 
 #[derive(Default)]
 struct Pending {
-    sequence: u64,
     requests: HashMap<u64, Request>,
 }
 
@@ -120,14 +119,13 @@ impl Permissions {
         let uri = CoTaskMemPWSTR::from(raw);
         result?;
         let request = {
-            let mut pending = self.0.borrow_mut();
-            let Some(next) = pending.sequence.checked_add(1) else {
+            let pending = self.0.borrow();
+            let Some(next) = next_request() else {
                 return Ok(());
             };
             if pending.requests.len() >= 16 {
                 return Ok(());
             }
-            pending.sequence = next;
             next
         };
         let deferral = unsafe { args.GetDeferral()? };
@@ -189,9 +187,29 @@ fn permission_kind(kind: COREWEBVIEW2_PERMISSION_KIND) -> Option<PermissionKind>
     })
 }
 
+// Request identities must survive controller replacement and delayed session-worker replies.
+fn next_request() -> Option<u64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    match SEQUENCE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        current.checked_add(1)
+    }) {
+        Ok(previous) => Some(previous + 1),
+        Err(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_controllers_never_reuse_pending_permission_request_ids() {
+        let original = super::next_request().expect("first synthetic permission identity");
+        let replacement = super::next_request().expect("replacement synthetic permission identity");
+        assert_ne!(original, replacement);
+        assert!(replacement > original);
+    }
 
     #[test]
     fn unknown_permissions_are_denied_and_clipboard_requires_consent() {

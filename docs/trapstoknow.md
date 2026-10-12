@@ -12,6 +12,12 @@ you found it in the commit message, not here.
 
 ## Page tabs: WebView2 through wry
 
+- **A recreated controller can reuse an old permission request number.** A
+  delayed session-worker reply could then match a new prompt on the same live
+  tab. P1-16 allocates request IDs across controller lifetimes and clears retired
+  prompts on recovery. Keep both protections when changing controller ownership.
+  Source: `docs/p1-16-process-recovery.md` (code review and identity regression).
+
 - **Certificate failure is an expected navigation failure, not successful loading.**
   WebView2 can emit failed NavigationCompleted before ServerCertificateErrorDetected.
   P1-14 explicitly cancels and reads back the action; keep rejection sticky through

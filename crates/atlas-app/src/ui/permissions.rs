@@ -15,6 +15,10 @@ pub(super) struct Prompt {
 }
 
 impl BrowserView {
+    pub(super) fn forget_permissions(&mut self, id: u64) {
+        self.permissions.retain(|prompt| prompt.id != id);
+    }
+
     pub(super) fn permission_requested(
         &mut self,
         id: u64,

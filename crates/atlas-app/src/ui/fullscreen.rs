@@ -3,6 +3,12 @@
 use super::*;
 
 impl BrowserView {
+    pub(super) fn fullscreen_page_failed(&mut self, id: u64, window: &mut Window) {
+        if self.fullscreen.is_some_and(|(owner, _)| owner == id) {
+            self.restore_fullscreen(window);
+        }
+    }
+
     pub(super) fn page_fullscreen(&mut self, id: u64, active: bool, window: &mut Window) {
         if active && self.shown.is_some_and(|shown| shown.get() == id) && self.fullscreen.is_none()
         {
