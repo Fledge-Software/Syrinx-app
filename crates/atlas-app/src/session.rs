@@ -7,10 +7,12 @@ mod history_repair;
 mod preferences;
 mod recovery;
 mod retention;
+mod synthetic;
 
 pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
 pub use recovery::RecoveryPrompt;
+pub use synthetic::SyntheticCatalogue;
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -139,6 +141,11 @@ pub enum SessionCommand {
         start: i64,
         end: i64,
     },
+    /// P1-33's acceptance run only: grows the in-memory catalogue to `total` synthetic rows
+    /// and starts timing each query. Nothing is persisted.
+    GrowSyntheticCatalogue {
+        total: usize,
+    },
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -189,6 +196,13 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<SearchResults, SessionError>,
     },
+    /// Sent just before `Search` once P1-33's acceptance run has asked for query timing.
+    QueryTimed {
+        request_id: u64,
+        elapsed: Duration,
+    },
+    /// The answer to `GrowSyntheticCatalogue`.
+    SyntheticCatalogue(Result<SyntheticCatalogue, SessionError>),
     /// Sent after the import's single save committed, or when the model refused it unchanged.
     Imported {
         request_id: u64,
@@ -240,6 +254,8 @@ pub enum SessionError {
     WorkerPanicked,
     EventReceiverClosed,
     RecoveryUnavailable,
+    /// A synthetic catalogue request asked for fewer rows than present, or too many.
+    SyntheticCatalogue,
     Recovery(String),
     RecoveryFailed {
         startup: Box<SessionError>,
@@ -275,6 +291,9 @@ impl fmt::Display for SessionError {
             Self::EventReceiverClosed => formatter.write_str("The session event receiver closed"),
             Self::RecoveryUnavailable => {
                 formatter.write_str("This recovery decision is no longer available")
+            }
+            Self::SyntheticCatalogue => {
+                formatter.write_str("The synthetic catalogue cannot take that many rows")
             }
             Self::Recovery(error) => write!(formatter, "Cannot restore the backup: {error}"),
             Self::RecoveryFailed { startup, recovery } => {
@@ -467,6 +486,10 @@ struct Worker {
     destinations: QuickDestinations,
     /// The settings read at startup, handed to the window once.
     startup_settings: BTreeMap<String, String>,
+    /// P1-33's synthetic rows in the catalogue; non-zero only in an acceptance run.
+    synthetic_rows: usize,
+    /// Whether each query's catalogue time is reported, for P1-33's acceptance run.
+    time_queries: bool,
 }
 
 impl Worker {
@@ -505,6 +528,8 @@ impl Worker {
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
             startup_settings: stored_preferences.settings,
+            synthetic_rows: 0,
+            time_queries: false,
         })
     }
 
@@ -602,6 +627,9 @@ impl Worker {
                 scope,
                 policy,
             } => return self.answer_query(request_id, &text, scope, policy, events),
+            SessionCommand::GrowSyntheticCatalogue { total } => {
+                return self.grow_synthetic(total, events);
+            }
             SessionCommand::RecentHistory { request_id, limit } => {
                 let result = store.recent_visits(limit).map_err(SessionError::Store);
                 return emit(events, SessionEvent::History { request_id, result });
@@ -738,13 +766,44 @@ impl Worker {
         policy: SearchPolicy,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        let started = Instant::now();
         let result = utc_seconds().and_then(|now| {
             self.catalogue
                 .query(text, scope, now, policy)
                 .map_err(SessionError::Search)
         });
+        if self.time_queries {
+            let elapsed = started.elapsed();
+            emit(
+                events,
+                SessionEvent::QueryTimed {
+                    request_id,
+                    elapsed,
+                },
+            )?;
+        }
         // Failures carry the same identity as successful replies, so stale queries stay silent.
         emit(events, SessionEvent::Search { request_id, result })
+    }
+
+    /// Grows P1-33's in-memory synthetic rows and turns on query timing for the run.
+    fn grow_synthetic(
+        &mut self,
+        total: usize,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        self.time_queries = true;
+        let started = Instant::now();
+        let result = utc_seconds()
+            .and_then(|now| {
+                synthetic::grow(&mut self.catalogue, &mut self.synthetic_rows, total, now)
+            })
+            .map(|()| SyntheticCatalogue {
+                synthetic_rows: self.synthetic_rows,
+                catalogue_rows: self.catalogue.len(),
+                elapsed: started.elapsed(),
+            });
+        emit(events, SessionEvent::SyntheticCatalogue(result))
     }
 
     fn clear_history(
@@ -1000,6 +1059,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::ObserveNavigation { .. }
         | SessionCommand::SaveSettings(_)
         | SessionCommand::EditDestinations { .. }
+        | SessionCommand::GrowSyntheticCatalogue { .. }
         | SessionCommand::Shutdown => {}
     }
     Ok(())
