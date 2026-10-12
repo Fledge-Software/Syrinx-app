@@ -152,6 +152,69 @@ and exit zero. A foreground-denied diagnostic may appear; a missing document-foc
 report still fails the check. Neither result alone establishes visual acceptance.
 Do not run P1-12 until P1-11's gate and native acceptance are green.
 
+## Diagnosis of the lifecycle timeout (2026-10-12)
+
+The intermittent failure, tab 1 created with its source changed but no
+navigation completion or close within 45 seconds, was the product's own
+hidden-page suspension (P1-15) freezing the fixture's page mid-load. The
+diagnosis ran on `claude/diagnose-lifecycle-timeout`, branched from the
+integrated preview at `94b3cb1`; its logs are under that worktree's
+`target/diag-runs/`.
+
+**How it happens.** The close fixture created its page hidden and never
+showed it. `browser/lifecycle.rs` calls `TrySuspend` on a hidden page five
+seconds after its last navigation began. The fixture page must load, run a
+100 ms timer and call `window.close()` inside that window. Timestamped traces
+showed the load itself takes about 0.4 s, but the hidden page's close timer
+fired between 0.3 and 4.3 s after `NavigationCompleted`. Anything that slows
+the load, such as a concurrent optimized build, pushes it past five seconds;
+earlier failing runs above are recorded as overlapping an optimized build. Suspension then succeeds
+mid-load and the frozen page sends nothing more, while the harness, which
+ignores `Suspended` events, waits out its deadline.
+
+**Evidence.** A diagnostic loopback server that sent the headers and title at
+once but held the rest of the close page for 6 s reproduced the recorded
+failure exactly in 2 of 2 runs: `TrySuspend` was issued 5.0 s after the
+navigation, completed with success, and no completion arrived in the
+remaining 40 s even though the body was delivered at 6 s. Holding it for 3 s
+instead passed. The earlier hypotheses were checked and excluded: both
+fixture servers put accepted sockets in blocking mode; navigation, source
+and completion handlers are registered before `Navigate`; and every traced
+request was accepted, read and answered within milliseconds.
+
+**The fix.** The fixture now checks that each new close page starts hidden,
+then shows it as soon as `Created` arrives, which is what the popup and
+permission suites already did. A shown page is never suspended, and a page
+already suspended is resumed when shown. With the page shown, the close
+arrived about 0.1 s after completion in every traced run. `--stall-first-close`
+keeps the same 6 s hold as a regression check: the old fixture failed under
+the temporary diagnostic version of that hold, and the fixed one passes. `--trace` prints timestamped commands, events and
+loopback requests. No deadline was changed.
+
+**A second, deterministic failure.** At `94b3cb1` every run first stopped at
+lifecycle cycle 1 with "Repeated resize did not preserve matching survivor
+bounds". P1-08's placement change (`browser/placement.rs`, `7c6f2db`)
+deliberately leaves a hidden page's bounds alone until it is shown, and the
+fixture still expected the hidden survivor to move. The cycle now asserts the
+new contract instead: the hidden survivor keeps its bounds through the
+resize and has the card's bounds once it is shown again.
+
+**Results.** Before: the stall reproduction failed 2 of 2, and 5 of 5 plain
+runs failed on the resize assertion before the stress cycles. After: with
+`--stall-first-close` the whole fixture passed 3 of 3 traced runs, with
+completion at 6.4 s and the close 0.1 s later. Six traced plain runs also
+passed the whole fixture. Of 15 untraced runs (12 plain, 3 with the stall),
+10 passed the whole fixture and 5 exited 1 with bare deadline errors in the
+permission or certificate suites, whose pass lines were missing. The
+lifecycle suite printed no pass line in those builds, so they do not prove
+it passed, but each run's error count and duration fit one or two late
+suites, not a lifecycle failure. Those permission and certificate timeouts
+were not reproduced under `--trace` and remain undiagnosed. The lifecycle
+suite now prints its own pass line.
+
+Whether Atlas should suspend a hidden page while it is still loading is a
+product question, now under the v1 plan's "Open threads".
+
 ## Owner checks after the gate and native fixture pass
 
 1. Run `cargo atlas` from this worktree. From a page that opens a sign-in popup,
@@ -173,8 +236,8 @@ appearance and real sign-in behavior remain manual checks until explicitly obser
 ## Handoff boundary
 
 This checkpoint retains the failing native evidence rather than treating a green
-workspace gate as native acceptance. The navigation stall is not diagnosed, and
-no deadline, lifecycle assertion or vendor patch was changed to obtain a pass.
+workspace gate as native acceptance. The navigation stall was diagnosed later
+(see above); no deadline or vendor patch was changed to obtain a pass.
 
 P1-12 through P1-14 have not started because P1-11's combined native fixture is
 not green. In addition, the continuation instruction prohibits
