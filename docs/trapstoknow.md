@@ -84,6 +84,18 @@ you found it in the commit message, not here.
 
 ## The interface: GPUI on Windows
 
+- **A popup's input form can survive after its Enter handler loses its window.**
+  `InputState` and `subscribe_in` are tied to the creating window. Do not render
+  a retained Favorites form in a replacement peek or the main sidebar after
+  that popup closes; dismiss the unfinished form at the window boundary.
+  Source: P1-17 independent source review (source-confirmed; native acceptance
+  remains in `docs/p1-17-peek.md`).
+- **A queued peek dismissal can steal focus after Alt Tab.** A matching popup
+  generation proves identity, not current activation. Check native foreground
+  ownership again when applying the action, and close without refocusing when
+  Atlas has lost activation. Source: P1-17 source review and generation tests;
+  the owner still verifies native timing.
+
 - **A queued palette refocus can discard the Enter or Escape behind it.**
   The popup may remove its native window before the browser drains Ctrl L/K.
   Skip that obsolete popup-origin refocus without clearing its retained
