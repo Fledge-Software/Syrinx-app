@@ -1,4 +1,4 @@
-//! Proves history persistence, its version 3 migration and D47 range clears on disposable databases.
+//! Proves history persistence, its version 4 migration and D47 range clears on disposable databases.
 
 use std::fs;
 use std::num::NonZeroU64;
@@ -40,19 +40,34 @@ fn object_exists(connection: &Connection, name: &str) -> bool {
 
 /// Creates the version 2 (folders) schema with the fixture session at revision 1.
 fn folders_database(directory: &TestDirectory) -> Connection {
+    seeded_database(directory, false)
+}
+
+/// Creates the version 3 (preferences) schema, the one history migrates from.
+fn preferences_database(directory: &TestDirectory) -> Connection {
+    seeded_database(directory, true)
+}
+
+/// Builds a pre-history schema and seeds the fixture session at revision 1.
+fn seeded_database(directory: &TestDirectory, with_preferences: bool) -> Connection {
     let mut connection = directory.connection();
     schema::configure_connection(&connection).expect("configure synthetic connection");
     let initial = schema::initial_schema();
     let folders = schema::folders_migration();
-    let migrations = Migrations::new(vec![
+    let preferences = schema::preferences_migration();
+    let mut steps = vec![
         M::up(&initial).foreign_key_check(),
         M::up(&folders).foreign_key_check(),
-    ]);
-    schema::apply_migrations(&mut connection, &migrations).expect("create the folders schema");
+    ];
+    if with_preferences {
+        steps.push(M::up(&preferences));
+    }
+    let migrations = Migrations::new(steps);
+    schema::apply_migrations(&mut connection, &migrations).expect("create the older schema");
     assert_eq!(
         records::save(&mut connection, 0, &fixture()),
         Ok(1),
-        "seed the synthetic version 2 session"
+        "seed the synthetic older session"
     );
     connection
 }
@@ -190,9 +205,9 @@ fn upgrade_from_folders_schema_keeps_the_session_and_starts_empty_history() {
 
     let connection = directory.connection();
     assert_eq!(user_version(&connection), schema::SCHEMA_VERSION);
-    assert_eq!(schema::SCHEMA_VERSION, 3);
+    assert_eq!(schema::SCHEMA_VERSION, 4);
     close(connection);
-    let store = Store::open(directory.lease()).expect("version 3 database reopens");
+    let store = Store::open(directory.lease()).expect("version 4 database reopens");
     assert_eq!(store.load().expect("session reloads").snapshot, fixture());
     assert_eq!(store.history_entries().expect("history reloads").len(), 1);
     store.shutdown().expect("store closes");
@@ -200,17 +215,17 @@ fn upgrade_from_folders_schema_keeps_the_session_and_starts_empty_history() {
 }
 
 #[test]
-fn failed_history_migration_rolls_back_to_the_intact_folders_schema() {
+fn failed_history_migration_rolls_back_to_the_intact_preferences_schema() {
     // A conflicting table fails the migration's own SQL; a layout gap fails its validation hook.
     for damage in [
         "CREATE TABLE history_urls(value TEXT)",
         "UPDATE saved_layout SET entry_order = 9 WHERE entry_order = 1",
     ] {
         let directory = TestDirectory::new();
-        let mut connection = folders_database(&directory);
+        let mut connection = preferences_database(&directory);
         connection
             .execute_batch(damage)
-            .expect("damage synthetic version 2 database");
+            .expect("damage synthetic version 3 database");
         let pages = |connection: &Connection| -> i64 {
             connection
                 .query_row("SELECT count(*) FROM saved_pages", [], |row| row.get(0))
@@ -227,7 +242,8 @@ fn failed_history_migration_rolls_back_to_the_intact_folders_schema() {
             })
         ));
         assert!(connection.is_autocommit());
-        assert_eq!(user_version(&connection), 2);
+        assert_eq!(user_version(&connection), 3);
+        assert!(object_exists(&connection, "settings"));
         assert!(!object_exists(&connection, "history_visits"));
         assert!(!object_exists(&connection, "history_visits_by_url"));
         assert_eq!(pages(&connection), pages_before);

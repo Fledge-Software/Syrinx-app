@@ -71,13 +71,16 @@ Back and forward lists are not restored; the plan does not promise them.
 
 ## P1-20: history
 
-### Storage: schema version 3
+### Storage: schema version 4
 
-**Migration number: version 3** (`user_version = 3`), the next free number on
-this base after P1-21's version 2. It follows P1-21's style: it only creates
-its own objects, alters no earlier table, runs in one transaction with a
-foreign-key check and a hook that re-reads and validates the session, and any
-failure rolls back to the intact version 2 file.
+**Migration number: version 4** (`user_version = 4`). This branch first took
+version 3, but the integration merge on 2026-10-12 brought in P1-28/P1-29's
+preferences migration (`settings`, `quick_destinations`) as version 3, so
+history was renumbered to run after it. It follows P1-21's style: it only
+creates its own objects, alters no earlier table, runs with a foreign-key
+check and a hook that re-reads and validates the session, and a failure rolls
+the migration back. A version 2 file upgrades through preferences (3) and then
+history (4).
 
 | Object | Holds |
 | --- | --- |
@@ -99,7 +102,7 @@ and each read decodes and checks identities.
 single writer thread; reads use the two reader connections. History writes do
 not change the session's compare-and-save revision.
 
-Older builds refuse a version 3 database (`FutureSchema`) and skip version 3
+Older builds refuse a version 4 database (`FutureSchema`) and skip version 4
 backups, as P1-21 arranged; downgrading below this branch is unsupported, as
 before.
 
@@ -175,10 +178,10 @@ mapping there; the coordinator will connect it to this list
 (`toggle_history` in `ui.rs`) at integration. Until then Ctrl H works while
 Atlas's own interface has focus, and the toolbar button works in both cases.
 
-**Unbounded growth (DW-2):** every visit is kept and every remembered address
+**Unbounded growth (DW-4):** every visit is kept and every remembered address
 is loaded into the catalogue at start-up. Retention and pruning before D48's
-100,000-row scale are registered as DW-2 in the plan's "Deferred work" table
-(owning slice P1-27, or a P1-20 follow-up), with a `TODO(DW-2)` at the load
+100,000-row scale are registered as DW-4 in the plan's "Deferred work" table
+(owning slice P1-27, or a P1-20 follow-up), with a `TODO(DW-4)` at the load
 in `Worker::restore`.
 
 ### D47: cleared history must not come back
@@ -212,9 +215,10 @@ database is disposable.
 - `crates/atlas-store/src/engine/tests/history.rs`: visits merge by address,
   list newest first, keep known titles, retitle without recreating removed
   entries and survive restart without touching the session revision; invalid
-  visits are refused; a version 2 database upgrades with its session intact
-  and empty history; a failing version 3 migration (conflicting table, or a
-  validation-hook failure) rolls back to version 2; damaged version 2 rows are
+  visits are refused; a version 2 database upgrades through preferences to
+  version 4 with its session intact and empty history; a failing version 4
+  migration (conflicting table, or a validation-hook failure) leaves no
+  history tables behind; damaged version 2 rows are
   refused before migrating, leaving the file byte-identical; the D47 replay
   test above.
 - `crates/atlas-store/src/engine/tests/history.rs` also covers
@@ -238,8 +242,8 @@ database is disposable.
 - `crates/atlas-app/src/ui/history_list.rs`: stale replies, status text,
   labels and ages.
 - `crates/atlas-platform/src/storage/recovery/tests.rs`: the newer-schema
-  marker moves to version 4, and the version 1 downgrade fixture also drops
-  the history tables and now expects migration to version 3.
+  marker moves to version 5, and the version 1 downgrade fixture also drops
+  the history and preference tables and now expects migration to version 4.
 
 One existing worker test, `removed_saved_row_stays_removed_after_live_reopen_stale_callbacks_and_restart`,
 now also sees the live navigation as a history row. Its search helper was
@@ -253,7 +257,10 @@ and deferred-work checks, formatting, Clippy, 538 tests and the smoke launch.
 The log is `target/p1-19-20-gate.log`. After the review fixes it passed
 again (exit 0, 545 tests, smoke included); that log is
 `target/p1-19-20-review-gate.log`, written after one Clippy correction in a
-new test. One earlier warm-up build in this
+new test. After merging `codex/integrated-browser-preview` (preferences as
+schema version 3, the GPUI idle patch and the sidebar slice) and renumbering
+history to version 4, it passed again (exit 0, 606 tests, smoke included);
+that log is `target/p1-19-20-merge-gate.log`. One earlier warm-up build in this
 worktree hit Windows Application Control (os error 4551) on the `rust-i18n`
 build script; an unchanged retry built normally. No setting was changed.
 

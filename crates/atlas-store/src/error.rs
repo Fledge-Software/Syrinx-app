@@ -44,6 +44,8 @@ pub enum EncodingField {
     TabKind,
     Metadata,
     SessionState,
+    Setting,
+    Destination,
     History,
 }
 

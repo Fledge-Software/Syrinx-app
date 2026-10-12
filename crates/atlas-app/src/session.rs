@@ -1,12 +1,13 @@
 //! Keeps model, persistence and catalogue work off the browser's event thread.
 
 mod history;
+mod preferences;
 mod recovery;
 
 pub use recovery::RecoveryPrompt;
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fmt,
     num::NonZeroU64,
     path::PathBuf,
@@ -16,8 +17,8 @@ use std::{
 };
 
 use atlas_core::{
-    Activation, SavedPageId, SnapshotError, TabError, TabId, TabKind, TabMetadata, TabModel,
-    TabModelSnapshot,
+    Activation, DestinationEdit, DestinationError, DestinationSurface, QuickDestinations,
+    SavedPageId, SnapshotError, TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot,
 };
 use atlas_platform::{StartupStorage, WindowsDirectoryLease};
 use atlas_search::{
@@ -70,6 +71,13 @@ pub enum SessionCommand {
         address: Option<String>,
     },
     ReopenClosed,
+    /// Inserts or replaces documented settings keys (`docs/p1-28-29-home-settings.md`).
+    SaveSettings(Vec<(String, String)>),
+    /// Changes one Quick access or Favorites tile list.
+    EditDestinations {
+        surface: DestinationSurface,
+        edit: DestinationEdit,
+    },
     Query {
         request_id: u64,
         text: String,
@@ -114,6 +122,13 @@ pub struct SessionSnapshot {
 #[derive(Debug)]
 pub enum SessionEvent {
     RecoveryOffered(RecoveryPrompt),
+    /// The stored settings and tiles, sent once before the first state.
+    Preferences {
+        settings: BTreeMap<String, String>,
+        destinations: QuickDestinations,
+    },
+    /// The tile lists after an accepted edit.
+    Destinations(QuickDestinations),
     State(SessionSnapshot),
     Search {
         request_id: u64,
@@ -138,6 +153,7 @@ pub enum SessionError {
     Model(TabError),
     Snapshot(SnapshotError),
     Search(SearchError),
+    Destination(DestinationError),
     NoActiveTab,
     HistoryUnavailable,
     ClockUnavailable,
@@ -167,6 +183,7 @@ impl fmt::Display for SessionError {
             Self::Model(error) => write!(formatter, "Cannot change this tab: {error}"),
             Self::Snapshot(error) => write!(formatter, "Cannot restore the session: {error}"),
             Self::Search(error) => write!(formatter, "Local search failed: {error}"),
+            Self::Destination(error) => write!(formatter, "Cannot change this tile: {error}"),
             Self::NoActiveTab => formatter.write_str("There is no active page to save"),
             Self::HistoryUnavailable => {
                 formatter.write_str("This history entry is no longer available")
@@ -315,6 +332,9 @@ struct Worker {
     history: HistoryRecorder,
     revision: u64,
     previous_shutdown: ShutdownState,
+    destinations: QuickDestinations,
+    /// The settings read at startup, handed to the window once.
+    startup_settings: BTreeMap<String, String>,
 }
 
 impl Worker {
@@ -325,18 +345,21 @@ impl Worker {
         let mut catalogue = Catalogue::new();
         sync_catalogue(&mut catalogue, &TabModelSnapshot::default(), &snapshot)?;
         // Durable history joins the catalogue once; later visits update it row by row.
-        // TODO(DW-2): bound this load by history retention before D48's 100,000-row scale.
+        // TODO(DW-4): bound this load by history retention before D48's 100,000-row scale.
         for entry in store.history_entries().map_err(SessionError::Store)? {
             catalogue
                 .upsert(history::history_entry(&entry))
                 .map_err(SessionError::Search)?;
         }
+        let stored_preferences = preferences::restore(store)?;
         Ok(Self {
             model,
             catalogue,
             history: HistoryRecorder::restored(&snapshot),
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
+            destinations: stored_preferences.destinations,
+            startup_settings: stored_preferences.settings,
         })
     }
 
@@ -346,6 +369,13 @@ impl Worker {
         commands: mpsc::Receiver<SessionCommand>,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        emit(
+            events,
+            SessionEvent::Preferences {
+                settings: std::mem::take(&mut self.startup_settings),
+                destinations: self.destinations.clone(),
+            },
+        )?;
         self.publish(events, Vec::new(), None, None)?;
         let mut delay = IDLE_DELAY;
         loop {
@@ -428,6 +458,10 @@ impl Worker {
                 Err(error) => return emit_recoverable(events, error),
             },
             command => command,
+        };
+        let Some(command) = preferences::intercept(store, &mut self.destinations, command, events)?
+        else {
+            return Ok(());
         };
 
         // Invalid or stale commands do not mutate the model and remain recoverable UI errors.
@@ -653,11 +687,13 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
             model.reopen_closed().map_err(SessionError::Model)?;
         }
         SessionCommand::ConfirmRecovery { .. } => return Err(SessionError::RecoveryUnavailable),
-        // Reads and history lookups are answered before the model is consulted.
+        // Reads, history lookups and preferences are answered before the model is consulted.
         SessionCommand::Query { .. }
         | SessionCommand::RecentHistory { .. }
         | SessionCommand::OpenHistory(_)
         | SessionCommand::ObserveNavigation { .. }
+        | SessionCommand::SaveSettings(_)
+        | SessionCommand::EditDestinations { .. }
         | SessionCommand::Shutdown => {}
     }
     Ok(())

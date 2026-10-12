@@ -616,3 +616,4 @@ fn store_and_snapshot_debug_redact_paths_and_all_metadata_fields() {
 mod folders;
 mod history;
 mod lifecycle;
+mod preferences;

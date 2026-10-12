@@ -127,6 +127,11 @@ you found it in the commit message, not here.
   even when nothing changed, so an idle Atlas uses about 3.75% of a core.
   Patch the idle loop (D37) and measure idle CPU after any GPUI upgrade.
   Source: note 09 (measured; high).
+- **Smart App Control is off on the owner's machine since 2026-10-12.** The
+  owner switched it off for development, so os error 4551 blocks should stop
+  here. Older 4551 records stay valid history. Agents still never change
+  Windows security settings themselves, and a clean or another machine may
+  still block unsigned builds, so keep handling 4551 as below.
 - **Application Control can block locally built executables** (os error
   4551). Phase 0's debug builds were blocked and optimized builds ran. During
   P1-01, an optimized `xtask` was also blocked once; an unchanged retry passed

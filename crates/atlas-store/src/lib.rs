@@ -7,6 +7,7 @@ mod engine;
 mod error;
 mod history;
 mod location;
+mod preferences;
 mod records;
 mod schema;
 
@@ -18,3 +19,4 @@ pub use history::{HistoryEntry, HistoryVisit, RecordedVisit};
 pub use location::{
     DirectoryLease, LocationError, LocationOperation, SessionControl, ShutdownState, StorageSession,
 };
+pub use preferences::{MAX_SETTING_KEY_BYTES, MAX_SETTING_VALUE_BYTES, StoredPreferences};
