@@ -9,7 +9,7 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 
-use atlas_core::TabModelSnapshot;
+use atlas_core::{Destination, DestinationSurface, TabModelSnapshot};
 use rusqlite::{Connection, OpenFlags};
 
 use crate::deletion::DeletionRequest;
@@ -19,6 +19,7 @@ use crate::error::{
 use crate::history::{
     self, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit, HistoryWrite, RecordedVisit,
 };
+use crate::preferences::{self, PreferenceWrite, StoredPreferences};
 use crate::{BackupOutcome, DirectoryLease, ShutdownState};
 use crate::{backup, records, schema};
 
@@ -91,6 +92,35 @@ impl Store {
     /// Reads one committed revision. This blocks on a reader lock and SQLite's busy timeout.
     pub fn load(&self) -> Result<StoredSnapshot, StoreError> {
         self.read(|connection| records::load(connection, schema::CURRENT_GENERATION))
+    }
+
+    /// Reads the owner's settings and tiles from one committed snapshot. This blocks.
+    pub fn load_preferences(&self) -> Result<StoredPreferences, StoreError> {
+        self.read(preferences::load)
+    }
+
+    /// Inserts or replaces settings keys in one transaction. This blocks on the writer queue.
+    pub fn save_settings(&self, entries: Vec<(String, String)>) -> Result<(), StoreError> {
+        self.write_preferences(PreferenceWrite::Settings(entries))
+    }
+
+    /// Replaces one tile surface in order. This blocks on the writer queue.
+    pub fn save_destinations(
+        &self,
+        surface: DestinationSurface,
+        tiles: Vec<Destination>,
+    ) -> Result<(), StoreError> {
+        self.write_preferences(PreferenceWrite::Destinations { surface, tiles })
+    }
+
+    fn write_preferences(&self, change: PreferenceWrite) -> Result<(), StoreError> {
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::Preferences { change, reply })
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
     }
 
     /// Commits only if `expected_revision` is current. A lost reply requires reloading the revision.
@@ -261,6 +291,10 @@ enum WriterRequest {
         idle: bool,
         reply: mpsc::SyncSender<Result<BackupOutcome, StoreError>>,
     },
+    Preferences {
+        change: PreferenceWrite,
+        reply: mpsc::SyncSender<Result<(), StoreError>>,
+    },
     History(HistoryRequest),
 }
 
@@ -367,6 +401,10 @@ fn serve_writes(
                             )
                         })
                 };
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::Preferences { change, reply } => {
+                let result = preferences::write(&mut writer.connection, &change);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
             WriterRequest::History(HistoryRequest { write, reply }) => {

@@ -1,6 +1,6 @@
 //! Hosts ordinary page views and forwards metadata and browser shortcuts without page scripts.
 
-use std::num::NonZeroIsize;
+use std::{cell::Cell, num::NonZeroIsize};
 
 use raw_window_handle::{
     HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle,
@@ -29,7 +29,7 @@ use wry::{
 
 use super::{
     BrowserCommand, BrowserError, BrowserEvent, BrowserShortcut, EventSink, PageBounds,
-    ShortcutSink,
+    ShortcutSink, placement::Placement,
 };
 
 struct Parent(NonZeroIsize);
@@ -45,6 +45,7 @@ impl HasWindowHandle for Parent {
 
 pub(super) struct Page {
     view: WebView,
+    placement: Cell<Placement>,
 }
 
 impl Page {
@@ -98,7 +99,10 @@ impl Page {
         register_navigation(&view, id, events.clone())?;
         register_process_failure(&view, id, events.clone())?;
         register_shortcuts(&view, shortcuts, id, events)?;
-        Ok(Self { view })
+        Ok(Self {
+            view,
+            placement: Cell::new(Placement::new(bounds)),
+        })
     }
 
     pub(super) fn navigate(&self, url: &str) -> Result<(), BrowserError> {
@@ -108,16 +112,38 @@ impl Page {
             .map_err(|_| BrowserError::Navigation)
     }
 
-    pub(super) fn show(&self, visible: bool) -> Result<(), BrowserError> {
+    /// Shows or hides the page, first moving a page about to appear to the card's bounds.
+    pub(super) fn show(&self, visible: bool, card: PageBounds) -> Result<(), BrowserError> {
+        if let Some(bounds) = self.placement.get().on_show(visible, card) {
+            self.set_bounds(bounds)?;
+        }
         self.view
             .set_visible(visible)
-            .map_err(|_| BrowserError::Visibility)
+            .map_err(|_| BrowserError::Visibility)?;
+        self.update_placement(|placement| placement.shown(visible));
+        Ok(())
     }
 
-    pub(super) fn resize(&self, bounds: PageBounds) -> Result<(), BrowserError> {
+    /// Follows the card if this page is shown; hidden pages catch up when shown.
+    pub(super) fn resize(&self, card: PageBounds) -> Result<(), BrowserError> {
+        match self.placement.get().on_resize(card) {
+            Some(bounds) => self.set_bounds(bounds),
+            None => Ok(()),
+        }
+    }
+
+    fn set_bounds(&self, bounds: PageBounds) -> Result<(), BrowserError> {
         self.view
             .set_bounds(rect(bounds))
-            .map_err(|_| BrowserError::Bounds)
+            .map_err(|_| BrowserError::Bounds)?;
+        self.update_placement(|placement| placement.applied(bounds));
+        Ok(())
+    }
+
+    fn update_placement(&self, change: impl FnOnce(&mut Placement)) {
+        let mut placement = self.placement.get();
+        change(&mut placement);
+        self.placement.set(placement);
     }
 
     pub(super) fn apply(&self, command: BrowserCommand) -> Result<(), BrowserError> {

@@ -2,6 +2,7 @@
 
 mod environment;
 mod page;
+mod placement;
 
 use std::{
     collections::HashMap,
@@ -422,7 +423,7 @@ impl BrowserState {
                     return Err(BrowserError::UnknownTab);
                 }
                 for (id, page) in &self.pages {
-                    page.show(Some(*id) == active)?;
+                    page.show(Some(*id) == active, self.bounds)?;
                 }
             }
             BrowserCommand::Resize(next) => {
