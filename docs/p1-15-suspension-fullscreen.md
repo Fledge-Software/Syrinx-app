@@ -29,8 +29,17 @@ live in `browser/hidden_timer.rs`, a pure function of time with its own tests:
 - A completion is matched by its `NavigationId`, so a superseded navigation's
   late completion cannot settle the current one.
 - A load that never finishes is suspended 60 seconds after it began, so a hung
-  page cannot stay awake forever. A chain of redirects or page-initiated
-  navigations keeps the first start time, for the same reason.
+  page cannot stay awake forever. A load keeps its first start time through:
+  - redirects, which keep their navigation's ID;
+  - while the page is hidden, new navigations the page starts itself, so a
+    hidden loop of script or meta-refresh navigations is still suspended
+    within 60 seconds of its first start.
+
+  An Atlas-requested navigation is dated from the request, and a navigation
+  the page starts while shown is dated from its own `NavigationStarting`.
+  This holds even if a superseded load has not yet reported its cancelled
+  completion. So a tab whose load hung past the limit is not suspended at once
+  when the owner navigates it elsewhere and then hides it.
 - Atlas's own request is tracked apart from the navigation WebView2 confirms.
   A confirmed start takes its own time, a request WebView2 never starts (a
   same-document jump, for example) expires at the 60-second bound, and a
@@ -39,6 +48,16 @@ live in `browser/hidden_timer.rs`, a pure function of time with its own tests:
   or a refused suspension. Otherwise a navigation event arriving while
   `TrySuspend` was pending re-armed the timer and caused a second `TrySuspend`
   on the suspended page (found in independent review).
+
+Known limitation, older than this change: `Lifecycle::resume` restarts the
+timer, clearing its suspended state, before it calls `Resume`. If `Resume`
+fails, or the readback still reports the controller suspended, the timer
+believes the page is awake while the controller stays suspended. It can then
+issue another `TrySuspend` on a suspended page, which calls the callback
+lifetime's `suspend` a second time. Moving the restart after a successful
+resume is not a trivial fix: it would also leave the suspended state set when a
+pending suspension had in fact failed, so that page would never be suspended
+again. It is recorded here rather than changed.
 
 Hiding before `TrySuspend`, resuming before placing a page and the delivery of
 completion state across suspension are unchanged. The native suspension suite
