@@ -3,7 +3,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use atlas_core::{
-    SavedFolderId, SavedFolderSnapshot, SavedPageId, SavedPageSnapshot, TabId, TabSnapshot,
+    ActivationTarget, SavedFolderId, SavedFolderSnapshot, SavedPageId, SavedPageSnapshot, TabId,
+    TabSnapshot,
 };
 use atlas_ui::{
     SIDEBAR_WIDTH_STATE_KEY, SidebarWidthState,
@@ -268,7 +269,7 @@ impl BrowserView {
         };
         let mut row = row_frame(("saved", saved_id.get()), look, labels).on_click(cx.listener(
             move |this, _, _, cx| {
-                this.command(SessionCommand::OpenSaved(saved_id));
+                this.activate(ActivationTarget::Saved(saved_id));
                 cx.notify();
             },
         ));
@@ -313,7 +314,7 @@ impl BrowserView {
         };
         let row = row_frame(("tab", id.get()), look, labels).on_click(cx.listener(
             move |this, _, _, cx| {
-                this.command(SessionCommand::FocusTab(id));
+                this.activate(ActivationTarget::Tab(id));
                 cx.notify();
             },
         ));
