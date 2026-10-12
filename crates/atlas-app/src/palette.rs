@@ -6,11 +6,11 @@ use futures::channel::mpsc::UnboundedSender;
 use gpui::StatefulInteractiveElement;
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, ParentElement,
-    Render, Styled, Subscription, Window, actions, div, px, rgb,
+    Render, Styled, Subscription, Window, actions, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
 
-use crate::{navigation, session::SessionError, ui};
+use crate::{navigation, session::SessionError, theme, ui};
 
 actions!(palette, [Dismiss, NextResult, PreviousResult, SearchWeb]);
 
@@ -316,11 +316,11 @@ impl Render for PaletteView {
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(rgb(if self.choices.selected == Some(0) {
-                        0x343037
+                    .bg(if self.choices.selected == Some(0) {
+                        theme::preview_row_selected()
                     } else {
-                        0x1b1c21
-                    }))
+                        theme::panel()
+                    })
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if this.choices.request_id != request_id {
@@ -331,7 +331,7 @@ impl Render for PaletteView {
                     }))
                     .child(
                         div()
-                            .text_color(rgb(0xecedf0))
+                            .text_color(theme::text())
                             .overflow_hidden()
                             .child(format!("Go to {address}")),
                     ),
@@ -351,13 +351,13 @@ impl Render for PaletteView {
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(rgb(
+                    .bg(
                         if Some(index + self.choices.address_rows()) == self.choices.selected {
-                            0x343037
+                            theme::preview_row_selected()
                         } else {
-                            0x1b1c21
+                            theme::panel()
                         },
-                    ))
+                    )
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, window, _| {
                         let Some(event) = this.choices.activation(request_id, target) else {
@@ -366,11 +366,11 @@ impl Render for PaletteView {
                         this.emit(event);
                         window.remove_window();
                     }))
-                    .child(div().text_color(rgb(0xecedf0)).child(title))
+                    .child(div().text_color(theme::text()).child(title))
                     .child(
                         div()
                             .text_xs()
-                            .text_color(rgb(0xa3a6ae))
+                            .text_color(theme::icon_dim())
                             .overflow_hidden()
                             .child(hit.address.clone()),
                     ),
@@ -379,8 +379,8 @@ impl Render for PaletteView {
         div()
             .key_context("AtlasPalette")
             .size_full()
-            .bg(rgb(0x1b1c21))
-            .text_color(rgb(0xecedf0))
+            .bg(theme::panel())
+            .text_color(theme::text())
             .p_3()
             .rounded_lg()
             .flex()
@@ -448,7 +448,7 @@ impl Render for PaletteView {
             .child(
                 div()
                     .text_xs()
-                    .text_color(rgb(0xb4b7bf))
+                    .text_color(theme::icon())
                     .child(self.choices.status.clone()),
             )
             .child(div().id("results").flex_1().overflow_y_scroll().child(rows))
@@ -460,7 +460,7 @@ impl Render for PaletteView {
                     .flex()
                     .items_center()
                     .rounded_md()
-                    .bg(rgb(0x29272a))
+                    .bg(theme::preview_secondary_button())
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, window, cx| this.submit(true, window, cx)))
                     .child("Search the web")

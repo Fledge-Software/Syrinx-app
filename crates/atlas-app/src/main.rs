@@ -3,8 +3,10 @@
 
 mod navigation;
 mod palette;
+mod palette_sample;
 mod session;
 mod smoke_watchdog;
+mod theme;
 mod ui;
 
 use gpui::{
@@ -26,8 +28,9 @@ use std::{
 compile_error!("Atlas v1 supports Windows 11 only.");
 
 fn main() -> ExitCode {
-    let options = match options() {
-        Ok(options) => options,
+    let options = match run_mode() {
+        Ok(RunMode::Browser(options)) => options,
+        Ok(RunMode::PaletteSample) => return run_palette_sample(),
         Err(message) => {
             eprintln!("{message}");
             return ExitCode::FAILURE;
@@ -123,17 +126,45 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_palette_sample() -> ExitCode {
+    // Development review window for P1-07's tokens; it opens no profile, page or worker.
+    let failed = Arc::new(AtomicU8::new(0));
+    let result = failed.clone();
+    gpui_platform::application().run(move |cx: &mut App| {
+        if let Err(message) = palette_sample::open(cx) {
+            eprintln!("{message}");
+            result.store(1, Ordering::Release);
+            cx.quit();
+        }
+    });
+    if failed.load(Ordering::Acquire) != 0 {
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+/// What this launch does: the browser, or the development-only token review window.
+enum RunMode {
+    Browser(Options),
+    PaletteSample,
+}
+
 struct Options {
     directory: PathBuf,
     smoke: bool,
 }
 
-fn options() -> Result<Options, &'static str> {
+fn run_mode() -> Result<RunMode, &'static str> {
     let mut smoke = false;
     let mut test_directory = None;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(argument) = arguments.next() {
-        if argument == "--smoke" {
+        if argument == "--palette-sample" {
+            if arguments.next().is_some() || smoke || test_directory.is_some() {
+                return Err("--palette-sample takes no other arguments.");
+            }
+            return Ok(RunMode::PaletteSample);
+        } else if argument == "--smoke" {
             smoke = true;
         } else if argument == "--test-data-dir" {
             test_directory = Some(PathBuf::from(
@@ -142,7 +173,7 @@ fn options() -> Result<Options, &'static str> {
                     .ok_or("The test profile needs a directory.")?,
             ));
         } else {
-            return Err("Atlas accepts --smoke or --test-data-dir <directory>.");
+            return Err("Atlas accepts --smoke, --test-data-dir <directory> or --palette-sample.");
         }
     }
     if smoke && test_directory.is_some() {
@@ -165,7 +196,7 @@ fn options() -> Result<Options, &'static str> {
     if smoke {
         reserve_smoke_directory(&directory)?;
     }
-    Ok(Options { directory, smoke })
+    Ok(RunMode::Browser(Options { directory, smoke }))
 }
 
 fn reserve_smoke_directory(directory: &Path) -> Result<(), &'static str> {
