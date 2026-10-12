@@ -58,6 +58,10 @@ pub enum RecoveryError {
     Location(LocationError),
     Store(StoreError),
     NoValidBackup,
+    /// Every usable-looking backup was written by a newer Atlas; they are left untouched.
+    OnlyNewerSchemaBackups {
+        skipped: usize,
+    },
     HealthyPrimary,
     DeletionReplayRequired,
     MetadataMismatch,
@@ -122,6 +126,7 @@ pub(super) fn offer_prepared(prepared: PreparedDirectory) -> Result<RecoveryOffe
     });
 
     // Hold the selected source against writes for the entire offer and confirmation.
+    let mut newer_schema = 0;
     for backup in candidates {
         if backup.metadata.deletion_generation != 0 {
             return Err(RecoveryError::DeletionReplayRequired);
@@ -146,8 +151,15 @@ pub(super) fn offer_prepared(prepared: PreparedDirectory) -> Result<RecoveryOffe
                 });
             }
             Err(error) if damaged_candidate(&error) => continue,
+            // A newer Atlas's backup cannot be restored here; skip it rather than refuse all.
+            Err(StoreError::FutureSchema { .. }) => newer_schema += 1,
             Err(error) => return Err(error.into()),
         }
+    }
+    if newer_schema > 0 {
+        return Err(RecoveryError::OnlyNewerSchemaBackups {
+            skipped: newer_schema,
+        });
     }
     Err(RecoveryError::NoValidBackup)
 }

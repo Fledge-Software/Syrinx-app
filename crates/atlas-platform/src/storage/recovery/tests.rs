@@ -138,6 +138,75 @@ fn corrupt_newest_candidate_falls_back_but_foreign_primary_never_does() {
     );
 }
 
+/// Marks a synthetic backup as written by a newer Atlas (schema version 3, one past current).
+fn mark_newer_schema(path: &Path) {
+    let mut bytes = fs::read(path).expect("read synthetic backup");
+    bytes[60..64].copy_from_slice(&3u32.to_be_bytes());
+    fs::write(path, &bytes).expect("mark synthetic backup as newer");
+}
+
+/// Rewrites a synthetic backup into the version 1 schema that predates saved folders.
+fn downgrade_to_flat_schema(path: &Path) {
+    let connection = rusqlite::Connection::open(path).expect("open synthetic backup");
+    connection
+        .execute_batch(
+            "DROP TABLE saved_layout; DROP TABLE saved_folder_state; DROP TABLE saved_folders; PRAGMA user_version = 1;",
+        )
+        .expect("downgrade synthetic backup");
+    assert!(connection.close().is_ok(), "close synthetic backup");
+}
+
+#[test]
+fn newer_schema_backups_are_skipped_reported_and_left_unchanged() {
+    let fixture = Fixture::new();
+    let backups = seeded(&fixture, 2);
+    mark_newer_schema(&backups[1].2);
+    let newest = fs::read(&backups[1].2).expect("read newer synthetic backup");
+    damage(&fixture, false);
+
+    // The older usable backup is still offered instead of refusing every candidate.
+    let offer =
+        offer_recovery(&fixture.root, &DeletionLog::default()).expect("older backup is offered");
+    assert_eq!(offer.metadata(), backups[0].0);
+    drop(offer);
+    assert_eq!(
+        fs::read(&backups[1].2).expect("reread newer synthetic backup"),
+        newest
+    );
+
+    // With only newer backups left, recovery says so rather than claiming none exist.
+    mark_newer_schema(&backups[0].2);
+    assert!(matches!(
+        offer_recovery(&fixture.root, &DeletionLog::default()),
+        Err(RecoveryError::OnlyNewerSchemaBackups { skipped: 2 })
+    ));
+}
+
+#[test]
+fn flat_schema_backup_restores_and_the_next_open_migrates_it() {
+    let fixture = Fixture::new();
+    let backups = seeded(&fixture, 1);
+    downgrade_to_flat_schema(&backups[0].2);
+    damage(&fixture, false);
+    let offer =
+        offer_recovery(&fixture.root, &DeletionLog::default()).expect("flat backup is offered");
+    assert_eq!(offer.metadata(), backups[0].0);
+    offer.confirm().expect("flat backup is restored");
+
+    // Opening the store migrates the restored file and keeps its records.
+    restored(&fixture, &backups[0].1);
+    let connection = rusqlite::Connection::open(fixture.root.join(DATABASE_NAME))
+        .expect("open restored synthetic database");
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("read restored schema version");
+    assert_eq!(version, 2);
+    assert!(
+        connection.close().is_ok(),
+        "close restored synthetic database"
+    );
+}
+
 #[test]
 fn healthy_primary_and_nonzero_or_pending_deletions_are_refused() {
     let fixture = Fixture::new();

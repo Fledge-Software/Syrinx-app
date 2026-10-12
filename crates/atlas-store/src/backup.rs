@@ -143,6 +143,9 @@ fn valid_candidates(archive: &dyn BackupArchive) -> Result<Vec<BackupEntry>, Sto
             Ok(snapshot) if snapshot.revision == entry.metadata.revision => valid.push(entry),
             Ok(_) => {}
             Err(error) if invalid_candidate(&error) => {}
+            // A newer Atlas's backup is skipped and never pruned, so a downgrade cannot lose it;
+            // recovery reports such skips (`RecoveryError::OnlyNewerSchemaBackups`).
+            Err(StoreError::FutureSchema { .. }) => {}
             Err(error) => return Err(error),
         }
     }

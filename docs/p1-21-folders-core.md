@@ -1,6 +1,9 @@
 # P1-21 saved-page folders: headless core and storage
 
 Status: **partial, headless part done** on branch `claude/p1-21-folders-core`.
+The owner approved running Plan 1 slices in parallel on 2026-10-11, so this
+slice proceeded while P1-20 and earlier slices are still open; that approval
+is the exception to the strict phase order in `AGENTS.md`.
 This note records what the core model and store now do for inline folders,
 the decisions that had to be inferred, and the UI and search work that
 remains before P1-21 can be called complete.
@@ -82,9 +85,14 @@ renumber to 3; the two do not touch the same tables.
 | `saved_layout` | One row per page or folder: `entry_order` (depth-first position, the primary key), exactly one of `page_id`/`folder_id`, and `parent_folder_id`, all with foreign keys. |
 | `saved_folder_state` | The single-row folder ID watermark, so removed folder IDs stay retired across restarts. |
 
-The existing tables, including `saved_pages.saved_order`, are unchanged;
-`saved_order` is still the visible order of pages, and core validation checks
-that it agrees with the layout. New tables were chosen over `ALTER TABLE`
+The existing tables, including `saved_pages.saved_order`, are unchanged.
+**The page order is therefore stored twice**: `saved_pages.saved_order` (the
+order of pages alone) and `saved_layout.entry_order` (pages and folders
+together). Neither is repaired from the other. The reader loads pages by
+`saved_order` and the layout by `entry_order`, and core validation refuses
+the snapshot (`SavedLayoutMismatch`) unless the pages appear in the same order
+in both. Keeping `saved_order` avoids rebuilding `saved_pages` in the
+migration; a later schema could drop it once nothing depends on it. New tables were chosen over `ALTER TABLE`
 because the store matches the stored `CREATE TABLE` text exactly, and a
 rebuilt `saved_pages` would need foreign keys switched off inside the
 migration transaction.
@@ -100,6 +108,26 @@ accepts a version 1 backup as a flat tree without migrating it; restoring one
 lets the next writer upgrade it, so D46 recovery is not broken by the new
 schema. Reader connections still require the current schema.
 
+Backups written by a newer schema are now skipped rather than fatal. Daily
+rotation (`atlas-store/src/backup.rs`) skips them like invalid candidates and
+never prunes them; recovery (`atlas-platform`) offers the newest backup it can
+use and, if every candidate is newer, reports
+`RecoveryError::OnlyNewerSchemaBackups { skipped }` instead of
+`NoValidBackup`. This keeps a future version 2 → 3 downgrade from locking the
+owner out of older backups.
+
+### Known limitation: downgrading below this branch
+
+Builds that predate this branch cannot use this fix. Their backup listing
+(`atlas-store/src/backup.rs`, the `valid_candidates` loop) returns the first
+error that is not an "invalid candidate", and their recovery listing does the
+same, so `FutureSchema` from a single version 2 daily snapshot stops the whole
+scan. Once this build has written one version 2 snapshot, running an older
+build cannot rotate backups or list or restore any version 1 snapshot. The
+database itself also refuses to open in the older build (`FutureSchema`), as
+intended. Downgrading is therefore unsupported; recovering in that situation
+means running this build or a later one.
+
 One small `atlas-platform` change follows from the larger snapshot: the
 private `RecoveryOffer::expected` field is now boxed, because the two new
 vectors pushed `StartupStorage` over Clippy's `large_enum_variant` limit.
@@ -107,7 +135,7 @@ Behaviour and public API are unchanged.
 
 ## Gate
 
-`cargo xtask check` passed on this machine (454 tests, smoke run included);
+`cargo xtask check` passed on this machine after the review fixes (458 tests, smoke run included);
 the log is `target/p1-21-gate.log`. No Application Control (os error 4551)
 block occurred.
 
@@ -125,6 +153,17 @@ database is disposable.
   escaped trees; folder ID exhaustion; redaction; and a 500-step mixed
   sequence checking no cycles, no orphans, stable order, projection and
   snapshot round trips after every step.
+- The mixed sequence also saves, closes and reopens saved tabs while folders
+  exist, and a dedicated test checks that moving a folder holding open tabs,
+  and dissolving it with `MoveContentsUp`, leaves live tab IDs, associations
+  and the active tab unchanged.
+- `crates/atlas-store/src/backup/tests.rs`: a newer-schema backup is skipped
+  by a fresh rotation scan and never pruned.
+- `crates/atlas-platform/src/storage/recovery/tests.rs`: a newer-schema
+  newest backup is skipped (left byte-identical) in favour of an older one,
+  only-newer candidates are reported as such, and a version 1 backup restores
+  and is migrated by the next store open. `rusqlite` became a dev-dependency
+  of `atlas-platform` for that downgrade fixture (no new package).
 - `crates/atlas-store/src/engine/tests/folders.rs`: upgrade from version 1
   with existing flat rows (order, revision, association preserved) followed by
   folder edits and restarts; damaged version 1 rows refused with the file
