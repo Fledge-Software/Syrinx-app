@@ -13,15 +13,21 @@ use crate::{navigation, session::SessionError};
 pub(super) struct PaletteChoices {
     pub(super) request_id: u64,
     pub(super) address: Option<String>,
-    /// Command rows first, then the worker's rows; replaced only by the current request's reply.
+    /// Strong command rows, the worker's rows, then other commands; only the current request
+    /// changes them.
     pub(super) results: Vec<SearchHit>,
     pub(super) selected: Option<usize>,
     refresh_selection: Option<RefreshSelection>,
     pub(super) status: String,
-    /// Locally matched commands waiting to join the current request's reply.
+    /// Locally matched commands for the current request; the first `staged_strong` lead pages.
     staged: Vec<SearchHit>,
+    staged_strong: usize,
     staged_counts: CommandCounts,
     typed: bool,
+    /// A `>`, `@` or `/` query never falls back to navigation or web search.
+    prefixed: bool,
+    /// The owner moved the selection, so a reply keeps it on the same destination.
+    moved: bool,
     pub(super) counts: ChipCounts,
 }
 
@@ -64,6 +70,7 @@ impl PaletteChoices {
         };
         self.selected = Some(0);
         self.refresh_selection = None;
+        self.moved = false;
         self.request_id
     }
 
@@ -78,11 +85,20 @@ impl PaletteChoices {
         }
     }
 
-    /// Holds this request's command rows until its worker reply arrives, so rows change together.
-    pub(super) fn stage_commands(&mut self, matches: CommandMatches, typed: bool) {
+    /// Records this request's command rows. Commands are local, so rows that will lead the list
+    /// show at once (all of them after a prefix); the rest wait for the worker's reply.
+    pub(super) fn stage_commands(&mut self, matches: CommandMatches, typed: bool, prefixed: bool) {
+        self.staged_strong = matches.strong.min(matches.hits.len());
         self.staged = matches.hits;
         self.staged_counts = matches.counts;
         self.typed = typed;
+        self.prefixed = prefixed;
+        let shown = if prefixed {
+            self.staged.len()
+        } else {
+            self.staged_strong
+        };
+        self.results = self.staged[..shown].to_vec();
     }
 
     pub(super) fn refresh(&mut self) -> u64 {
@@ -117,7 +133,13 @@ impl PaletteChoices {
                     results.counts.tabs, results.counts.saved
                 );
                 self.counts = ChipCounts::new(results.counts, self.staged_counts, self.typed);
-                self.results = self.staged.iter().cloned().chain(results.hits).collect();
+                let (strong, weak) = self.staged.split_at(self.staged_strong);
+                self.results = strong
+                    .iter()
+                    .cloned()
+                    .chain(results.hits)
+                    .chain(weak.iter().cloned())
+                    .collect();
             }
             Err(error) => {
                 // A worker failure leaves the locally matched commands usable.
@@ -131,7 +153,7 @@ impl PaletteChoices {
             Some(RefreshSelection::Unselected) => None,
             Some(RefreshSelection::Default) if !succeeded && self.address.is_none() => None,
             Some(RefreshSelection::Default) => Some(0),
-            None if self.address.is_some() => selected_target
+            None if self.address.is_some() || self.moved => selected_target
                 .and_then(|target| self.target_row(target))
                 .or(Some(0)),
             None => Some(0),
@@ -159,6 +181,7 @@ impl PaletteChoices {
 
     pub(super) fn select(&mut self, selected: usize) {
         self.selected = Some(selected);
+        self.moved = true;
         // An explicit choice while waiting supersedes the retained pre-refresh selection.
         if self.refresh_selection.is_some() {
             self.refresh_selection = Some(self.selection());
@@ -197,6 +220,12 @@ impl PaletteChoices {
     }
 
     pub(super) fn submission(&self, text: String, force_search: bool) -> Option<PaletteEvent> {
+        // Enter on a prefixed query only runs or opens a listed row; Alt Enter stays explicit.
+        if self.prefixed && !force_search {
+            return self
+                .selected_hit()
+                .map(|hit| PaletteEvent::Activate(hit.target));
+        }
         if !force_search {
             self.selected?;
             if let Some(hit) = self.selected_hit() {
@@ -562,33 +591,37 @@ mod tests {
         assert!(choices.activation(removed, saved).is_none());
     }
 
-    fn staged(keys: &[u64]) -> CommandMatches {
-        let hits = results(
-            &keys
-                .iter()
-                .map(|key| Target::Command(std::num::NonZeroU64::new(*key).expect("synthetic key")))
-                .collect::<Vec<_>>(),
-        )
-        .hits;
+    fn command(key: u64) -> Target {
+        Target::Command(std::num::NonZeroU64::new(key).expect("synthetic key"))
+    }
+
+    fn staged(keys: &[u64], strong: usize) -> CommandMatches {
+        let targets: Vec<_> = keys.iter().map(|key| command(*key)).collect();
+        let hits = results(&targets).hits;
         CommandMatches {
             counts: CommandCounts {
                 browser: hits.len(),
                 plugin: 0,
             },
+            strong,
             hits,
         }
     }
 
     #[test]
-    fn staged_commands_appear_only_with_their_own_reply() {
+    fn weak_commands_wait_for_their_own_reply_and_follow_pages() {
         let [tab, saved] = targets();
-        let command = Target::Command(std::num::NonZeroU64::MIN);
         let mut choices = PaletteChoices::default();
         let old = choices.query_scoped("synthetic", true);
-        choices.stage_commands(staged(&[1]), true);
-        assert!(choices.results.is_empty(), "rows wait for the worker reply");
+        choices.stage_commands(staged(&[1], 0), true, false);
+        assert!(
+            choices.results.is_empty(),
+            "weak rows wait for the worker reply"
+        );
+        // Enter before the reply keeps the established web-search fallback, not the command.
+        assert_submit(&choices, "synthetic", false, "synthetic");
         let current = choices.query_scoped("synthetic newer", true);
-        choices.stage_commands(staged(&[]), true);
+        choices.stage_commands(staged(&[], 0), true, false);
 
         // The older reply neither shows its commands nor replaces the chip counts.
         assert!(!choices.receive(old, Ok(results(&[tab]))));
@@ -597,22 +630,74 @@ mod tests {
         assert_eq!(choices.results.len(), 1);
         assert_eq!(choices.counts.bookmarks, 1);
 
+        // "close" must open a page rather than close the tab: pages lead weak commands.
         let next = choices.query_scoped("synthetic", true);
-        choices.stage_commands(staged(&[1]), true);
+        choices.stage_commands(staged(&[1], 0), true, false);
         assert!(choices.receive(next, Ok(results(&[tab, saved]))));
         let order: Vec<_> = choices.results.iter().map(|hit| hit.target).collect();
-        assert_eq!(order, [command, tab, saved]);
+        assert_eq!(order, [tab, saved, command(1)]);
         assert_eq!(choices.counts.everything, 3);
-        assert!(matches!(
-            choices.submission("synthetic".to_owned(), false),
-            Some(PaletteEvent::Activate(target)) if target == command
-        ));
+        assert_target(&choices, tab);
 
         // A worker failure keeps the local command rows.
         let failed = choices.query_scoped("synthetic", true);
-        choices.stage_commands(staged(&[1]), true);
+        choices.stage_commands(staged(&[1], 0), true, false);
         assert!(choices.receive(failed, Err(SessionError::Search(SearchError::QueryTooLong))));
         assert_eq!(choices.results.len(), 1);
+    }
+
+    #[test]
+    fn exact_title_commands_show_at_once_and_lead_pages() {
+        let [tab, _] = targets();
+        let mut choices = PaletteChoices::default();
+        let request = choices.query_scoped("close tab", true);
+        choices.stage_commands(staged(&[2, 3], 1), true, false);
+        let shown: Vec<_> = choices.results.iter().map(|hit| hit.target).collect();
+        assert_eq!(shown, [command(2)]);
+        assert!(choices.receive(request, Ok(results(&[tab]))));
+        let order: Vec<_> = choices.results.iter().map(|hit| hit.target).collect();
+        assert_eq!(order, [command(2), tab, command(3)]);
+        assert_target(&choices, command(2));
+    }
+
+    #[test]
+    fn prefixed_queries_never_fall_back_to_navigation_or_search() {
+        let mut choices = PaletteChoices::default();
+        // Commands are local: `>rel` can run before the worker answers.
+        let request = choices.query_scoped(">rel", false);
+        choices.stage_commands(staged(&[4], 1), true, true);
+        assert_target(&choices, command(4));
+        assert!(choices.receive(request, Ok(results(&[]))));
+        assert_target(&choices, command(4));
+
+        // Nothing listed means Enter does nothing, never a web search for ">zzz".
+        for input in [">zzz", "@", "/nothing"] {
+            let request = choices.query_scoped(input, false);
+            choices.stage_commands(staged(&[], 0), true, true);
+            assert!(
+                choices.submission(input.to_owned(), false).is_none(),
+                "{input}"
+            );
+            assert!(choices.receive(request, Ok(results(&[]))));
+            assert!(
+                choices.submission(input.to_owned(), false).is_none(),
+                "{input}"
+            );
+            // Alt Enter is an explicit request and still searches the web.
+            assert_submit(&choices, input, true, input);
+        }
+    }
+
+    #[test]
+    fn a_moved_selection_stays_on_its_row_when_the_reply_arrives() {
+        let [tab, _] = targets();
+        let mut choices = PaletteChoices::default();
+        let request = choices.query_scoped(">", false);
+        choices.stage_commands(staged(&[1, 2], 2), false, true);
+        choices.next();
+        assert_target(&choices, command(2));
+        assert!(choices.receive(request, Ok(results(&[tab]))));
+        assert_target(&choices, command(2));
     }
 
     #[test]

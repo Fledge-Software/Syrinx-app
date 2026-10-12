@@ -915,6 +915,7 @@ slice it belongs to, so whoever comes back to it knows when it is due.
 | ID | Deferred work and why | Owning slice | Status | Issue |
 | --- | --- | --- | --- | --- |
 | DW-1 | Unify the bookmark parser's address check with navigation's `web_address` (`crates/atlas-app/src/navigation.rs`) through one shared function in `atlas-core`; the owner approved `atlas-core` using `url` for this on 2026-10-12. Until then the parser uses a stricter syntactic copy, and the import commit step must re-check every address with navigation's rule and report failures as skipped. P1-22 is not complete until this is done. | P1-22 | Open | |
+| DW-5 | Bound the palette's command ranking before plugins can register commands. P1-30 ranks registry commands on the UI thread (`crates/atlas-app/src/palette/commands.rs`), because enablement depends on what the window shows; with ten built-in commands each keystroke ranks a handful of rows, but nothing limits how many a plugin may add. Either cap the registry's size or move command ranking off the UI thread with enablement passed in, before Plan 2's host accepts plugin commands. | Plan 2, phase 1 | Open | |
 
 ## Issue map
 

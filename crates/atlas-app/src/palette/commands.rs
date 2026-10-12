@@ -25,6 +25,8 @@ pub struct CommandMatcher {
 #[derive(Default)]
 pub struct CommandMatches {
     pub hits: Vec<SearchHit>,
+    /// The first `strong` hits may rank above pages; the rest follow them.
+    pub strong: usize,
     pub counts: CommandCounts,
 }
 
@@ -56,6 +58,7 @@ impl CommandMatcher {
     }
 
     /// Ranks enabled commands for `text` and keeps the rows `view` shows.
+    // TODO(DW-5): bound this before plugins register commands: cap the registry or rank off the UI thread.
     pub fn matches(
         &mut self,
         text: &str,
@@ -73,7 +76,7 @@ impl CommandMatcher {
             })
             .collect();
         let counts = self.count(&enabled);
-        let hits = match view {
+        let mut hits = match view {
             View::Everything if text.is_empty() => Vec::new(),
             View::Everything => enabled.into_iter().take(EVERYTHING_COMMAND_LIMIT).collect(),
             View::Commands => enabled,
@@ -86,7 +89,16 @@ impl CommandMatcher {
                 .collect(),
             View::Tabs | View::Bookmarks | View::History => Vec::new(),
         };
-        Ok(CommandMatches { hits, counts })
+        let strong = match view {
+            View::Everything => strong_first(&mut hits, text),
+            // `>` and `@` list commands only, so they lead by definition.
+            _ => hits.len(),
+        };
+        Ok(CommandMatches {
+            hits,
+            strong,
+            counts,
+        })
     }
 
     fn count(&self, hits: &[SearchHit]) -> CommandCounts {
@@ -102,6 +114,17 @@ impl CommandMatcher {
             plugin,
         }
     }
+}
+
+/// Moves exact title matches first and returns how many there are.
+///
+/// In Everything a command outranks pages only when the text names it outright ("close tab"), so
+/// typing a word such as "close" and pressing Enter opens a page rather than closing the tab.
+fn strong_first(hits: &mut [SearchHit], text: &str) -> usize {
+    let wanted = text.trim().to_lowercase();
+    let is_strong = |hit: &SearchHit| !wanted.is_empty() && hit.title.to_lowercase() == wanted;
+    hits.sort_by_key(|hit| !is_strong(hit));
+    hits.iter().take_while(|hit| is_strong(hit)).count()
 }
 
 fn entry(key: NonZeroU64, command: &Command) -> Entry {
@@ -237,6 +260,26 @@ mod tests {
                     .is_empty()
             );
         }
+    }
+
+    #[test]
+    fn only_exact_titles_may_lead_pages_in_everything() {
+        let mut matcher =
+            CommandMatcher::new(Rc::new(CommandRegistry::browser())).expect("index commands");
+        let partial = matcher
+            .matches("close", View::Everything, PAGE)
+            .expect("partial query");
+        assert!(!partial.hits.is_empty());
+        assert_eq!(partial.strong, 0, "a partial word must not outrank pages");
+        let exact = matcher
+            .matches("close tab", View::Everything, PAGE)
+            .expect("exact query");
+        assert_eq!(exact.strong, 1);
+        assert_eq!(titles(&matcher, &exact.hits[..1]), ["Close tab"]);
+        let prefixed = matcher
+            .matches("close", View::Commands, PAGE)
+            .expect("command query");
+        assert_eq!(prefixed.strong, prefixed.hits.len());
     }
 
     #[test]

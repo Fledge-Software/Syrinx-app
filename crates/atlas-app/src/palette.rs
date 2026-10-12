@@ -138,7 +138,7 @@ impl PaletteView {
         let request_id = self
             .choices
             .query_scoped(&input, self.view.accepts_address());
-        self.send_query(request_id, parsed.text);
+        self.send_query(request_id, parsed.text, parsed.prefix.is_some());
         cx.notify();
     }
 
@@ -148,12 +148,12 @@ impl PaletteView {
         let input = self.input.read(cx).value().to_string();
         let parsed = ParsedQuery::parse(&input);
         let request_id = self.choices.refresh();
-        self.send_query(request_id, parsed.text);
+        self.send_query(request_id, parsed.text, parsed.prefix.is_some());
         cx.notify();
     }
 
     /// Stages this request's commands, then asks the worker for its page rows and counts.
-    fn send_query(&mut self, request_id: u64, text: &str) {
+    fn send_query(&mut self, request_id: u64, text: &str, prefixed: bool) {
         let matches = match self.commands.matches(text, self.view, self.context) {
             Ok(matches) => matches,
             Err(error) => {
@@ -162,7 +162,8 @@ impl PaletteView {
                 CommandMatches::default()
             }
         };
-        self.choices.stage_commands(matches, !text.is_empty());
+        self.choices
+            .stage_commands(matches, !text.is_empty(), prefixed);
         self.emit(PaletteEvent::Query {
             request_id,
             text: text.to_owned(),

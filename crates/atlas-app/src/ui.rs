@@ -22,7 +22,7 @@ use std::{
 };
 
 use atlas_core::{
-    BrowserAction, CommandAction, CommandContext, CommandRegistry, Destination, Route, TabId,
+    ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry, Route, TabId,
     TabModelSnapshot, route,
 };
 use atlas_platform::browser::{
@@ -102,6 +102,23 @@ fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
         BrowserAction::NextTab => KeyBinding::new(keystroke, NextTab, None),
         BrowserAction::PreviousTab => KeyBinding::new(keystroke, PreviousTab, None),
         BrowserAction::SavePage => KeyBinding::new(keystroke, SavePage, None),
+    }
+}
+
+/// The session command that opens `target`, or `None` for a tab this snapshot no longer has.
+///
+/// Saved pages always go to the worker: its `open_saved` focuses a live instance against its own
+/// current model, so a click racing a queued close can neither fail nor load a duplicate (D43).
+fn activation_command(
+    model: &TabModelSnapshot,
+    target: ActivationTarget,
+) -> Option<SessionCommand> {
+    match target {
+        ActivationTarget::Saved(id) => Some(SessionCommand::OpenSaved(id)),
+        ActivationTarget::Tab(_) => match route(model, target)? {
+            Route::Focus(id) => Some(SessionCommand::FocusTab(id)),
+            Route::Load(id) => Some(SessionCommand::OpenSaved(id)),
+        },
     }
 }
 
@@ -841,8 +858,8 @@ impl BrowserView {
             PaletteEvent::Activate(target) => {
                 self.palette = None;
                 match target {
-                    Target::Tab(id) => self.activate(Destination::Tab(id)),
-                    Target::Saved(id) => self.activate(Destination::Saved(id)),
+                    Target::Tab(id) => self.activate(ActivationTarget::Tab(id)),
+                    Target::Saved(id) => self.activate(ActivationTarget::Saved(id)),
                     Target::History(_) | Target::Command(_) => {
                         self.message = "This destination is not available yet.".to_owned()
                     }
@@ -871,12 +888,11 @@ impl BrowserView {
     }
 
     /// The one path every surface uses to open a tab or saved page (D43): never a duplicate.
-    fn activate(&mut self, destination: Destination) {
-        match route(&self.model, destination) {
-            Some(Route::Focus(id)) => self.command(SessionCommand::FocusTab(id)),
-            // The worker re-checks for a live instance, so a racing open still focuses it.
-            Some(Route::Load(id)) => self.command(SessionCommand::OpenSaved(id)),
-            None => self.message = "That page is no longer open or saved.".to_owned(),
+    fn activate(&mut self, target: ActivationTarget) {
+        let command = activation_command(&self.model, target);
+        match command {
+            Some(command) => self.command(command),
+            None => self.message = "That tab is no longer open.".to_owned(),
         }
     }
 
@@ -1120,7 +1136,7 @@ impl BrowserView {
                 })
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.activate(Destination::Saved(saved_id));
+                    this.activate(ActivationTarget::Saved(saved_id));
                     cx.notify();
                 }))
                 .child(div().text_color(theme::accent()).child("◆"))
@@ -1179,7 +1195,7 @@ impl BrowserView {
                             theme::ground()
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.activate(Destination::Tab(id));
+                            this.activate(ActivationTarget::Tab(id));
                             cx.notify();
                         }))
                         .child("○")
@@ -1459,6 +1475,19 @@ mod palette_shortcut_tests {
     use futures::FutureExt;
 
     use super::*;
+
+    #[test]
+    fn saved_activation_reaches_the_worker_even_from_a_stale_snapshot() {
+        let saved = atlas_core::SavedPageId::new(3).expect("synthetic saved page");
+        let tab = TabId::new(5).expect("synthetic tab");
+        // An empty snapshot stands in for one taken before a queued close or save landed.
+        let stale = TabModelSnapshot::default();
+        assert!(matches!(
+            activation_command(&stale, ActivationTarget::Saved(saved)),
+            Some(SessionCommand::OpenSaved(id)) if id == saved
+        ));
+        assert!(activation_command(&stale, ActivationTarget::Tab(tab)).is_none());
+    }
 
     #[test]
     fn every_registry_command_runs_a_distinct_existing_shortcut() {
