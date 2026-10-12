@@ -146,7 +146,7 @@ impl BrowserView {
             self.retire_peek(cx);
             self.peek_state.sample(elapsed, sample);
             if pointer.active && !pointer.pressed && self.palette.is_none() {
-                self.focus_page(window);
+                self.focus_page(window, cx);
             }
         }
         let watching = (eligible && (edge || self.peek.is_some()))
@@ -324,7 +324,7 @@ impl BrowserView {
             return;
         }
         match action {
-            PeekAction::Dismiss => self.focus_page(window),
+            PeekAction::Dismiss => self.focus_page(window, cx),
             PeekAction::Palette(address) => self.open_palette(address, window, cx),
             PeekAction::Toggle => self.toggle_sidebar(window, cx),
         }
@@ -350,8 +350,16 @@ impl BrowserView {
         }
     }
 
+    /// Whether `window` is the open peek popup rather than the main window.
+    pub(super) fn is_peek_window(&self, window: &Window) -> bool {
+        self.peek
+            .as_ref()
+            .is_some_and(|peek| Window::window_handle(window) == peek.window.into())
+    }
+
     /// Input subscriptions belong to their window, so a transient form cannot cross windows.
     fn close_peek_editor(&mut self) {
+        self.folder_editor = None;
         if self
             .home
             .editor
@@ -377,7 +385,7 @@ impl BrowserView {
         let previous = self.sidebar_sizing.state();
         self.sidebar_sizing.toggle_hidden();
         self.sidebar_state_settled(previous, window, cx);
-        self.focus_page(window);
+        self.focus_page(window, cx);
     }
 }
 

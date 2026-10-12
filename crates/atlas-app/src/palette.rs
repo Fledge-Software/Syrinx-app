@@ -14,7 +14,8 @@ use atlas_search::{Scope, SearchResults, Target};
 use futures::channel::mpsc::UnboundedSender;
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, ParentElement,
-    Render, ScrollHandle, Styled, Subscription, Window, actions, div, px,
+    Render, ScrollHandle, StatefulInteractiveElement, Styled, Subscription, Window, actions, div,
+    px,
 };
 use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
 
@@ -287,6 +288,9 @@ impl Render for PaletteView {
             body = body.child(render::preview(self.preview()));
         }
         div()
+            .id("palette")
+            .role(gpui::Role::Dialog)
+            .aria_label("Command palette")
             .key_context("AtlasPalette")
             .size_full()
             .bg(theme::panel())
@@ -350,6 +354,9 @@ impl Render for PaletteView {
             .on_action(cx.listener(|this, _: &ui::Reload, _, _| {
                 this.emit(PaletteEvent::Shortcut(BrowserShortcut::Reload));
             }))
+            // Tab leaves the query for the scope chips and the web search button.
+            .on_action(|_: &ui::FocusNextControl, window, cx| window.focus_next(cx))
+            .on_action(|_: &ui::FocusPreviousControl, window, cx| window.focus_prev(cx))
             .child(
                 div()
                     .h(px(56.))
@@ -357,7 +364,11 @@ impl Render for PaletteView {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().flex_1().child(Input::new(&self.input)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(Input::new(&self.input).aria_label("Search or command")),
+                    )
                     .child(render::key_hint("Esc")),
             )
             .child(render::chips(self, cx))

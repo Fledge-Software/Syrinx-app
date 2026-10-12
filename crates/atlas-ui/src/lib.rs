@@ -5,6 +5,7 @@
 pub mod accent;
 pub mod color;
 pub mod contrast;
+pub mod focus;
 pub mod metrics;
 pub mod palette;
 pub mod sidebar;

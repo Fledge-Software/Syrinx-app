@@ -114,7 +114,8 @@ expanded. No folder editing UI was added; that remains P1-21's.
   "Deferred work" register; P1-29 added the table. At the integration merge
   (2026-10-12) a drag release or key step that changes the state saves
   `sidebar.width_state`, and start-up restores it; a missing or unreadable
-  value keeps wide. DW-2 is Done. Folder expansion is still in memory only.
+  value keeps wide. DW-2 is Done. Folder expansion is persisted since
+  `claude/p1-09-21-folder-ui` (`docs/p1-09-21-folder-ui.md`).
 - **Favorites follow the width.** P1-29's Favorites sit below the search
   button. Wide shows the four-column grid with its editor; favicon-only shows
   one column of named icon tiles, without the add tile or editor; hidden draws

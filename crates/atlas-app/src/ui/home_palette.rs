@@ -47,6 +47,7 @@ impl HomePaletteIntent {
                 | SessionCommand::ObserveMetadata { .. }
                 | SessionCommand::SaveActive
                 | SessionCommand::Unsave(_)
+                | SessionCommand::Folder(_)
         );
         sender.send(command)?;
         // Only accepted actions supersede entry; metadata and search traffic do not.
