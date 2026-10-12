@@ -43,6 +43,7 @@ impl HasWindowHandle for Parent {
 }
 
 pub(super) struct Page {
+    lifecycle: super::lifecycle::Lifecycle,
     permissions: super::permissions::Permissions,
     essentials: super::essentials::Essentials,
     view: WebView,
@@ -58,6 +59,9 @@ impl Page {
         shortcuts: ShortcutSink,
         popups: super::popups::PopupRequests,
     ) -> Result<Self, BrowserError> {
+        let life = super::lifecycle::CallbackLife::new();
+        let events = events.for_page(life.clone());
+        let lifecycle = super::lifecycle::Lifecycle::new(id, life, events.clone());
         let parent = Parent(NonZeroIsize::new(parent).ok_or(BrowserError::InvalidWindow)?);
         let titles = events.clone();
         let loading = events.clone();
@@ -95,6 +99,7 @@ impl Page {
             .map_err(|_| BrowserError::Settings)?;
         super::security::register(&view, id, events.clone())?;
         popups.register(&view, id, events.clone())?;
+        super::lifecycle::register_fullscreen(&view, id, events.clone())?;
         register_source(&view, id, events.clone())?;
         register_navigation(&view, id, events.clone())?;
         register_process_failure(&view, id, events.clone())?;
@@ -102,6 +107,7 @@ impl Page {
         let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
         register_shortcuts(&view, shortcuts, id, events)?;
         Ok(Self {
+            lifecycle,
             permissions,
             essentials,
             view,
@@ -114,15 +120,21 @@ impl Page {
 
     pub(super) fn navigate(&self, url: &str) -> Result<(), BrowserError> {
         validate_url(url)?;
+        self.lifecycle.resume(&self.view)?;
         self.view
             .load_url(url)
             .map_err(|_| BrowserError::Navigation)
     }
 
     pub(super) fn show(&self, visible: bool) -> Result<(), BrowserError> {
-        self.view
-            .set_visible(visible)
-            .map_err(|_| BrowserError::Visibility)
+        self.lifecycle.show(&self.view, visible)
+    }
+
+    pub(super) fn tick(&self) -> Result<(), BrowserError> {
+        self.lifecycle.tick(&self.view)
+    }
+    pub(super) fn suspend_due(&self) -> Option<std::time::Instant> {
+        self.lifecycle.due()
     }
 
     pub(super) fn resize(&self, bounds: PageBounds) -> Result<(), BrowserError> {
@@ -132,7 +144,16 @@ impl Page {
     }
 
     pub(super) fn apply(&self, command: BrowserCommand) -> Result<(), BrowserError> {
+        if matches!(
+            command,
+            BrowserCommand::Back { .. }
+                | BrowserCommand::Forward { .. }
+                | BrowserCommand::Reload { .. }
+        ) {
+            self.lifecycle.resume(&self.view)?;
+        }
         match command {
+            BrowserCommand::ExitFullscreen { .. } => super::lifecycle::exit_fullscreen(&self.view),
             BrowserCommand::PageAction { action, .. } => self.essentials.apply(&self.view, action),
             BrowserCommand::ResolvePermission {
                 request, allowed, ..
@@ -173,6 +194,7 @@ impl Page {
 
 impl Drop for Page {
     fn drop(&mut self) {
+        self.lifecycle.life.retire();
         self.permissions.clear();
     }
 }
@@ -271,6 +293,9 @@ fn register_shortcuts(
     events: EventSink,
 ) -> Result<(), BrowserError> {
     let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_controller, args| {
+        if !events.accepts_callbacks() {
+            return Ok(());
+        }
         let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
         let mut kind = COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN;
         unsafe { args.KeyEventKind(&mut kind) }?;
@@ -292,7 +317,7 @@ fn register_shortcuts(
                 return Ok(());
             }
             // Accelerator callbacks block WebView2: defer all actions to our message loop.
-            if let Err(error) = shortcuts.post(shortcut) {
+            if let Err(error) = shortcuts.post(shortcut, events.clone()) {
                 events.emit(BrowserEvent::Error {
                     tab: Some(id),
                     error,
@@ -328,6 +353,9 @@ fn shortcut_for_modifiers(
             0x27 => Some(BrowserShortcut::Forward),
             _ => None,
         };
+    }
+    if key == 0x7A && !control && !alt && !shift {
+        return Some(BrowserShortcut::Fullscreen);
     }
     if key == 0x74 && !control && !alt && !shift {
         return Some(BrowserShortcut::Reload);

@@ -14,6 +14,8 @@ mod essentials;
 
 #[path = "page_close/security.rs"]
 mod security;
+#[path = "page_close/suspension.rs"]
+mod suspension;
 
 use std::{
     fs,
@@ -89,7 +91,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => {
             println!(
-                "Synthetic native close, visibility, bounds, retry, 12 lifecycle cycles, popup opener/message/focus and multi-page shutdown passed; the reported WebView2 crash is not diagnosed."
+                "Selected synthetic native suites passed; the reported WebView2 crash is not diagnosed."
             );
             ExitCode::SUCCESS
         }
@@ -103,6 +105,12 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let profile = reserve_profile()?;
     let server = Server::start()?;
+    if std::env::args().any(|argument| argument == "--suspension-only") {
+        return combine(
+            run_browser(profile, &server.url, suspension::exercise),
+            server.stop(),
+        );
+    }
     let result = run_browser(profile, &server.url, exercise);
     // Run every suite even if one fails; fresh profiles keep their evidence independent.
     let popup_result =
@@ -122,7 +130,9 @@ fn run() -> Result<(), String> {
     if essentials_result.is_ok() {
         println!("Synthetic native find, download list, zoom and print-preview command passed.");
     }
-    let security_result = security::run(&server.url);
+    let suspension_result = reserve_profile()
+        .and_then(|profile| run_browser(profile, &server.url, suspension::exercise));
+    let security_result = combine(security::run(&server.url), suspension_result);
     if security_result.is_ok() {
         println!(
             "Synthetic certificate cancellation, repeat rejection and safe navigation recovery passed."
@@ -385,7 +395,11 @@ fn next_event(
             }
         }
         match events.try_recv() {
-            Ok(event) => return Ok(event),
+            Ok(event) => {
+                if let Some(event) = event.into_current() {
+                    return Ok(event);
+                }
+            }
             Err(TryRecvError::Closed) => {
                 return Err("Synthetic browser event channel closed.".into());
             }
@@ -492,6 +506,7 @@ fn respond(mut stream: TcpStream) -> Result<(), String> {
         .or_else(|| permissions::response(&request[..length]))
         .or_else(|| essentials::response(&request[..length]))
         .or_else(|| security::response(&request[..length]))
+        .or_else(|| suspension::response(&request[..length]))
         .unwrap_or(PAGE);
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",
