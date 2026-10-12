@@ -10,7 +10,9 @@ function Get-AtlasLocalPath([string]$Relative) {
 # Normalize a folder to a full path without a trailing backslash, refusing a drive root.
 function Resolve-AtlasFolder([string]$Folder) {
     if (-not $Folder) { throw 'A folder path is required.' }
-    $full = [System.IO.Path]::GetFullPath($Folder).TrimEnd('\')
+    # Resolve relative paths against PowerShell's current location; .NET would use the process folder.
+    $provider = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Folder)
+    $full = [System.IO.Path]::GetFullPath($provider).TrimEnd('\')
     $root = [System.IO.Path]::GetPathRoot($full).TrimEnd('\')
     if (-not $full -or $full -ieq $root) { throw "$Folder is a drive root; choose a folder inside it." }
     return $full

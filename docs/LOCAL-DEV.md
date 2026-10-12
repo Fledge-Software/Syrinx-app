@@ -346,9 +346,12 @@ The complete quality gate and D48 performance gate remain unresolved;
 cargo xtask package
 ```
 
-builds `atlas-app` with the `local` profile and writes a versioned folder and
-zip under `target\package`, with a manifest and the owner-run scripts from
-`packaging/`. It installs and registers nothing. The gate's
+builds `atlas-app` with the `local` profile and its `installed` feature
+(data in `%LOCALAPPDATA%\Atlas\data`) into the separate
+`target\package-build` directory, so `target\local\atlas-app.exe` stays the
+development build using `AtlasProductPreview`. It writes a versioned folder
+and zip under `target\package`, with a manifest and the owner-run scripts
+from `packaging/`. It installs and registers nothing. The gate's
 `cargo xtask check-packaging` step refuses a `packaging/atlas-registration.ps1`
 that differs from the Rust registry table (regenerate it with
 `cargo xtask write-registration`) and parses every script without running

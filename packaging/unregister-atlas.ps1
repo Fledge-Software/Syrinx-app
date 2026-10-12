@@ -45,10 +45,19 @@ function Remove-AtlasShortcut([string]$Folder) {
     Remove-Item -LiteralPath $path
 }
 
-# Remove the program folder and its kept versions, only where registration names this folder.
+# True when this script runs from an installed Atlas folder: a retry after registration is gone.
+function Test-RunningFromInstalledFolder([string]$Folder) {
+    if ($Folder -ine (Resolve-AtlasFolder $PSScriptRoot)) { return $false }
+    if (-not (Test-AtlasProgramFolder $Folder)) { return $false }
+    Read-AtlasManifest $Folder | Out-Null
+    return (Test-Path -LiteralPath (Join-Path $Folder $AtlasExecutable) -PathType Leaf)
+}
+
+# Remove the program folder and its kept versions, only where registration names this folder,
+# or, on a retry with registration already removed, where this script runs from that folder.
 function Remove-AtlasProgramFiles([string]$Folder, $Registered) {
-    if ($null -eq $Registered) {
-        Write-Warning "No Atlas registration names a program folder, so none was deleted. Delete $Folder by hand if wanted."
+    if ($null -eq $Registered -and -not (Test-RunningFromInstalledFolder $Folder)) {
+        Write-Warning "No Atlas registration names $Folder and this script is not running from it, so no program files were deleted."
         return
     }
     foreach ($candidate in @($Folder, "$Folder.previous", "$Folder.new")) {

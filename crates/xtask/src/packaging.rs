@@ -18,6 +18,9 @@ const SCRIPT_FOLDER: &str = "packaging";
 /// Output folder for packages, inside Cargo's ignored target directory.
 const OUTPUT_FOLDER: &str = r"target\package";
 
+/// Cargo target directory for the `installed` build, so it never replaces the development exe.
+const PACKAGE_TARGET_DIR: &str = r"target\package-build";
+
 /// Build the `local` executable and assemble a versioned folder and zip under `target\package`.
 pub fn package(root: &Path) -> Result<(), String> {
     check(root)?;
@@ -31,6 +34,8 @@ pub fn package(root: &Path) -> Result<(), String> {
             "installed",
             "--profile",
             "local",
+            "--target-dir",
+            PACKAGE_TARGET_DIR,
             "--offline",
             "--locked",
         ],
@@ -254,7 +259,7 @@ fn copy_package_files(root: &Path, folder: &Path) -> Result<Vec<PackagedFile>, S
 
 fn package_source(root: &Path, name: &str) -> PathBuf {
     if name == EXECUTABLE {
-        return root.join(r"target\local").join(EXECUTABLE);
+        return root.join(PACKAGE_TARGET_DIR).join("local").join(EXECUTABLE);
     }
     root.join(SCRIPT_FOLDER).join(name)
 }
@@ -336,6 +341,8 @@ mod tests {
         }
         let common = read_text(&repository().join(SCRIPT_FOLDER).join("atlas-common.ps1")).unwrap();
         assert!(common.contains("TrimEnd('\\')") && common.contains("GetPathRoot"));
+        // Relative paths must follow PowerShell's location, not the process folder.
+        assert!(common.contains("GetUnresolvedProviderPathFromPSPath($Folder)"));
     }
 
     #[test]
@@ -359,11 +366,19 @@ mod tests {
     }
 
     #[test]
-    fn executable_comes_from_the_local_profile() {
+    fn executable_comes_from_the_separate_package_build() {
+        // Development builds' executable folder (`cargo atlas`, the gate and launch checks).
+        const DEVELOPMENT_EXE_FOLDER: &str = r"target\local";
         assert_eq!(
             package_source(Path::new(r"C:\repo"), EXECUTABLE),
-            Path::new(r"C:\repo\target\local\atlas-app.exe")
+            Path::new(r"C:\repo\target\package-build\local\atlas-app.exe")
         );
+        // The installed-profile exe must never land where development launches from.
+        let development = Path::new(r"C:\repo").join(DEVELOPMENT_EXE_FOLDER);
+        let packaged = package_source(Path::new(r"C:\repo"), EXECUTABLE);
+        assert!(!packaged.starts_with(&development));
+        assert!(!development.starts_with(Path::new(r"C:\repo").join(PACKAGE_TARGET_DIR)));
+        assert_ne!(PACKAGE_TARGET_DIR, "target");
         assert_eq!(
             package_source(Path::new(r"C:\repo"), "register-atlas.ps1"),
             Path::new(r"C:\repo\packaging\register-atlas.ps1")
