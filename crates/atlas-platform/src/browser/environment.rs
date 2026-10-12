@@ -14,7 +14,7 @@ use windows::{
         Foundation::E_UNEXPECTED,
         System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
     },
-    core::{HSTRING, PCWSTR},
+    core::{HSTRING, PCWSTR, PWSTR},
 };
 
 use super::BrowserError;
@@ -85,4 +85,14 @@ pub(super) fn create(profile: &Path) -> Result<ICoreWebView2Environment, Browser
     }
     .map_err(|_| BrowserError::Environment)?;
     webview2_com::wait_with_pump(receive).map_err(|_| BrowserError::Environment)?
+}
+
+/// The Evergreen runtime version this environment runs, for D36's change notice.
+pub(super) fn runtime_version(environment: &ICoreWebView2Environment) -> Option<String> {
+    let mut version = PWSTR::null();
+    if unsafe { environment.BrowserVersionString(&mut version) }.is_err() {
+        return None;
+    }
+    let version = webview2_com::take_pwstr(version);
+    (!version.is_empty()).then_some(version)
 }

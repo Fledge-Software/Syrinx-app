@@ -10,6 +10,7 @@ mod smoke_watchdog;
 mod theme;
 mod ui;
 
+use atlas_platform::instance::{self, Claim, LinkRequest, PrimaryInstance};
 use gpui::{
     App, AppContext, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
     WindowOptions, px, size,
@@ -37,6 +38,22 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // A second launch on this profile hands its link to the running Atlas and exits.
+    let mut instance = match claim_profile(&options) {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let links = match instance.take_feed(options.link.clone()) {
+        Ok(links) => links,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
     // The GUI's orderly timeout cannot run while startup or its event thread is stalled.
     let watchdog = if options.smoke {
         match smoke_watchdog::SmokeWatchdog::start() {
@@ -52,6 +69,7 @@ fn main() -> ExitCode {
     let outcome = Arc::new(AtomicU8::new(0));
     let result = outcome.clone();
     let smoke = options.smoke;
+    let mut links = Some(links);
     gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);
         theme::apply_component_theme(cx);
@@ -77,6 +95,7 @@ fn main() -> ExitCode {
                         options.directory,
                         options.smoke,
                         result.clone(),
+                        links.take(),
                         window,
                         cx,
                     )
@@ -112,6 +131,8 @@ fn main() -> ExitCode {
         }
         cx.activate(true);
     });
+    // Release the profile only now, after the store and pages have shut down.
+    drop(instance);
     if let Some(watchdog) = watchdog
         && let Err(error) = watchdog.cancel()
     {
@@ -150,15 +171,27 @@ enum RunMode {
 struct Options {
     directory: PathBuf,
     smoke: bool,
+    /// A checked http(s) link to open, as Windows passes one when Atlas opens a link.
+    link: Option<LinkRequest>,
+}
+
+/// Becomes this profile's running Atlas, or returns `None` once the running one has the link.
+fn claim_profile(options: &Options) -> Result<Option<PrimaryInstance>, instance::InstanceError> {
+    let request = options.link.clone().unwrap_or(LinkRequest::Activate);
+    match instance::claim(&options.directory, &request, instance::FORWARD_PATIENCE)? {
+        Claim::Primary(instance) => Ok(Some(instance)),
+        Claim::Forwarded { .. } => Ok(None),
+    }
 }
 
 fn run_mode() -> Result<RunMode, &'static str> {
     let mut smoke = false;
     let mut test_directory = None;
+    let mut link = None;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == "--palette-sample" {
-            if arguments.next().is_some() || smoke || test_directory.is_some() {
+            if arguments.next().is_some() || smoke || test_directory.is_some() || link.is_some() {
                 return Err("--palette-sample takes no other arguments.");
             }
             return Ok(RunMode::PaletteSample);
@@ -170,12 +203,16 @@ fn run_mode() -> Result<RunMode, &'static str> {
                     .next()
                     .ok_or("The test profile needs a directory.")?,
             ));
+        } else if link.is_none() && !argument.to_string_lossy().starts_with('-') {
+            link = Some(link_argument(&argument)?);
         } else {
-            return Err("Atlas accepts --smoke, --test-data-dir <directory> or --palette-sample.");
+            return Err(
+                "Atlas accepts one http(s) link, --smoke, --test-data-dir <directory> or --palette-sample.",
+            );
         }
     }
-    if smoke && test_directory.is_some() {
-        return Err("The automatic smoke check always uses a fresh profile.");
+    if smoke && (test_directory.is_some() || link.is_some()) {
+        return Err("The automatic smoke check always uses a fresh profile and no link.");
     }
     let directory = if smoke {
         let nonce = SystemTime::now()
@@ -194,7 +231,19 @@ fn run_mode() -> Result<RunMode, &'static str> {
     if smoke {
         reserve_smoke_directory(&directory)?;
     }
-    Ok(RunMode::Browser(Options { directory, smoke }))
+    Ok(RunMode::Browser(Options {
+        directory,
+        smoke,
+        link,
+    }))
+}
+
+/// Accepts only an http(s) link; any other argument is refused, never opened or run.
+fn link_argument(argument: &std::ffi::OsStr) -> Result<LinkRequest, &'static str> {
+    let text = argument
+        .to_str()
+        .ok_or("Atlas opens only http and https links.")?;
+    LinkRequest::open(text).map_err(|_| "Atlas opens only http and https links.")
 }
 
 fn reserve_smoke_directory(directory: &Path) -> Result<(), &'static str> {

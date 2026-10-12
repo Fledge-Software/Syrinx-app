@@ -5,11 +5,13 @@ mod favorites;
 mod history_list;
 mod home;
 mod home_palette;
+mod incoming_links;
 mod navigation_intents;
 mod navigation_status;
 mod page_card;
 mod page_lifecycle;
 mod recovery;
+mod runtime_notice;
 mod sidebar_rows;
 mod sidebar_view;
 mod tile_editor;
@@ -34,6 +36,7 @@ use atlas_core::{SavedFolderId, TabId, TabModelSnapshot};
 use atlas_platform::browser::{
     BrowserCommand, BrowserEvent, BrowserHost, BrowserShortcut, PageBounds, set_overlay_owner,
 };
+use atlas_platform::instance::LinkFeed;
 use atlas_search::{BlankQuery, BoostWeights, Scope, SearchPolicy, Target};
 use atlas_ui::SidebarSizing;
 use futures::{StreamExt, channel::mpsc::unbounded};
@@ -130,6 +133,8 @@ pub struct BrowserView {
     palette: Option<PalettePopup>,
     home_palette: HomePaletteIntent,
     home: home::HomeState,
+    incoming: incoming_links::IncomingLinks,
+    runtime: runtime_notice::RuntimeNotice,
     parent_hwnd: isize,
     query_sequence: u64,
     pending_query: Option<(u64, u64)>,
@@ -144,6 +149,7 @@ impl BrowserView {
         data_dir: PathBuf,
         smoke: bool,
         outcome: Arc<AtomicU8>,
+        links: Option<LinkFeed>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -178,6 +184,8 @@ impl BrowserView {
             palette: None,
             home_palette: HomePaletteIntent::default(),
             home: home::HomeState::default(),
+            incoming: incoming_links::IncomingLinks::default(),
+            runtime: runtime_notice::RuntimeNotice::default(),
             parent_hwnd: 0,
             query_sequence: 0,
             pending_query: None,
@@ -196,6 +204,9 @@ impl BrowserView {
         }
         view.start_session(data_dir.join("State"), window, cx);
         view.start_browser(data_dir.join("WebView2"), window, cx);
+        if let Some(links) = links {
+            view.start_link_feed(links, window, cx);
+        }
         view
     }
 
@@ -280,7 +291,10 @@ impl BrowserView {
             SessionEvent::Preferences {
                 settings,
                 destinations,
-            } => self.restore_preferences(&settings, destinations, window, cx),
+            } => {
+                self.runtime_settings_loaded(&settings);
+                self.restore_preferences(&settings, destinations, window, cx);
+            }
             SessionEvent::Destinations(destinations) => self.destinations_changed(destinations),
             SessionEvent::State(snapshot) => {
                 self.recovery = None;
@@ -323,6 +337,9 @@ impl BrowserView {
                     self.navigate_committed(id);
                 }
                 self.sync_pages();
+                // Work that waited for the session to accept commands.
+                self.open_forwarded_links();
+                self.save_runtime_version();
                 // Only committed model changes invalidate an open palette's catalogue snapshot.
                 if changed
                     && !self.closing
@@ -402,6 +419,7 @@ impl BrowserView {
                 self.resize_pages(window);
                 self.sync_pages();
             }
+            BrowserEvent::RuntimeVersion(version) => self.runtime_version_observed(version),
             BrowserEvent::Title { id, title } => self.metadata(id, Some(title), None),
             BrowserEvent::CloseRequested { id } => {
                 if let Some(command) = page_lifecycle::observed_close(id, self.closing) {
@@ -905,6 +923,7 @@ impl BrowserView {
             return;
         }
         self.closing = true;
+        self.stop_link_feed();
         self.retire_palette(cx);
         self.message = "Saving and closing…".to_owned();
         if self.browser_stopped && !self.session_stopped {
@@ -990,6 +1009,7 @@ impl BrowserView {
             viewport_width: f32::from(viewport.width),
             viewport_height: f32::from(viewport.height),
             sidebar_width: self.sidebar_sizing.width(),
+            notice_height: self.notice_height(),
             scale: window.scale_factor(),
         });
         if self.bounds != Some(bounds) && self.page_command(BrowserCommand::Resize(bounds)) {
@@ -1158,6 +1178,7 @@ impl Render for BrowserView {
                 cx.notify();
             }))
             .child(self.toolbar(cx))
+            .children(self.runtime_banner(cx))
             .child(
                 div()
                     .flex_1()
