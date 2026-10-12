@@ -20,6 +20,18 @@ const LISTED_SKIPS: usize = 50;
 const PREVIEW_WIDTH: f32 = 560.;
 const PREVIEW_HEIGHT: f32 = 540.;
 
+const PREVIEW_CONTEXT: &str = "AtlasImportPreview";
+
+actions!(bookmark_import, [ConfirmImport, CancelImport]);
+
+/// Enter imports and Escape cancels while the preview has focus.
+pub(super) fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("enter", ConfirmImport, Some(PREVIEW_CONTEXT)),
+        KeyBinding::new("escape", CancelImport, Some(PREVIEW_CONTEXT)),
+    ]);
+}
+
 /// The palette's command words (the spec's `>` command prefix), compared without case.
 pub(super) fn is_import_command(input: &str) -> bool {
     let Some(command) = input.trim().strip_prefix('>') else {
@@ -150,10 +162,17 @@ impl BrowserView {
                 }
                 true
             });
-            let preview = cx.new(|_| ImportPreview {
+            let preview = cx.new(|cx| ImportPreview {
                 import: Some(import),
                 folder_title,
                 events,
+                focus: cx.focus_handle(),
+            });
+            // Import has the default focus, so Enter imports and Escape cancels.
+            let focus = preview.read(cx).focus.clone();
+            popup.defer(cx, move |popup, cx| {
+                popup.activate_window();
+                popup.focus(&focus, cx);
             });
             cx.new(|cx| Root::new(preview, popup, cx))
         });
@@ -229,9 +248,30 @@ impl BrowserView {
             return;
         }
         self.message = match result {
-            Ok(commit) => imported_message(&commit, &folder_title),
+            Ok(commit) => {
+                // Imported folders start collapsed so the sidebar builds one row, not thousands.
+                self.collapsed_folders
+                    .extend(commit.tree.folder_ids.iter().copied());
+                imported_message(&commit, &folder_title)
+            }
             Err(error) => format!("Nothing was imported: {error}"),
         };
+    }
+
+    /// Ends a pending import after a fatal storage error; returns whether one was pending.
+    pub(super) fn abandon_import_write(&mut self) -> bool {
+        if !matches!(self.importer.stage, Stage::Writing { .. }) {
+            return false;
+        }
+        self.importer.stage = Stage::Idle;
+        true
+    }
+
+    /// Folder open state is not saved, so restored folders start collapsed; a large import
+    /// expanded at start-up would build every one of its rows.
+    pub(super) fn collapse_restored_folders(&mut self, model: &TabModelSnapshot) {
+        self.collapsed_folders
+            .extend(model.saved_folders.iter().map(|folder| folder.id));
     }
 
     /// Closes an open preview without importing, as when Atlas closes.
@@ -408,11 +448,17 @@ struct ImportPreview {
     import: Option<Box<BookmarkImport>>,
     folder_title: String,
     events: UnboundedSender<PreviewEvent>,
+    /// Held by the Import button, or the window when there is nothing to import.
+    focus: FocusHandle,
 }
 
 impl ImportPreview {
     fn finish(&mut self, confirmed: bool, window: &mut Window) {
-        let event = match (confirmed, self.import.take()) {
+        let importable = self
+            .import
+            .as_ref()
+            .is_some_and(|import| has_entries(&import.summary));
+        let event = match (confirmed && importable, self.import.take()) {
             (true, Some(import)) => PreviewEvent::Confirm {
                 import,
                 folder_title: self.folder_title.clone(),
@@ -459,7 +505,7 @@ impl Render for ImportPreview {
             return div();
         };
         let summary = &import.summary;
-        let has_entries = summary.bookmarks + summary.folders > 0;
+        let has_entries = has_entries(summary);
         let mut body = div()
             .flex()
             .flex_col()
@@ -492,6 +538,7 @@ impl Render for ImportPreview {
         if has_entries {
             actions = actions.child(
                 preview_button("import-confirm", "Import", true)
+                    .track_focus(&self.focus)
                     .on_click(cx.listener(|this, _, window, _| this.finish(true, window))),
             );
         } else {
@@ -501,7 +548,16 @@ impl Render for ImportPreview {
                     .child("There is nothing to import."),
             );
         }
-        div()
+        let frame = div()
+            .key_context(PREVIEW_CONTEXT)
+            .on_action(cx.listener(|this, _: &ConfirmImport, window, _| this.finish(true, window)))
+            .on_action(cx.listener(|this, _: &CancelImport, window, _| this.finish(false, window)));
+        let frame = if has_entries {
+            frame
+        } else {
+            frame.track_focus(&self.focus)
+        };
+        frame
             .size_full()
             .flex()
             .flex_col()
@@ -523,6 +579,10 @@ impl Render for ImportPreview {
             )
             .child(actions)
     }
+}
+
+fn has_entries(summary: &ImportSummary) -> bool {
+    summary.bookmarks + summary.folders > 0
 }
 
 fn preview_button(id: &'static str, label: &'static str, primary: bool) -> Stateful<Div> {

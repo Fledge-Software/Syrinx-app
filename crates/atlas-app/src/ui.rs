@@ -93,6 +93,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-r", Reload, None),
     ]);
     crate::palette::bind_keys(cx);
+    import::bind_keys(cx);
 }
 
 struct PalettePopup {
@@ -286,6 +287,9 @@ impl BrowserView {
                 let previous_revision = self.session_revision.replace(snapshot.revision);
                 let initial = previous_revision.is_none();
                 let changed = previous_revision != Some(snapshot.revision);
+                if initial {
+                    self.collapse_restored_folders(&snapshot.model);
+                }
                 let saved_message = if initial
                     && !snapshot.model.tabs.is_empty()
                     && snapshot.previous_shutdown == atlas_store::ShutdownState::Unclean
@@ -355,13 +359,18 @@ impl BrowserView {
                 if self.smoke {
                     self.outcome.store(2, Ordering::Release);
                 }
-                if fatal {
+                if fatal && self.abandon_import_write() {
+                    self.fail(format!(
+                        "Storage stopped while importing bookmarks; the import may not have been saved: {error}"
+                    ));
+                } else if fatal {
                     self.fail(format!("Storage stopped: {error}"));
                 } else {
                     self.message = error.to_string();
                 }
             }
             SessionEvent::Stopped => {
+                self.abandon_import_write();
                 if !self.closing && self.failure.is_none() {
                     self.fail("Local storage stopped. Restart Atlas before continuing.");
                 }
@@ -817,7 +826,11 @@ impl BrowserView {
                 });
             }
             // `>import bookmarks` is the palette's one command until the command registry exists.
-            PaletteEvent::Submit { text, .. } if import::is_import_command(&text) => {
+            // Alt+Enter (`force_search`) searches the words instead.
+            PaletteEvent::Submit {
+                text,
+                force_search: false,
+            } if import::is_import_command(&text) => {
                 self.palette = None;
                 self.start_bookmark_import(window, cx);
             }

@@ -41,17 +41,37 @@ pub(crate) fn read_current(connection: &Connection) -> Result<StoredSnapshot, St
     read_snapshot(connection, CURRENT_GENERATION)
 }
 
+/// Whether a save must rewrite the saved tree, or may keep the rows already committed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SavedRows {
+    Replace,
+    /// The caller proved the committed tree at `expected_revision` equals the snapshot's.
+    Keep,
+}
+
+impl SavedRows {
+    /// Keeps the rows only when the saved pages, folders, layout and folder watermark match.
+    pub(crate) fn between(committed: &TabModelSnapshot, snapshot: &TabModelSnapshot) -> Self {
+        let unchanged = committed.last_saved_folder_id == snapshot.last_saved_folder_id
+            && committed.saved_layout == snapshot.saved_layout
+            && committed.saved_folders == snapshot.saved_folders
+            && committed.saved_pages == snapshot.saved_pages;
+        if unchanged { Self::Keep } else { Self::Replace }
+    }
+}
+
 pub(crate) fn save(
     connection: &mut Connection,
     expected_revision: u64,
     snapshot: &TabModelSnapshot,
+    saved_rows: SavedRows,
 ) -> Result<u64, StoreError> {
     // Validate before taking the write lock, then compare the revision under that lock.
     snapshot.validate()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| database_error(StoreOperation::BeginWrite, error))?;
-    let result = replace_snapshot(&transaction, expected_revision, snapshot);
+    let result = replace_snapshot(&transaction, expected_revision, snapshot, saved_rows);
     finish_transaction(transaction, result)
 }
 
@@ -273,6 +293,7 @@ fn replace_snapshot(
     connection: &Connection,
     expected_revision: u64,
     snapshot: &TabModelSnapshot,
+    saved_rows: SavedRows,
 ) -> Result<u64, StoreError> {
     let previous = read_state(connection)?;
     if previous.revision != expected_revision {
@@ -292,13 +313,22 @@ fn replace_snapshot(
         .checked_add(1)
         .ok_or(StoreError::RevisionExhausted)?;
 
-    // Clear selection and the tree before replacing rows, then restore them with the new counters.
-    connection
-        .execute_batch("UPDATE session_state SET active_tab_id = NULL; DELETE FROM saved_layout; DELETE FROM live_tabs; DELETE FROM saved_pages; DELETE FROM saved_folders;")
-        .map_err(|error| database_error(StoreOperation::Write, error))?;
-    write_saved_folders(connection, &snapshot.saved_folders)?;
-    write_saved_pages(connection, &snapshot.saved_pages)?;
-    write_saved_layout(connection, &snapshot.saved_layout)?;
+    // Clear selection and the rows being replaced, then restore them with the new counters.
+    match saved_rows {
+        SavedRows::Replace => {
+            connection
+                .execute_batch("UPDATE session_state SET active_tab_id = NULL; DELETE FROM saved_layout; DELETE FROM live_tabs; DELETE FROM saved_pages; DELETE FROM saved_folders;")
+                .map_err(|error| database_error(StoreOperation::Write, error))?;
+            write_saved_folders(connection, &snapshot.saved_folders)?;
+            write_saved_pages(connection, &snapshot.saved_pages)?;
+            write_saved_layout(connection, &snapshot.saved_layout)?;
+        }
+        // An unchanged saved tree keeps its rows; tens of thousands of imported pages make
+        // rewriting them on every page load far too slow (P1-22).
+        SavedRows::Keep => connection
+            .execute_batch("UPDATE session_state SET active_tab_id = NULL; DELETE FROM live_tabs;")
+            .map_err(|error| database_error(StoreOperation::Write, error))?,
+    }
     write_tabs(connection, &snapshot.tabs)?;
     write_folder_watermark(connection, snapshot.last_saved_folder_id)?;
     let active_id = snapshot.active_id.map(|id| id.get().to_be_bytes());

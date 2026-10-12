@@ -16,8 +16,8 @@ use std::{
 
 use atlas_core::{
     Activation, BookmarkImport, DestinationEdit, DestinationError, DestinationSurface,
-    ImportCommit, QuickDestinations, SavedPageId, SnapshotError, TabError, TabId, TabKind,
-    TabMetadata, TabModel, TabModelSnapshot, commit_bookmark_import,
+    ImportCommit, QuickDestinations, SavedPageId, SavedPageSnapshot, SnapshotError, TabError,
+    TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, commit_bookmark_import,
 };
 use atlas_platform::{StartupStorage, WindowsDirectoryLease};
 use atlas_search::{
@@ -359,7 +359,7 @@ impl Worker {
                 destinations: self.destinations.clone(),
             },
         )?;
-        self.publish(events, Vec::new(), None, None)?;
+        self.publish(events, self.model.snapshot(), Vec::new(), None, None)?;
         let mut delay = IDLE_DELAY;
         loop {
             match commands.recv_timeout(delay) {
@@ -440,7 +440,7 @@ impl Worker {
             .map(|tab| tab.id)
             .collect();
         let navigate = if navigating { after.active_id } else { None };
-        self.publish(events, created, navigate, home_entry)
+        self.publish(events, after, created, navigate, home_entry)
     }
 
     /// Saves the model if it changed since `before`, in one store transaction, then reindexes.
@@ -477,15 +477,17 @@ impl Worker {
                 return emit(events, SessionEvent::Imported { request_id, result });
             }
         };
-        self.persist(store, &before)?;
+        let after = self.persist(store, &before)?;
         let result = Ok(commit);
         emit(events, SessionEvent::Imported { request_id, result })?;
-        self.publish(events, Vec::new(), None, None)
+        self.publish(events, after, Vec::new(), None, None)
     }
 
+    /// Sends `model`, the snapshot just persisted, so a large saved tree is not copied again.
     fn publish(
         &self,
         events: &UnboundedSender<SessionEvent>,
+        model: TabModelSnapshot,
         created: Vec<TabId>,
         navigate: Option<TabId>,
         home_entry: Option<u64>,
@@ -494,7 +496,7 @@ impl Worker {
             events,
             SessionEvent::State(SessionSnapshot {
                 revision: self.revision,
-                model: self.model.snapshot(),
+                model,
                 created,
                 navigate,
                 home_entry,
@@ -658,38 +660,73 @@ fn sync_catalogue(
     after: &TabModelSnapshot,
 ) -> Result<(), SessionError> {
     // The feed contains only model-derived rows; it creates no browsing history or usage log.
-    let targets: HashSet<_> = after
-        .tabs
-        .iter()
-        .map(|tab| Target::Tab(tab.id))
-        .chain(after.saved_pages.iter().map(|page| Target::Saved(page.id)))
-        .collect();
-    for target in before
-        .tabs
-        .iter()
-        .map(|tab| Target::Tab(tab.id))
-        .chain(before.saved_pages.iter().map(|page| Target::Saved(page.id)))
-    {
-        if !targets.contains(&target) {
-            catalogue.remove(target).map_err(SessionError::Search)?;
+    sync_tabs(catalogue, before, after)?;
+    let open_before = open_saved_pages(before);
+    let open_after = open_saved_pages(after);
+    // Most changes touch only live tabs; then only saved rows whose open state flipped change.
+    if before.saved_pages == after.saved_pages {
+        let flipped: HashSet<SavedPageId> = open_before
+            .symmetric_difference(&open_after)
+            .copied()
+            .collect();
+        let changed = after
+            .saved_pages
+            .iter()
+            .filter(|page| flipped.contains(&page.id));
+        return upsert_saved(catalogue, changed, &open_after);
+    }
+    let kept: HashSet<SavedPageId> = after.saved_pages.iter().map(|page| page.id).collect();
+    for page in &before.saved_pages {
+        if !kept.contains(&page.id) {
+            catalogue
+                .remove(Target::Saved(page.id))
+                .map_err(SessionError::Search)?;
         }
     }
-    let open_saved: HashSet<_> = after
-        .tabs
-        .iter()
-        .filter_map(|tab| tab.saved_page_id)
-        .collect();
+    upsert_saved(catalogue, after.saved_pages.iter(), &open_after)
+}
+
+/// Removes closed tabs and upserts open ones; the catalogue skips unchanged entries.
+fn sync_tabs(
+    catalogue: &mut Catalogue,
+    before: &TabModelSnapshot,
+    after: &TabModelSnapshot,
+) -> Result<(), SessionError> {
+    let open: HashSet<TabId> = after.tabs.iter().map(|tab| tab.id).collect();
+    for tab in &before.tabs {
+        if !open.contains(&tab.id) {
+            catalogue
+                .remove(Target::Tab(tab.id))
+                .map_err(SessionError::Search)?;
+        }
+    }
     for tab in &after.tabs {
         catalogue
             .upsert(entry(Target::Tab(tab.id), &tab.metadata, true))
             .map_err(SessionError::Search)?;
     }
-    for page in &after.saved_pages {
+    Ok(())
+}
+
+fn open_saved_pages(model: &TabModelSnapshot) -> HashSet<SavedPageId> {
+    model
+        .tabs
+        .iter()
+        .filter_map(|tab| tab.saved_page_id)
+        .collect()
+}
+
+fn upsert_saved<'a>(
+    catalogue: &mut Catalogue,
+    pages: impl Iterator<Item = &'a SavedPageSnapshot>,
+    open: &HashSet<SavedPageId>,
+) -> Result<(), SessionError> {
+    for page in pages {
         catalogue
             .upsert(entry(
                 Target::Saved(page.id),
                 &page.metadata,
-                open_saved.contains(&page.id),
+                open.contains(&page.id),
             ))
             .map_err(SessionError::Search)?;
     }

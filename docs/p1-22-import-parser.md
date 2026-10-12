@@ -258,11 +258,13 @@ changed, and the block's cause is unproved, as in `docs/trapstoknow.md`.
 **Entry point.** There is no command registry or menu yet, so the palette's
 submission path carries the one command: typing `>import bookmarks` (the
 spec's `>` command prefix; spacing and letter case do not matter) and
-pressing Enter starts the import. If a local search result is highlighted,
-Enter opens it instead, so press Alt+Enter, which always submits the typed
-text. The interception is a single guarded arm in `ui.rs`'s palette handler;
-`palette.rs` is unchanged. When the command registry (P1-08 onwards) exists,
-the command should move there.
+pressing Enter starts the import. Alt+Enter (the palette's "search the
+web" submission) searches the words instead, as it does for any text. If a
+local search result happens to match the words and is highlighted, Enter
+opens that result; this is unlikely and goes away with the registry. The
+interception is a single guarded arm in `ui.rs`'s palette handler;
+`palette.rs` is unchanged. **Moving the command into the command registry
+is left for the palette merge**, which owns that registry.
 
 **File dialog.** `atlas_platform::file_dialog::choose_file` shows Windows'
 own file-open dialog (`IFileOpenDialog`) through the `windows` features
@@ -279,7 +281,8 @@ type sizes, the panel, line, text and accent colours). It names the new
 folder, then shows pages, folders and empty folders, the deepest nesting,
 duplicate addresses, shortened titles and closed lists (zero notes are left
 out), and the skipped entries grouped by reason with the first 50 named by
-line and title. Import and Cancel finish it; closing the window cancels. A
+line and title. Import has the default focus, so Enter imports and Escape
+cancels; the buttons do the same and closing the window cancels. A
 refused file (not an export, UTF-16, invalid UTF-8, too large or too deep)
 is reported in the status line with a request to re-export, and no preview
 opens.
@@ -306,8 +309,49 @@ converts it and calls the new `TabModel::append_saved_folder`, which:
 The worker then saves the whole snapshot once. The store writes a snapshot
 in one SQLite transaction, so an import that fails part-way, or a crash
 before commit, leaves the previous state intact; the owner can simply run it
-again. The status line reports the counts and any refusals. Export dates
-(`ADD_DATE`) are not kept, because saved rows have no date field yet.
+again. The status line reports the counts and any refusals. If the worker
+reports a fatal storage error while an import is being written, the pending
+import is cleared and the failure says the import may not have been saved.
+Export dates (`ADD_DATE`) are not kept, because saved rows have no date
+field yet.
+
+**Large imports and the sidebar.** The imported folder and every folder
+inside it start collapsed, so the sidebar adds one row, and a collapsed
+folder's contents are never built as elements (`visible_saved_rows`). The
+sidebar also indexes only the visible saved rows on each render, not every
+saved page. Folder open state is not saved, so after a restart every folder
+starts collapsed; this replaces P1-09's "every folder starts expanded",
+because expanding a 50,000-page import at start-up would build every row.
+
+**Large imports and later changes.** Before this review fix, every change
+after a 50,000-entry import (a title update or a navigation) took about one
+second in the worker, because the store deleted and re-inserted every saved
+row on each save and the catalogue re-checked every saved page. Now:
+
+- the store's writer remembers the snapshot it last committed, or the one a
+  reader last loaded (a revision's rows never change). When the next save's
+  saved pages, folders, layout and folder watermark equal it, the save keeps
+  those rows and rewrites only live tabs and the session row. Every save is
+  still validated in full before writing, and any failure forgets the
+  remembered snapshot so the next save rewrites everything;
+- the duplicate validation in `Store::save` was dropped; the writer
+  validates once;
+- `sync_catalogue` updates only the saved rows whose open state changed when
+  the saved pages are unchanged;
+- the worker publishes the snapshot it just saved instead of copying the
+  model again.
+
+Measured by `ordinary_changes_after_a_large_import_stay_fast`
+(`crates/atlas-app/src/session/import_tests.rs`) on this machine, with
+other builds running: the import itself 0.6–0.8 s; then title updates
+median 42.6–48.1 ms (worst 47–58 ms), navigations median 42.8–47.0 ms
+(worst 55–60 ms), and the first change after a restart 44 ms. Before the
+fix the same medians were 997 ms and 1,021 ms. The remaining cost is mostly
+copying the 50,000-row snapshot (about 14 ms each, three times per change)
+and validating it (about 9 ms); sharing the saved rows between snapshots
+would remove most of it, but is a wider model change than this slice. The
+test fails above 250 ms, so a return to full rewrites is caught without the
+gate becoming timing-flaky.
 
 **Tests.** All synthetic, all databases disposable:
 
@@ -321,7 +365,10 @@ again. The status line reports the counts and any refusals. Export dates
 - `crates/atlas-store/src/engine/tests/import.rs`: an import is exactly one
   revision and survives reopening; a failure injected part-way through the
   page rows, or on the last layout row, leaves the previous revision and
-  rows unchanged, and the same import then commits.
+  rows unchanged, and the same import then commits; live-tab changes after
+  an import, before and after reopening, round-trip exactly while a trigger
+  proves no saved row is deleted.
+- `crates/atlas-app/src/session/import_tests.rs`: the timing above.
 - `crates/atlas-app/src/ui/import.rs`: command recognition, skip grouping,
   summary lines, the bounded read and refusal messages.
 
@@ -333,13 +380,16 @@ changed. Building into a separate directory,
 was not blocked, and `cargo xtask check` passed there: dependency check,
 formatting, Clippy, 542 tests and the smoke run
 (`target/agent-p1-22-commit/p1-22-commit-gate.log`). The first gate run
-stopped only on formatting, fixed with `cargo fmt`.
+stopped only on formatting, fixed with `cargo fmt`. After the review fixes
+and the merge of the integration branch, the gate passed again with 605
+tests and the smoke run, logged inside the worktree at
+`target/p1-22-review-gate.log` (still building through the separate target
+directory).
 
 ## Known limits
 
-- The preview sidebar still lists saved pages flat, without folders or
-  virtualization, until P1-21's folder UI lands; a very large import makes
-  a long list.
+- Expanding a very large imported folder still builds every visible row;
+  the sidebar is not virtualized.
 - Imported pages appear in search through the existing catalogue sync; no
   folder path is searchable yet (see `docs/p1-21-folders-core.md`).
 - Importing the same file twice makes a second folder; duplicates against
@@ -349,9 +399,11 @@ stopped only on formatting, fixed with `cargo fmt`.
 
 The owner, not an agent, exports their own bookmarks and runs the import:
 export from Chrome, Edge or Firefox as HTML; in Atlas press Ctrl K, type
-`>import bookmarks` and press Enter (or Alt+Enter); choose the file; check
-that the preview's counts and skipped entries look right; press Import;
-check the status line and the new saved rows; restart Atlas and check that
-they are still there and unloaded. Also try Cancel, and a non-export file.
+`>import bookmarks` and press Enter; choose the file; check that the
+preview's counts and skipped entries look right; press Enter or Import;
+check the status line and the new collapsed folder, expand it, and check
+that browsing stays responsive; restart Atlas and check that the rows are
+still there, collapsed and unloaded. Also try Escape or Cancel, and a
+non-export file.
 The default limits stay as decided; if the owner's file is refused for size
 or depth, that is the moment to revisit them.
