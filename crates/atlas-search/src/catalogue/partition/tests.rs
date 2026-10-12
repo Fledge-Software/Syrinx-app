@@ -228,3 +228,94 @@ fn public_large_catalogue_keeps_unsupported_budgets_and_blank_policy() {
             .expect("exhaustive blank")
     );
 }
+
+#[test]
+fn refused_workers_fall_back_to_complete_results_and_are_recorded() {
+    let mut catalogue = fixture(19);
+    let policy = SearchPolicy {
+        limit: 7,
+        max_typos: 1,
+        blank: BlankQuery::All,
+        boosts: BoostWeights {
+            open: 1,
+            frequency: 1,
+            recency: 1,
+            recency_window_secs: NonZeroU64::new(60).expect("nonzero window"),
+        },
+    };
+    assert_eq!(
+        catalogue.worker_fallbacks(),
+        crate::WorkerFallbacks::default()
+    );
+    let refused = catalogue
+        .query_with_strategy(
+            "project",
+            Scope::Everything,
+            0,
+            policy,
+            QueryStrategy::PartitionedRefused,
+            &mut Unobserved,
+        )
+        .expect("serial fallback result");
+    assert_eq!(
+        refused,
+        catalogue
+            .query_exhaustive("project", Scope::Everything, 0, policy)
+            .expect("exhaustive result")
+    );
+    // Nineteen rows in partitions of five leave three ranges for workers.
+    assert_eq!(
+        catalogue.worker_fallbacks(),
+        crate::WorkerFallbacks {
+            refused: 3,
+            last_error: Some(std::io::ErrorKind::OutOfMemory),
+        }
+    );
+    compare(&mut catalogue, "project", Scope::Everything, 0, policy);
+    assert_eq!(catalogue.worker_fallbacks().refused, 3);
+}
+
+// Fast stand-in for the opt-in acceptance diagnostics' parity assertions.
+#[test]
+fn public_partitioned_query_matches_exhaustive_for_acceptance_shapes() {
+    let mut catalogue = fixture(MIN_ROWS);
+    let mut policy = SearchPolicy {
+        limit: 50,
+        max_typos: 0,
+        blank: BlankQuery::All,
+        boosts: BoostWeights {
+            open: 1_000,
+            frequency: 100,
+            recency: 400,
+            recency_window_secs: NonZeroU64::new(86_400).expect("nonzero window"),
+        },
+    };
+    for (query, typos) in [
+        ("p", 0),
+        ("proj", 0),
+        ("project", 1),
+        ("porject", 1),
+        ("PROJECT", 1),
+        ("pjct", 0),
+        ("partition.test", 1),
+        ("row-016383", 0),
+        ("café", 1),
+        ("東京", 0),
+        ("🧭", 0),
+        ("qzxvjk-no-result", 1),
+    ] {
+        policy.max_typos = typos;
+        for scope in [Scope::Everything, Scope::Tabs, Scope::History] {
+            assert_eq!(
+                catalogue
+                    .query(query, scope, MIN_ROWS as i64, policy)
+                    .expect("public partitioned query"),
+                catalogue
+                    .query_exhaustive(query, scope, MIN_ROWS as i64, policy)
+                    .expect("exhaustive oracle"),
+                "acceptance-shaped parity for {query:?} in {scope:?}"
+            );
+        }
+    }
+    assert_eq!(catalogue.worker_fallbacks().last_error, None);
+}

@@ -10,7 +10,7 @@ use frizbee::{Config, Match, MatchIndices, Matcher, Scoring, SortStrategy};
 
 use crate::{
     BlankQuery, BoostWeights, Entry, Scope, ScopeCounts, SearchError, SearchHit, SearchPolicy,
-    SearchResults, Target, TextField,
+    SearchResults, Target, TextField, WorkerFallbacks,
     candidate::{AsciiPresence, FieldMasks, QueryBound},
     digit_counts::DigitCounts,
     field_groups::{FieldGroups, GroupId},
@@ -24,7 +24,8 @@ use membership::GroupedMembership;
 mod highlight_cache;
 use highlight_cache::HighlightCache;
 
-#[cfg(test)]
+// Timing diagnostics over 100,000 rows run only when asked for, never in the gate.
+#[cfg(all(test, feature = "acceptance-diagnostics"))]
 mod acceptance_comparison;
 #[cfg(test)]
 mod hybrid;
@@ -37,6 +38,8 @@ mod range_index;
 enum QueryStrategy {
     Bounded,
     Partitioned,
+    #[cfg(test)]
+    PartitionedRefused,
     Filtered,
     #[cfg(test)]
     Exhaustive,
@@ -70,6 +73,7 @@ pub struct Catalogue {
     generation: u64,
     matcher: Matcher,
     ranked: Vec<Ranked>,
+    worker_fallbacks: WorkerFallbacks,
     #[cfg(test)]
     ranges: Option<range_index::RangeIndex>,
 }
@@ -137,6 +141,7 @@ impl Catalogue {
             generation: 0,
             matcher: Matcher::new("", &matcher_config(0)),
             ranked: Vec::new(),
+            worker_fallbacks: WorkerFallbacks::default(),
             #[cfg(test)]
             ranges: None,
         }
@@ -148,6 +153,11 @@ impl Catalogue {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Partition workers refused by the operating system since this catalogue was created.
+    pub fn worker_fallbacks(&self) -> WorkerFallbacks {
+        self.worker_fallbacks
     }
 
     pub fn generation(&self) -> u64 {
@@ -299,6 +309,25 @@ impl Catalogue {
         self.query_with_strategy(text, scope, now, policy, strategy, &mut Unobserved)
     }
 
+    fn rank_partitions(
+        &mut self,
+        text: &str,
+        scope: Scope,
+        now: i64,
+        policy: SearchPolicy,
+        start: partition::WorkerStart,
+    ) -> Result<ScopeCounts, SearchError> {
+        // Keep a refused worker visible even though its rows were searched on the caller.
+        let outcome =
+            partition::Rows::new(self).search_partitions(text, scope, now, policy, start)?;
+        for kind in outcome.refused {
+            self.worker_fallbacks.refused = self.worker_fallbacks.refused.saturating_add(1);
+            self.worker_fallbacks.last_error = Some(kind);
+        }
+        self.ranked.extend(outcome.finalists);
+        Ok(outcome.counts)
+    }
+
     #[cfg(test)]
     fn query_exhaustive(
         &mut self,
@@ -347,10 +376,11 @@ impl Catalogue {
             match strategy {
                 QueryStrategy::Bounded => self.rank_bounded(text, scope, now, policy, observer)?,
                 QueryStrategy::Partitioned => {
-                    let (counts, ranked) =
-                        partition::Rows::new(self).search_partitions(text, scope, now, policy)?;
-                    self.ranked.extend(ranked);
-                    counts
+                    self.rank_partitions(text, scope, now, policy, partition::WorkerStart::Native)?
+                }
+                #[cfg(test)]
+                QueryStrategy::PartitionedRefused => {
+                    self.rank_partitions(text, scope, now, policy, partition::WorkerStart::Refused)?
                 }
                 QueryStrategy::Filtered => self.rank_matches(text, scope, now, policy, true)?,
                 #[cfg(test)]
