@@ -3,6 +3,7 @@
 pub mod browser;
 pub mod edge;
 pub mod instance;
+pub mod notice;
 mod storage;
 
 pub use storage::{

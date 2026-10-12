@@ -30,8 +30,14 @@ window, because an agent cannot see it.
   `instance/security.rs`), it refuses clients on other machines
   (`PIPE_REJECT_REMOTE_CLIENTS`), and it is created "first instance only", so
   if another program already holds the name, Atlas refuses to start instead of
-  talking to it. A forwarding launch connects at identification level, so
-  whatever holds the pipe cannot impersonate it. The alternative,
+  talking to it. Pipe names are machine-wide and this one is predictable, so a
+  forwarding launch also checks who it reached: it asks Windows for the pipe
+  server's process (`GetNamedPipeServerProcessId`), opens that process's token
+  and compares its user SID with its own (`OwnerOnly::owns_process`). A server
+  running as another user, or one that cannot be inspected, gets nothing: no
+  link, and no foreground rights. The launch connects at identification
+  level, so whatever holds the pipe cannot impersonate it either. The
+  alternative,
   `WM_COPYDATA` to the main window, was rejected: GPUI owns the window class,
   so finding the window would mean matching on a title, and a pipe can be
   tested without a window.
@@ -48,7 +54,7 @@ window, because an agent cannot see it.
   restores a minimised window. Windows lets a program take the foreground only
   when the foreground program allows it, so the forwarding launch, which the
   owner just started, calls `AllowSetForegroundWindow` for the running Atlas
-  before sending. A launch without a link only brings Atlas forward.
+  before sending, and only after the identity check passes. A launch without a link only brings Atlas forward.
 - **Start-up and shutdown races** (`instance/tests.rs`):
   - Six launches at once elect exactly one running Atlas; the other five
     forward and their links arrive.
@@ -59,21 +65,45 @@ window, because an agent cannot see it.
   - A launch while Atlas is closing does not lose its link. The window stops
     listening as soon as closing starts; the mutex is released only after the
     store and pages have shut down, at the end of `main`. The waiting launch
-    then becomes the next running Atlas and opens the link itself.
+    then becomes the next running Atlas and opens the link itself. The exiting
+    Atlas keeps its (no longer listening) pipe until after it has released the
+    mutex, so no other process can take the name in between; the successor
+    waits up to 3 seconds (`PIPE_HANDOVER`) for the name to come free.
+  - Every step of the listener's conversation also ends on the stop event, so a
+    silent client cannot delay closing (tested to finish within a second).
+    A request that fails, times out or is too long is answered with a refusal
+    rather than left hanging.
   - An Atlas that died while owning the profile leaves an abandoned mutex,
     which the next launch takes over.
   - A running Atlas that never answers ends a launch's wait after 15 seconds
     (`FORWARD_PATIENCE`) with an error.
-  - A pipe name another program already holds stops the launch.
-- **Profile isolation.** The mutex and pipe names contain the user's SID and a
-  64-bit FNV-1a hash of the profile directory (`instance/names.rs`), with
+  - A pipe name another program already holds stops the launch once the
+    3-second handover wait has passed.
+  - Identity: the SID comparison is a pure, tested function, this process is
+    recognised as the user's own, and a process that cannot be opened counts
+    as foreign. A real second account was not available to test against.
+- **Profile isolation.** The mutex and pipe names contain the user's SID, the
+  Windows session number and a 64-bit FNV-1a hash of the profile directory (`instance/names.rs`), with
   spelling differences removed (slashes, letter case, a trailing separator,
   the `\\?\` prefix). A `--test-data-dir` profile and every `--smoke` profile
   therefore never forward to the owner's real Atlas. Spellings that the key
   does not unify, such as a junction or an 8.3 short name, could start a
   second Atlas on the same folder; the storage lease still refuses it.
-- **Command line.** `atlas-app.exe [--test-data-dir <directory>] [link]`.
-  One link at most; `--smoke` refuses a link.
+- **Command line.** `atlas-app.exe [--test-data-dir <directory>] [-- <link>]`.
+  A link is accepted only after the `--` marker, exactly one argument may
+  follow it, and that argument must be the link. So a crafted address passed
+  through a URL handler cannot add options such as `--test-data-dir`, even if
+  it contains quotes or spaces that split it into several arguments. A link
+  without the marker is refused; `--smoke` refuses a link. **P1-37's
+  `AtlasBrowser` registration must use the command line
+  `"<path>\atlas-app.exe" -- "%1"`.**
+- **Problems are shown, not only printed.** A launch started by Windows has no
+  console, so a refused argument, a running Atlas that does not answer, a
+  foreign or held pipe, or any other start-up failure is also shown in a
+  small Atlas message box (`atlas_platform::notice`). The `--smoke` check only
+  prints. When a forwarded link was accepted but Atlas was already closing,
+  the closing Atlas shows a message box after it has shut down, asking the
+  owner to open the link again.
 
 What P1-34 does **not** do: it does not register Atlas as a browser, a URL
 handler or the default browser, and it changes no registry setting. That is
@@ -83,14 +113,18 @@ Known limits:
 
 - A link that arrives in the moment between the window starting to close and
   its listener stopping is accepted but not opened. The window stops the
-  listener first thing when closing starts, so this window is a few
-  milliseconds.
-- Error messages from a forwarding launch go to standard error, which a
-  launch from Windows does not show. A refused link therefore fails silently.
+  listener first thing when closing starts, so this is a few milliseconds,
+  and the owner is told in a message box once Atlas has closed.
+- **Start-up denial of service.** Any local program, including one running
+  under another account, can create this user's predictable pipe name before
+  Atlas does. Atlas then refuses to start ("Another program holds Atlas's link
+  channel") rather than talk to it; signing out and back in, or restarting
+  Windows, clears it. Making the name unpredictable would need a secret shared
+  between launches, which this slice does not add.
 - Two Windows sessions of the same user (for example console and Remote
-  Desktop) each get their own mutex but share the pipe name; the second
-  session's Atlas then refuses to start with "Another program already holds
-  Atlas's link channel".
+  Desktop) now get separate mutex and pipe names, so each runs its own
+  instance; if both use the same profile, the storage lease refuses the
+  second with its own storage error.
 
 ## What P1-35 delivers
 
@@ -153,7 +187,7 @@ Build first with `cargo build --package atlas-app --profile local --offline
 1. **Forwarding.** Start
    `target\local\atlas-app.exe --test-data-dir C:\Temp\atlas-p134`. While it
    is open, run
-   `target\local\atlas-app.exe --test-data-dir C:\Temp\atlas-p134 https://example.com`
+   `target\local\atlas-app.exe --test-data-dir C:\Temp\atlas-p134 -- https://example.com`
    in PowerShell. Expected: the command returns at once, the open Atlas comes
    to the front with `example.com` in a new tab, and no second window opens.
 2. **Minimised.** Minimise that Atlas and repeat with another address.
@@ -161,8 +195,11 @@ Build first with `cargo build --package atlas-app --profile local --offline
 3. **No link.** Run the command from check 1 without a link. Expected: Atlas
    comes to the front and no tab is added.
 4. **Refusals.** Run it with `javascript:alert(1)`, with `file:///C:/Windows`
-   and with `notepad.exe` as the link. Expected: nothing opens, nothing runs,
-   and the open Atlas is unchanged.
+   and with `notepad.exe` as the link after `--`, then with
+   `-- https://example.com --test-data-dir C:\Temp\other`, and with
+   `https://example.com` without the `--`. Expected each time: an Atlas
+   message box explaining the refusal, nothing opens, nothing runs, and the
+   open Atlas is unchanged.
 5. **Start-up race.** Close Atlas, then run the start command and, within a
    second, the forwarding command from check 1. Expected: one window, with
    the link in a new tab once it has loaded.

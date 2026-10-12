@@ -10,13 +10,17 @@ mod smoke_watchdog;
 mod theme;
 mod ui;
 
-use atlas_platform::instance::{self, Claim, LinkRequest, PrimaryInstance};
+use atlas_platform::{
+    instance::{self, Claim, LinkRequest, PrimaryInstance},
+    notice,
+};
 use gpui::{
     App, AppContext, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
     WindowOptions, px, size,
 };
 use gpui_component::Root;
 use std::{
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::ExitCode,
     sync::{
@@ -30,11 +34,13 @@ use std::{
 compile_error!("Atlas v1 supports Windows 11 only.");
 
 fn main() -> ExitCode {
-    let options = match run_mode() {
+    let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let smoke_requested = arguments.iter().any(|argument| argument == "--smoke");
+    let options = match parse_arguments(arguments).and_then(run_mode) {
         Ok(RunMode::Browser(options)) => options,
         Ok(RunMode::PaletteSample) => return run_palette_sample(),
         Err(message) => {
-            eprintln!("{message}");
+            report_startup_problem(message, smoke_requested);
             return ExitCode::FAILURE;
         }
     };
@@ -43,14 +49,14 @@ fn main() -> ExitCode {
         Ok(Some(instance)) => instance,
         Ok(None) => return ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{error}");
+            report_startup_problem(&error.to_string(), options.smoke);
             return ExitCode::FAILURE;
         }
     };
     let links = match instance.take_feed(options.link.clone()) {
         Ok(links) => links,
         Err(error) => {
-            eprintln!("{error}");
+            report_startup_problem(&error.to_string(), options.smoke);
             return ExitCode::FAILURE;
         }
     };
@@ -132,7 +138,13 @@ fn main() -> ExitCode {
         cx.activate(true);
     });
     // Release the profile only now, after the store and pages have shut down.
+    let links_dropped = instance.links_dropped();
     drop(instance);
+    if links_dropped && !smoke {
+        notice::show_warning(
+            "Atlas was closing when a link arrived, so the link was not opened. Open it again.",
+        );
+    }
     if let Some(watchdog) = watchdog
         && let Err(error) = watchdog.cancel()
     {
@@ -184,36 +196,82 @@ fn claim_profile(options: &Options) -> Result<Option<PrimaryInstance>, instance:
     }
 }
 
-fn run_mode() -> Result<RunMode, &'static str> {
-    let mut smoke = false;
-    let mut test_directory = None;
-    let mut link = None;
-    let mut arguments = std::env::args_os().skip(1);
+/// A launch from Windows has no console, so its problems also appear in a message box.
+fn report_startup_problem(message: &str, smoke: bool) {
+    eprintln!("{message}");
+    if !smoke {
+        notice::show_warning(message);
+    }
+}
+
+/// What the command line asked for, before a profile is chosen.
+#[derive(Debug, Default, PartialEq)]
+struct Arguments {
+    palette_sample: bool,
+    smoke: bool,
+    test_directory: Option<PathBuf>,
+    link: Option<LinkRequest>,
+}
+
+const USAGE: &str = "Atlas accepts --smoke, --test-data-dir <directory>, --palette-sample \
+                     or -- followed by one http(s) link.";
+
+/// Reads options, then at most one link after `--`. Everything after `--` is the link, so a
+/// crafted link from a registered handler cannot add options such as `--test-data-dir`.
+fn parse_arguments(
+    arguments: impl IntoIterator<Item = OsString>,
+) -> Result<Arguments, &'static str> {
+    let mut parsed = Arguments::default();
+    let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
-        if argument == "--palette-sample" {
-            if arguments.next().is_some() || smoke || test_directory.is_some() || link.is_some() {
-                return Err("--palette-sample takes no other arguments.");
-            }
-            return Ok(RunMode::PaletteSample);
+        if argument == "--" {
+            parsed.link = Some(link_after_marker(arguments)?);
+            break;
+        } else if argument == "--palette-sample" {
+            parsed.palette_sample = true;
         } else if argument == "--smoke" {
-            smoke = true;
+            parsed.smoke = true;
         } else if argument == "--test-data-dir" {
-            test_directory = Some(PathBuf::from(
-                arguments
-                    .next()
-                    .ok_or("The test profile needs a directory.")?,
-            ));
-        } else if link.is_none() && !argument.to_string_lossy().starts_with('-') {
-            link = Some(link_argument(&argument)?);
+            let directory = arguments
+                .next()
+                .ok_or("The test profile needs a directory.")?;
+            parsed.test_directory = Some(PathBuf::from(directory));
         } else {
-            return Err(
-                "Atlas accepts one http(s) link, --smoke, --test-data-dir <directory> or --palette-sample.",
-            );
+            return Err(USAGE);
         }
     }
-    if smoke && (test_directory.is_some() || link.is_some()) {
+    let other_than_sample =
+        parsed.smoke || parsed.test_directory.is_some() || parsed.link.is_some();
+    if parsed.palette_sample && other_than_sample {
+        return Err("--palette-sample takes no other arguments.");
+    }
+    if parsed.smoke && (parsed.test_directory.is_some() || parsed.link.is_some()) {
         return Err("The automatic smoke check always uses a fresh profile and no link.");
     }
+    Ok(parsed)
+}
+
+/// Exactly one argument may follow `--`, and it must be an http(s) link.
+fn link_after_marker(
+    mut rest: impl Iterator<Item = OsString>,
+) -> Result<LinkRequest, &'static str> {
+    let link = rest.next().ok_or("A link must follow --.")?;
+    if rest.next().is_some() {
+        return Err("Atlas opens one link, and nothing may follow it.");
+    }
+    link_argument(&link)
+}
+
+fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
+    if arguments.palette_sample {
+        return Ok(RunMode::PaletteSample);
+    }
+    let Arguments {
+        smoke,
+        test_directory,
+        link,
+        ..
+    } = arguments;
     let directory = if smoke {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -239,7 +297,7 @@ fn run_mode() -> Result<RunMode, &'static str> {
 }
 
 /// Accepts only an http(s) link; any other argument is refused, never opened or run.
-fn link_argument(argument: &std::ffi::OsStr) -> Result<LinkRequest, &'static str> {
+fn link_argument(argument: &OsStr) -> Result<LinkRequest, &'static str> {
     let text = argument
         .to_str()
         .ok_or("Atlas opens only http and https links.")?;
@@ -256,6 +314,55 @@ mod tests {
     use std::{fs, io::Write};
 
     use super::*;
+
+    fn parse(arguments: &[&str]) -> Result<Arguments, &'static str> {
+        parse_arguments(arguments.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn a_link_comes_only_after_the_marker() {
+        let parsed = parse(&["--", "https://Example.TEST/page"]).expect("link");
+        assert_eq!(
+            parsed.link,
+            Some(LinkRequest::open("https://example.test/page").expect("web"))
+        );
+        let tested = parse(&[
+            "--test-data-dir",
+            r"C:\Synthetic",
+            "--",
+            "https://example.test/",
+        ])
+        .expect("test profile and link");
+        assert_eq!(tested.test_directory, Some(PathBuf::from(r"C:\Synthetic")));
+        assert!(tested.link.is_some());
+        assert_eq!(parse(&["https://example.test/"]), Err(USAGE));
+    }
+
+    #[test]
+    fn nothing_can_be_smuggled_after_the_link_marker() {
+        for arguments in [
+            &[
+                "--",
+                "https://example.test/",
+                "--test-data-dir",
+                r"C:\Elsewhere",
+            ][..],
+            &["--", "--test-data-dir", r"C:\Elsewhere"][..],
+            &[
+                "--",
+                "https://example.test/",
+                "https://second.example.test/",
+            ][..],
+            &["--", "javascript:alert(1)"][..],
+            &["--", "file:///C:/Windows/System32/cmd.exe"][..],
+            &["--"][..],
+            &["--smoke", "--", "https://example.test/"][..],
+            &["--palette-sample", "--", "https://example.test/"][..],
+        ] {
+            let parsed = parse(arguments);
+            assert!(parsed.is_err(), "{arguments:?} gave {parsed:?}");
+        }
+    }
 
     #[test]
     fn smoke_reservation_refuses_existing_directory_without_changing_contents() {

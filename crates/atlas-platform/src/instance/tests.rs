@@ -60,15 +60,15 @@ fn queued(feed: &mut LinkFeed) -> Vec<LinkRequest> {
 /// The owner-only descriptor and object names a launch on `directory` would use.
 fn identity(directory: &Path) -> (OwnerOnly, InstanceNames) {
     let owner = OwnerOnly::current_user().expect("owner");
-    let names = InstanceNames::new(directory, owner.sid()).expect("names");
+    let names = InstanceNames::new(directory, owner.sid(), owner.session()).expect("names");
     (owner, names)
 }
 
 /// Sends a raw message, retrying while the listener is between clients, as `claim` does.
-fn answer(pipe_name: &str, message: &[u8]) -> Delivery {
+fn answer(owner: &OwnerOnly, pipe_name: &str, message: &[u8]) -> Delivery {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let delivery = pipe::send(pipe_name, message).expect("pipe works");
+        let delivery = pipe::send(pipe_name, message, owner).expect("pipe works");
         if !matches!(delivery, Delivery::Unavailable) || Instant::now() >= deadline {
             return delivery;
         }
@@ -114,7 +114,7 @@ fn the_running_atlas_rechecks_every_request() {
     let directory = synthetic_profile("forged");
     let mut instance = primary(&directory);
     let mut feed = instance.take_feed(None).expect("feed");
-    let names = identity(&directory).1;
+    let (owner, names) = identity(&directory);
 
     // A client that skips `LinkRequest::open` must still be refused by the listener.
     for forged in [
@@ -123,17 +123,23 @@ fn the_running_atlas_rechecks_every_request() {
         &b"Ohttps://name:secret@example.test/"[..],
         &b"Xhttps://example.test/"[..],
     ] {
-        assert!(matches!(answer(&names.pipe, forged), Delivery::Refused));
+        assert!(matches!(
+            answer(&owner, &names.pipe, forged),
+            Delivery::Refused
+        ));
     }
     // An empty message is never queued, whether or not the pipe delivers it at all.
     assert!(!matches!(
-        answer(&names.pipe, &[]),
+        answer(&owner, &names.pipe, &[]),
         Delivery::Accepted { .. }
     ));
     let mut overlong = vec![b'O'];
     overlong.extend_from_slice(b"https://example.test/");
     overlong.resize(protocol::MAX_MESSAGE_BYTES + 64, b'a');
-    assert!(matches!(answer(&names.pipe, &overlong), Delivery::Refused));
+    assert!(matches!(
+        answer(&owner, &names.pipe, &overlong),
+        Delivery::Refused
+    ));
     assert!(queued(&mut feed).is_empty());
 }
 
@@ -323,4 +329,57 @@ fn a_pipe_name_held_by_someone_else_stops_the_launch() {
         PipeServer::start(&names.pipe, &owner, sender),
         Err(InstanceError::PipeTaken)
     ));
+}
+
+#[test]
+fn a_squatted_name_fails_after_the_handover_wait() {
+    let directory = synthetic_profile("squat-claim");
+    let (owner, names) = identity(&directory);
+    let (sender, _requests) = unbounded();
+    let _squatter = PipeServer::start(&names.pipe, &owner, sender).expect("first pipe");
+
+    let started = Instant::now();
+    assert_eq!(
+        launch(&directory, LinkRequest::Activate, Duration::from_secs(5)),
+        Err(InstanceError::PipeTaken)
+    );
+    assert!(
+        started.elapsed() >= PIPE_HANDOVER,
+        "waited for a predecessor first"
+    );
+}
+
+#[test]
+fn a_silent_client_does_not_delay_shutdown() {
+    let directory = synthetic_profile("stall");
+    let names = identity(&directory).1;
+    let mut instance = primary(&directory);
+    let feed = instance.take_feed(None).expect("feed");
+
+    // Connect and send nothing, as a stuck same-user client would.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let _stalled = loop {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&names.pipe)
+        {
+            Ok(client) => break client,
+            Err(error) if Instant::now() < deadline => {
+                assert_ne!(error.kind(), std::io::ErrorKind::PermissionDenied);
+                thread::sleep(RETRY_INTERVAL);
+            }
+            Err(error) => panic!("cannot reach the listener: {error}"),
+        }
+    };
+    thread::sleep(Duration::from_millis(200));
+
+    let stopping = Instant::now();
+    feed.stop.raise().expect("stop listening");
+    drop(instance);
+    assert!(
+        stopping.elapsed() < Duration::from_secs(1),
+        "teardown waited {:?}",
+        stopping.elapsed()
+    );
 }
