@@ -97,12 +97,42 @@ pub(super) fn truncate_chars(text: &mut String, max_chars: usize) -> bool {
 
 /// Decodes and normalizes a title or folder name for display.
 pub(super) fn display_text(raw: &str) -> String {
-    collapse_whitespace(&decode_entities(raw))
+    // Remove characters that could hide or reorder text in the preview (including decoded ones).
+    let visible: String = decode_entities(raw)
+        .chars()
+        .filter(|&character| !is_invisible_control(character))
+        .collect();
+    collapse_whitespace(&visible)
+}
+
+/// Control characters other than whitespace, and bidirectional overrides and isolates.
+fn is_invisible_control(character: char) -> bool {
+    (character.is_control() && !character.is_whitespace()) || is_bidi_control(character)
+}
+
+/// Embedding, override (U+202A–U+202E) and isolate (U+2066–U+2069) characters, which
+/// can make text display in a different order from the one it is stored in.
+pub(super) fn is_bidi_control(character: char) -> bool {
+    matches!(character, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 #[cfg(test)]
 mod tests {
     use super::{collapse_whitespace, decode_entities, display_text, truncate_chars};
+
+    #[test]
+    fn titles_lose_control_and_bidirectional_override_characters() {
+        assert_eq!(display_text("A\0B\u{7}C\u{9F}D"), "ABCD");
+        assert_eq!(display_text("evil\u{202E}txt.exe"), "eviltxt.exe");
+        assert_eq!(
+            display_text("\u{202A}a\u{202B}b\u{202C}c\u{202D}d\u{2066}e\u{2067}f\u{2068}g\u{2069}"),
+            "abcdefg"
+        );
+        // Encoded forms are removed too, and whitespace controls still separate words.
+        assert_eq!(display_text("x&#0;y&#x202E;z\r\nw"), "x\u{FFFD}yz w");
+        // Ordinary right-to-left text and its marks are kept.
+        assert_eq!(display_text("שלום\u{200F} title"), "שלום\u{200F} title");
+    }
 
     #[test]
     fn decodes_the_entities_browsers_write() {

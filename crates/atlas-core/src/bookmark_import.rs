@@ -21,6 +21,9 @@ pub struct ImportLimits {
     pub max_input_bytes: usize,
     /// Deepest folder nesting accepted; a top-level folder has depth 1.
     pub max_depth: usize,
+    /// Most `<DL>` lists without a folder heading open at once, the export's outer list
+    /// included. Exports have exactly one; more means a damaged or hand-made file.
+    pub max_bare_lists: usize,
     /// Most bookmarks, folders and skipped entries together.
     pub max_entries: usize,
     /// Titles and folder names longer than this are shortened, in characters.
@@ -34,6 +37,7 @@ impl Default for ImportLimits {
         Self {
             max_input_bytes: 32 * 1024 * 1024,
             max_depth: 32,
+            max_bare_lists: 4,
             max_entries: 50_000,
             max_title_chars: 1_024,
             max_address_bytes: 8 * 1024,
@@ -147,6 +151,11 @@ pub enum ImportError {
     /// The file lacks the bookmarks-export declaration.
     NotABookmarkFile,
     TooDeep {
+        line: usize,
+        limit: usize,
+    },
+    /// Too many `<DL>` lists without a folder heading are open at once.
+    TooManyBareLists {
         line: usize,
         limit: usize,
     },
@@ -313,6 +322,10 @@ impl fmt::Display for ImportError {
             Self::TooDeep { line, limit } => write!(
                 formatter,
                 "folders nest deeper than {limit} levels at line {line}"
+            ),
+            Self::TooManyBareLists { line, limit } => write!(
+                formatter,
+                "more than {limit} lists without a folder name are open at line {line}"
             ),
             Self::TooManyEntries { line, limit } => write!(
                 formatter,

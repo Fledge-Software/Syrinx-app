@@ -280,19 +280,67 @@ fn folder_depth_is_bounded_with_the_failing_line() {
     assert_eq!(import.summary.unclosed_lists, 5);
     assert_eq!(
         parse_bookmark_html_with_limits(nested_folders(5).as_bytes(), limits),
-        Err(ImportError::TooDeep { line: 12, limit: 4 })
-    );
-    // Headingless lists count toward the bound, so they cannot grow the stack unchecked.
-    let lists = format!("{HEADER}{}", "<DL>".repeat(5));
-    assert_eq!(
-        parse_bookmark_html_with_limits(lists.as_bytes(), limits),
-        Err(ImportError::TooDeep { line: 3, limit: 4 })
+        Err(ImportError::TooDeep { line: 11, limit: 4 })
     );
     // An empty heading with no list still counts as a level.
     let empty_heading = format!("{}<DT><H3>Too deep</H3>", nested_folders(4));
     assert_eq!(
         parse_bookmark_html_with_limits(empty_heading.as_bytes(), limits),
         Err(ImportError::TooDeep { line: 12, limit: 4 })
+    );
+}
+
+#[test]
+fn bare_lists_have_their_own_bound_and_do_not_reduce_folder_depth() {
+    let limits = ImportLimits {
+        max_depth: 2,
+        max_bare_lists: 3,
+        ..ImportLimits::default()
+    };
+    // The outer list plus two bare lists is three, and two folders still fit inside them.
+    let within = format!(
+        "{HEADER}<DL>\n<DL>\n<DT><H3>One</H3>\n<DL>\n<DT><H3>Two</H3>\n<DL>\n\
+         <DT><A HREF=\"https://inner.example.test/\">Inner</A>\n"
+    );
+    let Ok(import) = parse_bookmark_html_with_limits(within.as_bytes(), limits) else {
+        panic!("bare lists must not count as folder depth");
+    };
+    assert_eq!(import.summary.max_depth, 2);
+    assert_eq!(
+        outline(&import.items),
+        [
+            "0:folder:One",
+            "1:folder:Two",
+            "2:link:Inner=https://inner.example.test/",
+        ]
+    );
+    // A fourth bare list is refused with its own error, not as folder depth.
+    let too_many = format!("{HEADER}<DL>\n<DL>\n<DL>\n");
+    assert_eq!(
+        parse_bookmark_html_with_limits(too_many.as_bytes(), limits),
+        Err(ImportError::TooManyBareLists { line: 5, limit: 3 })
+    );
+    // Bare lists between folders stay bounded however the two are interleaved.
+    let interleaved = format!("{HEADER}<DT><H3>F</H3>\n<DL>\n<DL>\n<DL>\n<DL>\n");
+    assert_eq!(
+        parse_bookmark_html_with_limits(interleaved.as_bytes(), limits),
+        Err(ImportError::TooManyBareLists { line: 7, limit: 3 })
+    );
+}
+
+#[test]
+fn titles_drop_hidden_characters_from_exports() {
+    let input = format!(
+        "{HEADER}<DT><H3>Folder&#x202E;txt</H3>\n<DL>\n\
+         <DT><A HREF=\"https://x.example.test/\">Pay\u{202E}fdp.exe\u{0}</A>\n"
+    );
+    let import = parse(&input);
+    assert_eq!(
+        outline(&import.items),
+        [
+            "0:folder:Foldertxt",
+            "1:link:Payfdp.exe=https://x.example.test/"
+        ]
     );
 }
 

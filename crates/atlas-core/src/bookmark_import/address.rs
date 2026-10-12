@@ -1,7 +1,7 @@
 //! Decides which exported addresses may become saved pages: web addresses only.
 
 use super::SkipReason;
-use super::text::decode_entities;
+use super::text::{decode_entities, is_bidi_control};
 
 /// Longest scheme name kept in a skip reason; longer names are cut, never echoed whole.
 const MAX_REPORTED_SCHEME: usize = 32;
@@ -36,12 +36,12 @@ fn split_scheme(address: &str) -> Option<(String, &str)> {
     (starts_with_letter && valid).then(|| (scheme.to_ascii_lowercase(), remainder))
 }
 
-/// Accepts `http(s)://host...` without credentials, whitespace or control characters.
+/// Accepts `http(s)://host[:port]...` without credentials or hidden characters.
+///
+/// Stricter than, not identical to, navigation's `url`-based rule in `atlas-app`; the
+/// commit step re-checks every entry with that rule (`docs/p1-22-import-parser.md`).
 fn web_address(scheme: &str, remainder: &str) -> Result<String, SkipReason> {
-    if remainder
-        .chars()
-        .any(|character| character.is_whitespace() || character.is_control())
-    {
+    if remainder.chars().any(is_hidden_or_space) {
         return Err(SkipReason::InvalidAddress);
     }
     let after_slashes = remainder
@@ -55,10 +55,57 @@ fn web_address(scheme: &str, remainder: &str) -> Result<String, SkipReason> {
     if authority.contains('@') {
         return Err(SkipReason::CredentialsInAddress);
     }
-    if authority.is_empty() || authority.starts_with(':') {
+    if !valid_authority(authority) {
         return Err(SkipReason::InvalidAddress);
     }
     Ok(format!("{scheme}:{remainder}"))
+}
+
+/// Whitespace, control characters and bidirectional overrides never belong in an address.
+fn is_hidden_or_space(character: char) -> bool {
+    character.is_whitespace() || character.is_control() || is_bidi_control(character)
+}
+
+/// Checks a bracketed IPv6 literal or a host name, then an optional numeric port.
+fn valid_authority(authority: &str) -> bool {
+    let (valid_host, port) = match authority.strip_prefix('[') {
+        Some(bracketed) => match bracketed.split_once(']') {
+            Some((literal, rest)) => (valid_ipv6_literal(literal), rest),
+            None => return false,
+        },
+        None => {
+            let host_end = authority.find(':').unwrap_or(authority.len());
+            (
+                valid_host_name(&authority[..host_end]),
+                &authority[host_end..],
+            )
+        }
+    };
+    valid_host && valid_port(port)
+}
+
+fn valid_ipv6_literal(literal: &str) -> bool {
+    literal.contains(':')
+        && literal
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() || matches!(character, ':' | '.'))
+}
+
+/// Letters (including non-ASCII ones in international names), digits, `-`, `.` and `_`.
+fn valid_host_name(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .chars()
+            .all(|character| character.is_alphanumeric() || matches!(character, '-' | '.' | '_'))
+}
+
+/// Nothing, or `:` followed by nothing or a number from 0 to 65535.
+fn valid_port(port: &str) -> bool {
+    let Some(digits) = port.strip_prefix(':') else {
+        return port.is_empty();
+    };
+    digits.is_empty()
+        || (digits.bytes().all(|byte| byte.is_ascii_digit()) && digits.parse::<u16>().is_ok())
 }
 
 /// Keeps an unsupported scheme short enough to show safely in a preview.
@@ -125,6 +172,17 @@ mod tests {
             (Some("https://a b.test/"), SkipReason::InvalidAddress),
             (Some("https://example.test/\0"), SkipReason::InvalidAddress),
             (Some("1http://example.test/"), SkipReason::InvalidAddress),
+            (Some("https://[/"), SkipReason::InvalidAddress),
+            (Some("https://[zz::1]/"), SkipReason::InvalidAddress),
+            (Some("https://x.test:99999/"), SkipReason::InvalidAddress),
+            (Some("https://x.test:8o/"), SkipReason::InvalidAddress),
+            (Some("https://a%zz/"), SkipReason::InvalidAddress),
+            (Some("https://a!b.test/"), SkipReason::InvalidAddress),
+            (
+                Some("https://x.test/\u{202E}gpj.exe"),
+                SkipReason::InvalidAddress,
+            ),
+            (Some("https://x\u{2066}.test/"), SkipReason::InvalidAddress),
             (
                 Some("https://user:secret@example.test/"),
                 SkipReason::CredentialsInAddress,
@@ -137,6 +195,32 @@ mod tests {
             classify(Some(&long), LIMIT),
             Err(SkipReason::AddressTooLong)
         );
+    }
+
+    #[test]
+    fn an_address_exactly_at_the_byte_limit_is_accepted() {
+        let prefix = "https://example.test/";
+        let exact = format!("{prefix}{}", "a".repeat(LIMIT - prefix.len()));
+        assert_eq!(exact.len(), LIMIT);
+        assert_eq!(classify(Some(&exact), LIMIT), Ok(exact.clone()));
+        let over = format!("{exact}a");
+        assert_eq!(
+            classify(Some(&over), LIMIT),
+            Err(SkipReason::AddressTooLong)
+        );
+    }
+
+    #[test]
+    fn valid_hosts_ports_and_literals_are_accepted() {
+        for raw in [
+            "https://x.test:65535/",
+            "https://x.test:/",
+            "https://[2001:db8::1]:443/path",
+            "https://café.example.test/",
+            "https://under_score.example.test",
+        ] {
+            assert_eq!(classify(Some(raw), LIMIT), Ok(raw.to_owned()), "{raw}");
+        }
     }
 
     #[test]
