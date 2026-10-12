@@ -12,6 +12,26 @@ you found it in the commit message, not here.
 
 ## Page tabs: WebView2 through wry
 
+- **A repeated response header shows only its first line.** A synthetic page
+  sent `Cache-Control: max-age=0` and then `Cache-Control: no-store`; both
+  `GetHeaders` and the full `GetIterator` of `WebResourceResponseReceived`
+  reported only `max-age=0`, so Atlas captured a `no-store` page (F2). Commas
+  inside one line are split correctly. No WebView2 route Atlas may use exposes
+  the later line; treat this as a known residual of D35's `no-store` rule, not
+  as proof a page allows storing. Source: `docs/p1-25-page-text.md`, F2
+  (observed on this runtime).
+- **A reload or same-address visit raises no `SourceChanged`.** Only
+  `NavigationStarting` and `NavigationCompleted` arrive, so code that learns the
+  document address from `SourceChanged` sees no document after a reload. P1-25
+  takes the navigation's last requested address on successful completion.
+  Source: `docs/p1-25-page-text.md`, F14 (observed).
+- **`DOMSnapshot.captureSnapshot` keeps `visibility: hidden` text and sends -1 for
+  an empty attribute value.** Without the `visibility` computed style, hidden
+  text is laid out and returned (F1); `contenteditable=""` arrives with value
+  index -1, which a strict string lookup rejects as malformed (F10). Request
+  only `visibility` and read -1 as the empty string. Source:
+  `docs/p1-25-page-text.md` (observed).
+
 - **A recreated controller can reuse an old permission request number.** A
   delayed session-worker reply could then match a new prompt on the same live
   tab. P1-16 allocates request IDs across controller lifetimes and clears retired
