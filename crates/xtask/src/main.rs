@@ -3,6 +3,7 @@
 mod benchmark;
 mod deferred_work;
 mod dependency_policy;
+mod network_sources;
 mod packaging;
 
 use std::env;
@@ -73,13 +74,13 @@ fn cargo_command(root: &Path) -> Command {
 }
 
 fn check_dependencies(root: &Path) -> Result<(), String> {
-    // Read declared dependencies, including inactive optional and target-specific ones.
+    // Read declared dependencies, including inactive optional and target-specific ones, and the
+    // resolved graph that the D9 network check follows from each headless crate.
     let output = cargo_command(root)
         .args([
             "metadata",
             "--format-version",
             "1",
-            "--no-deps",
             "--all-features",
             "--offline",
             "--locked",
@@ -94,7 +95,9 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
     // Report policy violations without dumping metadata or accepting a partial document.
     let metadata = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("Cargo metadata could not be decoded: {error}"))?;
-    let violations = dependency_policy::check_metadata(&metadata)?;
+    let mut violations = dependency_policy::check_metadata(&metadata)?;
+    // Standard-library sockets need no dependency, so the typing path's source is read too.
+    violations.extend(network_sources::check(root)?);
     if !violations.is_empty() {
         return Err(violations.join("\n"));
     }
