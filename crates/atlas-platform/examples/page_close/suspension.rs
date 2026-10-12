@@ -108,7 +108,7 @@ pub(super) fn exercise(
     lifecycle::barrier(host, events, deadline)?;
     let child = lifecycle::only_child(parent)?;
     let original = page_rect(child)?;
-    for exit in [0, 1, 2] {
+    for exit in [0, 1, 2, 3] {
         // Separate user gestures; the browser can throttle rapid fullscreen re-entry.
         thread::sleep(Duration::from_millis(1500));
         println!("Synthetic fullscreen enter cycle {exit}.");
@@ -139,7 +139,13 @@ pub(super) fn exercise(
                 ) {}
                 send(host, BrowserCommand::ExitFullscreen { id: 1500 })?;
             }
-            _ => key(child, 0x58)?,
+            2 => key(child, 0x58)?,
+            _ => {
+                // Model F11/Escape received by Atlas chrome after focus left the controller.
+                unsafe { windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(parent)) }
+                    .map_err(|_| "Synthetic parent focus failed")?;
+                send(host, BrowserCommand::ExitFullscreen { id: 1500 })?;
+            }
         }
         wait_fullscreen(events, false, deadline)?;
         send(
@@ -157,7 +163,7 @@ pub(super) fn exercise(
         }
     }
     println!(
-        "Synthetic video fullscreen entered and exited through Escape, the F11 command, and page exit."
+        "Synthetic video fullscreen exits passed, including F11/Escape with native focus on chrome."
     );
     Ok(())
 }
