@@ -267,9 +267,18 @@ kept simple and shared through `packaging/atlas-common.ps1`:
   layout, so it cannot name paths outside the folder.
 - A program folder is deleted only when its manifest shows this tooling made
   it; the manifest is deleted last, so a partial failure can be retried.
+- Relative paths resolve against PowerShell's current location
+  (`GetUnresolvedProviderPathFromPSPath`), not the process folder that .NET's
+  `GetFullPath` would use.
 - `-Uninstall` compares the folder it runs from with the registered
   `InstallLocation` and changes nothing if they differ, so running it from
   an unzipped package cannot delete the wrong folder.
+- If `-Uninstall` stops after removing the registration (for example on a
+  locked file), the retry finds no registration. It then deletes program
+  files only when the script itself runs from that folder and the folder
+  holds a valid Atlas manifest and `atlas-app.exe`. Installed apps no longer
+  lists Atlas at that point, so the owner retries with
+  `unregister-atlas.ps1 -Uninstall` from `%LOCALAPPDATA%\Programs\Atlas`.
 - If data deletion is partial (WebView2 can still hold files), the script
   reports how many items remain instead of claiming success.
 - No script uses `using module`, the one construct that loads code while
@@ -334,7 +343,8 @@ cargo xtask package
 ```
 
 This runs `cargo xtask check-packaging`, builds `atlas-app` with the `local`
-profile and its `installed` feature (data in `Atlas\data`), and writes
+profile and its `installed` feature (data in `Atlas\data`) into its own
+Cargo target directory, `target\package-build`, and writes
 `target\package\Atlas-<version>-<commit>[-dirty]-x64\` and a zip of it,
 using Windows' own `tar.exe`. A `-dirty` name means the working tree had
 uncommitted changes. The manifest records the version, commit, dirty flag,
@@ -400,6 +410,9 @@ administrator) PowerShell window.
     only with `-IncludePreviewData`, as a separate question.
 16. If it reports that items remain, close every Atlas window and delete
     the folder it names by hand.
+17. If uninstall stopped partway and Atlas is no longer in Installed apps,
+    run `unregister-atlas.ps1 -Uninstall` again from
+    `%LOCALAPPDATA%\Programs\Atlas` to finish removing the program files.
 
 ## What "done" means for P1-37
 
