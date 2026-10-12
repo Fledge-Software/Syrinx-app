@@ -58,6 +58,33 @@ reach Atlas; the root element follows them and ends the drag on release
 inside or outside the window, and a move with no button held also ends a
 drag whose release was lost. The sidebar function moved here from `ui.rs`.
 
+Review fixes (2026-10-12):
+
+- **The release position decides the snap.** GPUI stops reporting moves once
+  the pointer leaves the window, so a flick left past the window edge used to
+  settle on the last in-window width (often favicon-only). `release_at` now
+  applies the mouse-up position before snapping.
+- **The strip and the card share one edge calculation.** Below the
+  favicon-only width the sidebar draws only its unpadded background
+  (`atlas_ui::sidebar::draws_content`), so the 12 + 10 px padding can no
+  longer hold it at 22 px while the card assumes the real width. The strip's
+  span and the card's left edge both come from `page_card::edge_strip`; a
+  test checks they never overlap at any width from 0 to 264 px and five
+  scales.
+- **A drag cannot outlive the window's activation.** Alt Tab or a dialog
+  (for example a WebView2 prompt) takes the mouse capture and the release
+  with it, so a window-activation observer settles any drag in progress at
+  its current width. A capture loss without deactivation still ends at the
+  next move with no button held.
+- **Only the shown page follows a drag.** `atlas-platform` resizes the
+  visible web view on each step; hidden pages receive the card's bounds once,
+  just before they are shown (`browser/placement.rs`, tested).
+- **Keyboard and roles.** The edge is a focusable splitter (tab stop) named
+  "Resize sidebar", described with its current state; Left narrows and Right
+  widens it by one state. All rows are tree items with a nesting level inside
+  one "Saved and open tabs" tree, and folders report whether they are
+  expanded. The Ctrl Alt S pin shortcut is P1-17's (DW-3).
+
 - **Wide** draws as before, with titles truncated while a drag narrows it.
 - **Favicon-only** draws each row as a 30 px icon button. Rows have no
   favicons yet, so each shows a monogram (the title's first letter or digit),
@@ -83,7 +110,7 @@ expanded. No folder editing UI was added; that remains P1-21's.
 - **Width state is kept in memory for now.** `atlas-store` has no settings
   table yet, so the settled state resets to wide on restart. This is tracked
   as DW-2 in the plan's "Deferred work" register and tagged
-  `TODO(DW-2)` where a drag is released. P1-29 owns persisting width and
+  `TODO(DW-2)` where the sidebar settles after a drag or key step. P1-29 owns persisting width and
   presentation, so it is the natural place to add the settings table; adding
   one here would have meant a schema migration outside this slice. Folder
   expansion is likewise in memory only.
@@ -106,8 +133,10 @@ branch: dependency boundaries, registered deferred-work markers (DW-2),
 formatting, Clippy with warnings denied, all tests (96 in `atlas-app`, 36 in
 `atlas-ui`) and the `--smoke` application run. An earlier Clippy run failed
 once with "can't find crate for `strum_macros`" while other agents were
-building on the machine; the unchanged retry passed. The agent could not look
-at the window, so the owner's manual checks follow.
+building on the machine; the unchanged retry passed. After the review fixes
+the full gate passed again on 2026-10-12, with 97 tests in `atlas-app`, 39 in
+`atlas-ui` and 73 in `atlas-platform` (including `placement`). The agent
+could not look at the window, so the owner's manual checks follow.
 
 ## Owner's manual checks
 
@@ -126,17 +155,22 @@ page (for example `https://example.com`), and then:
    page was, and the card should follow. Release at about 40 px for
    favicon-only, then drag again past 158 px for wide with labels. Also try
    hidden straight to wide in one drag.
-3. **Release outside the window.** Start a drag and release with the pointer
-   outside Atlas's window; the sidebar should still settle and stop
-   following the mouse.
-4. **Selection survives.** With a page selected, hide the sidebar and bring it
+3. **Release outside the window.** From wide, flick the strip quickly left
+   past the window's left edge and release there: the sidebar should hide,
+   not stop at favicon-only. Flick right past the window's right edge from
+   hidden: it should settle wide. Start a drag and press Alt Tab mid-drag:
+   the sidebar should settle and stop following the mouse.
+4. **Keyboard.** Press Tab until the strip is highlighted (or click it), then
+   use Left and Right: it should step wide, favicon-only, hidden and back,
+   with the page card following.
+5. **Selection survives.** With a page selected, hide the sidebar and bring it
    back; the same row should still be highlighted and the same page shown.
-5. **Resize and DPI.** In each of the three states, resize the window from
+6. **Resize and DPI.** In each of the three states, resize the window from
    its edges and maximise/restore it: the page card should stay 8 px from the
    sidebar and the window edges. If a second monitor with a different scale
    is available, drag the window across and check the same.
-6. **Accessible names.** In favicon-only, hover or inspect with Narrator: rows
+7. **Accessible names.** In favicon-only, hover or inspect with Narrator: rows
    should be announced by their page titles, not their letters.
-7. **Folders.** Only if the store already holds folders (for example from a
+8. **Folders.** Only if the store already holds folders (for example from a
    later import): folders should show indented contents in the wide sidebar
    and collapse/expand on click.

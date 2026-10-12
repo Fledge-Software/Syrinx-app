@@ -14,14 +14,20 @@ pub(super) struct CardFrame {
     pub scale: f32,
 }
 
+/// The drag strip's logical start and end beside a sidebar of `sidebar_width`. The sidebar
+/// view draws the strip here and the page card starts at its end, so they cannot overlap.
+pub(super) fn edge_strip(sidebar_width: f32) -> (f32, f32) {
+    let start = finite_or_zero(sidebar_width).max(0.);
+    (start, start + CARD_INSET)
+}
+
 /// The page card's physical bounds. The child web view does not follow the window on its own
 /// (`docs/trapstoknow.md`), so this runs on every drag step, resize and DPI change.
 pub(super) fn page_card_bounds(frame: CardFrame) -> PageBounds {
     let scale = usable_scale(frame.scale);
-    let sidebar = finite_or_zero(frame.sidebar_width).max(0.);
 
-    // Inset the card from the sidebar, the toolbar, the footer and the window's right edge.
-    let left = sidebar + CARD_INSET;
+    // Inset the card from the sidebar's strip, the toolbar, the footer and the right edge.
+    let (_, left) = edge_strip(frame.sidebar_width);
     let top = TOOLBAR_HEIGHT + CARD_INSET;
     let right = finite_or_zero(frame.viewport_width) - CARD_INSET;
     let bottom = finite_or_zero(frame.viewport_height) - FOOTER_HEIGHT - CARD_INSET;
@@ -60,7 +66,7 @@ fn finite_or_zero(value: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use atlas_ui::SidebarWidthState;
+    use atlas_ui::{SidebarWidthState, sidebar};
 
     use super::*;
 
@@ -118,6 +124,33 @@ mod tests {
             let bounds = page_card_bounds(frame(width, 1.25));
             assert_eq!(bounds.x + bounds.width as i32, expected, "at {width}");
             width += 0.3;
+        }
+    }
+
+    #[test]
+    fn the_strip_and_the_card_never_overlap_at_any_drag_width() {
+        for scale in [1., 1.25, 1.5, 1.75, 2.] {
+            let mut width = 0.;
+            while width <= 264. {
+                // Below favicon-only width the sidebar draws no padded content, so its laid-out
+                // width is exactly the drag width and the strip starts there.
+                let laid_out = if sidebar::draws_content(width) {
+                    width.max(sidebar::SIDEBAR_PADDING_LEFT + sidebar::SIDEBAR_PADDING_RIGHT)
+                } else {
+                    width
+                };
+                assert_eq!(laid_out, width, "padding widened the sidebar at {width}");
+                let (start, end) = edge_strip(laid_out);
+                assert_eq!(start, laid_out);
+                let bounds = page_card_bounds(frame(width, scale));
+                let strip_end = (end * scale).round() as i32;
+                assert!(
+                    strip_end <= bounds.x,
+                    "strip ends at {strip_end}, card starts at {} (width {width}, scale {scale})",
+                    bounds.x
+                );
+                width += 0.25;
+            }
         }
     }
 

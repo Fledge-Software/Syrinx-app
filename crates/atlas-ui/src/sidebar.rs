@@ -73,6 +73,28 @@ impl SidebarWidthState {
             SidebarWidthState::Hidden => "Hidden",
         }
     }
+
+    /// One keyboard step narrower; hidden stays hidden.
+    pub const fn narrower(self) -> Self {
+        match self {
+            SidebarWidthState::Wide => SidebarWidthState::Compact,
+            SidebarWidthState::Compact | SidebarWidthState::Hidden => SidebarWidthState::Hidden,
+        }
+    }
+
+    /// One keyboard step wider; wide stays wide.
+    pub const fn wider(self) -> Self {
+        match self {
+            SidebarWidthState::Hidden => SidebarWidthState::Compact,
+            SidebarWidthState::Compact | SidebarWidthState::Wide => SidebarWidthState::Wide,
+        }
+    }
+}
+
+/// Whether the sidebar draws its rows at `width`. Below the favicon-only width it draws only
+/// its background, without padding, so its laid-out width is exactly `width`.
+pub fn draws_content(width: f32) -> bool {
+    width >= COMPACT_WIDTH
 }
 
 /// The live width while the owner drags the sidebar edge: it follows the pointer, clamped.
@@ -182,6 +204,13 @@ impl SidebarSizing {
         let drag = self.drag.take()?;
         self.state = snap_on_release(drag.width);
         Some(self.state)
+    }
+
+    /// Ends a drag where the button came up. Moves stop arriving once the pointer leaves the
+    /// window, so the release position, not the last move, decides the state.
+    pub fn release_at(&mut self, pointer_x: f32) -> Option<SidebarWidthState> {
+        self.drag_to(pointer_x);
+        self.release()
     }
 
     /// Settles on `state` directly, abandoning any drag.
@@ -321,6 +350,50 @@ mod tests {
         assert!(!sizing.is_dragging());
         assert_eq!(sizing.width(), COMPACT_WIDTH);
         assert_eq!(sizing.release(), None);
+    }
+
+    #[test]
+    fn a_flick_past_the_window_edge_snaps_where_the_button_came_up() {
+        let mut sizing = SidebarSizing::default();
+        sizing.begin_drag(WIDE_WIDTH);
+        // The last move seen inside the window would settle on favicon-only...
+        sizing.drag_to(60.);
+        // ...but the button came up left of the window.
+        assert_eq!(sizing.release_at(-120.), Some(SidebarWidthState::Hidden));
+        // And a flick right past the window settles wide.
+        sizing.begin_drag(0.);
+        sizing.drag_to(30.);
+        assert_eq!(sizing.release_at(4_000.), Some(SidebarWidthState::Wide));
+        // Without a drag, a release changes nothing.
+        assert_eq!(sizing.release_at(0.), None);
+        assert_eq!(sizing.state(), SidebarWidthState::Wide);
+    }
+
+    #[test]
+    fn keyboard_steps_walk_the_three_states_and_stop_at_the_ends() {
+        use SidebarWidthState::{Compact, Hidden, Wide};
+        assert_eq!(Wide.narrower(), Compact);
+        assert_eq!(Compact.narrower(), Hidden);
+        assert_eq!(Hidden.narrower(), Hidden);
+        assert_eq!(Hidden.wider(), Compact);
+        assert_eq!(Compact.wider(), Wide);
+        assert_eq!(Wide.wider(), Wide);
+    }
+
+    #[test]
+    fn content_padding_never_exceeds_the_width_it_is_drawn_in() {
+        let mut width = 0.;
+        while width <= WIDE_WIDTH {
+            if draws_content(width) {
+                assert!(
+                    SIDEBAR_PADDING_LEFT + SIDEBAR_PADDING_RIGHT <= width,
+                    "at {width}"
+                );
+            }
+            width += 0.25;
+        }
+        assert!(draws_content(COMPACT_WIDTH));
+        assert!(!draws_content(COMPACT_WIDTH - 0.25));
     }
 
     #[test]
