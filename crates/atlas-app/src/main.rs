@@ -3,8 +3,10 @@
 
 mod navigation;
 mod palette;
+mod palette_sample;
 mod session;
 mod smoke_watchdog;
+mod theme;
 mod ui;
 
 use gpui::{
@@ -33,6 +35,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if options.palette_sample {
+        return run_palette_sample();
+    }
     // The GUI's orderly timeout cannot run while startup or its event thread is stalled.
     let watchdog = if options.smoke {
         match smoke_watchdog::SmokeWatchdog::start() {
@@ -123,9 +128,27 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_palette_sample() -> ExitCode {
+    // Development review window for P1-07's tokens; it opens no profile, page or worker.
+    let failed = Arc::new(AtomicU8::new(0));
+    let result = failed.clone();
+    gpui_platform::application().run(move |cx: &mut App| {
+        if let Err(message) = palette_sample::open(cx) {
+            eprintln!("{message}");
+            result.store(1, Ordering::Release);
+            cx.quit();
+        }
+    });
+    if failed.load(Ordering::Acquire) != 0 {
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
 struct Options {
     directory: PathBuf,
     smoke: bool,
+    palette_sample: bool,
 }
 
 fn options() -> Result<Options, &'static str> {
@@ -133,7 +156,16 @@ fn options() -> Result<Options, &'static str> {
     let mut test_directory = None;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(argument) = arguments.next() {
-        if argument == "--smoke" {
+        if argument == "--palette-sample" {
+            if arguments.next().is_some() || smoke || test_directory.is_some() {
+                return Err("--palette-sample takes no other arguments.");
+            }
+            return Ok(Options {
+                directory: PathBuf::new(),
+                smoke: false,
+                palette_sample: true,
+            });
+        } else if argument == "--smoke" {
             smoke = true;
         } else if argument == "--test-data-dir" {
             test_directory = Some(PathBuf::from(
@@ -142,7 +174,7 @@ fn options() -> Result<Options, &'static str> {
                     .ok_or("The test profile needs a directory.")?,
             ));
         } else {
-            return Err("Atlas accepts --smoke or --test-data-dir <directory>.");
+            return Err("Atlas accepts --smoke, --test-data-dir <directory> or --palette-sample.");
         }
     }
     if smoke && test_directory.is_some() {
@@ -165,7 +197,11 @@ fn options() -> Result<Options, &'static str> {
     if smoke {
         reserve_smoke_directory(&directory)?;
     }
-    Ok(Options { directory, smoke })
+    Ok(Options {
+        directory,
+        smoke,
+        palette_sample: false,
+    })
 }
 
 fn reserve_smoke_directory(directory: &Path) -> Result<(), &'static str> {
