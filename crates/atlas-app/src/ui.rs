@@ -861,6 +861,12 @@ impl BrowserView {
                 match target {
                     Target::Tab(id) => self.command(SessionCommand::FocusTab(id)),
                     Target::Saved(id) => self.command(SessionCommand::OpenSaved(id)),
+                    Target::Command(id) => {
+                        self.palette_command(id, window, cx);
+                        // Find keeps focus in its Atlas input after opening from the palette.
+                        cx.notify();
+                        return;
+                    }
                     _ => {
                         self.message =
                             "This destination is not available in the preview.".to_owned()

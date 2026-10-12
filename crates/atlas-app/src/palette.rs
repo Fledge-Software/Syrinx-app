@@ -116,8 +116,8 @@ impl PaletteChoices {
         match result {
             Ok(results) => {
                 self.status = format!(
-                    "{} tabs · {} saved pages",
-                    results.counts.tabs, results.counts.saved
+                    "{} tabs · {} saved pages · {} commands",
+                    results.counts.tabs, results.counts.saved, results.counts.commands
                 );
                 self.results = results.hits;
             }
@@ -481,6 +481,23 @@ mod tests {
     const ADDRESS: &str = "https://palette.example.test/Case?Key=Value";
 
     #[test]
+    fn browser_command_selection_activates_instead_of_navigating() {
+        for entry in crate::commands::entries() {
+            let mut choices = PaletteChoices::default();
+            let request = choices.query(&entry.title);
+            assert!(choices.receive(request, Ok(results(&[entry.target]))));
+            assert!(matches!(
+                choices.submission(entry.title.clone(), false),
+                Some(PaletteEvent::Activate(target)) if target == entry.target
+            ));
+            assert!(matches!(
+                choices.activation(request, entry.target),
+                Some(PaletteEvent::Activate(target)) if target == entry.target
+            ));
+        }
+    }
+
+    #[test]
     fn shortcut_stream_keeps_queries_until_submit_activation_or_close() {
         let shortcuts = [
             BrowserShortcut::NewTab,
@@ -567,11 +584,16 @@ mod tests {
             .iter()
             .filter(|target| matches!(target, Target::Saved(_)))
             .count();
+        let commands = targets
+            .iter()
+            .filter(|target| matches!(target, Target::Command(_)))
+            .count();
         SearchResults {
             generation: 1,
             counts: ScopeCounts {
                 tabs,
                 saved,
+                commands,
                 ..ScopeCounts::default()
             },
             hits: targets
@@ -743,7 +765,7 @@ mod tests {
         let mut choices = PaletteChoices::default();
         let old = choices.query("");
         assert!(choices.receive(old, Ok(results(&[first, second]))));
-        assert_eq!(choices.status, "2 tabs · 0 saved pages");
+        assert_eq!(choices.status, "2 tabs · 0 saved pages · 0 commands");
 
         let refreshed = choices.refresh();
         assert!(choices.results.is_empty());
@@ -752,7 +774,7 @@ mod tests {
         assert!(choices.activation(old, second).is_none());
         assert!(!choices.receive(old, Ok(results(&[first, second]))));
         assert!(choices.receive(refreshed, Ok(results(&[first]))));
-        assert_eq!(choices.status, "1 tabs · 0 saved pages");
+        assert_eq!(choices.status, "1 tabs · 0 saved pages · 0 commands");
         assert_eq!(choices.results.len(), 1);
         assert_target(&choices, first);
         assert!(choices.activation(refreshed, second).is_none());
@@ -878,14 +900,14 @@ mod tests {
         current.hits[0].title = "Changed synthetic title".to_owned();
         current.hits[0].address = "https://changed.example.test/".to_owned();
         assert!(choices.receive(refresh, Ok(current)));
-        assert_eq!(choices.status, "1 tabs · 1 saved pages");
+        assert_eq!(choices.status, "1 tabs · 1 saved pages · 0 commands");
         assert_eq!(choices.results[0].title, "Changed synthetic title");
         assert_eq!(choices.results[0].address, "https://changed.example.test/");
         assert_target(&choices, tab);
 
         let removed = choices.refresh();
         assert!(choices.receive(removed, Ok(results(&[tab]))));
-        assert_eq!(choices.status, "1 tabs · 0 saved pages");
+        assert_eq!(choices.status, "1 tabs · 0 saved pages · 0 commands");
         assert!(choices.activation(removed, saved).is_none());
     }
 }
