@@ -403,6 +403,7 @@ impl EventSink {
                     | BrowserEvent::Title { .. }
                     | BrowserEvent::Url { .. }
                     | BrowserEvent::Loading { .. }
+                    | BrowserEvent::NavigationCompleted { .. }
                     | BrowserEvent::Fullscreen { .. }
                     | BrowserEvent::Suspended { .. }
                     | BrowserEvent::PermissionFinished { .. }
