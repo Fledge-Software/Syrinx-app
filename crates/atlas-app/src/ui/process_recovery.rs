@@ -41,6 +41,10 @@ impl CrashState {
             "Page crashed"
         }
     }
+    /// Whether this page shows the crash card instead of its web view.
+    pub(super) fn is_crashed(&self, id: u64) -> bool {
+        self.pages.contains(&id)
+    }
     pub(super) fn restored(&mut self, id: u64) {
         self.pages.remove(&id);
     }

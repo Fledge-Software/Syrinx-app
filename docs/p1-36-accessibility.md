@@ -1,0 +1,232 @@
+# P1-36: keyboard navigation and accessibility
+
+Atlas must be usable without a mouse and readable by a screen reader before
+the owner makes it the default browser (Phase 5, plan issue map P1-36). A
+compact or hidden sidebar is the worst case: icons without names and edges
+that only a drag can move. This slice adds F6 pane cycling, Tab between every
+chrome control, a visible focus ring from the `atlas-ui` tokens, accessible
+names and roles for Atlas's own controls, and the NVDA checks the owner runs.
+
+Branch `claude/p1-36-accessibility`, from `codex/integrated-browser-preview`
+at `94b3cb1`.
+
+## What GPUI exposes to Windows UI Automation
+
+**GPUI 0.3.8 has a UI Automation provider.** The task allowed for the case
+where it had none; the evidence says otherwise, so no provider gap is
+recorded. What it does, with file and line evidence (the platform crate is the
+vendored one; the core crate is the pinned registry package
+`gpui-pre-0.3.8`):
+
+- The Windows backend depends on AccessKit and its Windows adapter:
+  `vendor/gpui-pre-windows-0.3.8/Cargo.toml`, lines 55 and 59
+  (`accesskit`, `accesskit_windows`; `Cargo.lock` pins `accesskit 0.24.1` and
+  `accesskit_windows 0.34.0`).
+- Every GPUI window creates an `accesskit_windows::Adapter` for its HWND:
+  `vendor/gpui-pre-windows-0.3.8/src/window.rs`, `a11y_init`, lines
+  1090–1108; tree updates are raised as UIA events in `a11y_tree_update`,
+  lines 1110–1124.
+- The window procedure answers UIA's `WM_GETOBJECT` through the adapter
+  (which returns the root provider with `UiaReturnRawElementProvider`):
+  `vendor/gpui-pre-windows-0.3.8/src/events.rs`, line 166 and
+  `handle_wm_getobject`, lines 852–867.
+- The core crate turns elements into AccessKit nodes each frame
+  (`gpui-pre-0.3.8/src/window/a11y.rs`, module documentation, lines 1–99) and
+  activates only when a UIA client asks (`gpui-pre-0.3.8/src/window.rs`,
+  lines 1615–1656). It is on by default: only
+  `Application::new_inaccessible` turns it off (`gpui-pre-0.3.8/src/app.rs`,
+  line 195), and Atlas starts through `gpui_platform::application()`.
+- An element appears in the tree only with an id **and** a role
+  (`gpui-pre-0.3.8/src/_accessibility.rs`, lines 58–103). The public API is
+  `role`, `aria_label`, `aria_description`, `aria_keyshortcuts`,
+  `aria_selected`, `aria_expanded`, `aria_toggled`, `aria_value`, `aria_level`
+  and more (`gpui-pre-0.3.8/src/elements/div.rs`, lines 1306–1513).
+- An element with a click handler gets AccessKit's Click action and a
+  focusable one gets Focus (`div.rs`, lines 3594–3599); a focused element
+  with a click handler is clicked by Enter or Space (`div.rs`, lines
+  3016–3080). Tab order comes from `tab_index` and paint order
+  (`gpui-pre-0.3.8/src/tab_stop.rs`), but nothing binds Tab: an app calls
+  `Window::focus_next` itself (`window.rs`, lines 2379–2399).
+- gpui-component's text field reports `Role::TextInput` and takes
+  `aria_label` (`gpui-component-0.7.1/src/input/input.rs`, lines 271 and
+  729–757).
+
+Known limits of that provider, each checked in source:
+
+- **Active descendant needs a focused ancestor.**
+  `set_active_descendant` (`gpui-pre-0.3.8/src/window/a11y.rs`, line 258)
+  ignores the claim unless the focused node is an ancestor of the row. The
+  palette keeps focus in its query field, which is the rows' sibling, so NVDA
+  cannot hear the arrow keys move the selection. Recorded as **DW-60**.
+- **Plain text is not in the tree.** Text without an id is not reported, so
+  Atlas names the parts a screen reader must read (the permission question,
+  the runtime notice, the status line) with labelled nodes.
+- **Debug assertions panic on a malformed tree.** The `local` profile keeps
+  `debug-assertions = true` (`Cargo.toml`, line 55), and the a11y builder
+  panics in debug builds on, for example, two nodes claiming focus in one
+  frame (`a11y.rs`, lines 230–240 and 530–536). It runs only while a UIA
+  client is attached, so a gate run does not exercise it; the NVDA checks
+  below do.
+- **The web page is a separate HWND.** The AccessKit tree covers GPUI's own
+  elements. WebView2 joins UI Automation through its own child window
+  (`docs/research/02-browser-v1-scope.md`, line 156). Whether NVDA's object
+  navigation moves between the two trees, rather than only following focus
+  events, is unverified and is an owner check below.
+
+No vendored GPUI file was changed.
+
+## What works now
+
+All of the following passes the gate's unit tests where it is pure logic; the
+window behaviour is for the owner to confirm (no agent inspected a window).
+
+**F6 and Shift F6 move between panes** in the order address toolbar, runtime
+notice, permission request, find bar, sidebar, page, wrapping at each end.
+Closed bars and a hidden sidebar are skipped; the address field and the page
+card are always there. The order and skipping are pure functions in
+`crates/atlas-ui/src/focus.rs` (`next_pane`, `OpenPanes`) with eight tests,
+including a bar that closes while focused handing focus to its neighbour.
+
+- From chrome, GPUI's `f6`/`shift-f6` bindings run
+  `BrowserView::cycle_pane` (`crates/atlas-app/src/ui/panes.rs`).
+- **From a focused page**, WebView2's `AcceleratorKeyPressed` handler maps
+  F6 to `BrowserShortcut::FocusNextPane` and Shift F6 to
+  `FocusPreviousPane` (`crates/atlas-platform/src/browser/page.rs`,
+  `shortcut_for_modifiers`). The handler is unchanged in shape: it reads the
+  key, sets `Handled` and posts; there is no COM call beyond the event
+  arguments, and Ctrl F, Ctrl H, Ctrl P and the zoom keys still reach the page
+  first (a new test pins that, per the 2026-10-12 decision).
+- **Tab past a page's last element** (or Shift Tab before its first) moves to
+  the next (previous) pane: WebView2's `MoveFocusRequested` is marked handled
+  and posted the same way; a scripted focus move stays in the page
+  (`register_focus_departure`, `departure_shortcut`, tested).
+- Landing: the address pane focuses the address field itself; a web page is
+  focused natively (`focus_page`); any other pane focuses its region and then
+  its first control (`Window::focus_next`).
+
+**Tab and Shift Tab move between every Atlas control** in each Atlas window
+(the main window, the palette and the import preview). The main window's
+order follows the screen: toolbar, bars, sidebar (search, Favorites, tab
+rows, row actions, new tab), the resize edge, then the page card's own
+controls (Home, History, Clear browsing data). Enter or Space activates the
+focused control. The resize edge was focusable before but could not be
+reached with Tab, because a tracked focus handle takes its Tab stop from the
+handle rather than from `tab_index`; it now can (new trap below).
+
+**A focus ring from the tokens.** `atlas_ui::focus` defines a 2 px ring in the
+accent ink, which `contrast::audit` already holds to WCAG 1.4.11's 3:1 on the
+ground, panel and card, with a 1 px inner line in the accent's on-fill colour
+so the ring still reads on accent-filled controls (a new test checks 3:1
+against every accent fill). `crates/atlas-app/src/controls.rs` draws it as an
+inset shadow, so it never moves layout and a scrolling sidebar cannot clip it.
+
+**Focus returns predictably.** Closing the palette, peek or import preview
+still calls `focus_page`, which now also clears GPUI's focus to the window
+root, and a page that takes focus by click reports WebView2's `GotFocus`
+(`BrowserEvent::PageFocused`), which does the same. Either way no chrome
+control keeps a ring while keys go to the page. Enter on a focused Cancel in
+the import preview now cancels instead of importing.
+
+**Names and roles.** Every Atlas control has a role and a name:
+
+| Area | Role and name |
+| --- | --- |
+| Toolbar | Toolbar "Address"; Back, Forward, Reload with their keys; address field (button "Search or enter address", value = current address, Ctrl L); Find in page, Downloads, Print, Zoom out, Reset zoom (value = percent), Zoom in, Save page, History |
+| Sidebar | Navigation "Sidebar"; Search; Favorites as buttons named by tile ("Edit …" while editing), Add favorite; plugins as labels "… · coming soon"; tree "Saved and open tabs" with tree items (level, selected, expanded for folders); Close tab, Unload page, Remove saved page; New tab; splitter "Resize sidebar" (state as description, vertical, ArrowLeft/ArrowRight) |
+| Bars | Status "Runtime notice" with its text; Alert "Permission request" with the question, "Remember for this site" checkbox (checked state), Deny, Allow; Search "Find in page" with a named field, Previous, Next, Close find |
+| Page card | Group "Page"; Home's Customize (expanded), Search (Ctrl K), Quick access tiles, Add shortcut, Edit/Done, move and remove buttons named for their tile, plugin cards; Customize dialog with palette and accent radio buttons, Custom accent, Reduce transparency switch, named colour field; tile form fields and target radio buttons; History rows as links; Clear browsing data checkboxes and time-range radio buttons |
+| Palette | Dialog "Command palette"; field "Search or command"; scope chips as radio buttons with their counts; results list box with named, selected options described by kind; "Search the web" (Alt Enter) |
+| Window | Status line at the bottom; caption buttons Minimize, Maximize/Restore, Close Atlas (unchanged) |
+
+**Not changed:** page web views' identity. No user agent, IPC handler,
+script, request filter or header change; the two new WebView2 handlers are
+controller events like the existing accelerator handler.
+
+## Owner checks with NVDA
+
+An agent cannot judge speech output, so these are the owner's. Use a fresh
+profile, never the daily one:
+
+```
+cargo run --package atlas-app --profile local --offline --locked -- --test-data-dir target\p1-36-nvda
+```
+
+Install or start NVDA yourself (installing software is the owner's call; the
+portable copy also works). Then record pass/fail for each:
+
+1. **Window and toolbar.** Start Atlas with NVDA running. NVDA says the
+   window title. Press F6: NVDA announces the address field as a button with
+   the current address. Tab through Back, Forward, Reload, the security
+   indicator area, Find in page, Downloads, Print, Zoom out, Reset zoom, Zoom
+   in, Save page and History; each is announced by name, with its shortcut
+   where one is listed above. A visible ring follows each one.
+2. **F6 order.** With no bars open, F6 goes address → sidebar → page →
+   address. On a web page, open Atlas's find bar with the toolbar's Find
+   button (Ctrl F goes to the page first, by decision) and the cycle includes
+   the find bar after the toolbar. Shift F6 runs in reverse.
+3. **F6 from a page.** Open `https://example.com/`, click into the page,
+   press F6: focus leaves the page for the address field and NVDA says so.
+   Shift F6 from the page goes to the sidebar. Tab repeatedly inside the page
+   until past its last link: focus comes back to the address field.
+4. **Page keys still the page's.** In a page, Ctrl F opens the page's find
+   (or the engine's) as before, Ctrl P prints, and Ctrl plus or minus zooms;
+   none of them is taken by Atlas.
+5. **Sidebar in each width.** In wide, compact (Ctrl Alt S toggles hidden;
+   drag or Left/Right on the edge for compact) and hidden: every row and
+   Favorite is read by its title, not a letter; folders say expanded or
+   collapsed; the active tab says selected. In hidden, F6 skips the sidebar,
+   and the address controls in the title bar are still reachable.
+6. **Edge.** Tab to "Resize sidebar"; NVDA reads it as a splitter with its
+   state; Left and Right change the width.
+7. **Palette.** Ctrl K: NVDA reads "Command palette" and the field. Type a
+   query; Tab reaches the scope chips (each reads its count and whether it is
+   selected) and "Search the web". Known gap DW-60: arrowing through results
+   is probably not announced. Record what NVDA actually says.
+8. **Permission bar.** On a synthetic page that asks for the camera (any test
+   page you trust), NVDA reads the question when you F6 to the bar;
+   "Remember for this site" reads as a checkbox with its state.
+9. **Home, Customize and History.** On Home, Tab reaches Customize, Search,
+   every Quick access tile and Add shortcut, and the plugin cards; Customize's
+   palettes and accents read as radio buttons with checked state. Ctrl H then
+   Tab through history rows (read by title, then address and age) and Clear
+   browsing data (checkboxes and time-range radio buttons).
+10. **Page content.** With focus inside a web page, NVDA's browse mode reads
+    the page. Then, from the page, use NVDA's object navigation
+    (NVDA+Shift+Up) to see whether you can reach Atlas's sidebar without F6;
+    record whether the two trees are connected.
+11. **No crash with NVDA attached.** Use Atlas for a few minutes with NVDA
+    running, opening the palette, peek and Customize. The `local` build keeps
+    debug assertions, so a malformed accessibility tree would stop Atlas;
+    report any such stop with its message.
+12. **Ring visibility.** In each of the five palettes, the focus ring is
+    visible on the toolbar, a sidebar row, an accent-filled button (Save in a
+    tile form) and the selected time-range chip.
+
+## Owner questions
+
+1. **Focus ring after mouse clicks (DW-62).** The ring shows on any focus,
+   so a clicked chrome button keeps a ring until focus moves. Hiding it after
+   clicks needs a GPUI change, because GPUI cannot see the F6 that leaves a
+   page. Recommendation: accept the current behaviour for v1; it errs toward
+   keyboard users.
+2. **Sidebar keyboard model (DW-61).** Every row is a Tab stop today.
+   Recommendation: move to one Tab stop with arrow keys before the week of
+   use (P1-40), because a long imported folder makes Tab slow.
+3. **Palette announcements (DW-60).** Recommendation: change the palette so
+   its list container owns focus and the query field (no GPUI patch), as a
+   follow-up slice; the alternative is asking for a vendored GPUI change.
+4. **Installing NVDA.** The checks above need NVDA on your machine; agents
+   do not install software. Narrator, which ships with Windows, is an
+   acceptable first pass if you prefer not to install NVDA yet.
+
+## Files
+
+- `crates/atlas-ui/src/focus.rs` (new): pane order, open panes, ring tokens and
+  their tests; `crates/atlas-ui/src/lib.rs`.
+- `crates/atlas-platform/src/browser.rs`, `crates/atlas-platform/src/browser/page.rs`:
+  F6 and Tab-out from a page, page focus arrival, tests.
+- `crates/atlas-app/src/controls.rs` (new), `crates/atlas-app/src/ui/panes.rs`
+  (new) and the chrome files that now use them (`ui.rs`, `ui/*.rs`,
+  `palette.rs`, `palette/render.rs`).
+- `docs/plans/Atlas v1 — Plan.md` (DW-60 to DW-62),
+  `docs/implementation-status.md`, `docs/trapstoknow.md`.

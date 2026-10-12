@@ -194,6 +194,25 @@ you found it in the commit message, not here.
   recovery or proof that a window is visible. Source: integrated-preview
   timeout review in `crates/atlas-app/src/main.rs` and `ui.rs` (code-confirmed).
 
+- **An element with its own focus handle never becomes a Tab stop through
+  `tab_index`.** GPUI applies `tab_index` only to handles it creates itself;
+  with `track_focus(&handle)` the handle's own `tab_stop` decides, and
+  `cx.focus_handle()` starts as `false`. Create such handles with
+  `.tab_stop(true)`. The sidebar's resize edge was focusable but unreachable
+  by Tab until P1-36. Source: `gpui-pre-0.3.8/src/elements/div.rs`, lines
+  2251–2270 (source-confirmed).
+- **A chrome control keeps GPUI focus, and its ring, while the page has the
+  keys.** WebView2 takes Win32 focus without GPUI noticing. Clear GPUI focus
+  to the window root when focus goes to the page: `focus_page` does, and the
+  page's `GotFocus` event (`BrowserEvent::PageFocused`) covers clicks.
+  Source: P1-36 (code-confirmed; owner visual check pending).
+- **GPUI's accessibility tree can panic the `local` build, but only with a
+  screen reader attached.** The `local` profile keeps debug assertions, and
+  the tree builder panics on, for example, two nodes claiming focus in one
+  frame. It runs only while a UI Automation client is attached, so the gate
+  never exercises it; test with NVDA or Narrator after changing roles, ids or
+  focus handles. Source: `gpui-pre-0.3.8/src/window/a11y.rs`, lines 230–240
+  and 530–536 (source-confirmed).
 - **GPUI draws above a WebView2 child window, not below it.** Note 08 read
   the code as the page covering GPUI; the Phase 0 spike found the opposite
   on this machine. Don't rely on either for layout: keep the page card's
