@@ -7,6 +7,13 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
+- **Pages get find, history, print and zoom keys first (P1-13).** When a web
+  page has focus, Ctrl F, Ctrl H, Ctrl P and the zoom keys go to the page
+  first, as in Chrome. If the page doesn't use them, the engine's own find,
+  print and zoom apply. Atlas's own find and history stay reachable from
+  Ctrl K and the toolbar. Grabbing them first broke Google Docs' in-document
+  find and its Ctrl H find and replace. Ctrl T, W, L, K and Tab stay Atlas's.
+
 - **Smart App Control is off for development.** Windows Application Control
   repeatedly blocked locally built, unsigned executables (os error 4551),
   breaking gate runs at random. The owner turned Smart App Control off on
