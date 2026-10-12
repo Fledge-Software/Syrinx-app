@@ -15,7 +15,10 @@ use webview2_com::{
     TrySuspendCompletedHandler,
 };
 use windows::{
-    Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer},
+    Win32::{
+        Foundation::{ERROR_SUCCESS, HWND, WIN32_ERROR},
+        UI::WindowsAndMessaging::{KillTimer, SetTimer},
+    },
     core::{BOOL, Interface},
 };
 use wry::{WebView, WebViewExtWindows};
@@ -25,11 +28,8 @@ pub(super) const GRACE: Duration = Duration::from_secs(5);
 pub(super) fn exit_fullscreen(view: &WebView) -> Result<(), BrowserError> {
     use windows::Win32::{
         Foundation::{LPARAM, WPARAM},
-        UI::{
-            Input::KeyboardAndMouse::SetFocus,
-            WindowsAndMessaging::{
-                GUITHREADINFO, GetGUIThreadInfo, IsChild, PostMessageW, WM_KEYDOWN, WM_KEYUP,
-            },
+        UI::WindowsAndMessaging::{
+            GUITHREADINFO, GetGUIThreadInfo, IsChild, PostMessageW, WM_KEYDOWN, WM_KEYUP,
         },
     };
     // A late exit command must not send Escape to a page which already left fullscreen.
@@ -40,7 +40,7 @@ pub(super) fn exit_fullscreen(view: &WebView) -> Result<(), BrowserError> {
         return Ok(());
     }
     // Reestablish the host's native focus before MoveFocus, including after Alt+Tab.
-    unsafe { SetFocus(Some(view.hwnd())) }.map_err(|_| BrowserError::Focus)?;
+    focus_host_window(view.hwnd())?;
     view.focus().map_err(|_| BrowserError::Focus)?;
     let mut info = GUITHREADINFO {
         cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
@@ -67,6 +67,30 @@ pub(super) fn exit_fullscreen(view: &WebView) -> Result<(), BrowserError> {
         )
     }
     .map_err(|_| BrowserError::Focus)
+}
+
+/// Gives the host window native focus, accepting a NULL result that only means nothing had focus.
+fn focus_host_window(hwnd: HWND) -> Result<(), BrowserError> {
+    use windows::Win32::{
+        Foundation::{GetLastError, SetLastError},
+        UI::Input::KeyboardAndMouse::SetFocus,
+    };
+    // Clear the thread's last error so a NULL return can be told apart from a failure.
+    // windows-rs only reads GetLastError when building the Err, so the code survives.
+    let (had_previous, error) = unsafe {
+        SetLastError(ERROR_SUCCESS);
+        let previous = SetFocus(Some(hwnd));
+        (previous.is_ok(), GetLastError())
+    };
+    if !focus_succeeded(had_previous, error) {
+        return Err(BrowserError::Focus);
+    }
+    Ok(())
+}
+
+// A NULL previous-focus handle also means success when no window previously had focus.
+fn focus_succeeded(had_previous: bool, error: WIN32_ERROR) -> bool {
+    had_previous || error == ERROR_SUCCESS
 }
 
 /// Carries validity across the worker/UI queue without retaining a native controller.
@@ -320,6 +344,17 @@ impl Drop for WakeTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_without_previous_window_succeeds_only_without_native_error() {
+        use windows::Win32::Foundation::ERROR_INVALID_PARAMETER;
+
+        assert!(focus_succeeded(false, ERROR_SUCCESS));
+        assert!(!focus_succeeded(false, ERROR_INVALID_PARAMETER));
+        assert!(focus_succeeded(true, ERROR_SUCCESS));
+        assert!(focus_succeeded(true, ERROR_INVALID_PARAMETER));
+    }
+
     #[test]
     fn queued_metadata_survives_suspension_but_not_controller_replacement() {
         let life = CallbackLife::new();
