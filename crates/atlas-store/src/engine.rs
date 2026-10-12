@@ -16,7 +16,9 @@ use crate::deletion::DeletionRequest;
 use crate::error::{
     EncodingField, StoreError, StoreOperation, combine_results, database_error, with_cleanup,
 };
-use crate::history::{self, HistoryEntry, HistoryRequest, HistoryVisit, HistoryWrite};
+use crate::history::{
+    self, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit, HistoryWrite, RecordedVisit,
+};
 use crate::{BackupOutcome, DirectoryLease, ShutdownState};
 use crate::{backup, records, schema};
 
@@ -137,13 +139,15 @@ impl Store {
         address: String,
         title: String,
         visited_at: i64,
-    ) -> Result<HistoryEntry, StoreError> {
-        self.write_history(HistoryWrite::Record {
+    ) -> Result<RecordedVisit, StoreError> {
+        match self.write_history(HistoryWrite::Record {
             address,
             title,
             visited_at,
-        })?
-        .ok_or(StoreError::InvalidEncoding(EncodingField::History))
+        })? {
+            HistoryOutcome::Recorded(recorded) => Ok(recorded),
+            _ => Err(StoreError::InvalidEncoding(EncodingField::History)),
+        }
     }
 
     /// Updates a remembered address's title; `None` means the entry no longer exists.
@@ -152,7 +156,13 @@ impl Store {
         id: NonZeroU64,
         title: String,
     ) -> Result<Option<HistoryEntry>, StoreError> {
-        self.write_history(HistoryWrite::Retitle { id, title })
+        self.write_entry(HistoryWrite::Retitle { id, title })
+    }
+
+    /// Retracts one visit, such as a failed navigation. Returns the address's remaining
+    /// totals, or `None` when no visit remains for it.
+    pub fn remove_visit(&self, visit: NonZeroU64) -> Result<Option<HistoryEntry>, StoreError> {
+        self.write_entry(HistoryWrite::RemoveVisit(visit))
     }
 
     /// Applies D47 history clears, here or on a restored copy; other categories are ignored.
@@ -184,7 +194,14 @@ impl Store {
         query(&mut reader.connection)
     }
 
-    fn write_history(&self, write: HistoryWrite) -> Result<Option<HistoryEntry>, StoreError> {
+    fn write_entry(&self, write: HistoryWrite) -> Result<Option<HistoryEntry>, StoreError> {
+        match self.write_history(write)? {
+            HistoryOutcome::Entry(entry) => Ok(entry),
+            _ => Err(StoreError::InvalidEncoding(EncodingField::History)),
+        }
+    }
+
+    fn write_history(&self, write: HistoryWrite) -> Result<HistoryOutcome, StoreError> {
         let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
         let (reply, result) = mpsc::sync_channel(1);
         writer

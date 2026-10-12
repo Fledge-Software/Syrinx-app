@@ -1,18 +1,17 @@
 //! Turns observed page navigation into durable visits and their search rows (P1-20).
 
-use std::{collections::HashMap, num::NonZeroU64};
+mod tracker;
+
+use std::time::Instant;
 
 use atlas_core::{TabId, TabKind, TabModelSnapshot};
 use atlas_search::{Catalogue, Entry, Target, Usage};
 use atlas_store::{HistoryEntry, Store};
 
 use super::SessionError;
+use tracker::{Action, VisitTracker};
 
-/// The address each live web tab last reported, and the history entry it was recorded as.
-struct Cursor {
-    address: String,
-    entry: Option<NonZeroU64>,
-}
+pub(super) use tracker::TITLE_SETTLE;
 
 /// One page callback's metadata, as the worker received it.
 pub(super) struct Observation {
@@ -21,136 +20,164 @@ pub(super) struct Observation {
     pub(super) address: Option<String>,
 }
 
+/// Applies the tracker's decisions to the store and the tier-1 catalogue.
 #[derive(Default)]
 pub(super) struct HistoryRecorder {
-    cursors: HashMap<TabId, Cursor>,
+    tracker: VisitTracker,
 }
 
 impl HistoryRecorder {
-    /// Restored tabs reload their saved address at startup; that reload is not a new visit.
     pub(super) fn restored(model: &TabModelSnapshot) -> Self {
-        let cursors = model
-            .tabs
-            .iter()
-            .filter(|tab| tab.kind == TabKind::Web)
-            .map(|tab| {
-                let cursor = Cursor {
-                    address: tab.metadata.address.clone(),
-                    entry: None,
-                };
-                (tab.id, cursor)
-            })
-            .collect();
-        Self { cursors }
+        Self {
+            tracker: VisitTracker::restored(model),
+        }
     }
 
-    /// Forgets closed tabs, so their late callbacks cannot record anything.
     pub(super) fn retain(&mut self, model: &TabModelSnapshot) {
-        self.cursors
-            .retain(|id, _| model.tabs.iter().any(|tab| tab.id == *id));
+        self.tracker.retain(model);
     }
 
-    /// Records a visit when a live web tab reports a new address, or retitles its last visit.
+    pub(super) fn has_pending_titles(&self) -> bool {
+        self.tracker.has_pending_titles()
+    }
+
+    /// Records a visit when a live web tab reports a new document address, and holds titles.
     pub(super) fn observe(
         &mut self,
         store: &Store,
         catalogue: &mut Catalogue,
         model: &TabModelSnapshot,
         observation: Observation,
-        now: impl FnOnce() -> Result<i64, SessionError>,
+        at: Instant,
+        now: impl Fn() -> Result<i64, SessionError>,
     ) -> Result<(), SessionError> {
         let Observation { id, title, address } = observation;
-        let live_web = model
-            .tabs
-            .iter()
-            .any(|tab| tab.id == id && tab.kind == TabKind::Web);
-        if !live_web {
+        if !is_live_web(model, id) {
             return Ok(());
         }
-        if let Some(address) = address
-            && self.is_new_address(id, &address)
-        {
-            return self.record(store, catalogue, id, address, title, now);
-        }
-        let Some(title) = title else {
+        let Some(address) = address else {
+            if let Some(title) = title {
+                self.tracker.title(id, title, at);
+            }
             return Ok(());
         };
-        self.retitle(store, catalogue, id, title)
+        let actions = self.tracker.address(id, address, title, at);
+        self.apply(store, catalogue, id, actions, at, &now)
     }
 
-    fn is_new_address(&self, id: TabId, address: &str) -> bool {
-        // Repeated or replayed callbacks for the current address are the same visit.
-        self.cursors
-            .get(&id)
-            .is_none_or(|cursor| cursor.address != address)
-    }
-
-    fn record(
+    /// A failed navigation retracts the visit its address change recorded.
+    pub(super) fn navigation(
         &mut self,
         store: &Store,
         catalogue: &mut Catalogue,
         id: TabId,
-        address: String,
-        title: Option<String>,
-        now: impl FnOnce() -> Result<i64, SessionError>,
+        success: bool,
+        at: Instant,
+        now: impl Fn() -> Result<i64, SessionError>,
     ) -> Result<(), SessionError> {
-        // Home and other non-web addresses move the cursor but are not history.
-        let cursor = self.cursors.entry(id).or_insert(Cursor {
-            address: String::new(),
-            entry: None,
-        });
-        cursor.address.clone_from(&address);
-        cursor.entry = None;
-        if !is_history_address(&address) {
-            return Ok(());
-        }
-        let entry = store
-            .record_visit(address, title.unwrap_or_default(), now()?)
-            .map_err(SessionError::Store)?;
-        cursor.entry = Some(entry.id);
-        catalogue
-            .upsert(history_entry(&entry))
-            .map_err(SessionError::Search)
+        let actions = self.tracker.navigation(id, success).into_iter().collect();
+        self.apply(store, catalogue, id, actions, at, &now)
     }
 
-    fn retitle(
+    /// Writes titles that have settled, or all held titles when `force` is set.
+    pub(super) fn settle(
+        &mut self,
+        store: &Store,
+        catalogue: &mut Catalogue,
+        at: Instant,
+        force: bool,
+        now: impl Fn() -> Result<i64, SessionError>,
+    ) -> Result<(), SessionError> {
+        for action in self.tracker.settle(at, force) {
+            self.apply_one(store, catalogue, None, action, at, &now)?;
+        }
+        Ok(())
+    }
+
+    fn apply(
         &mut self,
         store: &Store,
         catalogue: &mut Catalogue,
         id: TabId,
-        title: String,
+        actions: Vec<Action>,
+        at: Instant,
+        now: &dyn Fn() -> Result<i64, SessionError>,
     ) -> Result<(), SessionError> {
-        let Some(cursor) = self.cursors.get_mut(&id) else {
-            return Ok(());
-        };
-        let Some(entry_id) = cursor.entry else {
-            return Ok(());
-        };
-        // Skip unchanged and empty titles; a duplicate callback writes nothing.
-        let unchanged = catalogue
-            .get(Target::History(entry_id))
-            .is_some_and(|entry| entry.title == title);
-        if title.is_empty() || unchanged {
-            return Ok(());
+        for action in actions {
+            self.apply_one(store, catalogue, Some(id), action, at, now)?;
         }
-        match store
-            .retitle_history(entry_id, title)
-            .map_err(SessionError::Store)?
-        {
-            Some(entry) => catalogue
-                .upsert(history_entry(&entry))
-                .map_err(SessionError::Search),
+        Ok(())
+    }
+
+    fn apply_one(
+        &mut self,
+        store: &Store,
+        catalogue: &mut Catalogue,
+        tab: Option<TabId>,
+        action: Action,
+        at: Instant,
+        now: &dyn Fn() -> Result<i64, SessionError>,
+    ) -> Result<(), SessionError> {
+        match action {
+            Action::Record { address, title } => {
+                let recorded = store
+                    .record_visit(address, title, now()?)
+                    .map_err(SessionError::Store)?;
+                if let Some(tab) = tab {
+                    self.tracker.recorded(tab, &recorded, at);
+                }
+                upsert(catalogue, &recorded.entry)
+            }
+            Action::Retitle { entry, title } => {
+                // A duplicate title writes nothing.
+                let unchanged = catalogue
+                    .get(Target::History(entry))
+                    .is_some_and(|row| row.title == title);
+                if unchanged {
+                    return Ok(());
+                }
+                let changed = store
+                    .retitle_history(entry, title)
+                    .map_err(SessionError::Store)?;
+                self.update_row(catalogue, entry, changed)
+            }
+            Action::Retract { entry, visit } => {
+                let remaining = store.remove_visit(visit).map_err(SessionError::Store)?;
+                self.update_row(catalogue, entry, remaining)
+            }
+        }
+    }
+
+    fn update_row(
+        &mut self,
+        catalogue: &mut Catalogue,
+        entry: std::num::NonZeroU64,
+        current: Option<HistoryEntry>,
+    ) -> Result<(), SessionError> {
+        match current {
+            Some(current) => upsert(catalogue, &current),
             None => {
-                cursor.entry = None;
-                Ok(())
+                self.tracker.entry_removed(entry);
+                catalogue
+                    .remove(Target::History(entry))
+                    .map(drop)
+                    .map_err(SessionError::Search)
             }
         }
     }
 }
 
-/// History keeps only pages loaded from the web, never Home or local schemes.
-fn is_history_address(address: &str) -> bool {
-    address.starts_with("https://") || address.starts_with("http://")
+fn is_live_web(model: &TabModelSnapshot, id: TabId) -> bool {
+    model
+        .tabs
+        .iter()
+        .any(|tab| tab.id == id && tab.kind == TabKind::Web)
+}
+
+fn upsert(catalogue: &mut Catalogue, entry: &HistoryEntry) -> Result<(), SessionError> {
+    catalogue
+        .upsert(history_entry(entry))
+        .map_err(SessionError::Search)
 }
 
 /// The tier-1 search row for one remembered address.
