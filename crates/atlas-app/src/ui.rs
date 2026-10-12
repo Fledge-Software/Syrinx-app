@@ -44,6 +44,7 @@ use crate::{
     navigation,
     palette::{PaletteEvent, PaletteView},
     session::{self, SessionCommand, SessionEvent, SessionHandle},
+    theme,
 };
 
 const SIDEBAR_WIDTH: f32 = 264.;
@@ -949,7 +950,7 @@ impl BrowserView {
             .flex()
             .items_center()
             .gap_2()
-            .bg(rgb(0x141519))
+            .bg(theme::ground())
             .child(button("back", "‹").on_click(cx.listener(|this, _, _, cx| {
                 if let Some(id) = this.shown {
                     this.page_command(BrowserCommand::Back { id: id.get() });
@@ -979,7 +980,7 @@ impl BrowserView {
                     .h(px(34.))
                     .px_3()
                     .rounded_md()
-                    .bg(rgb(0x24262c))
+                    .bg(theme::line())
                     .flex()
                     .items_center()
                     .overflow_hidden()
@@ -1025,13 +1026,17 @@ impl BrowserView {
                 .flex()
                 .items_center()
                 .gap_2()
-                .bg(rgb(if active { 0x343037 } else { 0x141519 }))
+                .bg(if active {
+                    theme::preview_row_selected()
+                } else {
+                    theme::ground()
+                })
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.command(SessionCommand::OpenSaved(saved_id));
                     cx.notify();
                 }))
-                .child(div().text_color(rgb(0xff8a65)).child("◆"))
+                .child(div().text_color(theme::accent()).child("◆"))
                 .child(div().flex_1().overflow_hidden().child(title));
             if let Some(id) = live {
                 row = row.child(div().id(("unload", id.get())).px_1().child("×").on_click(
@@ -1046,7 +1051,7 @@ impl BrowserView {
                 div()
                     .id(("unsave", saved_id.get()))
                     .px_1()
-                    .text_color(rgb(0xa3a6ae))
+                    .text_color(theme::icon_dim())
                     .child("−")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
@@ -1081,11 +1086,11 @@ impl BrowserView {
                         .items_center()
                         .gap_2()
                         .cursor_pointer()
-                        .bg(rgb(if Some(id) == self.model.active_id {
-                            0x343037
+                        .bg(if Some(id) == self.model.active_id {
+                            theme::preview_row_selected()
                         } else {
-                            0x141519
-                        }))
+                            theme::ground()
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.command(SessionCommand::FocusTab(id));
                             cx.notify();
@@ -1108,12 +1113,12 @@ impl BrowserView {
             .flex()
             .flex_col()
             .gap_3()
-            .bg(rgb(0x141519))
+            .bg(theme::ground())
             .child(
                 div()
                     .px_2()
                     .text_lg()
-                    .text_color(rgb(0xff8a65))
+                    .text_color(theme::accent())
                     .child("Atlas"),
             )
             .child(
@@ -1124,7 +1129,7 @@ impl BrowserView {
             .child(
                 div()
                     .text_xs()
-                    .text_color(rgb(0xa3a6ae))
+                    .text_color(theme::icon_dim())
                     .px_2()
                     .child("PLUGINS"),
             )
@@ -1132,10 +1137,10 @@ impl BrowserView {
                 div()
                     .px_2()
                     .py_1()
-                    .text_color(rgb(0xa3a6ae))
+                    .text_color(theme::icon_dim())
                     .child(format!("{name} · coming soon"))
             }))
-            .child(div().h(px(1.)).bg(rgb(0x24262c)))
+            .child(div().h(px(1.)).bg(theme::line()))
             .child(
                 div()
                     .flex()
@@ -1145,7 +1150,7 @@ impl BrowserView {
                             .flex_1()
                             .px_2()
                             .text_xs()
-                            .text_color(rgb(0xa3a6ae))
+                            .text_color(theme::icon_dim())
                             .child("SAVED & OPEN TABS"),
                     )
                     .child(
@@ -1178,7 +1183,7 @@ impl Render for BrowserView {
         let mut page = div().flex_1().h_full();
         if self.shown.is_none() {
             page = page
-                .bg(rgb(0x141519))
+                .bg(theme::ground())
                 .flex()
                 .flex_col()
                 .items_center()
@@ -1187,7 +1192,7 @@ impl Render for BrowserView {
                 .child(div().text_3xl().child("Your workspace, together."))
                 .child(
                     div()
-                        .text_color(rgb(0xa3a6ae))
+                        .text_color(theme::icon_dim())
                         .child("Open a page, or press Ctrl K to find your tabs and saved pages."),
                 )
                 .child(button("home-search", "Search or enter address").on_click(
@@ -1196,7 +1201,7 @@ impl Render for BrowserView {
         }
         div()
             .size_full()
-            .text_color(rgb(0xecedf0))
+            .text_color(theme::text())
             .text_sm()
             .font_family("Segoe UI Variable Text")
             .track_focus(&self.focus)
@@ -1262,11 +1267,11 @@ impl Render for BrowserView {
                 div()
                     .h(px(FOOTER_HEIGHT))
                     .px_3()
-                    .bg(rgb(0x141519))
+                    .bg(theme::ground())
                     .flex()
                     .items_center()
                     .text_xs()
-                    .text_color(rgb(0xb4b7bf))
+                    .text_color(theme::icon())
                     .child(self.failure.as_ref().unwrap_or(&self.message).clone()),
             )
     }
@@ -1331,7 +1336,7 @@ fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
         .px_3()
         .py_2()
         .rounded_md()
-        .bg(rgb(0x24262c))
+        .bg(theme::line())
         .cursor_pointer()
         .child(label)
 }

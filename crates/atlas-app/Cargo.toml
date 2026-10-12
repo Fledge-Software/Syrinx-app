@@ -11,6 +11,7 @@ atlas-core = { path = "../atlas-core" }
 atlas-platform = { path = "../atlas-platform" }
 atlas-search = { path = "../atlas-search" }
 atlas-store = { path = "../atlas-store" }
+atlas-ui = { path = "../atlas-ui" }
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component.workspace = true
