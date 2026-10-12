@@ -5,7 +5,7 @@
 use atlas_ui::{
     Accent, Color, Palette, PaletteId, SidebarWidthState,
     contrast::{self, ContrastCheck},
-    metrics::{radius, space, text},
+    metrics::{chrome, radius, space, text},
     palette, sidebar,
 };
 use gpui::{
@@ -344,7 +344,7 @@ fn window_sample(frame: &Palette, label: &'static str, sidebar_width: f32, peek:
         .top(px(0.))
         .w(px(SAMPLE_WIDTH - reserved))
         .h(px(SAMPLE_HEIGHT))
-        .p(px(sidebar::PEEK_EDGE_ZONE))
+        .p(px(chrome::CARD_INSET))
         .child(
             div()
                 .size_full()

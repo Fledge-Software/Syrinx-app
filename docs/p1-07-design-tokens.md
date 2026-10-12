@@ -71,17 +71,26 @@ The audit measures:
   its input; minimum 4.5:1;
 - icons on the ground, card and panel, and the accent ink as a selection mark;
   minimum 3:1 (WCAG 1.4.11, non-text);
+- the accent ink as text: the palette draws matched characters in it
+  (`design/canvas/project/Palette.dc.html`, the bold `mark` spans), so it is
+  also checked on the palette panel and on the selected palette row (the
+  accent wash over the panel); minimum 4.5:1;
 - each tile and plugin monogram on its own tile, and badge text on the accent;
   minimum 4.5:1.
 
-Translucent layers are blended over every colour the ground can present and
-the worst result is kept. For Haze and Glass that means the canvas's stand-in
+Every palette is audited with each of the four accent presets, and each
+result is labelled `palette/accent/foreground/background` so failures that
+depend on the accent can be told apart. Translucent layers, including
+Glass's translucent tiles, are blended over every colour the ground can
+present and the worst result is kept. For Haze and Glass that means the canvas's stand-in
 wallpaper colours, whose most saturated centres are a harsher test than an
 average wallpaper. Disabled controls are exempt under WCAG and are not checked.
 
 The canvas values miss the minimum in these pairs. They are reported, not
 retuned: changing a palette value is a design decision for the owner.
-Ratios are for the default accent unless noted.
+Unless the table says otherwise, a pair fails with every accent preset and
+the ratio is the same for each. The test's list therefore has 55 entries,
+one per palette, accent and pair.
 
 | Palette | Foreground on background | Ratio | Minimum |
 |---|---|---|---|
@@ -99,8 +108,13 @@ Ratios are for the default accent unless noted.
 | Glass | bright secondary text on the selected row | 4.39 | 4.5 |
 | Glass | accent ink on the page card (blue preset `#6EA8FF` only) | 2.94 | 3.0 |
 | Tint | muted text on the selected row (green and gold presets only) | 4.33–4.36 | 4.5 |
+| Paper | accent ink as matched text on the palette panel (green `#6FD3A8` and gold `#E8C16A` only) | 4.17, 4.21 | 4.5 |
+| Paper | accent ink as matched text on the selected palette row (green and gold only) | 3.85, 3.91 | 4.5 |
 
-Every Paper pair, every monogram tile and every badge passes. The muted grey
+Paper's darker ink, `hsl(h, min(85, s)%, 36%)`, is still too light for the
+green and gold hues at 36% lightness; the default and blue accents pass. Every
+monogram tile (Glass's included, over every stand-in wallpaper) and every
+badge passes. The muted grey
 on a selected row is the pattern that recurs: the canvas shows a plugin's open
 item ("Forge · fledge-core") in muted text on the selected row. Glass's
 failures come from its brightest stand-in wallpaper disc (`#C4623B`), which
@@ -169,7 +183,7 @@ Then decide:
 
 On 2026-10-11 the full local gate, `cargo xtask check`, passed on branch
 `claude/p1-07-design-tokens` (dependency boundaries, formatting, Clippy with
-warnings denied, every workspace test including atlas-ui's 25 and the
+warnings denied, every workspace test including atlas-ui's 27 and the
 application smoke run); the log is `target/p1-07-gate.log`. No Application
 Control (os error 4551) block occurred. A normal launch of
 `--palette-sample` opened a window titled "Atlas · design token review

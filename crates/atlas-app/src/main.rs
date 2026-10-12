@@ -28,16 +28,14 @@ use std::{
 compile_error!("Atlas v1 supports Windows 11 only.");
 
 fn main() -> ExitCode {
-    let options = match options() {
-        Ok(options) => options,
+    let options = match run_mode() {
+        Ok(RunMode::Browser(options)) => options,
+        Ok(RunMode::PaletteSample) => return run_palette_sample(),
         Err(message) => {
             eprintln!("{message}");
             return ExitCode::FAILURE;
         }
     };
-    if options.palette_sample {
-        return run_palette_sample();
-    }
     // The GUI's orderly timeout cannot run while startup or its event thread is stalled.
     let watchdog = if options.smoke {
         match smoke_watchdog::SmokeWatchdog::start() {
@@ -145,13 +143,18 @@ fn run_palette_sample() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// What this launch does: the browser, or the development-only token review window.
+enum RunMode {
+    Browser(Options),
+    PaletteSample,
+}
+
 struct Options {
     directory: PathBuf,
     smoke: bool,
-    palette_sample: bool,
 }
 
-fn options() -> Result<Options, &'static str> {
+fn run_mode() -> Result<RunMode, &'static str> {
     let mut smoke = false;
     let mut test_directory = None;
     let mut arguments = std::env::args_os().skip(1);
@@ -160,11 +163,7 @@ fn options() -> Result<Options, &'static str> {
             if arguments.next().is_some() || smoke || test_directory.is_some() {
                 return Err("--palette-sample takes no other arguments.");
             }
-            return Ok(Options {
-                directory: PathBuf::new(),
-                smoke: false,
-                palette_sample: true,
-            });
+            return Ok(RunMode::PaletteSample);
         } else if argument == "--smoke" {
             smoke = true;
         } else if argument == "--test-data-dir" {
@@ -197,11 +196,7 @@ fn options() -> Result<Options, &'static str> {
     if smoke {
         reserve_smoke_directory(&directory)?;
     }
-    Ok(Options {
-        directory,
-        smoke,
-        palette_sample: false,
-    })
+    Ok(RunMode::Browser(Options { directory, smoke }))
 }
 
 fn reserve_smoke_directory(directory: &Path) -> Result<(), &'static str> {
