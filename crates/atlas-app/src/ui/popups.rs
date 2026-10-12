@@ -3,6 +3,14 @@
 use super::{BrowserCommand, BrowserView, SessionCommand, TabId};
 
 impl BrowserView {
+    pub(super) fn popup_creation_failed(&mut self, id: TabId) -> bool {
+        let Some(command) = failed_adoption(id, &self.popup_pages, &mut self.pending_pages) else {
+            return false;
+        };
+        self.command(command);
+        true
+    }
+
     pub(super) fn blank_popup(&self) -> Option<(TabId, String)> {
         desired_popup(&self.model, &self.popup_pages, self.browser_ready)
     }
@@ -46,6 +54,20 @@ impl BrowserView {
     }
 }
 
+fn failed_adoption(
+    id: TabId,
+    popups: &std::collections::HashSet<TabId>,
+    pending: &mut std::collections::HashSet<TabId>,
+) -> Option<SessionCommand> {
+    if !popups.contains(&id) {
+        pending.remove(&id);
+        return None;
+    }
+    // Block ordinary creation until the durable close removes the failed popup.
+    pending.insert(id);
+    Some(SessionCommand::ObserveClosed(id))
+}
+
 fn desired_popup(
     model: &atlas_core::TabModelSnapshot,
     popups: &std::collections::HashSet<TabId>,
@@ -66,6 +88,37 @@ fn desired_popup(
 mod tests {
     use super::*;
     use atlas_core::{Activation, TabKind, TabMetadata, TabModel};
+
+    #[test]
+    fn failed_adoption_stays_pending_until_durable_close() {
+        let mut model = TabModel::new();
+        let popup = model
+            .open(TabKind::Web, TabMetadata::default(), Activation::Foreground)
+            .expect("synthetic popup");
+        let popups = std::collections::HashSet::from([popup]);
+        let mut pending = popups.clone();
+        assert!(matches!(
+            failed_adoption(popup, &popups, &mut pending),
+            Some(SessionCommand::ObserveClosed(id)) if id == popup
+        ));
+        // Reselecting the still-committed tab cannot enqueue ordinary Create.
+        assert!(pending.contains(&popup));
+        let loaded = std::collections::HashSet::new();
+        assert!(
+            super::super::page_lifecycle::removed(&model.snapshot(), &loaded, &pending).is_empty()
+        );
+        model.close(popup).expect("commit failed popup close");
+        assert_eq!(
+            super::super::page_lifecycle::removed(&model.snapshot(), &loaded, &pending),
+            vec![popup]
+        );
+        assert_eq!(desired_popup(&model.snapshot(), &popups, true), None);
+
+        let ordinary = TabId::new(popup.get() + 1).expect("synthetic ordinary page");
+        pending.insert(ordinary);
+        assert!(failed_adoption(ordinary, &popups, &mut pending).is_none());
+        assert!(!pending.contains(&ordinary));
+    }
 
     #[test]
     fn only_a_live_adopted_blank_tab_overrides_home() {

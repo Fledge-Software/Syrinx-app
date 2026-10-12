@@ -386,11 +386,16 @@ impl BrowserView {
             }
             BrowserEvent::CreationFailed { id, error } => {
                 let active = self.active_page_feedback(id);
+                let mut popup_failed = false;
                 if let Ok(id) = TabId::new(id) {
-                    self.pending_pages.remove(&id);
+                    popup_failed = self.popup_creation_failed(id);
                     self.navigation_status.forget(id);
                 }
-                if active {
+                if popup_failed {
+                    self.message = format!(
+                        "{error}. Closing the popup because its opener could not be preserved."
+                    );
+                } else if active {
                     self.message = format!("{error}. Select the tab to retry.");
                 }
                 if self.smoke {
