@@ -1,8 +1,10 @@
 # P1-06: GPUI idle repaint patch, results
 
 Date: 2026-10-12. Branch `claude/p1-06-gpui-idle-v2`. Status: patch vendored,
-measured and gated; the eight-suspended-tab criterion and the first-page
-startup comparison remain open (see "What remains").
+measured and gated; the idle result is a provisional pass only. The
+quiet-machine and eight-suspended-tab measurements, the first-page startup
+comparison and the owner's visual and touchpad check of a patched window
+remain open (see "What remains").
 
 ## Why this work exists
 
@@ -66,12 +68,17 @@ runs as noise.
   unpatched `atlas-app` was built by temporarily removing the patch line and
   restored afterwards; the two executables differ only in that package and
   its dependants.
-- **Harness.** A throwaway program (source kept in the ignored
-  `target/p1-06-idle-evidence/harness/`, not committed) opens static GPUI
-  windows. A thread-local `WH_GETMESSAGE` hook counts `WM_PAINT` messages
+- **Evidence files.** The harness source, the measurement scripts and the
+  text logs are committed under `docs/evidence/p1-06/`. The absolute path in
+  the patched harness manifest is replaced by `<atlas checkout>`; the logs
+  contain only process names, synthetic profile runs and timings. The gate
+  log stays in the ignored `target/` because it contains local user paths;
+  its hash is recorded below.
+- **Harness.** A throwaway program (`docs/evidence/p1-06/harness/`, kept
+  exactly as it ran, not part of the workspace) opens static GPUI windows. A thread-local `WH_GETMESSAGE` hook counts `WM_PAINT` messages
   removed from the queue for each window, and each view counts its GPUI
   renders. It does not modify GPUI, so it runs identically on both builds.
-- **Idle CPU.** `target/p1-06-idle-evidence/measure.ps1` launches the
+- **Idle CPU.** `docs/evidence/p1-06/measure.ps1` launches the
   program with a normal visible window, waits 30 s, reads
   `Get-Process ... TotalProcessorTime` for the process and every descendant
   process, waits 300 s, reads again, and divides the CPU-seconds used by the
@@ -81,12 +88,18 @@ runs as noise.
   newly named temporary directory, so it opened a synthetic empty profile; it
   showed the Home view and started no WebView2 process, so its process tree
   was atlas-app alone. It was closed through its window afterwards.
+  Two limits of the script: a descendant that exits inside the 300 s window
+  is not counted (it is only reported as "exited during window", which was
+  0 in every run), and the retained logs' `EXIT` lines are blank because the
+  script did not keep the process handle open. The committed copy now opens
+  the handle, so future runs record the exit code; it was checked once.
 - **Behaviour scenarios.** The harness's `scenarios --expect-idle` mode runs
-  ten checks over two windows: initial paint, idle paint rate, notify after
-  idle (only the notified window renders), a next-frame callback with no
-  dirty view, demand raised during a frame, a 60-frame animation that then
-  returns to idle, notifying the second window, work requested while
-  minimized delivered on restore, a native resize, and final idle.
+  14 checks over two windows, in ten steps: initial paint; idle paint rate
+  and idle renders; notify after idle (only the notified window renders); a
+  next-frame callback with no dirty view; demand raised during a frame; a
+  60-frame animation, then no renders and no paints afterwards; notifying the
+  second window; work requested while minimized delivered on restore; a
+  native resize; and final idle renders and paints.
 - **Unit tests.** `src/frame_demand.rs` carries eight tests for the latch and
   the invalidation rule.
 
@@ -113,22 +126,37 @@ animation and 18/s at the end) and the patched build passes all of them.
 | Harness (one window) | 1.859% | 1.656% | 0.460% | 0.244% |
 | `atlas-app`, fresh profile | 1.996% | 1.755% | 0.347% | 0.229% |
 
-All four patched runs are under the 0.5% bar; all four unpatched runs are
-over it by more than three times. The patch removes roughly 80 to 85% of idle
-CPU. The margin is thin in one run (0.460%). The remaining cost is most likely
-the VSync thread still waking once per display refresh, as the design review
-predicted; this was inferred, not profiled per thread.
+All four patched runs are under the 0.5% bar and all four unpatched runs are
+more than three times over it. The patch removes roughly 80 to 85% of idle
+CPU. **This is a provisional pass, not final D37 evidence.** The margin is
+small: the two harness runs were 0.244% and 0.460%, and 0.460% is only 8%
+under the bar. All runs were taken while other agents' builds were running on
+the machine, and only two runs per build were made. Final D37 evidence needs
+repeated runs on a quiet machine and the eight-suspended-tab case after P1-15.
+The remaining cost is most likely the VSync thread still waking once per
+display refresh, as the design review predicted; this was inferred, not
+profiled per thread.
+
+The unpatched `atlas-app` measured 1.76 to 2.00% here, against Phase 0's
+3.75%. The reason is not known. The programs differ (Phase 0 measured its
+throwaway spike, not this application), and so did the machine load, but
+neither cause was tested.
 
 ### Behaviour
 
-The scenario runs are in `target/p1-06-idle-evidence/scenarios-*.log`. All
-behavioural checks pass on both builds: initial paint of two windows, notify
-after idle in about 15 ms with no render of the other window, a next-frame
-callback in 16 to 32 ms, mid-frame demand served, a 60-frame animation in
-about 2.65 s (both builds) followed by zero renders, no renders while
-minimized and pending work delivered on restore, and a native resize render in
-about 22 ms. The eight `frame_demand` unit tests pass
-(`target/p1-06-idle-evidence/frame-demand-tests.log`).
+The retained scenario runs are `docs/evidence/p1-06/scenarios-patched.log`
+and `scenarios-unpatched.log`. All behavioural checks pass on both builds; the
+unpatched build fails only the three paint-rate checks. Timings from the
+retained patched log: initial paint of both windows within 0.15 ms of
+opening; notify after idle rendered window A in 27 ms with no render of B; a
+next-frame callback ran in 6 ms; mid-frame demand was served in 128 ms; the
+60-frame animation finished in 2.57 s and was followed by zero renders and
+zero paints; notifying window B rendered it in 74 ms with no render of A; no
+renders while minimized, and the pending work was drawn during restore; a
+native resize rendered in 67 ms. (An earlier interactive run gave about 15 ms
+for notify and 2.65 s for the animation; timings vary with machine load.) The
+eight `frame_demand` unit tests pass
+(`docs/evidence/p1-06/frame-demand-tests.log`).
 
 ### Gate
 
@@ -166,7 +194,8 @@ The workspace gate does not run the vendored crate's tests (see below).
 - **Eight suspended tabs.** D37's bar is stated with eight tabs suspended.
   Suspension does not exist until P1-15, and hiding page views is not
   suspension, so this criterion stays open. Suspended WebView2 processes will
-  add their own cost on top of the 0.23 to 0.35% measured here.
+  add their own cost on top of the 0.23 to 0.35% measured for `atlas-app`
+  (and up to 0.46% for the harness) here.
 - **First-page startup.** P1-06 also asks for the equivalent start-to-first-
   page comparison over five launches; it was not run in this slice.
 
@@ -198,6 +227,7 @@ The workspace gate does not run the vendored crate's tests (see below).
 
 ## What remains
 
+- Repeat the idle runs on a quiet machine; the current pass is provisional.
 - Remeasure with eight suspended tabs once P1-15 implements suspension; if
   the result exceeds 0.5% of one core, the next step is the reviewed VSync
   parking change, and failure returns the tradeoff to the owner under D37.
