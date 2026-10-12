@@ -67,34 +67,16 @@ impl BrowserView {
         request: u64,
         result: Result<Option<bool>, StoreError>,
     ) {
-        let Some(index) = self
-            .permissions
-            .iter()
-            .position(|prompt| prompt.id == id && prompt.request == request)
-        else {
+        let Some(command) = resolve_saved_choice(
+            &mut self.permissions,
+            &mut self.message,
+            id,
+            request,
+            result,
+        ) else {
             return;
         };
-        match result {
-            Ok(None) => self.permissions[index].waiting = false,
-            result => {
-                let allowed = match result {
-                    Ok(Some(allowed)) => allowed,
-                    Err(error) => {
-                        self.message = format!(
-                            "Permission denied because its saved choice could not be read or saved: {error}"
-                        );
-                        false
-                    }
-                    Ok(None) => unreachable!("handled above"),
-                };
-                self.permissions.remove(index);
-                self.page_command(BrowserCommand::ResolvePermission {
-                    id,
-                    request,
-                    allowed,
-                });
-            }
-        }
+        self.page_command(command);
     }
 
     pub(super) fn active_permission(&self) -> Option<usize> {
@@ -218,6 +200,38 @@ impl BrowserView {
     }
 }
 
+// Keep stale replies inert and leave an unknown choice available for explicit consent.
+fn resolve_saved_choice(
+    prompts: &mut Vec<Prompt>,
+    message: &mut String,
+    id: u64,
+    request: u64,
+    result: Result<Option<bool>, StoreError>,
+) -> Option<BrowserCommand> {
+    let index = prompts
+        .iter()
+        .position(|prompt| prompt.id == id && prompt.request == request)?;
+    let allowed = match result {
+        Ok(None) => {
+            prompts[index].waiting = false;
+            return None;
+        }
+        Ok(Some(allowed)) => allowed,
+        Err(error) => {
+            *message = format!(
+                "Permission denied because its saved choice could not be read or saved: {error}"
+            );
+            false
+        }
+    };
+    prompts.remove(index);
+    Some(BrowserCommand::ResolvePermission {
+        id,
+        request,
+        allowed,
+    })
+}
+
 fn matches_prompt(prompt: &Prompt, shown: Option<u64>, id: u64, request: u64) -> bool {
     shown == Some(id) && prompt.id == id && prompt.request == request && !prompt.waiting
 }
@@ -235,6 +249,61 @@ fn canonical_origin(uri: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pending_prompt() -> Prompt {
+        Prompt {
+            id: 1,
+            request: 2,
+            origin: "https://example.test".into(),
+            kind: PermissionKind::Camera,
+            remember: false,
+            waiting: true,
+        }
+    }
+
+    #[test]
+    fn unknown_choice_waits_for_consent_and_stale_replies_are_inert() {
+        let mut prompts = vec![pending_prompt()];
+        let mut message = String::new();
+        for (id, request) in [(1, 3), (3, 2)] {
+            assert!(
+                resolve_saved_choice(&mut prompts, &mut message, id, request, Ok(Some(true)))
+                    .is_none()
+            );
+            assert!(prompts[0].waiting);
+        }
+        assert!(resolve_saved_choice(&mut prompts, &mut message, 1, 2, Ok(None)).is_none());
+        assert_eq!(prompts.len(), 1);
+        assert!(!prompts[0].waiting);
+        assert!(message.is_empty());
+    }
+
+    #[test]
+    fn remembered_choices_finish_once_and_storage_errors_deny() {
+        for (result, expected, failed) in [
+            (Ok(Some(true)), true, false),
+            (Ok(Some(false)), false, false),
+            (
+                Err(StoreError::InvalidEncoding(
+                    atlas_store::EncodingField::Permission,
+                )),
+                false,
+                true,
+            ),
+        ] {
+            let mut prompts = vec![pending_prompt()];
+            let mut message = String::new();
+            assert!(matches!(
+                resolve_saved_choice(&mut prompts, &mut message, 1, 2, result),
+                Some(BrowserCommand::ResolvePermission { id: 1, request: 2, allowed }) if allowed == expected
+            ));
+            assert!(prompts.is_empty());
+            assert_eq!(message.contains("Permission denied"), failed);
+            assert!(
+                resolve_saved_choice(&mut prompts, &mut message, 1, 2, Ok(Some(true))).is_none()
+            );
+        }
+    }
 
     #[test]
     fn stale_consent_cannot_grant_a_replacement_request_or_tab() {
