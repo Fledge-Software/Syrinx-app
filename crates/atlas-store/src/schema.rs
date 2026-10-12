@@ -119,6 +119,10 @@ const DELETION_STATE_TABLE: &str = "CREATE TABLE history_deletion_state (
 const HISTORY_VISITS_INDEX: &str =
     "CREATE INDEX history_visits_by_url ON history_visits(url_id, visited_at)";
 
+// Version 5: range clears and retention expiry find visits by time without a full scan.
+const HISTORY_TIME_INDEX: &str =
+    "CREATE INDEX history_visits_by_time ON history_visits(visited_at)";
+
 // Owner preferences as documented keys and text values; `docs/p1-28-29-home-settings.md` lists them.
 const SETTINGS_TABLE: &str = "CREATE TABLE settings (
     key TEXT PRIMARY KEY NOT NULL CHECK(length(key) BETWEEN 1 AND 64),
@@ -349,7 +353,9 @@ pub(crate) fn history_migration() -> String {
 /// Version 5: records that no clear has been applied yet. The startup reconcile replays the
 /// journal past this generation, so history kept from an older file is still cleared.
 pub(crate) fn deletions_migration() -> String {
-    format!("{DELETION_STATE_TABLE}; INSERT INTO history_deletion_state VALUES (1, 0);")
+    format!(
+        "{DELETION_STATE_TABLE}; INSERT INTO history_deletion_state VALUES (1, 0); {HISTORY_TIME_INDEX};"
+    )
 }
 
 /// Owns the migration SQL that `rusqlite_migration` borrows, numbered by position.
@@ -492,18 +498,30 @@ const HISTORY_OBJECTS: &[SchemaObject] = &[
 ];
 
 /// Version 5 adds only this table, which sorts before every version 4 object.
-static DELETION_STATE_OBJECT: SchemaObject = table("history_deletion_state", DELETION_STATE_TABLE);
+/// Version 5 adds the applied clear generation and the visit-time index to version 4.
+const DELETION_ADDED_OBJECTS: &[SchemaObject] = &[
+    table("history_deletion_state", DELETION_STATE_TABLE),
+    SchemaObject {
+        kind: "index",
+        name: "history_visits_by_time",
+        table: "history_visits",
+        sql: HISTORY_TIME_INDEX,
+    },
+];
 
 /// Objects of each generation, sorted by name as `sqlite_schema` lists them.
-fn expected_objects(generation: SchemaGeneration) -> impl Iterator<Item = &'static SchemaObject> {
-    let (added, base) = match generation {
-        SchemaGeneration::FlatSaved => (None, FLAT_OBJECTS),
-        SchemaGeneration::Folders => (None, FOLDER_OBJECTS),
-        SchemaGeneration::Preferences => (None, PREFERENCE_OBJECTS),
-        SchemaGeneration::History => (None, HISTORY_OBJECTS),
-        SchemaGeneration::Deletions => (Some(&DELETION_STATE_OBJECT), HISTORY_OBJECTS),
+fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> {
+    let (added, base): (&[SchemaObject], _) = match generation {
+        SchemaGeneration::FlatSaved => (&[], FLAT_OBJECTS),
+        SchemaGeneration::Folders => (&[], FOLDER_OBJECTS),
+        SchemaGeneration::Preferences => (&[], PREFERENCE_OBJECTS),
+        SchemaGeneration::History => (&[], HISTORY_OBJECTS),
+        SchemaGeneration::Deletions => (DELETION_ADDED_OBJECTS, HISTORY_OBJECTS),
     };
-    added.into_iter().chain(base)
+    let mut objects: Vec<_> = added.iter().chain(base).collect();
+    // Byte order of names, as `ORDER BY name` lists them under SQLite's binary collation.
+    objects.sort_by_key(|object| object.name);
+    objects
 }
 
 fn validate_schema(

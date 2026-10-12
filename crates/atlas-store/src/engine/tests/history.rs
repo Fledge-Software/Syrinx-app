@@ -436,6 +436,7 @@ fn version_4_history_upgrades_to_an_unapplied_deletion_generation() {
     let connection = directory.connection();
     assert_eq!(user_version(&connection), 5);
     assert!(object_exists(&connection, "history_deletion_state"));
+    assert!(object_exists(&connection, "history_visits_by_time"));
     close(connection);
     directory.cleanup();
 }

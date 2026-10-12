@@ -3,7 +3,8 @@
 mod maintenance;
 
 pub(super) use maintenance::{
-    open_movable, open_readonly, remove_checked_directory, remove_checked_file, rename_no_replace,
+    create_movable, open_movable, open_readonly, remove_checked_directory, remove_checked_entry,
+    remove_checked_file, rename_no_replace, rename_replacing,
 };
 
 use std::{

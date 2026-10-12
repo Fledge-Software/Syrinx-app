@@ -94,8 +94,10 @@ directory entry survives a power cut.
   flushed, so something may already have acted on it.
 
 Schema version 5 adds `history_deletion_state`, the newest clear generation
-the database has applied. It is the barrier against a lost journal: every
-start compares it with the journal and
+the database has applied, and the index `history_visits_by_time`, so range
+clears and retention find visits by time instead of scanning every visit.
+The generation is the barrier against a lost journal: every start compares
+it with the journal and
 
 - replays any journal clear the database lacks (a restored or older file);
 - finishes an interrupted clear;
@@ -123,11 +125,22 @@ On confirmation (`DeletionJournal::rebuild`, `session/history_repair.rs`):
 
 1. the damaged journal's bytes are preserved beside it as
    `atlas.deletions.damaged-<time>`, the way D46 keeps damaged databases;
-2. a new journal is written holding one completed **all-time** clear for
-   every generation up to the database's, then flushed with its folder;
-3. the start-up appends and runs one more all-time clear through the normal
-   request, apply and complete steps, so the live database is empty of
-   history before anything reads it.
+2. the new journal is written to `atlas.deletions.rebuild` and flushed. It
+   holds one completed **all-time** clear for every generation up to the
+   database's, then one more all-time clear as a *requested* record;
+3. the old journal is released, the new file is renamed over it in one
+   atomic step, and the folder is flushed;
+4. the start-up's normal reconciliation applies the requested all-time clear
+   and completes it, so the live database is empty of history before
+   anything reads it.
+
+A crash at any step is safe. Before the rename, the damaged journal is still
+in place, so the next start offers the repair again, and the next repair
+removes the leftover `.rebuild` file first. After the rename, the journal is
+complete and valid and its requested clear is still pending, so the next
+start finishes it without asking. The first version truncated the journal in
+place before writing, which a crash could leave empty, and ran the all-time
+clear as a separate step that a crash could skip without anyone noticing.
 
 Why this honours D46 and D47: D47 requires that a restore can never bring
 cleared history back. Each rebuilt generation claims all time, a superset of
@@ -170,22 +183,51 @@ without limit (D48 plans for 100,000 rows).
 Expiry is an ordinary D47 range clear, not a separate deletion path:
 
 - At start-up, after reconciliation and before the catalogue loads,
-  `deletions::expire_at_startup` clears `[0, end)`, where `end` is 90 days
-  ago, or earlier if more than 2,000 visits are that old
+  `retention::expire_at_startup` clears `[0, end)`, where `end` is the
+  cutoff, or earlier if more than 2,000 visits are older than it
   (`Store::history_expiry_end`). Expired addresses therefore never reach the
   catalogue.
+- **The cutoff is 90 days before the earlier of the clock and the newest
+  stored visit.** A clock that jumps a year ahead therefore cannot expire the
+  most recent 90 days of real browsing; without the cap it would journal a
+  clear that also replays onto every backup.
 - While the session is idle, the check that also runs the daily backup calls
   `Worker::expire_while_idle`. A backlog left by the bound continues one batch
   per idle check; once nothing has expired, the next expiry waits a day.
+- The next due time is saved in the settings table (`history.expiry_due`,
+  kept out of the appearance settings handed to the window). A start within
+  a day of the last expiry skips it, so restarting many times a day adds
+  nothing to the journal. A saved time more than a day ahead, left by a clock
+  that moved back, is ignored.
 - Each expiry is journaled, applied and completed like an owner's clear, so a
   restored backup replays it and old visits cannot come back. Nothing is
-  journaled when nothing has expired, so the journal grows by at most one
-  clear a day.
+  journaled when nothing has expired.
 - A journal refusal during an idle expiry is shown once and retried the next
   day; a storage failure stops the session, as it does for an owner's clear.
 
 The rejected alternatives were a visit-count cap (the owner chose an age),
 and unjournaled pruning, which a backup restore would undo.
+
+**Journal growth.** Each clear adds two 48-byte records, and the journal
+refuses new clears at 16 MiB, which is about 174,000 clears. At one expiry a
+day plus the owner's own clears that is centuries, so compaction (folding old
+completed clears together) is not needed and is not registered as deferred
+work.
+
+**Measured cost** (2026-10-12, this machine, `local` profile, 100,000
+synthetic visits to 10,000 addresses spread over 200 days, one 2,000-visit
+batch; a throwaway timing test that is not part of the suite):
+
+| Step | Without the time index | With `history_visits_by_time` |
+| --- | --- | --- |
+| Find the batch end (`history_expiry_end`) | 13.7 ms | 0.2–0.3 ms |
+| Apply the clear (`apply_history_deletions`) | 47 ms | 40–51 ms |
+| Load 10,000 addresses for the catalogue | 5 ms | 5–7 ms |
+
+Applying a clear is dominated by recounting every remembered address after
+the visits go, not by finding them. Together with the journal's two flushed
+records and the saved due time, start-up expiry stays well under a tenth of
+a second at D48's scale.
 
 ## Known limits
 
@@ -201,6 +243,10 @@ and unjournaled pruning, which a backup restore would undo.
 - A retention batch that stops at its 2,000-visit bound leaves older visits
   in the catalogue until the idle checks catch up, a few minutes after the
   first start with a large backlog.
+- Visits recorded while the clock was far ahead carry that wrong time. Once
+  one exists, retention measures 90 days back from it, so real visits more
+  than 90 days older than that wrong visit can expire. The cap protects
+  against a jumped clock, not against browsing for a while under one.
 
 ## Tests
 
@@ -222,9 +268,15 @@ All on disposable synthetic data with reserved domains:
   changes nothing, a confirmed one clears all history for good; a clear whose
   request was journaled before a crash finishes at the next start;
 - retention: the bounded expiry end (cutoff, limit, shared oldest second);
-  start-up expiry of visits older than 90 days, journaled once and not
-  repeated when nothing else has expired; idle expiry in bounded batches with
-  the catalogue following, then waiting a day;
+  start-up expiry of visits older than 90 days, journaled once, and a second
+  start within the day that journals nothing even with a newly expired
+  visit; a clock a year ahead that expires nothing; idle expiry in bounded
+  batches with the catalogue following, then waiting a day; the version 5
+  migration's time index;
+- repair crash safety: stopping after the replacement is written leaves the
+  damaged journal refused and the repair repeatable; a repeated repair
+  removes the leftover file; stopping after the rename leaves the all-time
+  clear requested, and the next start applies it without asking;
 - dialog: matching spans for both parts, stale replies ignored, partial
   failure wording with WebView2's error code, a close failure reported apart
   from a successful clear, a stopped session ending the wait, cache-only
