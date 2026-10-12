@@ -17,8 +17,9 @@ use std::{
 };
 
 use atlas_core::{
-    Activation, DestinationEdit, DestinationError, DestinationSurface, QuickDestinations,
-    SavedPageId, SnapshotError, TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot,
+    Activation, BookmarkImport, DestinationEdit, DestinationError, DestinationSurface,
+    ImportCommit, QuickDestinations, SavedPageId, SavedPageSnapshot, SnapshotError, TabError,
+    TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, commit_bookmark_import,
 };
 use atlas_platform::{StartupStorage, WindowsDirectoryLease};
 use atlas_search::{
@@ -71,6 +72,12 @@ pub enum SessionCommand {
         address: Option<String>,
     },
     ReopenClosed,
+    /// Writes a confirmed bookmark import as one new folder of unloaded saved pages (P1-22).
+    ImportBookmarks {
+        request_id: u64,
+        import: Box<BookmarkImport>,
+        folder_title: String,
+    },
     /// Inserts or replaces documented settings keys (`docs/p1-28-29-home-settings.md`).
     SaveSettings(Vec<(String, String)>),
     /// Changes one Quick access or Favorites tile list.
@@ -133,6 +140,11 @@ pub enum SessionEvent {
     Search {
         request_id: u64,
         result: Result<SearchResults, SessionError>,
+    },
+    /// Sent after the import's single save committed, or when the model refused it unchanged.
+    Imported {
+        request_id: u64,
+        result: Result<ImportCommit, SessionError>,
     },
     History {
         request_id: u64,
@@ -376,7 +388,7 @@ impl Worker {
                 destinations: self.destinations.clone(),
             },
         )?;
-        self.publish(events, Vec::new(), None, None)?;
+        self.publish(events, self.model.snapshot(), Vec::new(), None, None)?;
         let mut delay = IDLE_DELAY;
         loop {
             // Held page titles are written once they settle, even while nothing else happens.
@@ -457,6 +469,11 @@ impl Worker {
                 Ok(command) => command,
                 Err(error) => return emit_recoverable(events, error),
             },
+            SessionCommand::ImportBookmarks {
+                request_id,
+                import,
+                folder_title,
+            } => return self.import_bookmarks(store, request_id, &import, folder_title, events),
             command => command,
         };
         let Some(command) = preferences::intercept(store, &mut self.destinations, command, events)?
@@ -482,13 +499,7 @@ impl Worker {
         if let Err(error) = apply_model(&mut self.model, command) {
             return emit_recoverable(events, error);
         }
-        let after = self.model.snapshot();
-        if before != after {
-            self.revision = store
-                .save(self.revision, after.clone())
-                .map_err(SessionError::Store)?;
-            sync_catalogue(&mut self.catalogue, &before, &after)?;
-        }
+        let after = self.persist(store, &before)?;
         self.history.retain(&after);
         if let Some(observation) = observation {
             self.record_history(store, &after, observation, events)?;
@@ -500,7 +511,47 @@ impl Worker {
             .map(|tab| tab.id)
             .collect();
         let navigate = if navigating { after.active_id } else { None };
-        self.publish(events, created, navigate, home_entry)
+        self.publish(events, after, created, navigate, home_entry)
+    }
+
+    /// Saves the model if it changed since `before`, in one store transaction, then reindexes.
+    fn persist(
+        &mut self,
+        store: &Store,
+        before: &TabModelSnapshot,
+    ) -> Result<TabModelSnapshot, SessionError> {
+        let after = self.model.snapshot();
+        if *before != after {
+            self.revision = store
+                .save(self.revision, after.clone())
+                .map_err(SessionError::Store)?;
+            sync_catalogue(&mut self.catalogue, before, &after)?;
+        }
+        Ok(after)
+    }
+
+    /// Adds the whole import in memory, then commits it with a single save.
+    fn import_bookmarks(
+        &mut self,
+        store: &Store,
+        request_id: u64,
+        import: &BookmarkImport,
+        folder_title: String,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let before = self.model.snapshot();
+        // A refused import leaves the model unchanged and is not fatal.
+        let commit = match commit_bookmark_import(&mut self.model, import, folder_title) {
+            Ok(commit) => commit,
+            Err(error) => {
+                let result = Err(SessionError::Model(error));
+                return emit(events, SessionEvent::Imported { request_id, result });
+            }
+        };
+        let after = self.persist(store, &before)?;
+        let result = Ok(commit);
+        emit(events, SessionEvent::Imported { request_id, result })?;
+        self.publish(events, after, Vec::new(), None, None)
     }
 
     fn answer_query(
@@ -549,9 +600,11 @@ impl Worker {
         route_history_result(result, events)
     }
 
+    /// Sends `model`, the snapshot just persisted, so a large saved tree is not copied again.
     fn publish(
         &self,
         events: &UnboundedSender<SessionEvent>,
+        model: TabModelSnapshot,
         created: Vec<TabId>,
         navigate: Option<TabId>,
         home_entry: Option<u64>,
@@ -560,7 +613,7 @@ impl Worker {
             events,
             SessionEvent::State(SessionSnapshot {
                 revision: self.revision,
-                model: self.model.snapshot(),
+                model,
                 created,
                 navigate,
                 home_entry,
@@ -689,6 +742,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         SessionCommand::ConfirmRecovery { .. } => return Err(SessionError::RecoveryUnavailable),
         // Reads, history lookups and preferences are answered before the model is consulted.
         SessionCommand::Query { .. }
+        | SessionCommand::ImportBookmarks { .. }
         | SessionCommand::RecentHistory { .. }
         | SessionCommand::OpenHistory(_)
         | SessionCommand::ObserveNavigation { .. }
@@ -727,38 +781,73 @@ fn sync_catalogue(
     after: &TabModelSnapshot,
 ) -> Result<(), SessionError> {
     // The feed contains only model-derived rows; it creates no browsing history or usage log.
-    let targets: HashSet<_> = after
-        .tabs
-        .iter()
-        .map(|tab| Target::Tab(tab.id))
-        .chain(after.saved_pages.iter().map(|page| Target::Saved(page.id)))
-        .collect();
-    for target in before
-        .tabs
-        .iter()
-        .map(|tab| Target::Tab(tab.id))
-        .chain(before.saved_pages.iter().map(|page| Target::Saved(page.id)))
-    {
-        if !targets.contains(&target) {
-            catalogue.remove(target).map_err(SessionError::Search)?;
+    sync_tabs(catalogue, before, after)?;
+    let open_before = open_saved_pages(before);
+    let open_after = open_saved_pages(after);
+    // Most changes touch only live tabs; then only saved rows whose open state flipped change.
+    if before.saved_pages == after.saved_pages {
+        let flipped: HashSet<SavedPageId> = open_before
+            .symmetric_difference(&open_after)
+            .copied()
+            .collect();
+        let changed = after
+            .saved_pages
+            .iter()
+            .filter(|page| flipped.contains(&page.id));
+        return upsert_saved(catalogue, changed, &open_after);
+    }
+    let kept: HashSet<SavedPageId> = after.saved_pages.iter().map(|page| page.id).collect();
+    for page in &before.saved_pages {
+        if !kept.contains(&page.id) {
+            catalogue
+                .remove(Target::Saved(page.id))
+                .map_err(SessionError::Search)?;
         }
     }
-    let open_saved: HashSet<_> = after
-        .tabs
-        .iter()
-        .filter_map(|tab| tab.saved_page_id)
-        .collect();
+    upsert_saved(catalogue, after.saved_pages.iter(), &open_after)
+}
+
+/// Removes closed tabs and upserts open ones; the catalogue skips unchanged entries.
+fn sync_tabs(
+    catalogue: &mut Catalogue,
+    before: &TabModelSnapshot,
+    after: &TabModelSnapshot,
+) -> Result<(), SessionError> {
+    let open: HashSet<TabId> = after.tabs.iter().map(|tab| tab.id).collect();
+    for tab in &before.tabs {
+        if !open.contains(&tab.id) {
+            catalogue
+                .remove(Target::Tab(tab.id))
+                .map_err(SessionError::Search)?;
+        }
+    }
     for tab in &after.tabs {
         catalogue
             .upsert(entry(Target::Tab(tab.id), &tab.metadata, true))
             .map_err(SessionError::Search)?;
     }
-    for page in &after.saved_pages {
+    Ok(())
+}
+
+fn open_saved_pages(model: &TabModelSnapshot) -> HashSet<SavedPageId> {
+    model
+        .tabs
+        .iter()
+        .filter_map(|tab| tab.saved_page_id)
+        .collect()
+}
+
+fn upsert_saved<'a>(
+    catalogue: &mut Catalogue,
+    pages: impl Iterator<Item = &'a SavedPageSnapshot>,
+    open: &HashSet<SavedPageId>,
+) -> Result<(), SessionError> {
+    for page in pages {
         catalogue
             .upsert(entry(
                 Target::Saved(page.id),
                 &page.metadata,
-                open_saved.contains(&page.id),
+                open.contains(&page.id),
             ))
             .map_err(SessionError::Search)?;
     }

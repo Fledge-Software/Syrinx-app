@@ -91,7 +91,18 @@ impl Store {
 
     /// Reads one committed revision. This blocks on a reader lock and SQLite's busy timeout.
     pub fn load(&self) -> Result<StoredSnapshot, StoreError> {
-        self.read(|connection| records::load(connection, schema::CURRENT_GENERATION))
+        // Reading here and then telling the writer means load now depends on the writer: it
+        // fails with WorkerUnavailable if the writer stopped, waits behind queued saves or a
+        // backup, and the writer keeps one more full snapshot. Load runs once, at start-up.
+        let stored =
+            self.read(|connection| records::load(connection, schema::CURRENT_GENERATION))?;
+        // A revision's rows never change, so the writer may compare the next save with it.
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        writer
+            .sender
+            .send(WriterRequest::Remember(stored.clone()))
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        Ok(stored)
     }
 
     /// Reads the owner's settings and tiles from one committed snapshot. This blocks.
@@ -130,7 +141,7 @@ impl Store {
         snapshot: TabModelSnapshot,
     ) -> Result<u64, StoreError> {
         // A reply acknowledges the committed revision, never merely a queued request.
-        snapshot.validate()?;
+        // The writer validates the snapshot once before writing (`records::save`).
         let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
         let (reply, result) = mpsc::sync_channel(1);
         writer
@@ -286,6 +297,8 @@ struct SaveRequest {
 
 enum WriterRequest {
     Save(SaveRequest),
+    /// A committed revision a reader loaded; no reply.
+    Remember(StoredSnapshot),
     Backup {
         now_utc_seconds: i64,
         idle: bool,
@@ -362,6 +375,8 @@ fn serve_writes(
     requests: mpsc::Receiver<WriterRequest>,
 ) -> Result<(), StoreError> {
     let mut schedule = backup::BackupSchedule::default();
+    // The last snapshot this writer committed, so an unchanged saved tree is not rewritten.
+    let mut committed: Option<StoredSnapshot> = None;
     loop {
         // Sender disconnection is the shutdown signal, not an ignored receive failure.
         let request = match requests.recv() {
@@ -370,15 +385,38 @@ fn serve_writes(
         };
         match request {
             WriterRequest::Save(request) => {
+                let saved_rows = committed
+                    .as_ref()
+                    .filter(|stored| stored.revision == request.expected_revision)
+                    .map_or(records::SavedRows::Replace, |stored| {
+                        records::SavedRows::between(&stored.snapshot, &request.snapshot)
+                    });
                 let result = records::save(
                     &mut writer.connection,
                     request.expected_revision,
                     &request.snapshot,
+                    saved_rows,
                 );
+                // Any failure forgets the cache, so the next save rewrites everything.
+                committed = match &result {
+                    Ok(revision) => Some(StoredSnapshot {
+                        revision: *revision,
+                        snapshot: request.snapshot,
+                    }),
+                    Err(_) => None,
+                };
                 request
                     .reply
                     .send(result)
                     .map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::Remember(stored) => {
+                if committed
+                    .as_ref()
+                    .is_none_or(|current| current.revision < stored.revision)
+                {
+                    committed = Some(stored);
+                }
             }
             WriterRequest::Backup {
                 now_utc_seconds,

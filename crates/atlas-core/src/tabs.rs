@@ -1,11 +1,13 @@
 //! Keeps open tabs and persistent saved destinations in one sidebar and palette model.
 
 mod folders;
+mod import;
 mod snapshot;
 
 pub use folders::{
     FolderRemoval, RemovedSavedEntries, SavedEntryId, SavedFolder, SavedFolderId, SavedPlacement,
 };
+pub use import::{AppendedSavedTree, NewSavedItem};
 pub use snapshot::{
     SavedFolderSnapshot, SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot,
 };
