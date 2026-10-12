@@ -171,10 +171,7 @@ fn deleting_a_folder_with_contents_keeps_its_open_page_as_an_ordinary_tab() {
         &mut events,
         FolderCommand::DeleteWithContents {
             id: folder,
-            expected: FolderContents {
-                pages: 1,
-                folders: 0,
-            },
+            expected: [page].into_iter().collect(),
         },
     );
     assert!(deleted.model.saved_pages.is_empty());

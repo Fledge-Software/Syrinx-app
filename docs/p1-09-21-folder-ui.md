@@ -43,8 +43,10 @@ the fix.
 `SessionCommand::Folder(FolderCommand)` carries five edits:
 `Create { title, parent }`, `Rename { id, title }`, `Remove { id }` (contents
 move up), `DeleteWithContents { id, expected }` and
-`Move { entry, parent, index }`. `expected` is the `FolderContents` (pages and
-folders at any depth) that the confirmation card showed; the model's
+`Move { entry, parent, index }`. `expected` is the `FolderContents` that the
+confirmation card showed: the set of every page and folder ID inside it, at
+any depth, not just their counts, so a swap (one row moved in, another moved
+out) is still noticed. The model's
 `delete_folder_confirmed` refuses the delete with
 `TabError::FolderContentsChanged` if the folder holds anything else by the
 time the command arrives, for example after a drag-in or a queued move. Both
@@ -122,10 +124,13 @@ focusable element on mouse-down, so before the review fix a click left the
 row focused and later row keys (Alt Left, Delete) acted on the sidebar instead
 of the page. One handler, `activate_row`, now serves click, Enter and Space on
 saved pages and tabs: it activates through `activate()`, then in the docked
-sidebar clears GPUI's focus and gives focus to the shown page (`focus_page`);
-a newly shown page is focused when it appears, as before. In the peek, the
-existing peek dismissal returns focus to the page. Toggling a folder keeps
-focus on the folder row, so the tree can still be walked.
+sidebar clears GPUI's focus. If the activated page is already the shown one
+it is focused at once (`focus_page`); otherwise focus waits until
+`sync_pages` shows it and focuses it, so it never lands briefly on the page
+that was showing before (`target_is_shown` decides, tested). In the peek, the
+existing peek dismissal returns focus to the page. A folder toggled by a
+click also lets go of focus, so Alt Left then means Back; a folder toggled
+with Enter or Space keeps focus on its row, so the tree can still be walked.
 
 **Later keyboard plan (P1-36, DW-61).** P1-36 plans one Tab stop for the whole
 tree, with arrow keys moving between rows. The moves here use Alt plus an
@@ -303,6 +308,15 @@ An independent review approved the first commit with fixes:
 - **L1–L3:** the cards and drag label use `atlas-ui` tokens, the move replay
   checks counts, the tree and refusals, and the card names only what the
   folder holds.
+
+The re-review approved those fixes and asked for four follow-ups, all done:
+the delete carries the exact set of rows shown (tested with a swap in the
+core and the card); a clicked folder row lets go of focus; page focus waits
+until the activated page is shown; and a card whose folder or page was
+removed elsewhere now says so ("That folder was removed elsewhere, so its
+card closed.") instead of claiming it changed. A card for an unopened page
+that becomes open closes with an explanation, because removing it would now
+keep its tab.
 
 ## What remains
 

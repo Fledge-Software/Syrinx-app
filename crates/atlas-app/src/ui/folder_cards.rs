@@ -44,7 +44,7 @@ impl BrowserView {
             .iter()
             .find(|folder| folder.id == removal.id)?
             .title;
-        let held = contents_phrase(removal.shown);
+        let held = contents_phrase(&removal.shown);
         let card = card
             .track_focus(&removal.focus)
             .on_action(cx.listener(|this, _: &ConfirmFolderCard, _, cx| {

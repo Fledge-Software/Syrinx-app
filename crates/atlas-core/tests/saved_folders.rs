@@ -666,31 +666,47 @@ fn a_confirmed_delete_is_refused_when_the_folder_changed() -> Result<(), TabErro
     let inner = folder(&mut model, "inner", Some(target));
     let first = model.add_saved_page(metadata(1), Some(inner))?;
     let shown = saved_folder_contents(model.saved_layout(), target);
+    assert_eq!((shown.pages(), shown.folders()), (1, 1));
     assert_eq!(
         shown,
-        FolderContents {
-            pages: 1,
-            folders: 1
-        }
+        [dir(inner), page(first)]
+            .into_iter()
+            .collect::<FolderContents>()
     );
 
     // A page dragged in after the owner confirmed must not be deleted unseen.
-    model.add_saved_page(metadata(2), Some(target))?;
+    let second = model.add_saved_page(metadata(2), Some(target))?;
     let before = model.snapshot();
     assert_eq!(
-        model.delete_folder_confirmed(target, shown),
+        model.delete_folder_confirmed(target, &shown),
         Err(TabError::FolderContentsChanged(target))
     );
     assert_eq!(model.snapshot(), before);
 
-    let current = saved_folder_contents(model.saved_layout(), target);
-    let removed = model.delete_folder_confirmed(target, current)?;
+    // A swap keeps the counts equal (one page in, another out), but not the rows.
+    let swapped = saved_folder_contents(model.saved_layout(), target);
+    model.move_saved_entry(page(first), None, 0)?;
+    model.add_saved_page(metadata(3), Some(inner))?;
+    let after_swap = saved_folder_contents(model.saved_layout(), target);
+    assert_eq!(
+        (after_swap.pages(), after_swap.folders()),
+        (swapped.pages(), swapped.folders())
+    );
+    let before = model.snapshot();
+    assert_eq!(
+        model.delete_folder_confirmed(target, &swapped),
+        Err(TabError::FolderContentsChanged(target))
+    );
+    assert_eq!(model.snapshot(), before);
+
+    let removed = model.delete_folder_confirmed(target, &after_swap)?;
     assert_eq!(removed.pages.len(), 2);
-    assert!(model.get_saved(first).is_none());
+    assert!(model.get_saved(second).is_none());
+    assert!(model.get_saved(first).is_some());
     assert!(model.saved_folders().is_empty());
     let unknown = SavedFolderId::new(u64::MAX)?;
     assert_eq!(
-        model.delete_folder_confirmed(unknown, FolderContents::default()),
+        model.delete_folder_confirmed(unknown, &FolderContents::default()),
         Err(TabError::UnknownSavedFolder(unknown))
     );
     assert!(saved_folder_contents(model.saved_layout(), unknown).is_empty());
