@@ -1,7 +1,12 @@
 # Keep the product and its checks on one Windows development profile (D38).
 [workspace]
 members = ["crates/*"]
-exclude = ["vendor/libsqlite3-sys-0.38.2", "vendor/wry-0.57.0", "vendor/frizbee-0.13.0"]
+exclude = [
+    "vendor/libsqlite3-sys-0.38.2",
+    "vendor/wry-0.57.0",
+    "vendor/frizbee-0.13.0",
+    "vendor/gpui-pre-windows-0.3.8",
+]
 default-members = ["crates/atlas-app"]
 resolver = "3"
 
@@ -33,6 +38,8 @@ libsqlite3-sys = { path = "vendor/libsqlite3-sys-0.38.2" }
 wry = { path = "vendor/wry-0.57.0" }
 # The approved padding correction keeps ASCII scores and highlights inside real text.
 frizbee = { path = "vendor/frizbee-0.13.0" }
+# The approved idle-repaint patch stops GPUI repainting clean windows every display refresh (D37).
+gpui-pre-windows = { path = "vendor/gpui-pre-windows-0.3.8" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
