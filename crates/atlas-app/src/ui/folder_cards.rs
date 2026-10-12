@@ -13,9 +13,8 @@ use gpui_component::input::Input;
 use super::{
     BrowserView,
     folder_editor::{
-        BUTTON_CONTEXT, CARD_CONTEXT, CancelFolderCard, ConfirmFolderCard, DeleteFolderContents,
-        FolderEditor, NameForm, NameTarget, PageCard, PressButton, RemoveCard, RemoveStep,
-        contents_phrase,
+        CARD_CONTEXT, CancelFolderCard, ConfirmFolderCard, DeleteFolderContents, FolderEditor,
+        NameForm, NameTarget, PageCard, RemoveCard, RemoveStep, contents_phrase,
     },
     tile_editor::form_button,
 };
@@ -47,17 +46,14 @@ impl BrowserView {
         let held = contents_phrase(&removal.shown);
         let card = card
             .track_focus(&removal.focus)
-            .on_action(cx.listener(|this, _: &ConfirmFolderCard, _, cx| {
-                this.confirm_folder_card(cx);
+            .on_action(cx.listener(|this, _: &ConfirmFolderCard, window, cx| {
+                this.confirm_folder_card(window, cx);
             }))
             .on_action(cx.listener(|this, _: &DeleteFolderContents, _, cx| {
                 this.choose_delete_contents(cx);
             }));
         if removal.step == RemoveStep::ConfirmDelete {
-            let delete = keyboard_button(form_button("folder-delete", "Delete", &palette, true))
-                .on_action(cx.listener(|this, _: &PressButton, _, cx| {
-                    this.delete_with_contents(cx);
-                }))
+            let delete = form_button("folder-delete", "Delete", &palette, true)
                 .on_click(cx.listener(|this, _, _, cx| this.delete_with_contents(cx)));
             return Some(
                 card.child(card_heading(format!(
@@ -77,18 +73,14 @@ impl BrowserView {
                 ),
             );
         }
-        let remove = keyboard_button(form_button("folder-remove", "Remove", &palette, true))
-            .on_action(cx.listener(|this, _: &PressButton, _, cx| {
-                this.remove_keeping_contents(cx);
-            }))
+        let remove = form_button("folder-remove", "Remove", &palette, true)
             .on_click(cx.listener(|this, _, _, cx| this.remove_keeping_contents(cx)));
-        let delete_contents = keyboard_button(form_button(
+        let delete_contents = form_button(
             "folder-delete-contents",
             "Delete contents…",
             &palette,
             false,
-        ))
-        .on_action(cx.listener(|this, _: &PressButton, _, cx| this.choose_delete_contents(cx)))
+        )
         .on_click(cx.listener(|this, _, _, cx| this.choose_delete_contents(cx)));
         Some(
             card.child(card_heading(format!("Remove “{title}”?")))
@@ -119,8 +111,7 @@ impl BrowserView {
         } else {
             &saved.metadata.title
         };
-        let delete = keyboard_button(form_button("saved-delete", "Delete", &palette, true))
-            .on_action(cx.listener(|this, _: &PressButton, _, cx| this.delete_saved_page(cx)))
+        let delete = form_button("saved-delete", "Delete", &palette, true)
             .on_click(cx.listener(|this, _, _, cx| this.delete_saved_page(cx)));
         Some(
             card.track_focus(&page.focus)
@@ -145,21 +136,12 @@ fn name_form(card: Div, form: &NameForm, cx: &mut Context<BrowserView>) -> Div {
         NameTarget::New => "New folder",
         NameTarget::Rename(_) => "Rename folder",
     };
-    let save = keyboard_button(form_button("folder-save", "Save", &palette, true))
-        .on_action(cx.listener(|this, _: &PressButton, _, cx| this.submit_folder_name(cx)))
+    let save = form_button("folder-save", "Save", &palette, true)
         .on_click(cx.listener(|this, _, _, cx| this.submit_folder_name(cx)));
     card.child(card_heading(heading))
         .child(Input::new(&form.input))
         .children(form.error.map(|error| note(&palette, error.to_owned())))
         .child(button_row().child(save).child(cancel_button(&palette, cx)))
-}
-
-/// Makes a sidebar button a tab stop that Enter or Space presses (`PressButton`).
-pub(super) fn keyboard_button(button: Stateful<Div>) -> Stateful<Div> {
-    button
-        .key_context(BUTTON_CONTEXT)
-        .tab_index(0)
-        .focus(|style| style.border_1().border_color(theme::accent()))
 }
 
 /// The tile editor's card shape, in the sidebar.
@@ -196,7 +178,6 @@ fn note(palette: &Palette, line: String) -> Div {
 }
 
 fn cancel_button(palette: &Palette, cx: &mut Context<BrowserView>) -> Stateful<Div> {
-    keyboard_button(form_button("folder-cancel", "Cancel", palette, false))
-        .on_action(cx.listener(|this, _: &PressButton, _, cx| this.cancel_folder_card(cx)))
+    form_button("folder-cancel", "Cancel", palette, false)
         .on_click(cx.listener(|this, _, _, cx| this.cancel_folder_card(cx)))
 }

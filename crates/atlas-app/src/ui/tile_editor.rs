@@ -7,12 +7,13 @@ use atlas_core::{
 use atlas_ui::Palette;
 use atlas_ui::metrics::{radius, text};
 use gpui::{
-    AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Stateful,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Role,
+    Stateful, StatefulInteractiveElement, Styled, Subscription, Toggled, Window, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use super::BrowserView;
+use crate::controls::control;
 use crate::navigation;
 use crate::theme::rgba;
 
@@ -183,10 +184,10 @@ impl BrowserView {
                     .text_color(rgba(palette.text))
                     .child(title),
             )
-            .child(Input::new(&editor.label))
+            .child(Input::new(&editor.label).aria_label("Tile name"))
             .child(choices);
         if editor.target == TargetChoice::Website {
-            form = form.child(Input::new(&editor.address));
+            form = form.child(Input::new(&editor.address).aria_label("Tile address"));
         } else {
             form = form.child(
                 div()
@@ -271,20 +272,28 @@ fn target_chip(
     } else {
         (palette.field, palette.chip_line)
     };
-    div()
-        .id(("tile-target", position))
-        .h(px(26.))
-        .px(px(10.))
-        .rounded(px(13.))
-        .border_1()
-        .border_color(rgba(outline))
-        .bg(rgba(background))
-        .text_size(px(text::SMALL))
-        .text_color(rgba(palette.text_secondary))
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        .child(label)
+    control(
+        div().id(("tile-target", position)),
+        Role::RadioButton,
+        label,
+    )
+    .aria_toggled(if selected {
+        Toggled::True
+    } else {
+        Toggled::False
+    })
+    .h(px(26.))
+    .px(px(10.))
+    .rounded(px(13.))
+    .border_1()
+    .border_color(rgba(outline))
+    .bg(rgba(background))
+    .text_size(px(text::SMALL))
+    .text_color(rgba(palette.text_secondary))
+    .flex()
+    .items_center()
+    .cursor_pointer()
+    .child(label)
 }
 
 pub(super) fn form_button(
@@ -298,8 +307,7 @@ pub(super) fn form_button(
     } else {
         (palette.field, palette.text_secondary)
     };
-    div()
-        .id(id)
+    control(div().id(id), Role::Button, label)
         .h(px(28.))
         .px(px(12.))
         .rounded(px(radius::CONTROL))

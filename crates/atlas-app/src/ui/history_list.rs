@@ -155,37 +155,42 @@ fn row(
 ) -> impl gpui::IntoElement {
     let entry = visit.entry_id;
     let when = now.map_or_else(String::new, |now| age(visit.visited_at, now));
-    div()
-        .id(("history-visit", visit.id.get()))
-        .h(px(44.))
-        .px_2()
-        .rounded_md()
-        .flex()
-        .items_center()
-        .gap_3()
-        .cursor_pointer()
-        .hover(|style| style.bg(theme::preview_row_selected()))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.toggle_history();
-            this.command(SessionCommand::OpenHistory(entry));
-            cx.notify();
-        }))
-        .child(
-            div()
-                .flex_1()
-                .overflow_hidden()
-                .flex()
-                .flex_col()
-                .child(div().overflow_hidden().child(label(visit).to_owned()))
-                .child(
-                    div()
-                        .overflow_hidden()
-                        .text_xs()
-                        .text_color(theme::icon_dim())
-                        .child(visit.address.clone()),
-                ),
-        )
-        .child(div().text_xs().text_color(theme::icon_dim()).child(when))
+    let name = label(visit).to_owned();
+    crate::controls::control(
+        div().id(("history-visit", visit.id.get())),
+        gpui::Role::Link,
+        name,
+    )
+    .aria_description(format!("{} {when}", visit.address))
+    .h(px(44.))
+    .px_2()
+    .rounded_md()
+    .flex()
+    .items_center()
+    .gap_3()
+    .cursor_pointer()
+    .hover(|style| style.bg(theme::preview_row_selected()))
+    .on_click(cx.listener(move |this, _, _, cx| {
+        this.toggle_history();
+        this.command(SessionCommand::OpenHistory(entry));
+        cx.notify();
+    }))
+    .child(
+        div()
+            .flex_1()
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .child(div().overflow_hidden().child(label(visit).to_owned()))
+            .child(
+                div()
+                    .overflow_hidden()
+                    .text_xs()
+                    .text_color(theme::icon_dim())
+                    .child(visit.address.clone()),
+            ),
+    )
+    .child(div().text_xs().text_color(theme::icon_dim()).child(when))
 }
 
 #[cfg(test)]

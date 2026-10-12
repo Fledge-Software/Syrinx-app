@@ -10,6 +10,7 @@ use gpui::{
 
 use super::BrowserView;
 use super::tiles;
+use crate::controls::control;
 use crate::theme::{self, rgba};
 
 /// The canvas sidebar's four-column grid of 46px-high tiles.
@@ -73,10 +74,12 @@ impl BrowserView {
         let mut grid = div().grid().grid_cols(COLUMNS).gap(px(8.));
         for (index, tile) in favorites.iter().enumerate() {
             let opened = tile.clone();
-            let mut cell = div()
-                .id(("favorite", index))
-                .role(Role::Button)
-                .aria_label(tile.label.clone())
+            let name = if editing {
+                format!("Edit {}", tile.label)
+            } else {
+                tile.label.to_string()
+            };
+            let mut cell = control(div().id(("favorite", index)), Role::Button, name)
                 .flex()
                 .flex_col()
                 .items_center()
@@ -103,10 +106,7 @@ impl BrowserView {
     }
 
     fn add_favorite(&self, palette: &Palette, cx: &mut Context<Self>) -> Stateful<Div> {
-        div()
-            .id("favorite-add")
-            .role(Role::Button)
-            .aria_label("Add favorite")
+        control(div().id("favorite-add"), Role::Button, "Add favorite")
             .cursor_pointer()
             .child(tiles::add_face(palette, TILE_HEIGHT, TILE_RADIUS).w_full())
             .on_click(cx.listener(|this, _, window, cx| {
@@ -123,23 +123,24 @@ impl BrowserView {
         for (index, tile) in favorites.iter().enumerate() {
             let opened = tile.clone();
             column = column.child(
-                div()
-                    .id(("favorite", index))
-                    .role(Role::Button)
-                    .aria_label(tile.label.clone())
-                    .cursor_pointer()
-                    .child(tiles::tile_face(
-                        &palette,
-                        tile,
-                        ICON_BUTTON,
-                        COMPACT_RADIUS,
-                        COMPACT_LETTER_SIZE,
-                    ))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_tile(&opened);
-                        this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
-                        cx.notify();
-                    })),
+                control(
+                    div().id(("favorite", index)),
+                    Role::Button,
+                    tile.label.clone(),
+                )
+                .cursor_pointer()
+                .child(tiles::tile_face(
+                    &palette,
+                    tile,
+                    ICON_BUTTON,
+                    COMPACT_RADIUS,
+                    COMPACT_LETTER_SIZE,
+                ))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_tile(&opened);
+                    this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
+                    cx.notify();
+                })),
             );
         }
         column

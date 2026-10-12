@@ -23,7 +23,6 @@ use crate::{
 actions!(
     saved_rows,
     [
-        OpenRow,
         RenameRow,
         RemoveRow,
         DeleteFolderContents,
@@ -31,7 +30,6 @@ actions!(
         MoveRowDown,
         MoveRowOut,
         MoveRowIn,
-        PressButton,
         ConfirmFolderCard,
         CancelFolderCard
     ]
@@ -39,16 +37,14 @@ actions!(
 
 /// The key context of a focused sidebar row.
 pub(super) const ROW_CONTEXT: &str = "AtlasSavedRow";
-/// The key context of a focusable sidebar button.
-pub(super) const BUTTON_CONTEXT: &str = "AtlasSidebarButton";
 /// The key context of the naming form and the removal cards.
 pub(super) const CARD_CONTEXT: &str = "AtlasFolderCard";
 
 /// Row keys win over the window's own (Alt Left is Back elsewhere) only while a row has focus.
+/// Enter and Space on a focused row or button are GPUI keyboard clicks (P1-36's `control`),
+/// so they reach the same `on_click` handler as the mouse.
 pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("enter", OpenRow, Some(ROW_CONTEXT)),
-        KeyBinding::new("space", OpenRow, Some(ROW_CONTEXT)),
         KeyBinding::new("f2", RenameRow, Some(ROW_CONTEXT)),
         KeyBinding::new("delete", RemoveRow, Some(ROW_CONTEXT)),
         KeyBinding::new("shift-delete", DeleteFolderContents, Some(ROW_CONTEXT)),
@@ -56,8 +52,6 @@ pub(super) fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-down", MoveRowDown, Some(ROW_CONTEXT)),
         KeyBinding::new("alt-left", MoveRowOut, Some(ROW_CONTEXT)),
         KeyBinding::new("alt-right", MoveRowIn, Some(ROW_CONTEXT)),
-        KeyBinding::new("enter", PressButton, Some(BUTTON_CONTEXT)),
-        KeyBinding::new("space", PressButton, Some(BUTTON_CONTEXT)),
         KeyBinding::new("enter", ConfirmFolderCard, Some(CARD_CONTEXT)),
         KeyBinding::new("escape", CancelFolderCard, Some(CARD_CONTEXT)),
         KeyBinding::new("shift-delete", DeleteFolderContents, Some(CARD_CONTEXT)),
@@ -175,8 +169,8 @@ impl Render for DraggedRow {
 }
 
 impl BrowserView {
-    /// The one handler for using a saved page or tab row (click, Enter, Space): activate it
-    /// through `activate()`, then give focus to the page so later keys go there, not the row.
+    /// The one handler for using a saved page or tab row (a mouse or keyboard click): activate
+    /// it through `activate()`, then give focus to the page so later keys go there, not the row.
     pub(super) fn activate_row(
         &mut self,
         target: ActivationTarget,
@@ -189,15 +183,25 @@ impl BrowserView {
                 self.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
             }
             RowFocus::Page => {
-                window.blur(cx);
+                self.release_row_focus(window, cx);
                 // A page that is not shown yet is focused by `sync_pages` when it appears;
                 // focusing now would reach the page that was showing before.
                 if target_is_shown(&self.model, target, self.shown) {
-                    self.focus_page(window);
+                    self.focus_page(window, cx);
                 }
             }
         }
         cx.notify();
+    }
+
+    /// Takes keyboard focus off a sidebar row, back to the window's root (as `focus_page`
+    /// does), so the row's own keys stop applying.
+    pub(super) fn release_row_focus(&self, window: &mut Window, cx: &mut App) {
+        if Window::window_handle(window) == self.main_window {
+            window.focus(&self.focus, cx);
+        } else {
+            window.blur(cx);
+        }
     }
 
     /// Opens the naming form for a new top-level folder.
@@ -369,15 +373,19 @@ impl BrowserView {
         cx.notify();
     }
 
-    /// Enter on a card: only the non-destructive default; a delete needs its focused button.
-    pub(super) fn confirm_folder_card(&mut self, cx: &mut Context<Self>) {
-        match &self.folder_editor {
-            Some(FolderEditor::Name(_)) => self.submit_folder_name(cx),
-            Some(FolderEditor::Remove(card)) if enter_removes(card.step) => {
-                self.remove_keeping_contents(cx);
-            }
-            _ => {}
+    /// Enter on the removal card itself performs only the non-destructive default. Enter on
+    /// a focused button inside it is passed on, so that button's own click runs; a delete
+    /// therefore always needs its Delete button.
+    pub(super) fn confirm_folder_card(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(FolderEditor::Remove(card)) = &self.folder_editor else {
+            cx.propagate();
+            return;
+        };
+        if !card.focus.is_focused(window) || !enter_removes(card.step) {
+            cx.propagate();
+            return;
         }
+        self.remove_keeping_contents(cx);
     }
 
     /// Moves the card from the default removal to the delete confirmation.

@@ -19,6 +19,7 @@ mod navigation_intents;
 mod navigation_status;
 mod page_card;
 mod page_lifecycle;
+mod panes;
 mod peek;
 mod peek_state;
 mod permissions;
@@ -59,7 +60,11 @@ use atlas_platform::browser::{
 };
 use atlas_platform::instance::LinkFeed;
 use atlas_search::{BlankQuery, BoostWeights, Scope, SearchPolicy, Target};
-use atlas_ui::{SidebarSizing, metrics::chrome::TITLE_BAR_HEIGHT};
+use atlas_ui::{
+    SidebarSizing,
+    focus::{Direction, Pane},
+    metrics::chrome::TITLE_BAR_HEIGHT,
+};
 use futures::{StreamExt, channel::mpsc::unbounded};
 use gpui::StatefulInteractiveElement;
 use gpui::prelude::FluentBuilder;
@@ -72,6 +77,8 @@ use gpui::{
 use gpui_component::Root;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use title_bar::title_bar;
+
+pub(crate) use panes::{FocusNextControl, FocusPreviousControl};
 
 use home_palette::HomePaletteIntent;
 use navigation_intents::NavigationIntents;
@@ -102,6 +109,7 @@ actions!(
         Forward,
         Reload,
         ShowHistory,
+        ClearBrowsingData,
         ToggleSidebar,
         DismissPeek,
         Fullscreen
@@ -144,6 +152,7 @@ pub fn bind_keys(cx: &mut App) {
     essentials::bind_zoom_keys(cx);
     find::bind_keys(cx);
     folder_editor::bind_keys(cx);
+    panes::bind_keys(cx);
 }
 
 fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
@@ -165,6 +174,7 @@ fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
         BrowserAction::ZoomIn => KeyBinding::new(keystroke, essentials::ZoomIn, None),
         BrowserAction::ZoomOut => KeyBinding::new(keystroke, essentials::ZoomOut, None),
         BrowserAction::ResetZoom => KeyBinding::new(keystroke, essentials::ZoomReset, None),
+        BrowserAction::ClearBrowsingData => KeyBinding::new(keystroke, ClearBrowsingData, None),
     }
 }
 
@@ -185,8 +195,8 @@ fn activation_command(
     }
 }
 
-/// Runs a browser command through the same handler as its keyboard shortcut; history has no
-/// native page shortcut, so it is handled by `toggle_history` directly.
+/// Runs a browser command through the same handler as its keyboard shortcut; history and clear
+/// browsing data have no native page shortcut, so they open their page-card views directly.
 fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
     Some(match action {
         BrowserAction::NewTab => BrowserShortcut::NewTab,
@@ -205,7 +215,7 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
         BrowserAction::ZoomIn => BrowserShortcut::ZoomIn,
         BrowserAction::ZoomOut => BrowserShortcut::ZoomOut,
         BrowserAction::ResetZoom => BrowserShortcut::ZoomReset,
-        BrowserAction::ShowHistory => return None,
+        BrowserAction::ShowHistory | BrowserAction::ClearBrowsingData => return None,
     })
 }
 
@@ -249,6 +259,7 @@ pub struct BrowserView {
     expanded_saved: BTreeSet<SavedFolderId>,
     folder_editor: Option<folder_editor::FolderEditor>,
     sidebar_edge_focus: FocusHandle,
+    panes: panes::PaneFocus,
     /// Ends a sidebar drag when the window deactivates; dropping it unsubscribes.
     _drag_activation_watch: Subscription,
     message: String,
@@ -319,7 +330,9 @@ impl BrowserView {
             collapsed_folders: HashSet::new(),
             expanded_saved: BTreeSet::new(),
             folder_editor: None,
-            sidebar_edge_focus: cx.focus_handle(),
+            // A tracked handle takes its Tab stop from the handle, not from `tab_index`.
+            sidebar_edge_focus: cx.focus_handle().tab_stop(true),
+            panes: panes::PaneFocus::new(cx),
             _drag_activation_watch: cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
                     this.sidebar_drag_abandoned(window, cx);
@@ -345,7 +358,7 @@ impl BrowserView {
                 let was_open = this.peek.is_some();
                 this.retire_peek(cx);
                 if was_open && window.is_window_active() {
-                    this.focus_page(window);
+                    this.focus_page(window, cx);
                 }
             }),
             home_palette: HomePaletteIntent::default(),
@@ -775,6 +788,7 @@ impl BrowserView {
                 self.browser_data_cleared(request, outcome);
             }
             BrowserEvent::Shortcut(shortcut) => self.shortcut(shortcut, window, cx),
+            BrowserEvent::PageFocused { id } => self.page_took_focus(id, window, cx),
             BrowserEvent::PopupRequested { id, request, url } => {
                 self.request_popup(id, request, url);
             }
@@ -994,6 +1008,12 @@ impl BrowserView {
                 self.dismiss_peek(generation, window, cx);
             }
             BrowserShortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
+            // Only a focused page sends these; GPUI's own F6 binding covers the chrome.
+            BrowserShortcut::FocusNextPane => self.cycle_pane(Direction::Forward, true, window, cx),
+            BrowserShortcut::FocusPreviousPane => {
+                self.cycle_pane(Direction::Backward, true, window, cx)
+            }
+            BrowserShortcut::LeavePageBackward => self.leave_page_backward(window, cx),
             BrowserShortcut::Fullscreen => self.fullscreen_shortcut(window),
             BrowserShortcut::Find => self.open_find(window, cx),
             BrowserShortcut::Downloads
@@ -1213,7 +1233,7 @@ impl BrowserView {
             PaletteEvent::Submit { text, force_search } => {
                 self.palette = None;
                 self.navigate(text, force_search);
-                self.focus_page(window);
+                self.focus_page(window, cx);
             }
             PaletteEvent::Activate(target) => {
                 self.palette = None;
@@ -1225,7 +1245,7 @@ impl BrowserView {
                         self.message = "Commands run through their own row.".to_owned()
                     }
                 }
-                self.focus_page(window);
+                self.focus_page(window, cx);
             }
             PaletteEvent::Run(action) => {
                 self.palette = None;
@@ -1242,7 +1262,7 @@ impl BrowserView {
             }
             PaletteEvent::Closed => {
                 self.palette = None;
-                self.focus_page(window);
+                self.focus_page(window, cx);
             }
         }
         if finishes_entry {
@@ -1264,7 +1284,7 @@ impl BrowserView {
     fn run_command(&mut self, action: CommandAction, window: &mut Window, cx: &mut Context<Self>) {
         let CommandAction::Browser(action) = action else {
             self.message = "Plugin actions need the plugin runtime, which is not built yet.".into();
-            self.focus_page(window);
+            self.focus_page(window, cx);
             return;
         };
         // Find keeps focus in its Atlas input; a queued page Focus would take it back.
@@ -1273,6 +1293,7 @@ impl BrowserView {
         }
         match browser_shortcut(action) {
             Some(shortcut) => self.shortcut(shortcut, window, cx),
+            None if action == BrowserAction::ClearBrowsingData => self.open_clear_data(),
             None => self.toggle_history(),
         }
         // Edit address reopens the palette and Find focuses its bar; the rest return to the page.
@@ -1280,7 +1301,7 @@ impl BrowserView {
             action,
             BrowserAction::EditAddress | BrowserAction::FindInPage
         ) {
-            self.focus_page(window);
+            self.focus_page(window, cx);
         }
     }
 
@@ -1293,11 +1314,15 @@ impl BrowserView {
         }
     }
 
-    fn focus_page(&mut self, window: &mut Window) {
+    fn focus_page(&mut self, window: &mut Window, cx: &mut App) {
         if self.closing {
             return;
         }
         window.activate_window();
+        // Clear chrome focus so no control keeps its ring once keys go to the page.
+        if Window::window_handle(window) == self.main_window {
+            window.focus(&self.focus, cx);
+        }
         if let Some(id) = self.shown {
             self.page_command(BrowserCommand::Focus { id: id.get() });
         }
@@ -1421,8 +1446,11 @@ impl BrowserView {
         }
     }
 
-    fn toolbar(&self, cx: &mut Context<Self>) -> Div {
-        div()
+    /// The navigation toolbar: the address pane F6 visits first.
+    fn toolbar(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        // Shown and announced decoded where safe, host kept as punycode; Ctrl L edits the raw address.
+        let readable = atlas_core::readable_address(&self.active_address());
+        let bar = div()
             .w_full()
             .min_w_0()
             .flex_none()
@@ -1438,27 +1466,38 @@ impl BrowserView {
             .items_center()
             .gap_2()
             .bg(theme::ground())
-            .child(button("back", "‹").on_click(cx.listener(|this, _, _, cx| {
-                if let Some(id) = this.shown {
-                    this.page_command(BrowserCommand::Back { id: id.get() });
-                }
-                cx.notify();
-            })))
             .child(
-                button("forward", "›").on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(id) = this.shown {
-                        this.page_command(BrowserCommand::Forward { id: id.get() });
-                    }
-                    cx.notify();
-                })),
+                button("back", "‹")
+                    .aria_label("Back")
+                    .aria_keyshortcuts("Alt+ArrowLeft")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(id) = this.shown {
+                            this.page_command(BrowserCommand::Back { id: id.get() });
+                        }
+                        cx.notify();
+                    })),
             )
             .child(
-                button("reload", "↻").on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(id) = this.shown {
-                        this.page_command(BrowserCommand::Reload { id: id.get() });
-                    }
-                    cx.notify();
-                })),
+                button("forward", "›")
+                    .aria_label("Forward")
+                    .aria_keyshortcuts("Alt+ArrowRight")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(id) = this.shown {
+                            this.page_command(BrowserCommand::Forward { id: id.get() });
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
+                button("reload", "↻")
+                    .aria_label("Reload")
+                    .aria_keyshortcuts("Control+R")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(id) = this.shown {
+                            this.page_command(BrowserCommand::Reload { id: id.get() });
+                        }
+                        cx.notify();
+                    })),
             )
             .child(self.connection_display())
             .child(
@@ -1466,6 +1505,10 @@ impl BrowserView {
                     .id("address")
                     .role(gpui::Role::Button)
                     .aria_label("Search or enter address")
+                    .aria_value(readable.clone())
+                    .aria_keyshortcuts("Control+L")
+                    .track_focus(self.address_field_focus())
+                    .focus(crate::controls::focus_ring)
                     .min_w_0()
                     .flex_1()
                     .h(px(34.))
@@ -1479,10 +1522,10 @@ impl BrowserView {
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_palette(true, window, cx)),
                     )
-                    .child(if self.active_address().is_empty() {
+                    .child(if readable.is_empty() {
                         "Search or enter address · Ctrl K".to_owned()
                     } else {
-                        self.active_address()
+                        readable
                     }),
             )
             .child(self.essential_controls(cx))
@@ -1497,7 +1540,8 @@ impl BrowserView {
                     this.toggle_history();
                     cx.notify();
                 })),
-            )
+            );
+        self.as_pane(bar, Pane::Address, gpui::Role::Toolbar)
     }
 }
 
@@ -1636,10 +1680,30 @@ impl Render for BrowserView {
                 this.toggle_history();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &ClearBrowsingData, _, cx| {
+                this.open_clear_data();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &Fullscreen, window, cx| {
                 this.fullscreen_shortcut(window);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &panes::FocusNextPane, window, cx| {
+                this.cycle_pane(Direction::Forward, false, window, cx);
+            }))
+            .on_action(
+                cx.listener(|this, _: &panes::FocusPreviousPane, window, cx| {
+                    this.cycle_pane(Direction::Backward, false, window, cx);
+                }),
+            )
+            .on_action(cx.listener(|_, _: &panes::FocusNextControl, window, cx| {
+                window.focus_next(cx);
+            }))
+            .on_action(
+                cx.listener(|_, _: &panes::FocusPreviousControl, window, cx| {
+                    window.focus_prev(cx);
+                }),
+            )
             .child(title_bar(
                 if self.sidebar_sizing.width() == 0. {
                     div()
@@ -1656,20 +1720,31 @@ impl Render for BrowserView {
             .when(self.sidebar_sizing.width() > 0., |root| {
                 root.child(self.toolbar(cx))
             })
-            .children(self.runtime_banner(cx))
-            .child(self.permission_bar(cx))
-            .child(self.find_bar(cx))
+            .children(self.bar_pane(
+                self.runtime_banner(cx),
+                Pane::RuntimeNotice,
+                gpui::Role::Status,
+            ))
+            .children(self.bar_pane(self.permission_bar(cx), Pane::Permission, gpui::Role::Alert))
+            .children(self.bar_pane(self.find_bar(cx), Pane::Find, gpui::Role::Search))
             .child(
                 div()
                     .flex_1()
                     .flex()
                     .min_h_0()
-                    .child(self.sidebar(cx))
+                    .child(self.as_pane(self.sidebar(cx), Pane::Sidebar, gpui::Role::Navigation))
                     .child(self.sidebar_edge(cx))
-                    .child(page),
+                    .child(self.as_pane(
+                        div().flex_1().min_w_0().h_full().flex().child(page),
+                        Pane::Page,
+                        gpui::Role::Group,
+                    )),
             )
             .child(
                 div()
+                    .id("status")
+                    .role(gpui::Role::Status)
+                    .aria_label(self.failure.as_ref().unwrap_or(&self.message).clone())
                     .h(px(FOOTER_HEIGHT))
                     .px_3()
                     .bg(theme::ground())
@@ -1738,15 +1813,18 @@ fn page_command_allowed(closing: bool, command: &BrowserCommand) -> bool {
     !closing || matches!(command, BrowserCommand::Shutdown)
 }
 
+/// A labelled chrome button, reachable with Tab and named by its label; glyph buttons
+/// override the name with `aria_label`.
 fn button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
-    div()
+    let frame = div()
         .id(id)
         .px_3()
         .py_2()
         .rounded_md()
         .bg(theme::line())
         .cursor_pointer()
-        .child(label)
+        .child(label);
+    crate::controls::push_button(frame, label)
 }
 
 fn native_handle(window: &Window) -> Result<isize, &'static str> {
@@ -1801,9 +1879,12 @@ mod palette_shortcut_tests {
             let CommandAction::Browser(action) = command.action else {
                 panic!("built-in commands are browser actions");
             };
-            // History opens in the page card through `toggle_history`, not a page shortcut.
+            // History and clear data open in the page card, not through a page shortcut.
             let Some(shortcut) = browser_shortcut(action) else {
-                assert_eq!(action, BrowserAction::ShowHistory);
+                assert!(matches!(
+                    action,
+                    BrowserAction::ShowHistory | BrowserAction::ClearBrowsingData
+                ));
                 continue;
             };
             assert!(
