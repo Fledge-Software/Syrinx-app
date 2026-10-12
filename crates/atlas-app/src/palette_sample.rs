@@ -9,8 +9,9 @@ use atlas_ui::{
     palette, sidebar,
 };
 use gpui::{
-    App, AppContext, Bounds, Context, Div, FontWeight, IntoElement, ParentElement, Render, Styled,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, size,
+    App, AppContext, Bounds, Context, Div, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, StatefulInteractiveElement, Styled, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, div, px, size,
 };
 
 use crate::theme::rgba;
@@ -43,28 +44,39 @@ impl Render for PaletteSample {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         // The review frame itself uses Graphite, the default palette.
         let frame = palette(PaletteId::Graphite, Accent::default());
+
+        // Scroll the whole review page, so the width states below the palettes stay reachable.
         div()
+            .id("palette-sample")
             .size_full()
-            .p(px(space::XXL))
-            .flex()
-            .flex_col()
-            .gap(px(space::XXL))
+            .overflow_y_scroll()
             .bg(rgba(frame.ground.representative()))
             .text_color(rgba(frame.text))
             .font_family(text::UI_FONT_FAMILIES[0])
             .text_size(px(text::BODY))
-            .child(heading("Base palettes with the default accent (#FF8A65)"))
-            .child(
-                div().flex().gap(px(space::XL)).children(
-                    PaletteId::ALL.map(|id| palette_column(&palette(id, Accent::default()))),
-                ),
-            )
-            .child(transparency_fallback(&frame))
-            .child(heading(
-                "Sidebar width states (D44): PROPOSED values for review",
-            ))
-            .child(width_states(&frame))
+            .child(sample_content(&frame))
     }
+}
+
+fn sample_content(frame: &Palette) -> Div {
+    // Lay the review sections out top to bottom at their natural height.
+    div()
+        .p(px(space::XXL))
+        .flex()
+        .flex_col()
+        .gap(px(space::XXL))
+        .child(heading("Base palettes with the default accent (#FF8A65)"))
+        .child(
+            div()
+                .flex()
+                .gap(px(space::XL))
+                .children(PaletteId::ALL.map(|id| palette_column(&palette(id, Accent::default())))),
+        )
+        .child(transparency_fallback(frame))
+        .child(heading(
+            "Sidebar width states (D44): PROPOSED values for review",
+        ))
+        .child(width_states(frame))
 }
 
 fn heading(label: &'static str) -> Div {
