@@ -10,8 +10,8 @@ use crate::metrics::chrome::ICON_BUTTON;
 pub const WIDE_WIDTH: f32 = 264.;
 
 /// The canvas sidebar's left and right padding (`padding: 8px 10px 10px 12px`).
-const SIDEBAR_PADDING_LEFT: f32 = 12.;
-const SIDEBAR_PADDING_RIGHT: f32 = 10.;
+pub const SIDEBAR_PADDING_LEFT: f32 = 12.;
+pub const SIDEBAR_PADDING_RIGHT: f32 = 10.;
 
 /// PROPOSED: favicon-only width: the canvas's side padding around one 30px icon button.
 pub const COMPACT_WIDTH: f32 = SIDEBAR_PADDING_LEFT + ICON_BUTTON + SIDEBAR_PADDING_RIGHT;
@@ -105,9 +105,233 @@ pub fn in_peek_zone(state: SidebarWidthState, pointer_x: f32) -> bool {
     state.can_peek() && (0.0..PEEK_EDGE_ZONE).contains(&pointer_x)
 }
 
+/// A drag of the sidebar's edge: the width it shows and where the pointer gripped the handle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct EdgeDrag {
+    grip_offset: f32,
+    width: f32,
+}
+
+/// The sidebar's settled width state plus any drag in progress (D44).
+///
+/// The page card and the rows both read [`SidebarSizing::width`], so they follow the
+/// pointer during a drag and the settled state otherwise.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SidebarSizing {
+    state: SidebarWidthState,
+    drag: Option<EdgeDrag>,
+}
+
+impl SidebarSizing {
+    pub const fn new(state: SidebarWidthState) -> Self {
+        Self { state, drag: None }
+    }
+
+    /// The state the sidebar settles in when no drag is in progress.
+    pub const fn state(&self) -> SidebarWidthState {
+        self.state
+    }
+
+    pub const fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    /// The width reserved beside the page card right now.
+    pub fn width(&self) -> f32 {
+        match self.drag {
+            Some(drag) => drag.width,
+            None => self.state.reserved_width(),
+        }
+    }
+
+    /// Whether rows draw their titles: exactly when a release now would settle on wide.
+    pub fn labels_visible(&self) -> bool {
+        match self.drag {
+            Some(drag) => labels_visible(drag.width),
+            None => self.state == SidebarWidthState::Wide,
+        }
+    }
+
+    /// Starts a drag with the pointer on the edge handle, keeping the width where it is.
+    pub fn begin_drag(&mut self, pointer_x: f32) {
+        let width = self.width();
+        let grip_offset = if pointer_x.is_finite() {
+            pointer_x - width
+        } else {
+            0.
+        };
+        self.drag = Some(EdgeDrag { grip_offset, width });
+    }
+
+    /// Follows the pointer during a drag. Returns whether the width changed.
+    pub fn drag_to(&mut self, pointer_x: f32) -> bool {
+        let Some(drag) = self.drag.as_mut() else {
+            return false;
+        };
+        let width = drag_width(pointer_x - drag.grip_offset);
+        if width == drag.width {
+            return false;
+        }
+        drag.width = width;
+        true
+    }
+
+    /// Ends a drag by snapping to the nearest state. Returns the new state, or `None`
+    /// when no drag was in progress.
+    pub fn release(&mut self) -> Option<SidebarWidthState> {
+        let drag = self.drag.take()?;
+        self.state = snap_on_release(drag.width);
+        Some(self.state)
+    }
+
+    /// Settles on `state` directly, abandoning any drag.
+    pub fn set_state(&mut self, state: SidebarWidthState) {
+        self.drag = None;
+        self.state = state;
+    }
+}
+
+impl Default for SidebarSizing {
+    fn default() -> Self {
+        Self::new(SidebarWidthState::Wide)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Drags from the edge of `sizing` to `pointer_x` and releases there.
+    fn drag_and_release(sizing: &mut SidebarSizing, pointer_x: f32) -> Option<SidebarWidthState> {
+        sizing.begin_drag(sizing.width());
+        sizing.drag_to(pointer_x);
+        sizing.release()
+    }
+
+    #[test]
+    fn a_settled_sidebar_reserves_its_state_width() {
+        let sizing = SidebarSizing::default();
+        assert_eq!(sizing.state(), SidebarWidthState::Wide);
+        assert_eq!(sizing.width(), WIDE_WIDTH);
+        assert!(sizing.labels_visible());
+        assert!(!sizing.is_dragging());
+        assert!(!SidebarSizing::new(SidebarWidthState::Compact).labels_visible());
+    }
+
+    #[test]
+    fn dragging_follows_the_pointer_from_where_the_handle_was_gripped() {
+        let mut sizing = SidebarSizing::default();
+        // Grip the handle 3 px right of the sidebar's edge.
+        sizing.begin_drag(WIDE_WIDTH + 3.);
+        assert_eq!(sizing.width(), WIDE_WIDTH);
+        assert!(sizing.drag_to(203.));
+        assert_eq!(sizing.width(), 200.);
+        assert!(
+            !sizing.drag_to(203.),
+            "an unchanged width reports no change"
+        );
+        assert!(sizing.drag_to(-50.));
+        assert_eq!(sizing.width(), HIDDEN_WIDTH);
+        assert!(sizing.drag_to(5_000.));
+        assert_eq!(sizing.width(), WIDE_WIDTH);
+    }
+
+    #[test]
+    fn releases_snap_at_the_owner_reviewed_thresholds() {
+        assert_eq!(WIDE_SNAP_THRESHOLD, 158.);
+        assert_eq!(COMPACT_SNAP_THRESHOLD, 26.);
+        let cases = [
+            (158., SidebarWidthState::Wide),
+            (157.9, SidebarWidthState::Compact),
+            (26., SidebarWidthState::Compact),
+            (25.9, SidebarWidthState::Hidden),
+        ];
+        for (pointer_x, expected) in cases {
+            let mut sizing = SidebarSizing::default();
+            assert_eq!(drag_and_release(&mut sizing, pointer_x), Some(expected));
+            assert_eq!(sizing.width(), expected.reserved_width());
+        }
+    }
+
+    #[test]
+    fn labels_show_during_a_drag_exactly_when_release_would_settle_wide() {
+        let mut sizing = SidebarSizing::new(SidebarWidthState::Hidden);
+        sizing.begin_drag(0.);
+        let mut pointer_x = 0.;
+        while pointer_x <= WIDE_WIDTH {
+            sizing.drag_to(pointer_x);
+            let wide = snap_on_release(sizing.width()) == SidebarWidthState::Wide;
+            assert_eq!(sizing.labels_visible(), wide, "at {pointer_x}");
+            pointer_x += 0.5;
+        }
+    }
+
+    #[test]
+    fn forward_and_reverse_drags_visit_every_state() {
+        let mut sizing = SidebarSizing::default();
+        // Wide to favicon-only to hidden...
+        assert_eq!(
+            drag_and_release(&mut sizing, COMPACT_WIDTH),
+            Some(SidebarWidthState::Compact)
+        );
+        assert_eq!(
+            drag_and_release(&mut sizing, 0.),
+            Some(SidebarWidthState::Hidden)
+        );
+        // ...and back: hidden to favicon-only to wide.
+        assert_eq!(
+            drag_and_release(&mut sizing, 40.),
+            Some(SidebarWidthState::Compact)
+        );
+        assert_eq!(
+            drag_and_release(&mut sizing, 200.),
+            Some(SidebarWidthState::Wide)
+        );
+        // A reverse drag straight from hidden to wide skips favicon-only.
+        sizing.set_state(SidebarWidthState::Hidden);
+        assert_eq!(
+            drag_and_release(&mut sizing, WIDE_WIDTH),
+            Some(SidebarWidthState::Wide)
+        );
+    }
+
+    #[test]
+    fn a_click_without_movement_keeps_the_state() {
+        for state in SidebarWidthState::ALL {
+            let mut sizing = SidebarSizing::new(state);
+            sizing.begin_drag(state.reserved_width() + 4.);
+            assert_eq!(sizing.release(), Some(state));
+        }
+    }
+
+    #[test]
+    fn moves_and_releases_without_a_drag_change_nothing() {
+        let mut sizing = SidebarSizing::new(SidebarWidthState::Compact);
+        assert!(!sizing.drag_to(10.));
+        assert_eq!(sizing.release(), None);
+        assert_eq!(sizing.state(), SidebarWidthState::Compact);
+    }
+
+    #[test]
+    fn setting_a_state_abandons_a_drag() {
+        let mut sizing = SidebarSizing::default();
+        sizing.begin_drag(WIDE_WIDTH);
+        sizing.drag_to(10.);
+        sizing.set_state(SidebarWidthState::Compact);
+        assert!(!sizing.is_dragging());
+        assert_eq!(sizing.width(), COMPACT_WIDTH);
+        assert_eq!(sizing.release(), None);
+    }
+
+    #[test]
+    fn a_non_finite_pointer_cannot_corrupt_the_width() {
+        let mut sizing = SidebarSizing::default();
+        sizing.begin_drag(f32::NAN);
+        sizing.drag_to(f32::NAN);
+        assert_eq!(sizing.width(), HIDDEN_WIDTH);
+        sizing.drag_to(f32::INFINITY);
+        assert_eq!(sizing.width(), WIDE_WIDTH);
+    }
 
     #[test]
     fn widths_shrink_through_the_d44_progression() {

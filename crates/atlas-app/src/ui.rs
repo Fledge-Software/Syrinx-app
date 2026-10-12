@@ -3,8 +3,11 @@
 mod home_palette;
 mod navigation_intents;
 mod navigation_status;
+mod page_card;
 mod page_lifecycle;
 mod recovery;
+mod sidebar_rows;
+mod sidebar_view;
 
 #[cfg(test)]
 mod shutdown_tests;
@@ -21,17 +24,18 @@ use std::{
     },
 };
 
-use atlas_core::{TabId, TabModelSnapshot};
+use atlas_core::{SavedFolderId, TabId, TabModelSnapshot};
 use atlas_platform::browser::{
     BrowserCommand, BrowserEvent, BrowserHost, BrowserShortcut, PageBounds, set_overlay_owner,
 };
 use atlas_search::{BlankQuery, BoostWeights, Scope, SearchPolicy, Target};
+use atlas_ui::SidebarSizing;
 use futures::{StreamExt, channel::mpsc::unbounded};
 use gpui::StatefulInteractiveElement;
 use gpui::{
     App, AppContext, Bounds, Context, Div, Entity, FocusHandle, InteractiveElement, IntoElement,
-    KeyBinding, ParentElement, Render, Stateful, Styled, Window, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, actions, div, point, px, rgb, size,
+    KeyBinding, MouseButton, MouseMoveEvent, ParentElement, Render, Stateful, Styled, Window,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, div, point, px, rgb, size,
 };
 use gpui_component::Root;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -47,7 +51,6 @@ use crate::{
     theme,
 };
 
-const SIDEBAR_WIDTH: f32 = 264.;
 const TOOLBAR_HEIGHT: f32 = 48.;
 const FOOTER_HEIGHT: f32 = 28.;
 
@@ -105,7 +108,9 @@ pub struct BrowserView {
     navigation_intents: NavigationIntents,
     navigation_status: NavigationStatus,
     shown: Option<TabId>,
-    bounds: Option<(i32, i32, u32, u32)>,
+    bounds: Option<PageBounds>,
+    sidebar_sizing: SidebarSizing,
+    collapsed_folders: HashSet<SavedFolderId>,
     message: String,
     failure: Option<String>,
     focus: FocusHandle,
@@ -144,6 +149,8 @@ impl BrowserView {
             navigation_status: NavigationStatus::default(),
             shown: None,
             bounds: None,
+            sidebar_sizing: SidebarSizing::default(),
+            collapsed_folders: HashSet::new(),
             message: "Opening your workspace…".to_owned(),
             failure: None,
             focus: cx.focus_handle(),
@@ -921,24 +928,17 @@ impl BrowserView {
         }
     }
 
+    /// Keeps the page card beside the sidebar; render calls this on every drag step,
+    /// window resize and DPI change.
     fn resize_pages(&mut self, window: &Window) {
         let viewport = window.viewport_size();
-        let scale = window.scale_factor();
-        let bounds = (
-            ((SIDEBAR_WIDTH + 8.) * scale) as i32,
-            ((TOOLBAR_HEIGHT + 8.) * scale) as i32,
-            ((f32::from(viewport.width) - SIDEBAR_WIDTH - 16.).max(1.) * scale) as u32,
-            ((f32::from(viewport.height) - TOOLBAR_HEIGHT - FOOTER_HEIGHT - 16.).max(1.) * scale)
-                as u32,
-        );
-        if self.bounds != Some(bounds)
-            && self.page_command(BrowserCommand::Resize(PageBounds {
-                x: bounds.0,
-                y: bounds.1,
-                width: bounds.2,
-                height: bounds.3,
-            }))
-        {
+        let bounds = page_card::page_card_bounds(page_card::CardFrame {
+            viewport_width: f32::from(viewport.width),
+            viewport_height: f32::from(viewport.height),
+            sidebar_width: self.sidebar_sizing.width(),
+            scale: window.scale_factor(),
+        });
+        if self.bounds != Some(bounds) && self.page_command(BrowserCommand::Resize(bounds)) {
             self.bounds = Some(bounds);
         }
     }
@@ -1001,175 +1001,6 @@ impl BrowserView {
                 })),
             )
     }
-
-    fn sidebar(&self, cx: &mut Context<Self>) -> Div {
-        let mut rows = div().flex().flex_col().gap_1();
-        for page in &self.model.saved_pages {
-            let saved_id = page.id;
-            let live = self
-                .model
-                .tabs
-                .iter()
-                .find(|tab| tab.saved_page_id == Some(saved_id))
-                .map(|tab| tab.id);
-            let active = live.is_some() && live == self.model.active_id;
-            let title = if page.metadata.title.is_empty() {
-                page.metadata.address.clone()
-            } else {
-                page.metadata.title.clone()
-            };
-            let mut row = div()
-                .id(("saved", saved_id.get()))
-                .h(px(36.))
-                .px_2()
-                .rounded_md()
-                .flex()
-                .items_center()
-                .gap_2()
-                .bg(if active {
-                    theme::preview_row_selected()
-                } else {
-                    theme::ground()
-                })
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.command(SessionCommand::OpenSaved(saved_id));
-                    cx.notify();
-                }))
-                .child(div().text_color(theme::accent()).child("◆"))
-                .child(div().flex_1().overflow_hidden().child(title));
-            if let Some(id) = live {
-                row = row.child(div().id(("unload", id.get())).px_1().child("×").on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.command(SessionCommand::CloseTab(id));
-                        cx.notify();
-                    }),
-                ));
-            }
-            row = row.child(
-                div()
-                    .id(("unsave", saved_id.get()))
-                    .px_1()
-                    .text_color(theme::icon_dim())
-                    .child("−")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.command(SessionCommand::Unsave(saved_id));
-                        cx.notify();
-                    })),
-            );
-            rows = rows.child(row);
-        }
-        for tab in self
-            .model
-            .tabs
-            .iter()
-            .filter(|tab| tab.saved_page_id.is_none())
-        {
-            let id = tab.id;
-            let title = if tab.metadata.address == "about:blank" {
-                "Home".to_owned()
-            } else if tab.metadata.title.is_empty() {
-                tab.metadata.address.clone()
-            } else {
-                tab.metadata.title.clone()
-            };
-            rows =
-                rows.child(
-                    div()
-                        .id(("tab", id.get()))
-                        .h(px(36.))
-                        .px_2()
-                        .rounded_md()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .cursor_pointer()
-                        .bg(if Some(id) == self.model.active_id {
-                            theme::preview_row_selected()
-                        } else {
-                            theme::ground()
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.command(SessionCommand::FocusTab(id));
-                            cx.notify();
-                        }))
-                        .child("○")
-                        .child(div().flex_1().overflow_hidden().child(title))
-                        .child(div().id(("close", id.get())).px_1().child("×").on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.command(SessionCommand::CloseTab(id));
-                                cx.notify();
-                            }),
-                        )),
-                );
-        }
-        div()
-            .w(px(SIDEBAR_WIDTH))
-            .h_full()
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .bg(theme::ground())
-            .child(
-                div()
-                    .px_2()
-                    .text_lg()
-                    .text_color(theme::accent())
-                    .child("Atlas"),
-            )
-            .child(
-                button("palette", "Search · Ctrl K").on_click(
-                    cx.listener(|this, _, window, cx| this.open_palette(false, window, cx)),
-                ),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme::icon_dim())
-                    .px_2()
-                    .child("PLUGINS"),
-            )
-            .children(["Forge", "Notes", "Fledge"].map(|name| {
-                div()
-                    .px_2()
-                    .py_1()
-                    .text_color(theme::icon_dim())
-                    .child(format!("{name} · coming soon"))
-            }))
-            .child(div().h(px(1.)).bg(theme::line()))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .px_2()
-                            .text_xs()
-                            .text_color(theme::icon_dim())
-                            .child("SAVED & OPEN TABS"),
-                    )
-                    .child(
-                        button("new-tab", "+").on_click(cx.listener(|this, _, _, cx| {
-                            this.command(SessionCommand::NewTab {
-                                address: "about:blank".to_owned(),
-                            });
-                            cx.notify();
-                        })),
-                    ),
-            )
-            .child(
-                div()
-                    .id("tab-scroll")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .child(rows),
-            )
-    }
 }
 
 impl Render for BrowserView {
@@ -1207,6 +1038,17 @@ impl Render for BrowserView {
             .track_focus(&self.focus)
             .flex()
             .flex_col()
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                this.sidebar_drag_moved(event, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.sidebar_drag_released(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.sidebar_drag_released(cx)),
+            )
             .on_action(cx.listener(|this, _: &NewTab, _, cx| {
                 this.command(SessionCommand::NewTab {
                     address: "about:blank".to_owned(),
@@ -1261,6 +1103,7 @@ impl Render for BrowserView {
                     .flex()
                     .min_h_0()
                     .child(self.sidebar(cx))
+                    .child(self.sidebar_edge(cx))
                     .child(page),
             )
             .child(

@@ -12,4 +12,4 @@ pub mod sidebar;
 pub use accent::{ACCENT_PRESETS, Accent, AccentColors, DEFAULT_ACCENT};
 pub use color::{Color, contrast_ratio};
 pub use palette::{Ground, Palette, PaletteId, PluginColors, TileColors, WindowMaterial, palette};
-pub use sidebar::SidebarWidthState;
+pub use sidebar::{SidebarSizing, SidebarWidthState};
