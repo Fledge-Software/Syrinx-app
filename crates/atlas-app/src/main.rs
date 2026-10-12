@@ -1,6 +1,7 @@
 //! Opens the integrated browser and keeps its native workers alive through orderly shutdown.
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+mod appearance;
 mod navigation;
 mod palette;
 mod palette_sample;
@@ -13,7 +14,7 @@ use gpui::{
     App, AppContext, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
     WindowOptions, px, size,
 };
-use gpui_component::{Root, Theme, ThemeMode, ThemeToken};
+use gpui_component::Root;
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -53,10 +54,7 @@ fn main() -> ExitCode {
     let smoke = options.smoke;
     gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);
-        Theme::change(ThemeMode::Dark, None, cx);
-        // Root must not paint over the native page's rectangle (the Phase 0 stacking trap).
-        Theme::global_mut(cx).tokens.background =
-            ThemeToken::new(gpui::transparent_black(), gpui::transparent_black().into());
+        theme::apply_component_theme(cx);
         ui::bind_keys(cx);
         let opened = cx.open_window(
             WindowOptions {

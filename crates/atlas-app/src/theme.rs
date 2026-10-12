@@ -1,59 +1,122 @@
 //! Gives the chrome its colours from `atlas-ui`'s tokens instead of hex literals.
 
-use std::sync::LazyLock;
+use std::cell::RefCell;
 
-use atlas_ui::{Accent, Color, Palette, PaletteId, palette};
-use gpui::Rgba;
+use atlas_ui::{Accent, Color, Ground, Palette, PaletteId, palette};
+use gpui::{App, Background, Rgba, WindowBackgroundAppearance, linear_color_stop, linear_gradient};
+use gpui_component::{Theme, ThemeMode, ThemeToken};
 
-/// Graphite with the default accent, until P1-29 persists the owner's Customize choice.
-static PREVIEW: LazyLock<Palette> =
-    LazyLock::new(|| palette(PaletteId::Graphite, Accent::default()));
+thread_local! {
+    // GPUI draws every Atlas window on one thread; Customize replaces this palette live.
+    static CURRENT: RefCell<Palette> = RefCell::new(palette(PaletteId::Graphite, Accent::default()));
+}
+
+/// Makes `palette` the one every later render draws with.
+pub(crate) fn apply(palette: Palette) {
+    CURRENT.set(palette);
+}
+
+/// Gives gpui-component's widgets, such as text fields, the drawn palette's light or dark
+/// theme; Paper is the only light palette.
+pub(crate) fn apply_component_theme(cx: &mut App) {
+    let mode = CURRENT.with_borrow(|palette| {
+        if palette.id == PaletteId::Paper {
+            ThemeMode::Light
+        } else {
+            ThemeMode::Dark
+        }
+    });
+    Theme::change(mode, None, cx);
+    // Root must not paint over the native page's rectangle (the Phase 0 stacking trap).
+    Theme::update(cx, |theme| {
+        theme.tokens.background =
+            ThemeToken::new(gpui::transparent_black(), gpui::transparent_black().into());
+    });
+}
+
+/// A copy of the palette being drawn.
+pub(crate) fn current() -> Palette {
+    CURRENT.with_borrow(Palette::clone)
+}
+
+fn token(read: impl FnOnce(&Palette) -> Color) -> Rgba {
+    CURRENT.with_borrow(|palette| rgba(read(palette)))
+}
 
 /// Converts a token colour to the GPUI colour type.
 pub(crate) fn rgba(color: Color) -> Rgba {
     gpui::rgba(color.to_rgba_u32())
 }
 
-/// Every token of the current palette, for surfaces such as the command palette that use many.
-pub(crate) fn tokens() -> &'static Palette {
-    &PREVIEW
+/// The colour a chrome region paints over the window fill. Gradient and material grounds are
+/// painted once by the window, so regions stay transparent and let them show through.
+pub(crate) fn ground() -> Rgba {
+    token(|palette| match palette.ground {
+        Ground::Solid(color) => color,
+        Ground::Gradient { .. } | Ground::Material { .. } => Color::rgba(0, 0, 0, 0.),
+    })
 }
 
-pub(crate) fn ground() -> Rgba {
-    rgba(PREVIEW.ground.representative())
+/// What the main window paints behind all chrome: Tint's gradient, or a see-through palette's
+/// translucent tint over the OS material.
+pub(crate) fn window_fill() -> Background {
+    CURRENT.with_borrow(|palette| match palette.ground {
+        Ground::Solid(color) | Ground::Material { tint: color, .. } => rgba(color).into(),
+        Ground::Gradient {
+            angle_degrees,
+            stops,
+        } => {
+            // GPUI gradients take two stops, so Tint keeps its first and last.
+            let [(from, from_at), _, (to, to_at)] = stops;
+            linear_gradient(
+                angle_degrees,
+                linear_color_stop(rgba(from), from_at),
+                linear_color_stop(rgba(to), to_at),
+            )
+        }
+    })
+}
+
+/// The OS backdrop the drawn palette asks for. Glass's Acrylic needs `atlas-platform`; until
+/// then it shares Haze's Mica (recorded in `docs/p1-28-29-home-settings.md`).
+pub(crate) fn window_material() -> WindowBackgroundAppearance {
+    CURRENT.with_borrow(|palette| match palette.ground {
+        Ground::Material { .. } => WindowBackgroundAppearance::MicaBackdrop,
+        Ground::Solid(_) | Ground::Gradient { .. } => WindowBackgroundAppearance::Opaque,
+    })
 }
 
 pub(crate) fn text() -> Rgba {
-    rgba(PREVIEW.text)
+    token(|palette| palette.text)
 }
 
 pub(crate) fn icon() -> Rgba {
-    rgba(PREVIEW.icon)
+    token(|palette| palette.icon)
 }
 
 pub(crate) fn icon_dim() -> Rgba {
-    rgba(PREVIEW.icon_dim)
+    token(|palette| palette.icon_dim)
 }
 
 pub(crate) fn line() -> Rgba {
-    rgba(PREVIEW.line)
+    token(|palette| palette.line)
 }
 
 pub(crate) fn panel() -> Rgba {
-    rgba(PREVIEW.panel)
+    token(|palette| palette.panel)
 }
 
 pub(crate) fn accent() -> Rgba {
-    rgba(PREVIEW.accent.ink)
+    token(|palette| palette.accent.ink)
 }
 
-// The preview's selected-row grey is not a canvas token. It is kept unchanged here, recorded
-// in docs/p1-07-design-tokens.md, until the sidebar slices adopt `row_selected`. The palette's
-// former "Search the web" grey was replaced by tokens in P1-30.
+// The preview's selected-row grey was an opaque stand-in (P1-07). Live palettes need it to
+// follow Paper too, so it now reads the canvas token. The palette's former "Search the web"
+// grey went with P1-30, whose palette reads every colour from `current()`.
 
-/// The preview's opaque selected-row grey (the canvas uses translucent `row_selected`).
+/// The selected row (the canvas's translucent `rowOn`).
 pub(crate) fn preview_row_selected() -> Rgba {
-    gpui::rgb(0x343037)
+    token(|palette| palette.row_selected)
 }
 
 #[cfg(test)]
@@ -69,5 +132,17 @@ mod tests {
         assert_eq!(line(), gpui::rgb(0x24262c));
         assert_eq!(panel(), gpui::rgb(0x1b1c21));
         assert_eq!(accent(), gpui::rgb(0xff8a65));
+    }
+
+    #[test]
+    fn applying_a_palette_changes_every_later_token() {
+        let paper = palette(PaletteId::Paper, Accent::default());
+        apply(paper.clone());
+        assert_eq!(text(), rgba(paper.text));
+        assert_eq!(preview_row_selected(), rgba(paper.row_selected));
+        assert_eq!(current(), paper);
+        // Restore the default for any later test sharing this thread.
+        apply(palette(PaletteId::Graphite, Accent::default()));
+        assert_eq!(ground(), gpui::rgb(0x141519));
     }
 }

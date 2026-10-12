@@ -40,7 +40,7 @@ fn starts_section(hits: &[SearchHit], index: usize) -> bool {
 }
 
 pub(super) fn chips(view: &PaletteView, cx: &mut Context<PaletteView>) -> Div {
-    let tokens = theme::tokens();
+    let tokens = theme::current();
     let selected_chip = view.view.chip();
     let mut row = div().px_4().pb_3().flex().items_center().gap_2();
     for (index, chip) in Chip::ALL.into_iter().enumerate() {
@@ -79,7 +79,7 @@ pub(super) fn chips(view: &PaletteView, cx: &mut Context<PaletteView>) -> Div {
 }
 
 pub(super) fn list(view: &PaletteView, wide: bool, cx: &mut Context<PaletteView>) -> Div {
-    let tokens = theme::tokens();
+    let tokens = theme::current();
     let mut rows = div()
         .id("results")
         .flex_1()
@@ -166,7 +166,7 @@ fn result_row(
 }
 
 fn row_frame(id: gpui::ElementId, selected: bool) -> Stateful<Div> {
-    let tokens = theme::tokens();
+    let tokens = theme::current();
     let row = div()
         .id(id)
         .h(px(ROW_HEIGHT))
@@ -197,7 +197,7 @@ fn target_glyph(target: Target) -> &'static str {
 }
 
 fn glyph(symbol: &'static str) -> Div {
-    let tokens = theme::tokens();
+    let tokens = theme::current();
     div()
         .w(px(24.))
         .h(px(24.))
@@ -214,7 +214,7 @@ fn glyph(symbol: &'static str) -> Div {
 /// Matched characters use the accent ink at semibold weight, as on the Palette board.
 fn styled(highlighted: Highlighted) -> StyledText {
     let style = HighlightStyle {
-        color: Some(Hsla::from(rgba(theme::tokens().accent.ink))),
+        color: Some(Hsla::from(rgba(theme::current().accent.ink))),
         font_weight: Some(FontWeight::SEMIBOLD),
         ..HighlightStyle::default()
     };
@@ -244,7 +244,7 @@ fn trailing_address(hit: &SearchHit) -> Div {
         .whitespace_nowrap()
         .text_ellipsis()
         .text_size(px(text::SMALL))
-        .text_color(rgba(theme::tokens().text_muted))
+        .text_color(rgba(theme::current().text_muted))
         .font_weight(FontWeight::NORMAL)
         .child(styled(highlight(
             &hit.address,
@@ -263,7 +263,7 @@ fn section_header(section: Section) -> Div {
         .items_center()
         .text_size(px(text::CAPTION))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgba(theme::tokens().text_muted))
+        .text_color(rgba(theme::current().text_muted))
         .child(section.label().to_uppercase())
 }
 
@@ -273,13 +273,11 @@ fn empty_state(view: View) -> Option<Div> {
             "No plugins yet",
             "Plugin actions appear here once the plugin runtime is installed.",
         ),
-        View::History => (
-            "No history yet",
-            "Visited pages appear here once Atlas keeps history.",
-        ),
-        View::Everything | View::Tabs | View::Commands | View::Bookmarks => return None,
+        View::Everything | View::Tabs | View::Commands | View::Bookmarks | View::History => {
+            return None;
+        }
     };
-    let tokens = theme::tokens();
+    let tokens = theme::current();
     Some(
         div()
             .px(px(10.))
@@ -298,7 +296,7 @@ fn empty_state(view: View) -> Option<Div> {
 }
 
 fn web_search_row(cx: &mut Context<PaletteView>) -> Div {
-    let tokens = theme::tokens();
+    let tokens = theme::current();
     div()
         .flex_shrink_0()
         .px(px(10.))
@@ -325,7 +323,7 @@ fn web_search_row(cx: &mut Context<PaletteView>) -> Div {
 }
 
 pub(super) fn preview(preview: Option<Preview>) -> Div {
-    let tokens = theme::tokens();
+    let tokens = theme::current();
     let pane = div()
         .flex_1()
         .min_w_0()
@@ -374,7 +372,7 @@ pub(super) fn preview(preview: Option<Preview>) -> Div {
 }
 
 pub(super) fn footer(status: &str) -> Div {
-    let tokens = theme::tokens();
+    let tokens = theme::current();
     div()
         .h(px(32.))
         .flex_shrink_0()
@@ -409,7 +407,7 @@ fn prefix_hint(symbol: &'static str, label: &'static str) -> Div {
 }
 
 pub(super) fn key_hint(label: &str) -> Div {
-    let tokens = theme::tokens();
+    let tokens = theme::current();
     div()
         .flex_shrink_0()
         .px(px(6.))

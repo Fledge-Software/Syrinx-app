@@ -1,10 +1,19 @@
 //! Connects the shared session to browser chrome without running storage or search on the UI thread.
 
+mod customize;
+mod favorites;
+mod history_list;
+mod home;
 mod home_palette;
 mod navigation_intents;
 mod navigation_status;
+mod page_card;
 mod page_lifecycle;
 mod recovery;
+mod sidebar_rows;
+mod sidebar_view;
+mod tile_editor;
+mod tiles;
 
 #[cfg(test)]
 mod shutdown_tests;
@@ -22,19 +31,21 @@ use std::{
 };
 
 use atlas_core::{
-    ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry, Route, TabId,
-    TabModelSnapshot, route,
+    ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry, Route,
+    SavedFolderId, TabId, TabModelSnapshot, route,
 };
 use atlas_platform::browser::{
     BrowserCommand, BrowserEvent, BrowserHost, BrowserShortcut, PageBounds, set_overlay_owner,
 };
 use atlas_search::{BlankQuery, BoostWeights, Scope, SearchPolicy, Target};
+use atlas_ui::SidebarSizing;
 use futures::{StreamExt, channel::mpsc::unbounded};
 use gpui::StatefulInteractiveElement;
 use gpui::{
     App, AppContext, Bounds, Context, Div, Entity, FocusHandle, InteractiveElement, IntoElement,
-    KeyBinding, ParentElement, Render, Stateful, Styled, Window, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, actions, div, point, px, rgb, size,
+    KeyBinding, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Render, Stateful, Styled,
+    Subscription, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, div,
+    point, px, rgb, size,
 };
 use gpui_component::Root;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -50,7 +61,6 @@ use crate::{
     theme,
 };
 
-const SIDEBAR_WIDTH: f32 = 264.;
 const TOOLBAR_HEIGHT: f32 = 48.;
 const FOOTER_HEIGHT: f32 = 28.;
 
@@ -67,7 +77,8 @@ actions!(
         SavePage,
         Back,
         Forward,
-        Reload
+        Reload,
+        ShowHistory
     ]
 );
 
@@ -102,6 +113,7 @@ fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
         BrowserAction::NextTab => KeyBinding::new(keystroke, NextTab, None),
         BrowserAction::PreviousTab => KeyBinding::new(keystroke, PreviousTab, None),
         BrowserAction::SavePage => KeyBinding::new(keystroke, SavePage, None),
+        BrowserAction::ShowHistory => KeyBinding::new(keystroke, ShowHistory, None),
     }
 }
 
@@ -122,9 +134,10 @@ fn activation_command(
     }
 }
 
-/// Runs a browser command through the same handler as its keyboard shortcut.
-fn browser_shortcut(action: BrowserAction) -> BrowserShortcut {
-    match action {
+/// Runs a browser command through the same handler as its keyboard shortcut; history has no
+/// native page shortcut, so it is handled by `toggle_history` directly.
+fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
+    Some(match action {
         BrowserAction::NewTab => BrowserShortcut::NewTab,
         BrowserAction::CloseTab => BrowserShortcut::CloseTab,
         BrowserAction::ReopenTab => BrowserShortcut::ReopenTab,
@@ -135,7 +148,8 @@ fn browser_shortcut(action: BrowserAction) -> BrowserShortcut {
         BrowserAction::NextTab => BrowserShortcut::NextTab,
         BrowserAction::PreviousTab => BrowserShortcut::PreviousTab,
         BrowserAction::SavePage => BrowserShortcut::SavePage,
-    }
+        BrowserAction::ShowHistory => return None,
+    })
 }
 
 struct PalettePopup {
@@ -157,14 +171,21 @@ pub struct BrowserView {
     pending_pages: HashSet<TabId>,
     navigation_intents: NavigationIntents,
     navigation_status: NavigationStatus,
+    history: history_list::HistoryList,
     shown: Option<TabId>,
-    bounds: Option<(i32, i32, u32, u32)>,
+    bounds: Option<PageBounds>,
+    sidebar_sizing: SidebarSizing,
+    collapsed_folders: HashSet<SavedFolderId>,
+    sidebar_edge_focus: FocusHandle,
+    /// Ends a sidebar drag when the window deactivates; dropping it unsubscribes.
+    _drag_activation_watch: Subscription,
     message: String,
     failure: Option<String>,
     focus: FocusHandle,
     palette: Option<PalettePopup>,
     commands: Rc<CommandRegistry>,
     home_palette: HomePaletteIntent,
+    home: home::HomeState,
     parent_hwnd: isize,
     query_sequence: u64,
     pending_query: Option<(u64, u64)>,
@@ -196,14 +217,24 @@ impl BrowserView {
             pending_pages: HashSet::new(),
             navigation_intents: NavigationIntents::default(),
             navigation_status: NavigationStatus::default(),
+            history: history_list::HistoryList::default(),
             shown: None,
             bounds: None,
+            sidebar_sizing: SidebarSizing::default(),
+            collapsed_folders: HashSet::new(),
+            sidebar_edge_focus: cx.focus_handle(),
+            _drag_activation_watch: cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.sidebar_drag_abandoned(cx);
+                }
+            }),
             message: "Opening your workspace…".to_owned(),
             failure: None,
             focus: cx.focus_handle(),
             palette: None,
             commands: Rc::new(CommandRegistry::browser()),
             home_palette: HomePaletteIntent::default(),
+            home: home::HomeState::default(),
             parent_hwnd: 0,
             query_sequence: 0,
             pending_query: None,
@@ -303,6 +334,11 @@ impl BrowserView {
                             .to_owned();
                 }
             }
+            SessionEvent::Preferences {
+                settings,
+                destinations,
+            } => self.restore_preferences(&settings, destinations, window, cx),
+            SessionEvent::Destinations(destinations) => self.destinations_changed(destinations),
             SessionEvent::State(snapshot) => {
                 self.recovery = None;
                 // Restored sessions already have saved revisions; only the first state is startup.
@@ -322,6 +358,10 @@ impl BrowserView {
                     &snapshot.created,
                     snapshot.home_entry,
                 );
+                // Switching or opening a page leaves the history list for that page.
+                if snapshot.model.active_id != self.model.active_id {
+                    self.history.close();
+                }
                 self.model = snapshot.model;
                 self.navigation_status.retain(&self.model);
                 if !self.closing {
@@ -375,6 +415,9 @@ impl BrowserView {
                         self.outcome.store(2, Ordering::Release);
                     }
                 }
+            }
+            SessionEvent::History { request_id, result } => {
+                self.history.receive(request_id, result);
             }
             SessionEvent::Failure { error, fatal } => {
                 if self.smoke {
@@ -450,6 +493,13 @@ impl BrowserView {
                 }
             }
             BrowserEvent::NavigationCompleted { id, success } => {
+                // History retracts a visit whose navigation failed.
+                if let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id) {
+                    self.command(SessionCommand::ObserveNavigation {
+                        id: tab.id,
+                        success,
+                    });
+                }
                 if self.smoke
                     && self
                         .model
@@ -603,9 +653,10 @@ impl BrowserView {
             }
             self.navigation_intents.creation_queued(*id, queued);
         }
+        // The history list occupies the page card, so no page is shown beneath it.
         let next = desired
             .map(|(id, _)| id)
-            .filter(|id| self.loaded.contains(id));
+            .filter(|id| self.loaded.contains(id) && !self.history.is_open());
         if next != self.shown && self.page_command(BrowserCommand::ShowActive(next.map(TabId::get)))
         {
             self.shown = next;
@@ -649,6 +700,17 @@ impl BrowserView {
 
     fn close_tab(&mut self) {
         self.command(SessionCommand::CloseActive);
+    }
+
+    /// Shows recent history in the page card, or returns to the active page.
+    fn toggle_history(&mut self) {
+        if self.history.is_open() {
+            self.history.close();
+        } else if !self.closing && self.session_revision.is_some() {
+            let read = self.history.open();
+            self.command(read);
+        }
+        self.sync_pages();
     }
 
     fn shortcut(&mut self, shortcut: BrowserShortcut, window: &mut Window, cx: &mut Context<Self>) {
@@ -860,8 +922,9 @@ impl BrowserView {
                 match target {
                     Target::Tab(id) => self.activate(ActivationTarget::Tab(id)),
                     Target::Saved(id) => self.activate(ActivationTarget::Saved(id)),
-                    Target::History(_) | Target::Command(_) => {
-                        self.message = "This destination is not available yet.".to_owned()
+                    Target::History(id) => self.command(SessionCommand::OpenHistory(id)),
+                    Target::Command(_) => {
+                        self.message = "Commands run through their own row.".to_owned()
                     }
                 }
                 self.focus_page(window);
@@ -902,7 +965,10 @@ impl BrowserView {
             self.focus_page(window);
             return;
         };
-        self.shortcut(browser_shortcut(action), window, cx);
+        match browser_shortcut(action) {
+            Some(shortcut) => self.shortcut(shortcut, window, cx),
+            None => self.toggle_history(),
+        }
         // Edit address reopens the palette, which takes focus; everything else returns to the page.
         if action != BrowserAction::EditAddress {
             self.focus_page(window);
@@ -1024,24 +1090,17 @@ impl BrowserView {
         }
     }
 
+    /// Keeps the page card beside the sidebar; render calls this on every drag step,
+    /// window resize and DPI change.
     fn resize_pages(&mut self, window: &Window) {
         let viewport = window.viewport_size();
-        let scale = window.scale_factor();
-        let bounds = (
-            ((SIDEBAR_WIDTH + 8.) * scale) as i32,
-            ((TOOLBAR_HEIGHT + 8.) * scale) as i32,
-            ((f32::from(viewport.width) - SIDEBAR_WIDTH - 16.).max(1.) * scale) as u32,
-            ((f32::from(viewport.height) - TOOLBAR_HEIGHT - FOOTER_HEIGHT - 16.).max(1.) * scale)
-                as u32,
-        );
-        if self.bounds != Some(bounds)
-            && self.page_command(BrowserCommand::Resize(PageBounds {
-                x: bounds.0,
-                y: bounds.1,
-                width: bounds.2,
-                height: bounds.3,
-            }))
-        {
+        let bounds = page_card::page_card_bounds(page_card::CardFrame {
+            viewport_width: f32::from(viewport.width),
+            viewport_height: f32::from(viewport.height),
+            sidebar_width: self.sidebar_sizing.width(),
+            scale: window.scale_factor(),
+        });
+        if self.bounds != Some(bounds) && self.page_command(BrowserCommand::Resize(bounds)) {
             self.bounds = Some(bounds);
         }
     }
@@ -1103,174 +1162,11 @@ impl BrowserView {
                     cx.notify();
                 })),
             )
-    }
-
-    fn sidebar(&self, cx: &mut Context<Self>) -> Div {
-        let mut rows = div().flex().flex_col().gap_1();
-        for page in &self.model.saved_pages {
-            let saved_id = page.id;
-            let live = self
-                .model
-                .tabs
-                .iter()
-                .find(|tab| tab.saved_page_id == Some(saved_id))
-                .map(|tab| tab.id);
-            let active = live.is_some() && live == self.model.active_id;
-            let title = if page.metadata.title.is_empty() {
-                page.metadata.address.clone()
-            } else {
-                page.metadata.title.clone()
-            };
-            let mut row = div()
-                .id(("saved", saved_id.get()))
-                .h(px(36.))
-                .px_2()
-                .rounded_md()
-                .flex()
-                .items_center()
-                .gap_2()
-                .bg(if active {
-                    theme::preview_row_selected()
-                } else {
-                    theme::ground()
-                })
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.activate(ActivationTarget::Saved(saved_id));
+            .child(
+                button("history", "History").on_click(cx.listener(|this, _, _, cx| {
+                    this.toggle_history();
                     cx.notify();
-                }))
-                .child(div().text_color(theme::accent()).child("◆"))
-                .child(div().flex_1().overflow_hidden().child(title));
-            if let Some(id) = live {
-                row = row.child(div().id(("unload", id.get())).px_1().child("×").on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.command(SessionCommand::CloseTab(id));
-                        cx.notify();
-                    }),
-                ));
-            }
-            row = row.child(
-                div()
-                    .id(("unsave", saved_id.get()))
-                    .px_1()
-                    .text_color(theme::icon_dim())
-                    .child("−")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.command(SessionCommand::Unsave(saved_id));
-                        cx.notify();
-                    })),
-            );
-            rows = rows.child(row);
-        }
-        for tab in self
-            .model
-            .tabs
-            .iter()
-            .filter(|tab| tab.saved_page_id.is_none())
-        {
-            let id = tab.id;
-            let title = if tab.metadata.address == "about:blank" {
-                "Home".to_owned()
-            } else if tab.metadata.title.is_empty() {
-                tab.metadata.address.clone()
-            } else {
-                tab.metadata.title.clone()
-            };
-            rows =
-                rows.child(
-                    div()
-                        .id(("tab", id.get()))
-                        .h(px(36.))
-                        .px_2()
-                        .rounded_md()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .cursor_pointer()
-                        .bg(if Some(id) == self.model.active_id {
-                            theme::preview_row_selected()
-                        } else {
-                            theme::ground()
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.activate(ActivationTarget::Tab(id));
-                            cx.notify();
-                        }))
-                        .child("○")
-                        .child(div().flex_1().overflow_hidden().child(title))
-                        .child(div().id(("close", id.get())).px_1().child("×").on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.command(SessionCommand::CloseTab(id));
-                                cx.notify();
-                            }),
-                        )),
-                );
-        }
-        div()
-            .w(px(SIDEBAR_WIDTH))
-            .h_full()
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .bg(theme::ground())
-            .child(
-                div()
-                    .px_2()
-                    .text_lg()
-                    .text_color(theme::accent())
-                    .child("Atlas"),
-            )
-            .child(
-                button("palette", "Search · Ctrl K").on_click(
-                    cx.listener(|this, _, window, cx| this.open_palette(false, window, cx)),
-                ),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme::icon_dim())
-                    .px_2()
-                    .child("PLUGINS"),
-            )
-            .children(["Forge", "Notes", "Fledge"].map(|name| {
-                div()
-                    .px_2()
-                    .py_1()
-                    .text_color(theme::icon_dim())
-                    .child(format!("{name} · coming soon"))
-            }))
-            .child(div().h(px(1.)).bg(theme::line()))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .px_2()
-                            .text_xs()
-                            .text_color(theme::icon_dim())
-                            .child("SAVED & OPEN TABS"),
-                    )
-                    .child(
-                        button("new-tab", "+").on_click(cx.listener(|this, _, _, cx| {
-                            this.command(SessionCommand::NewTab {
-                                address: "about:blank".to_owned(),
-                            });
-                            cx.notify();
-                        })),
-                    ),
-            )
-            .child(
-                div()
-                    .id("tab-scroll")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .child(rows),
+                })),
             )
     }
 }
@@ -1283,33 +1179,41 @@ impl Render for BrowserView {
         if self.browser_ready && !self.closing {
             self.resize_pages(window);
         }
-        let mut page = div().flex_1().h_full();
-        if self.shown.is_none() {
-            page = page
-                .bg(theme::ground())
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_4()
-                .child(div().text_3xl().child("Your workspace, together."))
-                .child(
-                    div()
-                        .text_color(theme::icon_dim())
-                        .child("Open a page, or press Ctrl K to find your tabs and saved pages."),
-                )
-                .child(button("home-search", "Search or enter address").on_click(
-                    cx.listener(|this, _, window, cx| this.open_palette(false, window, cx)),
-                ));
-        }
+        // The history list takes the page card's place until it is closed.
+        let page = if self.history.is_open() {
+            div()
+                .flex_1()
+                .h_full()
+                .child(history_list::render(&self.history, cx))
+        } else if self.shown.is_none() {
+            self.home_page(cx)
+        } else {
+            div().flex_1().h_full()
+        };
         div()
             .size_full()
+            .bg(theme::window_fill())
             .text_color(theme::text())
             .text_sm()
             .font_family("Segoe UI Variable Text")
             .track_focus(&self.focus)
             .flex()
             .flex_col()
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                this.sidebar_drag_moved(event, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                    this.sidebar_drag_released(f32::from(event.position.x), cx);
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                    this.sidebar_drag_released(f32::from(event.position.x), cx);
+                }),
+            )
             .on_action(cx.listener(|this, _: &NewTab, _, cx| {
                 this.command(SessionCommand::NewTab {
                     address: "about:blank".to_owned(),
@@ -1357,6 +1261,10 @@ impl Render for BrowserView {
                     this.page_command(BrowserCommand::Reload { id: id.get() });
                 }
             }))
+            .on_action(cx.listener(|this, _: &ShowHistory, _, cx| {
+                this.toggle_history();
+                cx.notify();
+            }))
             .child(self.toolbar(cx))
             .child(
                 div()
@@ -1364,6 +1272,7 @@ impl Render for BrowserView {
                     .flex()
                     .min_h_0()
                     .child(self.sidebar(cx))
+                    .child(self.sidebar_edge(cx))
                     .child(page),
             )
             .child(
@@ -1496,7 +1405,11 @@ mod palette_shortcut_tests {
             let CommandAction::Browser(action) = command.action else {
                 panic!("built-in commands are browser actions");
             };
-            let shortcut = browser_shortcut(action);
+            // History opens in the page card through `toggle_history`, not a page shortcut.
+            let Some(shortcut) = browser_shortcut(action) else {
+                assert_eq!(action, BrowserAction::ShowHistory);
+                continue;
+            };
             assert!(
                 !shortcuts.contains(&shortcut),
                 "two commands share a handler"

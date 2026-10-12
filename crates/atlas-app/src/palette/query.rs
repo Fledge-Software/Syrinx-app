@@ -232,7 +232,7 @@ mod tests {
         let search = ScopeCounts {
             tabs: 3,
             saved: 2,
-            history: 0,
+            history: 4,
             commands: 0,
         };
         let commands = CommandCounts {
@@ -240,15 +240,14 @@ mod tests {
             plugin: 0,
         };
         let typed = ChipCounts::new(search, commands, true);
-        assert_eq!(typed.everything, 9);
+        assert_eq!(typed.everything, 13);
         assert_eq!(typed.get(Chip::Tabs), 3);
         assert_eq!(typed.get(Chip::Bookmarks), 2);
-        // History stays zero until the history slice feeds the catalogue.
-        assert_eq!(typed.get(Chip::History), 0);
+        assert_eq!(typed.get(Chip::History), 4);
         assert_eq!(typed.get(Chip::PluginActions), 0);
 
         let blank = ChipCounts::new(search, commands, false);
-        assert_eq!(blank.everything, 5);
+        assert_eq!(blank.everything, 9);
 
         let plugins = ChipCounts::new(
             ScopeCounts::default(),
