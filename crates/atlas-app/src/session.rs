@@ -326,6 +326,9 @@ impl Worker {
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
         let mut catalogue = Catalogue::new();
+        for entry in crate::commands::entries() {
+            catalogue.upsert(entry).map_err(SessionError::Search)?;
+        }
         sync_catalogue(
             &mut catalogue,
             &TabModelSnapshot::default(),

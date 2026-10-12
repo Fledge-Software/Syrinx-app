@@ -829,6 +829,12 @@ this plan, in order:
 - `docs/plans/Atlas v1 — Notes — Plan.md` (plan 3)
 - `docs/plans/Atlas v1 — Forge — Plan.md` (plan 4)
 
+## Deferred work
+
+| ID | Work and completion criteria | Owner |
+|---|---|---|
+| DW-7 | Remembered site permissions currently have no clearing control. Add a settings action that removes a saved origin/kind choice so the next request asks again, with storage and UI regression coverage. The decision store is `crates/atlas-store/src/permissions.rs`; the owner explicitly requested its `TODO(DW-7)` marker on 2026-10-12. | P1-29 settings, or a P1-12 follow-up before integration. |
+
 ## Open threads
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
