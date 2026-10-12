@@ -176,6 +176,37 @@ fn query_policy() -> SearchPolicy {
 }
 
 #[test]
+fn palette_commands_are_searchable_after_startup_and_restart() {
+    let fixture = Fixture::new();
+    for _ in 0..2 {
+        let (handle, mut events) = fixture.start();
+        state(&mut events);
+        for entry in crate::commands::entries() {
+            send(
+                &handle,
+                SessionCommand::Query {
+                    request_id: 91,
+                    text: entry.title.clone(),
+                    scope: Scope::Commands,
+                    policy: query_policy(),
+                },
+            );
+            let SessionEvent::Search { request_id, result } = next_event(&mut events) else {
+                panic!("expected browser command search result")
+            };
+            assert_eq!(request_id, 91);
+            let results = result.expect("browser command search");
+            assert_eq!(results.hits[0].target, entry.target);
+            assert_eq!(results.hits[0].title, entry.title);
+            assert_eq!(results.counts.tabs, 0);
+            assert_eq!(results.counts.saved, 0);
+        }
+        stop(handle, &mut events);
+    }
+    fixture.cleanup();
+}
+
+#[test]
 fn worker_restart_preserves_saved_destination_and_latest_live_navigation() {
     let fixture = Fixture::new();
     let (handle, mut events) = fixture.start();
@@ -936,10 +967,23 @@ fn assert_only_live_search(
     };
     assert_eq!(request_id, 73);
     let results = result.expect("synthetic live-only search succeeds");
-    assert_eq!(results.counts.total(), 1);
+    assert_eq!(results.counts.total(), 8);
     assert_eq!(results.counts.tabs, 1);
     assert_eq!(results.counts.saved, 0);
-    assert_eq!(results.hits.len(), 1);
+    assert_eq!(results.counts.commands, 7);
+    assert_eq!(results.hits.len(), 8);
+    let command_targets: HashSet<_> = results
+        .hits
+        .iter()
+        .filter(|hit| matches!(hit.target, Target::Command(_)))
+        .map(|hit| hit.target)
+        .collect();
+    assert_eq!(
+        command_targets,
+        crate::commands::entries()
+            .map(|entry| entry.target)
+            .collect()
+    );
     assert_eq!(results.hits[0].target, Target::Tab(id));
     assert_eq!(results.hits[0].title, metadata.title);
     assert_eq!(results.hits[0].address, metadata.address);
