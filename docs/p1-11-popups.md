@@ -187,3 +187,18 @@ and vendor patches remain unchanged. Shared documentation changes are the P1-11
 row in `docs/implementation-status.md` and the focus-fixture entry in
 `docs/trapstoknow.md`. All changes and the checkpoint commit stay in this
 worktree's current branch; the integration checkout is untouched.
+
+## Adoption failure review fix, 2026-10-12
+
+A failed adoption cannot recreate the requested address as a normal page: that
+would lose its live opener. `ui/popups.rs` now requests a durable close for the
+failed popup and retains pending ownership until the committed close arrives.
+The UI reports why it is closing the popup. If persistence fails, selection
+still cannot queue ordinary page creation. Ordinary page failures remain
+retryable. The regression covers pending ownership, committed removal and the
+ordinary-page retry path.
+
+After the machine restart, `cargo xtask check` passed in
+`target/restart-p1-11-gate.log`. A fresh synthetic-profile window was captured
+in `target/restart-p1-11-window.png` and closed through its normal window close
+path. This window check does not simulate failed native adoption or real sign-in.
