@@ -6,6 +6,14 @@ use serde_json::Value;
 
 struct Package {
     dependencies: BTreeSet<String>,
+    declarations: Vec<Declaration>,
+}
+
+/// One dependency declaration's requested features, kept for feature-restricted packages.
+struct Declaration {
+    name: String,
+    features: BTreeSet<String>,
+    default_features: bool,
 }
 
 type Workspace = BTreeMap<String, Package>;
@@ -17,6 +25,7 @@ pub fn check_metadata(metadata: &Value) -> Result<Vec<String>, String> {
     let mut violations = BTreeSet::new();
     for (name, package) in &workspace {
         check_direct_dependencies(name, package, &workspace, &mut violations);
+        check_update_verifier_features(name, package, &mut violations);
         check_shell_paths(name, &workspace, &mut violations);
     }
     Ok(violations.into_iter().collect())
@@ -67,20 +76,54 @@ fn read_packages(metadata: &Value) -> Result<BTreeMap<&str, &Value>, String> {
 fn insert_package(workspace: &mut Workspace, package: &Value) -> Result<(), String> {
     // Cargo reports the original package name even when an import is renamed.
     let name = normalize_name(required_string(package, "name", "workspace package")?);
-    let dependencies = required_array(package, "dependencies", &name)?
+    let declarations = required_array(package, "dependencies", &name)?
         .iter()
-        .map(|dependency| {
-            required_string(dependency, "name", &format!("dependency of {name}"))
-                .map(normalize_name)
-        })
-        .collect::<Result<_, _>>()?;
-    if workspace
-        .insert(name.clone(), Package { dependencies })
-        .is_some()
-    {
+        .map(|dependency| read_declaration(dependency, &name))
+        .collect::<Result<Vec<_>, _>>()?;
+    let dependencies = declarations
+        .iter()
+        .map(|declaration| declaration.name.clone())
+        .collect();
+    let package = Package {
+        dependencies,
+        declarations,
+    };
+    if workspace.insert(name.clone(), package).is_some() {
         return Err(format!("ambiguous workspace package name: {name}"));
     }
     Ok(())
+}
+
+fn read_declaration(dependency: &Value, package: &str) -> Result<Declaration, String> {
+    // Missing features mean none; missing default-feature data counts as defaults enabled.
+    let context = format!("dependency of {package}");
+    let name = normalize_name(required_string(dependency, "name", &context)?);
+    let features = match dependency.get("features") {
+        None => BTreeSet::new(),
+        Some(value) => value
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .map(Value::as_str)
+                    .collect::<Option<BTreeSet<_>>>()
+            })
+            .ok_or_else(|| format!("{context}.features must be an array of strings"))?
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    };
+    let default_features = match dependency.get("uses_default_features") {
+        None => true,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| format!("{context}.uses_default_features must be a boolean"))?,
+    };
+    Ok(Declaration {
+        name,
+        features,
+        default_features,
+    })
 }
 
 fn required_array<'a>(value: &'a Value, field: &str, context: &str) -> Result<&'a [Value], String> {
@@ -116,9 +159,14 @@ fn check_direct_dependencies(
                 "{name} -> {dependency}: only atlas-app and atlas-ui may directly depend on GPUI"
             ));
         }
-        if is_platform_library(dependency) && name != "atlas-platform" {
+        if is_platform_library(dependency) && !may_use_platform_library(name, dependency) {
             violations.insert(format!(
                 "{name} -> {dependency}: only atlas-platform may directly depend on WebView2 or raw Win32"
+            ));
+        }
+        if dependency == UPDATE_VERIFIER {
+            violations.insert(format!(
+                "{name} -> {dependency}: nothing may use the update verifier before P1-39 is approved"
             ));
         }
         check_plugin_dependency(name, dependency, workspace, violations);
@@ -159,6 +207,47 @@ fn is_platform_library(name: &str) -> bool {
     )
 }
 
+/// The P1-38 update verifier, which no crate may use until P1-39's delivery is approved.
+const UPDATE_VERIFIER: &str = "atlas-update";
+
+/// The only `windows` features the update verifier may request: CNG and its NTSTATUS types.
+const UPDATE_VERIFIER_WINDOWS_FEATURES: [&str; 2] =
+    ["Win32_Foundation", "Win32_Security_Cryptography"];
+
+fn check_update_verifier_features(
+    name: &str,
+    package: &Package,
+    violations: &mut BTreeSet<String>,
+) {
+    // Keep the verifier to cryptography: no default features, no networking or other namespaces.
+    if name != UPDATE_VERIFIER {
+        return;
+    }
+    for declaration in package
+        .declarations
+        .iter()
+        .filter(|item| item.name == "windows")
+    {
+        if declaration.default_features {
+            violations.insert(format!(
+                "{name} -> windows: default features must be disabled"
+            ));
+        }
+        for feature in &declaration.features {
+            if !UPDATE_VERIFIER_WINDOWS_FEATURES.contains(&feature.as_str()) {
+                violations.insert(format!(
+                    "{name} -> windows: feature {feature} is not allowed for the update verifier"
+                ));
+            }
+        }
+    }
+}
+
+/// The platform crate owns Win32; the update verifier may also call CNG through `windows`.
+fn may_use_platform_library(name: &str, dependency: &str) -> bool {
+    name == "atlas-platform" || (name == UPDATE_VERIFIER && dependency == "windows")
+}
+
 fn is_atlas_dependency(name: &str, workspace: &Workspace) -> bool {
     workspace.contains_key(name)
         || name.starts_with("atlas-")
@@ -169,7 +258,7 @@ fn is_atlas_dependency(name: &str, workspace: &Workspace) -> bool {
 fn needs_shell_isolation(name: &str) -> bool {
     matches!(
         name,
-        "atlas-core" | "atlas-store" | "atlas-search" | "atlas-plugin-api"
+        "atlas-core" | "atlas-store" | "atlas-search" | "atlas-plugin-api" | "atlas-update"
     ) || name.starts_with("plugin-")
 }
 
@@ -265,6 +354,83 @@ mod tests {
             package("atlas-plugin-api", json!([{"name": "serde"}])),
         ]);
         assert!(check_metadata(&input)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn confines_the_update_verifier() -> Result<(), String> {
+        // The verifier may call CNG through `windows`, but not WebView2, and nothing may use it yet.
+        let permitted = metadata(vec![package(
+            "atlas-update",
+            json!([{
+                "name": "windows",
+                "uses_default_features": false,
+                "features": ["Win32_Foundation", "Win32_Security_Cryptography"]
+            }]),
+        )]);
+        assert!(check_metadata(&permitted)?.is_empty());
+
+        let input = metadata(vec![
+            package(
+                "atlas-update",
+                json!([
+                    {"name": "windows", "uses_default_features": false},
+                    {"name": "wry"},
+                    {"name": "atlas-platform"}
+                ]),
+            ),
+            package(
+                "atlas-app",
+                json!([{"name": "atlas-update", "kind": "dev"}]),
+            ),
+            package("atlas-platform", json!([])),
+        ]);
+        let violations = check_metadata(&input)?;
+        assert_eq!(violations.len(), 3);
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("atlas-update -> wry"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("atlas-app -> atlas-update"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("atlas-update -> atlas-platform"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restricts_the_update_verifier_to_cryptography_features() -> Result<(), String> {
+        // A networking namespace or the default features must fail the dependency check.
+        let input = metadata(vec![package(
+            "atlas-update",
+            json!([
+                {
+                    "name": "windows",
+                    "uses_default_features": false,
+                    "features": ["Win32_Security_Cryptography", "Win32_Networking_WinHttp"]
+                },
+                {"name": "windows", "kind": "dev"}
+            ]),
+        )]);
+        let violations = check_metadata(&input)?;
+        assert_eq!(violations.len(), 2);
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("Win32_Networking_WinHttp"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("default features must be disabled"))
+        );
         Ok(())
     }
 
