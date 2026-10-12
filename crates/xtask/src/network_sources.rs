@@ -3,14 +3,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Source on the typing path: the palette, address-bar parsing and the headless crates behind it.
-const QUERY_PATH: [&str; 6] = [
+/// Source on the typing path: the palette, address-bar parsing, the session worker that runs
+/// each query and the headless crates behind them. A text scan cannot see a spawned process.
+const QUERY_PATH: [&str; 8] = [
     "crates/atlas-core/src",
     "crates/atlas-search/src",
     "crates/atlas-store/src",
     "crates/atlas-app/src/palette",
     "crates/atlas-app/src/palette.rs",
     "crates/atlas-app/src/navigation.rs",
+    "crates/atlas-app/src/session",
+    "crates/atlas-app/src/session.rs",
 ];
 
 /// Standard-library sockets and Windows HTTP entry points, which no dependency check can see.

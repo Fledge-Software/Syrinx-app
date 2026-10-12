@@ -62,16 +62,55 @@ pub fn recognized_address(input: &str) -> Result<Option<String>, EntryError> {
     {
         return checked(text).map(Some);
     }
-    if text.contains("://")
-        || scheme.eq_ignore_ascii_case("javascript")
-        || scheme.eq_ignore_ascii_case("data")
-    {
+    if names_other_scheme(text, scheme, remainder) {
         return Err(EntryError::UnsupportedScheme);
     }
-    let Some(address) = schemeless_address(text) else {
+    let Some(candidate) = schemeless_candidate(text) else {
         return Ok(None);
     };
-    checked(&address).map(Some)
+    https_or_loopback_http(&candidate).map(Some)
+}
+
+/// Whether one word starts with a scheme Atlas does not open (`ftp://`, `javascript:`, `data:`).
+/// Text with spaces is a search even when it mentions an address.
+fn names_other_scheme(text: &str, scheme: &str, remainder: &str) -> bool {
+    if text.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let is_scheme = scheme
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "+-.".contains(character));
+    (is_scheme && remainder.starts_with("//"))
+        || scheme.eq_ignore_ascii_case("javascript")
+        || scheme.eq_ignore_ascii_case("data")
+}
+
+/// Checks `https://` plus the candidate, then downgrades to `http` only when the host that the
+/// `url` parser actually found is loopback, so no hand-split text can choose plain `http`.
+fn https_or_loopback_http(candidate: &str) -> Result<String, EntryError> {
+    let normalized = checked(&format!("https://{candidate}"))?;
+    let mut address =
+        url::Url::parse(&normalized).map_err(|_| EntryError::Address(WebAddressError::Invalid))?;
+    if !is_loopback(&address) {
+        return Ok(normalized);
+    }
+    address
+        .set_scheme("http")
+        .map_err(|()| EntryError::Address(WebAddressError::Invalid))?;
+    Ok(address.into())
+}
+
+fn is_loopback(address: &url::Url) -> bool {
+    match address.host() {
+        Some(url::Host::Domain(name)) => name == "localhost" || name.ends_with(".localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
 }
 
 /// The Google search address for `text`, the one engine D9 chose. Building it sends nothing.
@@ -95,39 +134,33 @@ fn checked(text: &str) -> Result<String, EntryError> {
     web_address(text).map_err(EntryError::Address)
 }
 
-/// The full address for schemeless text whose host is `localhost`, an IP address or a dotted
-/// name with a plausible top-level label, or `None` to search it. Loopback hosts open over
-/// `http`, like a local development server; every other host opens over `https`.
-fn schemeless_address(text: &str) -> Option<String> {
+/// Schemeless text whose host looks like `localhost`, an IP address or a dotted name with a
+/// plausible top-level label, ready to follow `https://`; `None` means search it. This only
+/// decides address versus search: the scheme comes from the parsed host afterwards.
+fn schemeless_candidate(text: &str) -> Option<String> {
     if text.chars().any(char::is_whitespace) {
         return None;
     }
-    let authority = text.split(['/', '?', '#']).next().unwrap_or(text);
+    // `url` treats `\` like `/` in http(s) addresses, so it ends the host here too.
+    let authority = text.split(['/', '\\', '?', '#']).next().unwrap_or(text);
     // An e-mail address or `user@host` is searched, never opened with credentials.
     if authority.is_empty() || authority.contains('@') {
         return None;
     }
     // A bare IPv6 literal has no port and needs brackets to become an address.
-    if let Ok(address) = authority.parse::<Ipv6Addr>() {
+    if authority.parse::<Ipv6Addr>().is_ok() {
         let rest = &text[authority.len()..];
-        return Some(format!(
-            "{}://[{authority}]{rest}",
-            scheme(address.is_loopback())
-        ));
+        return Some(format!("[{authority}]{rest}"));
     }
     let host = host_without_port(authority)?;
-    let local = match host
+    let plausible = match host
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))
     {
-        Some(literal) => literal.parse::<Ipv6Addr>().ok()?.is_loopback(),
-        None => is_local_name(&host.to_lowercase())?,
+        Some(literal) => literal.parse::<Ipv6Addr>().is_ok(),
+        None => looks_like_host(&host.to_lowercase()),
     };
-    Some(format!("{}://{text}", scheme(local)))
-}
-
-fn scheme(local: bool) -> &'static str {
-    if local { "http" } else { "https" }
+    plausible.then(|| text.to_owned())
 }
 
 // Split `host:port`, accepting only a numeric port so `word:word` stays a search.
@@ -152,15 +185,12 @@ fn is_port(digits: &str) -> bool {
     !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-/// Whether a named or IPv4 host is loopback, or `None` when it does not look like a host.
-fn is_local_name(host: &str) -> Option<bool> {
-    if host == "localhost" || host.ends_with(".localhost") {
-        return Some(true);
-    }
-    if let Ok(address) = host.parse::<Ipv4Addr>() {
-        return Some(address.is_loopback());
-    }
-    has_plausible_top_label(host).then_some(false)
+/// Whether a lower-case name is `localhost`, an IPv4 address or a plausible domain name.
+fn looks_like_host(host: &str) -> bool {
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || host.parse::<Ipv4Addr>().is_ok()
+        || has_plausible_top_label(host)
 }
 
 /// A dotted name whose last label could be a top-level domain: two or more characters, starting
@@ -248,6 +278,54 @@ mod tests {
                 entry_destination(input, false),
                 Ok(google_search(input)),
                 "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_parsed_loopback_host_gets_plain_http() {
+        // `url` reads `\` as `/`, so these hosts are remote however the text ends.
+        for (input, expected) in [
+            ("evil.test\\x.localhost", "https://evil.test/x.localhost"),
+            (
+                "evil.test\\x.localhost:8080",
+                "https://evil.test/x.localhost:8080",
+            ),
+            ("evil.test\\127.0.0.1", "https://evil.test/127.0.0.1"),
+            ("evil.test\\@localhost", "https://evil.test/@localhost"),
+            ("localhost\\path", "http://localhost/path"),
+        ] {
+            assert_eq!(opens(input).as_deref(), Some(expected), "{input:?}");
+        }
+        // Tabs and newlines, which `url` would strip, make the text a search.
+        for input in [
+            "evil.test\tx.localhost",
+            "evil.test\nx.localhost",
+            "evil.test\r\n.localhost",
+            "evil\t.localhost",
+        ] {
+            assert_eq!(opens(input), None, "{input:?}");
+        }
+        // An explicit scheme is never changed.
+        assert_eq!(
+            opens("https://evil.test\\x.localhost").as_deref(),
+            Some("https://evil.test/x.localhost")
+        );
+    }
+
+    #[test]
+    fn a_scheme_only_counts_at_the_start_of_one_word() {
+        assert_eq!(opens("how to parse https://x.test in rust"), None);
+        assert_eq!(opens("is javascript: safe"), None);
+        assert_eq!(
+            opens("example.test/r?to=https://x.test").as_deref(),
+            Some("https://example.test/r?to=https://x.test")
+        );
+        for refused in ["foo://bar", "chrome://settings", "view-source+x://y"] {
+            assert_eq!(
+                recognized_address(refused),
+                Err(EntryError::UnsupportedScheme),
+                "{refused}"
             );
         }
     }

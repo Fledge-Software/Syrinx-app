@@ -453,12 +453,15 @@ fn plugin_card(palette: &Palette, plugin: BuiltInPlugin) -> Stateful<Div> {
         )
 }
 
-/// The header's local date, or a plain notice when Windows cannot format it. Read at each render,
-/// so an idle window keeps yesterday's date until something redraws it.
+/// The header's local date, or a plain notice when Windows cannot format it (the error goes to
+/// stderr). Read at each render, so an idle window keeps yesterday's date until it redraws.
 fn local_date() -> String {
     match atlas_platform::calendar::local_date_heading() {
         Ok(date) => date,
-        Err(_) => "Date unavailable".to_owned(),
+        Err(error) => {
+            eprintln!("Atlas could not format the local date: {error}");
+            "Date unavailable".to_owned()
+        }
     }
 }
 

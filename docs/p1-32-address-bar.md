@@ -29,7 +29,8 @@ the typed error into the owner-facing sentence.
 | `http://…`, `https://…` in any letter case | that address, checked by `web_address` |
 | `about:blank` | `about:blank` |
 | Text with a space, one word, `1.5`, `e.g.`, `a.b`, `word:word`, `someone@example.com` | Google search |
-| `javascript:`, `data:`, `file://`, `ftp://` and other `scheme://` | refused with "This preview opens HTTP and HTTPS addresses." |
+| One word starting with `javascript:`, `data:`, `file://`, `ftp://` or another `scheme://` | refused with "This preview opens HTTP and HTTPS addresses." |
+| `how to parse https://x in rust` (spaces), `example.com/r?to=https://x` (scheme later in the text) | Google search; `https://example.com/r?to=https://x` |
 | Anything, with **Alt Enter** | Google search for exactly the typed text |
 
 A schemeless word counts as a host when it is `localhost` (or ends in
@@ -48,20 +49,37 @@ first `/` is searched rather than opened, because `web_address` refuses
 credentials in addresses and an e-mail address is far more likely than a
 `user@host` URL.
 
+The hand-written classification above only decides address versus search.
+The scheme is chosen afterwards from the host that the `url` parser actually
+found: Atlas builds `https://` plus the text, validates it with
+`web_address`, and switches to `http` only if the parsed host is `localhost`,
+a `.localhost` name or a loopback IP. This matters because `url` reads `\` as
+`/` in web addresses: `evil.test\x.localhost` ends in `.localhost` as text
+but its host is `evil.test`, so it opens as `https://evil.test/x.localhost`.
+The classifier also stops the host at `\`, and text containing a tab or
+newline (which `url` would silently strip) is a search.
+
 ## What the address field shows
 
 `atlas_core::readable_address` (`crates/atlas-core/src/address_display.rs`)
-is what the field above the page card displays. It decodes percent-escapes
-in the path, query and fragment only into characters that cannot change how
-the address reads:
+is what the field above the page card displays. It shows the scheme, host
+and port and never a user name or password, so a page that navigates to
+`https://accounts.example.com@evil.test/` is shown as `https://evil.test/`.
+It decodes percent-escapes in the path, query and fragment only into
+characters that cannot change how the address reads:
 
 - ASCII is decoded only for letters, digits and `-._~`. A reserved character
   such as `/`, `?`, `#`, `&`, `=` or `%` stays escaped, so `a%2Fb` never reads
   as two path segments.
-- Non-ASCII characters are decoded (`caf%C3%A9` reads `café`) unless they are
-  controls, white space, invisible or direction-changing characters (for
-  example U+202E, which reverses the text after it) or characters that look
-  like `/`, `?`, `#` or `.`. Those stay escaped.
+- Other characters are decoded only when Rust's `char::is_alphanumeric`
+  accepts them (`caf%C3%A9` reads `café`, `%E6%97%A5` reads `日`). That one
+  rule keeps escaped every space, format (Cf), private-use (Co) and
+  unassigned (Cn) code point, every symbol and punctuation mark (including
+  look-alikes of `/`, `?`, `#` and `.`, and emoji) and the Braille blank.
+  Right-to-left letters (Hebrew, Arabic and the other right-to-left blocks)
+  also stay escaped, since they could reorder the text around them, as do
+  the few letters that are invisible fillers or separator look-alikes. No
+  Unicode table crate was added; the standard library's tables suffice.
 - Escapes that are not valid UTF-8 are left exactly as they are.
 
 The host is always shown in its ASCII form. A Unicode host such as one with a
@@ -96,7 +114,8 @@ free of network code structurally, in three parts:
    path printed. This is where the typed text is parsed and ranked.
 3. **No socket or HTTP API on the typing path.** Standard-library sockets need
    no dependency, so `network_sources.rs` reads the source of the headless
-   crates, the palette and `navigation.rs` and rejects `TcpStream`,
+   crates, the palette, `navigation.rs` and the session worker
+   (`session.rs`, `session/`) and rejects `TcpStream`,
    `TcpListener`, `UdpSocket`, `ToSocketAddrs`, WinHTTP/WinINet entry points
    and `http_client`.
 
@@ -106,8 +125,10 @@ loading remote images. Atlas never passes GPUI a remote image, and part 1
 stops `atlas-app` from using such a crate directly, but the check cannot rule
 out that a later GPUI call fetches something. WebView2 is also, by design,
 the network for pages; the check proves that typing does not drive it, not
-that pages are offline. A text scan can be evaded by deliberate aliasing; it
-is a tripwire against accidents, which review backs up.
+that pages are offline. A text scan can be evaded by deliberate aliasing, and
+it cannot see a spawned process (for example a `std::process::Command` that
+runs a downloader); it is a tripwire against accidents, which review backs
+up.
 
 ## Also in this branch
 
@@ -116,7 +137,7 @@ is a tripwire against accidents, which review backs up.
   ("Friday, October 9") in the owner's display language and local time zone.
   It adds the `Win32_Globalization` feature to the existing `windows =0.62.2`
   pin; no package and no lockfile change. If Windows refuses, the header says
-  "Date unavailable". The date is read at each render, so a window left idle
+  "Date unavailable" and writes the Windows error to stderr. The date is read at each render, so a window left idle
   past midnight keeps showing yesterday until it next redraws.
 - **Clear browsing data from the palette (P1-27).** The registry gains
   `browser.clear-data`, "Clear browsing data…", with no shortcut. It opens
