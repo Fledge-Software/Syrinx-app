@@ -27,8 +27,8 @@ pub use destinations::{
 };
 
 pub use tabs::{
-    Activation, AppendedSavedTree, FolderRemoval, NewSavedItem, RemovedSavedEntries, SavedEntryId,
-    SavedFolder, SavedFolderId, SavedFolderSnapshot, SavedPage, SavedPageId, SavedPageSnapshot,
-    SavedPlacement, SidebarRow, SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata,
-    TabModel, TabModelSnapshot, TabSnapshot,
+    Activation, AppendedSavedTree, FolderContents, FolderRemoval, NewSavedItem,
+    RemovedSavedEntries, SavedEntryId, SavedFolder, SavedFolderId, SavedFolderSnapshot, SavedPage,
+    SavedPageId, SavedPageSnapshot, SavedPlacement, SidebarRow, SnapshotError, Tab, TabError,
+    TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, TabSnapshot, saved_folder_contents,
 };

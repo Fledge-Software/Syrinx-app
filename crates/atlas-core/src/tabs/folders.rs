@@ -73,6 +73,42 @@ pub enum FolderRemoval {
     RemoveContents,
 }
 
+/// How many saved pages and folders sit inside a folder, at any depth.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FolderContents {
+    pub pages: usize,
+    pub folders: usize,
+}
+
+impl FolderContents {
+    pub fn is_empty(self) -> bool {
+        self == Self::default()
+    }
+}
+
+/// Counts everything nested inside `folder` in a depth-first layout (empty if it is unknown).
+pub fn saved_folder_contents(layout: &[SavedPlacement], folder: SavedFolderId) -> FolderContents {
+    let mut inside = BTreeSet::from([folder]);
+    let mut contents = FolderContents::default();
+    // Each parent comes before its contents, so one pass finds every nested row.
+    for placement in layout {
+        if !placement
+            .parent
+            .is_some_and(|parent| inside.contains(&parent))
+        {
+            continue;
+        }
+        match placement.entry {
+            SavedEntryId::Page(_) => contents.pages += 1,
+            SavedEntryId::Folder(id) => {
+                contents.folders += 1;
+                inside.insert(id);
+            }
+        }
+    }
+    contents
+}
+
 /// The saved records a folder removal deleted, in visible order.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RemovedSavedEntries {
@@ -216,6 +252,20 @@ impl TabModel {
         self.layout.splice(destination..destination, block);
         self.sync_saved_order();
         Ok(())
+    }
+
+    /// Deletes a folder with everything in it, only if it still holds exactly what the owner
+    /// confirmed; otherwise refuses with `FolderContentsChanged` and changes nothing.
+    pub fn delete_folder_confirmed(
+        &mut self,
+        id: SavedFolderId,
+        expected: FolderContents,
+    ) -> Result<RemovedSavedEntries, TabError> {
+        self.placement_index(SavedEntryId::Folder(id))?;
+        if saved_folder_contents(&self.layout, id) != expected {
+            return Err(TabError::FolderContentsChanged(id));
+        }
+        self.remove_folder(id, FolderRemoval::RemoveContents)
     }
 
     /// Removes a folder, either lifting its contents into its parent or removing them too.

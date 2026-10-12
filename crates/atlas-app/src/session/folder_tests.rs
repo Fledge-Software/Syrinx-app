@@ -1,6 +1,6 @@
 //! Proves the sidebar's folder edits and folder expansion survive a real worker restart (P1-21).
 
-use atlas_core::{FolderRemoval, SavedEntryId, SavedFolderId, TabError};
+use atlas_core::{FolderContents, SavedEntryId, SavedFolderId, TabError};
 
 use super::*;
 
@@ -105,14 +105,7 @@ fn folder_edits_and_expansion_survive_restart() {
     assert_eq!(restored.model.tabs[0].id, live);
 
     // The default removal keeps the page, lifted to the top level.
-    let lifted = folder_edit(
-        &handle,
-        &mut events,
-        FolderCommand::Remove {
-            id: folder,
-            removal: FolderRemoval::MoveContentsUp,
-        },
-    );
+    let lifted = folder_edit(&handle, &mut events, FolderCommand::Remove { id: folder });
     assert!(lifted.model.saved_folders.is_empty());
     assert_eq!(lifted.model.saved_layout.len(), 1);
     assert_eq!(lifted.model.saved_layout[0].parent, None);
@@ -158,12 +151,30 @@ fn deleting_a_folder_with_contents_keeps_its_open_page_as_an_ordinary_tab() {
             index: 0,
         },
     );
+    // A confirmation made before the folder changed is refused, recoverably and without loss.
+    send(
+        &handle,
+        SessionCommand::Folder(FolderCommand::DeleteWithContents {
+            id: folder,
+            expected: FolderContents::default(),
+        }),
+    );
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::Failure {
+            error: SessionError::Model(TabError::FolderContentsChanged(_)),
+            fatal: false
+        }
+    ));
     let deleted = folder_edit(
         &handle,
         &mut events,
-        FolderCommand::Remove {
+        FolderCommand::DeleteWithContents {
             id: folder,
-            removal: FolderRemoval::RemoveContents,
+            expected: FolderContents {
+                pages: 1,
+                folders: 0,
+            },
         },
     );
     assert!(deleted.model.saved_pages.is_empty());

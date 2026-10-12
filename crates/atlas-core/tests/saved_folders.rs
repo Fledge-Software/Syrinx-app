@@ -3,9 +3,9 @@
 use std::collections::BTreeSet;
 
 use atlas_core::{
-    Activation, FolderRemoval, NewSavedItem, SavedEntryId, SavedFolderId, SavedFolderSnapshot,
-    SavedPageId, SavedPlacement, SidebarRow, SnapshotError, Tab, TabError, TabId, TabKind,
-    TabMetadata, TabModel, TabModelSnapshot,
+    Activation, FolderContents, FolderRemoval, NewSavedItem, SavedEntryId, SavedFolderId,
+    SavedFolderSnapshot, SavedPageId, SavedPlacement, SidebarRow, SnapshotError, Tab, TabError,
+    TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, saved_folder_contents,
 };
 
 fn metadata(number: usize) -> TabMetadata {
@@ -656,6 +656,44 @@ fn long_folder_operation_sequences_preserve_tree_invariants() -> Result<(), TabE
         }
     }
     assert!(issued_folders.len() > 20);
+    Ok(())
+}
+
+#[test]
+fn a_confirmed_delete_is_refused_when_the_folder_changed() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let target = folder(&mut model, "target", None);
+    let inner = folder(&mut model, "inner", Some(target));
+    let first = model.add_saved_page(metadata(1), Some(inner))?;
+    let shown = saved_folder_contents(model.saved_layout(), target);
+    assert_eq!(
+        shown,
+        FolderContents {
+            pages: 1,
+            folders: 1
+        }
+    );
+
+    // A page dragged in after the owner confirmed must not be deleted unseen.
+    model.add_saved_page(metadata(2), Some(target))?;
+    let before = model.snapshot();
+    assert_eq!(
+        model.delete_folder_confirmed(target, shown),
+        Err(TabError::FolderContentsChanged(target))
+    );
+    assert_eq!(model.snapshot(), before);
+
+    let current = saved_folder_contents(model.saved_layout(), target);
+    let removed = model.delete_folder_confirmed(target, current)?;
+    assert_eq!(removed.pages.len(), 2);
+    assert!(model.get_saved(first).is_none());
+    assert!(model.saved_folders().is_empty());
+    let unknown = SavedFolderId::new(u64::MAX)?;
+    assert_eq!(
+        model.delete_folder_confirmed(unknown, FolderContents::default()),
+        Err(TabError::UnknownSavedFolder(unknown))
+    );
+    assert!(saved_folder_contents(model.saved_layout(), unknown).is_empty());
     Ok(())
 }
 
