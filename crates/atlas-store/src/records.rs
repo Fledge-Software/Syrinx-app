@@ -63,7 +63,7 @@ fn read_snapshot(
     let saved_pages = read_saved_pages(connection)?;
     let tree = match generation {
         SchemaGeneration::FlatSaved => flat_tree(&saved_pages),
-        SchemaGeneration::Folders => read_saved_tree(connection)?,
+        SchemaGeneration::Folders | SchemaGeneration::History => read_saved_tree(connection)?,
     };
     let snapshot = TabModelSnapshot {
         tabs: read_tabs(connection)?,
@@ -518,7 +518,7 @@ fn decode_kind(kind: i64) -> Result<TabKind, StoreError> {
     }
 }
 
-fn finish_transaction<T>(
+pub(crate) fn finish_transaction<T>(
     transaction: Transaction<'_>,
     result: Result<T, StoreError>,
 ) -> Result<T, StoreError> {
