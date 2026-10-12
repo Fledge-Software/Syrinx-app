@@ -1,6 +1,6 @@
 # P1-23 full-text candidate audit
 
-Page recall needs measured costs for deletion and seven-day expiry before Atlas chooses a store. This audit, dated 2026-10-11, covers benchmark-only use. Neither candidate is approved here for product integration; P1-24 waits for the owner's review.
+Page recall needs measured costs for deletion and seven-day expiry before Atlas chooses a store. This audit was prepared on 2026-10-11 and continued on 2026-10-12 under the owner's explicit Tantivy approval. It covers benchmark-only use. P1-24 still waits for review of the measured engine choice and satisfaction of the production preconditions below.
 
 ## SQLite FTS5: existing dependency, no patch change
 
@@ -10,17 +10,21 @@ Use a separate disposable cache database, never Atlas's durable store or snapsho
 
 ## Tantivy: exact candidate and approval boundary
 
-Proposed pin: `tantivy = { version = "=0.26.2", default-features = false, features = ["mmap", "lz4-compression"] }`. MIT is declared in its packaged manifest and licence. Memory-mapped directories permit a disk/recovery comparison; LZ4 supplies document compression. Stemming, stopwords and Zstandard are omitted to avoid changing query semantics or adding unnecessary native compression dependencies. The main alternative is Tantivy's broader default feature set; it should not silently replace this audited configuration.
+Approved benchmark pin: `tantivy = { version = "=0.26.2", default-features = false, features = ["mmap", "lz4-compression"] }`. MIT is declared in its packaged manifest and licence. Memory-mapped directories permit a disk/recovery comparison; LZ4 supplies document compression. Stemming, stopwords and Zstandard are omitted to avoid changing query semantics or adding unnecessary native compression dependencies. The main alternative is Tantivy's broader default feature set; it should not silently replace this audited configuration.
 
 The [packaged changelog](https://docs.rs/crate/tantivy/0.26.2/source/CHANGELOG.md) records recent scorer and aggregation fixes, while [upstream releases](https://github.com/quickwit-oss/tantivy/releases) show ongoing maintenance. Its manifest requires Rust 1.86; the installed 1.97.1 meets this. Release activity is evidence of maintenance, not proof of correctness or security.
 
-**Do not add this candidate to the workspace lockfile yet.** The isolated graph contains `lru 0.16.4`, directly required by Tantivy, affected by [RUSTSEC-2026-0253](https://rustsec.org/advisories/RUSTSEC-2026-0253.html). The advisory describes use-after-free/double-free when a key destructor panics during `pop` and execution continues after catching the panic. The patched range is `>=0.18.2`; the resolved version is outside it. A source follow-up found the only `LruCache` use in Tantivy's `src/store/reader.rs:74`: `LruCache<usize, Block>`, with get/put/peek operations. An integer key has no panicking destructor, so the advisory's stated trigger is not apparent in that path. This is a scoped reachability observation, not permission to ignore a package advisory or a blanket safety proof. Recommend withholding approval for this graph and separately auditing a corrected candidate, rather than silently patching a dependency. No such patch is authorized by this document.
+**Approved for the benchmark, with the advisory retained.** On 2026-10-12 the owner explicitly instructed this session to measure the audited candidate despite its `lru 0.16.4` advisory if no compatible fixed version was cached. The local crates.io sparse-index cache ends at non-yanked Tantivy 0.26.2; its `lru ^0.16.3` requirement excludes the fixed `>=0.18.2` range. No network refresh, ineffective `cargo update`, patch or vendoring of lru was performed.
+
+[RUSTSEC-2026-0253](https://rustsec.org/advisories/RUSTSEC-2026-0253.html) describes use-after-free/double-free when a key destructor panics during `pop` and execution continues after catching the panic. Reinspection of cached `tantivy-0.26.2/src/store/reader.rs` found `LruCache<usize, Block>` at line 74 and get/put operations at lines 84/95. Integer keys have no panicking destructor, so the advisory's stated trigger is not reachable through this inspected store-reader path, including Atlas's intended stored-document retrieval. This does not establish that every future use of Tantivy/lru is safe or replace a package-level advisory review. The benchmark exercises only synthetic data and is not a product dependency.
+
+**P1-24 precondition if Tantivy is selected:** resolve the advisory with an audited upstream candidate or compatible fixed dependency before production integration. This session does not authorize a lru patch, suppress the finding, or approve shipping the affected version. The owner's benchmark exception supersedes the previous recommendation to withhold measurement.
 
 `cargo audit` is not installed. Instead, the public RustSec advisory archive was downloaded and package names in the entire resolved normal/build graph were matched against its crate directories. All matching advisory version ranges were read; the lru finding above remains applicable. This is a manual scoped review, not a cargo-audit pass or a claim that no undisclosed flaw exists. Other matched advisories have patched ranges containing the resolved versions. The appendix below records the matched advisory IDs and ranges.
 
 ## Audit evidence and licences
 
-The final approval inventory comes from the disposable workspace copy described below, not from the preliminary standalone resolution. It adds 36 registry packages without upgrading/removing existing package versions. Atlas's real lockfile contains only the new local benchmark package and its existing rusqlite edge. Tantivy remains unapplied.
+The final approval inventory comes from the disposable workspace copy described below, not from the preliminary standalone resolution. It adds 36 registry packages without upgrading/removing existing package versions. The approved patch is now applied to the real branch lockfile. The only direct Tantivy edge is from `fulltext-bench`; no product crate depends on the benchmark or Tantivy.
 
 The RustSec archive (`https://github.com/RustSec/advisory-db/archive/refs/heads/main.zip`) SHA-256 is `09A09A05E691D44FD3B496E569B3A36A42C28D10C2F43201166B3EBAF975BB2F`; it remains under `target/p1-23-audit`. Package names and each matching advisory's version ranges were checked for the final closure. The graph's lru version remains affected; all other matching entries have patched ranges containing their resolved versions. No automated cargo-audit pass is claimed.
 
@@ -66,11 +70,11 @@ The expanded closure also includes bumpalo 3.20.3, which is in the patched range
 
 ## Workspace-copy resolution: approval inventory
 
-A preliminary standalone resolution was followed by this definitive workspace-copy check. A `git archive` of base `7dbf579` was expanded under `target/p1-23-workspace-audit`, and a benchmark-only package was added there with the real workspace package settings, existing rusqlite dependency and the proposed Tantivy pin/features. Only that disposable copy's lockfile was resolved. No Tantivy code was built or executed.
+A preliminary standalone resolution was followed by this definitive workspace-copy check. A `git archive` of base `7dbf579` was expanded under `target/p1-23-workspace-audit`, and a benchmark-only package was added there with the real workspace package settings, existing rusqlite dependency and the proposed Tantivy pin/features. Only that disposable copy's lockfile was resolved. No Tantivy code was built or executed during that initial audit; the approved continuation builds it only for the benchmark.
 
 This resolution adds 36 registry packages and upgrades/removes no existing package versions, as checked against the real branch lockfile. Shared features nevertheless expand Tantivy's visible dependency closure; `serde_json 1.0.151` and `syn 3.0.6` replace the standalone audit's newer selections. The complete workspace-copy closure is the approval inventory below. Its packages' advisory ranges were checked again: lru 0.16.4 remains the applicable finding; no additional applicable entry was found among the expanded closure. Existing workspace packages outside Tantivy's closure retain their prior audits, not a new audit claim here.
 
-The candidate lockfile SHA-256 is `994CC838E35FE188C4C0B549F2CAFC60F0B25A75C429A8FE03A3F6ABF26A139E`. The compact, inert `crates/fulltext-bench/audit/workspace-tantivy.patch` records its difference from this branch's real lockfile. Applying it with an explicit disposable `--directory` target and `--unidiff-zero` and normalizing Git's CRLF conversion back to LF reproduced that hash. Do not apply it to the real workspace without owner approval. To reconstruct the candidate in a disposable copy of this branch, add the proposed Tantivy declaration to its benchmark manifest, apply this zero-context patch with `git apply --unidiff-zero` to its copied `Cargo.lock`, then run the locked commands below. Product manifests and vendor files were unchanged in the scratch experiment.
+The candidate lockfile SHA-256 is `994CC838E35FE188C4C0B549F2CAFC60F0B25A75C429A8FE03A3F6ABF26A139E`. The compact, inert `crates/fulltext-bench/audit/workspace-tantivy.patch` records its difference from this branch's real lockfile. Applying it with an explicit disposable `--directory` target and `--unidiff-zero` and normalizing Git's CRLF conversion back to LF reproduced that hash. The owner subsequently approved this exact dependency configuration; this session applied the retained patch to the branch lockfile. To reconstruct the candidate in a disposable copy of this branch, add the proposed Tantivy declaration to its benchmark manifest, apply this zero-context patch with `git apply --unidiff-zero` to its copied `Cargo.lock`, then run the locked commands below. Product manifests and vendor files were unchanged in the scratch experiment.
 
 ```powershell
 cargo tree --manifest-path target/p1-23-workspace-audit/Cargo.toml -p tantivy --offline --target all --edges normal,build --prefix none --format '{p} | {l}'
@@ -223,3 +227,9 @@ For reconstruction from the retained patch, add `--locked` to the first command 
 | zmij v1.0.23 | MIT |
 
 The workspace-copy closure has 140 all-target packages and 119 Windows packages, including Tantivy itself.
+
+## Approved continuation verification, 2026-10-12
+
+`cargo tree -p tantivy --locked --offline --target all --edges normal,build --prefix none --format '{p} | {l}'` reproduces all 140 entries in the inventory above (Cargo's proc-macro annotation is omitted from the table). A parsed comparison against the committed baseline lockfile shows exactly 36 added registry name/version pairs and zero removed or upgraded versions. The existing SQLite source and build flags, all workspace pins and all vendor files remain unchanged. The two existing exact-package licence exceptions remain sufficient; no new licence exception is needed.
+
+The raw tree is `target/p1-23-approved-tree.txt`. Maintenance/security conclusions remain those of the retained 2026-10-11 source/advisory snapshot; no fresh advisory-database download or automated cargo-audit pass is claimed on 2026-10-12. The latest-version statement is deliberately limited to the local registry cache, as requested by the owner.
