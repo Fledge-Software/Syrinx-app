@@ -312,6 +312,18 @@ style problem.
   archive inventory, exact diff and modified hashes, and validate the unchanged
   dependency graph. This approval covers neither another dependency patch nor
   commits, merges, pushes, publication or an upstream message.
+- **Approved narrow source patch, 2026-10-11:** P1-06 may vendor the pinned
+  `gpui-pre-windows 0.3.8` package (Zed snapshot
+  `279fe070bb389b79652e52065b2f001edcc0b11b`, Apache-2.0) with the D37 idle
+  repaint patch described in `docs/gpui-idle-patch-review.md`. Unchanged
+  upstream `TODO`/`FIXME` comments, including those at
+  `src/shaders.hlsl:490` and `:704`, and existing lint annotations are
+  permitted only inside `vendor/gpui-pre-windows-0.3.8`; no new
+  Atlas-authored suppression or deferred-work marker is allowed. Preserve the
+  exact pin, features, licence and all other package files; record the
+  archive inventory, exact diff and modified hashes, and validate the
+  unchanged dependency graph. This approval covers neither another dependency
+  patch nor commits, merges, pushes, publication or an upstream message.
 - **Pin GPUI exactly with `=`.** Snapshot releases change its API weekly, and
   a caret requirement has already broken builds (note 08, 1.2). A patched
   fork of wry or tao is allowed only if small, pinned and offered upstream
