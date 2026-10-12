@@ -187,6 +187,24 @@ writer and a rename, and refuse a wrong-case name, an extra directory and a
 junction created with `mklink /J`. P1-39 should still stage into a folder
 only Atlas can write, as a second layer.
 
+Three limits remain, and P1-39 must design around them:
+
+- **Held directory handles do not stop new entries.** They prevent renaming
+  or deleting a verified directory, but another process can still create a
+  new file inside it after the listing. P1-39 must therefore never copy,
+  list or enumerate the staging folder again after verification; it
+  installs only from the `VerifiedFile` handles.
+- **Nothing above the staging root is pinned.** `DirectoryPayload::open`
+  resolves the root by path, and each later open joins names onto that
+  path, so a junction in a folder above the root could redirect it before
+  the root handle is taken. P1-39 must place the staging root inside a
+  folder only Atlas can write, or open entries relative to the held
+  directory handle instead of by path.
+- **Only `DirectoryPayload` enforces the `Payload` rules.** Any other
+  implementation is trusted to keep them, including returning the same
+  bytes when its handle is rewound and read again. A new source needs its
+  own review and tests before P1-39 relies on it.
+
 Releasing a CNG handle cannot report a failure from `Drop`, so
 `atlas-update` writes such a failure to standard error. It only happens if a
 handle Atlas created is already invalid, which would be a bug. P1-39 should

@@ -20,6 +20,9 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 const MAX_ENTRIES: usize = 65_536;
 
 /// Payload files under one staging directory; directory handles are held for its lifetime.
+///
+/// The root path itself is resolved by name, so a junction above it is not pinned. Use a root
+/// inside a folder only Atlas can write.
 pub struct DirectoryPayload {
     root: PathBuf,
     directories: Vec<File>,

@@ -14,7 +14,10 @@ const READ_CHUNK_BYTES: usize = 64 * 1024;
 /// Where payload files come from, such as `DirectoryPayload`'s staging directory.
 ///
 /// Verification holds only for the bytes it read. Install from the handles in the returned
-/// `VerifiedPayload`, never by opening the files again.
+/// `VerifiedPayload`, never by opening, copying or listing the source again: held handles do
+/// not stop new entries appearing. Only `DirectoryPayload` enforces the rules below; any
+/// other implementation is trusted to keep them, including returning the same bytes after
+/// a rewind.
 pub trait Payload {
     type File: Read + Seek;
 
