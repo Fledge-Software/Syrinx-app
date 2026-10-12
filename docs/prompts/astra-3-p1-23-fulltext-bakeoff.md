@@ -42,9 +42,10 @@ nothing else. Product crates stay untouched.
      and the full transitive dependency list with licences, from
      `cargo tree` in a scratch copy, not the real lockfile.
 
-   **Then stop and ask the owner** before adding Tantivy to the workspace
-   lockfile, because it shifts many transitive packages. Do the FTS5 half
-   while you wait if it needs no new dependency.
+   **The owner approved Tantivy on 2026-10-11** (see `AGENTS.md`,
+   "Approved dependency"). Add the exact audited version to the bench crate
+   only. Stop and ask only if a transitive package has a licence outside
+   the permissive list, or if FTS5 needs a SQLite build-flag change.
 2. **Corpus.** Generate the corpus deterministically from a seed: synthetic
    pages on `example.test` domains with made-up text, sized to the plan's
    stated scale. Include multilingual and accented text, long pages and
@@ -75,7 +76,7 @@ nothing else. Product crates stay untouched.
 
 ## Done means
 
-The audit is written. Either both engines are measured, or FTS5 is measured
-and Tantivy is waiting on owner approval, stated plainly. The report has a
+The audit is written and both engines are measured, unless a licence or
+build-flag question is waiting on the owner, stated plainly. The report has a
 recommendation, the gate is green on the branch, and the P1-23 ledger row is
 updated.

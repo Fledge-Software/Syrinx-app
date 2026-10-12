@@ -1,6 +1,7 @@
 //! Runs the local development gate and checks the workspace's dependency boundaries.
 
 mod benchmark;
+mod deferred_work;
 mod dependency_policy;
 
 use std::env;
@@ -10,7 +11,7 @@ use std::process::{Command, ExitCode, Stdio};
 #[cfg(not(target_os = "windows"))]
 compile_error!("Atlas's development gate supports Windows 11 only.");
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps | bench>";
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | bench>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.
@@ -37,6 +38,7 @@ fn run() -> Result<(), String> {
     match command.to_str() {
         Some("check") => check_workspace(&root),
         Some("check-deps") => check_dependencies(&root),
+        Some("check-deferred") => check_deferred_work(&root),
         Some("bench") => benchmark::run(),
         Some("--help" | "-h") => {
             println!("{USAGE}");
@@ -97,9 +99,24 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn check_deferred_work(root: &Path) -> Result<(), String> {
+    // Allow deferred-work markers only when the plan's register tracks them.
+    let violations = deferred_work::check(root)?;
+    if !violations.is_empty() {
+        return Err(violations.join(
+            "
+",
+        ));
+    }
+
+    println!("Deferred-work markers are all registered.");
+    Ok(())
+}
+
 fn check_workspace(root: &Path) -> Result<(), String> {
     // Stop at the first failed check, then prove the application itself can start.
     check_dependencies(root)?;
+    check_deferred_work(root)?;
     run_cargo(root, &["fmt", "--all", "--", "--check"])?;
     run_cargo(
         root,

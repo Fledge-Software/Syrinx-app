@@ -50,6 +50,7 @@ do not silently download a toolchain or change a Windows security setting.
 
 ```powershell
 cargo xtask check-deps
+cargo xtask check-deferred
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --profile local --offline --locked -- -D warnings
 cargo test --workspace --profile local --offline --locked
