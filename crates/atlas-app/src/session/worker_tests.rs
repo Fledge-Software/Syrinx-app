@@ -1695,3 +1695,6 @@ mod preference_tests;
 
 #[path = "import_tests.rs"]
 mod import_tests;
+
+#[path = "folder_tests.rs"]
+mod folder_tests;

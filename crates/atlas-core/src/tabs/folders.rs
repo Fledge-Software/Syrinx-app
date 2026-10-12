@@ -73,11 +73,75 @@ pub enum FolderRemoval {
     RemoveContents,
 }
 
+/// Every saved page and folder inside a folder, at any depth. A confirmed delete carries the
+/// exact set the owner was shown, so a swap (one row in, another out) is still noticed.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FolderContents {
+    entries: BTreeSet<SavedEntryId>,
+}
+
+impl FolderContents {
+    pub fn entries(&self) -> &BTreeSet<SavedEntryId> {
+        &self.entries
+    }
+
+    pub fn pages(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry, SavedEntryId::Page(_)))
+            .count()
+    }
+
+    pub fn folders(&self) -> usize {
+        self.entries.len() - self.pages()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl FromIterator<SavedEntryId> for FolderContents {
+    fn from_iter<I: IntoIterator<Item = SavedEntryId>>(entries: I) -> Self {
+        Self {
+            entries: entries.into_iter().collect(),
+        }
+    }
+}
+
+/// Collects everything nested inside `folder` in a depth-first layout (empty if it is unknown).
+pub fn saved_folder_contents(layout: &[SavedPlacement], folder: SavedFolderId) -> FolderContents {
+    let mut inside = BTreeSet::from([folder]);
+    let mut entries = BTreeSet::new();
+    // Each parent comes before its contents, so one pass finds every nested row.
+    for placement in layout {
+        if !placement
+            .parent
+            .is_some_and(|parent| inside.contains(&parent))
+        {
+            continue;
+        }
+        if let SavedEntryId::Folder(id) = placement.entry {
+            inside.insert(id);
+        }
+        entries.insert(placement.entry);
+    }
+    FolderContents { entries }
+}
+
 /// The saved records a folder removal deleted, in visible order.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RemovedSavedEntries {
     pub folders: Vec<SavedFolder>,
     pub pages: Vec<SavedPage>,
+}
+
+/// Refuses a folder name that is empty or only whitespace; the title is otherwise kept as given.
+pub(super) fn require_folder_title(title: &str) -> Result<(), TabError> {
+    if title.trim().is_empty() {
+        return Err(TabError::EmptyFolderTitle);
+    }
+    Ok(())
 }
 
 impl TabModel {
@@ -120,6 +184,7 @@ impl TabModel {
         parent: Option<SavedFolderId>,
     ) -> Result<SavedFolderId, TabError> {
         // Validate and allocate before changing the tree so failures leave it untouched.
+        require_folder_title(&title)?;
         self.require_folder(parent)?;
         let id = self.allocate_folder_id()?;
         let position = self.append_position(parent)?;
@@ -136,6 +201,7 @@ impl TabModel {
     }
 
     pub fn rename_folder(&mut self, id: SavedFolderId, title: String) -> Result<(), TabError> {
+        require_folder_title(&title)?;
         let folder = self
             .folders
             .iter_mut()
@@ -206,6 +272,20 @@ impl TabModel {
         self.layout.splice(destination..destination, block);
         self.sync_saved_order();
         Ok(())
+    }
+
+    /// Deletes a folder with everything in it, only if it still holds exactly what the owner
+    /// confirmed; otherwise refuses with `FolderContentsChanged` and changes nothing.
+    pub fn delete_folder_confirmed(
+        &mut self,
+        id: SavedFolderId,
+        expected: &FolderContents,
+    ) -> Result<RemovedSavedEntries, TabError> {
+        self.placement_index(SavedEntryId::Folder(id))?;
+        if saved_folder_contents(&self.layout, id) != *expected {
+            return Err(TabError::FolderContentsChanged(id));
+        }
+        self.remove_folder(id, FolderRemoval::RemoveContents)
     }
 
     /// Removes a folder, either lifting its contents into its parent or removing them too.

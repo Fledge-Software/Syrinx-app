@@ -1,10 +1,11 @@
-//! Draws the sidebar at its current D44 width and lets the owner drag its edge (P1-08, P1-09).
+//! Draws the sidebar at its current D44 width and lets the owner drag its edge (P1-08, P1-09),
+//! with the saved rows' folder controls (P1-21).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use atlas_core::{
-    ActivationTarget, SavedFolderId, SavedFolderSnapshot, SavedPageId, SavedPageSnapshot, TabId,
-    TabSnapshot,
+    ActivationTarget, SavedEntryId, SavedFolderId, SavedFolderSnapshot, SavedPageId,
+    SavedPageSnapshot, TabId, TabSnapshot,
 };
 use atlas_ui::{
     SIDEBAR_WIDTH_STATE_KEY, SidebarWidthState,
@@ -14,16 +15,21 @@ use atlas_ui::{
     sidebar_setting,
 };
 use gpui::{
-    Context, Div, ElementId, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    AppContext, ClickEvent, Context, Div, ElementId, InteractiveElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, ParentElement, Role, Stateful, StatefulInteractiveElement,
+    Styled, Window, div, prelude::FluentBuilder, px,
 };
 
 use crate::controls::control;
 
 use super::{
     BrowserView, button,
+    folder_editor::{
+        DeleteFolderContents, DraggedRow, MoveRowDown, MoveRowIn, MoveRowOut, MoveRowUp,
+        ROW_CONTEXT, RemoveRow, RenameRow,
+    },
     page_card::edge_strip,
+    saved_moves::{DropTarget, Step},
     sidebar_rows::{SavedRow, visible_saved_rows},
     tiles::monogram,
 };
@@ -87,6 +93,7 @@ impl BrowserView {
             .child(plugin_section(labels))
             .child(div().h(px(1.)).bg(theme::line()))
             .child(tabs_header(labels, cx))
+            .children(labels.then(|| self.folder_editor_view(cx)).flatten())
             .child(
                 div()
                     .id("tab-scroll")
@@ -278,7 +285,7 @@ impl BrowserView {
                     expanded,
                 } => folders
                     .get(&id)
-                    .map(|folder| folder_row(folder, depth, expanded, labels, cx)),
+                    .map(|folder| self.folder_row(folder, depth, expanded, labels, cx)),
                 SavedRow::Page { id, depth } => pages
                     .get(&id)
                     .map(|page| self.saved_row(page, depth, labels, cx)),
@@ -314,27 +321,37 @@ impl BrowserView {
         let title = title_or_address(&page.metadata.title, &page.metadata.address);
         let look = RowLook {
             icon: monogram(&title),
-            title,
+            title: title.clone(),
             active: live.is_some() && live == self.model.active_id,
             depth,
             saved: true,
         };
-        let mut row = row_frame(("saved", saved_id.get()), look, labels).on_click(cx.listener(
+        let target = ActivationTarget::Saved(saved_id);
+        let row = row_frame(("saved", saved_id.get()), look, labels).on_click(cx.listener(
             move |this, _, window, cx| {
-                this.activate(ActivationTarget::Saved(saved_id));
-                this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
-                cx.notify();
+                this.activate_row(target, window, cx);
             },
         ));
+        // The confirmation for an unopened page needs the wide sidebar's card.
+        let row = if labels || live.is_some() {
+            row.on_action(cx.listener(move |this, _: &RemoveRow, window, cx| {
+                this.request_page_removal(saved_id, window, cx);
+            }))
+        } else {
+            row
+        };
+        let mut row = movable_row(row, SavedEntryId::Page(saved_id), title, cx);
         if !labels {
             return row;
         }
         if let Some(id) = live {
             row = row.child(
                 row_action(("unload", id.get()), "×", "Unload page").on_click(cx.listener(
-                    move |this, _, _, cx| {
+                    move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.command(SessionCommand::CloseTab(id));
+                        // The row stays, so its keys must not keep applying after the click.
+                        this.release_row_focus(window, cx);
                         cx.notify();
                     },
                 )),
@@ -343,10 +360,9 @@ impl BrowserView {
         row.child(
             row_action(("unsave", saved_id.get()), "−", "Remove saved page")
                 .text_color(theme::icon_dim())
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
-                    this.command(SessionCommand::Unsave(saved_id));
-                    cx.notify();
+                    this.request_page_removal(saved_id, window, cx);
                 })),
         )
     }
@@ -365,11 +381,10 @@ impl BrowserView {
             depth: 0,
             saved: false,
         };
+        let target = ActivationTarget::Tab(id);
         let row = row_frame(("tab", id.get()), look, labels).on_click(cx.listener(
             move |this, _, window, cx| {
-                this.activate(ActivationTarget::Tab(id));
-                this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
-                cx.notify();
+                this.activate_row(target, window, cx);
             },
         ));
         if !labels {
@@ -386,47 +401,119 @@ impl BrowserView {
         )
     }
 
-    /// Expands or collapses one folder's rows. This is view state, not a model change.
-    fn toggle_folder(&mut self, id: SavedFolderId) {
-        if !self.collapsed_folders.remove(&id) {
-            self.collapsed_folders.insert(id);
+    /// A folder row: its arrow toggles the contents. Renaming and removal need the wide
+    /// sidebar's form, so the favicon-only width offers only toggling and moving (D44).
+    fn folder_row(
+        &self,
+        folder: &SavedFolderSnapshot,
+        depth: usize,
+        expanded: bool,
+        labels: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let id = folder.id;
+        let look = RowLook {
+            icon: if expanded { "▾" } else { "▸" }.to_owned(),
+            title: folder.title.clone(),
+            active: false,
+            depth,
+            saved: true,
+        };
+        let row = row_frame(("folder", id.get()), look, labels)
+            .aria_expanded(expanded)
+            // A click lets go of focus, as page rows do, so Alt Left then means Back; a
+            // keyboard toggle keeps focus on the row so the tree can still be walked.
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                this.toggle_folder(id);
+                if !event.is_keyboard() {
+                    this.release_row_focus(window, cx);
+                }
+                cx.notify();
+            }));
+        let row = movable_row(row, SavedEntryId::Folder(id), folder.title.clone(), cx);
+        if !labels {
+            return row;
         }
+        row.on_action(cx.listener(move |this, _: &RenameRow, window, cx| {
+            this.start_rename_folder(id, window, cx);
+        }))
+        .on_action(cx.listener(move |this, _: &RemoveRow, window, cx| {
+            this.request_folder_removal(id, false, window, cx);
+        }))
+        .on_action(
+            cx.listener(move |this, _: &DeleteFolderContents, window, cx| {
+                this.request_folder_removal(id, true, window, cx);
+            }),
+        )
+        .child(
+            row_action(("rename-folder", id.get()), "✎", "Rename folder")
+                .text_color(theme::icon_dim())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.start_rename_folder(id, window, cx);
+                })),
+        )
+        .child(
+            row_action(("remove-folder", id.get()), "−", "Remove folder")
+                .text_color(theme::icon_dim())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.request_folder_removal(id, false, window, cx);
+                })),
+        )
     }
 }
 
-/// A folder row: a disclosure arrow that expands or collapses its contents.
-fn folder_row(
-    folder: &SavedFolderSnapshot,
-    depth: usize,
-    expanded: bool,
-    labels: bool,
+/// Lets a saved page or folder move by Alt arrows while focused, be dragged, and take drops.
+fn movable_row(
+    row: Stateful<Div>,
+    entry: SavedEntryId,
+    title: String,
     cx: &mut Context<BrowserView>,
 ) -> Stateful<Div> {
-    let id = folder.id;
-    let look = RowLook {
-        icon: if expanded { "▾" } else { "▸" }.to_owned(),
-        title: folder.title.clone(),
-        active: false,
-        depth,
-        saved: true,
+    // An Alt arrow that moves nothing goes on to the window's own binding (Alt Left is Back).
+    let step = |step: Step| {
+        move |this: &mut BrowserView, cx: &mut Context<BrowserView>| {
+            if this.move_saved_row(entry, step) {
+                cx.notify();
+            } else {
+                cx.propagate();
+            }
+        }
     };
-    row_frame(("folder", id.get()), look, labels)
-        .aria_expanded(expanded)
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.toggle_folder(id);
+    let (up, down, out, into) = (
+        step(Step::Up),
+        step(Step::Down),
+        step(Step::Out),
+        step(Step::In),
+    );
+    row.on_action(cx.listener(move |this, _: &MoveRowUp, _, cx| up(this, cx)))
+        .on_action(cx.listener(move |this, _: &MoveRowDown, _, cx| down(this, cx)))
+        .on_action(cx.listener(move |this, _: &MoveRowOut, _, cx| out(this, cx)))
+        .on_action(cx.listener(move |this, _: &MoveRowIn, _, cx| into(this, cx)))
+        // Mouse-down focused the row; a drag lets go of that focus, as a click does.
+        .on_drag(DraggedRow { entry, title }, |dragged, _, window, cx| {
+            window.blur(cx);
+            cx.new(|_| dragged.clone())
+        })
+        .drag_over::<DraggedRow>(|style, _, _, _| style.bg(theme::preview_row_selected()))
+        .on_drop(cx.listener(move |this, dragged: &DraggedRow, window, cx| {
+            this.drop_saved_row(dragged.entry, DropTarget::Row(entry));
+            this.release_row_focus(window, cx);
             cx.notify();
         }))
 }
 
 /// The shared row shape: a titled row when labels show, a centred icon button otherwise.
 /// Every row is a tree item at its nesting level, keeping its title as the accessible name,
-/// and its own Tab stop: Enter or Space opens it.
+/// and its own Tab stop with P1-36's focus ring: Enter or Space uses it (a keyboard click).
 // TODO(DW-61): one Tab stop for the tree with arrow keys between rows, Left and Right for
 // folders, and F6 landing on the active row.
 fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<Div> {
     let row = control(div().id(id), Role::TreeItem, look.title.clone())
         .aria_level(look.depth + 1)
         .aria_selected(look.active)
+        .key_context(ROW_CONTEXT)
         .h(px(ROW_HEIGHT))
         .flex_none()
         .rounded_md()
@@ -522,7 +609,8 @@ fn plugin_section(labels: bool) -> Div {
     }))
 }
 
-/// The tab section's header with its new-tab button.
+/// The tab section's header with its new-folder and new-tab buttons. A row dropped on it
+/// moves to the end of the top level, out of any folder.
 fn tabs_header(labels: bool, cx: &mut Context<BrowserView>) -> Div {
     let new_tab = cx.listener(|this, _, window, cx| {
         this.command(SessionCommand::NewTab {
@@ -531,7 +619,15 @@ fn tabs_header(labels: bool, cx: &mut Context<BrowserView>) -> Div {
         this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
         cx.notify();
     });
-    let header = div().flex().items_center();
+    let header = div()
+        .flex()
+        .items_center()
+        .rounded_md()
+        .drag_over::<DraggedRow>(|style, _, _, _| style.bg(theme::preview_row_selected()))
+        .on_drop(cx.listener(|this, dragged: &DraggedRow, _, cx| {
+            this.drop_saved_row(dragged.entry, DropTarget::TopLevel);
+            cx.notify();
+        }));
     if !labels {
         return header.child(icon_button("new-tab", "+", "New tab").on_click(new_tab));
     }
@@ -543,6 +639,10 @@ fn tabs_header(labels: bool, cx: &mut Context<BrowserView>) -> Div {
                 .text_xs()
                 .text_color(theme::icon_dim())
                 .child("SAVED & OPEN TABS"),
+        )
+        .child(
+            button("new-folder", "New folder")
+                .on_click(cx.listener(|this, _, window, cx| this.start_new_folder(window, cx))),
         )
         .child(
             button("new-tab", "+")

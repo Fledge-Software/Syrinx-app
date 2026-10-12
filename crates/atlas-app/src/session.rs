@@ -1,12 +1,14 @@
 //! Keeps model, persistence and catalogue work off the browser's event thread.
 
 mod deletions;
+mod folders;
 mod history;
 mod history_repair;
 mod preferences;
 mod recovery;
 mod retention;
 
+pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
 pub use recovery::RecoveryPrompt;
 
@@ -88,6 +90,8 @@ pub enum SessionCommand {
     OpenSaved(SavedPageId),
     SaveActive,
     Unsave(SavedPageId),
+    /// Creates, renames, removes or moves saved folders and pages (P1-21).
+    Folder(FolderCommand),
     UpdateMetadata {
         id: TabId,
         metadata: TabMetadata,
@@ -959,6 +963,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         SessionCommand::Unsave(id) => {
             model.remove_saved(id).map_err(SessionError::Model)?;
         }
+        SessionCommand::Folder(command) => command.apply(model).map_err(SessionError::Model)?,
         SessionCommand::UpdateMetadata { id, metadata } => model
             .update_metadata(id, metadata)
             .map_err(SessionError::Model)?,
