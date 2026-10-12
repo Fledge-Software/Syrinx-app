@@ -41,6 +41,11 @@ impl HistoryRecorder {
         self.tracker.has_pending_titles()
     }
 
+    /// A clear removed these addresses and may have removed any recent visit.
+    pub(super) fn history_cleared(&mut self, removed: &[std::num::NonZeroU64]) {
+        self.tracker.history_cleared(removed);
+    }
+
     /// Records a visit when a live web tab reports a new document address, and holds titles.
     pub(super) fn observe(
         &mut self,

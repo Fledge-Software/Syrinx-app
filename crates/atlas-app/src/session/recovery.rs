@@ -5,7 +5,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use atlas_platform::{RecoveryError, RecoveryOffer, StartupStorage, offer_recovery};
+use atlas_platform::{
+    JournalError, RecoveryError, RecoveryOffer, StartupStorage, offer_recovery, read_deletion_log,
+};
 use atlas_store::{StoreOperation, deletion::DeletionLog};
 
 use super::*;
@@ -20,9 +22,9 @@ pub struct RecoveryPrompt {
 }
 
 pub(super) fn prepare_startup(directory: &Path) -> Result<StartupStorage, SessionError> {
-    // The preview has no history/deletions; nonzero backup generations still require refusal.
-    atlas_platform::prepare_startup(directory, &DeletionLog::default()).map_err(|error| match error
-    {
+    // A recovery offer replays this journal onto the restored copy (D47).
+    let deletions = startup_log(directory)?;
+    atlas_platform::prepare_startup(directory, &deletions).map_err(|error| match error {
         RecoveryError::Location(error) => SessionError::Location(error),
         error => SessionError::Recovery(error.to_string()),
     })
@@ -37,14 +39,38 @@ pub(super) fn confirm_failed_start(
     if !can_probe(&startup) {
         return Err(startup);
     }
-    // This preview collects no history/deletions; the API still rejects nonzero backup generations.
-    let offer = offer_recovery(directory, &DeletionLog::default()).map_err(|error| {
-        SessionError::RecoveryFailed {
+    // The journal is read again here: the failed open may have followed a clear.
+    let offer = startup_log(directory)
+        .map_err(|error| error.to_string())
+        .and_then(|deletions| {
+            offer_recovery(directory, &deletions).map_err(|error| error.to_string())
+        })
+        .map_err(|recovery| SessionError::RecoveryFailed {
             startup: Box::new(startup),
-            recovery: error.to_string(),
-        }
-    })?;
+            recovery,
+        })?;
     confirm_offer(offer, commands, events)
+}
+
+/// The journal a recovery offer replays. A damaged one is treated as empty here: only
+/// generation-0 backups can then be offered, and opening the restored database still meets
+/// the damaged journal, which forces the owner-confirmed history repair before any history
+/// is shown.
+fn startup_log(directory: &Path) -> Result<DeletionLog, SessionError> {
+    match read_deletion_log(directory) {
+        Ok(log) => Ok(log),
+        Err(JournalError::Deletion(_)) => Ok(DeletionLog::default()),
+        Err(error) => Err(SessionError::Deletion(error)),
+    }
+}
+
+/// A fresh identity for one startup decision, so a stale click cannot confirm a later one.
+pub(super) fn next_offer_id() -> Result<u64, SessionError> {
+    NEXT_OFFER
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .map_err(|_| SessionError::RecoveryUnavailable)
 }
 
 pub(super) fn confirm_offer(
@@ -52,17 +78,25 @@ pub(super) fn confirm_offer(
     commands: &mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<bool, SessionError> {
-    let offer_id = NEXT_OFFER
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-            next.checked_add(1)
-        })
-        .map_err(|_| SessionError::RecoveryUnavailable)?;
+    let offer_id = next_offer_id()?;
     let prompt = RecoveryPrompt {
         offer_id,
         created_at: offer.metadata().created_at,
     };
     emit(events, SessionEvent::RecoveryOffered(prompt))?;
-    wait_for_confirmation(offer, prompt, commands, events)
+    // The offer keeps exclusive storage ownership while the owner decides.
+    let confirmed = await_decision(
+        commands,
+        events,
+        |command| matches!(command, SessionCommand::ConfirmRecovery { offer_id } if *offer_id == prompt.offer_id),
+    )?;
+    if !confirmed {
+        return Ok(false);
+    }
+    offer
+        .confirm()
+        .map_err(|error| SessionError::Recovery(error.to_string()))?;
+    Ok(true)
 }
 
 fn can_probe(error: &SessionError) -> bool {
@@ -89,11 +123,11 @@ fn can_probe(error: &SessionError) -> bool {
     }
 }
 
-fn wait_for_confirmation(
-    offer: RecoveryOffer,
-    prompt: RecoveryPrompt,
+/// Waits for the matching confirmation; shutdown or a closed command channel declines.
+pub(super) fn await_decision(
     commands: &mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
+    is_confirmation: impl Fn(&SessionCommand) -> bool,
 ) -> Result<bool, SessionError> {
     loop {
         // A dropped UI must release the exclusive offer even if its sender is still alive.
@@ -104,12 +138,7 @@ fn wait_for_confirmation(
             Ok(SessionCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Ok(false);
             }
-            Ok(SessionCommand::ConfirmRecovery { offer_id }) if offer_id == prompt.offer_id => {
-                offer
-                    .confirm()
-                    .map_err(|error| SessionError::Recovery(error.to_string()))?;
-                return Ok(true);
-            }
+            Ok(command) if is_confirmation(&command) => return Ok(true),
             Ok(_) => reject_command(events)?,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }

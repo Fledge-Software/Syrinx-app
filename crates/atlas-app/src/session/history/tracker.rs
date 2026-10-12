@@ -180,6 +180,18 @@ impl VisitTracker {
         actions
     }
 
+    /// After a clear no held visit can be retracted, since it may be gone, and removed
+    /// entries can no longer take titles or absorb a scripted return.
+    pub(super) fn history_cleared(&mut self, removed: &[NonZeroU64]) {
+        for cursor in self.cursors.values_mut() {
+            cursor.visit = None;
+            cursor.recent.clear();
+            if cursor.entry.is_some_and(|entry| removed.contains(&entry)) {
+                cursor.entry = None;
+            }
+        }
+    }
+
     /// The entry no longer exists, so later titles have nothing to name.
     pub(super) fn entry_removed(&mut self, entry: NonZeroU64) {
         for cursor in self.cursors.values_mut() {
@@ -449,5 +461,31 @@ mod tests {
         model.close(restored).expect("close synthetic tab");
         tracker.retain(&model.snapshot());
         assert!(tracker.cursors.is_empty());
+    }
+
+    #[test]
+    fn a_clear_forgets_retractable_visits_and_removed_entries() {
+        let start = Instant::now();
+        let mut tracker = VisitTracker::default();
+        let tab = tab();
+        assert_eq!(
+            visit(&mut tracker, tab, FIRST, start, 1),
+            [record(FIRST, "")]
+        );
+        tracker.history_cleared(&[id(1)]);
+
+        // The cleared visit is not retracted, its title names nothing, and a quick return
+        // to the address is recorded again rather than absorbed into the removed entry.
+        assert_eq!(tracker.navigation(tab, false), None);
+        tracker.title(tab, "Synthetic late".to_owned(), start);
+        assert!(tracker.settle(start + TITLE_SETTLE, true).is_empty());
+        assert_eq!(
+            visit(&mut tracker, tab, SECOND, start, 2),
+            [record(SECOND, "")]
+        );
+        assert_eq!(
+            visit(&mut tracker, tab, FIRST, start, 3),
+            [record(FIRST, "")]
+        );
     }
 }

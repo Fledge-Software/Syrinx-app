@@ -1,10 +1,10 @@
 //! Persists browsing history (P1-20) beside the session, with D47's range deletion participant.
 
-use std::{fmt, num::NonZeroU64, sync::mpsc};
+use std::{collections::BTreeSet, fmt, num::NonZeroU64, sync::mpsc};
 
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 
-use crate::deletion::{DeletionCategory, DeletionRequest};
+use crate::deletion::{DeletionCategory, DeletionRange, DeletionRequest};
 use crate::error::{EncodingField, StoreError, StoreOperation, database_error};
 use crate::records::finish_transaction;
 
@@ -71,12 +71,34 @@ pub struct RecordedVisit {
     pub entry: HistoryEntry,
 }
 
+/// What a D47 clear changed, so a running search catalogue can follow it.
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct HistoryDeletion {
+    /// Visits removed, including visits to addresses that keep older ones.
+    pub visits: usize,
+    /// Addresses left without any visit, now gone from history.
+    pub removed: Vec<NonZeroU64>,
+    /// Addresses that lost some visits and keep others, with their recomputed totals.
+    pub changed: Vec<HistoryEntry>,
+}
+
+impl fmt::Debug for HistoryDeletion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HistoryDeletion")
+            .field("visits", &self.visits)
+            .field("removed", &self.removed.len())
+            .field("changed", &self.changed.len())
+            .finish()
+    }
+}
+
 /// What a history write produced, by kind of write.
 pub(crate) enum HistoryOutcome {
     Recorded(RecordedVisit),
     /// The changed entry, or `None` when it no longer exists.
     Entry(Option<HistoryEntry>),
-    Deleted,
+    Deleted(HistoryDeletion),
 }
 
 pub(crate) struct HistoryRequest {
@@ -105,7 +127,7 @@ pub(crate) fn write(
             remove_visit(&transaction, visit).map(HistoryOutcome::Entry)
         }
         HistoryWrite::Delete(requests) => {
-            delete(&transaction, &requests).map(|()| HistoryOutcome::Deleted)
+            delete(&transaction, &requests).map(HistoryOutcome::Deleted)
         }
     };
     finish_transaction(transaction, result)
@@ -206,14 +228,115 @@ fn retitle(
         .transpose()
 }
 
-fn delete(connection: &Connection, requests: &[DeletionRequest]) -> Result<(), StoreError> {
-    // Remove visits in each cleared half-open range, then entries left without visits.
-    let ranges = requests
+fn delete(
+    connection: &Connection,
+    requests: &[DeletionRequest],
+) -> Result<HistoryDeletion, StoreError> {
+    // Note the touched addresses first, so the caller learns which rows went or changed.
+    let affected = affected_entries(connection, requests)?;
+    let visits = delete_ranges(connection, requests)?;
+    if let Some(generation) = requests.iter().map(|request| request.generation()).max() {
+        record_generation(connection, generation)?;
+    }
+    let mut deletion = HistoryDeletion {
+        visits,
+        ..HistoryDeletion::default()
+    };
+    for id in affected {
+        match entry(connection, id)? {
+            Some(entry) => deletion.changed.push(entry),
+            None => deletion.removed.push(id),
+        }
+    }
+    Ok(deletion)
+}
+
+fn history_ranges(requests: &[DeletionRequest]) -> impl Iterator<Item = DeletionRange> + '_ {
+    requests
         .iter()
         .filter(|request| request.category() == DeletionCategory::History)
-        .map(|request| request.range());
-    for range in ranges {
-        connection
+        .map(|request| request.range())
+}
+
+fn affected_entries(
+    connection: &Connection,
+    requests: &[DeletionRequest],
+) -> Result<BTreeSet<NonZeroU64>, StoreError> {
+    let mut statement = connection
+        .prepare_cached(
+            "SELECT DISTINCT url_id FROM history_visits WHERE visited_at >= ?1 AND visited_at < ?2",
+        )
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    let mut affected = BTreeSet::new();
+    for range in history_ranges(requests) {
+        let rows = statement
+            .query_map(params![range.start(), range.end()], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|error| database_error(StoreOperation::Read, error))?;
+        for row in rows {
+            let id = row.map_err(|error| database_error(StoreOperation::Read, error))?;
+            affected.insert(identity(id)?);
+        }
+    }
+    Ok(affected)
+}
+
+fn entry(connection: &Connection, id: NonZeroU64) -> Result<Option<HistoryEntry>, StoreError> {
+    connection
+        .query_row(
+            "SELECT id, address, title, visit_count, last_visited FROM history_urls WHERE id = ?1",
+            [row_id(id)?],
+            entry_columns,
+        )
+        .optional()
+        .map_err(|error| database_error(StoreOperation::Read, error))?
+        .map(decode_entry)
+        .transpose()
+}
+
+/// The newest D47 clear this database has applied (schema version 5 and later).
+pub(crate) fn applied_generation(connection: &Connection) -> Result<u64, StoreError> {
+    let generation: i64 = connection
+        .query_row(
+            "SELECT applied_generation FROM history_deletion_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    u64::try_from(generation).map_err(|_| StoreError::InvalidEncoding(EncodingField::History))
+}
+
+/// Advances the applied generation; replaying an older request never moves it backwards.
+pub(crate) fn record_generation(
+    connection: &Connection,
+    generation: u64,
+) -> Result<(), StoreError> {
+    let generation = i64::try_from(generation)
+        .map_err(|_| StoreError::InvalidEncoding(EncodingField::History))?;
+    let changed = connection
+        .execute(
+            "UPDATE history_deletion_state SET applied_generation = max(applied_generation, ?1)
+             WHERE singleton = 1",
+            [generation],
+        )
+        .map_err(|error| database_error(StoreOperation::Write, error))?;
+    if changed != 1 {
+        return Err(StoreError::InvalidEncoding(EncodingField::History));
+    }
+    Ok(())
+}
+
+/// Removes visits in each cleared half-open range, then entries left without visits.
+/// This is the whole participant for a staged copy, which may predate the generation table.
+/// Returns how many visits were removed.
+pub(crate) fn delete_ranges(
+    connection: &Connection,
+    requests: &[DeletionRequest],
+) -> Result<usize, StoreError> {
+    let mut visits = 0;
+    for range in history_ranges(requests) {
+        visits += connection
             .execute(
                 "DELETE FROM history_visits WHERE visited_at >= ?1 AND visited_at < ?2",
                 params![range.start(), range.end()],
@@ -228,7 +351,49 @@ fn delete(connection: &Connection, requests: &[DeletionRequest]) -> Result<(), S
                  visit_count = (SELECT count(*) FROM history_visits WHERE url_id = history_urls.id),
                  last_visited = (SELECT max(visited_at) FROM history_visits WHERE url_id = history_urls.id);",
         )
-        .map_err(|error| database_error(StoreOperation::Write, error))
+        .map_err(|error| database_error(StoreOperation::Write, error))?;
+    Ok(visits)
+}
+
+/// Unix seconds of the newest stored visit, or `None` without history.
+pub(crate) fn newest_visit_time(connection: &Connection) -> Result<Option<i64>, StoreError> {
+    connection
+        .query_row("SELECT max(visited_at) FROM history_visits", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| database_error(StoreOperation::Read, error))
+}
+
+/// The end of the next expiry range `[0, end)`: `cutoff` when at most `limit` visits are
+/// older, otherwise the time of the first visit beyond `limit`. A range never ends on the
+/// oldest visit's own second, so each expiry removes something.
+pub(crate) fn expiry_end(
+    connection: &Connection,
+    cutoff: i64,
+    limit: usize,
+) -> Result<Option<i64>, StoreError> {
+    let limit = i64::try_from(limit).map_err(|_| StoreError::TooManyRecords)?;
+    let oldest: Option<i64> = connection
+        .query_row(
+            "SELECT min(visited_at) FROM history_visits WHERE visited_at < ?1",
+            [cutoff],
+            |row| row.get(0),
+        )
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    let Some(oldest) = oldest else {
+        return Ok(None);
+    };
+    let beyond: Option<i64> = connection
+        .query_row(
+            "SELECT visited_at FROM history_visits WHERE visited_at < ?1
+             ORDER BY visited_at LIMIT 1 OFFSET ?2",
+            params![cutoff, limit],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    // `oldest < cutoff`, so `oldest + 1` cannot overflow and never passes `cutoff`.
+    Ok(Some(beyond.map_or(cutoff, |time| time.max(oldest + 1))))
 }
 
 /// Every remembered address in identity order, for rebuilding the search catalogue.

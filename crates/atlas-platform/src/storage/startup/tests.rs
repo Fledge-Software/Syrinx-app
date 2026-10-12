@@ -303,7 +303,7 @@ fn unexpected_entries_in_new_state_prevent_fresh_initialization() {
         fs::write(destination.join(name), b"synthetic competing entry")
             .expect("add competing entry");
         assert!(matches!(
-            acquire(prepared, created),
+            acquire(prepared, created, &DeletionLog::default()),
             Err(RecoveryError::Location(LocationError::IdentityChanged))
         ));
         assert_eq!(
@@ -326,7 +326,7 @@ fn archive_directory_in_new_state_prevents_fresh_initialization() {
     assert!(created);
     fs::create_dir(destination.join("backups")).expect("synthetic unexpected archive");
     assert!(matches!(
-        acquire(prepared, created),
+        acquire(prepared, created, &DeletionLog::default()),
         Err(RecoveryError::Location(LocationError::IdentityChanged))
     ));
     assert!(destination.join("backups").is_dir());
@@ -459,7 +459,8 @@ impl LocationProbe for OnSyncCheck {
 }
 
 #[test]
-fn unsupported_deletion_state_refuses_before_creating_storage() {
+fn a_pending_or_completed_clear_does_not_block_normal_startup() {
+    // The session finishes or replays clears after opening; startup itself is unaffected.
     let fixture = Fixture::new();
     let destination = fixture.root.join("State");
     let mut deletions = DeletionLog::default();
@@ -472,17 +473,15 @@ fn unsupported_deletion_state_refuses_before_creating_storage() {
     deletions.accept(record).expect("accept synthetic deletion");
     assert!(matches!(
         prepare_startup(&destination, &deletions),
-        Err(RecoveryError::DeletionReplayRequired)
+        Ok(StartupStorage::Ready(_))
     ));
-    assert!(!destination.exists());
     deletions
         .accept(deletions.completion().expect("synthetic completion"))
         .expect("complete synthetic deletion");
     assert!(matches!(
         prepare_startup(&destination, &deletions),
-        Err(RecoveryError::DeletionReplayRequired)
+        Ok(StartupStorage::Ready(_))
     ));
-    assert!(!destination.exists());
 }
 
 #[test]
