@@ -45,11 +45,20 @@ impl HasWindowHandle for Parent {
     }
 }
 
+/// The worker-wide channels and shared state every page is built with.
+pub(super) struct PageContext {
+    pub(super) events: EventSink,
+    pub(super) shortcuts: NativeSink,
+    pub(super) popups: super::popups::PopupRequests,
+    pub(super) text_policy: super::page_text::SharedPolicy,
+}
+
 pub(super) struct Page {
     destination: std::rc::Rc<std::cell::RefCell<String>>,
     lifecycle: super::lifecycle::Lifecycle,
     permissions: super::permissions::Permissions,
     essentials: super::essentials::Essentials,
+    text: Option<super::page_text::PageText>,
     view: WebView,
     placement: Cell<Placement>,
 }
@@ -60,10 +69,14 @@ impl Page {
         parent: isize,
         environment: &ICoreWebView2Environment,
         bounds: PageBounds,
-        events: EventSink,
-        shortcuts: NativeSink,
-        popups: super::popups::PopupRequests,
+        context: PageContext,
     ) -> Result<Self, BrowserError> {
+        let PageContext {
+            events,
+            shortcuts,
+            popups,
+            text_policy,
+        } = context;
         let destination = std::rc::Rc::new(std::cell::RefCell::new("about:blank".to_owned()));
         let life = super::lifecycle::CallbackLife::new();
         let events = events.for_page(life.clone());
@@ -116,12 +129,21 @@ impl Page {
         let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
         register_focus_arrival(&view, id, events.clone())?;
         register_focus_departure(&view, shortcuts.clone(), id, events.clone())?;
+        // Observes headers and navigations only while capture is on; never a request filter.
+        let text = super::page_text::PageText::register(
+            &view,
+            id,
+            text_policy,
+            events.clone(),
+            shortcuts.clone(),
+        )?;
         register_shortcuts(&view, shortcuts, id, events)?;
         Ok(Self {
             destination,
             lifecycle,
             permissions,
             essentials,
+            text,
             view,
             placement: Cell::new(Placement::new(bounds)),
         })
@@ -162,14 +184,23 @@ impl Page {
         };
         self.lifecycle.show(&self.view, visible, place)?;
         self.update_placement(|placement| placement.shown(visible));
+        if let Some(text) = self.text.as_ref().filter(|_| visible) {
+            text.resumed();
+        }
         Ok(())
     }
 
     pub(super) fn tick(&self) -> Result<(), BrowserError> {
-        self.lifecycle.tick(&self.view)
+        self.lifecycle.tick(&self.view)?;
+        self.text
+            .as_ref()
+            .map_or(Ok(()), |text| text.tick(&self.view))
     }
     pub(super) fn suspend_due(&self) -> Option<std::time::Instant> {
         self.lifecycle.due()
+    }
+    pub(super) fn text_due(&self) -> Option<std::time::Instant> {
+        self.text.as_ref().and_then(super::page_text::PageText::due)
     }
 
     /// Follows the card if this page is shown; hidden pages catch up when shown.

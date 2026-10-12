@@ -8,6 +8,7 @@ pub use essentials::PageAction;
 pub const RENDER_PROCESS_UNRESPONSIVE: i32 = webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE.0;
 mod lifecycle;
 mod page;
+mod page_text;
 mod placement;
 pub use lifecycle::CallbackTicket;
 mod permissions;
@@ -15,6 +16,8 @@ mod popups;
 mod recovery;
 mod security;
 pub use security::{ConnectionScheme, ConnectionState, ConnectionStatus};
+
+pub use atlas_core::{Ineligible, PageTextPolicy};
 
 use std::{
     collections::HashMap,
@@ -26,6 +29,7 @@ use std::{
         mpsc::{self, Receiver, Sender, TryRecvError},
     },
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -135,7 +139,54 @@ pub enum BrowserCommand {
         kinds: BrowsingDataKinds,
         span: Option<ClearSpan>,
     },
+    /// Switches page-text capture on or off (P1-25). Only pages created while it is on are
+    /// observed; `None` means no DevTools call is ever made.
+    SetPageTextPolicy(Option<PageTextPolicy>),
     Shutdown,
+}
+
+/// What became of one page's scheduled text capture (P1-25).
+pub enum PageTextOutcome {
+    /// Judged ineligible when it fell due; nothing was read.
+    Ineligible(Ineligible),
+    /// The tab navigated before the capture fell due.
+    Cancelled,
+    /// The one DevTools call was made for this address.
+    Requested {
+        address: String,
+    },
+    /// The tab changed while the snapshot was in flight; it was dropped unread.
+    Superseded,
+    /// The snapshot was read and then thrown away.
+    Discarded(DiscardReason),
+    Captured(CapturedText),
+    /// WebView2 refused or failed the call.
+    Failed,
+}
+
+/// Why a snapshot was thrown away after the call (steps 9 to 11).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiscardReason {
+    /// Step 9: the snapshot's root document is not the judged address.
+    AddressMismatch,
+    /// Step 10: the document has a password or payment-card field.
+    SignInOrPayment,
+    /// The response exceeded the parse bound.
+    TooLarge,
+    /// The response did not have the documented shape.
+    Malformed,
+}
+
+/// The kept text of one document, with the measurements the feasibility harness reports.
+pub struct CapturedText {
+    pub address: String,
+    pub text: String,
+    /// Documents in the response, including child frames that were not read.
+    pub documents: usize,
+    pub truncated: bool,
+    pub response_bytes: usize,
+    pub call_time: Duration,
+    pub parse_time: Duration,
 }
 
 impl fmt::Debug for BrowserCommand {
@@ -253,6 +304,11 @@ pub enum BrowserEvent {
         request: u64,
         outcome: ClearOutcome,
     },
+    /// A page-text capture's progress; only sent while capture is switched on.
+    PageText {
+        id: u64,
+        outcome: PageTextOutcome,
+    },
     Error {
         tab: Option<u64>,
         error: BrowserError,
@@ -318,6 +374,8 @@ pub enum BrowserError {
     ClearData {
         code: i32,
     },
+    /// Page-text observation or its DevTools call failed; the page is not read.
+    PageText,
     StillRunning,
     WorkerPanicked,
 }
@@ -469,6 +527,7 @@ impl EventSink {
                     | BrowserEvent::Fullscreen { .. }
                     | BrowserEvent::Suspended { .. }
                     | BrowserEvent::PermissionFinished { .. }
+                    | BrowserEvent::PageText { .. }
                     | BrowserEvent::Error { .. }
             );
             let ticket = life.ticket(lifetime_only);
@@ -550,6 +609,7 @@ fn run(
         recovery: recovery::RecoveryBudget::default(),
         bounds: PageBounds::default(),
         parent,
+        page_text_policy: page_text::SharedPolicy::default(),
         events: events.clone(),
         shortcuts: NativeSink {
             send: shortcut_send,
@@ -592,7 +652,8 @@ fn run(
             state
                 .pages
                 .values()
-                .filter_map(Page::suspend_due)
+                .flat_map(|page| [page.suspend_due(), page.text_due()])
+                .flatten()
                 .chain(state.recovery.due)
                 .min(),
         )?;
@@ -657,6 +718,7 @@ struct BrowserState {
     recovery: recovery::RecoveryBudget,
     bounds: PageBounds,
     parent: isize,
+    page_text_policy: page_text::SharedPolicy,
     events: EventSink,
     shortcuts: NativeSink,
 }
@@ -678,9 +740,12 @@ impl BrowserState {
             self.parent,
             self.environment.as_ref().ok_or(BrowserError::Environment)?,
             self.bounds,
-            self.events.clone(),
-            self.shortcuts.clone(),
-            self.popups.clone(),
+            page::PageContext {
+                events: self.events.clone(),
+                shortcuts: self.shortcuts.clone(),
+                popups: self.popups.clone(),
+                text_policy: self.page_text_policy.clone(),
+            },
         )
     }
 
@@ -742,6 +807,9 @@ impl BrowserState {
                 let outcome = clear_outcome(self.environment.as_ref(), self.parent, kinds, span);
                 self.events
                     .emit(BrowserEvent::DataCleared { request, outcome });
+            }
+            BrowserCommand::SetPageTextPolicy(policy) => {
+                *self.page_text_policy.borrow_mut() = policy.map(std::rc::Rc::new);
             }
             BrowserCommand::Resize(next) => {
                 next.validate()?;
@@ -900,6 +968,7 @@ impl BrowserCommand {
             Self::CancelPopup { .. }
             | Self::Resize(_)
             | Self::ClearData { .. }
+            | Self::SetPageTextPolicy(_)
             | Self::Shutdown => None,
         }
     }
