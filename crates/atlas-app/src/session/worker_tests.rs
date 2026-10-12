@@ -1600,3 +1600,6 @@ fn healthy_existing_primary_starts_directly_with_its_saved_state() {
     stop(handle, &mut events);
     fixture.cleanup();
 }
+
+#[path = "crash_restart_tests.rs"]
+mod crash_restart;
