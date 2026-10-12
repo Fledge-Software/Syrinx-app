@@ -1,8 +1,10 @@
 # P1-22: HTML bookmark import parser
 
-Date: 2026-10-11. Status: **partial — parser and preview summary implemented
-and tested on branch `claude/p1-22-import-parser`; no preview/confirm UI, no
-store writes, no folder-model integration.**
+Date: 2026-10-11, completed 2026-10-12. Status: **implemented on branch
+`claude/p1-22-import-commit`, awaiting independent review and the owner's
+manual check.** The parser merged first; this branch adds the shared address
+rule (DW-1), the commit step, the file dialog and the preview window. See
+"The import step" below.
 
 ## Why this exists
 
@@ -39,7 +41,7 @@ order) and an `ImportSummary` (bookmark, folder and empty-folder counts,
 deepest nesting, duplicate addresses, shortened titles, unclosed lists and
 every skipped entry with its line and reason).
 
-**Why `atlas-core` and not a new crate.** The parser has no dependencies and
+**Why `atlas-core` and not a new crate.** The parser needs only `url`, through the shared address rule, and
 produces data the core model will consume when P1-21's folders exist.
 `crates/xtask/src/dependency_policy.rs` only stops core crates from reaching
 the shell, GPUI or WebView2; a module adds nothing it would need to check.
@@ -115,12 +117,20 @@ All three browsers write the "Netscape bookmark file":
 
 ### Which addresses are imported
 
-Only `http` and `https` addresses with a host become bookmarks. This matches
-what Atlas's page web views will open (`validate_url` in
-`crates/atlas-platform/src/browser/page.rs`). The only other address the page
-host accepts, `about:blank`, makes no sense as a saved page. The scheme is
-lower-cased; the rest of the address is kept exactly. Skipped entries carry a
-reason:
+Only `http` and `https` addresses that navigation would open become
+bookmarks. **There is one address rule** (DW-1, done 2026-10-12):
+`atlas_core::web_address` in `crates/atlas-core/src/web_address.rs`, built on
+the `url` crate. Navigation (`crates/atlas-app/src/navigation.rs`) and the
+parser both call it, and the commit step calls it again on every bookmark
+before writing. The owner approved `atlas-core` taking `url` on 2026-10-12;
+it is the exact version already pinned for `atlas-app` (`=2.5.8`), so the
+lockfile gains one dependency edge and no package.
+
+Before that rule, the parser only refuses what an export never contains raw:
+an address that does not start `scheme://`, and whitespace, control
+characters or bidirectional override/isolate characters (U+202A–U+202E,
+U+2066–U+2069). The scheme is read first so the preview can say why
+something was skipped. Skipped entries carry a reason:
 
 | Reason | Cause |
 | --- | --- |
@@ -128,39 +138,26 @@ reason:
 | `DataAddress` | `data:` addresses, which can hide arbitrary content. |
 | `UnsupportedScheme(name)` | `file`, `place`, `chrome`, `edge`, `about`, `ftp`, … The scheme name is shortened to 32 characters. |
 | `CredentialsInAddress` | `user:password@host`. Navigation already refuses these, and Atlas never saves credentials. |
-| `InvalidAddress` | No scheme or `//`; an empty host; a host with characters other than letters, digits, `-`, `.` and `_` (for example `%`); an unclosed or non-hex `[…]` literal; a port that is not a number up to 65535; whitespace, control characters or bidirectional override/isolate characters (U+202A–U+202E, U+2066–U+2069) anywhere in the address. |
+| `InvalidAddress` | Refused by the shared rule (no host, a bad port, an invalid IPv6 literal, a forbidden host character such as `%`), or by the pre-filter above. |
 | `MissingAddress` | No or empty `HREF`. |
-| `AddressTooLong` | Over the address limit; a shortened address would point somewhere else. |
+| `AddressTooLong` | Over the address limit, checked on the raw address and again after normalizing, which can lengthen it; a shortened address would point somewhere else. |
 | `Separator` | A Firefox `<HR>`. |
 
-The importer does not normalise addresses beyond the scheme (no host
-lower-casing, no punycode).
-
-**This is a second address rule, on purpose and temporarily.** Navigation's
-rule is `web_address` in `crates/atlas-app/src/navigation.rs`, built on the
-`url` crate. The parser cannot reuse it without moving it into `atlas-core`
-and giving the core its first third-party dependency. `atlas-core` is
-documented as dependency-free (`docs/LOCAL-DEV.md`), so that change goes to
-review rather than being made quietly here. The parser's syntactic check is
-stricter than before. The independent review found that
-`https://[/`, `https://x.test:99999/`, `https://a%zz/` and addresses
-containing U+202E were accepted; all are now skipped, with regressions in
-`address.rs`. It is still not identical to `url`'s rules: it accepts no
-percent-encoded or punycode hosts and does not check IPv4 or IPv6 literal
-structure.
-
-**Acceptance criterion for P1-22:** before anything is written, the commit
-step re-checks every imported address with navigation's rule. That means
-one shared function, not a copy. Entries that fail are reported as
-skipped, never written. The commit step is the natural place to unify the
-two rules, because it already sits where `url` is available. Unifying them
-is recorded with the P1-22 acceptance note in `docs/plans/Atlas v1 — Plan.md`.
+**Addresses are now saved in the shared rule's normalized form**: the scheme
+and host lower-cased, international hosts in punycode, default ports
+dropped, and an empty path written as `/`. This is what navigation would
+open, so a saved row and a typed address compare equal. Three earlier parser
+expectations changed with it, deliberately: `https:///path` is read as
+`https://path/` and `https://a!b.test/` is accepted, as navigation already
+did, and `https://Upper.Example.Test/Path` is saved as
+`https://upper.example.test/Path`. Duplicate counting uses the normalized
+form, so `https://Example.test` and `https://example.test/` now count as
+duplicates.
 
 ### Duplicates
 
 Duplicates are matched as exact strings after entity decoding and
-lower-casing the scheme. `https://Example.test/` and `https://example.test`
-therefore count as different addresses. A bookmark whose address appeared
+normalizing with the shared address rule. A bookmark whose address appeared
 earlier in the file is kept, because
 the owner may have filed the same page in two folders on purpose, and counted
 in `duplicate_addresses` so the preview can mention it. Whether the import
@@ -256,37 +253,167 @@ unchanged `atlas-search` library test executable
 gate (`target/p1-22-review-fixes-gate-retry.log`). No Windows setting was
 changed, and the block's cause is unproved, as in `docs/trapstoknow.md`.
 
-## What is left for P1-22
+## The import step
 
-1. **Preview and confirm UI.** Show the summary (counts, depth, duplicates,
-   skipped entries grouped by reason, with their titles) and import only on
-   the owner's confirmation. It needs a file picker for an exported file;
-   reading a browser's profile directly stays out of scope (D14).
-2. **Writing into the folder model.** Once P1-21 lands, map each
-   `ImportedFolder`/`ImportedBookmark` to folders and unloaded saved pages in
-   export order, in one store transaction, so a failed import leaves nothing
-   half-written. Re-check every address with navigation's own rule first,
-   through one shared function (the acceptance criterion above).
-3. **Placement of special folders.** Decide where `Toolbar` and `Unfiled`
-   folders go: kept as ordinary folders, merged into Favorites (D45) or
-   placed at the top. This is a product question for the owner (below).
-4. **Search and session.** Imported saved pages must appear in tier-1
-   search and survive restart unloaded (P1-19, P1-21's consistency tests).
+**Entry point.** There is no command registry or menu yet, so the palette's
+submission path carries the one command: typing `>import bookmarks` (the
+spec's `>` command prefix; spacing and letter case do not matter) and
+pressing Enter starts the import. Alt+Enter (the palette's "search the
+web" submission) searches the words instead, as it does for any text. If a
+local search result happens to match the words and is highlighted, Enter
+opens that result; this is unlikely and goes away with the registry. The
+interception is a single guarded arm in `ui.rs`'s palette handler;
+`palette.rs` is unchanged. **Moving the command into the command registry
+is left for the palette merge**, which owns that registry.
 
-## Decisions for the owner
+**File dialog.** `atlas_platform::file_dialog::choose_file` shows Windows'
+own file-open dialog (`IFileOpenDialog`) through the `windows` features
+`atlas-platform` already enables, so no crate or feature was added. Only
+existing file-system files can be chosen. It runs on a dedicated thread with
+its own COM apartment, owned by the main window, so the interface thread
+never blocks or re-enters. The same thread reads the file (refusing more
+than 32 MiB from its size before reading, and reading at most one byte past
+the limit) and parses it. Nothing from the file or its path is logged.
 
-- **Toolbar folder placement.** Recommendation: import the bookmarks bar or
-  favorites bar as an ordinary folder named as exported, and do not populate
-  Favorites (D45) automatically. The owner can then drag what they want into
-  Favorites.
-- **Encoding.** Recommendation: keep UTF-8 only and tell the owner to
-  re-export if a file is refused. All three supported browsers write UTF-8.
-- **Shared address rule.** Recommendation: when the commit step is built,
-  move navigation's `url`-based `web_address` to one place both callers use,
-  and drop the parser's syntactic check down to a pre-filter. If that place
-  is `atlas-core`, it gains its first third-party dependency (`url`, already
-  audited and pinned for `atlas-app`), so the owner should approve it.
-- **Bounds.** The defaults above are judgement calls (32 MiB, 32 levels,
-  4 bare lists, 50,000 entries, 1,024-character titles, 8 KiB addresses). They are easy to
-  change if the owner's own export is larger. Only the owner can check that,
-  by running the preview on their own file; no agent should see it.
+**Preview.** `crates/atlas-app/src/ui/import.rs` opens a popup owned by the
+main window, like the palette, drawn with `atlas-ui` tokens (spacing, radii,
+type sizes, the panel, line, text and accent colours). It names the new
+folder, then shows pages, folders and empty folders, the deepest nesting,
+duplicate addresses, shortened titles and closed lists (zero notes are left
+out), and the skipped entries grouped by reason with the first 50 named by
+line and title. Import has the default focus, so Enter imports and Escape
+cancels; the buttons do the same and closing the window cancels. A
+refused file (not an export, UTF-16, invalid UTF-8, too large or too deep)
+is reported in the status line with a request to re-export, and no preview
+opens.
+
+**Commit.** On Import the parsed tree goes to the session worker as
+`SessionCommand::ImportBookmarks`. `atlas_core::commit_bookmark_import`
+converts it and calls the new `TabModel::append_saved_folder`, which:
+
+- adds one new top-level folder at the end of the saved rows, named after
+  the file (`import_folder_title`: the file name without extension, with
+  control and bidirectional characters removed, or "Imported bookmarks");
+- keeps the export's hierarchy and order beneath it; toolbar and unfiled
+  folders become ordinary folders (owner decision, 2026-10-12), and an
+  unnamed exported folder becomes "Untitled folder" because empty folder
+  names are refused;
+- writes every page as an unloaded saved row, opening nothing; an untitled
+  bookmark shows its address;
+- re-checks each address with `web_address` and returns refusals as
+  `RejectedBookmark`s, which are never written;
+- checks that enough folder and page identities remain before changing
+  anything, and appends in one pass (the per-row `add_saved_page` would be
+  quadratic at 50,000 entries).
+
+The worker then saves the whole snapshot once. The store writes a snapshot
+in one SQLite transaction, so an import that fails part-way, or a crash
+before commit, leaves the previous state intact; the owner can simply run it
+again. The status line reports the counts and any refusals. If the worker
+reports a fatal storage error while an import is being written, the pending
+import is cleared and the failure says the import may not have been saved.
+Export dates (`ADD_DATE`) are not kept, because saved rows have no date
+field yet.
+
+**Large imports and the sidebar.** The imported folder and every folder
+inside it start collapsed, so the sidebar adds one row, and a collapsed
+folder's contents are never built as elements (`visible_saved_rows`). The
+sidebar also indexes only the visible saved rows on each render, not every
+saved page. Folder open state is not saved, so after a restart every folder
+starts collapsed; this replaces P1-09's "every folder starts expanded",
+because expanding a 50,000-page import at start-up would build every row.
+
+**Visible change for the owner: every folder starts collapsed after a
+restart**, including folders the owner made and never imported, not only
+imported ones (`collapse_restored_folders`, called on the first session
+snapshot in `crates/atlas-app/src/ui.rs`). Folders created during a session
+still start expanded, and any folder can be expanded with one click. The
+alternative, keeping restored folders expanded, would make a restart after a
+large import build every row; remembering each folder's open state across
+restarts would avoid this trade-off but needs a stored setting, which is not
+part of this slice.
+
+**Large imports and later changes.** Before this review fix, every change
+after a 50,000-entry import (a title update or a navigation) took about one
+second in the worker, because the store deleted and re-inserted every saved
+row on each save and the catalogue re-checked every saved page. Now:
+
+- the store's writer remembers the snapshot it last committed, or the one a
+  reader last loaded (a revision's rows never change). When the next save's
+  saved pages, folders, layout and folder watermark equal it, the save keeps
+  those rows and rewrites only live tabs and the session row. Every save is
+  still validated in full before writing, and any failure forgets the
+  remembered snapshot so the next save rewrites everything;
+- the duplicate validation in `Store::save` was dropped; the writer
+  validates once;
+- `sync_catalogue` updates only the saved rows whose open state changed when
+  the saved pages are unchanged;
+- the worker publishes the snapshot it just saved instead of copying the
+  model again.
+
+Measured by `ordinary_changes_after_a_large_import_stay_fast`
+(`crates/atlas-app/src/session/import_tests.rs`) on this machine, with
+other builds running: the import itself 0.6–0.8 s; then title updates
+median 42.6–48.1 ms (worst 47–58 ms), navigations median 42.8–47.0 ms
+(worst 55–60 ms), and the first change after a restart 44 ms. Before the
+fix the same medians were 997 ms and 1,021 ms. The remaining cost is mostly
+copying the 50,000-row snapshot (about 14 ms each, three times per change)
+and validating it (about 9 ms); sharing the saved rows between snapshots
+would remove most of it, but is a wider model change than this slice. The
+test fails above 250 ms, so a return to full rewrites is caught without the
+gate becoming timing-flaky.
+
+**Tests.** All synthetic, all databases disposable:
+
+- `crates/atlas-core/src/web_address.rs`: normalization and refusals.
+- `crates/atlas-core/tests/bookmark_commit.rs`: the Chrome fixture becomes
+  one folder in export order with nothing opened and a valid, restorable
+  snapshot; the import appends after existing rows and leaves live tabs and
+  selection alone; refused addresses are reported and not written; unnamed
+  folders and untitled pages; identity exhaustion leaves the model
+  unchanged; folder naming; and a 40,000-page, 20-deep import.
+- `crates/atlas-store/src/engine/tests/import.rs`: an import is exactly one
+  revision and survives reopening; a failure injected part-way through the
+  page rows, or on the last layout row, leaves the previous revision and
+  rows unchanged, and the same import then commits; live-tab changes after
+  an import, before and after reopening, round-trip exactly while a trigger
+  proves no saved row is deleted.
+- `crates/atlas-app/src/session/import_tests.rs`: the timing above.
+- `crates/atlas-app/src/ui/import.rs`: command recognition, skip grouping,
+  summary lines, the bounded read and refusal messages.
+
+**Gate record (import step).** In this worktree's own target directory,
+Windows Application Control blocked the freshly built `cookie 0.18.2` build
+script (os error 4551) twice, once on an unchanged retry. No setting was
+changed. Building into a separate directory,
+`target/agent-p1-22-commit` in the main checkout (via `CARGO_TARGET_DIR`),
+was not blocked, and `cargo xtask check` passed there: dependency check,
+formatting, Clippy, 542 tests and the smoke run
+(`target/agent-p1-22-commit/p1-22-commit-gate.log`). The first gate run
+stopped only on formatting, fixed with `cargo fmt`. After the review fixes
+and the merge of the integration branch, the gate passed again with 605
+tests and the smoke run, logged inside the worktree at
+`target/p1-22-review-gate.log` (still building through the separate target
+directory).
+
+## Known limits
+
+- Expanding a very large imported folder still builds every visible row;
+  the sidebar is not virtualized.
+- Imported pages appear in search through the existing catalogue sync; no
+  folder path is searchable yet (see `docs/p1-21-folders-core.md`).
+- Importing the same file twice makes a second folder; duplicates against
+  existing saved pages are not detected.
+
+## Owner's manual check
+
+The owner, not an agent, exports their own bookmarks and runs the import:
+export from Chrome, Edge or Firefox as HTML; in Atlas press Ctrl K, type
+`>import bookmarks` and press Enter; choose the file; check that the
+preview's counts and skipped entries look right; press Enter or Import;
+check the status line and the new collapsed folder, expand it, and check
+that browsing stays responsive; restart Atlas and check that the rows are
+still there, collapsed and unloaded. Also try Escape or Cancel, and a
+non-export file.
+The default limits stay as decided; if the owner's file is refused for size
+or depth, that is the moment to revisit them.

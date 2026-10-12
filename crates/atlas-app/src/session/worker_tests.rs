@@ -1630,3 +1630,6 @@ mod history_recording;
 
 #[path = "preference_tests.rs"]
 mod preference_tests;
+
+#[path = "import_tests.rs"]
+mod import_tests;

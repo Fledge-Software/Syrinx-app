@@ -65,7 +65,7 @@ fn seeded_database(directory: &TestDirectory, with_preferences: bool) -> Connect
     let migrations = Migrations::new(steps);
     schema::apply_migrations(&mut connection, &migrations).expect("create the older schema");
     assert_eq!(
-        records::save(&mut connection, 0, &fixture()),
+        records::save(&mut connection, 0, &fixture(), records::SavedRows::Replace),
         Ok(1),
         "seed the synthetic older session"
     );

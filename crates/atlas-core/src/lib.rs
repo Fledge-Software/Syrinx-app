@@ -3,10 +3,14 @@
 mod bookmark_import;
 mod destinations;
 mod tabs;
+mod web_address;
+
+pub use web_address::{WebAddressError, web_address};
 
 pub use bookmark_import::{
-    BookmarkImport, FolderRole, ImportError, ImportLimits, ImportSummary, ImportedBookmark,
-    ImportedFolder, ImportedItem, SkipReason, SkippedEntry, parse_bookmark_html,
+    BookmarkImport, DEFAULT_IMPORT_FOLDER, FolderRole, ImportCommit, ImportError, ImportLimits,
+    ImportSummary, ImportedBookmark, ImportedFolder, ImportedItem, RejectedBookmark, SkipReason,
+    SkippedEntry, commit_bookmark_import, import_folder_title, parse_bookmark_html,
     parse_bookmark_html_with_limits,
 };
 
@@ -16,8 +20,8 @@ pub use destinations::{
 };
 
 pub use tabs::{
-    Activation, FolderRemoval, RemovedSavedEntries, SavedEntryId, SavedFolder, SavedFolderId,
-    SavedFolderSnapshot, SavedPage, SavedPageId, SavedPageSnapshot, SavedPlacement, SidebarRow,
-    SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot,
-    TabSnapshot,
+    Activation, AppendedSavedTree, FolderRemoval, NewSavedItem, RemovedSavedEntries, SavedEntryId,
+    SavedFolder, SavedFolderId, SavedFolderSnapshot, SavedPage, SavedPageId, SavedPageSnapshot,
+    SavedPlacement, SidebarRow, SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata,
+    TabModel, TabModelSnapshot, TabSnapshot,
 };
