@@ -31,7 +31,10 @@ use std::{
     },
 };
 
-use atlas_core::{SavedFolderId, TabId, TabModelSnapshot};
+use atlas_core::{
+    ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry, Route,
+    SavedFolderId, TabId, TabModelSnapshot, route,
+};
 use atlas_platform::browser::{
     BrowserCommand, BrowserEvent, BrowserHost, BrowserShortcut, PageBounds, set_overlay_owner,
 };
@@ -54,7 +57,7 @@ use navigation_status::NavigationStatus;
 
 use crate::{
     navigation,
-    palette::{PaletteEvent, PaletteView},
+    palette::{self, PaletteEvent, PaletteView},
     session::{self, SessionCommand, SessionEvent, SessionHandle},
     theme,
 };
@@ -80,23 +83,75 @@ actions!(
     ]
 );
 
+/// Binds each browser command's shortcut from the command registry, plus Ctrl K for the palette.
 pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("ctrl-t", NewTab, None),
-        KeyBinding::new("ctrl-w", CloseTab, None),
-        KeyBinding::new("ctrl-l", Address, None),
-        KeyBinding::new("ctrl-k", Palette, None),
-        KeyBinding::new("ctrl-tab", NextTab, None),
-        KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
-        KeyBinding::new("ctrl-shift-t", ReopenTab, None),
-        KeyBinding::new("ctrl-d", SavePage, None),
-        KeyBinding::new("alt-left", Back, None),
-        KeyBinding::new("alt-right", Forward, None),
-        KeyBinding::new("ctrl-r", Reload, None),
-        KeyBinding::new("ctrl-h", ShowHistory, None),
-    ]);
+    let registry = CommandRegistry::browser();
+    let mut bindings: Vec<KeyBinding> = registry
+        .iter()
+        .filter_map(|(_, command)| {
+            let CommandAction::Browser(action) = command.action else {
+                return None;
+            };
+            let shortcut = command.shortcut.as_ref()?;
+            Some(key_binding(action, shortcut.keystroke()))
+        })
+        .collect();
+    // The palette is where commands run, so it is not itself a command.
+    bindings.push(KeyBinding::new("ctrl-k", Palette, None));
+    cx.bind_keys(bindings);
     crate::palette::bind_keys(cx);
     import::bind_keys(cx);
+}
+
+fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
+    match action {
+        BrowserAction::NewTab => KeyBinding::new(keystroke, NewTab, None),
+        BrowserAction::CloseTab => KeyBinding::new(keystroke, CloseTab, None),
+        BrowserAction::ReopenTab => KeyBinding::new(keystroke, ReopenTab, None),
+        BrowserAction::Reload => KeyBinding::new(keystroke, Reload, None),
+        BrowserAction::Back => KeyBinding::new(keystroke, Back, None),
+        BrowserAction::Forward => KeyBinding::new(keystroke, Forward, None),
+        BrowserAction::EditAddress => KeyBinding::new(keystroke, Address, None),
+        BrowserAction::NextTab => KeyBinding::new(keystroke, NextTab, None),
+        BrowserAction::PreviousTab => KeyBinding::new(keystroke, PreviousTab, None),
+        BrowserAction::SavePage => KeyBinding::new(keystroke, SavePage, None),
+        BrowserAction::ShowHistory => KeyBinding::new(keystroke, ShowHistory, None),
+    }
+}
+
+/// The session command that opens `target`, or `None` for a tab this snapshot no longer has.
+///
+/// Saved pages always go to the worker: its `open_saved` focuses a live instance against its own
+/// current model, so a click racing a queued close can neither fail nor load a duplicate (D43).
+fn activation_command(
+    model: &TabModelSnapshot,
+    target: ActivationTarget,
+) -> Option<SessionCommand> {
+    match target {
+        ActivationTarget::Saved(id) => Some(SessionCommand::OpenSaved(id)),
+        ActivationTarget::Tab(_) => match route(model, target)? {
+            Route::Focus(id) => Some(SessionCommand::FocusTab(id)),
+            Route::Load(id) => Some(SessionCommand::OpenSaved(id)),
+        },
+    }
+}
+
+/// Runs a browser command through the same handler as its keyboard shortcut; history has no
+/// native page shortcut, so it is handled by `toggle_history` directly.
+fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
+    Some(match action {
+        BrowserAction::NewTab => BrowserShortcut::NewTab,
+        BrowserAction::CloseTab => BrowserShortcut::CloseTab,
+        BrowserAction::ReopenTab => BrowserShortcut::ReopenTab,
+        BrowserAction::Reload => BrowserShortcut::Reload,
+        BrowserAction::Back => BrowserShortcut::Back,
+        BrowserAction::Forward => BrowserShortcut::Forward,
+        BrowserAction::EditAddress => BrowserShortcut::Address,
+        BrowserAction::NextTab => BrowserShortcut::NextTab,
+        BrowserAction::PreviousTab => BrowserShortcut::PreviousTab,
+        BrowserAction::SavePage => BrowserShortcut::SavePage,
+        BrowserAction::ShowHistory => return None,
+    })
 }
 
 struct PalettePopup {
@@ -130,6 +185,7 @@ pub struct BrowserView {
     failure: Option<String>,
     focus: FocusHandle,
     palette: Option<PalettePopup>,
+    commands: Rc<CommandRegistry>,
     home_palette: HomePaletteIntent,
     importer: import::BookmarkImporter,
     home: home::HomeState,
@@ -179,6 +235,7 @@ impl BrowserView {
             failure: None,
             focus: cx.focus_handle(),
             palette: None,
+            commands: Rc::new(CommandRegistry::browser()),
             home_palette: HomePaletteIntent::default(),
             importer: import::BookmarkImporter::default(),
             home: home::HomeState::default(),
@@ -336,7 +393,10 @@ impl BrowserView {
                     && let Some(palette) = &self.palette
                 {
                     self.pending_query = None;
-                    palette.view.update(cx, |palette, cx| palette.refresh(cx));
+                    let context = self.command_context();
+                    palette
+                        .view
+                        .update(cx, |palette, cx| palette.refresh(context, cx));
                 }
                 if self.smoke && self.model.tabs.is_empty() && !self.closing {
                     self.command(SessionCommand::NewTab {
@@ -353,6 +413,8 @@ impl BrowserView {
                     && let Some(palette) = &self.palette
                 {
                     let failed = result.is_err();
+                    // Saved instances collapse into one row against the current model.
+                    let result = result.map(|results| palette::arrange(results, &self.model));
                     let accepted = palette
                         .view
                         .update(cx, |palette, cx| palette.receive(local, result, cx));
@@ -735,14 +797,18 @@ impl BrowserView {
         let popup_retained = retained.clone();
         let ownership_error = Rc::new(RefCell::new(None));
         let popup_error = ownership_error.clone();
+        let registry = self.commands.clone();
+        let context = self.command_context();
         let main_bounds = window.bounds();
-        let width = f32::from(main_bounds.size.width).min(680.);
+        let main_width = f32::from(main_bounds.size.width);
+        // The design's palette is 880 wide; narrower windows drop the preview pane.
+        let width = (main_width - 48.).clamp(320., 880.).min(main_width);
         let popup_bounds = Bounds::new(
             point(
-                main_bounds.origin.x + px((f32::from(main_bounds.size.width) - width) / 2.),
-                main_bounds.origin.y + px(100.),
+                main_bounds.origin.x + px((main_width - width) / 2.),
+                main_bounds.origin.y + px(72.),
             ),
-            size(px(width), px(480.)),
+            size(px(width), px(560.)),
         );
         let popup = cx.open_window(
             WindowOptions {
@@ -769,7 +835,8 @@ impl BrowserView {
                     }
                     true
                 });
-                let palette = cx.new(|cx| PaletteView::new(initial, events, popup, cx));
+                let palette =
+                    cx.new(|cx| PaletteView::new(initial, events, registry, context, popup, cx));
                 *popup_retained.borrow_mut() = Some(palette.clone());
                 let root = cx.new(|cx| Root::new(palette.clone(), popup, cx));
                 popup.defer(cx, move |popup, cx| {
@@ -843,7 +910,11 @@ impl BrowserView {
             self.home_palette.finish_entry();
         }
         match event {
-            PaletteEvent::Query { request_id, text } => {
+            PaletteEvent::Query {
+                request_id,
+                text,
+                scope,
+            } => {
                 self.query_sequence = self
                     .query_sequence
                     .checked_add(1)
@@ -851,9 +922,9 @@ impl BrowserView {
                 self.pending_query = Some((self.query_sequence, request_id));
                 self.command(SessionCommand::Query {
                     request_id: self.query_sequence,
-                    policy: search_policy(&text),
+                    policy: search_policy(&text, scope),
                     text,
-                    scope: Scope::Everything,
+                    scope,
                 });
             }
             // `>import bookmarks` is the palette's one command until the command registry exists.
@@ -873,15 +944,18 @@ impl BrowserView {
             PaletteEvent::Activate(target) => {
                 self.palette = None;
                 match target {
-                    Target::Tab(id) => self.command(SessionCommand::FocusTab(id)),
-                    Target::Saved(id) => self.command(SessionCommand::OpenSaved(id)),
+                    Target::Tab(id) => self.activate(ActivationTarget::Tab(id)),
+                    Target::Saved(id) => self.activate(ActivationTarget::Saved(id)),
                     Target::History(id) => self.command(SessionCommand::OpenHistory(id)),
                     Target::Command(_) => {
-                        self.message =
-                            "This destination is not available in the preview.".to_owned()
+                        self.message = "Commands run through their own row.".to_owned()
                     }
                 }
                 self.focus_page(window);
+            }
+            PaletteEvent::Run(action) => {
+                self.palette = None;
+                self.run_command(action, window, cx);
             }
             PaletteEvent::Shortcut(shortcut) => {
                 let popup_live = self.palette.as_ref().is_some_and(|palette| {
@@ -898,6 +972,40 @@ impl BrowserView {
             }
         }
         cx.notify();
+    }
+
+    /// The one path every surface uses to open a tab or saved page (D43): never a duplicate.
+    fn activate(&mut self, target: ActivationTarget) {
+        let command = activation_command(&self.model, target);
+        match command {
+            Some(command) => self.command(command),
+            None => self.message = "That tab is no longer open.".to_owned(),
+        }
+    }
+
+    fn run_command(&mut self, action: CommandAction, window: &mut Window, cx: &mut Context<Self>) {
+        let CommandAction::Browser(action) = action else {
+            self.message = "Plugin actions need the plugin runtime, which is not built yet.".into();
+            self.focus_page(window);
+            return;
+        };
+        match browser_shortcut(action) {
+            Some(shortcut) => self.shortcut(shortcut, window, cx),
+            None => self.toggle_history(),
+        }
+        // Edit address reopens the palette, which takes focus; everything else returns to the page.
+        if action != BrowserAction::EditAddress {
+            self.focus_page(window);
+        }
+    }
+
+    /// What the command registry needs to know to enable or hide each command.
+    fn command_context(&self) -> CommandContext {
+        CommandContext {
+            active_tab: self.model.active_id.is_some(),
+            active_page: self.shown.is_some(),
+            tab_count: self.model.tabs.len(),
+        }
     }
 
     fn focus_page(&mut self, window: &mut Window) {
@@ -1279,10 +1387,12 @@ fn native_handle(window: &Window) -> Result<isize, &'static str> {
     }
 }
 
-fn search_policy(text: &str) -> SearchPolicy {
+fn search_policy(text: &str, scope: Scope) -> SearchPolicy {
     // These are preview tuning values; the core policy remains an explicit caller input.
+    // A chip or prefix narrows the rows, so it may show more of them.
+    let limit = if scope == Scope::Everything { 10 } else { 24 };
     SearchPolicy {
-        limit: 8,
+        limit,
         max_typos: u16::from(text.chars().count() >= 4),
         blank: BlankQuery::All,
         boosts: BoostWeights {
@@ -1301,6 +1411,42 @@ mod palette_shortcut_tests {
     use super::*;
 
     #[test]
+    fn saved_activation_reaches_the_worker_even_from_a_stale_snapshot() {
+        let saved = atlas_core::SavedPageId::new(3).expect("synthetic saved page");
+        let tab = TabId::new(5).expect("synthetic tab");
+        // An empty snapshot stands in for one taken before a queued close or save landed.
+        let stale = TabModelSnapshot::default();
+        assert!(matches!(
+            activation_command(&stale, ActivationTarget::Saved(saved)),
+            Some(SessionCommand::OpenSaved(id)) if id == saved
+        ));
+        assert!(activation_command(&stale, ActivationTarget::Tab(tab)).is_none());
+    }
+
+    #[test]
+    fn every_registry_command_runs_a_distinct_existing_shortcut() {
+        let mut shortcuts = Vec::new();
+        for (_, command) in CommandRegistry::browser().iter() {
+            let CommandAction::Browser(action) = command.action else {
+                panic!("built-in commands are browser actions");
+            };
+            // History opens in the page card through `toggle_history`, not a page shortcut.
+            let Some(shortcut) = browser_shortcut(action) else {
+                assert_eq!(action, BrowserAction::ShowHistory);
+                continue;
+            };
+            assert!(
+                !shortcuts.contains(&shortcut),
+                "two commands share a handler"
+            );
+            shortcuts.push(shortcut);
+        }
+        // Every native shortcut except the palette itself is reachable as a command.
+        assert_eq!(shortcuts.len(), 10);
+        assert!(!shortcuts.contains(&BrowserShortcut::Palette));
+    }
+
+    #[test]
     fn removed_popup_refocus_does_not_invalidate_queued_completion() {
         for shortcut in [BrowserShortcut::Address, BrowserShortcut::Palette] {
             for terminal in [
@@ -1313,6 +1459,7 @@ mod palette_shortcut_tests {
                     force_search: true,
                 },
                 PaletteEvent::Activate(Target::Tab(TabId::new(1).expect("synthetic tab"))),
+                PaletteEvent::Run(CommandAction::Browser(BrowserAction::NewTab)),
                 PaletteEvent::Closed,
             ] {
                 let (sender, mut receiver) = unbounded();
@@ -1338,6 +1485,7 @@ mod palette_shortcut_tests {
                         }
                         PaletteEvent::Submit { .. }
                         | PaletteEvent::Activate(_)
+                        | PaletteEvent::Run(_)
                         | PaletteEvent::Closed => {
                             completed = true;
                             retained_popup = None;

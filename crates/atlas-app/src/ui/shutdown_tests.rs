@@ -35,7 +35,7 @@ fn query() -> SessionCommand {
         request_id: 17,
         text: "synthetic".into(),
         scope: Scope::Everything,
-        policy: super::search_policy("synthetic"),
+        policy: super::search_policy("synthetic", atlas_search::Scope::Everything),
     }
 }
 

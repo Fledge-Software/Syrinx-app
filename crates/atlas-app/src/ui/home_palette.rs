@@ -243,7 +243,7 @@ mod tests {
                 request_id: 1,
                 text: "synthetic".into(),
                 scope: atlas_search::Scope::Everything,
-                policy: super::super::search_policy("synthetic"),
+                policy: super::super::search_policy("synthetic", atlas_search::Scope::Everything),
             },
         );
         assert!(!intent.acknowledge(&home, &[], None));

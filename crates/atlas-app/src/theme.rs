@@ -110,17 +110,13 @@ pub(crate) fn accent() -> Rgba {
     token(|palette| palette.accent.ink)
 }
 
-// The preview's selected-row and secondary-button greys were opaque stand-ins (P1-07). Live
-// palettes need them to follow Paper too, so they now read the canvas tokens.
+// The preview's selected-row grey was an opaque stand-in (P1-07). Live palettes need it to
+// follow Paper too, so it now reads the canvas token. The palette's former "Search the web"
+// grey went with P1-30, whose palette reads every colour from `current()`.
 
 /// The selected row (the canvas's translucent `rowOn`).
 pub(crate) fn preview_row_selected() -> Rgba {
     token(|palette| palette.row_selected)
-}
-
-/// The palette's "Search the web" button (the canvas's `field`).
-pub(crate) fn preview_secondary_button() -> Rgba {
-    token(|palette| palette.field)
 }
 
 #[cfg(test)]
