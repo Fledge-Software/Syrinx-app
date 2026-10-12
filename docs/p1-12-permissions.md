@@ -94,7 +94,15 @@ accurate; this newer successful run is additional evidence, not a rewrite of it.
 The shared `crates/atlas-app/src/ui.rs` changes wire permission events, state,
 bar placement and native bounds, and allow request-specific button identities.
 The other shared files named in the task (`Cargo.toml`, `Cargo.lock`, platform
-`lib.rs`) are unchanged. There are no deferred-work markers or new ledger rows.
+`lib.rs`) are unchanged. The 2026-10-12 review adds DW-7 to the plan and its
+owner-requested marker at the decision store: clearing a remembered choice
+belongs to P1-29 settings or a P1-12 follow-up. Permission results now use early
+returns, with regressions for absent choices, allow/deny, storage failures and
+stale replies. The schema number stays unchanged on this branch; integration
+will renumber permissions to version 5 after folders, settings and history.
+
+The post-restart review gate passed in `target/restart-p1-12-gate.log`, including
+the new result-handling regressions and the application smoke run.
 
 ## API references
 
