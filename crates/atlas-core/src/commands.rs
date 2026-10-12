@@ -86,6 +86,7 @@ pub enum BrowserAction {
     NextTab,
     PreviousTab,
     SavePage,
+    ShowHistory,
 }
 
 /// What running a command does.
@@ -415,6 +416,14 @@ fn browser_commands() -> Vec<Command> {
             SavePage,
             "ctrl-d",
         ),
+        (
+            "browser.show-history",
+            "Open history",
+            "visited past pages recent",
+            Always,
+            ShowHistory,
+            "ctrl-h",
+        ),
     ]
     .into_iter()
     .map(
@@ -478,6 +487,7 @@ mod tests {
                 (browser(BrowserAction::NextTab), Some("ctrl-tab")),
                 (browser(BrowserAction::PreviousTab), Some("ctrl-shift-tab")),
                 (browser(BrowserAction::SavePage), Some("ctrl-d")),
+                (browser(BrowserAction::ShowHistory), Some("ctrl-h")),
             ]
         );
         // Keys follow registration order, so both the palette and search agree on them.
@@ -625,8 +635,8 @@ mod tests {
                 .filter(|(_, command)| command.is_enabled(context))
                 .count()
         };
-        assert_eq!(enabled(empty), 3);
-        assert_eq!(enabled(home), 5);
+        assert_eq!(enabled(empty), 4);
+        assert_eq!(enabled(home), 6);
         assert_eq!(enabled(page), registry.len());
     }
 }

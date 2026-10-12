@@ -29,11 +29,12 @@ Down, Enter, Alt Enter, Ctrl Enter and Tab can never be claimed, and Ctrl L
 belongs only to Edit address. It is generic on purpose; it is not a plugin
 host and no plugin can reach it yet.
 
-The ten existing browser commands are registered with the same shortcuts as
+The eleven existing browser commands are registered with the same shortcuts as
 before: New tab (Ctrl T), Close tab (Ctrl W), Reopen closed tab (Ctrl Shift
 T), Reload page (Ctrl R), Go back (Alt Left), Go forward (Alt Right), Edit
-address (Ctrl L), Next and Previous tab (Ctrl Tab, Ctrl Shift Tab) and Save
-page (Ctrl D). `ui::bind_keys` now derives every GPUI key binding from the
+address (Ctrl L), Next and Previous tab (Ctrl Tab, Ctrl Shift Tab), Save
+page (Ctrl D) and, since P1-20 merged, Open history (Ctrl H), which runs the
+history view's `toggle_history`. `ui::bind_keys` now derives every GPUI key binding from the
 registry instead of listing them again; Ctrl K stays a separate binding
 because the palette is where commands run, not a command itself. The native
 accelerator router in `atlas-platform` still maps the same keys for a focused
@@ -70,7 +71,7 @@ mechanism was added (D7). It now has:
 
 Commands are matched on the palette's own thread, not on the session worker.
 Their enablement depends on what the window is showing, which only the UI
-thread knows, and the registry is small and bounded (ten built-in commands;
+thread knows, and the registry is small and bounded (eleven built-in commands;
 plugin commands arrive with Plan 2), so each keystroke ranks a few dozen
 entries. Tab, saved-page and history search stays on the worker as before.
 The alternative, indexing commands in the worker's catalogue, was rejected
@@ -87,8 +88,9 @@ register commands; a `TODO(DW-5)` marks the ranking site.
 History sit under the input, each with its count for the current text. The
 tab, bookmark and history counts come from the worker's `ScopeCounts`, which
 count every match before the display limit; the Plugin actions count comes
-from the local command match. History shows 0 until the history slice feeds
-the catalogue. Everything includes commands only once text is typed: a blank
+from the local command match. History rows and counts come from P1-20's
+history in the worker's catalogue, and choosing a history row opens its address
+as the history slice does. Everything includes commands only once text is typed: a blank
 Ctrl K lists open tabs and bookmarks, and `>` lists every command. Choosing a
 chip removes a typed prefix, because the prefix would otherwise override it.
 
@@ -146,7 +148,9 @@ Alt Enter web search changes and D48's speed target are out of scope here.
   `commands.rs`, `display.rs`, `query.rs`, `render.rs`).
 - `crates/atlas-app/src/ui.rs`: key bindings from the registry, command
   execution, the shared activation path, the popup's size and passing the
-  command context. `crates/atlas-app/src/theme.rs` gained `tokens()`.
+  command context; `ui/sidebar_view.rs` row clicks use the same activation path.
+  The palette reads every colour from `theme::current()`, so it follows
+  Customize.
 - No change to `atlas-search`'s public API or internals.
 
 ## What the owner checks in the running app
@@ -184,4 +188,6 @@ needs a signed-in account.
 11. Make the Atlas window narrower than about 770 pixels and press Ctrl K: the
     palette still works, without the preview pane.
 12. Press Ctrl T, Ctrl W, Ctrl Shift T, Ctrl R, Alt Left and Right, Ctrl L,
-    Ctrl Tab and Ctrl D outside the palette: each behaves as before.
+    Ctrl Tab, Ctrl D and Ctrl H outside the palette: each behaves as before.
+13. Choose another palette in Customize, then press Ctrl K: the palette uses
+    the new colours.

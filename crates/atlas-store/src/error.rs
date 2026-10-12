@@ -44,6 +44,9 @@ pub enum EncodingField {
     TabKind,
     Metadata,
     SessionState,
+    Setting,
+    Destination,
+    History,
 }
 
 /// All diagnostic fields are structural; SQLite's message strings are discarded.

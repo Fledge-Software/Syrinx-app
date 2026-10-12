@@ -1,0 +1,398 @@
+--- a/src/direct_manipulation.rs
++++ b/src/direct_manipulation.rs
+@@ -26,10 +26,13 @@
+     window: HWND,
+     scale_factor: Rc<Cell<f32>>,
+     pending_events: Rc<RefCell<Vec<PlatformInput>>>,
++    /// Gesture state updates only when the paint path polls, so contact and activity demand frames.
++    frame_demand: FrameDemand,
++    manipulating: Rc<Cell<bool>>,
+ }
+ 
+ impl DirectManipulationHandler {
+-    pub fn new(window: HWND, scale_factor: f32) -> Result<Self> {
++    pub fn new(window: HWND, scale_factor: f32, frame_demand: FrameDemand) -> Result<Self> {
+         unsafe {
+             let manager: IDirectManipulationManager =
+                 CoCreateInstance(&DirectManipulationManager, None, CLSCTX_INPROC_SERVER)?;
+@@ -65,12 +68,15 @@
+ 
+             let scale_factor = Rc::new(Cell::new(scale_factor));
+             let pending_events = Rc::new(RefCell::new(Vec::new()));
++            let manipulating = Rc::new(Cell::new(false));
+ 
+             let event_handler: IDirectManipulationViewportEventHandler =
+                 DirectManipulationEventHandler::new(
+                     window,
+                     Rc::clone(&scale_factor),
+                     Rc::clone(&pending_events),
++                    frame_demand.clone(),
++                    Rc::clone(&manipulating),
+                 )
+                 .into();
+ 
+@@ -86,6 +92,8 @@
+                 window,
+                 scale_factor,
+                 pending_events,
++                frame_demand,
++                manipulating,
+             })
+         }
+     }
+@@ -101,6 +109,8 @@
+             if GetPointerType(pointer_id, &mut pointer_type).is_ok() && pointer_type == PT_TOUCHPAD
+             {
+                 self.viewport.SetContact(pointer_id).log_err();
++                // Contact starts a gesture that only advances when a frame polls `update`.
++                self.frame_demand.request();
+             }
+         }
+     }
+@@ -111,6 +121,11 @@
+         }
+     }
+ 
++    /// Whether a gesture or its inertia is still running and needs another polled frame.
++    pub fn is_manipulating(&self) -> bool {
++        self.manipulating.get()
++    }
++
+     pub fn drain_events(&self) -> Vec<PlatformInput> {
+         std::mem::take(&mut *self.pending_events.borrow_mut())
+     }
+@@ -143,6 +158,8 @@
+     last_y_offset: Cell<f32>,
+     scroll_phase: Cell<TouchPhase>,
+     pending_events: Rc<RefCell<Vec<PlatformInput>>>,
++    frame_demand: FrameDemand,
++    manipulating: Rc<Cell<bool>>,
+ }
+ 
+ impl DirectManipulationEventHandler {
+@@ -150,6 +167,8 @@
+         window: HWND,
+         scale_factor: Rc<Cell<f32>>,
+         pending_events: Rc<RefCell<Vec<PlatformInput>>>,
++        frame_demand: FrameDemand,
++        manipulating: Rc<Cell<bool>>,
+     ) -> Self {
+         Self {
+             window,
+@@ -160,6 +179,8 @@
+             last_y_offset: Cell::new(0.0),
+             scroll_phase: Cell::new(TouchPhase::Started),
+             pending_events,
++            frame_demand,
++            manipulating,
+         }
+     }
+ 
+@@ -214,6 +235,11 @@
+             return Ok(());
+         }
+ 
++        // Keep polling while a gesture or inertia runs, and deliver the final ended event.
++        self.manipulating
++            .set(current == DIRECTMANIPULATION_RUNNING || current == DIRECTMANIPULATION_INERTIA);
++        self.frame_demand.request();
++
+         // A new gesture interrupted inertia, so end the old sequence.
+         if current == DIRECTMANIPULATION_RUNNING && previous == DIRECTMANIPULATION_INERTIA {
+             self.end_gesture();
+--- a/src/events.rs
++++ b/src/events.rs
+@@ -1317,6 +1317,7 @@
+         // between) is treated as a forced render so it both clears
+         // `skip_draws` and bypasses the view cache.
+         self.state.force_render_pending.set(true);
++        self.state.frame_demand.request();
+         Some(0)
+     }
+ 
+@@ -1334,16 +1335,30 @@
+             }
+             // Validate the region so a nested message pump doesn't keep
+             // re-dispatching WM_PAINT for the still-invalid region in a busy
+-            // loop until the in-progress draw unwinds. The vsync thread
+-            // re-invalidates every window on each vsync (see
++            // loop until the in-progress draw unwinds. Keeping frame demand
++            // makes the vsync thread re-invalidate this window (see
+             // `begin_vsync_thread`), so the deferred frame still gets drawn,
+             // at most one vsync late.
++            self.state.frame_demand.request();
+             unsafe { ValidateRect(Some(handle), None).ok().log_err() };
+             return Some(0);
+         };
+-        let mut request_frame = self.state.callbacks.request_frame.take()?;
++        let Some(mut request_frame) = self.state.callbacks.request_frame.take() else {
++            // Minimized windows park their callback; keep the work owed until it returns.
++            if force_render {
++                self.state.force_render_pending.set(true);
++            }
++            self.state.frame_demand.request();
++            return None;
++        };
++        // Consume demand only now, so demand raised during this frame survives it.
++        self.state.frame_demand.take();
+ 
+         self.state.direct_manipulation.update();
++        if self.state.direct_manipulation.is_manipulating() {
++            // Manual-update Direct Manipulation only advances gestures and inertia when polled here.
++            self.state.frame_demand.request();
++        }
+ 
+         let events = self.state.direct_manipulation.drain_events();
+         if !events.is_empty() {
+--- a/src/gpui_windows.rs
++++ b/src/gpui_windows.rs
+@@ -11,6 +11,7 @@
+ mod dispatcher;
+ mod display;
+ mod events;
++mod frame_demand;
+ mod keyboard;
+ mod platform;
+ mod system_notifications;
+@@ -29,6 +30,7 @@
+ pub(crate) use dispatcher::*;
+ pub(crate) use display::*;
+ pub(crate) use events::*;
++pub(crate) use frame_demand::*;
+ pub(crate) use keyboard::*;
+ pub(crate) use platform::*;
+ pub(crate) use system_notifications::*;
+--- a/src/platform.rs
++++ b/src/platform.rs
+@@ -42,6 +42,7 @@
+ struct TrackedWindow {
+     handle: SafeHwnd,
+     frame_signal: Arc<PlatformFrameSignal>,
++    frame_demand: FrameDemand,
+ }
+ 
+ impl TrackedWindow {
+@@ -473,17 +474,24 @@
+                         break;
+                     };
+                     for hwnd in all_windows.read().iter() {
++                        let (visible, minimized) = unsafe {
++                            (
++                                IsWindowVisible(hwnd.as_raw()).as_bool(),
++                                IsIconic(hwnd.as_raw()).as_bool(),
++                            )
++                        };
++                        if !visible || minimized {
++                            // Hidden windows may not consume WM_PAINT until shown again.
++                            hwnd.frame_signal.take();
++                        }
++                        // Only demanded windows paint; the UI thread consumes the demand.
++                        if !should_invalidate(hwnd.frame_demand.is_pending(), visible, minimized) {
++                            continue;
++                        }
++                        if let Some(signal_at) = signal_at {
++                            hwnd.frame_signal.record(signal_at, signal_source);
++                        }
+                         unsafe {
+-                            if let Some(signal_at) = signal_at {
+-                                if IsWindowVisible(hwnd.as_raw()).as_bool()
+-                                    && !IsIconic(hwnd.as_raw()).as_bool()
+-                                {
+-                                    hwnd.frame_signal.record(signal_at, signal_source);
+-                                } else {
+-                                    // Hidden windows may not consume WM_PAINT until shown again.
+-                                    hwnd.frame_signal.take();
+-                                }
+-                            }
+                             RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE)
+                                 .ok()
+                                 .log_err();
+@@ -762,6 +770,7 @@
+         self.raw_window_handles.write().push(TrackedWindow {
+             handle: handle.into(),
+             frame_signal: window.state.frame_signal.clone(),
++            frame_demand: window.state.frame_demand.clone(),
+         });
+ 
+         Ok(Box::new(window))
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -55,6 +55,8 @@
+ 
+     pub callbacks: Callbacks,
+     pub frame_signal: Arc<PlatformFrameSignal>,
++    /// Shared with the VSync thread, which repaints this window only while demand is pending.
++    pub(crate) frame_demand: FrameDemand,
+     pub input_handler: Cell<Option<PlatformInputHandler>>,
+     pub ime_enabled: Cell<bool>,
+     pub pending_surrogate: Cell<Option<u16>>,
+@@ -155,8 +157,10 @@
+         let fullscreen = None;
+         let initial_placement = None;
+ 
+-        let direct_manipulation = DirectManipulationHandler::new(hwnd, scale_factor)
+-            .context("initializing Direct Manipulation")?;
++        let frame_demand = FrameDemand::new();
++        let direct_manipulation =
++            DirectManipulationHandler::new(hwnd, scale_factor, frame_demand.clone())
++                .context("initializing Direct Manipulation")?;
+ 
+         Ok(Self {
+             origin: Cell::new(origin),
+@@ -170,6 +174,7 @@
+             min_size,
+             callbacks,
+             frame_signal: Arc::new(PlatformFrameSignal::new()),
++            frame_demand,
+             input_handler: Cell::new(input_handler),
+             ime_enabled: Cell::new(true),
+             pending_surrogate: Cell::new(pending_surrogate),
+@@ -967,6 +972,12 @@
+         self.state.is_fullscreen()
+     }
+ 
++    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
++        // Capture only the latch: the waker lives in GPUI's window, so a window reference would cycle.
++        let demand = self.state.frame_demand.clone();
++        Some(Rc::new(move || demand.request()))
++    }
++
+     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
+         self.state.callbacks.request_frame.set(Some(callback));
+     }
+@@ -1036,6 +1047,10 @@
+             .log_err();
+     }
+ 
++    fn schedule_frame(&self) {
++        self.state.frame_demand.request();
++    }
++
+     #[cfg(any(test, feature = "test-support"))]
+     fn render_to_image(&self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
+         self.state
+--- /dev/null
++++ b/src/frame_demand.rs
+@@ -0,0 +1,122 @@
++//! Per-window frame demand, so the VSync thread repaints only windows with work to draw.
++
++use std::sync::{
++    Arc,
++    atomic::{AtomicBool, Ordering},
++};
++
++/// A latch shared by a window, its GPUI frame waker and the VSync thread.
++///
++/// GPUI raises it when a window becomes dirty or schedules a next-frame
++/// callback. The VSync thread only reads it; the UI thread consumes it when a
++/// frame callback actually runs, so demand raised during that frame survives
++/// for the next display tick.
++#[derive(Clone)]
++pub(crate) struct FrameDemand(Arc<AtomicBool>);
++
++impl FrameDemand {
++    /// A new window starts with demand so its first frame is always drawn.
++    pub(crate) fn new() -> Self {
++        Self(Arc::new(AtomicBool::new(true)))
++    }
++
++    /// Asks for one more frame on the next display tick.
++    pub(crate) fn request(&self) {
++        self.0.store(true, Ordering::Release);
++    }
++
++    /// Whether a frame is still owed. Used by the VSync thread, which must not consume it.
++    pub(crate) fn is_pending(&self) -> bool {
++        self.0.load(Ordering::Acquire)
++    }
++
++    /// Consumes the demand at the start of a frame that will run GPUI's callback.
++    pub(crate) fn take(&self) -> bool {
++        self.0.swap(false, Ordering::AcqRel)
++    }
++}
++
++/// Whether the VSync thread should invalidate a window on this tick.
++///
++/// Hidden and minimized windows keep their demand; showing or restoring them
++/// paints through their own native messages and then the latch.
++pub(crate) fn should_invalidate(demand_pending: bool, visible: bool, minimized: bool) -> bool {
++    demand_pending && visible && !minimized
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn new_window_demands_its_first_frame() {
++        assert!(FrameDemand::new().is_pending());
++    }
++
++    #[test]
++    fn take_consumes_demand_once() {
++        let demand = FrameDemand::new();
++        assert!(demand.take());
++        assert!(!demand.take());
++        assert!(!demand.is_pending());
++    }
++
++    #[test]
++    fn idle_window_stays_idle_until_requested() {
++        let demand = FrameDemand::new();
++        demand.take();
++        assert!(!should_invalidate(demand.is_pending(), true, false));
++        demand.request();
++        assert!(should_invalidate(demand.is_pending(), true, false));
++    }
++
++    #[test]
++    fn reading_demand_does_not_consume_it() {
++        let demand = FrameDemand::new();
++        assert!(demand.is_pending());
++        assert!(demand.is_pending());
++        assert!(demand.take());
++    }
++
++    #[test]
++    fn demand_raised_during_a_frame_survives_that_frame() {
++        let demand = FrameDemand::new();
++        // Frame entry consumes the demand that started the frame...
++        assert!(demand.take());
++        // ...and GPUI re-invalidates while drawing.
++        demand.request();
++        assert!(demand.is_pending());
++        assert!(should_invalidate(demand.is_pending(), true, false));
++    }
++
++    #[test]
++    fn hidden_or_minimized_windows_keep_demand_without_invalidation() {
++        let demand = FrameDemand::new();
++        assert!(!should_invalidate(demand.is_pending(), false, false));
++        assert!(!should_invalidate(demand.is_pending(), true, true));
++        assert!(demand.is_pending());
++    }
++
++    #[test]
++    fn clones_share_one_latch() {
++        let window = FrameDemand::new();
++        let waker = window.clone();
++        let vsync = window.clone();
++        window.take();
++        waker.request();
++        assert!(vsync.is_pending());
++        assert!(window.take());
++        assert!(!vsync.is_pending());
++    }
++
++    #[test]
++    fn requests_from_another_thread_are_visible() {
++        let demand = FrameDemand::new();
++        demand.take();
++        let remote = demand.clone();
++        std::thread::spawn(move || remote.request())
++            .join()
++            .expect("request thread finishes");
++        assert!(demand.take());
++    }
++}

@@ -7,6 +7,13 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
+- **Smart App Control is off for development.** Windows Application Control
+  repeatedly blocked locally built, unsigned executables (os error 4551),
+  breaking gate runs at random. The owner turned Smart App Control off on
+  their machine. This was the owner's own action; agents still never change
+  Windows security settings. Atlas stays unsigned for now (D38), and a fresh
+  Windows install may still block it.
+
 - **The five palettes are approved (P1-07).** The owner reviewed the
   `--palette-sample` window against the design and approved it. The D44
   drag thresholds stay proposed until they can be tried in a draggable

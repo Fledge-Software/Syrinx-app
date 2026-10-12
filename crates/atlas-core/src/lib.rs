@@ -3,6 +3,7 @@
 mod activation;
 mod bookmark_import;
 mod commands;
+mod destinations;
 mod tabs;
 
 pub use bookmark_import::{
@@ -15,6 +16,10 @@ pub use activation::{ActivationTarget, Route, live_instance, route};
 pub use commands::{
     BrowserAction, Command, CommandAction, CommandContext, CommandError, CommandId,
     CommandRegistry, CommandScope, Enablement, Shortcut,
+};
+pub use destinations::{
+    BuiltInPlugin, Destination, DestinationEdit, DestinationError, DestinationSurface,
+    DestinationTarget, MAX_DESTINATIONS, QuickDestinations,
 };
 
 pub use tabs::{

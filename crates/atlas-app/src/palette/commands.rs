@@ -208,11 +208,11 @@ mod tests {
         let all = matcher
             .matches("", View::Commands, PAGE)
             .expect("blank command query");
-        assert_eq!(all.hits.len(), 10);
+        assert_eq!(all.hits.len(), 11);
         assert_eq!(
             all.counts,
             CommandCounts {
-                browser: 10,
+                browser: 11,
                 plugin: 0
             }
         );
@@ -243,7 +243,7 @@ mod tests {
             .matches("", View::Everything, PAGE)
             .expect("blank query");
         assert!(blank.hits.is_empty());
-        assert_eq!(blank.counts.browser, 10);
+        assert_eq!(blank.counts.browser, 11);
 
         let tab = matcher
             .matches("tab", View::Everything, PAGE)

@@ -273,7 +273,7 @@ impl PaletteView {
 
 impl Render for PaletteView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tokens = theme::tokens();
+        let tokens = theme::current();
         let wide = f32::from(window.viewport_size().width) >= PREVIEW_MIN_WIDTH;
         let list = render::list(self, wide, cx);
         let mut body = div()
