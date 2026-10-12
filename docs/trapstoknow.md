@@ -12,6 +12,64 @@ you found it in the commit message, not here.
 
 ## Page tabs: WebView2 through wry
 
+- **A recreated controller can reuse an old permission request number.** A
+  delayed session-worker reply could then match a new prompt on the same live
+  tab. P1-16 allocates request IDs across controller lifetimes and clears retired
+  prompts on recovery. Keep both protections when changing controller ownership.
+  Source: `docs/p1-16-process-recovery.md` (code review and identity regression).
+
+- **Certificate failure is an expected navigation failure, not successful loading.**
+  WebView2 can emit failed NavigationCompleted before ServerCertificateErrorDetected.
+  P1-14 explicitly cancels and reads back the action; keep rejection sticky through
+  completion and match navigation IDs before accepting success. Its negative fixture
+  accepts only its own expected failure, without changing shared fixture checks.
+  Cancellation may retain the old document, so a source-change assertion needs a
+  distinct recovery address. An initial already-blank view need not change source.
+  See `docs/p1-14-security-display.md` and its native logs.
+- **The local SslStream server could not use its ephemeral certificate key.**
+  P1-14's initial helper failed with “No credentials are available in the security
+  package.” Do not fix this by persisting keys outside the fixture or installing
+  a trusted certificate. The installed Python standard library serves the same
+  fresh untrusted certificate from files confined to the synthetic target folder.
+
+- **An empty native Find.Start can leave its completion pending.** The P1-13
+  fixture on this runtime completed a nonempty two-match search, but an empty
+  term never completed. Atlas opens its own find input without calling Start;
+  clearing calls Stop. Query IDs must change on both edits and bar reopen, since
+  native cancellation cannot retract an event already queued to the UI. Moving
+  logical GPUI focus alone is insufficient: transfer Windows focus from the page
+  child to the chrome parent before typing. See `docs/p1-13-essentials.md`.
+- **Do not build an example while its executable is running.** On Windows,
+  the gate also links examples. Running the native fixture concurrently caused
+  LNK1104 against its own executable. Serialize the native fixture and gate;
+  do not kill another session's processes or relocate executables.
+
+- **A consent click grants a replacement prompt.** Capture the displayed
+  tab/request identity in each callback and give each prompt's buttons distinct
+  element IDs. Reject a delayed click after navigation, tab change or a new
+  request. Also disable WebView2 permission persistence with `SavesInProfile`
+  false; otherwise a one-shot choice becomes durable outside Atlas's store.
+  Source: P1-12 independent review, stale-action regression and native fixture
+  in `docs/p1-12-permissions.md`.
+
+- **The original lifecycle fixture sometimes times out during navigation.**
+  Its fixture-navigation wait has failed before popups and during repeated
+  cycles. P1-12's run passed, which does not establish a fix. Preserve its
+  assertions and deadlines, record the individual suite result, and keep the
+  original timeout separate from new slice failures. The owner explicitly
+  authorized P1-12 through P1-14 despite this pre-existing intermittent failure.
+  Sources: `docs/fixture-transport-timing-review.md` and `docs/p1-11-popups.md`.
+
+- **A native fixture rejects popup focus before trying it.** Windows may
+  deny `SetForegroundWindow` for a background process even though WebView2's
+  `MoveFocus` succeeds. Keep foreground denial diagnostic and require the
+  synthetic child to report `document.hasFocus()` after the production focus
+  command. P1-11's 2026-10-12 run passed that assertion with foreground
+  activation denied. This proves page focus, not GPUI visual acceptance.
+  Sources: `docs/p1-11-popups.md` and Microsoft's
+  [foreground activation rules](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
+  (documented restriction and native observation).
+
 - **A synthetic Windows HTTP server drops a connection before request bytes
   arrive.** An accepted socket inherits the listener's nonblocking mode;
   setting read/write timeouts does not make it blocking. Explicitly set each
@@ -284,6 +342,11 @@ you found it in the commit message, not here.
 
 ## Repository and research
 
+- **Windows PowerShell can replace Unicode in a native-program pipeline.**
+  An edit piped to Python lost its middle-dot separator, so a replacement did
+  not match and a P1-14 label regression failed. Use direct patches for Unicode
+  text, or ASCII script literals with Unicode escapes; UTF-8 file reads alone
+  do not control the shell's pipe encoding.
 - **Files on disk have CRLF line endings; git stores LF.** This machine's
   system git config sets `core.autocrlf=true` and `.gitattributes` sets
   `* text=auto`, so `git ls-files --eol` shows `i/lf w/crlf` for most text

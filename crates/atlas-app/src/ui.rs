@@ -2,7 +2,10 @@
 
 mod clear_data;
 mod customize;
+mod essentials;
 mod favorites;
+mod find;
+mod fullscreen;
 mod history_list;
 mod history_repair;
 mod home;
@@ -15,10 +18,15 @@ mod page_card;
 mod page_lifecycle;
 mod peek;
 mod peek_state;
+mod permissions;
+mod popups;
+mod process_recovery;
 mod recovery;
 mod runtime_notice;
+mod security;
 mod sidebar_rows;
 mod sidebar_view;
+mod suspended_fixture;
 mod tile_editor;
 mod tiles;
 mod title_bar;
@@ -91,7 +99,8 @@ actions!(
         Reload,
         ShowHistory,
         ToggleSidebar,
-        DismissPeek
+        DismissPeek,
+        Fullscreen
     ]
 );
 
@@ -116,9 +125,20 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", DismissPeek, Some("Atlas")),
         KeyBinding::new("escape", crate::palette::Dismiss, Some("AtlasPeek")),
     ]);
+    // Fullscreen is a window key; Escape leaves page fullscreen only while it is active.
+    bindings.extend([
+        KeyBinding::new("f11", Fullscreen, None),
+        KeyBinding::new(
+            "escape",
+            fullscreen::ExitPageFullscreen,
+            Some("AtlasFullscreen"),
+        ),
+    ]);
     cx.bind_keys(bindings);
     crate::palette::bind_keys(cx);
     import::bind_keys(cx);
+    essentials::bind_zoom_keys(cx);
+    find::bind_keys(cx);
 }
 
 fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
@@ -134,6 +154,12 @@ fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
         BrowserAction::PreviousTab => KeyBinding::new(keystroke, PreviousTab, None),
         BrowserAction::SavePage => KeyBinding::new(keystroke, SavePage, None),
         BrowserAction::ShowHistory => KeyBinding::new(keystroke, ShowHistory, None),
+        BrowserAction::FindInPage => KeyBinding::new(keystroke, essentials::Find, None),
+        BrowserAction::ShowDownloads => KeyBinding::new(keystroke, essentials::Downloads, None),
+        BrowserAction::Print => KeyBinding::new(keystroke, essentials::Print, None),
+        BrowserAction::ZoomIn => KeyBinding::new(keystroke, essentials::ZoomIn, None),
+        BrowserAction::ZoomOut => KeyBinding::new(keystroke, essentials::ZoomOut, None),
+        BrowserAction::ResetZoom => KeyBinding::new(keystroke, essentials::ZoomReset, None),
     }
 }
 
@@ -168,6 +194,12 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
         BrowserAction::NextTab => BrowserShortcut::NextTab,
         BrowserAction::PreviousTab => BrowserShortcut::PreviousTab,
         BrowserAction::SavePage => BrowserShortcut::SavePage,
+        BrowserAction::FindInPage => BrowserShortcut::Find,
+        BrowserAction::ShowDownloads => BrowserShortcut::Downloads,
+        BrowserAction::Print => BrowserShortcut::Print,
+        BrowserAction::ZoomIn => BrowserShortcut::ZoomIn,
+        BrowserAction::ZoomOut => BrowserShortcut::ZoomOut,
+        BrowserAction::ResetZoom => BrowserShortcut::ZoomReset,
         BrowserAction::ShowHistory => return None,
     })
 }
@@ -178,6 +210,15 @@ struct PalettePopup {
 }
 
 pub struct BrowserView {
+    fullscreen: Option<(u64, bool)>,
+    crashes: process_recovery::CrashState,
+    fullscreen_pages: fullscreen::FullscreenPages,
+    suspended_fixture: suspended_fixture::SuspendedFixture,
+    connections: std::collections::HashMap<u64, atlas_platform::browser::ConnectionState>,
+    find: Option<find::FindBar>,
+    find_sequence: u64,
+    zoom_levels: std::collections::HashMap<u64, f64>,
+    permissions: Vec<permissions::Prompt>,
     model: TabModelSnapshot,
     session_revision: Option<u64>,
     recovery: Option<recovery::RecoveryCard>,
@@ -190,6 +231,7 @@ pub struct BrowserView {
     closing: bool,
     loaded: HashSet<TabId>,
     pending_pages: HashSet<TabId>,
+    popup_pages: HashSet<TabId>,
     navigation_intents: NavigationIntents,
     navigation_status: NavigationStatus,
     history: history_list::HistoryList,
@@ -230,12 +272,22 @@ impl BrowserView {
     pub fn new(
         data_dir: PathBuf,
         smoke: bool,
+        suspended_tabs: usize,
         outcome: Arc<AtomicU8>,
         links: Option<LinkFeed>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut view = Self {
+            fullscreen: None,
+            crashes: process_recovery::CrashState::default(),
+            fullscreen_pages: fullscreen::FullscreenPages::default(),
+            suspended_fixture: suspended_fixture::SuspendedFixture::new(suspended_tabs),
+            connections: std::collections::HashMap::new(),
+            find: None,
+            find_sequence: 0,
+            zoom_levels: std::collections::HashMap::new(),
+            permissions: Vec::new(),
             model: TabModelSnapshot::default(),
             session_revision: None,
             recovery: None,
@@ -248,6 +300,7 @@ impl BrowserView {
             closing: false,
             loaded: HashSet::new(),
             pending_pages: HashSet::new(),
+            popup_pages: HashSet::new(),
             navigation_intents: NavigationIntents::default(),
             navigation_status: NavigationStatus::default(),
             history: history_list::HistoryList::default(),
@@ -437,6 +490,9 @@ impl BrowserView {
                     self.clear_data.close();
                 }
                 self.model = snapshot.model;
+                self.crashes.retain(&self.model);
+                self.zoom_levels
+                    .retain(|id, _| self.model.tabs.iter().any(|tab| tab.id.get() == *id));
                 self.navigation_status.retain(&self.model);
                 if !self.closing {
                     if let Some(id) = snapshot.navigate {
@@ -453,10 +509,17 @@ impl BrowserView {
                 {
                     self.navigate_committed(id);
                 }
+                if let Some((request, target)) = snapshot.popup {
+                    self.commit_popup(request, target);
+                }
                 self.sync_pages();
                 // Work that waited for the session to accept commands.
                 self.open_forwarded_links();
                 self.save_runtime_version();
+                self.restore_fullscreen_if_hidden(window);
+                if initial {
+                    self.seed_suspended_fixture();
+                }
                 // Only committed model changes invalidate an open palette's catalogue snapshot.
                 if changed
                     && !self.closing
@@ -473,9 +536,17 @@ impl BrowserView {
                         address: "about:blank".to_owned(),
                     });
                 }
-                if new_home && !self.closing && !self.smoke {
+                if new_home && !self.closing && !self.smoke && !self.suspended_fixture.enabled() {
                     self.open_palette(false, window, cx);
                 }
+            }
+            SessionEvent::Permission {
+                id,
+                request,
+                result,
+            } => self.permission_result(id, request, result),
+            SessionEvent::PopupRejected { request } => {
+                self.page_command(BrowserCommand::CancelPopup { request });
             }
             SessionEvent::Search { request_id, result } => {
                 if let Some((pending, local)) = self.pending_query
@@ -505,6 +576,10 @@ impl BrowserView {
             SessionEvent::Failure { error, fatal } => {
                 if self.smoke {
                     self.outcome.store(2, Ordering::Release);
+                }
+                // A stopped session cannot persist pages, so the page host stops with it.
+                if fatal {
+                    self.page_command(BrowserCommand::Shutdown);
                 }
                 if fatal && self.abandon_import_write() {
                     self.fail(format!(
@@ -538,6 +613,13 @@ impl BrowserView {
     }
 
     fn browser_event(&mut self, event: BrowserEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(event) = event.into_current() else {
+            return;
+        };
+        if process_recovery::smoke_process_failure(self.smoke, &event, &self.outcome) {
+            self.request_close(cx);
+            return;
+        }
         if let Some(message) = self.navigation_status.observe(
             &event,
             &self.model,
@@ -548,6 +630,57 @@ impl BrowserView {
             self.message = message.to_owned();
         }
         match event {
+            BrowserEvent::PageCrashed { id } => {
+                self.page_crashed(id, window);
+                self.recovery_focus(window, cx);
+            }
+            BrowserEvent::PageRestored { id } => {
+                self.crashes.restored(id);
+                self.recovery_focus(window, cx);
+            }
+            BrowserEvent::RecoveryStarted { sequence, tabs } => {
+                self.browser_recovering(sequence, tabs, window);
+                self.recovery_focus(window, cx);
+            }
+            BrowserEvent::RecoveryFinished {
+                sequence,
+                restored: _,
+                failed,
+                stopped,
+            } => {
+                if self.crashes.finished(sequence, stopped) {
+                    self.message = if stopped {
+                        "Browser engine stopped. Reload a tab to try again.".into()
+                    } else if failed.is_empty() {
+                        "Page engine recovered. Your tabs are intact.".into()
+                    } else {
+                        "Some pages could not be restored. Reload an affected tab to retry.".into()
+                    };
+                    self.recovery_focus(window, cx);
+                }
+            }
+            BrowserEvent::Callback { .. } => unreachable!("callback envelopes are unwrapped once"),
+            BrowserEvent::Fullscreen { id, active } => self.page_fullscreen(id, active, window),
+            BrowserEvent::Suspended { id, suspended } => {
+                self.suspended_fixture.observe(id, suspended)
+            }
+            BrowserEvent::Connection { id, state } => self.observe_connection(id, state),
+            BrowserEvent::ZoomChanged { id, factor } => {
+                self.zoom_levels.insert(id, factor);
+            }
+            BrowserEvent::FindCompleted { id, request, count } => {
+                self.find_completed(id, request, count)
+            }
+            BrowserEvent::DownloadDialog { .. } => {}
+            BrowserEvent::PermissionRequested {
+                id,
+                request,
+                uri,
+                kind,
+            } => self.permission_requested(id, request, &uri, kind),
+            BrowserEvent::PermissionFinished { id, request } => {
+                self.permission_finished(id, request)
+            }
             BrowserEvent::Ready => {
                 self.browser_ready = true;
                 self.resize_pages(window);
@@ -570,11 +703,16 @@ impl BrowserView {
             }
             BrowserEvent::CreationFailed { id, error } => {
                 let active = self.active_page_feedback(id);
+                let mut popup_failed = false;
                 if let Ok(id) = TabId::new(id) {
-                    self.pending_pages.remove(&id);
+                    popup_failed = self.popup_creation_failed(id);
                     self.navigation_status.forget(id);
                 }
-                if active {
+                if popup_failed {
+                    self.message = format!(
+                        "{error}. Closing the popup because its opener could not be preserved."
+                    );
+                } else if active {
                     self.message = format!("{error}. Select the tab to retry.");
                 }
                 if self.smoke {
@@ -605,23 +743,30 @@ impl BrowserView {
                     }
                 }
             }
-            BrowserEvent::ProcessFailed { kind, .. } => {
-                self.fail(format!(
-                    "The page engine reported failure {kind}. Restart Atlas if the page does not recover."
-                ));
-                if self.smoke {
-                    self.request_close(cx);
+            BrowserEvent::ProcessFailed { id, kind } => {
+                if self.active_page_feedback(id) {
+                    self.message = if kind == atlas_platform::browser::RENDER_PROCESS_UNRESPONSIVE {
+                        "This page is not responding. You can wait or reload it.".into()
+                    } else {
+                        "A page component failed; the engine is handling its recovery.".into()
+                    };
                 }
             }
-            BrowserEvent::Url { id, url } => self.metadata(id, None, Some(url)),
+            BrowserEvent::Url { id, url } => {
+                self.forget_find(id, true);
+                self.metadata(id, None, Some(url));
+            }
             BrowserEvent::Loading { .. } => {}
             BrowserEvent::DataCleared { request, outcome } => {
                 self.browser_data_cleared(request, outcome);
             }
             BrowserEvent::Shortcut(shortcut) => self.shortcut(shortcut, window, cx),
+            BrowserEvent::PopupRequested { id, request, url } => {
+                self.request_popup(id, request, url);
+            }
             BrowserEvent::PopupBlocked { id } => {
                 if self.active_page_feedback(id) {
-                    self.message = "This preview cannot open this site's popup yet.".to_owned();
+                    self.message = "This popup could not be opened.".to_owned();
                 }
             }
             BrowserEvent::Error { tab, error } => {
@@ -727,14 +872,22 @@ impl BrowserView {
         if self.closing || self.session_revision.is_none() {
             return;
         }
-        let desired =
-            self.navigation_intents
-                .desired_page(&self.model, self.browser_ready, self.smoke);
+        self.popup_pages
+            .retain(|id| self.model.tabs.iter().any(|tab| tab.id == *id));
+        if self.sync_suspended_fixture() {
+            return;
+        }
+        let desired = self
+            .navigation_intents
+            .desired_page(&self.model, self.browser_ready, self.smoke)
+            .or_else(|| self.blank_popup());
         if !self.browser_ready {
             return;
         }
         let removed = page_lifecycle::removed(&self.model, &self.loaded, &self.pending_pages);
         for id in removed {
+            self.connections.remove(&id.get());
+            self.forget_find(id.get(), false);
             if self.page_command(BrowserCommand::Close { id: id.get() }) {
                 self.loaded.remove(&id);
                 self.pending_pages.remove(&id);
@@ -760,6 +913,9 @@ impl BrowserView {
             .filter(|id| self.loaded.contains(id) && card_free);
         if next != self.shown && self.page_command(BrowserCommand::ShowActive(next.map(TabId::get)))
         {
+            if let Some(previous) = self.shown {
+                self.forget_find(previous.get(), true);
+            }
             self.shown = next;
             if self.palette.is_none()
                 && self.peek.is_none()
@@ -824,6 +980,13 @@ impl BrowserView {
                 self.dismiss_peek(generation, window, cx);
             }
             BrowserShortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
+            BrowserShortcut::Fullscreen => self.fullscreen_shortcut(window),
+            BrowserShortcut::Find => self.open_find(window, cx),
+            BrowserShortcut::Downloads
+            | BrowserShortcut::Print
+            | BrowserShortcut::ZoomIn
+            | BrowserShortcut::ZoomOut
+            | BrowserShortcut::ZoomReset => self.essential_shortcut(shortcut),
             BrowserShortcut::NewTab => self.command(SessionCommand::NewTab {
                 address: "about:blank".to_owned(),
             }),
@@ -1090,12 +1253,19 @@ impl BrowserView {
             self.focus_page(window);
             return;
         };
+        // Find keeps focus in its Atlas input; a queued page Focus would take it back.
+        if action == BrowserAction::FindInPage {
+            window.activate_window();
+        }
         match browser_shortcut(action) {
             Some(shortcut) => self.shortcut(shortcut, window, cx),
             None => self.toggle_history(),
         }
-        // Edit address reopens the palette, which takes focus; everything else returns to the page.
-        if action != BrowserAction::EditAddress {
+        // Edit address reopens the palette and Find focuses its bar; the rest return to the page.
+        if !matches!(
+            action,
+            BrowserAction::EditAddress | BrowserAction::FindInPage
+        ) {
             self.focus_page(window);
         }
     }
@@ -1125,7 +1295,7 @@ impl BrowserView {
             .iter()
             .find(|tab| Some(tab.id) == self.model.active_id)
             .map_or_else(String::new, |tab| {
-                if tab.metadata.address == "about:blank" {
+                if tab.metadata.address == "about:blank" && !self.popup_pages.contains(&tab.id) {
                     String::new()
                 } else {
                     tab.metadata.address.clone()
@@ -1227,6 +1397,9 @@ impl BrowserView {
             viewport_height: f32::from(viewport.height),
             sidebar_width: self.sidebar_sizing.width(),
             notice_height: self.notice_height(),
+            permission_height: self.permission_height(),
+            find_height: self.find_height(),
+            fullscreen: self.fullscreen.is_some(),
             scale: window.scale_factor(),
         });
         if self.bounds != Some(bounds) && self.page_command(BrowserCommand::Resize(bounds)) {
@@ -1273,6 +1446,7 @@ impl BrowserView {
                     cx.notify();
                 })),
             )
+            .child(self.connection_display())
             .child(
                 div()
                     .id("address")
@@ -1297,6 +1471,7 @@ impl BrowserView {
                         self.active_address()
                     }),
             )
+            .child(self.essential_controls(cx))
             .child(
                 button("save", "Save page").on_click(cx.listener(|this, _, _, cx| {
                     this.command(SessionCommand::SaveActive);
@@ -1325,7 +1500,25 @@ impl Render for BrowserView {
         if self.browser_ready && !self.closing {
             self.resize_pages(window);
         }
-        // The history list takes the page card's place until it is closed.
+        // A fullscreen page fills the window; no title bar, toolbar, sidebar or footer is drawn.
+        if self.fullscreen.is_some() {
+            return div()
+                .key_context("AtlasFullscreen")
+                .size_full()
+                .track_focus(&self.focus)
+                .on_action(cx.listener(|this, _: &Fullscreen, window, cx| {
+                    this.fullscreen_shortcut(window);
+                    cx.notify();
+                }))
+                .on_action(
+                    cx.listener(|this, _: &fullscreen::ExitPageFullscreen, window, cx| {
+                        this.fullscreen_shortcut(window);
+                        cx.notify();
+                    }),
+                );
+        }
+        // The history list takes the page card's place until it is closed; a crashed page
+        // shows its recovery card there.
         let page = if self.clear_data.is_open() {
             div()
                 .flex_1()
@@ -1336,12 +1529,14 @@ impl Render for BrowserView {
                 .flex_1()
                 .h_full()
                 .child(history_list::render(&self.history, cx))
+        } else if let Some(card) = self.crashed_page(cx) {
+            card
         } else if self.shown.is_none() {
             self.home_page(cx)
         } else {
             div().flex_1().h_full()
         };
-        div()
+        let chrome = div()
             .size_full()
             .key_context("Atlas")
             .bg(theme::window_fill())
@@ -1427,6 +1622,10 @@ impl Render for BrowserView {
                 this.toggle_history();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &Fullscreen, window, cx| {
+                this.fullscreen_shortcut(window);
+                cx.notify();
+            }))
             .child(title_bar(
                 if self.sidebar_sizing.width() == 0. {
                     div()
@@ -1444,6 +1643,8 @@ impl Render for BrowserView {
                 root.child(self.toolbar(cx))
             })
             .children(self.runtime_banner(cx))
+            .child(self.permission_bar(cx))
+            .child(self.find_bar(cx))
             .child(
                 div()
                     .flex_1()
@@ -1463,7 +1664,8 @@ impl Render for BrowserView {
                     .text_xs()
                     .text_color(theme::icon())
                     .child(self.failure.as_ref().unwrap_or(&self.message).clone()),
-            )
+            );
+        self.essential_actions(chrome, cx)
     }
 }
 
@@ -1522,7 +1724,7 @@ fn page_command_allowed(closing: bool, command: &BrowserCommand) -> bool {
     !closing || matches!(command, BrowserCommand::Shutdown)
 }
 
-fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
+fn button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .px_3()
@@ -1596,9 +1798,16 @@ mod palette_shortcut_tests {
             );
             shortcuts.push(shortcut);
         }
-        // Every native shortcut except the palette itself is reachable as a command.
-        assert_eq!(shortcuts.len(), 10);
-        assert!(!shortcuts.contains(&BrowserShortcut::Palette));
+        // Every native shortcut except the palette, fullscreen and the window's sidebar and
+        // peek keys is reachable as a command: ten navigation actions and six page essentials.
+        assert_eq!(shortcuts.len(), 16);
+        for window_key in [
+            BrowserShortcut::Palette,
+            BrowserShortcut::Fullscreen,
+            BrowserShortcut::ToggleSidebar,
+        ] {
+            assert!(!shortcuts.contains(&window_key));
+        }
     }
 
     #[test]

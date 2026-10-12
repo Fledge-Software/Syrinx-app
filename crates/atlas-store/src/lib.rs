@@ -7,6 +7,7 @@ mod engine;
 mod error;
 mod history;
 mod location;
+mod permissions;
 mod preferences;
 mod records;
 mod replay;
@@ -20,5 +21,6 @@ pub use history::{HistoryDeletion, HistoryEntry, HistoryVisit, RecordedVisit};
 pub use location::{
     DirectoryLease, LocationError, LocationOperation, SessionControl, ShutdownState, StorageSession,
 };
+pub use permissions::PermissionKind;
 pub use preferences::{MAX_SETTING_KEY_BYTES, MAX_SETTING_VALUE_BYTES, StoredPreferences};
 pub use replay::replay_history_deletions;

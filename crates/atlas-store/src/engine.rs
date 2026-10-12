@@ -156,6 +156,39 @@ impl Store {
         result.recv().map_err(|_| StoreError::WorkerUnavailable)?
     }
 
+    /// Reads the explicit choice for a canonical HTTP(S) origin on a reader connection.
+    pub fn permission(
+        &self,
+        origin: &str,
+        kind: crate::PermissionKind,
+    ) -> Result<Option<bool>, StoreError> {
+        let readers = self.readers.as_ref().ok_or(StoreError::Closed)?;
+        let reader = readers[0].lock().map_err(|_| StoreError::ReaderPoisoned)?;
+        crate::permissions::load(&reader.connection, origin, kind)
+    }
+
+    /// Serializes an explicit remembered choice with other durable writes.
+    pub fn remember_permission(
+        &self,
+        origin: String,
+        kind: crate::PermissionKind,
+        allowed: bool,
+    ) -> Result<(), StoreError> {
+        crate::permissions::validate_origin(&origin)?;
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::Permission {
+                origin,
+                kind,
+                allowed,
+                reply,
+            })
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
+    }
+
     /// Creates a daily validated backup only while idle. This blocks on the existing writer queue.
     pub fn backup_if_due(
         &self,
@@ -319,6 +352,12 @@ struct SaveRequest {
 }
 
 enum WriterRequest {
+    Permission {
+        origin: String,
+        kind: crate::PermissionKind,
+        allowed: bool,
+        reply: mpsc::SyncSender<Result<(), StoreError>>,
+    },
     Save(SaveRequest),
     /// A committed revision a reader loaded; no reply.
     Remember(StoredSnapshot),
@@ -407,6 +446,21 @@ fn serve_writes(
             Err(mpsc::RecvError) => return Ok(()),
         };
         match request {
+            WriterRequest::Permission {
+                origin,
+                kind,
+                allowed,
+                reply,
+            } => {
+                reply
+                    .send(crate::permissions::save(
+                        &writer.connection,
+                        &origin,
+                        kind,
+                        allowed,
+                    ))
+                    .map_err(|_| StoreError::ReplyAbandoned)?;
+            }
             WriterRequest::Save(request) => {
                 let saved_rows = committed
                     .as_ref()

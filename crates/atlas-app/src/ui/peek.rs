@@ -125,13 +125,14 @@ impl BrowserView {
             && (page_card::chrome_height(self.sidebar_sizing.width())
                 ..f32::from(window.viewport_size().height) - FOOTER_HEIGHT)
                 .contains(&y);
+        // A fullscreen page (P1-15) has no sidebar to peek at.
         let eligible = peek_eligible(
             pointer.active,
             self.closing,
             self.palette.is_some(),
             self.sidebar_sizing.state(),
             self.sidebar_sizing.is_dragging(),
-        );
+        ) && self.fullscreen.is_none();
         let sample = HoverSample {
             eligible,
             edge,

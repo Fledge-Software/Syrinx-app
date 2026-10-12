@@ -42,6 +42,8 @@ impl HomePaletteIntent {
         let keeps_entry = matches!(
             command,
             SessionCommand::Query { .. }
+                | SessionCommand::CheckPermission { .. }
+                | SessionCommand::RememberPermission { .. }
                 | SessionCommand::ObserveMetadata { .. }
                 | SessionCommand::SaveActive
                 | SessionCommand::Unsave(_)

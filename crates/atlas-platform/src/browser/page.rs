@@ -22,14 +22,13 @@ use windows::{
     core::{BOOL, Interface, PWSTR},
 };
 use wry::{
-    NewWindowResponse, PageLoadEvent, Rect, WebView, WebViewBuilder, WebViewBuilderExtWindows,
-    WebViewExtWindows,
+    PageLoadEvent, Rect, WebView, WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows,
     dpi::{PhysicalPosition, PhysicalSize},
 };
 
 use super::{
-    BrowserCommand, BrowserError, BrowserEvent, BrowserShortcut, EventSink, PageBounds,
-    ShortcutSink, placement::Placement,
+    BrowserCommand, BrowserError, BrowserEvent, BrowserShortcut, EventSink, NativeSink, PageBounds,
+    placement::Placement,
 };
 
 struct Parent(NonZeroIsize);
@@ -44,6 +43,10 @@ impl HasWindowHandle for Parent {
 }
 
 pub(super) struct Page {
+    destination: std::rc::Rc<std::cell::RefCell<String>>,
+    lifecycle: super::lifecycle::Lifecycle,
+    permissions: super::permissions::Permissions,
+    essentials: super::essentials::Essentials,
     view: WebView,
     placement: Cell<Placement>,
 }
@@ -55,12 +58,16 @@ impl Page {
         environment: &ICoreWebView2Environment,
         bounds: PageBounds,
         events: EventSink,
-        shortcuts: ShortcutSink,
+        shortcuts: NativeSink,
+        popups: super::popups::PopupRequests,
     ) -> Result<Self, BrowserError> {
+        let destination = std::rc::Rc::new(std::cell::RefCell::new("about:blank".to_owned()));
+        let life = super::lifecycle::CallbackLife::new();
+        let events = events.for_page(life.clone());
+        let lifecycle = super::lifecycle::Lifecycle::new(id, life, events.clone());
         let parent = Parent(NonZeroIsize::new(parent).ok_or(BrowserError::InvalidWindow)?);
         let titles = events.clone();
         let loading = events.clone();
-        let popups = events.clone();
         let closes = events.clone();
         let view = WebViewBuilder::new()
             .with_environment(environment.clone())
@@ -68,6 +75,8 @@ impl Page {
             .with_visible(false)
             .with_focused(false)
             .with_devtools(false)
+            .with_clipboard(false)
+            .with_default_context_menus(true)
             .with_bounds(rect(bounds))
             .with_document_title_changed_handler(move |title| {
                 titles.emit(BrowserEvent::Title { id, title })
@@ -77,10 +86,6 @@ impl Page {
                     id,
                     loading: matches!(state, PageLoadEvent::Started),
                 })
-            })
-            .with_new_window_req_handler(move |_url, _features| {
-                popups.emit(BrowserEvent::PopupBlocked { id });
-                NewWindowResponse::Deny
             })
             .with_window_close_requested_handler(move || {
                 // Native teardown waits for the persisted model, outside this callback.
@@ -95,33 +100,70 @@ impl Page {
             settings.cast().map_err(|_| BrowserError::Settings)?;
         unsafe { settings.SetIsPasswordAutosaveEnabled(false) }
             .map_err(|_| BrowserError::Settings)?;
-        register_source(&view, id, events.clone())?;
+        // Unhandled page keys retain the engine's default browser actions.
+        unsafe { settings.SetAreBrowserAcceleratorKeysEnabled(true) }
+            .map_err(|_| BrowserError::Settings)?;
+        super::security::register(&view, id, events.clone())?;
+        popups.register(&view, id, events.clone())?;
+        super::lifecycle::register_fullscreen(&view, id, events.clone())?;
+        register_source(&view, id, events.clone(), destination.clone())?;
         register_navigation(&view, id, events.clone())?;
-        register_process_failure(&view, id, events.clone())?;
+        register_process_failure(&view, id, events.clone(), shortcuts.clone())?;
+        let permissions = super::permissions::Permissions::register(&view, id, events.clone())?;
+        let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
         register_shortcuts(&view, shortcuts, id, events)?;
         Ok(Self {
+            destination,
+            lifecycle,
+            permissions,
+            essentials,
             view,
             placement: Cell::new(Placement::new(bounds)),
         })
     }
 
+    pub(super) fn webview(&self) -> webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2 {
+        self.view.webview()
+    }
+
+    #[cfg(test)]
+    pub(super) fn synthetic_failure(&self, id: u64, kind: i32) -> BrowserEvent {
+        BrowserEvent::Callback {
+            ticket: self.lifecycle.life.ticket(true),
+            event: Box::new(BrowserEvent::ProcessFailed { id, kind }),
+        }
+    }
+
+    pub(super) fn destination(&self) -> String {
+        self.destination.borrow().clone()
+    }
+
     pub(super) fn navigate(&self, url: &str) -> Result<(), BrowserError> {
         validate_url(url)?;
+        self.lifecycle.resume(&self.view)?;
         self.view
             .load_url(url)
-            .map_err(|_| BrowserError::Navigation)
+            .map_err(|_| BrowserError::Navigation)?;
+        *self.destination.borrow_mut() = url.to_owned();
+        Ok(())
     }
 
     /// Shows or hides the page, first moving a page about to appear to the card's bounds.
+    /// The lifecycle resumes a suspended page before it becomes visible.
     pub(super) fn show(&self, visible: bool, card: PageBounds) -> Result<(), BrowserError> {
         if let Some(bounds) = self.placement.get().on_show(visible, card) {
             self.set_bounds(bounds)?;
         }
-        self.view
-            .set_visible(visible)
-            .map_err(|_| BrowserError::Visibility)?;
+        self.lifecycle.show(&self.view, visible)?;
         self.update_placement(|placement| placement.shown(visible));
         Ok(())
+    }
+
+    pub(super) fn tick(&self) -> Result<(), BrowserError> {
+        self.lifecycle.tick(&self.view)
+    }
+    pub(super) fn suspend_due(&self) -> Option<std::time::Instant> {
+        self.lifecycle.due()
     }
 
     /// Follows the card if this page is shown; hidden pages catch up when shown.
@@ -147,7 +189,20 @@ impl Page {
     }
 
     pub(super) fn apply(&self, command: BrowserCommand) -> Result<(), BrowserError> {
+        if matches!(
+            command,
+            BrowserCommand::Back { .. }
+                | BrowserCommand::Forward { .. }
+                | BrowserCommand::Reload { .. }
+        ) {
+            self.lifecycle.resume(&self.view)?;
+        }
         match command {
+            BrowserCommand::ExitFullscreen { .. } => super::lifecycle::exit_fullscreen(&self.view),
+            BrowserCommand::PageAction { action, .. } => self.essentials.apply(&self.view, action),
+            BrowserCommand::ResolvePermission {
+                request, allowed, ..
+            } => self.permissions.resolve(request, allowed),
             BrowserCommand::Navigate { url, .. } => self.navigate(&url),
             BrowserCommand::Focus { .. } => self.view.focus().map_err(|_| BrowserError::Focus),
             BrowserCommand::Back { .. } => self.history(true),
@@ -182,7 +237,14 @@ impl Page {
     }
 }
 
-fn validate_url(url: &str) -> Result<(), BrowserError> {
+impl Drop for Page {
+    fn drop(&mut self) {
+        self.lifecycle.life.retire();
+        self.permissions.clear();
+    }
+}
+
+pub(super) fn validate_url(url: &str) -> Result<(), BrowserError> {
     if url.contains('\0')
         || !(url.starts_with("https://") || url.starts_with("http://") || url == "about:blank")
     {
@@ -198,7 +260,12 @@ fn rect(bounds: PageBounds) -> Rect {
     }
 }
 
-fn register_source(view: &WebView, id: u64, events: EventSink) -> Result<(), BrowserError> {
+fn register_source(
+    view: &WebView,
+    id: u64,
+    events: EventSink,
+    destination: std::rc::Rc<std::cell::RefCell<String>>,
+) -> Result<(), BrowserError> {
     let handler = SourceChangedEventHandler::create(Box::new(move |core, _args| {
         let core = core.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
         let mut raw = PWSTR::null();
@@ -211,10 +278,11 @@ fn register_source(view: &WebView, id: u64, events: EventSink) -> Result<(), Bro
             });
             return Err(error);
         }
-        events.emit(BrowserEvent::Url {
-            id,
-            url: owned.to_string(),
-        });
+        let url = owned.to_string();
+        if events.accepts_callbacks() && validate_url(&url).is_ok() {
+            *destination.borrow_mut() = url.clone();
+        }
+        events.emit(BrowserEvent::Url { id, url });
         Ok(())
     }));
     let mut token = 0;
@@ -249,6 +317,7 @@ fn register_process_failure(
     view: &WebView,
     id: u64,
     events: EventSink,
+    native: NativeSink,
 ) -> Result<(), BrowserError> {
     let handler = ProcessFailedEventHandler::create(Box::new(move |_core, args| {
         let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
@@ -261,7 +330,12 @@ fn register_process_failure(
             return Err(error);
         }
         // Forward only the structural kind; frame details and process descriptions stay unread.
-        events.emit(BrowserEvent::ProcessFailed { id, kind: kind.0 });
+        if let Err(error) = native.post(BrowserEvent::ProcessFailed { id, kind: kind.0 }, &events) {
+            events.emit(BrowserEvent::Error {
+                tab: Some(id),
+                error,
+            });
+        }
         Ok(())
     }));
     let mut token = 0;
@@ -271,11 +345,14 @@ fn register_process_failure(
 
 fn register_shortcuts(
     view: &WebView,
-    shortcuts: ShortcutSink,
+    shortcuts: NativeSink,
     id: u64,
     events: EventSink,
 ) -> Result<(), BrowserError> {
     let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_controller, args| {
+        if !events.accepts_callbacks() {
+            return Ok(());
+        }
         let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
         let mut kind = COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN;
         unsafe { args.KeyEventKind(&mut kind) }?;
@@ -300,7 +377,7 @@ fn register_shortcuts(
                 return Ok(());
             }
             // Accelerator callbacks block WebView2: defer all actions to our message loop.
-            if let Err(error) = shortcuts.post(shortcut) {
+            if let Err(error) = shortcuts.post(BrowserEvent::Shortcut(shortcut), &events) {
                 events.emit(BrowserEvent::Error {
                     tab: Some(id),
                     error,
@@ -355,6 +432,9 @@ fn shortcut_for_modifiers(
             _ => None,
         };
     }
+    if key == 0x7A && !control && !alt && !shift {
+        return Some(BrowserShortcut::Fullscreen);
+    }
     if key == 0x74 && !control && !alt && !shift {
         return Some(BrowserShortcut::Reload);
     }
@@ -362,6 +442,7 @@ fn shortcut_for_modifiers(
         return None;
     }
     match (key, shift) {
+        (0x4A, false) => Some(BrowserShortcut::Downloads),
         (0x54, false) => Some(BrowserShortcut::NewTab),
         (0x54, true) => Some(BrowserShortcut::ReopenTab),
         (0x57, false) => Some(BrowserShortcut::CloseTab),
@@ -455,6 +536,7 @@ mod tests {
             (0x4B, false, BrowserShortcut::Palette),
             (0x44, false, BrowserShortcut::SavePage),
             (0x52, false, BrowserShortcut::Reload),
+            (0x4A, false, BrowserShortcut::Downloads),
         ] {
             assert_eq!(
                 shortcut_for_modifiers(key, true, shift, false, false),
@@ -481,11 +563,21 @@ mod tests {
     }
 
     #[test]
+    fn find_history_print_and_zoom_keys_reach_the_page_before_the_engine() {
+        // Include shifted plus and the numeric keypad variants.
+        for key in [0x46, 0x48, 0x50, 0xBB, 0x6B, 0xBD, 0x6D, 0x30, 0x60] {
+            for shift in [false, true] {
+                assert_eq!(shortcut_for_modifiers(key, true, shift, false, false), None);
+            }
+        }
+    }
+
+    #[test]
     fn unrelated_and_extra_modified_keys_stay_with_the_page() {
         for key in [0x41, 0x43, 0x46, 0x53, 0x56, 0x58, 0x5A] {
             assert_eq!(shortcut_for_modifiers(key, true, false, false, false), None);
         }
-        for key in [0x57, 0x4C, 0x4B, 0x44, 0x52] {
+        for key in [0x57, 0x4C, 0x4B, 0x44, 0x52, 0x46, 0x4A, 0x50, 0x48] {
             assert_eq!(shortcut_for_modifiers(key, true, true, false, false), None);
         }
         for (control, shift, alt) in [

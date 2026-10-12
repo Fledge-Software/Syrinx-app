@@ -208,7 +208,7 @@ fn upgrade_from_folders_schema_keeps_the_session_and_starts_empty_history() {
 
     let connection = directory.connection();
     assert_eq!(user_version(&connection), schema::SCHEMA_VERSION);
-    assert_eq!(schema::SCHEMA_VERSION, 5);
+    assert_eq!(schema::SCHEMA_VERSION, 6);
     close(connection);
     let store = Store::open(directory.lease()).expect("current database reopens");
     assert_eq!(store.load().expect("session reloads").snapshot, fixture());
@@ -434,7 +434,7 @@ fn version_4_history_upgrades_to_an_unapplied_deletion_generation() {
     assert_eq!(store.history_entries().expect("history kept").len(), 1);
     store.shutdown().expect("store closes");
     let connection = directory.connection();
-    assert_eq!(user_version(&connection), 5);
+    assert_eq!(user_version(&connection), schema::SCHEMA_VERSION);
     assert!(object_exists(&connection, "history_deletion_state"));
     assert!(object_exists(&connection, "history_visits_by_time"));
     close(connection);
@@ -533,7 +533,7 @@ fn staged_replay_clears_version_4_history_without_changing_its_schema() {
     assert_eq!(remaining, 1);
     close(connection);
 
-    // Opening migrates it to version 5 at generation zero; startup then replays again harmlessly.
+    // Opening migrates it to the latest version at generation zero; startup then replays again harmlessly.
     let store = Store::open(directory.lease()).expect("version 4 copy upgrades");
     assert_eq!(store.history_deletion_generation(), Ok(0));
     let replay = log.unapplied(0).expect("journal covers the copy");
