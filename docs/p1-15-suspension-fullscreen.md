@@ -22,14 +22,23 @@ live in `browser/hidden_timer.rs`, a pure function of time with its own tests:
 
 - A hidden page with no navigation in flight is due five seconds after it was
   hidden, or after its last navigation completed, successfully or not.
-- A main-frame navigation that starts while the page is hidden cancels the
-  countdown. Atlas's own `Navigate` marks the load before calling WebView2, so
-  the page cannot be suspended in the gap before `NavigationStarting` arrives.
+- A main-frame navigation that starts while the page is hidden replaces the
+  five-second countdown with the 60-second bound below, until it completes.
+  Atlas's own `Navigate` marks the load before calling WebView2, so the page
+  cannot be suspended in the gap before `NavigationStarting` arrives.
 - A completion is matched by its `NavigationId`, so a superseded navigation's
   late completion cannot settle the current one.
 - A load that never finishes is suspended 60 seconds after it began, so a hung
   page cannot stay awake forever. A chain of redirects or page-initiated
   navigations keeps the first start time, for the same reason.
+- Atlas's own request is tracked apart from the navigation WebView2 confirms.
+  A confirmed start takes its own time, a request WebView2 never starts (a
+  same-document jump, for example) expires at the 60-second bound, and a
+  refused `load_url` leaves a load already in flight tracked.
+- Once a suspension is requested, navigation events arm nothing until a resume
+  or a refused suspension. Otherwise a navigation event arriving while
+  `TrySuspend` was pending re-armed the timer and caused a second `TrySuspend`
+  on the suspended page (found in independent review).
 
 Hiding before `TrySuspend`, resuming before placing a page and the delivery of
 completion state across suspension are unchanged. The native suspension suite
