@@ -14,6 +14,11 @@ pub(crate) fn rgba(color: Color) -> Rgba {
     gpui::rgba(color.to_rgba_u32())
 }
 
+/// Every token of the current palette, for surfaces such as the command palette that use many.
+pub(crate) fn tokens() -> &'static Palette {
+    &PREVIEW
+}
+
 pub(crate) fn ground() -> Rgba {
     rgba(PREVIEW.ground.representative())
 }
@@ -42,18 +47,13 @@ pub(crate) fn accent() -> Rgba {
     rgba(PREVIEW.accent.ink)
 }
 
-// The preview's selected-row and secondary-button greys are not canvas tokens. They are kept
-// unchanged here, recorded in docs/p1-07-design-tokens.md, until the sidebar slices adopt
-// `row_selected`.
+// The preview's selected-row grey is not a canvas token. It is kept unchanged here, recorded
+// in docs/p1-07-design-tokens.md, until the sidebar slices adopt `row_selected`. The palette's
+// former "Search the web" grey was replaced by tokens in P1-30.
 
 /// The preview's opaque selected-row grey (the canvas uses translucent `row_selected`).
 pub(crate) fn preview_row_selected() -> Rgba {
     gpui::rgb(0x343037)
-}
-
-/// The preview palette's "Search the web" button grey.
-pub(crate) fn preview_secondary_button() -> Rgba {
-    gpui::rgb(0x29272a)
 }
 
 #[cfg(test)]
