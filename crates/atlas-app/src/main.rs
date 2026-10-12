@@ -1,6 +1,7 @@
 //! Opens the integrated browser and keeps its native workers alive through orderly shutdown.
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+mod appearance;
 mod navigation;
 mod palette;
 mod palette_sample;

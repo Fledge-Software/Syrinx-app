@@ -9,7 +9,7 @@ use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x4154_4c53;
-pub(crate) const SCHEMA_VERSION: i64 = 2;
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 
 /// The record layout of a recognized Atlas database, by `user_version`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,9 +18,11 @@ pub(crate) enum SchemaGeneration {
     FlatSaved,
     /// Version 2 (P1-21): saved pages and folders form an ordered tree.
     Folders,
+    /// Version 3 (P1-28/P1-29): adds owner settings and the Quick access/Favorites tiles.
+    Preferences,
 }
 
-pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Folders;
+pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Preferences;
 
 /// What a database file holds before Atlas writes to it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +72,22 @@ const FOLDER_STATE_TABLE: &str = "CREATE TABLE saved_folder_state (
     last_saved_folder_id BLOB NOT NULL CHECK(length(last_saved_folder_id) = 8)
 ) STRICT";
 
+// Owner preferences as documented keys and text values; `docs/p1-28-29-home-settings.md` lists them.
+const SETTINGS_TABLE: &str = "CREATE TABLE settings (
+    key TEXT PRIMARY KEY NOT NULL CHECK(length(key) BETWEEN 1 AND 64),
+    value TEXT NOT NULL CHECK(length(value) <= 256)
+) STRICT";
+
+// Quick access (surface 0) and sidebar Favorites (surface 1); a target is a web address or plugin id.
+const DESTINATIONS_TABLE: &str = "CREATE TABLE quick_destinations (
+    surface INTEGER NOT NULL CHECK(surface IN (0, 1)),
+    position INTEGER NOT NULL CHECK(position >= 0),
+    label TEXT NOT NULL,
+    target_kind INTEGER NOT NULL CHECK(target_kind IN (0, 1)),
+    target TEXT NOT NULL,
+    PRIMARY KEY(surface, position)
+) STRICT";
+
 const STATE_TABLE: &str = "CREATE TABLE session_state (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     revision BLOB NOT NULL CHECK(length(revision) = 8),
@@ -101,6 +119,9 @@ pub(crate) fn prepare_writer(
     if let Identity::Atlas(generation) = identity {
         validate_schema(connection, generation)?;
         crate::records::load(connection, generation)?;
+        if generation == SchemaGeneration::Preferences {
+            crate::preferences::load(connection)?;
+        }
         if previous_shutdown == ShutdownState::Unclean {
             quick_check(connection)?;
         }
@@ -156,7 +177,11 @@ pub(crate) fn validate_backup(
     drop(rows);
     drop(statement);
     // An older backup stays valid; restoring it lets the next writer migrate it.
-    crate::records::load(connection, generation)
+    let snapshot = crate::records::load(connection, generation)?;
+    if generation == SchemaGeneration::Preferences {
+        crate::preferences::load(connection)?;
+    }
+    Ok(snapshot)
 }
 
 fn integrity_check(
@@ -226,6 +251,7 @@ fn inspect_identity(connection: &Connection) -> Result<Identity, StoreError> {
     match version {
         1 => Ok(Identity::Atlas(SchemaGeneration::FlatSaved)),
         2 => Ok(Identity::Atlas(SchemaGeneration::Folders)),
+        3 => Ok(Identity::Atlas(SchemaGeneration::Preferences)),
         version if version > SCHEMA_VERSION => Err(StoreError::FutureSchema { version }),
         _ => Err(StoreError::SchemaMismatch),
     }
@@ -251,10 +277,16 @@ pub(crate) fn folders_migration() -> String {
     )
 }
 
+/// Version 3: adds empty settings and tile tables; absent rows mean the documented defaults.
+pub(crate) fn preferences_migration() -> String {
+    format!("{SETTINGS_TABLE}; {DESTINATIONS_TABLE};")
+}
+
 /// Owns the migration SQL that `rusqlite_migration` borrows, numbered by position.
 pub(crate) struct MigrationScripts {
     initial: String,
     folders: String,
+    preferences: String,
 }
 
 impl MigrationScripts {
@@ -262,6 +294,7 @@ impl MigrationScripts {
         Self {
             initial: initial_schema(),
             folders: folders_migration(),
+            preferences: preferences_migration(),
         }
     }
 
@@ -269,6 +302,7 @@ impl MigrationScripts {
         Migrations::new(vec![
             M::up(&self.initial).foreign_key_check(),
             M::up_with_hook(&self.folders, check_migrated_records).foreign_key_check(),
+            M::up_with_hook(&self.preferences, check_migrated_preferences),
         ])
     }
 }
@@ -276,6 +310,13 @@ impl MigrationScripts {
 fn check_migrated_records(transaction: &Transaction<'_>) -> HookResult {
     // Refuse to commit a migration whose result is not a complete, valid saved tree.
     crate::records::read_current(transaction)
+        .map(drop)
+        .map_err(|error| HookError::Hook(error.to_string()))
+}
+
+fn check_migrated_preferences(transaction: &Transaction<'_>) -> HookResult {
+    // The new tables must read back as valid, default preferences before the commit.
+    crate::preferences::read(transaction)
         .map(drop)
         .map_err(|error| HookError::Hook(error.to_string()))
 }
@@ -318,6 +359,16 @@ fn expected_tables(generation: SchemaGeneration) -> &'static [(&'static str, &'s
             ("saved_layout", LAYOUT_TABLE),
             ("saved_pages", SAVED_TABLE),
             ("session_state", STATE_TABLE),
+        ],
+        SchemaGeneration::Preferences => &[
+            ("live_tabs", LIVE_TABLE),
+            ("quick_destinations", DESTINATIONS_TABLE),
+            ("saved_folder_state", FOLDER_STATE_TABLE),
+            ("saved_folders", FOLDERS_TABLE),
+            ("saved_layout", LAYOUT_TABLE),
+            ("saved_pages", SAVED_TABLE),
+            ("session_state", STATE_TABLE),
+            ("settings", SETTINGS_TABLE),
         ],
     }
 }
