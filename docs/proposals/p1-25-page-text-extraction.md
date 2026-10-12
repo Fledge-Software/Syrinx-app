@@ -1,5 +1,5 @@
 ---
-status: proposed, awaiting the owner's approval
+status: approved by the owner, 2026-10-12
 slice: P1-25 (plan 1, Phase 3)
 decisions: D18, D35, D40; D39 is not involved
 date: 2026-10-12

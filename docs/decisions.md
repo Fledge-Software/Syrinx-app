@@ -7,6 +7,23 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
+- **Page text is read with one DevTools snapshot, never a script (P1-25).**
+  The owner approved `docs/proposals/p1-25-page-text-extraction.md` as
+  recommended. Atlas captures an eligible page's visible text with a single
+  `DOMSnapshot.captureSnapshot` call and reads only response headers, so
+  nothing runs inside any page. Google's own sites (YouTube included), banks
+  and payment sites, pages with password or card fields, pages not proven
+  cacheable and redirect chains through an excluded site are never read. If
+  testing shows a site can detect the capture, the work stops and returns to
+  the owner. This keeps D35's no-injection rule absolute.
+
+- **Local usage counting is approved, off until switched on (AN-01/02).**
+  The owner approved `docs/proposals/an-01-02-local-analytics.md` as
+  recommended: the fixed version 1 schema, turning it off deletes the counts,
+  30-day periods with two kept, never backed up or restored, and export only
+  as a JSON file the owner saves or copies. AN-01 follows P1-39 and AN-02
+  precedes P1-40. This implements D39 without uploads or identifiers.
+
 - **Pages get find, history, print and zoom keys first (P1-13).** When a web
   page has focus, Ctrl F, Ctrl H, Ctrl P and the zoom keys go to the page
   first, as in Chrome. If the page doesn't use them, the engine's own find,
