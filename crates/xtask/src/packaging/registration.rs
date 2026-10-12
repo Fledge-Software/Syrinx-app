@@ -1,9 +1,12 @@
 //! The one list of per-user registry values that makes Atlas choosable as a browser (P1-37).
 //!
-//! `packaging/atlas-registration.ps1` is rendered from this file; the gate refuses drift.
+//! `packaging/atlas-registration.ps1` and the design doc's key table are rendered from this file.
 
 /// Product name shown in Default apps, the Start menu and Installed apps.
 pub const PRODUCT: &str = "Atlas";
+
+/// Registry name for every key Atlas owns; distinctive so another "Atlas" is never taken over.
+pub const REGISTRY_NAME: &str = "AtlasBrowser";
 
 /// Executable copied into the package and registered with Windows.
 pub const EXECUTABLE: &str = "atlas-app.exe";
@@ -11,8 +14,11 @@ pub const EXECUTABLE: &str = "atlas-app.exe";
 /// Program folder relative to `%LOCALAPPDATA%`, kept apart from every data folder.
 pub const INSTALL_FOLDER: &str = r"Programs\Atlas";
 
-/// Data folders relative to `%LOCALAPPDATA%`: the preview profile, then the platform default.
-pub const DATA_FOLDERS: [&str; 2] = ["AtlasProductPreview", r"Atlas\data"];
+/// Data folder of the installed app, relative to `%LOCALAPPDATA%` (atlas-app's `installed` feature).
+pub const DATA_FOLDER: &str = r"Atlas\data";
+
+/// Development and preview runs' data folder; uninstall only offers it behind a separate switch.
+pub const PREVIEW_DATA_FOLDER: &str = "AtlasProductPreview";
 
 /// Switch Windows passes before a link; P1-34 must treat the rest of the command line as one URL.
 pub const OPEN_URL_SWITCH: &str = "--open-url";
@@ -23,10 +29,14 @@ pub const ACCEPTS_OPEN_URL: bool = false;
 /// Generated PowerShell file shared by the install, register and unregister scripts.
 pub const GENERATED_SCRIPT: &str = "atlas-registration.ps1";
 
-const START_MENU_INTERNET: &str = r"Software\Clients\StartMenuInternet\Atlas";
-const CAPABILITIES: &str = r"Software\Clients\StartMenuInternet\Atlas\Capabilities";
-const URL_PROG_ID: &str = r"Software\Classes\AtlasURL";
-const UNINSTALL: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Atlas";
+/// Value written into every key root Atlas owns; keys without it are never changed or deleted.
+pub const OWNER_MARKER_NAME: &str = "AtlasPackagingOwner";
+pub const OWNER_MARKER_DATA: &str = "atlas-packaging-v1";
+
+const START_MENU_INTERNET: &str = r"Software\Clients\StartMenuInternet\AtlasBrowser";
+const CAPABILITIES: &str = r"Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities";
+const URL_PROG_ID: &str = r"Software\Classes\AtlasBrowserURL";
+const UNINSTALL: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser";
 const REGISTERED_APPLICATIONS: &str = r"Software\RegisteredApplications";
 
 /// Registry data. Strings may hold `{exe}`, `{dir}` and `{version}`, filled in by the script.
@@ -60,17 +70,29 @@ const fn dword(key: &'static str, name: &'static str, data: u32) -> RegistryValu
     }
 }
 
-/// Every value `register-atlas.ps1` writes, all under `HKEY_CURRENT_USER`.
-pub const VALUES: [RegistryValue; 25] = [
+const fn marker(key: &'static str) -> RegistryValue {
+    string(key, OWNER_MARKER_NAME, OWNER_MARKER_DATA)
+}
+
+/// Key trees `unregister-atlas.ps1` deletes whole, each only when it carries the owner marker.
+pub const OWNED_KEYS: [&str; 3] = [START_MENU_INTERNET, URL_PROG_ID, UNINSTALL];
+
+/// Single values in keys other software shares, removed only while they still hold Atlas's data.
+pub const SHARED_VALUES: [RegistryValue; 1] =
+    [string(REGISTERED_APPLICATIONS, REGISTRY_NAME, CAPABILITIES)];
+
+/// Every value `register-atlas.ps1` writes under owned keys, all under `HKEY_CURRENT_USER`.
+pub const VALUES: [RegistryValue; 26] = [
     // The browser entry Windows lists in Default apps.
+    marker(START_MENU_INTERNET),
     string(START_MENU_INTERNET, "", "Atlas"),
     string(
-        r"Software\Clients\StartMenuInternet\Atlas\DefaultIcon",
+        r"Software\Clients\StartMenuInternet\AtlasBrowser\DefaultIcon",
         "",
         "{exe},0",
     ),
     string(
-        r"Software\Clients\StartMenuInternet\Atlas\shell\open\command",
+        r"Software\Clients\StartMenuInternet\AtlasBrowser\shell\open\command",
         "",
         "\"{exe}\"",
     ),
@@ -79,52 +101,51 @@ pub const VALUES: [RegistryValue; 25] = [
     string(CAPABILITIES, "ApplicationDescription", "Atlas web browser"),
     string(CAPABILITIES, "ApplicationIcon", "{exe},0"),
     string(
-        r"Software\Clients\StartMenuInternet\Atlas\Capabilities\StartMenu",
+        r"Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities\StartMenu",
         "StartMenuInternet",
-        "Atlas",
+        "AtlasBrowser",
     ),
     string(
-        r"Software\Clients\StartMenuInternet\Atlas\Capabilities\URLAssociations",
+        r"Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities\URLAssociations",
         "http",
-        "AtlasURL",
+        "AtlasBrowserURL",
     ),
     string(
-        r"Software\Clients\StartMenuInternet\Atlas\Capabilities\URLAssociations",
+        r"Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities\URLAssociations",
         "https",
-        "AtlasURL",
-    ),
-    // Points Windows at the capabilities above; a value, never a key Atlas owns.
-    string(
-        REGISTERED_APPLICATIONS,
-        "Atlas",
-        r"Software\Clients\StartMenuInternet\Atlas\Capabilities",
+        "AtlasBrowserURL",
     ),
     // The ProgID that opens a link in Atlas once the owner chooses it.
+    marker(URL_PROG_ID),
     string(URL_PROG_ID, "", "Atlas URL"),
     string(URL_PROG_ID, "FriendlyTypeName", "Atlas URL"),
-    string(URL_PROG_ID, "URL Protocol", ""),
     string(
-        r"Software\Classes\AtlasURL\Application",
+        r"Software\Classes\AtlasBrowserURL\Application",
         "ApplicationName",
         "Atlas",
     ),
     string(
-        r"Software\Classes\AtlasURL\Application",
+        r"Software\Classes\AtlasBrowserURL\Application",
         "ApplicationDescription",
         "Atlas web browser",
     ),
     string(
-        r"Software\Classes\AtlasURL\Application",
+        r"Software\Classes\AtlasBrowserURL\Application",
         "ApplicationIcon",
         "{exe},0",
     ),
-    string(r"Software\Classes\AtlasURL\DefaultIcon", "", "{exe},0"),
     string(
-        r"Software\Classes\AtlasURL\shell\open\command",
+        r"Software\Classes\AtlasBrowserURL\DefaultIcon",
+        "",
+        "{exe},0",
+    ),
+    string(
+        r"Software\Classes\AtlasBrowserURL\shell\open\command",
         "",
         "\"{exe}\" --open-url %1",
     ),
     // The Installed apps entry, whose Uninstall button runs the unregister script.
+    marker(UNINSTALL),
     string(UNINSTALL, "DisplayName", "Atlas"),
     string(UNINSTALL, "DisplayVersion", "{version}"),
     string(UNINSTALL, "DisplayIcon", "{exe},0"),
@@ -132,20 +153,14 @@ pub const VALUES: [RegistryValue; 25] = [
     string(
         UNINSTALL,
         "UninstallString",
-        "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{dir}\\unregister-atlas.ps1\" -Uninstall",
+        "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File \"{dir}\\unregister-atlas.ps1\" -Uninstall -PauseAtEnd",
     ),
     dword(UNINSTALL, "NoModify", 1),
     dword(UNINSTALL, "NoRepair", 1),
 ];
 
-/// Key trees `unregister-atlas.ps1` deletes whole. Shared keys are never listed here.
-pub const OWNED_KEYS: [&str; 3] = [START_MENU_INTERNET, URL_PROG_ID, UNINSTALL];
-
-/// Single values `unregister-atlas.ps1` deletes from keys other software shares.
-pub const SHARED_VALUES: [(&str, &str); 1] = [(REGISTERED_APPLICATIONS, "Atlas")];
-
 /// Render the generated PowerShell data file, with CRLF line endings for Windows PowerShell.
-pub fn render_script() -> String {
+pub fn render_script(package_files: &[&str]) -> String {
     let mut lines = vec![
         "# Generated from crates/xtask/src/packaging/registration.rs.".to_owned(),
         "# Do not edit by hand: change the Rust table, then run `cargo xtask write-registration`."
@@ -153,11 +168,17 @@ pub fn render_script() -> String {
         "# Every key is under HKEY_CURRENT_USER. Nothing here sets the default browser.".to_owned(),
         String::new(),
         format!("$AtlasProduct = {}", quote(PRODUCT)),
+        format!("$AtlasRegistryName = {}", quote(REGISTRY_NAME)),
         format!("$AtlasExecutable = {}", quote(EXECUTABLE)),
         format!("$AtlasInstallFolder = {}", quote(INSTALL_FOLDER)),
-        format!("$AtlasDataFolders = @({})", quoted_list(&DATA_FOLDERS)),
+        format!("$AtlasDataFolder = {}", quote(DATA_FOLDER)),
+        format!("$AtlasPreviewDataFolder = {}", quote(PREVIEW_DATA_FOLDER)),
+        format!("$AtlasPackageFiles = @({})", quoted_list(package_files)),
         format!("$AtlasOpenUrlSwitch = {}", quote(OPEN_URL_SWITCH)),
         format!("$AtlasAcceptsOpenUrl = ${ACCEPTS_OPEN_URL}"),
+        format!("$AtlasOwnerMarkerName = {}", quote(OWNER_MARKER_NAME)),
+        format!("$AtlasOwnerMarkerData = {}", quote(OWNER_MARKER_DATA)),
+        format!("$AtlasUninstallKey = {}", quote(UNINSTALL)),
         String::new(),
         "$AtlasRegistryValues = @(".to_owned(),
     ];
@@ -166,16 +187,34 @@ pub fn render_script() -> String {
     lines.push(String::new());
     lines.push(format!("$AtlasOwnedKeys = @({})", quoted_list(&OWNED_KEYS)));
     lines.push("$AtlasSharedValues = @(".to_owned());
-    lines.extend(
-        SHARED_VALUES
-            .iter()
-            .map(|(key, name)| format!("    @{{ Key = {}; Name = {} }}", quote(key), quote(name))),
-    );
+    lines.extend(SHARED_VALUES.iter().map(render_value));
     lines.push(")".to_owned());
 
     let mut script = lines.join("\r\n");
     script.push_str("\r\n");
     script
+}
+
+/// Render the design doc's Markdown key table, so the doc cannot drift from the scripts.
+pub fn render_doc_table() -> String {
+    let mut lines = vec![
+        "| Key under `HKCU\\` | Value | Data |".to_owned(),
+        "| --- | --- | --- |".to_owned(),
+    ];
+    lines.extend(VALUES.iter().chain(SHARED_VALUES.iter()).map(|value| {
+        let name = if value.name.is_empty() {
+            "(default)"
+        } else {
+            value.name
+        };
+        let data = match value.data {
+            Data::String("") => "(empty)".to_owned(),
+            Data::String(text) => format!("`{text}`"),
+            Data::Dword(number) => format!("DWORD {number}"),
+        };
+        format!("| `{}` | `{name}` | {data} |", value.key)
+    }));
+    lines.join("\n")
 }
 
 fn render_value(value: &RegistryValue) -> String {
@@ -208,51 +247,45 @@ fn quote(text: &str) -> String {
 mod tests {
     use super::*;
 
-    const ALLOWED_ROOTS: [&str; 4] = [
-        START_MENU_INTERNET,
-        URL_PROG_ID,
-        UNINSTALL,
-        REGISTERED_APPLICATIONS,
-    ];
-
     fn under(key: &str, root: &str) -> bool {
         key == root || key.starts_with(&format!("{root}\\"))
     }
 
+    fn owned(key: &str) -> bool {
+        OWNED_KEYS.iter().any(|root| under(key, root))
+    }
+
     #[test]
-    fn every_value_stays_in_atlas_per_user_keys() {
+    fn every_owned_value_stays_under_an_owned_root() {
         for value in VALUES {
-            assert!(
-                ALLOWED_ROOTS.iter().any(|root| under(value.key, root)),
-                "{} is outside Atlas's keys",
-                value.key
-            );
+            assert!(owned(value.key), "{} is outside Atlas's keys", value.key);
             assert!(!value.key.contains("HKEY_LOCAL_MACHINE") && !value.key.starts_with("HKLM"));
         }
     }
 
     #[test]
-    fn unregistering_removes_everything_registering_writes() {
-        for value in VALUES {
-            let owned = OWNED_KEYS.iter().any(|root| under(value.key, root));
-            let shared = SHARED_VALUES.contains(&(value.key, value.name));
+    fn every_owned_root_carries_the_owner_marker() {
+        for root in OWNED_KEYS {
             assert!(
-                owned || shared,
-                "{}\\{} would be left behind",
-                value.key,
-                value.name
+                VALUES.contains(&marker(root)),
+                "{root} lacks the owner marker"
             );
+            assert!(root.ends_with(REGISTRY_NAME) || root.ends_with("AtlasBrowserURL"));
         }
     }
 
     #[test]
-    fn shared_keys_are_never_deleted_whole() {
-        assert!(!OWNED_KEYS.contains(&REGISTERED_APPLICATIONS));
+    fn shared_keys_are_never_owned_or_deleted_whole() {
+        for shared in SHARED_VALUES {
+            assert!(!owned(shared.key));
+            assert!(!OWNED_KEYS.contains(&shared.key));
+            assert_eq!(shared.name, REGISTRY_NAME);
+        }
         assert!(!OWNED_KEYS.iter().any(|key| key.ends_with(r"\Classes")));
     }
 
     #[test]
-    fn windows_can_offer_atlas_for_web_links() {
+    fn windows_can_offer_atlas_for_web_links_only() {
         let associations: Vec<_> = VALUES
             .iter()
             .filter(|value| value.key.ends_with(r"\URLAssociations"))
@@ -261,11 +294,13 @@ mod tests {
         assert_eq!(
             associations,
             [
-                ("http", Data::String("AtlasURL")),
-                ("https", Data::String("AtlasURL"))
+                ("http", Data::String("AtlasBrowserURL")),
+                ("https", Data::String("AtlasBrowserURL"))
             ]
         );
-        assert!(VALUES.contains(&string(REGISTERED_APPLICATIONS, "Atlas", CAPABILITIES)));
+        assert_eq!(SHARED_VALUES[0].data, Data::String(CAPABILITIES));
+        // No "URL Protocol": the ProgID must not register an atlasbrowserurl: scheme.
+        assert!(!VALUES.iter().any(|value| value.name == "URL Protocol"));
     }
 
     #[test]
@@ -273,7 +308,7 @@ mod tests {
         // The link stays unquoted and last, so P1-34 can take the raw remainder as one URL.
         let command = VALUES
             .iter()
-            .find(|value| value.key == r"Software\Classes\AtlasURL\shell\open\command")
+            .find(|value| value.key == r"Software\Classes\AtlasBrowserURL\shell\open\command")
             .map(|value| value.data);
         let Some(Data::String(command)) = command else {
             panic!("the link command must be a string value");
@@ -282,21 +317,59 @@ mod tests {
     }
 
     #[test]
+    fn uninstall_runs_with_remote_signed_policy_and_pauses() {
+        let command = VALUES
+            .iter()
+            .find(|value| value.name == "UninstallString")
+            .map(|value| value.data);
+        let Some(Data::String(command)) = command else {
+            panic!("the uninstall command must be a string value");
+        };
+        assert!(command.contains("-ExecutionPolicy RemoteSigned"));
+        assert!(!command.contains("Bypass"));
+        assert!(command.ends_with("-Uninstall -PauseAtEnd"));
+    }
+
+    #[test]
     fn program_folder_is_separate_from_data() {
-        for data in DATA_FOLDERS {
+        for data in [DATA_FOLDER, PREVIEW_DATA_FOLDER] {
             assert!(!under(INSTALL_FOLDER, data) && !under(data, INSTALL_FOLDER));
         }
     }
 
     #[test]
+    fn installed_app_selects_the_same_data_folder() {
+        // atlas-app is a binary, so check its source rather than import its constant.
+        let source = include_str!("../../../atlas-app/src/main.rs");
+        let selection = format!(
+            "if cfg!(feature = \"installed\") {{\n    r\"{DATA_FOLDER}\"\n}} else {{\n    \"{PREVIEW_DATA_FOLDER}\"\n}}"
+        );
+        assert!(
+            source.replace("\r\n", "\n").contains(&selection),
+            "atlas-app's DATA_FOLDER selection no longer matches the packaging table"
+        );
+    }
+
+    #[test]
     fn rendering_escapes_quotes_and_uses_crlf() {
         assert_eq!(quote("it's"), "'it''s'");
-        let script = render_script();
+        let script = render_script(&["a.exe"]);
         assert!(script.ends_with("\r\n"));
         assert!(!script.replace("\r\n", "").contains('\n'));
         assert_eq!(
             script.matches("@{ Key = ").count(),
             VALUES.len() + SHARED_VALUES.len()
         );
+        assert!(script.contains("$AtlasPackageFiles = @('a.exe')"));
+    }
+
+    #[test]
+    fn doc_table_lists_every_value() {
+        let table = render_doc_table();
+        assert_eq!(
+            table.lines().count(),
+            2 + VALUES.len() + SHARED_VALUES.len()
+        );
+        assert!(table.contains("| `Software\\RegisteredApplications` | `AtlasBrowser` |"));
     }
 }

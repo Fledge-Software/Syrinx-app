@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'atlas-registration.ps1')
 . (Join-Path $PSScriptRoot 'atlas-common.ps1')
 
-# Refuse without the Evergreen WebView2 runtime; Atlas never downloads it itself.
+# Refuse without the Evergreen WebView2 runtime; Atlas never downloads it itself. Reads only.
 function Assert-WebView2Runtime {
     $client = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
     $keys = @("HKLM:\SOFTWARE\WOW6432Node\$client", "HKLM:\SOFTWARE\$client", "HKCU:\Software\$client")
@@ -38,9 +38,9 @@ function Assert-PackageIntact($Manifest) {
 
 # Keep program files out of every Atlas data folder, and the reverse.
 function Assert-SeparateFromData([string]$Folder) {
-    $target = [System.IO.Path]::GetFullPath($Folder).TrimEnd('\') + '\'
-    foreach ($relative in $AtlasDataFolders) {
-        $data = [System.IO.Path]::GetFullPath((Get-AtlasLocalPath $relative)).TrimEnd('\') + '\'
+    $target = $Folder + '\'
+    foreach ($relative in @($AtlasDataFolder, $AtlasPreviewDataFolder)) {
+        $data = (Resolve-AtlasFolder (Get-AtlasLocalPath $relative)) + '\'
         if ($target.StartsWith($data, [System.StringComparison]::OrdinalIgnoreCase) -or
             $data.StartsWith($target, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "$Folder overlaps Atlas's data folder $data; choose another program folder."
@@ -52,7 +52,7 @@ function Assert-SeparateFromData([string]$Folder) {
 function Install-AtlasFiles($Manifest, [string]$Target) {
     $staging = "$Target.new"
     $previous = "$Target.previous"
-    Remove-AtlasProgramFolder $staging
+    Remove-AtlasOwnedFolder $staging
     New-Item -ItemType Directory -Path $staging | Out-Null
     # Manifest first, so an interrupted copy is still recognised and replaced next time.
     $names = @('atlas-package.json') + @($Manifest.files | ForEach-Object { $_.path })
@@ -62,7 +62,7 @@ function Install-AtlasFiles($Manifest, [string]$Target) {
 
     if (Test-Path -LiteralPath $Target) {
         if (-not (Test-AtlasProgramFolder $Target)) { throw "$Target exists but was not installed by this script." }
-        Remove-AtlasProgramFolder $previous
+        Remove-AtlasOwnedFolder $previous
         Rename-Item -LiteralPath $Target -NewName (Split-Path $previous -Leaf)
     }
     try {
@@ -73,28 +73,22 @@ function Install-AtlasFiles($Manifest, [string]$Target) {
     }
 }
 
-# Delete a program folder only when its manifest shows this tooling made it.
-function Remove-AtlasProgramFolder([string]$Folder) {
-    if (-not (Test-Path -LiteralPath $Folder)) { return }
-    if (-not (Test-AtlasProgramFolder $Folder)) { throw "$Folder exists but was not made by this script; move it aside first." }
-    Remove-Item -LiteralPath $Folder -Recurse -Force
-}
-
 if (-not $InstallDirectory) { $InstallDirectory = Get-AtlasLocalPath $AtlasInstallFolder }
-$InstallDirectory = [System.IO.Path]::GetFullPath($InstallDirectory)
-$PackageDirectory = [System.IO.Path]::GetFullPath($PackageDirectory)
-if ($InstallDirectory.TrimEnd('\') -ieq $PackageDirectory.TrimEnd('\')) {
-    throw 'Run this script from the unzipped package, not from the installed program folder.'
+$InstallDirectory = Resolve-AtlasFolder $InstallDirectory
+$PackageDirectory = Resolve-AtlasFolder $PackageDirectory
+$packagePrefix = $PackageDirectory + '\'
+if ($InstallDirectory -ieq $PackageDirectory -or ($InstallDirectory + '\').StartsWith($packagePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Install outside the unzipped package folder, not into or below it.'
 }
 
 $runtime = Assert-WebView2Runtime
 $manifest = Read-AtlasManifest $PackageDirectory
 Assert-PackageIntact $manifest
 Assert-SeparateFromData $InstallDirectory
-Assert-AtlasClosed $InstallDirectory
+Assert-AtlasClosed @($InstallDirectory, "$InstallDirectory.previous", "$InstallDirectory.new")
 Install-AtlasFiles $manifest $InstallDirectory
 
 Write-Host "Installed Atlas $($manifest.version) ($($manifest.commit)) into $InstallDirectory."
-Write-Host "WebView2 runtime $runtime found. Your Atlas data was not touched."
+Write-Host "WebView2 runtime $runtime found. Atlas's data in %LOCALAPPDATA%\$AtlasDataFolder was not touched."
 Write-Host "First install: run register-atlas.ps1 from $InstallDirectory to add Atlas to Default apps."
 Write-Host 'Upgrade: registration already points at this folder; run it again only to refresh the version shown.'

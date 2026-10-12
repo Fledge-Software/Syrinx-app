@@ -14,6 +14,21 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'atlas-registration.ps1')
 . (Join-Path $PSScriptRoot 'atlas-common.ps1')
 
+# Refuse before writing anything if another product already uses Atlas's key names.
+function Assert-RegistrationIsOurs {
+    foreach ($owned in $AtlasOwnedKeys) {
+        if ((Get-AtlasKeyOwner $owned) -eq 'foreign') {
+            throw "HKCU\$owned exists without Atlas's owner marker; another program may own it. Nothing was changed."
+        }
+    }
+    foreach ($shared in $AtlasSharedValues) {
+        $current = Get-AtlasRegistryValue $shared.Key $shared.Name
+        if ($null -ne $current -and $current -cne $shared.Data) {
+            throw "HKCU\$($shared.Key)\$($shared.Name) already points elsewhere. Nothing was changed."
+        }
+    }
+}
+
 # Fill the {exe}, {dir} and {version} placeholders from the installed copy.
 function Expand-AtlasData([string]$Template, [hashtable]$Facts) {
     $text = $Template
@@ -21,19 +36,17 @@ function Expand-AtlasData([string]$Template, [hashtable]$Facts) {
     return $text
 }
 
-# Write each value from the generated table under HKEY_CURRENT_USER.
-function Write-AtlasRegistration([hashtable]$Facts) {
-    foreach ($entry in $AtlasRegistryValues) {
-        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($entry.Key)
-        try {
-            if ($entry.Kind -eq 'DWord') {
-                $key.SetValue($entry.Name, [int]$entry.Data, [Microsoft.Win32.RegistryValueKind]::DWord)
-            } else {
-                $key.SetValue($entry.Name, (Expand-AtlasData $entry.Data $Facts), [Microsoft.Win32.RegistryValueKind]::String)
-            }
-        } finally {
-            $key.Dispose()
+# Write one value from the generated table under HKEY_CURRENT_USER.
+function Write-AtlasValue($Entry, [hashtable]$Facts) {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($Entry.Key)
+    try {
+        if ($Entry.Kind -eq 'DWord') {
+            $key.SetValue($Entry.Name, [int]$Entry.Data, [Microsoft.Win32.RegistryValueKind]::DWord)
+        } else {
+            $key.SetValue($Entry.Name, (Expand-AtlasData $Entry.Data $Facts), [Microsoft.Win32.RegistryValueKind]::String)
         }
+    } finally {
+        $key.Dispose()
     }
 }
 
@@ -48,12 +61,14 @@ function New-AtlasShortcut([string]$Executable, [string]$Folder) {
     $shortcut.Save()
 }
 
-$InstallDirectory = [System.IO.Path]::GetFullPath($InstallDirectory).TrimEnd('\')
+$InstallDirectory = Resolve-AtlasFolder $InstallDirectory
 $executable = Join-Path $InstallDirectory $AtlasExecutable
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "No $AtlasExecutable in $InstallDirectory; install Atlas first." }
 $manifest = Read-AtlasManifest $InstallDirectory
 
-Write-AtlasRegistration @{ exe = $executable; dir = $InstallDirectory; version = [string]$manifest.version }
+Assert-RegistrationIsOurs
+$facts = @{ exe = $executable; dir = $InstallDirectory; version = [string]$manifest.version }
+foreach ($entry in @($AtlasRegistryValues) + @($AtlasSharedValues)) { Write-AtlasValue $entry $facts }
 New-AtlasShortcut $executable $InstallDirectory
 Update-AtlasShellAssociations
 
@@ -63,4 +78,4 @@ if (-not $AtlasAcceptsOpenUrl) {
         'Do not choose it as the default browser until a build that can is installed.')
 }
 Write-Host 'To make Atlas the default: Settings > Apps > Default apps > Atlas > Set default.'
-if ($OpenDefaultApps) { Start-Process "ms-settings:defaultapps?registeredAppUser=$AtlasProduct" }
+if ($OpenDefaultApps) { Start-Process "ms-settings:defaultapps?registeredAppUser=$AtlasRegistryName" }

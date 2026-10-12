@@ -19,5 +19,9 @@ futures.workspace = true
 raw-window-handle.workspace = true
 url.workspace = true
 
+[features]
+# Set only by `cargo xtask package`, so the installed app keeps its data apart from preview runs.
+installed = []
+
 [lints]
 workspace = true
