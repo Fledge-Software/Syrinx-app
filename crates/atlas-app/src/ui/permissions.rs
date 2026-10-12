@@ -129,13 +129,12 @@ impl BrowserView {
         }
     }
 
-    pub(super) fn permission_bar(&self, cx: &mut Context<Self>) -> Div {
-        let Some(index) = self.active_permission() else {
-            return div();
-        };
+    pub(super) fn permission_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let index = self.active_permission()?;
         let prompt = &self.permissions[index];
         let (id, request) = (prompt.id, prompt.request);
-        div()
+        let question = format!("{} wants to {}", prompt.origin, prompt.kind.label());
+        let bar = div()
             .h(px(HEIGHT))
             .flex_shrink_0()
             .px_4()
@@ -144,11 +143,14 @@ impl BrowserView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(format!(
-                "{} wants to {}",
-                prompt.origin,
-                prompt.kind.label()
-            ))
+            // Plain text has no accessibility node; a named label lets NVDA read the question.
+            .child(
+                div()
+                    .id("permission-question")
+                    .role(gpui::Role::Label)
+                    .aria_label(question.clone())
+                    .child(question),
+            )
             .child(
                 div()
                     .flex()
@@ -163,6 +165,13 @@ impl BrowserView {
                                 "☐ Remember for this site"
                             },
                         )
+                        .role(gpui::Role::CheckBox)
+                        .aria_label("Remember for this site")
+                        .aria_toggled(if prompt.remember {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(index) = this.permission_action(id, request) {
                                 this.permissions[index].remember =
@@ -191,7 +200,8 @@ impl BrowserView {
                             cx.notify();
                         })),
                     ),
-            )
+            );
+        Some(bar)
     }
 
     pub(super) fn permission_finished(&mut self, id: u64, request: u64) {

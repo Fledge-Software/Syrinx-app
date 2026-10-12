@@ -61,13 +61,18 @@ impl BrowserView {
 
     pub(super) fn essential_controls(&self, cx: &mut Context<Self>) -> Div {
         let mut controls = div().flex().items_center().gap_1();
-        for (id, label, shortcut) in [
-            ("find", "Find", BrowserShortcut::Find),
-            ("downloads", "Downloads", BrowserShortcut::Downloads),
-            ("print", "Print", BrowserShortcut::Print),
-            ("zoom-out", "−", BrowserShortcut::ZoomOut),
+        for (id, label, name, shortcut) in [
+            ("find", "Find", "Find in page", BrowserShortcut::Find),
+            (
+                "downloads",
+                "Downloads",
+                "Downloads",
+                BrowserShortcut::Downloads,
+            ),
+            ("print", "Print", "Print", BrowserShortcut::Print),
+            ("zoom-out", "−", "Zoom out", BrowserShortcut::ZoomOut),
         ] {
-            controls = controls.child(button(id, label).on_click(cx.listener(
+            controls = controls.child(button(id, label).aria_label(name).on_click(cx.listener(
                 move |this, _, window, cx| {
                     if shortcut == BrowserShortcut::Find {
                         this.open_find(window, cx);
@@ -84,16 +89,17 @@ impl BrowserView {
             .unwrap_or(1.);
         controls
             .child(
-                div()
-                    .id("zoom-reset")
+                crate::controls::push_button(div().id("zoom-reset"), "Reset zoom")
+                    .aria_value(format!("{:.0}%", factor * 100.))
                     .cursor_pointer()
                     .px_1()
+                    .rounded_md()
                     .child(format!("{:.0}%", factor * 100.))
                     .on_click(cx.listener(|this, _, _, _| {
                         this.essential_shortcut(BrowserShortcut::ZoomReset)
                     })),
             )
-            .child(button("zoom-in", "+").on_click(
+            .child(button("zoom-in", "+").aria_label("Zoom in").on_click(
                 cx.listener(|this, _, _, _| this.essential_shortcut(BrowserShortcut::ZoomIn)),
             ))
     }
