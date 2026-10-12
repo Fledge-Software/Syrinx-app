@@ -898,6 +898,23 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
     Later commits and merges require their own approval; no remote or push
     is authorized.
 
+## Deferred work
+
+Atlas-authored code may carry a deferred-work marker (`TODO`, `FIXME` or
+`HACK`) only when it is tagged with a row from this register, written as
+`TODO(DW-1): what is left`. The owner allowed this on 2026-10-11 so that
+known gaps can stay next to the code they concern, as long as each one is
+tracked here and comes back as a fix. `cargo xtask check` refuses an
+untagged marker or a tag missing from this table. Once Atlas is on GitHub,
+each row gets an issue and the issue number goes in the last column. When
+the work is done, delete the marker and move the row's status to Done.
+
+Add a row before writing the marker. Say why the work is deferred and which
+slice it belongs to, so whoever comes back to it knows when it is due.
+
+| ID | Deferred work and why | Owning slice | Status | Issue |
+| --- | --- | --- | --- | --- |
+
 ## Issue map
 
 Approved by the owner on 2026-10-10 (D41). The following table is copied from

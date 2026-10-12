@@ -54,6 +54,9 @@ short with `tail`, `grep` or `Select-Object -Last`.
 - Windows Application Control sometimes blocks locally built executables
   (os error 4551). Record the block; never change a security setting, and
   never sign or relocate binaries to get around it.
+- `TODO`, `FIXME` and `HACK` markers are allowed only as `TODO(DW-n)`, with
+  the row added first to "Deferred work" in `docs/plans/Atlas v1 — Plan.md`.
+  The gate rejects any other form.
 - Never skip, `#[ignore]`, loosen or delete a test. Never silence Clippy with
   `#[allow]`. Never swallow errors with `let _ =`, `.ok()` or a catch-all
   default.

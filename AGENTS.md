@@ -324,6 +324,13 @@ style problem.
   archive inventory, exact diff and modified hashes, and validate the
   unchanged dependency graph. This approval covers neither another dependency
   patch nor commits, merges, pushes, publication or an upstream message.
+- **Approved dependency, 2026-10-11:** the owner approved adding Tantivy
+  for P1-23's full-text bake-off, and for P1-24 if the bake-off chooses it.
+  Pin the exact audited version and record its audit, including every
+  transitive package's licence, in `docs/p1-23-fulltext-audit.md`. This
+  approval accepts the lockfile growth Tantivy brings. It does not accept any
+  transitive package outside the permissive licences listed above; stop and
+  ask if one appears.
 - **Pin GPUI exactly with `=`.** Snapshot releases change its API weekly, and
   a caret requirement has already broken builds (note 08, 1.2). A patched
   fork of wry or tao is allowed only if small, pinned and offered upstream
@@ -363,8 +370,13 @@ breakdowns before implementation; creating GitHub is no longer a prerequisite.
 else. Each plan entry gets an issue under its milestone, and the plan's
 "Issue map" records them.
 
-Either way, keep the codebase free of `TODO` and `FIXME` markers: if you
-defer something, write it down where it will be found.
+Either way, a deferred-work marker (`TODO`, `FIXME`, `HACK`) in Atlas-authored
+code is allowed only when it carries a tag from the plan's "Deferred work"
+register, as in `TODO(DW-3): restore zoom per site`. Add the register row
+first. Once Atlas is on GitHub, each row becomes an issue, and the marker
+stays until that issue is fixed. `cargo xtask check` rejects untagged or
+unregistered markers. The owner set this rule on 2026-10-11. A marker never
+excuses a failing test, a silenced lint or a swallowed error.
 
 ## Writing voice for commits, plans and anything published
 
