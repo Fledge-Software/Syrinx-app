@@ -166,7 +166,8 @@ impl BrowserView {
                 import: Some(import),
                 folder_title,
                 events,
-                focus: cx.focus_handle(),
+                focus: cx.focus_handle().tab_stop(true),
+                cancel_focus: cx.focus_handle().tab_stop(true),
             });
             // Import has the default focus, so Enter imports and Escape cancels.
             let focus = preview.read(cx).focus.clone();
@@ -205,7 +206,7 @@ impl BrowserView {
                 folder_title,
             } => self.confirm_import(import, folder_title),
         }
-        self.focus_page(window);
+        self.focus_page(window, cx);
         cx.notify();
     }
 
@@ -265,13 +266,6 @@ impl BrowserView {
         }
         self.importer.stage = Stage::Idle;
         true
-    }
-
-    /// Folder open state is not saved, so restored folders start collapsed; a large import
-    /// expanded at start-up would build every one of its rows.
-    pub(super) fn collapse_restored_folders(&mut self, model: &TabModelSnapshot) {
-        self.collapsed_folders
-            .extend(model.saved_folders.iter().map(|folder| folder.id));
     }
 
     /// Closes an open preview without importing, as when Atlas closes.
@@ -450,6 +444,8 @@ struct ImportPreview {
     events: UnboundedSender<PreviewEvent>,
     /// Held by the Import button, or the window when there is nothing to import.
     focus: FocusHandle,
+    /// Held by Cancel, so Enter there cancels instead of importing.
+    cancel_focus: FocusHandle,
 }
 
 impl ImportPreview {
@@ -533,6 +529,7 @@ impl Render for ImportPreview {
         }
         let mut actions = div().flex().justify_end().gap(px(space::M)).child(
             preview_button("import-cancel", "Cancel", false)
+                .track_focus(&self.cancel_focus)
                 .on_click(cx.listener(|this, _, window, _| this.finish(false, window))),
         );
         if has_entries {
@@ -550,8 +547,14 @@ impl Render for ImportPreview {
         }
         let frame = div()
             .key_context(PREVIEW_CONTEXT)
-            .on_action(cx.listener(|this, _: &ConfirmImport, window, _| this.finish(true, window)))
-            .on_action(cx.listener(|this, _: &CancelImport, window, _| this.finish(false, window)));
+            .on_action(cx.listener(|this, _: &ConfirmImport, window, _| {
+                // Enter on a focused Cancel cancels; anywhere else it confirms.
+                let confirmed = !this.cancel_focus.is_focused(window);
+                this.finish(confirmed, window)
+            }))
+            .on_action(cx.listener(|this, _: &CancelImport, window, _| this.finish(false, window)))
+            .on_action(|_: &super::panes::FocusNextControl, window, cx| window.focus_next(cx))
+            .on_action(|_: &super::panes::FocusPreviousControl, window, cx| window.focus_prev(cx));
         let frame = if has_entries {
             frame
         } else {
@@ -591,7 +594,7 @@ fn preview_button(id: &'static str, label: &'static str, primary: bool) -> State
     } else {
         (theme::line(), theme::text())
     };
-    div()
+    let frame = div()
         .id(id)
         .px(px(space::XL))
         .py(px(space::S))
@@ -599,7 +602,8 @@ fn preview_button(id: &'static str, label: &'static str, primary: bool) -> State
         .bg(background)
         .text_color(foreground)
         .cursor_pointer()
-        .child(label)
+        .child(label);
+    crate::controls::push_button(frame, label)
 }
 
 #[cfg(test)]

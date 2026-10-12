@@ -7,6 +7,15 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
+- **A background tab finishes loading before it is put to sleep (P1-15).**
+  The five-second countdown before a hidden page is suspended now starts
+  when its navigation completes, not when it starts, so a slow page opened in
+  the background is fully loaded when the owner switches to it. Suspending
+  mid-load froze such pages half-loaded and was found as the cause of an
+  intermittent native-test timeout. Keeping the earlier timing, which saves
+  a little more memory, was rejected. A page that never finishes still
+  sleeps after a bounded wait.
+
 - **History is kept for 90 days (DW-4).** Older visits are deleted
   automatically through the same path as Clear browsing data, so they stay
   deleted after a backup is restored (D47). Ninety days matches Chrome: long

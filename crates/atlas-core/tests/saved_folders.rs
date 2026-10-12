@@ -3,9 +3,9 @@
 use std::collections::BTreeSet;
 
 use atlas_core::{
-    Activation, FolderRemoval, SavedEntryId, SavedFolderId, SavedFolderSnapshot, SavedPageId,
-    SavedPlacement, SidebarRow, SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata,
-    TabModel, TabModelSnapshot,
+    Activation, FolderContents, FolderRemoval, NewSavedItem, SavedEntryId, SavedFolderId,
+    SavedFolderSnapshot, SavedPageId, SavedPlacement, SidebarRow, SnapshotError, Tab, TabError,
+    TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, saved_folder_contents,
 };
 
 fn metadata(number: usize) -> TabMetadata {
@@ -338,7 +338,7 @@ fn reordering_uses_final_positions_and_rejects_bad_destinations() -> Result<(), 
         Err(TabError::UnknownSavedFolder(stale_folder))
     );
     assert_eq!(
-        model.rename_folder(stale_folder, String::new()),
+        model.rename_folder(stale_folder, "Synthetic stale".to_owned()),
         Err(TabError::UnknownSavedFolder(stale_folder))
     );
     assert_eq!(
@@ -656,5 +656,107 @@ fn long_folder_operation_sequences_preserve_tree_invariants() -> Result<(), TabE
         }
     }
     assert!(issued_folders.len() > 20);
+    Ok(())
+}
+
+#[test]
+fn a_confirmed_delete_is_refused_when_the_folder_changed() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let target = folder(&mut model, "target", None);
+    let inner = folder(&mut model, "inner", Some(target));
+    let first = model.add_saved_page(metadata(1), Some(inner))?;
+    let shown = saved_folder_contents(model.saved_layout(), target);
+    assert_eq!((shown.pages(), shown.folders()), (1, 1));
+    assert_eq!(
+        shown,
+        [dir(inner), page(first)]
+            .into_iter()
+            .collect::<FolderContents>()
+    );
+
+    // A page dragged in after the owner confirmed must not be deleted unseen.
+    let second = model.add_saved_page(metadata(2), Some(target))?;
+    let before = model.snapshot();
+    assert_eq!(
+        model.delete_folder_confirmed(target, &shown),
+        Err(TabError::FolderContentsChanged(target))
+    );
+    assert_eq!(model.snapshot(), before);
+
+    // A swap keeps the counts equal (one page in, another out), but not the rows.
+    let swapped = saved_folder_contents(model.saved_layout(), target);
+    model.move_saved_entry(page(first), None, 0)?;
+    model.add_saved_page(metadata(3), Some(inner))?;
+    let after_swap = saved_folder_contents(model.saved_layout(), target);
+    assert_eq!(
+        (after_swap.pages(), after_swap.folders()),
+        (swapped.pages(), swapped.folders())
+    );
+    let before = model.snapshot();
+    assert_eq!(
+        model.delete_folder_confirmed(target, &swapped),
+        Err(TabError::FolderContentsChanged(target))
+    );
+    assert_eq!(model.snapshot(), before);
+
+    let removed = model.delete_folder_confirmed(target, &after_swap)?;
+    assert_eq!(removed.pages.len(), 2);
+    assert!(model.get_saved(second).is_none());
+    assert!(model.get_saved(first).is_some());
+    assert!(model.saved_folders().is_empty());
+    let unknown = SavedFolderId::new(u64::MAX)?;
+    assert_eq!(
+        model.delete_folder_confirmed(unknown, &FolderContents::default()),
+        Err(TabError::UnknownSavedFolder(unknown))
+    );
+    assert!(saved_folder_contents(model.saved_layout(), unknown).is_empty());
+    Ok(())
+}
+
+#[test]
+fn empty_or_blank_folder_names_are_refused_without_change() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let named = folder(&mut model, "named", None);
+    let before = model.snapshot();
+    for blank in ["", " ", "\t\n", "\u{3000}"] {
+        assert_eq!(
+            model.create_folder(blank.to_owned(), None),
+            Err(TabError::EmptyFolderTitle),
+            "{blank:?}"
+        );
+        assert_eq!(
+            model.rename_folder(named, blank.to_owned()),
+            Err(TabError::EmptyFolderTitle),
+            "{blank:?}"
+        );
+    }
+    // A whole subtree is refused when any folder inside it is unnamed.
+    let nested_blank = vec![NewSavedItem::Folder {
+        title: "Synthetic outer".to_owned(),
+        items: vec![NewSavedItem::Folder {
+            title: " ".to_owned(),
+            items: vec![NewSavedItem::Page(metadata(1))],
+        }],
+    }];
+    assert_eq!(
+        model.append_saved_folder("Synthetic import".to_owned(), nested_blank),
+        Err(TabError::EmptyFolderTitle)
+    );
+    assert_eq!(
+        model.append_saved_folder(String::new(), Vec::new()),
+        Err(TabError::EmptyFolderTitle)
+    );
+    assert_eq!(model.snapshot(), before);
+    assert_eq!(
+        TabError::EmptyFolderTitle.to_string(),
+        "folder names cannot be empty"
+    );
+
+    // Surrounding spaces are allowed and kept; only an all-blank name is refused.
+    model.rename_folder(named, " Synthetic spaced ".to_owned())?;
+    assert_eq!(
+        model.get_folder(named).map(|folder| folder.title()),
+        Some(" Synthetic spaced ")
+    );
     Ok(())
 }

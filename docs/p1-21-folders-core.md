@@ -192,6 +192,11 @@ database is disposable.
 
 ## What remains for P1-21
 
+The sidebar UI, the session routing and the model's refusal of empty names
+were built on `claude/p1-09-21-folder-ui`; see `docs/p1-09-21-folder-ui.md`.
+Inferred decision 5 above is superseded by the owner's 2026-10-12 decision: empty
+names are refused. The list below is kept as the original hand-off.
+
 - **UI (`atlas-ui`/`atlas-app`)**: render folder rows with indentation and
   expand/collapse, create/rename/remove/move commands, drag-and-drop with the
   final-position semantics above, the removal confirmation, and the D44
