@@ -3,7 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
-use super::{SavedPage, SavedPageId, Tab, TabId, TabKind, TabMetadata, TabModel};
+use super::{
+    SavedEntryId, SavedFolder, SavedFolderId, SavedPage, SavedPageId, SavedPlacement, Tab, TabId,
+    TabKind, TabMetadata, TabModel,
+};
 
 /// One live session tab; metadata is independent of its optional saved destination.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,14 +24,36 @@ pub struct SavedPageSnapshot {
     pub metadata: TabMetadata,
 }
 
+/// One inline folder, ordered by its position in the snapshot's folder vector.
+#[derive(Clone, Eq, PartialEq)]
+pub struct SavedFolderSnapshot {
+    pub id: SavedFolderId,
+    pub title: String,
+}
+
+impl fmt::Debug for SavedFolderSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Folder names are owner content; only the identity is diagnostic.
+        formatter
+            .debug_struct("SavedFolderSnapshot")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Durable model state; closed-tab history remains in memory for this run only.
+/// `saved_layout` lists every page and folder depth-first; `saved_pages` and
+/// `saved_folders` hold their records in that same order.
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct TabModelSnapshot {
     pub tabs: Vec<TabSnapshot>,
     pub saved_pages: Vec<SavedPageSnapshot>,
+    pub saved_folders: Vec<SavedFolderSnapshot>,
+    pub saved_layout: Vec<SavedPlacement>,
     pub active_id: Option<TabId>,
     pub last_tab_id: u64,
     pub last_saved_page_id: u64,
+    pub last_saved_folder_id: u64,
 }
 
 impl fmt::Debug for TabModelSnapshot {
@@ -38,9 +63,11 @@ impl fmt::Debug for TabModelSnapshot {
             .debug_struct("TabModelSnapshot")
             .field("tab_count", &self.tabs.len())
             .field("saved_page_count", &self.saved_pages.len())
+            .field("saved_folder_count", &self.saved_folders.len())
             .field("active_id", &self.active_id)
             .field("last_tab_id", &self.last_tab_id)
             .field("last_saved_page_id", &self.last_saved_page_id)
+            .field("last_saved_folder_id", &self.last_saved_folder_id)
             .finish_non_exhaustive()
     }
 }
@@ -50,8 +77,13 @@ impl fmt::Debug for TabModelSnapshot {
 pub enum SnapshotError {
     DuplicateTabId(TabId),
     DuplicateSavedPageId(SavedPageId),
+    DuplicateSavedFolderId(SavedFolderId),
     TabIdAboveWatermark(TabId),
     SavedPageIdAboveWatermark(SavedPageId),
+    SavedFolderIdAboveWatermark(SavedFolderId),
+    SavedLayoutMismatch(SavedEntryId),
+    SavedLayoutIncomplete,
+    InvalidSavedParent(SavedEntryId),
     MissingActiveTab,
     UnknownActiveTab(TabId),
     UnknownSavedPage(SavedPageId),
@@ -68,6 +100,9 @@ impl fmt::Display for SnapshotError {
             Self::DuplicateSavedPageId(id) => {
                 write!(formatter, "duplicate saved page ID {}", id.get())
             }
+            Self::DuplicateSavedFolderId(id) => {
+                write!(formatter, "duplicate saved folder ID {}", id.get())
+            }
             Self::TabIdAboveWatermark(id) => {
                 write!(formatter, "tab {} exceeds the tab ID watermark", id.get())
             }
@@ -78,6 +113,23 @@ impl fmt::Display for SnapshotError {
                     id.get()
                 )
             }
+            Self::SavedFolderIdAboveWatermark(id) => {
+                write!(
+                    formatter,
+                    "saved folder {} exceeds its ID watermark",
+                    id.get()
+                )
+            }
+            Self::SavedLayoutMismatch(entry) => {
+                write!(formatter, "saved layout entry {entry:?} is out of order")
+            }
+            Self::SavedLayoutIncomplete => {
+                formatter.write_str("a saved page or folder has no layout entry")
+            }
+            Self::InvalidSavedParent(entry) => write!(
+                formatter,
+                "saved layout entry {entry:?} is not inside its parent folder"
+            ),
             Self::MissingActiveTab => formatter.write_str("nonempty session has no active tab"),
             Self::UnknownActiveTab(id) => {
                 write!(
@@ -112,8 +164,10 @@ impl TabModelSnapshot {
     /// Checks the complete model contract before a store writes or restores these records.
     /// Watermarks cover this snapshot; comparing older writes is the writer's responsibility.
     pub fn validate(&self) -> Result<(), SnapshotError> {
-        // Resolve saved identities once, then validate live rows and active selection.
+        // Resolve saved identities once, then validate the tree, live rows and selection.
         let saved_positions = self.saved_positions()?;
+        self.validate_folder_ids()?;
+        self.validate_layout()?;
         let tab_ids = self.validate_tabs(&saved_positions)?;
         match self.active_id {
             Some(id) if !tab_ids.contains(&id) => Err(SnapshotError::UnknownActiveTab(id)),
@@ -134,6 +188,63 @@ impl TabModelSnapshot {
             }
         }
         Ok(positions)
+    }
+
+    fn validate_folder_ids(&self) -> Result<(), SnapshotError> {
+        let mut ids = BTreeSet::new();
+        for folder in &self.saved_folders {
+            if folder.id.get() > self.last_saved_folder_id {
+                return Err(SnapshotError::SavedFolderIdAboveWatermark(folder.id));
+            }
+            if !ids.insert(folder.id) {
+                return Err(SnapshotError::DuplicateSavedFolderId(folder.id));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_layout(&self) -> Result<(), SnapshotError> {
+        // Records must appear in layout order, so each identity is placed exactly once.
+        let mut pages = self.saved_pages.iter();
+        let mut folders = self.saved_folders.iter();
+        let mut open_folders: Vec<SavedFolderId> = Vec::new();
+        for placement in &self.saved_layout {
+            let matches_record = match placement.entry {
+                SavedEntryId::Page(id) => pages.next().is_some_and(|page| page.id == id),
+                SavedEntryId::Folder(id) => folders.next().is_some_and(|folder| folder.id == id),
+            };
+            if !matches_record {
+                return Err(SnapshotError::SavedLayoutMismatch(placement.entry));
+            }
+
+            // Depth-first order: a parent is an enclosing folder that appeared earlier.
+            Self::enter_parent(&mut open_folders, placement)?;
+            if let SavedEntryId::Folder(id) = placement.entry {
+                open_folders.push(id);
+            }
+        }
+        if pages.next().is_some() || folders.next().is_some() {
+            return Err(SnapshotError::SavedLayoutIncomplete);
+        }
+        Ok(())
+    }
+
+    fn enter_parent(
+        open_folders: &mut Vec<SavedFolderId>,
+        placement: &SavedPlacement,
+    ) -> Result<(), SnapshotError> {
+        // Close folders until the parent is innermost; an unknown parent closes them all.
+        let Some(parent) = placement.parent else {
+            open_folders.clear();
+            return Ok(());
+        };
+        while let Some(&innermost) = open_folders.last() {
+            if innermost == parent {
+                return Ok(());
+            }
+            open_folders.pop();
+        }
+        Err(SnapshotError::InvalidSavedParent(placement.entry))
     }
 
     fn validate_tabs(
@@ -199,9 +310,19 @@ impl TabModel {
                     metadata: page.metadata.clone(),
                 })
                 .collect(),
+            saved_folders: self
+                .folders
+                .iter()
+                .map(|folder| SavedFolderSnapshot {
+                    id: folder.id,
+                    title: folder.title.clone(),
+                })
+                .collect(),
+            saved_layout: self.layout.clone(),
             active_id: self.active,
             last_tab_id: self.last_id,
             last_saved_page_id: self.last_saved_id,
+            last_saved_folder_id: self.last_folder_id,
         }
     }
 
@@ -229,9 +350,19 @@ impl TabModel {
                     metadata: page.metadata,
                 })
                 .collect(),
+            folders: snapshot
+                .saved_folders
+                .into_iter()
+                .map(|folder| SavedFolder {
+                    id: folder.id,
+                    title: folder.title,
+                })
+                .collect(),
+            layout: snapshot.saved_layout,
             active: snapshot.active_id,
             last_id: snapshot.last_tab_id,
             last_saved_id: snapshot.last_saved_page_id,
+            last_folder_id: snapshot.last_saved_folder_id,
             closed: VecDeque::new(),
         })
     }
@@ -334,9 +465,15 @@ mod tests {
                 id: saved_page,
                 metadata: metadata(1),
             }],
+            saved_folders: Vec::new(),
+            saved_layout: vec![crate::SavedPlacement {
+                entry: crate::SavedEntryId::Page(saved_page),
+                parent: None,
+            }],
             active_id: Some(ordinary_tab),
             last_tab_id: u64::MAX,
             last_saved_page_id: u64::MAX,
+            last_saved_folder_id: u64::MAX,
         };
         let mut restored =
             TabModel::from_snapshot(snapshot.clone()).expect("exhausted state is valid");

@@ -17,6 +17,7 @@ futures.workspace = true
 
 [dev-dependencies]
 atlas-core = { path = "../atlas-core" }
+rusqlite.workspace = true
 
 [lints]
 workspace = true

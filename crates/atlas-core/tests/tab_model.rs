@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 
 use atlas_core::{
-    Activation, SavedPageId, SidebarRow, Tab, TabError, TabId, TabKind, TabMetadata, TabModel,
+    Activation, SavedFolderId, SavedPageId, SidebarRow, Tab, TabError, TabId, TabKind, TabMetadata,
+    TabModel,
 };
 
 fn metadata(number: usize) -> TabMetadata {
@@ -25,6 +26,7 @@ fn open_ids(model: &TabModel) -> Vec<TabId> {
 
 #[derive(Debug, Eq, PartialEq)]
 enum RowIdentity {
+    Folder(SavedFolderId),
     Saved(SavedPageId, Option<TabId>),
     Ordinary(TabId),
 }
@@ -33,7 +35,8 @@ fn rows(model: &TabModel) -> Vec<RowIdentity> {
     model
         .sidebar_rows()
         .map(|row| match row {
-            SidebarRow::Saved { page, open_tab } => {
+            SidebarRow::Folder { folder, .. } => RowIdentity::Folder(folder.id()),
+            SidebarRow::Saved { page, open_tab, .. } => {
                 RowIdentity::Saved(page.id(), open_tab.map(Tab::id))
             }
             SidebarRow::Ordinary(tab) => RowIdentity::Ordinary(tab.id()),
@@ -83,7 +86,11 @@ fn assert_open_invariants(model: &TabModel) {
     let mut ordinary_started = false;
     for row in model.sidebar_rows() {
         match row {
-            SidebarRow::Saved { page, open_tab } => {
+            SidebarRow::Folder { folder, .. } => {
+                assert!(!ordinary_started);
+                assert_eq!(model.get_folder(folder.id()), Some(folder));
+            }
+            SidebarRow::Saved { page, open_tab, .. } => {
                 assert!(!ordinary_started);
                 projected_saved.push(page.id());
                 assert_eq!(

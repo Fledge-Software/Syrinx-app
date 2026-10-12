@@ -206,7 +206,7 @@ pub(super) fn offer(prepared: PreparedDirectory) -> Result<RecoveryOffer, Recove
         prepared,
         backup,
         source,
-        expected,
+        expected: Box::new(expected),
         primary,
         continuation: Some(Box::new(Continuation {
             bundle,
