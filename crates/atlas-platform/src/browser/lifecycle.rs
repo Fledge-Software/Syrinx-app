@@ -337,6 +337,10 @@ mod tests {
             id: 7,
             loading: false,
         });
+        events.emit(BrowserEvent::NavigationCompleted {
+            id: 7,
+            success: true,
+        });
         life.suspend();
         assert!(
             matches!(received.try_recv().unwrap().into_current(), Some(BrowserEvent::Title { title, .. }) if title == "Finished synthetic page")
@@ -348,6 +352,10 @@ mod tests {
         assert!(matches!(
             received.try_recv().unwrap().into_current(),
             Some(BrowserEvent::Loading { loading: false, .. })
+        ));
+        assert!(matches!(
+            received.try_recv().unwrap().into_current(),
+            Some(BrowserEvent::NavigationCompleted { success: true, .. })
         ));
         events.emit(BrowserEvent::Title {
             id: 7,

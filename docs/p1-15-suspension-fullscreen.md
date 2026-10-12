@@ -22,8 +22,10 @@ invalidates queued action callbacks, and closing permanently retires the
 controller's ticket. A newly created controller has a separate lifetime even
 when a test reuses a numeric tab ID. Suspension completions also carry a request
 number, so activation followed by hiding cannot accept the previous request.
-Title, address, loading and element-fullscreen observations retain FIFO delivery
+Title, address, loading, navigation completion and element-fullscreen observations retain FIFO delivery
 across suspension so the model keeps the last real state even while hidden.
+The completion result must survive too: `Loading(false)` alone represents
+finishing navigation and does not establish success or failure.
 Process-failure notifications and permission cleanup remain deliverable while
 suspended, but not after controller retirement. Native popup and permission
 callbacks refuse new pending work on a retired or suspended controller.
@@ -91,6 +93,9 @@ passed in `target/p1-15-review-native-1.log`, including exit after moving focus
 from the controller to the parent chrome window. The original page-close
 lifecycle suite and its pre-existing timeout are unchanged; this focused run
 does not claim to fix that timeout.
+The final navigation-completion correction also passed all 460 tests and smoke
+in `target/p1-15-review-gate-final.log`; its queued-event regression now checks
+the completion result as well as the loading flag.
 The fresh eight-tab app was captured and inspected in
 `target/p1-15-review-eight-tabs.png`, confirmed 8/8 native suspensions, and
 closed normally. This checks the synthetic window, not the remaining GPUI
