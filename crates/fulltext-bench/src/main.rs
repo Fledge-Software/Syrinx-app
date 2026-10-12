@@ -1,10 +1,13 @@
-//! Measures an isolated synthetic FTS5 cache; no product crate uses this harness.
+//! Compares disposable synthetic full-text caches; no product crate uses this harness.
 
 mod corpus;
+mod engine;
 mod recovery;
 mod store;
+mod tantivy_store;
 
-use rusqlite::Connection;
+use corpus::Corpus;
+use engine::Engine;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -18,12 +21,15 @@ fn main() -> Result<()> {
         .get(1)
         .is_some_and(|argument| argument == "crash-writer")
     {
-        return recovery::writer(Path::new(arguments.get(2).ok_or("missing crash path")?));
+        return recovery::writer(
+            arguments.get(2).ok_or("missing crash engine")?,
+            Path::new(arguments.get(3).ok_or("missing crash path")?),
+        );
     }
     let directory = PathBuf::from(
         arguments
             .get(1)
-            .ok_or("usage: fulltext-bench NEW_DIRECTORY [COUNT]")?,
+            .ok_or("usage: fulltext-bench NEW_DIRECTORY [COUNT] [fts5|tantivy] [overlap|broad]")?,
     );
     let count = arguments
         .get(2)
@@ -33,8 +39,17 @@ fn main() -> Result<()> {
     if count < 2000 {
         return Err("use at least 2000 documents".into());
     }
+    let engine = arguments.get(3).map(String::as_str).unwrap_or("fts5");
+    if !matches!(engine, "fts5" | "tantivy") {
+        return Err("engine must be fts5 or tantivy".into());
+    }
+    let corpus = match arguments.get(4).map(String::as_str).unwrap_or("overlap") {
+        "overlap" => Corpus::Overlap,
+        "broad" => Corpus::Broad,
+        _ => return Err("corpus must be overlap or broad".into()),
+    };
     fs::create_dir(&directory)?;
-    run(&directory, count)
+    run(&directory, count, engine, corpus)
 }
 
 fn timed<T>(name: &str, action: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -47,26 +62,13 @@ fn timed<T>(name: &str, action: impl FnOnce() -> Result<T>) -> Result<T> {
     Ok(result)
 }
 
-fn run(directory: &Path, count: usize) -> Result<()> {
-    let path = directory.join("synthetic-cache.db");
-    let mut connection = store::open(&path)?;
-    let version: String = connection.query_row("SELECT sqlite_version()", [], |row| row.get(0))?;
-    if version != "3.53.4" {
-        return Err(format!("unexpected SQLite {version}").into());
-    }
-    let fts5: bool = connection.query_row(
-        "SELECT sqlite_compileoption_used('ENABLE_FTS5')",
-        [],
-        |row| row.get(0),
-    )?;
-    if !fts5 {
-        return Err("FTS5 compile option missing".into());
-    }
+fn run(directory: &Path, count: usize, name: &str, corpus: Corpus) -> Result<()> {
+    let mut engine = Engine::open(name, directory)?;
     println!(
-        "engine,sqlite,{version}\nseed,{}\ncount,{count}",
+        "engine,{name}\ncorpus,{corpus:?}\nseed,{}\ncount,{count}",
         corpus::SEED
     );
-    let documents: Vec<_> = (0..count).map(corpus::document).collect();
+    let documents: Vec<_> = (0..count).map(|id| corpus.document(id)).collect();
     println!(
         "corpus_body_bytes,{}",
         documents
@@ -74,111 +76,86 @@ fn run(directory: &Path, count: usize) -> Result<()> {
             .map(|document| document.body.len())
             .sum::<usize>()
     );
-    timed("bulk", || {
-        let transaction = connection.transaction()?;
-        for document in &documents {
-            store::insert(&transaction, document)?;
-        }
-        transaction.commit()?;
-        store::maintain(&connection)
-    })?;
+    timed("bulk", || engine.batch(&documents, &[], false))?;
     println!("disk_after_bulk,{}", disk_size(directory)?);
-    queries(&connection)?;
+    queries(&engine)?;
     timed("add_1000", || {
-        let transaction = connection.transaction()?;
-        for id in count..count + 1000 {
-            store::insert(&transaction, &corpus::document(id))?;
-        }
-        transaction.commit()?;
-        store::maintain(&connection)
+        let documents: Vec<_> = (count..count + 1000)
+            .map(|id| corpus.document(id))
+            .collect();
+        engine.batch(&documents, &[], false)
     })?;
     timed("update_1000", || {
-        let transaction = connection.transaction()?;
-        for id in 0..1000 {
-            transaction.execute("DELETE FROM pages WHERE rowid=?1", [id as i64])?;
-            let mut document = corpus::document(id);
-            document.body.push_str(" revisedfolio");
-            store::insert(&transaction, &document)?;
-        }
-        transaction.commit()?;
-        store::maintain(&connection)
+        let documents: Vec<_> = (0..1000)
+            .map(|id| {
+                let mut document = corpus.document(id);
+                document.body.push_str(" revisedfolio");
+                document
+            })
+            .collect();
+        engine.batch(&documents, &(0..1000).collect::<Vec<_>>(), false)
     })?;
+    if engine.hits("revisedfolio")? != 1000 || engine.hits(&format!("sigil{count}"))? != 1 {
+        return Err("incremental update/add verification failed".into());
+    }
     timed("delete_1000", || {
-        let transaction = connection.transaction()?;
-        for id in 1000..2000 {
-            transaction.execute("INSERT INTO deleted VALUES(?1)", [id])?;
-            transaction.execute("DELETE FROM pages WHERE rowid=?1", [id])?;
-        }
-        transaction.commit()?;
-        store::maintain(&connection)
+        engine.batch(&[], &(1000..2000).collect::<Vec<_>>(), true)
     })?;
-    let expired = timed("expiry_and_maintenance", || {
-        let expired = store::expire(&connection)?;
-        store::maintain(&connection)?;
-        Ok(expired)
-    })?;
+    let expired = timed("expiry_and_maintenance", || engine.expire())?;
     println!(
         "expired_count,{expired}\ndisk_after_expiry,{}",
         disk_size(directory)?
     );
     let expected = (0..count + 1000)
-        .filter(|id| !(1000..2000).contains(id) && corpus::document(*id).captured > corpus::CUTOFF)
+        .filter(|id| !(1000..2000).contains(id) && (*id % 10) as i64 * 86_400 > corpus::CUTOFF)
         .count();
-    store::verify(&connection, expected)?;
-    connection.close().map_err(|(_, error)| error)?;
+    engine.verify(expected)?;
+    engine.close()?;
     timed("interrupted_writer_until_kill", || {
-        recovery::interrupt(&path)
+        recovery::interrupt(name, directory)
     })?;
     timed("reopen_and_verify", || {
-        let recovered = store::open(&path)?;
-        store::verify(&recovered, expected)?;
-        recovered.close().map_err(|(_, error)| error)?;
-        Ok(())
+        let recovered = Engine::open(name, directory)?;
+        recovered.verify(expected)?;
+        recovered.close()
     })?;
-    let mut recovered = store::open(&path)?;
+    let mut recovered = Engine::open(name, directory)?;
     timed("stale_replay_and_verify", || {
-        let transaction = recovered.transaction()?;
-        for id in 0..2000 {
-            let document = corpus::document(id);
-            if (document.captured <= corpus::CUTOFF || (1000..2000).contains(&id))
-                && store::replay(&transaction, &document)?
-            {
-                return Err("stale replay accepted".into());
-            }
-        }
-        transaction.commit()?;
-        store::maintain(&recovered)?;
-        store::verify(&recovered, expected)
+        let documents: Vec<_> = (0..2000)
+            .map(|id| corpus.document(id))
+            .filter(|document| {
+                document.captured <= corpus::CUTOFF || (1000..2000).contains(&document.id)
+            })
+            .collect();
+        recovered.replay(&documents)?;
+        recovered.verify(expected)
     })?;
-    recovered.close().map_err(|(_, error)| error)?;
-    let final_connection = store::open(&path)?;
-    store::verify(&final_connection, expected)?;
+    recovered.close()?;
+    let final_engine = Engine::open(name, directory)?;
+    final_engine.verify(expected)?;
+    final_engine.close()?;
     println!("recovery_and_replay,PASS\nfinal_count,{expected}");
     Ok(())
 }
 
-fn queries(connection: &Connection) -> Result<()> {
-    // Measure preparation, ranking, top-20 retrieval and bounded snippets together.
+fn queries(engine: &Engine) -> Result<()> {
+    // Measure parsing, ranking, top-20 retrieval and bounded snippets together.
     for query in corpus::QUERIES {
         let mut samples = Vec::new();
         let mut returned = 0usize;
         for _ in 0..101 {
             let start = Instant::now();
-            let mut statement = connection.prepare("SELECT rowid,snippet(pages,2,'[',']','...',16) FROM pages WHERE pages MATCH ?1 ORDER BY rank LIMIT 20")?;
-            let rows = statement.query_map([query], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })?;
-            for row in rows {
-                std::hint::black_box(row?);
-                returned += 1;
-            }
+            returned += engine.query(query)?;
             samples.push(start.elapsed().as_secs_f64() * 1000.0);
         }
-        let cold = samples.remove(0);
+        let first = samples.remove(0);
         samples.sort_by(f64::total_cmp);
         println!(
-            "query,{query},{:.3},{:.3},{:.3},first={cold:.3},rows={returned}",
-            samples[49], samples[94], samples[99]
+            "query,{query},{:.3},{:.3},{:.3},first={first:.3},rows={returned},hits={}",
+            samples[49],
+            samples[94],
+            samples[99],
+            engine.hits(query)?
         );
     }
     Ok(())
