@@ -17,11 +17,29 @@ shared, each affected WebView receives its own failure notification.
 
 Browser-process exit retains every hosted live ID and destination, clears
 pending native popup deferrals, releases all controllers and the environment,
-then creates a new environment with the same dedicated profile and existing
+then schedules a new environment with the same dedicated profile and existing
 privacy/security options. It rebuilds controllers under the same IDs and
 restores which tab is visible. It never asks the session worker to close or
 reopen a logical tab. Saved associations, tab order and selection therefore
 remain in the existing session model. Unloaded logical rows remain unloaded.
+
+Review fixes bound automatic recovery to three rebuild attempts in a rolling
+60-second window. Attempts wait one, two, then four seconds on the native message
+loop's existing wake timer; the UI and command queue remain responsive during
+backoff. Repeated callbacks from the failed generation cannot schedule another
+attempt. A fourth failure retires its controllers but performs no reconstruction.
+The retained tabs show **Browser engine stopped** with **Reload**. Time passing
+alone does not restart them. Reload (or explicit navigation of a stopped tab)
+resets the budget and counts its immediate rebuild as the first attempt in the
+new owner-requested cycle. A pending automatic attempt cannot be bypassed by
+repeated Reload commands. Ordinary page creation cannot bypass the stopped state.
+
+Rebuilding only the active controller was considered. This change retains the
+existing all-hosted-tab rebuild so background tabs keep their established live
+controller behavior; adding a second lazy-restoration state would broaden this
+review fix. The cap covers the shared environment rebuild, regardless of how
+many retained controllers it restores. Controller or environment construction
+errors keep the existing explicit retry behavior instead of spinning.
 
 Native failure callbacks only enqueue owned structural events. Reconstruction
 runs in the worker message loop, outside WebView2's callback stack. Pending
@@ -30,6 +48,10 @@ or navigation commands need not run against a known-dead generation.
 Controller-lifetime tickets from P1-15 reject repeat events from the retired
 generation, including events already queued from other tabs. A later failure
 of a replacement controller is a new failure, not a duplicate of the old one.
+After a timed rebuild, the worker returns to queue processing before waiting
+for another Windows message. Controller construction can consume a posted wake
+without consuming the corresponding callback queue; immediate replacement
+failures must still be processed and counted by the recovery budget.
 
 Environment and individual-controller reconstruction can also fail. Their live
 records remain in an unavailable-page map, with a visible retry state rather
@@ -53,6 +75,18 @@ connection presentation and exit page fullscreen. Duplicate recovery-start and
 completion notices do not reset the current UI generation. A failed tab keeps
 its sidebar row and can still be selected, closed or reloaded.
 
+After crash/recovery notifications, GPUI's `Window::is_window_active()` gates
+page focus. A healthy selected page receives native focus only while the Atlas
+window is active and no find/palette input owns focus. A crashed selected page
+returns focus to GPUI's crash card. While Atlas is inactive, only GPUI's logical
+focus is updated; no Windows activation call is made. Recovery of background
+tabs targets the selected page, never the reconstructed hidden controller.
+
+Every accepted native process-failure notification is forwarded as a structural
+event before retiring its callback ticket. This preserves `--smoke` failure even
+if subsequent recovery succeeds. The unresponsive-page message compares the
+named WebView2 process-kind constant, not a numeric literal.
+
 Recreating a controller exposed a permission race: its old per-controller
 request counter would start again while a storage-worker reply could still be
 queued. `browser/permissions.rs` now allocates unique process-local request IDs
@@ -70,6 +104,34 @@ dependency, vendor patch, user-agent override, injected script or IPC handler
 is introduced.
 
 ## Synthetic evidence
+
+The 2026-10-12 review fixes passed `cargo xtask check` with 471 tests and
+application smoke in `target/p1-16-review-gate-final2.log`. This final run includes
+P1-15's navigation-completion correction, the active-selection regression, and
+the native recovery regression requiring a return to queue processing after
+rebuilding without spinning when idle. Earlier passing runs are preserved in
+`target/p1-16-review-gate-1.log` and `target/p1-16-review-gate-final.log`.
+Regressions verify the three-attempt cap, each backoff boundary, expiration of
+old attempts, no restart after the cap merely because time passes, and native
+Reload recovery with the same IDs after closing one stopped tab. They also
+verify stopped-card/Reload state, smoke's failure outcome for every native
+process kind, and focus decisions for live, crashed, inactive and overlay cases.
+
+`ShowActive` records the requested selection before native visibility work.
+The P1-15 helper still resumes the target before hiding the old controller;
+its regression now also requires recovery to retain the requested active ID
+when Resume fails. The worker reports the native error rather than swallowing it.
+
+All six combined native suites passed in `target/p1-16-review-native-final.log`,
+including the unchanged original lifecycle suite and the fullscreen exit from
+chrome-focus regression. The pre-existing original lifecycle timeout did not
+reproduce in this run; its assertions and deadlines were not changed, and its
+cause remains undiagnosed.
+The fresh eight-tab application confirmed 8/8 suspensions and was inspected in
+`target/p1-16-review2-eight-tabs.png`, then closed normally. The first capture
+was incomplete, so it was retained and a second fresh instance was activated
+and captured before inspection. This confirms ordinary app layout and the
+synthetic suspension setup, not manual crash-card, Alt+Tab or DPI acceptance.
 
 Fault injection exists only under `cfg(test)` in
 `crates/atlas-platform/src/browser/recovery_tests.rs` and the page's private

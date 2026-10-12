@@ -3,6 +3,7 @@
 mod environment;
 mod essentials;
 pub use essentials::PageAction;
+pub const RENDER_PROCESS_UNRESPONSIVE: i32 = webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE.0;
 mod lifecycle;
 mod page;
 pub use lifecycle::CallbackTicket;
@@ -140,6 +141,7 @@ pub enum BrowserEvent {
         sequence: u64,
         restored: Vec<u64>,
         failed: Vec<u64>,
+        stopped: bool,
     },
     /// Unwrap with into_current before handling a native callback.
     Callback {
@@ -500,6 +502,7 @@ fn run(
         unavailable: HashMap::new(),
         active: None,
         recovery_sequence: 0,
+        recovery: recovery::RecoveryBudget::default(),
         bounds: PageBounds::default(),
         parent,
         events: events.clone(),
@@ -521,6 +524,10 @@ fn run(
         }
         // Handle native callbacks even when there are no commands to drain.
         drain_native(&shortcuts, &mut state)?;
+        // Rebuilding can consume wake messages while leaving native callbacks queued.
+        if state.recovery_tick(std::time::Instant::now()) {
+            continue;
+        }
         for (id, page) in &state.pages {
             if let Err(error) = page.tick() {
                 events.emit(BrowserEvent::Error {
@@ -529,7 +536,14 @@ fn run(
                 });
             }
         }
-        timer.arm(state.pages.values().filter_map(Page::suspend_due).min())?;
+        timer.arm(
+            state
+                .pages
+                .values()
+                .filter_map(Page::suspend_due)
+                .chain(state.recovery.due)
+                .min(),
+        )?;
         let mut message = MSG::default();
         match unsafe { GetMessageW(&mut message, None, 0, 0) }.0 {
             -1 => return Err(BrowserError::MessageLoop),
@@ -588,6 +602,7 @@ struct BrowserState {
     unavailable: HashMap<u64, String>,
     active: Option<u64>,
     recovery_sequence: u64,
+    recovery: recovery::RecoveryBudget,
     bounds: PageBounds,
     parent: isize,
     events: EventSink,
@@ -655,13 +670,16 @@ impl BrowserState {
                 }) {
                     return Err(BrowserError::UnknownTab);
                 }
-                // Selection remains authoritative even if a controller cannot resume.
-                self.active = active;
-                show_active(self.pages.keys().copied(), active, |id, visible| {
-                    self.pages
-                        .get(&id)
-                        .map_or(Ok(()), |page| page.show(visible))
-                })?;
+                show_active(
+                    self.pages.keys().copied(),
+                    active,
+                    &mut self.active,
+                    |id, visible| {
+                        self.pages
+                            .get(&id)
+                            .map_or(Ok(()), |page| page.show(visible))
+                    },
+                )?;
             }
             BrowserCommand::Resize(next) => {
                 next.validate()?;
@@ -671,20 +689,12 @@ impl BrowserState {
                 self.bounds = next;
             }
             BrowserCommand::Reload { id } if self.unavailable.contains_key(&id) => {
-                if self.environment.is_none() {
-                    self.recover_browser();
-                } else {
-                    self.restore_page(id)?;
-                }
+                self.retry_unavailable(id)?;
             }
             BrowserCommand::Navigate { id, url } if self.unavailable.contains_key(&id) => {
                 page::validate_url(&url)?;
                 self.unavailable.insert(id, url);
-                if self.environment.is_none() {
-                    self.recover_browser();
-                } else {
-                    self.restore_page(id)?;
-                }
+                self.retry_unavailable(id)?;
             }
             BrowserCommand::Focus { id } if self.unavailable.contains_key(&id) => {}
             command => {
@@ -708,8 +718,11 @@ impl Drop for BrowserState {
 fn show_active(
     ids: impl Iterator<Item = u64>,
     active: Option<u64>,
+    selection: &mut Option<u64>,
     mut show: impl FnMut(u64, bool) -> Result<(), BrowserError>,
 ) -> Result<(), BrowserError> {
+    // Recovery must use the requested selection even if its controller cannot resume.
+    *selection = active;
     if let Some(id) = active {
         show(id, true)?;
     }
@@ -729,19 +742,35 @@ mod visibility_tests {
     #[test]
     fn resume_failure_leaves_previous_page_visible_and_reports_failure() {
         let mut visible = HashMap::from([(7, true), (8, false), (9, false)]);
-        let result = show_active([7, 8, 9].into_iter(), Some(8), |id, show| {
-            if id == 8 && show {
-                return Err(BrowserError::Suspension);
-            }
-            visible.insert(id, show);
-            Ok(())
-        });
+        let mut selection = Some(7);
+        let result = show_active(
+            [7, 8, 9].into_iter(),
+            Some(8),
+            &mut selection,
+            |id, show| {
+                if id == 8 && show {
+                    return Err(BrowserError::Suspension);
+                }
+                visible.insert(id, show);
+                Ok(())
+            },
+        );
         assert_eq!(result, Err(BrowserError::Suspension));
+        assert_eq!(
+            selection,
+            Some(8),
+            "recovery must not retain the old active ID"
+        );
         assert_eq!(visible, HashMap::from([(7, true), (8, false), (9, false)]));
-        show_active([7, 8, 9].into_iter(), Some(8), |id, show| {
-            visible.insert(id, show);
-            Ok(())
-        })
+        show_active(
+            [7, 8, 9].into_iter(),
+            Some(8),
+            &mut selection,
+            |id, show| {
+                visible.insert(id, show);
+                Ok(())
+            },
+        )
         .unwrap();
         assert_eq!(visible, HashMap::from([(7, false), (8, true), (9, false)]));
     }

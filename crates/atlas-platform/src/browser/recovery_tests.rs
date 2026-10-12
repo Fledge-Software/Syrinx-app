@@ -100,6 +100,7 @@ impl Fixture {
                 unavailable: HashMap::new(),
                 active: None,
                 recovery_sequence: 0,
+                recovery: RecoveryBudget::default(),
                 bounds: PageBounds {
                     x: 0,
                     y: 0,
@@ -215,6 +216,28 @@ fn native_faults_recover_once_keep_all_tabs_and_leave_other_renderers_untouched(
         fixture.state().native_event(event);
     }
     assert_eq!(fixture.state().recovery_sequence, 1);
+    assert!(
+        fixture.state().pages.is_empty(),
+        "backoff releases every failed controller"
+    );
+    let due = fixture.state().recovery.due.expect("scheduled rebuild");
+    assert!(
+        !fixture
+            .state()
+            .recovery_tick(due - Duration::from_millis(1))
+    );
+    assert!(
+        fixture.state().pages.is_empty(),
+        "no rebuild before backoff"
+    );
+    assert!(
+        fixture.state().recovery_tick(due),
+        "a rebuild must return the worker to its queues before waiting"
+    );
+    assert!(
+        !fixture.state().recovery_tick(due),
+        "an idle worker must not spin"
+    );
     assert_eq!(fixture.state().pages.len(), 3);
     assert_eq!(fixture.state().active, Some(2));
     assert!(fixture.state().unavailable.is_empty());
@@ -229,7 +252,13 @@ fn native_faults_recover_once_keep_all_tabs_and_leave_other_renderers_untouched(
             .count(),
         1
     );
-    assert!(events.iter().any(|event| matches!(event, BrowserEvent::RecoveryFinished { sequence: 1, restored, failed } if restored == &[1,2,3] && failed.is_empty())));
+    assert!(events.iter().any(|event| matches!(event, BrowserEvent::RecoveryFinished { sequence: 1, restored, failed, stopped: false } if restored == &[1,2,3] && failed.is_empty())));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, BrowserEvent::ProcessFailed { kind: 0, .. })),
+        "smoke must still observe the retired controller's process failure"
+    );
     assert_eq!(
         fixture.state().apply(BrowserCommand::Create {
             id: 2,
@@ -259,9 +288,10 @@ fn environment_and_controller_recovery_failures_keep_retryable_live_records() {
     let mut fixture = Fixture::new();
     fixture.create(11);
     fixture.create(12);
+    assert!(fixture.state().begin_recovery());
     fixture
         .state()
-        .recover_browser_with(|_| Err(BrowserError::Environment));
+        .rebuild_environment(|_| Err(BrowserError::Environment));
     assert!(fixture.state().pages.is_empty());
     assert_eq!(fixture.state().unavailable.len(), 2);
     assert!(fixture.state().environment.is_none());
@@ -300,4 +330,91 @@ fn environment_and_controller_recovery_failures_keep_retryable_live_records() {
         .expect("retry failed controller with explicit valid destination");
     assert_eq!(fixture.state().pages.len(), 1);
     assert!(fixture.state().unavailable.is_empty());
+}
+
+#[test]
+fn recovery_budget_caps_three_attempts_and_requires_explicit_retry_after_stop() {
+    let start = Instant::now();
+    let mut now = start;
+    let mut budget = RecoveryBudget::default();
+    for delay in [1, 2, 4] {
+        assert!(budget.schedule(now));
+        now += Duration::from_secs(delay);
+        assert_eq!(budget.due, Some(now));
+        assert!(!budget.take_due(now - Duration::from_millis(1)));
+        assert!(budget.take_due(now));
+        assert!(!budget.take_due(now), "one attempt per wake");
+    }
+    assert!(!budget.schedule(now));
+    assert!(budget.stopped);
+    assert!(
+        !budget.schedule(start + ATTEMPT_WINDOW * 2),
+        "elapsed time must not restart a stopped engine"
+    );
+    budget.owner_retry(start + ATTEMPT_WINDOW * 2);
+    assert!(!budget.stopped);
+    assert_eq!(budget.attempts.len(), 1);
+    assert!(budget.schedule(start + ATTEMPT_WINDOW * 2));
+}
+
+#[test]
+fn isolated_failures_expire_from_the_rolling_window() {
+    let start = Instant::now();
+    let mut budget = RecoveryBudget::default();
+    for index in 0..5 {
+        let now = start + ATTEMPT_WINDOW * index;
+        assert!(budget.schedule(now));
+        let due = budget.due.unwrap();
+        assert!(budget.take_due(due));
+        assert!(budget.attempts.len() <= 2);
+    }
+    assert!(!budget.stopped);
+}
+
+#[test]
+fn repeated_native_failures_stop_and_owner_reload_recovers_retained_tabs() {
+    let mut fixture = Fixture::new();
+    fixture.create(21);
+    fixture.create(22);
+    fixture
+        .state()
+        .apply(BrowserCommand::ShowActive(Some(21)))
+        .unwrap();
+    for _ in 0..ATTEMPT_LIMIT {
+        let failure = fixture.state().pages[&21].synthetic_failure(21, 0);
+        fixture.state().native_event(failure);
+        let due = fixture.state().recovery.due.unwrap();
+        fixture.state().recovery_tick(due);
+        assert_eq!(fixture.state().pages.len(), 2);
+    }
+    let failure = fixture.state().pages[&21].synthetic_failure(21, 0);
+    fixture.state().native_event(failure);
+    assert!(fixture.state().pages.is_empty());
+    assert!(fixture.state().environment.is_none());
+    assert_eq!(fixture.state().unavailable_tabs(), [21, 22]);
+    assert!(fixture.state().recovery.stopped);
+    assert!(fixture.state().recovery.due.is_none());
+    fixture
+        .state()
+        .recovery_tick(Instant::now() + ATTEMPT_WINDOW * 2);
+    assert!(fixture.state().pages.is_empty());
+    assert_eq!(
+        fixture.state().ensure_environment(),
+        Err(BrowserError::Recovery)
+    );
+    assert!(fixture.drain().iter().any(|event| matches!(event, BrowserEvent::RecoveryFinished { stopped: true, failed, .. } if failed == &[21, 22])));
+    fixture
+        .state()
+        .apply(BrowserCommand::Close { id: 22 })
+        .unwrap();
+    fixture
+        .state()
+        .apply(BrowserCommand::Reload { id: 21 })
+        .unwrap();
+    assert!(!fixture.state().recovery.stopped);
+    assert_eq!(fixture.state().active, Some(21));
+    assert_eq!(fixture.state().pages.len(), 1);
+    assert_eq!(fixture.state().pages[&21].destination(), "about:blank");
+    assert!(fixture.state().unavailable.is_empty());
+    assert!(fixture.drain().iter().any(|event| matches!(event, BrowserEvent::RecoveryFinished { stopped: false, restored, failed, .. } if restored == &[21] && failed.is_empty())));
 }
