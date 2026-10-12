@@ -72,7 +72,7 @@ impl BrowserView {
                     tiles::tile_face(palette, tile, TILE_HEIGHT, TILE_RADIUS, LETTER_SIZE).w_full(),
                 );
             cell = if editing {
-                cell.child(self.tile_controls(palette, surface, index, favorites.len(), cx))
+                cell.child(self.tile_controls(palette, surface, (index, tile), favorites.len(), cx))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.start_tile_editor(surface, Some(index), window, cx);
                     }))

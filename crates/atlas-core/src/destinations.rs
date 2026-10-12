@@ -115,6 +115,8 @@ pub enum DestinationError {
     InvalidAddress,
     TooMany,
     UnknownPosition,
+    /// The tile at that position is no longer the one the edit was made against.
+    Changed,
 }
 
 impl fmt::Display for DestinationError {
@@ -124,19 +126,32 @@ impl fmt::Display for DestinationError {
             Self::InvalidAddress => "a tile needs an http or https address",
             Self::TooMany => "this list already has the most tiles it can hold",
             Self::UnknownPosition => "that tile is no longer in the list",
+            Self::Changed => "that tile changed before the edit arrived, so nothing was changed",
         })
     }
 }
 
 impl std::error::Error for DestinationError {}
 
-/// An edit to one surface, resolved against the latest list rather than an older UI copy.
+/// An edit to one surface. Each positional edit names the tile it was made against
+/// (`expected`), so a queued edit never lands on a tile that moved into that position.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DestinationEdit {
     Add(Destination),
-    Replace { index: usize, tile: Destination },
-    Remove { index: usize },
-    Move { from: usize, to: usize },
+    Replace {
+        index: usize,
+        expected: Destination,
+        tile: Destination,
+    },
+    Remove {
+        index: usize,
+        expected: Destination,
+    },
+    Move {
+        from: usize,
+        to: usize,
+        expected: Destination,
+    },
 }
 
 /// Both surfaces, each in display order.
@@ -183,10 +198,36 @@ impl QuickDestinations {
         };
         match edit {
             DestinationEdit::Add(tile) => add(list, tile),
-            DestinationEdit::Replace { index, tile } => replace(list, index, tile),
-            DestinationEdit::Remove { index } => remove(list, index),
-            DestinationEdit::Move { from, to } => move_tile(list, from, to),
+            DestinationEdit::Replace {
+                index,
+                expected,
+                tile,
+            } => {
+                check_expected(list, index, &expected)?;
+                replace(list, index, tile)
+            }
+            DestinationEdit::Remove { index, expected } => {
+                check_expected(list, index, &expected)?;
+                remove(list, index)
+            }
+            DestinationEdit::Move { from, to, expected } => {
+                check_expected(list, from, &expected)?;
+                move_tile(list, from, to)
+            }
         }
+    }
+}
+
+/// Refuses an edit whose tile is gone or was replaced by another one at that position.
+fn check_expected(
+    list: &[Destination],
+    index: usize,
+    expected: &Destination,
+) -> Result<(), DestinationError> {
+    match list.get(index) {
+        None => Err(DestinationError::UnknownPosition),
+        Some(current) if current != expected => Err(DestinationError::Changed),
+        Some(_) => Ok(()),
     }
 }
 
@@ -243,7 +284,10 @@ fn check_target(target: &DestinationTarget) -> Result<(), DestinationError> {
     };
     // The application normalises addresses; the model only refuses what can never open.
     let web = address.starts_with("https://") || address.starts_with("http://");
-    if !web || address.len() > MAX_ADDRESS_BYTES || address.chars().any(char::is_whitespace) {
+    let unprintable = address
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control());
+    if !web || address.len() > MAX_ADDRESS_BYTES || unprintable {
         return Err(DestinationError::InvalidAddress);
     }
     Ok(())
@@ -295,7 +339,11 @@ mod tests {
         destinations
             .apply(
                 DestinationSurface::QuickAccess,
-                DestinationEdit::Move { from: 2, to: 0 },
+                DestinationEdit::Move {
+                    from: 2,
+                    to: 0,
+                    expected: web("Charlie", 3),
+                },
             )
             .expect("move tile");
         assert_eq!(
@@ -318,6 +366,7 @@ mod tests {
                 DestinationSurface::QuickAccess,
                 DestinationEdit::Replace {
                     index: 1,
+                    expected: web("Two", 2),
                     tile: web("Renamed", 9),
                 },
             )
@@ -325,7 +374,10 @@ mod tests {
         destinations
             .apply(
                 DestinationSurface::QuickAccess,
-                DestinationEdit::Remove { index: 0 },
+                DestinationEdit::Remove {
+                    index: 0,
+                    expected: web("One", 1),
+                },
             )
             .expect("remove tile");
         assert_eq!(
@@ -340,10 +392,18 @@ mod tests {
             QuickDestinations::from_lists(vec![web("One", 1)], Vec::new()).expect("valid lists");
         let before = destinations.clone();
         for edit in [
-            DestinationEdit::Remove { index: 1 },
-            DestinationEdit::Move { from: 0, to: 1 },
+            DestinationEdit::Remove {
+                index: 1,
+                expected: web("One", 1),
+            },
+            DestinationEdit::Move {
+                from: 0,
+                to: 1,
+                expected: web("One", 1),
+            },
             DestinationEdit::Replace {
                 index: 3,
+                expected: web("One", 1),
                 tile: web("Late", 3),
             },
         ] {
@@ -353,6 +413,72 @@ mod tests {
             );
         }
         assert_eq!(destinations, before);
+    }
+
+    #[test]
+    fn a_rename_queued_behind_a_removal_never_overwrites_the_next_tile() {
+        // The editor was opened on "Three" (index 2); "One" is removed before Save arrives.
+        let mut destinations = QuickDestinations::from_lists(
+            vec![
+                web("One", 1),
+                web("Two", 2),
+                web("Three", 3),
+                web("Four", 4),
+            ],
+            Vec::new(),
+        )
+        .expect("valid lists");
+        destinations
+            .apply(
+                DestinationSurface::QuickAccess,
+                DestinationEdit::Remove {
+                    index: 0,
+                    expected: web("One", 1),
+                },
+            )
+            .expect("remove first tile");
+        let before = destinations.clone();
+        assert_eq!(
+            destinations.apply(
+                DestinationSurface::QuickAccess,
+                DestinationEdit::Replace {
+                    index: 2,
+                    expected: web("Three", 3),
+                    tile: web("Renamed", 9),
+                },
+            ),
+            Err(DestinationError::Changed)
+        );
+        assert_eq!(destinations, before);
+        assert_eq!(
+            labels(&destinations, DestinationSurface::QuickAccess),
+            ["Two", "Three", "Four"]
+        );
+    }
+
+    #[test]
+    fn a_repeated_remove_removes_only_one_tile() {
+        // A double click queues the same removal twice before the first is acknowledged.
+        let mut destinations = QuickDestinations::from_lists(
+            vec![web("One", 1), web("Two", 2), web("Three", 3)],
+            Vec::new(),
+        )
+        .expect("valid lists");
+        let remove = DestinationEdit::Remove {
+            index: 0,
+            expected: web("One", 1),
+        };
+        destinations
+            .apply(DestinationSurface::QuickAccess, remove.clone())
+            .expect("first removal");
+        assert_eq!(
+            destinations.apply(DestinationSurface::QuickAccess, remove),
+            Err(DestinationError::Changed)
+        );
+        assert_eq!(
+            labels(&destinations, DestinationSurface::QuickAccess),
+            ["Two", "Three"]
+        );
     }
 
     #[test]
@@ -372,6 +498,8 @@ mod tests {
             "example.test",
             "javascript:void(0)",
             "https://spaced example.test/",
+            "https://control.example.test/\u{7}bell",
+            "https://control.example.test/\u{0}nul",
         ] {
             assert_eq!(
                 Destination::new("Synthetic", DestinationTarget::Web(address.to_owned())),

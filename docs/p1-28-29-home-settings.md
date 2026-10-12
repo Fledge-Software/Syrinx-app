@@ -40,10 +40,18 @@ window, because an agent cannot see it.
 - **Model and limits** (`crates/atlas-core/src/destinations.rs`): each list
   holds at most 64 tiles; a name is 1–64 characters with no control
   characters; a stored target is an `http`/`https` address of at most 8 KiB
-  or a built-in plugin id. Edits are resolved by the session worker against
-  its latest lists, the same way tab commands are, and a refused edit is a
-  recoverable footer message. Tile labels and addresses are redacted from
-  debug output.
+  with no whitespace or control characters, or a built-in plugin id. Tile
+  labels and addresses are redacted from debug output.
+- **Edits name the tile they were made against.** Every rename, move and
+  removal carries its position and the tile the window showed there. The
+  session worker applies it only if that tile is still at that position, and
+  otherwise refuses it with a footer message ("that tile changed before the
+  edit arrived"). So a rename saved after an earlier tile was removed cannot
+  overwrite the tile that moved up, and a double-clicked × removes one tile,
+  not two. When the lists change, an open change form whose tile moved or
+  went away closes and says so. Comparing content rather than a stored id
+  keeps the table and the model simple; two identical tiles are
+  interchangeable, so matching either is harmless.
 
 ## What P1-29 delivers
 
@@ -56,8 +64,12 @@ window, because an agent cannot see it.
   backdrop: Mica for Haze and Glass, opaque otherwise. The chrome redraws at
   once. The two opaque greys P1-07 left in `theme.rs` (selected row and the
   palette's secondary button) now read the canvas tokens `row_selected` and
-  `field`, so Paper does not draw dark rows under dark text. An open command
-  palette window picks the new palette up on its next redraw.
+  `field`, so Paper does not draw dark rows under dark text. The
+  gpui-component widgets (the text fields in the palette, the tile form and
+  the custom accent) switch to the library's light theme for Paper and its
+  dark theme otherwise; they use the library's own colours, not the canvas
+  tokens. An open command palette window picks the new palette up on its
+  next redraw.
 - **Persistence.** The worker saves the choice through the store's writer
   and restores it before the first tab state, so Atlas starts in the chosen
   look. An unreadable stored value falls back to the default for that key
@@ -90,8 +102,25 @@ The settings keys this slice owns:
 | `appearance.accent` | `#RRGGBB` (opaque) | `#FF8A65` |
 | `appearance.reduce_transparency` | `true`, `false` | `false` |
 
-The sidebar slice owns the sidebar width/presentation and should store it
-under its own `sidebar.` keys in the same table.
+P1-29 also provides the storage for the sidebar presentation, which the plan
+assigns to it. The sidebar slice (`claude/p1-08-sidebar-states`) built the
+drag states and left saving them as deferred item DW-2, owned by P1-29, at
+the point where a drag is released. The hookup happens at integration under
+DW-2, using this API in `crates/atlas-ui/src/sidebar_setting.rs`:
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `sidebar.width_state` | `wide`, `favicon`, `hidden` | the sidebar slice's default (wide) |
+
+- Save: send `SessionCommand::SaveSettings(vec![atlas_ui::sidebar_setting(state)])`
+  when a drag settles. Peek is transient and is never stored.
+- Restore: in `BrowserView::restore_preferences`
+  (`crates/atlas-app/src/ui/customize.rs`), read
+  `settings.get(atlas_ui::SIDEBAR_WIDTH_STATE_KEY)` and parse it with
+  `atlas_ui::parse_sidebar_setting`; an unreadable value keeps the default.
+
+The round trip through the worker and a restart is tested in
+`crates/atlas-app/src/session/preference_tests.rs`.
 
 Opening a version 3 database validates the preference rows before any
 write; damaged rows (a position gap, an unknown plugin, an untrimmed label,
@@ -110,9 +139,21 @@ disposable databases with synthetic labels and `example.test` addresses
   would be wrong every evening in the owner's time zone, so the date waits
   for a one-function local-calendar helper in `atlas-platform` (owned by the
   platform work, not this slice).
-- **Sidebar presentation** (wide, favicon-only, hidden) is persisted by the
-  sidebar slice, which owns the width and drag code. Customize does not
-  show it yet.
+- **Sidebar presentation hookup.** The storage above is ready; wiring it to
+  the drag release and to start-up is DW-2, done at integration with the
+  sidebar branch. Customize does not show the presentation.
+- **The default palette shows briefly at start-up.** The saved appearance
+  arrives from the session worker after it opens the database; reading the
+  database on the GUI thread before the window opens would break the rule
+  that storage never runs on the event thread, and the worker holds the
+  storage lease. The window therefore draws Graphite for the moment before
+  the preferences event, then switches.
+- **One damaged tile row stops start-up and offers recovery.** Damaged tile
+  or settings rows are refused like damaged tab rows, so a single bad row
+  sends the whole database to backup recovery rather than dropping only
+  that row. This is kept deliberately consistent with the existing storage
+  rule for now (review finding 5); a narrower repair would need its own
+  decision.
 - **Glass uses Mica, not Acrylic.** GPUI's `Blurred` background is not the
   Windows 11 Acrylic (see `docs/trapstoknow.md`), and drawing real Acrylic
   needs `DwmSetWindowAttribute` in `atlas-platform`. Until then Glass shows
@@ -143,7 +184,10 @@ Run `cargo atlas` (or the built `atlas-app.exe`) and look at the window.
 4. **Open a tile.** On Home, clicking the tile opens the site in the same
    tab. With a page open, clicking a Favorite opens a new tab.
 5. **Edit.** Click "Edit": each tile shows ‹ × ›. Move one, remove one,
-   click one to rename it, then click "Done".
+   click one to rename it, then click "Done". With at least four tiles,
+   open the form on the third, then remove the first with ×: the form
+   closes with "That tile changed while you were editing it". Double-click
+   a × quickly: only one tile goes.
 6. **Plugin tile.** Add a tile, choose "Forge", save. It is dimmed; clicking
    it shows "Forge is not available yet…" in the footer.
 7. **Favorites.** In the sidebar's FAVORITES grid, add two favorites with the
@@ -154,7 +198,9 @@ Run `cargo atlas` (or the built `atlas-app.exe`) and look at the window.
 9. **Palettes.** Open Customize and choose each of the five palettes. The
    whole window changes at once: Haze and Glass show the desktop backdrop,
    Tint follows the accent, Paper is light and still readable (selected
-   sidebar row included).
+   sidebar row included). Open a text field (Ctrl K, or "Add shortcut") in
+   Paper and in a dark palette: the field is light in Paper and dark
+   otherwise.
 10. **Accent.** Choose each preset, then "+" and enter `#12AB9C` and press
     Enter; the hex label and accent marks change. Enter `#12AB9` and check
     the error message.

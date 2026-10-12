@@ -3,7 +3,8 @@
 use std::cell::RefCell;
 
 use atlas_ui::{Accent, Color, Ground, Palette, PaletteId, palette};
-use gpui::{Background, Rgba, WindowBackgroundAppearance, linear_color_stop, linear_gradient};
+use gpui::{App, Background, Rgba, WindowBackgroundAppearance, linear_color_stop, linear_gradient};
+use gpui_component::{Theme, ThemeMode, ThemeToken};
 
 thread_local! {
     // GPUI draws every Atlas window on one thread; Customize replaces this palette live.
@@ -13,6 +14,24 @@ thread_local! {
 /// Makes `palette` the one every later render draws with.
 pub(crate) fn apply(palette: Palette) {
     CURRENT.set(palette);
+}
+
+/// Gives gpui-component's widgets, such as text fields, the drawn palette's light or dark
+/// theme; Paper is the only light palette.
+pub(crate) fn apply_component_theme(cx: &mut App) {
+    let mode = CURRENT.with_borrow(|palette| {
+        if palette.id == PaletteId::Paper {
+            ThemeMode::Light
+        } else {
+            ThemeMode::Dark
+        }
+    });
+    Theme::change(mode, None, cx);
+    // Root must not paint over the native page's rectangle (the Phase 0 stacking trap).
+    Theme::update(cx, |theme| {
+        theme.tokens.background =
+            ThemeToken::new(gpui::transparent_black(), gpui::transparent_black().into());
+    });
 }
 
 /// A copy of the palette being drawn.

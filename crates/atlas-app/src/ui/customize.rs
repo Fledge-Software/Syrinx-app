@@ -6,7 +6,7 @@ use atlas_core::QuickDestinations;
 use atlas_ui::metrics::{radius, text};
 use atlas_ui::{ACCENT_PRESETS, Accent, Color, Palette, PaletteId, palette};
 use gpui::{
-    AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Stateful,
+    App, AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Stateful,
     StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -34,6 +34,7 @@ impl BrowserView {
         settings: &BTreeMap<String, String>,
         destinations: QuickDestinations,
         window: &mut Window,
+        cx: &mut App,
     ) {
         self.home.destinations = destinations;
         let (appearance, unreadable) = Appearance::from_settings(settings);
@@ -42,7 +43,7 @@ impl BrowserView {
                 "A saved appearance setting could not be read, so Atlas used its default."
                     .to_owned();
         }
-        self.show_appearance(appearance, window);
+        self.show_appearance(appearance, window, cx);
     }
 
     /// Applies and saves a Customize choice.
@@ -55,15 +56,16 @@ impl BrowserView {
         if appearance == self.home.appearance {
             return;
         }
-        self.show_appearance(appearance, window);
+        self.show_appearance(appearance, window, cx);
         self.command(SessionCommand::SaveSettings(appearance.to_settings()));
         cx.notify();
     }
 
-    fn show_appearance(&mut self, appearance: Appearance, window: &mut Window) {
+    fn show_appearance(&mut self, appearance: Appearance, window: &mut Window, cx: &mut App) {
         // Every later render, in every Atlas window, reads the new palette.
         self.home.appearance = appearance;
         theme::apply(appearance.drawn_palette());
+        theme::apply_component_theme(cx);
         window.set_background_appearance(theme::window_material());
         window.refresh();
     }
