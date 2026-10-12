@@ -656,7 +656,7 @@ impl BrowserState {
             BrowserCommand::Close { id } => {
                 self.popups.cancel_opener(id);
                 let page = self.pages.remove(&id);
-                let unavailable = self.unavailable.remove(&id);
+                let unavailable = self.forget_unavailable(id);
                 if page.is_none() && unavailable.is_none() {
                     return Err(BrowserError::UnknownTab);
                 }

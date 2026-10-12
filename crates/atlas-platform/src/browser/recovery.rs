@@ -48,8 +48,12 @@ impl RecoveryBudget {
     }
 
     fn owner_retry(&mut self, now: Instant) {
-        self.attempts.clear();
+        self.reset();
         self.attempts.push_back(now);
+    }
+
+    fn reset(&mut self) {
+        self.attempts.clear();
         self.due = None;
         self.stopped = false;
     }
@@ -105,9 +109,15 @@ impl BrowserState {
         self.events.emit(BrowserEvent::PageCrashed { id });
     }
 
+    /// Prepares the shared environment for an owner-initiated Create.
     pub(super) fn ensure_environment(&mut self) -> Result<(), BrowserError> {
-        if self.recovery.stopped || self.recovery.due.is_some() {
+        // An already scheduled attempt must finish before an owner request can replace it.
+        if self.recovery.due.is_some() {
             return Err(BrowserError::Recovery);
+        }
+        // Opening a tab after the cap is an explicit owner retry with a fresh budget.
+        if self.recovery.stopped {
+            self.owner_restart(Instant::now());
         }
         if self.environment.is_none() {
             self.environment = Some(environment::create(&self.profile)?);
@@ -155,11 +165,28 @@ impl BrowserState {
         if self.environment.is_some() {
             return self.restore_page(id);
         }
-        self.recovery.owner_retry(Instant::now());
+        self.owner_restart(Instant::now());
+        Ok(())
+    }
+
+    /// Restarts a stopped engine for the owner, restoring every retained crashed tab.
+    fn owner_restart(&mut self, now: Instant) {
+        self.recovery.owner_retry(now);
+        if self.unavailable.is_empty() {
+            return;
+        }
         if self.begin_recovery() {
             self.rebuild_environment(environment::create);
         }
-        Ok(())
+    }
+
+    /// Forgets a closed crashed tab; a stopped engine with nothing left to restore starts afresh.
+    pub(super) fn forget_unavailable(&mut self, id: u64) -> Option<String> {
+        let destination = self.unavailable.remove(&id)?;
+        if self.recovery.stopped && self.unavailable.is_empty() {
+            self.recovery.reset();
+        }
+        Some(destination)
     }
 
     fn begin_recovery(&mut self) -> bool {
