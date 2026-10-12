@@ -1,5 +1,5 @@
 ---
-status: proposed, awaiting the owner's approval
+status: approved by the owner, 2026-10-12
 slices: AN-01 (local aggregate counters), AN-02 (report preview and export)
 decisions: D39; D13, D37, D40 and D47 constrain it
 date: 2026-10-12

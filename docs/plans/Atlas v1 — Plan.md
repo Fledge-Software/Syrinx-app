@@ -861,21 +861,22 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
   retention, export preview and performance budget still need a proposal
   before collector implementation. No automatic upload or model integration
   is authorized, and actual usage stays out of development artifacts.
-- **Analytics proposal awaiting the owner (AN-01/AN-02):**
-  `docs/proposals/an-01-02-local-analytics.md` proposes the fixed version 1
-  schema, off-by-default controls, 30-day periods with two kept, bucket edges,
-  the overhead budget, the exact JSON export and the two added rows (AN-01
-  after P1-39, AN-02 before P1-40, renumbering nothing). It ends with seven
-  yes/no questions. Nothing is built or collected until they are answered.
-- **Page-text extraction method awaiting the owner (P1-25):**
-  `docs/proposals/p1-25-page-text-extraction.md` compares five methods and
-  recommends a single DevTools-protocol `DOMSnapshot.captureSnapshot` call on
-  eligible pages, with response headers read through
-  `WebResourceResponseReceived` and no script injection anywhere. It sets the
-  eligibility order (exclusions and redirect chain before any access, fail
-  closed on unproven `no-store`) and the synthetic feasibility test. It ends
-  with seven yes/no questions; no guarded page API is used until they are
-  answered.
+- **Analytics proposal approved (AN-01/AN-02), 2026-10-12:**
+  the owner answered yes to all seven questions in
+  `docs/proposals/an-01-02-local-analytics.md`: the fixed version 1 schema,
+  off until enabled, turning it off deletes the counts, 30-day periods with
+  two kept, kept out of backups, owner-initiated JSON export only, and AN-01
+  after P1-39 with AN-02 before P1-40. Real usage still stays out of
+  development artifacts.
+- **Page-text extraction method approved (P1-25), 2026-10-12:** the owner
+  answered yes to all seven questions in
+  `docs/proposals/p1-25-page-text-extraction.md`: one DevTools-protocol
+  `DOMSnapshot.captureSnapshot` call on eligible pages, response headers
+  read only through `WebResourceResponseReceived`, no script run inside any
+  page, Google's own domains (YouTube included) excluded, redirect chains
+  through an excluded site skipped, a built-in bank and payment list with a
+  password/card-field guard, fail closed on unproven `no-store`, and a stop
+  and return to the owner if test F15 shows the capture is detectable.
 - **Retention implementation (D40):** the owner chose seven days with page
   text excluded from daily backups. Prove expiry across cache/index and
   restart/replay/restore; do not treat search invisibility as deletion.
