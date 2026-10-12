@@ -1,5 +1,9 @@
 //! Keeps model, persistence and catalogue work off the browser's event thread.
 
+mod recovery;
+
+pub use recovery::RecoveryPrompt;
+
 use std::{
     collections::HashSet,
     fmt,
@@ -13,7 +17,7 @@ use atlas_core::{
     Activation, SavedPageId, SnapshotError, TabError, TabId, TabKind, TabMetadata, TabModel,
     TabModelSnapshot,
 };
-use atlas_platform::WindowsDirectoryLease;
+use atlas_platform::{StartupStorage, WindowsDirectoryLease};
 use atlas_search::{
     Catalogue, Entry, Scope, SearchError, SearchPolicy, SearchResults, Target, Usage,
 };
@@ -30,6 +34,9 @@ pub enum HomeEntryAction {
 }
 
 pub enum SessionCommand {
+    ConfirmRecovery {
+        offer_id: u64,
+    },
     HomeEntry {
         request_id: u64,
         action: HomeEntryAction,
@@ -91,6 +98,7 @@ pub struct SessionSnapshot {
 
 #[derive(Debug)]
 pub enum SessionEvent {
+    RecoveryOffered(RecoveryPrompt),
     State(SessionSnapshot),
     Search {
         request_id: u64,
@@ -118,6 +126,12 @@ pub enum SessionError {
     },
     WorkerPanicked,
     EventReceiverClosed,
+    RecoveryUnavailable,
+    Recovery(String),
+    RecoveryFailed {
+        startup: Box<SessionError>,
+        recovery: String,
+    },
     CleanupFailed {
         primary: Box<SessionError>,
         cleanup: StoreError,
@@ -140,6 +154,16 @@ impl fmt::Display for SessionError {
             }
             Self::WorkerPanicked => formatter.write_str("The session worker stopped unexpectedly"),
             Self::EventReceiverClosed => formatter.write_str("The session event receiver closed"),
+            Self::RecoveryUnavailable => {
+                formatter.write_str("This recovery decision is no longer available")
+            }
+            Self::Recovery(error) => write!(formatter, "Cannot restore the backup: {error}"),
+            Self::RecoveryFailed { startup, recovery } => {
+                write!(
+                    formatter,
+                    "{startup}; backup recovery is unavailable: {recovery}"
+                )
+            }
             Self::CleanupFailed { primary, cleanup } => {
                 write!(formatter, "{primary}; shutdown also failed: {cleanup}")
             }
@@ -206,15 +230,54 @@ fn run(
     commands: mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
-    // Startup refuses unsafe paths or corruption; restoration always needs owner confirmation.
-    let lease = WindowsDirectoryLease::prepare(&data_dir).map_err(SessionError::Location)?;
+    let Some((store, mut worker)) = startup_session(&data_dir, &commands, events)? else {
+        return Ok(());
+    };
+    let result = worker.serve(&store, commands, events);
+    finish_store(result, store.shutdown())
+}
+
+fn startup_session(
+    data_dir: &std::path::Path,
+    commands: &mpsc::Receiver<SessionCommand>,
+    events: &UnboundedSender<SessionEvent>,
+) -> Result<Option<(Store, Worker)>, SessionError> {
+    // The guarded preflight retains either the existing primary or the exact recovery offer.
+    let confirmed = match recovery::prepare_startup(data_dir)? {
+        StartupStorage::Ready(lease) => match open_session(lease) {
+            Ok(session) => return Ok(Some(session)),
+            Err(error) => recovery::confirm_failed_start(data_dir, error, commands, events)?,
+        },
+        StartupStorage::Recovery(offer) => recovery::confirm_offer(offer, commands, events)?,
+    };
+    if !confirmed {
+        return Ok(None);
+    }
+    // A confirmed restore gets one guarded reopen, never an automatic second offer.
+    let StartupStorage::Ready(lease) = recovery::prepare_startup(data_dir)? else {
+        return Err(SessionError::RecoveryUnavailable);
+    };
+    open_session(lease).map(Some)
+}
+
+fn open_session(lease: WindowsDirectoryLease) -> Result<(Store, Worker), SessionError> {
     let store = Store::open(Arc::new(lease)).map_err(SessionError::Store)?;
-    let result =
-        Worker::restore(&store).and_then(|mut worker| worker.serve(&store, commands, events));
-    let cleanup = store.shutdown();
+    match Worker::restore(&store) {
+        Ok(worker) => Ok((store, worker)),
+        Err(error) => {
+            // Recovery cannot overlap live connections or conceal a failed close.
+            finish_store(Err(error), store.shutdown())
+        }
+    }
+}
+
+fn finish_store<T>(
+    result: Result<T, SessionError>,
+    cleanup: Result<(), StoreError>,
+) -> Result<T, SessionError> {
     match (result, cleanup) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Ok(()), Err(error)) => Err(SessionError::Store(error)),
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(error)) => Err(SessionError::Store(error)),
         (Err(error), Ok(())) => Err(error),
         (Err(primary), Err(cleanup)) => Err(SessionError::CleanupFailed {
             primary: Box::new(primary),
@@ -280,6 +343,9 @@ impl Worker {
         command: SessionCommand,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        if matches!(command, SessionCommand::ConfirmRecovery { .. }) {
+            return recovery::reject_command(events);
+        }
         if let SessionCommand::Query {
             request_id,
             text,
@@ -466,6 +532,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         SessionCommand::ReopenClosed => {
             model.reopen_closed().map_err(SessionError::Model)?;
         }
+        SessionCommand::ConfirmRecovery { .. } => return Err(SessionError::RecoveryUnavailable),
         SessionCommand::Query { .. } | SessionCommand::Shutdown => {}
     }
     Ok(())

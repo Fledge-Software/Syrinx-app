@@ -12,6 +12,17 @@ you found it in the commit message, not here.
 
 ## Page tabs: WebView2 through wry
 
+- **A synthetic Windows HTTP server drops a connection before request bytes
+  arrive.** An accepted socket inherits the listener's nonblocking mode;
+  setting read/write timeouts does not make it blocking. Explicitly set each
+  accepted stream to blocking mode before the bounded I/O. Otherwise an
+  immediate `WouldBlock` can be mistaken for an idle timeout, and logging
+  before the read can conceal the defect by changing timing. The close-page
+  fixture regression proves `WouldBlock`/10035 before configuration and
+  `TimedOut`/10060 after it. Source:
+  `docs/parallel-browser-navigation-review-2026-10-10.md` (source and native
+  socket test confirmed; not the original WebView2 breakpoint diagnosis).
+
 - **A page closes its native window while its Atlas tab still looks open.**
   Published wry 0.57.0 destroys the child window directly on
   `WindowCloseRequested`. Atlas's approved two-file patch delegates this
@@ -72,6 +83,14 @@ you found it in the commit message, not here.
   logical units. Source: note 08, section 2.3 (medium, code-read only).
 
 ## The interface: GPUI on Windows
+
+- **A queued palette refocus can discard the Enter or Escape behind it.**
+  The popup may remove its native window before the browser drains Ctrl L/K.
+  Skip that obsolete popup-origin refocus without clearing its retained
+  identity; the queued completion still needs that identity to pass the
+  stale-popup guard. Keep main-window stale-handle recovery unchanged.
+  Source: integrated-preview shortcut review and the app's routing regression
+  (source-confirmed; native timing acceptance remains separate).
 
 - **A hidden launch cannot establish visible-window readiness.** Fresh
   non-smoke Atlas processes started with `Start-Process -WindowStyle Hidden`
@@ -182,6 +201,17 @@ you found it in the commit message, not here.
   audited 0.13.0 source; this does not promise grapheme-cluster boundaries.
 
 ## Storage
+
+- **A retained directory or database can still be renamed despite excluding
+  delete sharing.** Windows metadata-only opens do not enforce this sharing
+  restriction. Retained directories need `FILE_LIST_DIRECTORY`, and retained
+  existing primary files need `FILE_READ_DATA`; keep identity probes
+  metadata-only so exclusive lifecycle/maintenance handles remain inspectable.
+  Test empty directories and existing files as well as freshly created files,
+  then verify rename succeeds after release. Source:
+  `docs/missing-primary-startup-review.md`, native validation follow-up
+  (both original rename assertions pass after correction, with 60 focused
+  storage tests and the 436-test normal-desktop gate passing).
 
 - **Read-only inspection can refuse a rollback before reporting corruption.**
   A primary accompanied by a rollback journal can return

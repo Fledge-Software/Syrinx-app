@@ -24,6 +24,8 @@ mod highlight_cache;
 use highlight_cache::HighlightCache;
 
 #[cfg(test)]
+mod acceptance_comparison;
+#[cfg(test)]
 mod hybrid;
 #[cfg(test)]
 mod occupancy;
@@ -42,6 +44,8 @@ enum QueryStrategy {
     Ranges,
     #[cfg(test)]
     BoundReuse(bool),
+    #[cfg(test)]
+    MembershipOrder(bool),
 }
 
 impl QueryStrategy {
@@ -350,6 +354,10 @@ impl Catalogue {
                 #[cfg(test)]
                 QueryStrategy::BoundReuse(reuse) => {
                     self.rank_reused_bounds(text, scope, now, policy, observer, reuse)?
+                }
+                #[cfg(test)]
+                QueryStrategy::MembershipOrder(cached_first) => {
+                    self.rank_membership_order(text, scope, now, policy, observer, cached_first)?
                 }
             }
         };

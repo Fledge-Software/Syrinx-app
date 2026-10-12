@@ -361,3 +361,64 @@ Host failure injection, adapted pending-controller shutdown and real GPUI
 typing/focus validation remain outstanding; the owner's manual typing check
 is still pending through integration. This outcome update changes only this
 report and makes no commit or merge.
+
+### Process-role diagnostic blocked before application execution
+
+On October 11, 2026, the isolated diagnostic build and its single unchanged
+metadata-trace build ended with Cargo exit 101 at `gpui_macros` resolution.
+A subsequent single explicit-import compiler probe ended with exit 1 and
+exposed `LoadLibraryExW` error 4551: Application Control blocked the exact
+diagnostic `gpui_macros-1a9aa98a68e2369f.dll` (SHA-256
+`0dc1d95fdd74af5015a9a5c59d1b753b73e466bf81251aacc85e1b727c2f741b`).
+The diagnostic reports five internal load attempts; integration invoked the
+probe compiler once. Evidence is preserved in `target/macro-load-probe/`,
+alongside `target/continuation-process-role-build.log` and
+`target/continuation-process-role-build-trace.log`.
+
+No diagnostic Atlas application ran, so process-role and browser-exit
+observations remain uncollected. This establishes the probe's policy block,
+not which policy rule selected the file, every earlier compiler failure's
+cause, or the original WebView2 breakpoint's cause. The earlier empty scoped
+CodeIntegrity query does not negate the explicit loader error. This isolated
+build path is stopped without security, signing, cache, dependency or DLL
+replacement changes.
+
+### Abnormal parent-window lifetime remains a separate coverage gap
+
+A read-only audit, independently reviewed by two subagents, found the ordinary
+close veto, startup-window failure and ordinary Rust worker unwinding consistent
+with the reviewed browser-first ordering. That is Rust resource ordering, not
+proof that every native close succeeded or all COM references were released.
+
+Windows session termination follows a different path in the pinned GPUI source:
+it calls application shutdown, clears windows before awaiting quit observers,
+and may exit without Atlas's stopped-event and join protocol. Atlas's fallback
+`BrowserHost` destructor requests shutdown but retains no parent-window owner
+and does not wait. This leaves the parent-lifetime guarantee unenforced on that
+path; native destruction timing and consequences remain untested. It does not
+show that session termination occurred during the original breakpoint or that
+this path caused it. No Windows logoff/shutdown test, source fix or policy
+change was performed. A blocking GUI join or an ordinary async quit hook alone
+does not establish safe ownership because the worker needs message pumping and
+GPUI clears windows before awaiting that hook.
+
+Two independent source reviewers then checked the available shutdown hooks.
+The pinned `on_app_quit` hook is noncancelable, and `WindowHandle` does not own
+the native window. GPUI's 200 ms quit-future waiter parks without pumping
+Windows messages or foreground tasks; meanwhile wry's destructor can send a
+synchronous message to the parent. Merely moving window destruction later or
+joining on the GUI thread can therefore introduce a deadlock. The waiter also
+cannot enforce its timeout while a future's poll blocks.
+
+A safe solution needs a contract before native window teardown: retain the
+actual parent owner, release application borrows before pumping messages,
+coordinate browser shutdown and store draining, and define deadline,
+cancellation and reentrancy behavior. This requires a concrete dependency or
+public-hook proposal with separate owner approval. Preserve the ordinary close
+path; do not apply an `on_app_quit`-only workaround. This is source feasibility
+analysis, not a reproduced crash or authorization for a dependency patch.
+
+Any in-process pumping deadline is cooperative between message dispatches;
+it cannot interrupt a handler that blocks. A future proposal must not promise
+a hard timeout or guaranteed graceful OS-session shutdown, and must explicitly
+guard against reentrant or duplicate session-end and quit notifications.

@@ -4,6 +4,10 @@ mod home_palette;
 mod navigation_intents;
 mod navigation_status;
 mod page_lifecycle;
+mod recovery;
+
+#[cfg(test)]
+mod shutdown_tests;
 
 use std::{
     cell::RefCell,
@@ -88,6 +92,7 @@ struct PalettePopup {
 pub struct BrowserView {
     model: TabModelSnapshot,
     session_revision: Option<u64>,
+    recovery: Option<recovery::RecoveryCard>,
     session: Option<SessionHandle>,
     browser: Option<BrowserHost>,
     session_stopped: bool,
@@ -125,6 +130,7 @@ impl BrowserView {
         let mut view = Self {
             model: TabModelSnapshot::default(),
             session_revision: None,
+            recovery: None,
             session: None,
             browser: None,
             session_stopped: true,
@@ -233,9 +239,20 @@ impl BrowserView {
 
     fn session_event(&mut self, event: SessionEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            SessionEvent::RecoveryOffered(prompt) => {
+                if !self.closing {
+                    self.recovery = Some(recovery::RecoveryCard::new(prompt));
+                    self.message =
+                        "A verified backup is available. Confirm before continuing recovery."
+                            .to_owned();
+                }
+            }
             SessionEvent::State(snapshot) => {
+                self.recovery = None;
                 // Restored sessions already have saved revisions; only the first state is startup.
-                let initial = self.session_revision.replace(snapshot.revision).is_none();
+                let previous_revision = self.session_revision.replace(snapshot.revision);
+                let initial = previous_revision.is_none();
+                let changed = previous_revision != Some(snapshot.revision);
                 let saved_message = if initial
                     && !snapshot.model.tabs.is_empty()
                     && snapshot.previous_shutdown == atlas_store::ShutdownState::Unclean
@@ -267,6 +284,14 @@ impl BrowserView {
                     self.navigate_committed(id);
                 }
                 self.sync_pages();
+                // Only committed model changes invalidate an open palette's catalogue snapshot.
+                if changed
+                    && !self.closing
+                    && let Some(palette) = &self.palette
+                {
+                    self.pending_query = None;
+                    palette.view.update(cx, |palette, cx| palette.refresh(cx));
+                }
                 if self.smoke && self.model.tabs.is_empty() && !self.closing {
                     self.command(SessionCommand::NewTab {
                         address: "about:blank".to_owned(),
@@ -450,16 +475,30 @@ impl BrowserView {
     }
 
     fn command(&mut self, command: SessionCommand) {
+        let ready = self.session_revision.is_some();
         let Some(session) = &self.session else {
-            self.message = "Local storage is unavailable.".to_owned();
+            if session_command_allowed(self.closing, ready, &command) {
+                self.message = "Local storage is unavailable.".to_owned();
+            }
             return;
         };
-        if self.home_palette.send(&session.commands, command).is_err() {
-            self.message = "The session worker is unavailable.".to_owned();
+        if queue_session_command(
+            self.closing,
+            ready,
+            &mut self.home_palette,
+            &session.commands,
+            command,
+        )
+        .is_err()
+        {
+            self.fail("The session worker is unavailable.");
         }
     }
 
     fn page_command(&mut self, command: BrowserCommand) -> bool {
+        if !page_command_allowed(self.closing, &command) {
+            return false;
+        }
         let Some(browser) = &self.browser else {
             self.message = "The page host is unavailable.".to_owned();
             return false;
@@ -467,13 +506,16 @@ impl BrowserView {
         match browser.send(command) {
             Ok(()) => true,
             Err(error) => {
-                self.message = error.to_string();
+                self.fail(error.to_string());
                 false
             }
         }
     }
 
     fn sync_pages(&mut self) {
+        if self.closing || self.session_revision.is_none() {
+            return;
+        }
         let desired =
             self.navigation_intents
                 .desired_page(&self.model, self.browser_ready, self.smoke);
@@ -549,6 +591,9 @@ impl BrowserView {
     }
 
     fn shortcut(&mut self, shortcut: BrowserShortcut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing {
+            return;
+        }
         match shortcut {
             BrowserShortcut::NewTab => self.command(SessionCommand::NewTab {
                 address: "about:blank".to_owned(),
@@ -579,6 +624,9 @@ impl BrowserView {
     }
 
     fn open_palette(&mut self, address: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || self.session_revision.is_none() {
+            return;
+        }
         if let Some(palette) = &self.palette {
             let view = palette.view.clone();
             if palette
@@ -686,7 +734,7 @@ impl BrowserView {
             .entity_id();
         cx.spawn_in(window, async move |view, cx| {
             while let Some(event) = receiver.next().await {
-                let closed = !matches!(event, PaletteEvent::Query { .. });
+                let closed = event.finishes_entry();
                 // A late event from a closed popup must not act on a replacement popup.
                 let delivered = view.update_in(cx, |view, window, cx| {
                     if view
@@ -711,7 +759,10 @@ impl BrowserView {
     }
 
     fn palette_event(&mut self, event: PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(event, PaletteEvent::Query { .. }) {
+        if self.closing {
+            return;
+        }
+        if event.finishes_entry() {
             self.pending_query = None;
             self.home_palette.finish_entry();
         }
@@ -746,6 +797,15 @@ impl BrowserView {
                 }
                 self.focus_page(window);
             }
+            PaletteEvent::Shortcut(shortcut) => {
+                let popup_live = self.palette.as_ref().is_some_and(|palette| {
+                    let handle: gpui::AnyWindowHandle = palette.window.into();
+                    cx.windows().contains(&handle)
+                });
+                dispatch_palette_shortcut(shortcut, popup_live, |shortcut| {
+                    self.shortcut(shortcut, window, cx);
+                });
+            }
             PaletteEvent::Closed => {
                 self.palette = None;
                 self.focus_page(window);
@@ -755,6 +815,9 @@ impl BrowserView {
     }
 
     fn focus_page(&mut self, window: &mut Window) {
+        if self.closing {
+            return;
+        }
         window.activate_window();
         if let Some(id) = self.shown {
             self.page_command(BrowserCommand::Focus { id: id.get() });
@@ -780,6 +843,7 @@ impl BrowserView {
             return;
         }
         self.closing = true;
+        self.retire_palette(cx);
         self.message = "Saving and closing…".to_owned();
         if self.browser_stopped && !self.session_stopped {
             self.command(SessionCommand::Shutdown);
@@ -789,6 +853,26 @@ impl BrowserView {
         }
         self.finish_close(cx);
         cx.notify();
+    }
+
+    fn retire_palette(&mut self, cx: &mut Context<Self>) {
+        // Invalidate queued popup events before removing a still-open native window.
+        self.pending_query = None;
+        self.home_palette.finish_entry();
+        let Some(palette) = self.palette.take() else {
+            return;
+        };
+        let handle: gpui::AnyWindowHandle = palette.window.into();
+        // Enter can already have removed the window while its Submit event is queued.
+        if !cx.windows().contains(&handle) {
+            return;
+        }
+        if handle
+            .update(cx, |_, window, _| window.remove_window())
+            .is_err()
+        {
+            self.fail("Cannot close the command palette during shutdown.");
+        }
     }
 
     pub fn smoke_timeout(&mut self, cx: &mut Context<Self>) {
@@ -1085,6 +1169,9 @@ impl BrowserView {
 
 impl Render for BrowserView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.session_revision.is_none() {
+            return self.startup_panel(cx);
+        }
         if self.browser_ready && !self.closing {
             self.resize_pages(window);
         }
@@ -1185,6 +1272,59 @@ impl Render for BrowserView {
     }
 }
 
+fn dispatch_palette_shortcut(
+    shortcut: BrowserShortcut,
+    popup_live: bool,
+    dispatch: impl FnOnce(BrowserShortcut),
+) {
+    // Enter or Escape may remove the popup before its earlier refocus request is delivered.
+    // Keep the retained popup identity so its queued completion can still reach the browser.
+    if !popup_live
+        && matches!(
+            shortcut,
+            BrowserShortcut::Address | BrowserShortcut::Palette
+        )
+    {
+        return;
+    }
+    dispatch(shortcut);
+}
+
+fn session_command_allowed(closing: bool, ready: bool, command: &SessionCommand) -> bool {
+    // Drain final native metadata before Shutdown, but accept no new browsing or recovery intent.
+    if closing
+        && !matches!(
+            command,
+            SessionCommand::ObserveMetadata { .. } | SessionCommand::Shutdown
+        )
+    {
+        return false;
+    }
+    ready
+        || matches!(
+            command,
+            SessionCommand::ConfirmRecovery { .. } | SessionCommand::Shutdown
+        )
+}
+
+fn queue_session_command(
+    closing: bool,
+    ready: bool,
+    home: &mut HomePaletteIntent,
+    sender: &std::sync::mpsc::Sender<SessionCommand>,
+    command: SessionCommand,
+) -> Result<bool, std::sync::mpsc::SendError<SessionCommand>> {
+    if !session_command_allowed(closing, ready, &command) {
+        return Ok(false);
+    }
+    home.send(sender, command)?;
+    Ok(true)
+}
+
+fn page_command_allowed(closing: bool, command: &BrowserCommand) -> bool {
+    !closing || matches!(command, BrowserCommand::Shutdown)
+}
+
 fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -1217,5 +1357,100 @@ fn search_policy(text: &str) -> SearchPolicy {
             recency: 30,
             recency_window_secs: NonZeroU64::new(604_800).expect("positive recency window"),
         },
+    }
+}
+
+#[cfg(test)]
+mod palette_shortcut_tests {
+    use futures::FutureExt;
+
+    use super::*;
+
+    #[test]
+    fn removed_popup_refocus_does_not_invalidate_queued_completion() {
+        for shortcut in [BrowserShortcut::Address, BrowserShortcut::Palette] {
+            for terminal in [
+                PaletteEvent::Submit {
+                    text: "https://queued.example.test/".to_owned(),
+                    force_search: false,
+                },
+                PaletteEvent::Submit {
+                    text: "synthetic search".to_owned(),
+                    force_search: true,
+                },
+                PaletteEvent::Activate(Target::Tab(TabId::new(1).expect("synthetic tab"))),
+                PaletteEvent::Closed,
+            ] {
+                let (sender, mut receiver) = unbounded();
+                sender
+                    .unbounded_send(PaletteEvent::Shortcut(shortcut))
+                    .expect("queue refocus before completion");
+                sender.unbounded_send(terminal).expect("queue completion");
+                drop(sender);
+                let popup_id = 7;
+                let mut retained_popup = Some(popup_id);
+                let mut completed = false;
+                while let Some(event) = receiver.next().now_or_never().expect("queued event") {
+                    // The browser rejects an event once its originating popup identity is lost.
+                    if retained_popup != Some(popup_id) {
+                        break;
+                    }
+                    match event {
+                        PaletteEvent::Shortcut(shortcut) => {
+                            dispatch_palette_shortcut(shortcut, false, |_| {
+                                // A stale open_palette call would retire this identity too early.
+                                retained_popup = None;
+                            });
+                        }
+                        PaletteEvent::Submit { .. }
+                        | PaletteEvent::Activate(_)
+                        | PaletteEvent::Closed => {
+                            completed = true;
+                            retained_popup = None;
+                        }
+                        PaletteEvent::Query { .. } => panic!("unexpected query in refocus race"),
+                    }
+                }
+                assert!(
+                    completed,
+                    "queued completion must survive the obsolete refocus"
+                );
+                assert_eq!(retained_popup, None);
+            }
+        }
+    }
+
+    #[test]
+    fn popup_liveness_only_suppresses_obsolete_refocus_actions() {
+        let ordinary = [
+            BrowserShortcut::NewTab,
+            BrowserShortcut::CloseTab,
+            BrowserShortcut::NextTab,
+            BrowserShortcut::PreviousTab,
+            BrowserShortcut::ReopenTab,
+            BrowserShortcut::SavePage,
+            BrowserShortcut::Back,
+            BrowserShortcut::Forward,
+            BrowserShortcut::Reload,
+        ];
+        for popup_live in [false, true] {
+            let mut dispatched = Vec::new();
+            for shortcut in ordinary {
+                dispatch_palette_shortcut(shortcut, popup_live, |shortcut| {
+                    dispatched.push(shortcut);
+                });
+            }
+            assert_eq!(dispatched, ordinary);
+        }
+        let mut refocused = Vec::new();
+        for shortcut in [BrowserShortcut::Address, BrowserShortcut::Palette] {
+            dispatch_palette_shortcut(shortcut, true, |shortcut| {
+                refocused.push(shortcut);
+            });
+        }
+        assert_eq!(
+            refocused,
+            [BrowserShortcut::Address, BrowserShortcut::Palette]
+        );
     }
 }

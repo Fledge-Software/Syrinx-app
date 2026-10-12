@@ -8,6 +8,149 @@ active plans, `docs/LOCAL-DEV.md` and `docs/implementation-status.md` first.
 
 ## Latest continuation checkpoint
 
+### October 11 browser-first continuation
+
+Latest checkpoint: atomic startup and retained-name guards pass the complete
+normal-desktop gate with 436 tests and synthetic app smoke in
+`target/continuation-atomic-startup-desktop-gate.log` (SHA-256
+`5654ffa30e3f5af2b8711410ea862db2d5dcb8c42b474450b294048f49ccad79`).
+Current `target/local/atlas-app.exe` SHA-256 is
+`252044439eb668680360e28009a3245e2992a754cb22d82b2dae8b6b8839982d`.
+Both initial rename-refusal failures were fixed without weakening assertions;
+60 focused storage tests and 23 worker tests also pass. The restricted-context
+gate's smoke timed out with watchdog code 124; the unchanged binary passed
+normal-desktop smoke and the full desktop gate. Preserve both logs and do not
+call the original WebView2 crash resolved. All execution is terminal. Visual
+typing/focus acceptance and the blocked isolated diagnostic remain open.
+This supersedes the pending implementation/validation notes below. Changes
+remain uncommitted; the previous commit authorization was already fulfilled.
+
+The crash chat independently verified the latest gate and binary hashes and
+the 436-test total. Its two source audits found no missing startup
+acknowledgement or reversed readiness dependency. Exit 124 identifies the
+independent watchdog deadline, not the stalled operation. No new crash fix or
+diagnostic execution follows from this review; the isolated diagnostic and
+Computer Use recovery limits remain unchanged.
+
+The owner has now explicitly approved exactly `Wdk_Foundation`,
+`Wdk_Storage_FileSystem` and `Win32_System_IO` on pinned `windows 0.62.2`.
+The usability chat has resumed the atomic startup implementation and its
+remaining regressions. This supersedes the pending-amendment checkpoint below;
+it grants no other dependency or security changes. Integration must wait for
+the reviewed implementation freeze before formatting, targeted tests and the
+full gate. The last verified binary remains the 411-test checkpoint.
+
+Owner approval update: the owner answered Yes to the exact missing-primary
+startup safeguard in `docs/missing-primary-startup-review.md`. The usability
+chat now owns its platform/native/recovery implementation, minimal app session
+wiring and synthetic regressions, with subagent review. This approval includes
+only that additive API and conservative initialization policy; other pending
+GPUI, security, dependency and version-control limits remain unchanged.
+Integration retains all execution; wait for implementation freeze before tests.
+
+Implementation review found that directory creation followed by opening its
+path cannot prove the opened object is the one created. A separate owner
+question is pending for exactly `Wdk_Foundation`, `Wdk_Storage_FileSystem` and
+`Win32_System_IO` on the existing pinned `windows 0.62.2` dependency, to expose
+typed atomic directory creation. No manifest change is authorized yet. The
+usability chat has frozen the unaffected retained-offer/session work and its
+13 new regressions after independent source review. The fresh-start branch
+deliberately fails closed until the amendment is approved and implemented.
+The exact 13-file handoff and remaining acceptance checks are recorded in
+`docs/missing-primary-startup-review.md`. Do not build or promote this partial
+state as a usable replacement. Startup source remains unvalidated; the latest
+verified binary remains the 411-test checkpoint below. Do not call that gate
+validation of these later startup changes.
+
+Latest checkpoint supersedes the in-progress notes below: the corrected palette
+shortcut routing and queued-refocus race pass the complete 411-test gate and
+synthetic smoke in `target/continuation-palette-refocus-gate.log`. Current
+`target/local/atlas-app.exe` SHA-256 is
+`4c437c976290615a00ee06287b5338b94b26267e1546002d8b307674d55cdfde`.
+All execution is terminal. Native focus/caret acceptance and the original
+WebView2 crash remain open. Missing-primary startup API/policy is now approved;
+only the three-feature atomic-creation amendment above remains pending. The search
+candidate stays test-only after the full comparison rejected promotion.
+
+The first palette-shortcut gate passes 409 tests and smoke in
+`target/continuation-palette-shortcuts-gate.log`, but independent review found
+a queued Ctrl K/L then Enter/Escape race that the test did not cover. That
+version is not accepted. The usability chat owns its narrow correction and
+regression; wait for its new freeze before running the next gate. All earlier
+evidence stays preserved. The full search comparison was rejected for
+production promotion after independent timing review; see `docs/p1-05-search.md`.
+
+Execution update: the shared private benchmark workload extraction passes all
+seven focused xtask benchmark tests in
+`target/continuation-shared-workload-tests.log`. The reviewed full 26-case
+Unicode-selected comparison finished successfully in 19.96 seconds, with exact
+result parity, in `target/continuation-unicode-full-comparison.log`. Session
+`19312` is terminal. The navigation chat is independently analyzing timings;
+production search remains unchanged. The usability chat is implementing the
+reviewed private routing of the 11 existing shortcuts in the palette; wait for
+its freeze before validating. Missing-primary startup API/policy approval is
+pending in the owner question; no such implementation is authorized yet.
+
+Latest validation: the independently reviewed late-action shutdown fix passes
+the full 407-test gate and synthetic smoke in
+`target/continuation-shutdown-actions-gate.log`. Current executable SHA-256 is
+`2e3bc975b0b1ea894c12a4c94f5171401635324712b1e0d378f72cf558b47b9e`.
+The Unicode-selected experiment now passes two focused tests; timing review
+is assigned to the navigation chat. The usability chat is preparing a
+review-only palette shortcut-routing proposal. The crash chat is auditing
+existing process-failure handling; blocked diagnostics and GPUI changes remain
+stopped. No Cargo/native process remains active at this checkpoint.
+
+The owner now prioritizes a usable browser and explicitly defers plugins,
+Fledge, Notes and Forge. The preceding work was committed at their request
+as `8239511`; later changes remain uncommitted. No merge, push or security
+change is authorized. Three existing chats and their subagents continue
+crash investigation, navigation/search reliability and browser recovery;
+the integration chat alone executes Cargo and native checks.
+
+The corrected synthetic socket fixture passes its regression and one native
+12-cycle lifecycle run. Send failures now remain visible, and an open palette
+refreshes after committed tab changes. Their full gate passes 382 tests and
+smoke in `target/continuation-browser-first-formatted-gate.log`. Application
+SHA-256 is `0da392f0800e5e3b739bfeabe8122903111d38301e41a6d610168e0b882debd3`.
+Computer Use could not activate the fresh synthetic window on either allowed
+attempt; automation stopped, so current visual acceptance remains open.
+
+The next reviewed increment adds explicit failed-start recovery confirmation
+and a watchdog that cannot block on stderr. All 70 application tests pass in
+`target/continuation-recovery-watchdog-tests.log`. Missing-primary preflight,
+visual recovery checks remain open. This increment's full gate subsequently
+passes all 400 tests and smoke in
+`target/continuation-recovery-watchdog-full-gate.log`; the latest executable
+SHA-256 is `9b2fded8f7dc79d436ddbfe15af63133a1be005645c188c98750f17fcfb36119`.
+The cached-first search experiment passes correctness but is rejected for
+unconditional production adoption because paired measurements regress; production
+still passes only 10/26 D48 cases. Check execution status before starting any
+build or benchmark.
+
+The isolated process-role diagnostic has not executed. Two builds fail while
+loading `gpui_macros`; the second preserves a compiler trace at
+`target/continuation-process-role-build-trace.log`. One explicit-import probe
+exposed Windows Application Control error 4551 loading that exact macro DLL;
+evidence is preserved in `target/macro-load-probe/`. That diagnostic build path
+is stopped. Do not retry the full build without new evidence, change security,
+replace cached DLLs or treat the normal metadata fallback as a proven cause.
+The original WebView2 breakpoint remains unresolved. The implementation ledger
+contains the fuller evidence and limitations; older checkpoints below remain
+historical.
+
+After the 400-test gate, the navigation chat added a separately reviewed,
+test-only Unicode-selected membership experiment. It is not included in that
+gate and has not run. Its queued command is
+`cargo test -p atlas-search --profile local --offline --locked catalogue::range_index::tests::membership_order::unicode_selected -- --nocapture --test-threads=1`.
+The diagnostic launcher now passes 31 pure parser cases and six pure cleanup
+cases plus independent review; its final SHA-256 is
+`82eaf67d6d0d762ad2234b3f59abfcf5feab0b55c1ad0c0f3ebeec26880eab74`.
+It has not launched the blocked diagnostic. No Cargo/native job remains active
+at this checkpoint. The owner's requested continued coordination is scheduled
+in this chat every 30 minutes as `continue-atlas-browser-work`, preserving all
+approval limits and reporting only meaningful changes or required input.
+
 ### Stable address row and current crash evidence
 
 The owner-approved stable visible “Go to …” row is implemented and independently

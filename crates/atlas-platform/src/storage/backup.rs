@@ -69,7 +69,7 @@ impl WindowsBackupArchive {
             Some(file) => file,
             None if create => {
                 super::create_directory(&path)?;
-                native::open_directory(&path, false)?
+                native::open_retained_directory(&path)?
             }
             None => return Ok(None),
         };
