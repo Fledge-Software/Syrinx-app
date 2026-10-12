@@ -13,7 +13,23 @@ pub(super) struct CardFrame {
     pub sidebar_width: f32,
     /// The runtime notice's height while it shows under the toolbar, otherwise zero.
     pub notice_height: f32,
+    /// The site permission prompt's height while it shows under the notice, otherwise zero.
+    pub permission_height: f32,
+    /// The find bar's height while it shows under the permission prompt, otherwise zero.
+    pub find_height: f32,
+    /// A page in element fullscreen takes the whole viewport, with no chrome around it.
+    pub fullscreen: bool,
     pub scale: f32,
+}
+
+impl CardFrame {
+    /// The bars stacked between the chrome and the card, in the order they are drawn.
+    fn bar_heights(&self) -> f32 {
+        [self.notice_height, self.permission_height, self.find_height]
+            .into_iter()
+            .map(|height| finite_or_zero(height).max(0.))
+            .sum()
+    }
 }
 
 /// The drag strip's logical start and end beside a sidebar of `sidebar_width`. The sidebar
@@ -44,11 +60,21 @@ pub(super) fn titlebar_navigation_width(viewport_width: f32) -> f32 {
 pub(super) fn page_card_bounds(frame: CardFrame) -> PageBounds {
     let scale = usable_scale(frame.scale);
 
-    // Inset the card from the sidebar's strip, the toolbar and notice, the footer and the right.
+    // Fullscreen hides the title bar, toolbar, bars and footer; the page fills the viewport.
+    if frame.fullscreen {
+        let (x, width) = physical_span(0., finite_or_zero(frame.viewport_width), scale);
+        let (y, height) = physical_span(0., finite_or_zero(frame.viewport_height), scale);
+        return PageBounds {
+            x,
+            y,
+            width,
+            height,
+        };
+    }
+
+    // Inset the card from the sidebar's strip, the toolbar and bars, the footer and the right.
     let (_, left) = edge_strip(frame.sidebar_width);
-    let top = chrome_height(frame.sidebar_width)
-        + finite_or_zero(frame.notice_height).max(0.)
-        + CARD_INSET;
+    let top = chrome_height(frame.sidebar_width) + frame.bar_heights() + CARD_INSET;
     let right = finite_or_zero(frame.viewport_width) - CARD_INSET;
     let bottom = finite_or_zero(frame.viewport_height) - FOOTER_HEIGHT - CARD_INSET;
 
@@ -96,7 +122,51 @@ mod tests {
             viewport_height: 800.,
             sidebar_width,
             notice_height: 0.,
+            permission_height: 0.,
+            find_height: 0.,
+            fullscreen: false,
             scale,
+        }
+    }
+
+    #[test]
+    fn the_permission_prompt_and_find_bar_stack_under_the_notice() {
+        let plain = page_card_bounds(frame(264., 1.));
+        let barred = page_card_bounds(CardFrame {
+            notice_height: 36.,
+            permission_height: 44.,
+            find_height: 48.,
+            ..frame(264., 1.)
+        });
+        assert_eq!(barred.y - plain.y, 36 + 44 + 48);
+        assert_eq!(
+            barred.y + barred.height as i32,
+            plain.y + plain.height as i32
+        );
+        assert_eq!((barred.x, barred.width), (plain.x, plain.width));
+        let invalid = page_card_bounds(CardFrame {
+            permission_height: f32::NAN,
+            find_height: -5.,
+            ..frame(264., 1.)
+        });
+        assert_eq!(invalid, plain);
+    }
+
+    #[test]
+    fn fullscreen_covers_the_viewport_in_every_sidebar_state() {
+        for scale in [1., 1.25, 1.5, 2.] {
+            for state in SidebarWidthState::ALL {
+                let bounds = page_card_bounds(CardFrame {
+                    fullscreen: true,
+                    notice_height: 36.,
+                    permission_height: 44.,
+                    find_height: 48.,
+                    ..frame(state.reserved_width(), scale)
+                });
+                assert_eq!((bounds.x, bounds.y), (0, 0), "{}", state.name());
+                assert_eq!(bounds.width, (1280. * scale).round() as u32);
+                assert_eq!(bounds.height, (800. * scale).round() as u32);
+            }
         }
     }
 
@@ -235,6 +305,9 @@ mod tests {
             viewport_height: 10.,
             sidebar_width: 264.,
             notice_height: 0.,
+            permission_height: 0.,
+            find_height: 0.,
+            fullscreen: false,
             scale: 2.,
         });
         assert_eq!((bounds.width, bounds.height), (1, 1));
@@ -243,6 +316,9 @@ mod tests {
             viewport_height: f32::INFINITY,
             sidebar_width: f32::NAN,
             notice_height: f32::NAN,
+            permission_height: f32::NAN,
+            find_height: f32::NAN,
+            fullscreen: false,
             scale: 0.,
         });
         assert_eq!(invalid.x, CARD_INSET as i32);

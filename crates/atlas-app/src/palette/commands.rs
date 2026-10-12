@@ -208,11 +208,12 @@ mod tests {
         let all = matcher
             .matches("", View::Commands, PAGE)
             .expect("blank command query");
-        assert_eq!(all.hits.len(), 11);
+        // Eleven navigation and history commands plus P1-13's six page essentials.
+        assert_eq!(all.hits.len(), 17);
         assert_eq!(
             all.counts,
             CommandCounts {
-                browser: 11,
+                browser: 17,
                 plugin: 0
             }
         );
@@ -221,6 +222,10 @@ mod tests {
             .matches("refresh", View::Commands, PAGE)
             .expect("keyword query");
         assert_eq!(titles(&matcher, &refresh.hits), ["Reload page"]);
+        let magnify = matcher
+            .matches("magnify", View::Commands, PAGE)
+            .expect("keyword query");
+        assert_eq!(titles(&matcher, &magnify.hits), ["Zoom in"]);
 
         // Home has no page, so page commands neither show nor count.
         let home = CommandContext {
@@ -233,6 +238,12 @@ mod tests {
             .expect("disabled query");
         assert!(reload.hits.is_empty());
         assert_eq!(reload.counts, CommandCounts::default());
+        for page_only in ["find in page", "print", "downloads", "reset zoom"] {
+            let hidden = matcher
+                .matches(page_only, View::Commands, home)
+                .expect("disabled query");
+            assert!(hidden.hits.is_empty(), "{page_only} needs a page");
+        }
     }
 
     #[test]
@@ -243,7 +254,7 @@ mod tests {
             .matches("", View::Everything, PAGE)
             .expect("blank query");
         assert!(blank.hits.is_empty());
-        assert_eq!(blank.counts.browser, 11);
+        assert_eq!(blank.counts.browser, 17);
 
         let tab = matcher
             .matches("tab", View::Everything, PAGE)

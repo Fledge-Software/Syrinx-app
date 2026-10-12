@@ -87,6 +87,12 @@ pub enum BrowserAction {
     PreviousTab,
     SavePage,
     ShowHistory,
+    FindInPage,
+    ShowDownloads,
+    Print,
+    ZoomIn,
+    ZoomOut,
+    ResetZoom,
 }
 
 /// What running a command does.
@@ -332,6 +338,9 @@ impl CommandRegistry {
 }
 
 /// The built-in commands, in the order the palette lists them for `>`.
+///
+/// Zoom has no registry shortcut: `ctrl-=` and `ctrl--` use punctuation keys that `Shortcut`
+/// does not spell, so the application binds all three zoom keys beside the registry bindings.
 fn browser_commands() -> Vec<Command> {
     use BrowserAction::*;
     use Enablement::*;
@@ -342,7 +351,7 @@ fn browser_commands() -> Vec<Command> {
             "open blank home",
             Always,
             NewTab,
-            "ctrl-t",
+            Some("ctrl-t"),
         ),
         (
             "browser.close-tab",
@@ -350,7 +359,7 @@ fn browser_commands() -> Vec<Command> {
             "unload",
             ActiveTab,
             CloseTab,
-            "ctrl-w",
+            Some("ctrl-w"),
         ),
         (
             "browser.reopen-tab",
@@ -358,7 +367,7 @@ fn browser_commands() -> Vec<Command> {
             "restore undo",
             Always,
             ReopenTab,
-            "ctrl-shift-t",
+            Some("ctrl-shift-t"),
         ),
         (
             "browser.reload",
@@ -366,7 +375,7 @@ fn browser_commands() -> Vec<Command> {
             "refresh",
             ActivePage,
             Reload,
-            "ctrl-r",
+            Some("ctrl-r"),
         ),
         (
             "browser.back",
@@ -374,7 +383,7 @@ fn browser_commands() -> Vec<Command> {
             "previous page history",
             ActivePage,
             Back,
-            "alt-left",
+            Some("alt-left"),
         ),
         (
             "browser.forward",
@@ -382,7 +391,7 @@ fn browser_commands() -> Vec<Command> {
             "next page history",
             ActivePage,
             Forward,
-            "alt-right",
+            Some("alt-right"),
         ),
         (
             "browser.edit-address",
@@ -390,7 +399,7 @@ fn browser_commands() -> Vec<Command> {
             "url location navigate",
             Always,
             EditAddress,
-            "ctrl-l",
+            Some("ctrl-l"),
         ),
         (
             "browser.next-tab",
@@ -398,7 +407,7 @@ fn browser_commands() -> Vec<Command> {
             "switch",
             SeveralTabs,
             NextTab,
-            "ctrl-tab",
+            Some("ctrl-tab"),
         ),
         (
             "browser.previous-tab",
@@ -406,7 +415,7 @@ fn browser_commands() -> Vec<Command> {
             "switch",
             SeveralTabs,
             PreviousTab,
-            "ctrl-shift-tab",
+            Some("ctrl-shift-tab"),
         ),
         (
             "browser.save-page",
@@ -414,7 +423,7 @@ fn browser_commands() -> Vec<Command> {
             "pin bookmark",
             ActiveTab,
             SavePage,
-            "ctrl-d",
+            Some("ctrl-d"),
         ),
         (
             "browser.show-history",
@@ -422,7 +431,55 @@ fn browser_commands() -> Vec<Command> {
             "visited past pages recent",
             Always,
             ShowHistory,
-            "ctrl-h",
+            Some("ctrl-h"),
+        ),
+        (
+            "browser.find",
+            "Find in page",
+            "search text",
+            ActivePage,
+            FindInPage,
+            Some("ctrl-f"),
+        ),
+        (
+            "browser.downloads",
+            "Downloads",
+            "files saved",
+            ActivePage,
+            ShowDownloads,
+            Some("ctrl-j"),
+        ),
+        (
+            "browser.print",
+            "Print",
+            "paper pdf",
+            ActivePage,
+            Print,
+            Some("ctrl-p"),
+        ),
+        (
+            "browser.zoom-in",
+            "Zoom in",
+            "larger bigger magnify",
+            ActivePage,
+            ZoomIn,
+            None,
+        ),
+        (
+            "browser.zoom-out",
+            "Zoom out",
+            "smaller",
+            ActivePage,
+            ZoomOut,
+            None,
+        ),
+        (
+            "browser.zoom-reset",
+            "Reset zoom",
+            "actual size 100",
+            ActivePage,
+            ResetZoom,
+            None,
         ),
     ]
     .into_iter()
@@ -434,7 +491,7 @@ fn browser_commands() -> Vec<Command> {
             scope: CommandScope::Browser,
             enablement,
             action: CommandAction::Browser(action),
-            shortcut: Some(Shortcut::new(shortcut).expect("built-in shortcut")),
+            shortcut: shortcut.map(|keys| Shortcut::new(keys).expect("built-in shortcut")),
         },
     )
     .collect()
@@ -488,6 +545,12 @@ mod tests {
                 (browser(BrowserAction::PreviousTab), Some("ctrl-shift-tab")),
                 (browser(BrowserAction::SavePage), Some("ctrl-d")),
                 (browser(BrowserAction::ShowHistory), Some("ctrl-h")),
+                (browser(BrowserAction::FindInPage), Some("ctrl-f")),
+                (browser(BrowserAction::ShowDownloads), Some("ctrl-j")),
+                (browser(BrowserAction::Print), Some("ctrl-p")),
+                (browser(BrowserAction::ZoomIn), None),
+                (browser(BrowserAction::ZoomOut), None),
+                (browser(BrowserAction::ResetZoom), None),
             ]
         );
         // Keys follow registration order, so both the palette and search agree on them.

@@ -287,7 +287,8 @@ impl BrowserView {
             .iter()
             .filter(|tab| tab.saved_page_id.is_none())
         {
-            rows = rows.child(self.ordinary_row(tab.id, ordinary_title(tab), labels, cx));
+            let title = ordinary_title(tab, self.popup_pages.contains(&tab.id));
+            rows = rows.child(self.ordinary_row(tab.id, title, labels, cx));
         }
         rows
     }
@@ -600,9 +601,10 @@ fn title_or_address(title: &str, address: &str) -> String {
     }
 }
 
-/// An ordinary tab's title; a blank tab is Home.
-fn ordinary_title(tab: &TabSnapshot) -> String {
-    if tab.metadata.address == "about:blank" {
+/// An ordinary tab's title; a blank tab is Home, unless it is an adopted popup (P1-11)
+/// that has not reported its first address yet.
+fn ordinary_title(tab: &TabSnapshot, popup: bool) -> String {
+    if tab.metadata.address == "about:blank" && !popup {
         return "Home".to_owned();
     }
     title_or_address(&tab.metadata.title, &tab.metadata.address)

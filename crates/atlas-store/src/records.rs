@@ -81,12 +81,10 @@ fn read_snapshot(
 ) -> Result<StoredSnapshot, StoreError> {
     let state = read_state(connection)?;
     let saved_pages = read_saved_pages(connection)?;
-    let tree = match generation {
-        SchemaGeneration::FlatSaved => flat_tree(&saved_pages),
-        SchemaGeneration::Folders
-        | SchemaGeneration::Preferences
-        | SchemaGeneration::History
-        | SchemaGeneration::Deletions => read_saved_tree(connection)?,
+    let tree = if generation.has_folders() {
+        read_saved_tree(connection)?
+    } else {
+        flat_tree(&saved_pages)
     };
     let snapshot = TabModelSnapshot {
         tabs: read_tabs(connection)?,

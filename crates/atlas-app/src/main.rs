@@ -109,6 +109,7 @@ fn main() -> ExitCode {
                     ui::BrowserView::new(
                         options.directory,
                         options.smoke,
+                        options.suspended_tabs,
                         result.clone(),
                         links.take(),
                         window,
@@ -194,6 +195,8 @@ struct Options {
     smoke: bool,
     /// A checked http(s) link to open, as Windows passes one when Atlas opens a link.
     link: Option<LinkRequest>,
+    /// P1-15's measurement mode: this many synthetic tabs suspended in a fresh profile.
+    suspended_tabs: usize,
 }
 
 /// Becomes this profile's running Atlas, or returns `None` once the running one has the link.
@@ -220,10 +223,11 @@ struct Arguments {
     smoke: bool,
     test_directory: Option<PathBuf>,
     link: Option<LinkRequest>,
+    suspended_tabs: usize,
 }
 
-const USAGE: &str = "Atlas accepts --smoke, --test-data-dir <directory>, --palette-sample \
-                     or -- followed by one http(s) link.";
+const USAGE: &str = "Atlas accepts --smoke, --test-data-dir <directory>, --palette-sample, \
+                     --test-suspended-tabs <1-32> or -- followed by one http(s) link.";
 
 /// Reads options, then at most one link after `--`. Everything after `--` is the link, so a
 /// crafted link from a registered handler cannot add options such as `--test-data-dir`.
@@ -240,6 +244,8 @@ fn parse_arguments(
             parsed.palette_sample = true;
         } else if argument == "--smoke" {
             parsed.smoke = true;
+        } else if argument == "--test-suspended-tabs" {
+            parsed.suspended_tabs = suspended_tab_count(arguments.next())?;
         } else if argument == "--test-data-dir" {
             let directory = arguments
                 .next()
@@ -249,15 +255,33 @@ fn parse_arguments(
             return Err(USAGE);
         }
     }
+    let measuring = parsed.suspended_tabs > 0;
     let other_than_sample =
-        parsed.smoke || parsed.test_directory.is_some() || parsed.link.is_some();
+        parsed.smoke || measuring || parsed.test_directory.is_some() || parsed.link.is_some();
     if parsed.palette_sample && other_than_sample {
         return Err("--palette-sample takes no other arguments.");
     }
-    if parsed.smoke && (parsed.test_directory.is_some() || parsed.link.is_some()) {
+    if parsed.smoke && measuring {
+        return Err("Use smoke or suspended-tab measurement separately.");
+    }
+    if (parsed.smoke || measuring) && (parsed.test_directory.is_some() || parsed.link.is_some()) {
         return Err("The automatic smoke check always uses a fresh profile and no link.");
     }
     Ok(parsed)
+}
+
+/// Reads P1-15's synthetic suspended-tab count, which must be 1 through 32.
+fn suspended_tab_count(value: Option<OsString>) -> Result<usize, &'static str> {
+    let value = value.ok_or("Synthetic tab count is missing.")?;
+    let count = value
+        .to_str()
+        .ok_or("Synthetic tab count is not text.")?
+        .parse::<usize>()
+        .map_err(|_| "Synthetic tab count must be an integer.")?;
+    if !(1..=32).contains(&count) {
+        return Err("Synthetic suspended tab count must be 1 through 32.");
+    }
+    Ok(count)
 }
 
 /// Exactly one argument may follow `--`, and it must be an http(s) link.
@@ -279,9 +303,12 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
         smoke,
         test_directory,
         link,
+        suspended_tabs,
         ..
     } = arguments;
-    let directory = if smoke {
+    // Smoke and measurement runs always use a fresh synthetic profile.
+    let fresh_profile = smoke || suspended_tabs > 0;
+    let directory = if fresh_profile {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| "The system clock is unavailable.")?
@@ -295,13 +322,14 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
         )
         .join(DATA_FOLDER)
     };
-    if smoke {
+    if fresh_profile {
         reserve_smoke_directory(&directory)?;
     }
     Ok(RunMode::Browser(Options {
         directory,
         smoke,
         link,
+        suspended_tabs,
     }))
 }
 
@@ -367,6 +395,16 @@ mod tests {
             &["--"][..],
             &["--smoke", "--", "https://example.test/"][..],
             &["--palette-sample", "--", "https://example.test/"][..],
+            &["--test-suspended-tabs", "4", "--", "https://example.test/"][..],
+            &["--", "https://example.test/", "--test-suspended-tabs", "4"][..],
+            &[
+                "--test-suspended-tabs",
+                "4",
+                "--test-data-dir",
+                r"C:\Synthetic",
+            ][..],
+            &["--smoke", "--test-suspended-tabs", "4"][..],
+            &["--test-suspended-tabs", "33"][..],
         ] {
             let parsed = parse(arguments);
             assert!(parsed.is_err(), "{arguments:?} gave {parsed:?}");

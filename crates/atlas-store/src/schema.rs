@@ -9,7 +9,7 @@ use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x4154_4c53;
-pub(crate) const SCHEMA_VERSION: i64 = 5;
+pub(crate) const SCHEMA_VERSION: i64 = 6;
 
 /// The record layout of a recognized Atlas database, by `user_version`.
 /// Declared in version order, so later generations compare greater.
@@ -25,11 +25,18 @@ pub(crate) enum SchemaGeneration {
     History,
     /// Version 5 (P1-27): records which D47 history clears this database has applied.
     Deletions,
+    /// Version 6 (P1-12): adds the owner's remembered site permission choices.
+    Permissions,
 }
 
-pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Deletions;
+pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Permissions;
 
 impl SchemaGeneration {
+    /// Whether this generation (version 2 or later) stores saved pages as a folder tree.
+    pub(crate) fn has_folders(self) -> bool {
+        self >= Self::Folders
+    }
+
     /// Whether this generation (version 3 or later) stores settings and tiles.
     fn has_preferences(self) -> bool {
         self >= Self::Preferences
@@ -314,6 +321,7 @@ fn inspect_identity(connection: &Connection) -> Result<Identity, StoreError> {
         3 => Ok(Identity::Atlas(SchemaGeneration::Preferences)),
         4 => Ok(Identity::Atlas(SchemaGeneration::History)),
         5 => Ok(Identity::Atlas(SchemaGeneration::Deletions)),
+        6 => Ok(Identity::Atlas(SchemaGeneration::Permissions)),
         version if version > SCHEMA_VERSION => Err(StoreError::FutureSchema { version }),
         _ => Err(StoreError::SchemaMismatch),
     }
@@ -358,6 +366,11 @@ pub(crate) fn deletions_migration() -> String {
     )
 }
 
+/// Version 6: adds the empty remembered-permission table. Absent rows mean "ask".
+pub(crate) fn permissions_migration() -> String {
+    format!("{};", crate::permissions::TABLE)
+}
+
 /// Owns the migration SQL that `rusqlite_migration` borrows, numbered by position.
 pub(crate) struct MigrationScripts {
     initial: String,
@@ -365,6 +378,7 @@ pub(crate) struct MigrationScripts {
     preferences: String,
     history: String,
     deletions: String,
+    permissions: String,
 }
 
 impl MigrationScripts {
@@ -375,6 +389,7 @@ impl MigrationScripts {
             preferences: preferences_migration(),
             history: history_migration(),
             deletions: deletions_migration(),
+            permissions: permissions_migration(),
         }
     }
 
@@ -385,6 +400,7 @@ impl MigrationScripts {
             M::up_with_hook(&self.preferences, check_migrated_preferences),
             M::up_with_hook(&self.history, check_migrated_records).foreign_key_check(),
             M::up_with_hook(&self.deletions, check_migrated_deletions),
+            M::up_with_hook(&self.permissions, check_migrated_permissions),
         ])
     }
 }
@@ -408,6 +424,17 @@ fn check_migrated_deletions(transaction: &Transaction<'_>) -> HookResult {
     match crate::history::applied_generation(transaction) {
         Ok(0) => Ok(()),
         Ok(_) => Err(HookError::Hook("unexpected deletion generation".to_owned())),
+        Err(error) => Err(HookError::Hook(error.to_string())),
+    }
+}
+
+fn check_migrated_permissions(transaction: &Transaction<'_>) -> HookResult {
+    // The new table must start empty, so every site still asks before the commit.
+    match crate::permissions::count(transaction) {
+        Ok(0) => Ok(()),
+        Ok(_) => Err(HookError::Hook(
+            "unexpected site permission rows".to_owned(),
+        )),
         Err(error) => Err(HookError::Hook(error.to_string())),
     }
 }
@@ -497,7 +524,6 @@ const HISTORY_OBJECTS: &[SchemaObject] = &[
     table("settings", SETTINGS_TABLE),
 ];
 
-/// Version 5 adds only this table, which sorts before every version 4 object.
 /// Version 5 adds the applied clear generation and the visit-time index to version 4.
 const DELETION_ADDED_OBJECTS: &[SchemaObject] = &[
     table("history_deletion_state", DELETION_STATE_TABLE),
@@ -509,6 +535,18 @@ const DELETION_ADDED_OBJECTS: &[SchemaObject] = &[
     },
 ];
 
+/// Version 6 adds the remembered site permission table to version 5.
+const PERMISSION_ADDED_OBJECTS: &[SchemaObject] = &[
+    table("history_deletion_state", DELETION_STATE_TABLE),
+    SchemaObject {
+        kind: "index",
+        name: "history_visits_by_time",
+        table: "history_visits",
+        sql: HISTORY_TIME_INDEX,
+    },
+    table("site_permissions", crate::permissions::TABLE),
+];
+
 /// Objects of each generation, sorted by name as `sqlite_schema` lists them.
 fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> {
     let (added, base): (&[SchemaObject], _) = match generation {
@@ -517,6 +555,7 @@ fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> 
         SchemaGeneration::Preferences => (&[], PREFERENCE_OBJECTS),
         SchemaGeneration::History => (&[], HISTORY_OBJECTS),
         SchemaGeneration::Deletions => (DELETION_ADDED_OBJECTS, HISTORY_OBJECTS),
+        SchemaGeneration::Permissions => (PERMISSION_ADDED_OBJECTS, HISTORY_OBJECTS),
     };
     let mut objects: Vec<_> = added.iter().chain(base).collect();
     // Byte order of names, as `ORDER BY name` lists them under SQLite's binary collation.

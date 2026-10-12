@@ -1629,6 +1629,61 @@ fn healthy_existing_primary_starts_directly_with_its_saved_state() {
     fixture.cleanup();
 }
 
+#[test]
+fn popup_allocation_is_durable_correlated_and_refuses_a_closed_opener() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    let opened = change(
+        &handle,
+        &mut events,
+        SessionCommand::NewTab {
+            address: SAVED_ADDRESS.into(),
+        },
+    );
+    let opener = opened.created[0];
+    let popup = change(
+        &handle,
+        &mut events,
+        SessionCommand::AdoptPopup {
+            request: 41,
+            opener,
+            address: LIVE_ADDRESS.into(),
+        },
+    );
+    let target = popup.created[0];
+    assert_eq!(popup.popup, Some((41, Some(target))));
+    assert_eq!(popup.model.active_id, Some(target));
+    assert_eq!(
+        popup.navigate, None,
+        "adoption must not schedule ordinary navigation"
+    );
+    change(&handle, &mut events, SessionCommand::CloseTab(opener));
+    let stale = change(
+        &handle,
+        &mut events,
+        SessionCommand::AdoptPopup {
+            request: 42,
+            opener,
+            address: LIVE_ADDRESS.into(),
+        },
+    );
+    assert_eq!(stale.popup, Some((42, None)));
+    assert!(stale.created.is_empty());
+    assert_eq!(stale.model.tabs.len(), 1);
+    stop(handle, &mut events);
+    let (handle, mut events) = fixture.start();
+    let restored = state(&mut events);
+    assert_eq!(restored.model.tabs[0].id, target);
+    assert_eq!(restored.model.tabs[0].metadata.address, LIVE_ADDRESS);
+    assert_eq!(
+        restored.popup, None,
+        "native requests must not survive restart"
+    );
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
 #[path = "crash_restart_tests.rs"]
 mod crash_restart;
 

@@ -43,6 +43,19 @@ pub enum HomeEntryAction {
 }
 
 pub enum SessionCommand {
+    CheckPermission {
+        id: u64,
+        request: u64,
+        origin: String,
+        kind: atlas_store::PermissionKind,
+    },
+    RememberPermission {
+        id: u64,
+        request: u64,
+        origin: String,
+        kind: atlas_store::PermissionKind,
+        allowed: bool,
+    },
     ConfirmRecovery {
         offer_id: u64,
     },
@@ -55,6 +68,11 @@ pub enum SessionCommand {
         action: HomeEntryAction,
     },
     NewTab {
+        address: String,
+    },
+    AdoptPopup {
+        request: u64,
+        opener: TabId,
         address: String,
     },
     NavigateActive {
@@ -137,11 +155,18 @@ pub struct SessionSnapshot {
     pub navigate: Option<TabId>,
     /// UI intent acknowledged by this command only, never restored from storage.
     pub home_entry: Option<u64>,
+    /// Native popup request correlated only after durable tab allocation.
+    pub popup: Option<(u64, Option<TabId>)>,
     pub previous_shutdown: ShutdownState,
 }
 
 #[derive(Debug)]
 pub enum SessionEvent {
+    Permission {
+        id: u64,
+        request: u64,
+        result: Result<Option<bool>, StoreError>,
+    },
     RecoveryOffered(RecoveryPrompt),
     /// The deletion journal cannot be trusted; continuing needs the owner to clear all history.
     HistoryRepairOffered(HistoryRepairPrompt),
@@ -152,6 +177,9 @@ pub enum SessionEvent {
     },
     /// The tile lists after an accepted edit.
     Destinations(QuickDestinations),
+    PopupRejected {
+        request: u64,
+    },
     State(SessionSnapshot),
     Search {
         request_id: u64,
@@ -489,7 +517,7 @@ impl Worker {
                 destinations: self.destinations.clone(),
             },
         )?;
-        self.publish(events, self.model.snapshot(), Vec::new(), None, None)?;
+        self.publish(events, self.model.snapshot(), Vec::new(), None, None, None)?;
         let mut delay = IDLE_DELAY;
         loop {
             // Held page titles are written once they settle, even while nothing else happens.
@@ -588,6 +616,27 @@ impl Worker {
                 import,
                 folder_title,
             } => return self.import_bookmarks(store, request_id, &import, folder_title, events),
+            SessionCommand::CheckPermission {
+                id,
+                request,
+                origin,
+                kind,
+            } => {
+                let result = store.permission(&origin, kind);
+                return emit_permission(events, id, request, result);
+            }
+            SessionCommand::RememberPermission {
+                id,
+                request,
+                origin,
+                kind,
+                allowed,
+            } => {
+                let result = store
+                    .remember_permission(origin, kind, allowed)
+                    .map(|()| Some(allowed));
+                return emit_permission(events, id, request, result);
+            }
             command => command,
         };
         let Some(command) = preferences::intercept(store, &mut self.destinations, command, events)?
@@ -609,8 +658,16 @@ impl Worker {
             }),
             _ => None,
         };
+        let popup_request = match &command {
+            SessionCommand::AdoptPopup { request, .. } => Some(*request),
+            _ => None,
+        };
         let before = self.model.snapshot();
         if let Err(error) = apply_model(&mut self.model, command) {
+            // A refused popup must not leave its native request waiting for a tab.
+            if let Some(request) = popup_request {
+                emit(events, SessionEvent::PopupRejected { request })?;
+            }
             return emit_recoverable(events, error);
         }
         let after = self.persist(store, &before)?;
@@ -618,14 +675,15 @@ impl Worker {
         if let Some(observation) = observation {
             self.record_history(store, &after, observation, events)?;
         }
-        let created = after
+        let created: Vec<_> = after
             .tabs
             .iter()
             .filter(|tab| tab.id.get() > before.last_tab_id)
             .map(|tab| tab.id)
             .collect();
         let navigate = if navigating { after.active_id } else { None };
-        self.publish(events, after, created, navigate, home_entry)
+        let popup = popup_request.map(|request| (request, created.first().copied()));
+        self.publish(events, after, created, navigate, home_entry, popup)
     }
 
     /// Saves the model if it changed since `before`, in one store transaction, then reindexes.
@@ -665,7 +723,7 @@ impl Worker {
         let after = self.persist(store, &before)?;
         let result = Ok(commit);
         emit(events, SessionEvent::Imported { request_id, result })?;
-        self.publish(events, after, Vec::new(), None, None)
+        self.publish(events, after, Vec::new(), None, None, None)
     }
 
     fn answer_query(
@@ -779,6 +837,7 @@ impl Worker {
         created: Vec<TabId>,
         navigate: Option<TabId>,
         home_entry: Option<u64>,
+        popup: Option<(u64, Option<TabId>)>,
     ) -> Result<(), SessionError> {
         emit(
             events,
@@ -788,6 +847,7 @@ impl Worker {
                 created,
                 navigate,
                 home_entry,
+                popup,
                 previous_shutdown: self.previous_shutdown,
             }),
         )
@@ -842,6 +902,17 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
                 None => SessionCommand::NewTab { address },
             };
             apply_model(model, resolved)?;
+        }
+        SessionCommand::AdoptPopup {
+            opener, address, ..
+        } => {
+            if model
+                .tabs()
+                .iter()
+                .any(|tab| tab.id() == opener && tab.kind() == TabKind::Web)
+            {
+                apply_model(model, SessionCommand::NewTab { address })?;
+            }
         }
         SessionCommand::NewTab { address } => {
             model
@@ -913,8 +984,10 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         SessionCommand::ConfirmRecovery { .. } | SessionCommand::ConfirmHistoryRepair { .. } => {
             return Err(SessionError::RecoveryUnavailable);
         }
-        // Reads, history lookups and preferences are answered before the model is consulted.
+        // Reads, history lookups, permissions and preferences are answered before the model.
         SessionCommand::Query { .. }
+        | SessionCommand::CheckPermission { .. }
+        | SessionCommand::RememberPermission { .. }
         | SessionCommand::ImportBookmarks { .. }
         | SessionCommand::RecentHistory { .. }
         | SessionCommand::ClearHistory { .. }
@@ -1051,6 +1124,23 @@ fn route_history_result(
         Err(error) => emit_recoverable(events, error),
         Ok(()) => Ok(()),
     }
+}
+
+/// Answers a page's permission request with the remembered choice, if any.
+fn emit_permission(
+    events: &UnboundedSender<SessionEvent>,
+    id: u64,
+    request: u64,
+    result: Result<Option<bool>, StoreError>,
+) -> Result<(), SessionError> {
+    emit(
+        events,
+        SessionEvent::Permission {
+            id,
+            request,
+            result,
+        },
+    )
 }
 
 /// Reports a failure that leaves the session running.
@@ -1259,6 +1349,7 @@ mod tests {
             created: Vec::new(),
             navigate: None,
             home_entry: None,
+            popup: None,
             previous_shutdown: ShutdownState::Clean,
         });
         assert!(!format!("{event:?}").contains(address));

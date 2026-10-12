@@ -617,4 +617,5 @@ mod folders;
 mod history;
 mod import;
 mod lifecycle;
+mod permissions;
 mod preferences;
