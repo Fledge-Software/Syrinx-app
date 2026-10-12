@@ -1,5 +1,7 @@
 //! Connects the shared session to browser chrome without running storage or search on the UI thread.
 
+mod essentials;
+mod find;
 mod home_palette;
 mod navigation_intents;
 mod navigation_status;
@@ -84,6 +86,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-r", Reload, None),
     ]);
     crate::palette::bind_keys(cx);
+    essentials::bind_keys(cx);
+    find::bind_keys(cx);
 }
 
 struct PalettePopup {
@@ -92,6 +96,9 @@ struct PalettePopup {
 }
 
 pub struct BrowserView {
+    find: Option<find::FindBar>,
+    find_sequence: u64,
+    zoom_levels: std::collections::HashMap<u64, f64>,
     permissions: Vec<permissions::Prompt>,
     model: TabModelSnapshot,
     session_revision: Option<u64>,
@@ -132,6 +139,9 @@ impl BrowserView {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut view = Self {
+            find: None,
+            find_sequence: 0,
+            zoom_levels: std::collections::HashMap::new(),
             permissions: Vec::new(),
             model: TabModelSnapshot::default(),
             session_revision: None,
@@ -273,6 +283,8 @@ impl BrowserView {
                     snapshot.home_entry,
                 );
                 self.model = snapshot.model;
+                self.zoom_levels
+                    .retain(|id, _| self.model.tabs.iter().any(|tab| tab.id.get() == *id));
                 self.navigation_status.retain(&self.model);
                 if !self.closing {
                     if let Some(id) = snapshot.navigate {
@@ -373,6 +385,13 @@ impl BrowserView {
             self.message = message.to_owned();
         }
         match event {
+            BrowserEvent::ZoomChanged { id, factor } => {
+                self.zoom_levels.insert(id, factor);
+            }
+            BrowserEvent::FindCompleted { id, request, count } => {
+                self.find_completed(id, request, count)
+            }
+            BrowserEvent::DownloadDialog { .. } => {}
             BrowserEvent::PermissionRequested {
                 id,
                 request,
@@ -439,7 +458,10 @@ impl BrowserView {
                     self.request_close(cx);
                 }
             }
-            BrowserEvent::Url { id, url } => self.metadata(id, None, Some(url)),
+            BrowserEvent::Url { id, url } => {
+                self.forget_find(id, true);
+                self.metadata(id, None, Some(url));
+            }
             BrowserEvent::Loading { .. } => {}
             BrowserEvent::Shortcut(shortcut) => self.shortcut(shortcut, window, cx),
             BrowserEvent::PopupRequested { id, request, url } => {
@@ -557,6 +579,7 @@ impl BrowserView {
         }
         let removed = page_lifecycle::removed(&self.model, &self.loaded, &self.pending_pages);
         for id in removed {
+            self.forget_find(id.get(), false);
             if self.page_command(BrowserCommand::Close { id: id.get() }) {
                 self.loaded.remove(&id);
                 self.pending_pages.remove(&id);
@@ -580,6 +603,9 @@ impl BrowserView {
             .filter(|id| self.loaded.contains(id));
         if next != self.shown && self.page_command(BrowserCommand::ShowActive(next.map(TabId::get)))
         {
+            if let Some(previous) = self.shown {
+                self.forget_find(previous.get(), true);
+            }
             self.shown = next;
             if self.palette.is_none()
                 && let Some(id) = next
@@ -628,6 +654,13 @@ impl BrowserView {
             return;
         }
         match shortcut {
+            BrowserShortcut::Find => self.open_find(window, cx),
+            BrowserShortcut::Downloads
+            | BrowserShortcut::Print
+            | BrowserShortcut::ZoomIn
+            | BrowserShortcut::ZoomOut
+            | BrowserShortcut::ZoomReset
+            | BrowserShortcut::History => self.essential_shortcut(shortcut),
             BrowserShortcut::NewTab => self.command(SessionCommand::NewTab {
                 address: "about:blank".to_owned(),
             }),
@@ -958,11 +991,12 @@ impl BrowserView {
         let scale = window.scale_factor();
         let bounds = (
             ((SIDEBAR_WIDTH + 8.) * scale) as i32,
-            ((TOOLBAR_HEIGHT + self.permission_height() + 8.) * scale) as i32,
+            ((TOOLBAR_HEIGHT + self.permission_height() + self.find_height() + 8.) * scale) as i32,
             ((f32::from(viewport.width) - SIDEBAR_WIDTH - 16.).max(1.) * scale) as u32,
             ((f32::from(viewport.height)
                 - TOOLBAR_HEIGHT
                 - self.permission_height()
+                - self.find_height()
                 - FOOTER_HEIGHT
                 - 16.)
                 .max(1.)
@@ -1031,6 +1065,7 @@ impl BrowserView {
                         self.active_address()
                     }),
             )
+            .child(self.essential_controls(cx))
             .child(
                 button("save", "Save page").on_click(cx.listener(|this, _, _, cx| {
                     this.command(SessionCommand::SaveActive);
@@ -1233,7 +1268,7 @@ impl Render for BrowserView {
                     cx.listener(|this, _, window, cx| this.open_palette(false, window, cx)),
                 ));
         }
-        div()
+        let chrome = div()
             .size_full()
             .text_color(rgb(0xecedf0))
             .text_sm()
@@ -1290,6 +1325,7 @@ impl Render for BrowserView {
             }))
             .child(self.toolbar(cx))
             .child(self.permission_bar(cx))
+            .child(self.find_bar(cx))
             .child(
                 div()
                     .flex_1()
@@ -1308,7 +1344,8 @@ impl Render for BrowserView {
                     .text_xs()
                     .text_color(rgb(0xb4b7bf))
                     .child(self.failure.as_ref().unwrap_or(&self.message).clone()),
-            )
+            );
+        self.essential_actions(chrome, cx)
     }
 }
 

@@ -1,6 +1,8 @@
 //! Keeps page WebView2 objects on one Windows thread while Rust UI code exchanges owned commands.
 
 mod environment;
+mod essentials;
+pub use essentials::PageAction;
 mod page;
 mod permissions;
 mod popups;
@@ -43,6 +45,13 @@ pub struct PageBounds {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserShortcut {
+    Find,
+    Downloads,
+    Print,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    History,
     NewTab,
     CloseTab,
     Address,
@@ -57,6 +66,10 @@ pub enum BrowserShortcut {
 }
 
 pub enum BrowserCommand {
+    PageAction {
+        id: u64,
+        action: PageAction,
+    },
     ResolvePermission {
         id: u64,
         request: u64,
@@ -104,6 +117,19 @@ impl fmt::Debug for BrowserCommand {
 }
 
 pub enum BrowserEvent {
+    FindCompleted {
+        id: u64,
+        request: u64,
+        count: i32,
+    },
+    DownloadDialog {
+        id: u64,
+        open: bool,
+    },
+    ZoomChanged {
+        id: u64,
+        factor: f64,
+    },
     PermissionRequested {
         id: u64,
         request: u64,
@@ -204,6 +230,7 @@ pub enum BrowserError {
     CreatePage,
     Popup,
     Permission,
+    PageControl,
     Settings,
     EventRegistration,
     Navigation,
@@ -528,7 +555,8 @@ fn dispatch(message: MSG) {
 impl BrowserCommand {
     fn tab_id(&self) -> Option<u64> {
         match self {
-            Self::ResolvePermission { id, .. }
+            Self::PageAction { id, .. }
+            | Self::ResolvePermission { id, .. }
             | Self::AdoptPopup { id, .. }
             | Self::Create { id, .. }
             | Self::Navigate { id, .. }
@@ -560,6 +588,16 @@ impl PageBounds {
 fn validate_window(window: isize) -> Result<(), BrowserError> {
     if window == 0 || !unsafe { IsWindow(Some(HWND(window as *mut _))) }.as_bool() {
         return Err(BrowserError::InvalidWindow);
+    }
+    Ok(())
+}
+
+/// Return keyboard focus from the native page child to its Atlas chrome window.
+pub fn focus_chrome(parent: isize) -> Result<(), BrowserError> {
+    validate_window(parent)?;
+    unsafe {
+        windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(HWND(parent as *mut _)))
+            .map_err(|_| BrowserError::Focus)?;
     }
     Ok(())
 }
