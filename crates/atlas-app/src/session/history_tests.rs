@@ -7,6 +7,7 @@ use super::*;
 const FIRST: &str = "https://history-first.example.test/";
 const SECOND: &str = "https://history-second.example.test/";
 const LATER: &str = "https://history-later.example.test/";
+const FAILED: &str = "https://history-failed.example.test/";
 
 fn observe(
     handle: &SessionHandle,
@@ -97,6 +98,8 @@ fn observed_navigation_records_each_visit_once_and_survives_restart() {
     observe(&handle, &mut events, tab, None, Some(FIRST));
     observe(&handle, &mut events, tab, Some("Synthetic first"), None);
     observe(&handle, &mut events, tab, Some("Synthetic first"), None);
+    // A title is written once it settles; the next command finds it settled.
+    thread::sleep(history::TITLE_SETTLE + Duration::from_millis(100));
     observe(
         &handle,
         &mut events,
@@ -104,19 +107,36 @@ fn observed_navigation_records_each_visit_once_and_survives_restart() {
         Some("Synthetic second"),
         Some(SECOND),
     );
+    // A fragment, or a quick scripted return through Home, is not another visit.
     observe(&handle, &mut events, tab, None, Some(FIRST));
-    // Home is not history, but leaving and returning is a new visit.
     observe(&handle, &mut events, tab, None, Some("about:blank"));
     observe(&handle, &mut events, tab, None, Some(FIRST));
+    observe(
+        &handle,
+        &mut events,
+        tab,
+        None,
+        Some(&format!("{FIRST}#part")),
+    );
+    // A navigation that fails retracts the visit its address change recorded.
+    observe(&handle, &mut events, tab, None, Some(FAILED));
+    send(
+        &handle,
+        SessionCommand::ObserveNavigation {
+            id: tab,
+            success: false,
+        },
+    );
     let visits = recent(&handle, &mut events);
     assert_eq!(
         timeline(&visits),
-        [
-            (FIRST, "Synthetic first"),
-            (FIRST, "Synthetic first"),
-            (SECOND, "Synthetic second"),
-            (FIRST, "Synthetic first"),
-        ]
+        [(SECOND, "Synthetic second"), (FIRST, "Synthetic first")]
+    );
+    assert_eq!(
+        history_hits(&handle, &mut events, "history-failed")
+            .counts
+            .history,
+        0
     );
 
     // A late callback for a closed tab records nothing.

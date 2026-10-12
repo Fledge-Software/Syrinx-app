@@ -93,8 +93,9 @@ as well as tables exactly. History rows are not loaded or validated as a
 whole at start-up (they can be large); SQLite's constraints guard their shape
 and each read decodes and checks identities.
 
-`Store` gains `record_visit`, `retitle_history`, `history_entries`,
-`recent_visits` and `apply_history_deletions`. Writes go through the existing
+`Store` gains `record_visit` (returning the visit and address identities),
+`retitle_history`, `remove_visit`, `history_entries`, `recent_visits` and
+`apply_history_deletions`. Writes go through the existing
 single writer thread; reads use the two reader connections. History writes do
 not change the session's compare-and-save revision.
 
@@ -104,25 +105,44 @@ before.
 
 ### Recording: no duplicates from stale or repeated events
 
-`crates/atlas-app/src/session/history.rs` turns page callbacks into visits:
+`crates/atlas-app/src/session/history/tracker.rs` decides, without storage,
+which page callbacks are visits and which address a title names;
+`session/history.rs` applies those decisions to the store and catalogue.
 
 - A visit is recorded when a live **web** tab reports an address different
   from the one it last reported. Opening a tab or submitting an address is
   intent, not a visit; the page's own report of its address is.
 - Repeated or replayed address callbacks for the current address are the same
-  visit. A title callback updates the address's title once and is skipped when
-  unchanged.
+  visit, and so is a change of the fragment (`#part`) alone. A reload of the
+  same address is not counted.
+- Address changes made by script (`pushState`) are visits, as in other
+  browsers, but returning to an address this tab recorded within the last
+  10 seconds is the same visit, so quick back-and-forth does not multiply
+  rows.
+- A failed navigation is not a visit. WebView2 reports the new address before
+  the navigation's result, so the visit is recorded and then retracted
+  (`Store::remove_visit`) when the UI forwards a failed `NavigationCompleted`
+  as `SessionCommand::ObserveNavigation`; the address row disappears from
+  the catalogue if no visit remains. Script-made changes have no navigation
+  result and stay recorded. One known gap: a failed reload after a script-made
+  change retracts that scripted visit.
 - Callbacks for a closed tab are ignored, because the model no longer has the
   tab (tab identities are never reused).
 - Restored tabs are seeded with their restored address, so reloading them at
   start-up is not counted as a new visit.
 - Only `http://` and `https://` addresses are history; Home (`about:blank`)
-  moves the cursor, so leaving and returning is a new visit.
+  moves the cursor.
 
-WebView2 reports `SourceChanged` for fragment and history-API navigations too,
-so those count as visits. A reload of the same address is not counted. If a
-title callback arrives before its page's address callback, the earlier visit
-briefly takes the new title until the next title callback corrects it.
+**Titles name the right address.** A page can report its next title just
+before its next address; a single-page app often does. A title reported on
+its own is therefore held for 300 ms (`TITLE_SETTLE`). If the tab's address
+changes within that time, the title goes to the new visit; otherwise it is
+written to the current address, at the next command or when the worker's
+wait expires, and any title still held at shutdown is written then. A title
+reported in the same callback as an address belongs to that address. The
+price is that a page whose title changes just before the owner navigates
+away keeps its older title (never the next page's), and the next page shows
+the carried title until its own arrives. Duplicate titles write nothing.
 
 A failed history write to storage stops the session like a failed save. An
 unindexable row or an unavailable clock is reported and the session continues.
@@ -148,11 +168,18 @@ While the list is open no page is shown beneath it, because GPUI cannot draw
 over a WebView2 child window (see `docs/trapstoknow.md`). Only the newest read
 fills the list, so a slow reply cannot overwrite a newer one.
 
-**Limitation:** Ctrl H works while Atlas's own interface has focus. While a
-page has focus, shortcuts reach Atlas only through `AcceleratorKeyPressed` in
-`atlas-platform/src/browser/page.rs`, which maps a fixed list. Adding Ctrl H
-there is a one-line change in the area another agent is rewriting, so it was
-left for that work; the toolbar button works in both cases.
+**Ctrl H while a page has focus:** shortcuts reach Atlas from a focused page
+only through `AcceleratorKeyPressed` in `atlas-platform/src/browser/page.rs`,
+which maps a fixed list. A parallel P1-13 session is adding the Ctrl H
+mapping there; the coordinator will connect it to this list
+(`toggle_history` in `ui.rs`) at integration. Until then Ctrl H works while
+Atlas's own interface has focus, and the toolbar button works in both cases.
+
+**Unbounded growth (DW-2):** every visit is kept and every remembered address
+is loaded into the catalogue at start-up. Retention and pruning before D48's
+100,000-row scale are registered as DW-2 in the plan's "Deferred work" table
+(owning slice P1-27, or a P1-20 follow-up), with a `TODO(DW-2)` at the load
+in `Worker::restore`.
 
 ### D47: cleared history must not come back
 
@@ -167,11 +194,15 @@ point, clears a range through the journal's request/apply/complete order,
 then opens the older copy and replays `DeletionLog::replay_after(0)`. The
 cleared visits are gone and the result matches the live database.
 
-What P1-27 still owns: persisting the journal and its generation barrier
-outside restored state, a clear-history UI, removing cleared rows from the
-running catalogue, clearing WebView2's own data, and calling this participant
-on the staged copy during recovery. Until then recovery keeps refusing backups
-with a nonzero deletion generation, and this branch adds no clearing UI.
+**Deletion is not wired into the running app yet.** Nothing in Atlas calls
+`apply_history_deletions` outside tests. P1-27 owns all of it: persisting the
+journal and its generation barrier outside restored state, a clear-history
+UI, calling the participant on the live database, updating the running
+tier-1 catalogue (removing or recomputing every affected `Target::History`
+row, which this participant does not report today), clearing WebView2's own
+data, and replaying completed clears on the staged copy during recovery.
+Until then recovery keeps refusing backups with a nonzero deletion
+generation.
 
 ## Tests
 
@@ -186,10 +217,22 @@ database is disposable.
   validation-hook failure) rolls back to version 2; damaged version 2 rows are
   refused before migrating, leaving the file byte-identical; the D47 replay
   test above.
+- `crates/atlas-store/src/engine/tests/history.rs` also covers
+  `remove_visit`: it recomputes an address's totals, drops an address with no
+  visit left, and is idempotent.
+- `crates/atlas-app/src/session/history/tracker.rs` (pure, with injected
+  times): a title reported just before its address names the new visit (the
+  review's regression); a settled title names the current address; forced
+  and repeated settling; fragments, replays and quick scripted returns are
+  not visits, while a return after the window is; a failed navigation
+  retracts only its unconfirmed visit and drops the error page's title;
+  restored and closed tabs record nothing.
 - `crates/atlas-app/src/session/history_tests.rs`: recording through the
-  worker, with replayed address and title callbacks, Home, a late callback for
-  a closed tab, history search, opening a result, restart and the restored
-  tab's reload; and a missing entry as a recoverable failure.
+  worker with replayed address and title callbacks, a settled title, a
+  fragment, a quick return through Home, a failed navigation retracted from
+  storage and search, a late callback for a closed tab, history search,
+  opening a result, restart and the restored tab's reload; and a missing
+  entry as a recoverable failure.
 - `crates/atlas-app/src/session/crash_restart_tests.rs`: the crash proof
   above, which also checks that the acknowledged visit survives.
 - `crates/atlas-app/src/ui/history_list.rs`: stale replies, status text,
@@ -207,7 +250,10 @@ the live address, rather than a total of one.
 
 `cargo xtask check` passed on this machine on 2026-10-12 (exit 0): dependency
 and deferred-work checks, formatting, Clippy, 538 tests and the smoke launch.
-The log is `target/p1-19-20-gate.log`. One earlier warm-up build in this
+The log is `target/p1-19-20-gate.log`. After the review fixes it passed
+again (exit 0, 545 tests, smoke included); that log is
+`target/p1-19-20-review-gate.log`, written after one Clippy correction in a
+new test. One earlier warm-up build in this
 worktree hit Windows Application Control (os error 4551) on the `rust-i18n`
 build script; an unchanged retry built normally. No setting was changed.
 

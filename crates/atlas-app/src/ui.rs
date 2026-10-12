@@ -402,6 +402,13 @@ impl BrowserView {
                 }
             }
             BrowserEvent::NavigationCompleted { id, success } => {
+                // History retracts a visit whose navigation failed.
+                if let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id) {
+                    self.command(SessionCommand::ObserveNavigation {
+                        id: tab.id,
+                        success,
+                    });
+                }
                 if self.smoke
                     && self
                         .model

@@ -12,7 +12,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, mpsc},
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use atlas_core::{
@@ -75,6 +75,11 @@ pub enum SessionCommand {
         text: String,
         scope: Scope,
         policy: SearchPolicy,
+    },
+    /// A page's navigation finished; a failure retracts the visit its address change recorded.
+    ObserveNavigation {
+        id: TabId,
+        success: bool,
     },
     /// Opens a remembered history address in a new tab (P1-20).
     OpenHistory(NonZeroU64),
@@ -320,6 +325,7 @@ impl Worker {
         let mut catalogue = Catalogue::new();
         sync_catalogue(&mut catalogue, &TabModelSnapshot::default(), &snapshot)?;
         // Durable history joins the catalogue once; later visits update it row by row.
+        // TODO(DW-2): bound this load by history retention before D48's 100,000-row scale.
         for entry in store.history_entries().map_err(SessionError::Store)? {
             catalogue
                 .upsert(history::history_entry(&entry))
@@ -343,13 +349,23 @@ impl Worker {
         self.publish(events, Vec::new(), None, None)?;
         let mut delay = IDLE_DELAY;
         loop {
-            match commands.recv_timeout(delay) {
+            // Held page titles are written once they settle, even while nothing else happens.
+            let wait = if self.history.has_pending_titles() {
+                delay.min(history::TITLE_SETTLE)
+            } else {
+                delay
+            };
+            match commands.recv_timeout(wait) {
                 Ok(SessionCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Ok(());
+                    // A title still held at exit most likely names the tab's current page.
+                    return self.settle_titles(store, true, events);
                 }
                 Ok(command) => {
                     self.handle(store, command, events)?;
                     delay = IDLE_DELAY;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
+                    self.settle_titles(store, false, events)?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     // The store retains its daily due state; retries remain idle and bounded.
@@ -360,14 +376,43 @@ impl Worker {
         }
     }
 
+    fn settle_titles(
+        &mut self,
+        store: &Store,
+        force: bool,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let result = self.history.settle(
+            store,
+            &mut self.catalogue,
+            Instant::now(),
+            force,
+            utc_seconds,
+        );
+        route_history_result(result, events)
+    }
+
     fn handle(
         &mut self,
         store: &Store,
         command: SessionCommand,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        // Titles that settled before this command name the page they were reported on.
+        self.settle_titles(store, false, events)?;
         let command = match command {
             SessionCommand::ConfirmRecovery { .. } => return recovery::reject_command(events),
+            SessionCommand::ObserveNavigation { id, success } => {
+                let result = self.history.navigation(
+                    store,
+                    &mut self.catalogue,
+                    id,
+                    success,
+                    Instant::now(),
+                    utc_seconds,
+                );
+                return route_history_result(result, events);
+            }
             SessionCommand::Query {
                 request_id,
                 text,
@@ -459,15 +504,15 @@ impl Worker {
         observation: Observation,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        let result =
-            self.history
-                .observe(store, &mut self.catalogue, model, observation, utc_seconds);
-        // Storage failures stop the session as saves do; an unindexable row or clock does not.
-        match result {
-            Err(SessionError::Store(error)) => Err(SessionError::Store(error)),
-            Err(error) => emit_recoverable(events, error),
-            Ok(()) => Ok(()),
-        }
+        let result = self.history.observe(
+            store,
+            &mut self.catalogue,
+            model,
+            observation,
+            Instant::now(),
+            utc_seconds,
+        );
+        route_history_result(result, events)
     }
 
     fn publish(
@@ -612,6 +657,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         SessionCommand::Query { .. }
         | SessionCommand::RecentHistory { .. }
         | SessionCommand::OpenHistory(_)
+        | SessionCommand::ObserveNavigation { .. }
         | SessionCommand::Shutdown => {}
     }
     Ok(())
@@ -696,6 +742,18 @@ fn entry(target: Target, metadata: &TabMetadata, open: bool) -> Entry {
     }
 }
 
+/// Storage failures stop the session as saves do; an unindexable row or clock does not.
+fn route_history_result(
+    result: Result<(), SessionError>,
+    events: &UnboundedSender<SessionEvent>,
+) -> Result<(), SessionError> {
+    match result {
+        Err(SessionError::Store(error)) => Err(SessionError::Store(error)),
+        Err(error) => emit_recoverable(events, error),
+        Ok(()) => Ok(()),
+    }
+}
+
 /// Reports a failure that leaves the session running.
 fn emit_recoverable(
     events: &UnboundedSender<SessionEvent>,
@@ -716,7 +774,7 @@ fn emit(events: &UnboundedSender<SessionEvent>, event: SessionEvent) -> Result<(
         .map_err(|_| SessionError::EventReceiverClosed)
 }
 
-fn utc_seconds() -> Result<i64, SessionError> {
+pub(crate) fn utc_seconds() -> Result<i64, SessionError> {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| SessionError::ClockUnavailable)?

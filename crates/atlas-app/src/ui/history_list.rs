@@ -1,7 +1,5 @@
 //! Shows recent visits in the page card and opens one in a new tab (P1-20, Ctrl H).
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use atlas_store::HistoryVisit;
 use gpui::{
     Context, Div, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled, div, px,
@@ -9,7 +7,7 @@ use gpui::{
 
 use super::{BrowserView, button};
 use crate::{
-    session::{SessionCommand, SessionError},
+    session::{self, SessionCommand, SessionError},
     theme,
 };
 
@@ -103,11 +101,6 @@ fn age(visited_at: i64, now: i64) -> String {
     }
 }
 
-fn now_seconds() -> Option<i64> {
-    let seconds = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-    i64::try_from(seconds).ok()
-}
-
 /// The page card's contents while the list is open.
 pub(super) fn render(list: &HistoryList, cx: &mut Context<BrowserView>) -> Div {
     let header = div()
@@ -125,7 +118,8 @@ pub(super) fn render(list: &HistoryList, cx: &mut Context<BrowserView>) -> Div {
     if let Some(status) = list.status() {
         rows = rows.child(div().px_2().text_color(theme::icon_dim()).child(status));
     }
-    let now = now_seconds();
+    // Without a clock the rows simply omit their age.
+    let now = session::utc_seconds().ok();
     for visit in &list.visits {
         rows = rows.child(row(visit, now, cx));
     }

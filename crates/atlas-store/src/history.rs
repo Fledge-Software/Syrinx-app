@@ -60,19 +60,35 @@ pub(crate) enum HistoryWrite {
         id: NonZeroU64,
         title: String,
     },
+    RemoveVisit(NonZeroU64),
     Delete(Vec<DeletionRequest>),
+}
+
+/// A newly stored visit and its address's updated totals.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordedVisit {
+    pub visit: NonZeroU64,
+    pub entry: HistoryEntry,
+}
+
+/// What a history write produced, by kind of write.
+pub(crate) enum HistoryOutcome {
+    Recorded(RecordedVisit),
+    /// The changed entry, or `None` when it no longer exists.
+    Entry(Option<HistoryEntry>),
+    Deleted,
 }
 
 pub(crate) struct HistoryRequest {
     pub(crate) write: HistoryWrite,
-    pub(crate) reply: mpsc::SyncSender<Result<Option<HistoryEntry>, StoreError>>,
+    pub(crate) reply: mpsc::SyncSender<Result<HistoryOutcome, StoreError>>,
 }
 
 /// Applies one history change in its own write transaction.
 pub(crate) fn write(
     connection: &mut Connection,
     change: HistoryWrite,
-) -> Result<Option<HistoryEntry>, StoreError> {
+) -> Result<HistoryOutcome, StoreError> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| database_error(StoreOperation::BeginWrite, error))?;
@@ -81,9 +97,16 @@ pub(crate) fn write(
             address,
             title,
             visited_at,
-        } => record(&transaction, &address, &title, visited_at).map(Some),
-        HistoryWrite::Retitle { id, title } => retitle(&transaction, id, &title),
-        HistoryWrite::Delete(requests) => delete(&transaction, &requests).map(|()| None),
+        } => record(&transaction, &address, &title, visited_at).map(HistoryOutcome::Recorded),
+        HistoryWrite::Retitle { id, title } => {
+            retitle(&transaction, id, &title).map(HistoryOutcome::Entry)
+        }
+        HistoryWrite::RemoveVisit(visit) => {
+            remove_visit(&transaction, visit).map(HistoryOutcome::Entry)
+        }
+        HistoryWrite::Delete(requests) => {
+            delete(&transaction, &requests).map(|()| HistoryOutcome::Deleted)
+        }
     };
     finish_transaction(transaction, result)
 }
@@ -93,7 +116,7 @@ fn record(
     address: &str,
     title: &str,
     visited_at: i64,
-) -> Result<HistoryEntry, StoreError> {
+) -> Result<RecordedVisit, StoreError> {
     // Refuse values the table would reject, without reporting their contents.
     if address.is_empty() || visited_at < 0 {
         return Err(StoreError::InvalidEncoding(EncodingField::History));
@@ -112,13 +135,56 @@ fn record(
         )
         .map_err(|error| database_error(StoreOperation::Write, error))?;
     let entry = decode_entry(columns)?;
-    connection
-        .execute(
-            "INSERT INTO history_visits(url_id, visited_at) VALUES (?1, ?2)",
+    let visit = connection
+        .query_row(
+            "INSERT INTO history_visits(url_id, visited_at) VALUES (?1, ?2) RETURNING id",
             params![row_id(entry.id)?, visited_at],
+            |row| row.get::<_, i64>(0),
         )
         .map_err(|error| database_error(StoreOperation::Write, error))?;
-    Ok(entry)
+    Ok(RecordedVisit {
+        visit: identity(visit)?,
+        entry,
+    })
+}
+
+fn remove_visit(
+    connection: &Connection,
+    visit: NonZeroU64,
+) -> Result<Option<HistoryEntry>, StoreError> {
+    // Retract one visit, then drop its address if no visit remains or recompute its totals.
+    let url_id: Option<i64> = connection
+        .query_row(
+            "DELETE FROM history_visits WHERE id = ?1 RETURNING url_id",
+            [row_id(visit)?],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| database_error(StoreOperation::Write, error))?;
+    let Some(url_id) = url_id else {
+        return Ok(None);
+    };
+    connection
+        .execute(
+            "DELETE FROM history_urls WHERE id = ?1 AND NOT EXISTS
+                 (SELECT 1 FROM history_visits WHERE url_id = ?1)",
+            [url_id],
+        )
+        .map_err(|error| database_error(StoreOperation::Write, error))?;
+    connection
+        .query_row(
+            "UPDATE history_urls SET
+                 visit_count = (SELECT count(*) FROM history_visits WHERE url_id = ?1),
+                 last_visited = (SELECT max(visited_at) FROM history_visits WHERE url_id = ?1)
+             WHERE id = ?1
+             RETURNING id, address, title, visit_count, last_visited",
+            [url_id],
+            entry_columns,
+        )
+        .optional()
+        .map_err(|error| database_error(StoreOperation::Write, error))?
+        .map(decode_entry)
+        .transpose()
 }
 
 fn retitle(

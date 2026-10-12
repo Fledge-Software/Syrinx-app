@@ -915,6 +915,7 @@ slice it belongs to, so whoever comes back to it knows when it is due.
 | ID | Deferred work and why | Owning slice | Status | Issue |
 | --- | --- | --- | --- | --- |
 | DW-1 | Unify the bookmark parser's address check with navigation's `web_address` (`crates/atlas-app/src/navigation.rs`) through one shared function in `atlas-core`; the owner approved `atlas-core` using `url` for this on 2026-10-12. Until then the parser uses a stricter syntactic copy, and the import commit step must re-check every address with navigation's rule and report failures as skipped. P1-22 is not complete until this is done. | P1-22 | Open | |
+| DW-2 | Bound browsing history before D48's 100,000-row scale. P1-20 keeps every visit and loads every remembered address into the tier-1 catalogue at start-up (`Worker::restore` in `crates/atlas-app/src/session.rs`), so both the database and start-up cost grow without limit. Add a retention policy (an owner decision on age or count) and pruning that removes visits, then addresses left without visits, and keeps the catalogue in step, using the same participant as D47 clearing (`Store::apply_history_deletions`). Deferred because P1-20 only had to make history durable and searchable, and pruning shares its machinery with clearing. | P1-27 (or a P1-20 follow-up) | Open | |
 
 ## Issue map
 

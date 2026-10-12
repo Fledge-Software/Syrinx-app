@@ -1,7 +1,7 @@
 //! Proves session restore after the process ends without any shutdown, on disposable storage.
 
 use std::{
-    env,
+    env, io,
     process::{Child, Command, ExitStatus, Stdio},
 };
 
@@ -88,8 +88,12 @@ fn unclean_exit_restores_committed_order_associations_and_unloaded_rows() {
         run_child(PathBuf::from(root));
     }
     let fixture = Fixture::new();
-    let status = run_crashing_child(&fixture.1);
-    assert_eq!(status.code(), Some(CHILD_EXIT));
+    let (status, stderr) = run_crashing_child(&fixture.1);
+    assert_eq!(
+        status.code(),
+        Some(CHILD_EXIT),
+        "synthetic crashing session did not reach its exit; its stderr was:\n{stderr}"
+    );
 
     let (handle, mut events) = fixture.start();
     let restored = state(&mut events);
@@ -188,16 +192,28 @@ fn assert_restored_layout(model: &TabModelSnapshot) {
     }
 }
 
-fn run_crashing_child(root: &Path) -> ExitStatus {
+/// Runs the child and returns its exit status with everything it wrote to stderr.
+fn run_crashing_child(root: &Path) -> (ExitStatus, String) {
     let mut child = Command::new(env::current_exe().expect("locate session test executable"))
         .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
         .env(CHILD_ROOT, root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("start synthetic crashing session");
-    wait_for_child(&mut child)
+    // Drain stderr concurrently so a chatty child cannot block on a full pipe.
+    let mut stderr = child.stderr.take().expect("child stderr is piped");
+    let reader = thread::spawn(move || {
+        let mut text = String::new();
+        io::Read::read_to_string(&mut stderr, &mut text).map(|_| text)
+    });
+    let status = wait_for_child(&mut child);
+    let output = reader
+        .join()
+        .expect("join synthetic stderr reader")
+        .expect("read synthetic child stderr");
+    (status, output)
 }
 
 fn wait_for_child(child: &mut Child) -> ExitStatus {

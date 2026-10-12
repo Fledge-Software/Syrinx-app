@@ -63,7 +63,8 @@ fn visits_merge_by_address_list_newest_first_and_survive_restart() {
     let store = Store::open(directory.lease()).expect("new store opens");
     let first = store
         .record_visit(FIRST.to_owned(), String::new(), 100)
-        .expect("first visit records");
+        .expect("first visit records")
+        .entry;
     assert_eq!((first.visit_count, first.last_visited), (1, 100));
     assert!(first.title.is_empty());
     store
@@ -71,7 +72,8 @@ fn visits_merge_by_address_list_newest_first_and_survive_restart() {
         .expect("second visit records");
     let again = store
         .record_visit(FIRST.to_owned(), "Synthetic first".to_owned(), 300)
-        .expect("repeat visit records");
+        .expect("repeat visit records")
+        .entry;
     assert_eq!(again.id, first.id);
     assert_eq!((again.visit_count, again.last_visited), (2, 300));
     assert_eq!(again.title, "Synthetic first");
@@ -79,7 +81,8 @@ fn visits_merge_by_address_list_newest_first_and_survive_restart() {
     // A visit reported before its title keeps the title already known for that address.
     let untitled = store
         .record_visit(SECOND.to_owned(), String::new(), 400)
-        .expect("untitled repeat records");
+        .expect("untitled repeat records")
+        .entry;
     assert_eq!(untitled.title, "Synthetic second");
     let recent = store.recent_visits(10).expect("recent visits read");
     assert_eq!(
@@ -111,6 +114,41 @@ fn visits_merge_by_address_list_newest_first_and_survive_restart() {
     assert_eq!(
         timeline(&store.recent_visits(10).expect("recent visits reread")),
         timeline(&recent)
+    );
+    store.shutdown().expect("store closes");
+    directory.cleanup();
+}
+
+#[test]
+fn removing_a_visit_recomputes_its_address_or_drops_it() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("new store opens");
+    let older = store
+        .record_visit(FIRST.to_owned(), "Synthetic first".to_owned(), 100)
+        .expect("older visit records");
+    let newer = store
+        .record_visit(FIRST.to_owned(), String::new(), 200)
+        .expect("newer visit records");
+    let only = store
+        .record_visit(SECOND.to_owned(), String::new(), 300)
+        .expect("single visit records");
+
+    // A retracted visit leaves its address's earlier visit and title.
+    let remaining = store
+        .remove_visit(newer.visit)
+        .expect("visit removes")
+        .expect("address remains");
+    assert_eq!(remaining.id, older.entry.id);
+    assert_eq!((remaining.visit_count, remaining.last_visited), (1, 100));
+    assert_eq!(remaining.title, "Synthetic first");
+
+    // Retracting an address's only visit removes the address; repeating it changes nothing.
+    assert_eq!(store.remove_visit(only.visit), Ok(None));
+    assert_eq!(store.remove_visit(only.visit), Ok(None));
+    assert_eq!(store.history_entries(), Ok(vec![remaining]));
+    assert_eq!(
+        timeline(&store.recent_visits(10).expect("recent visits read")),
+        [(FIRST, 100)]
     );
     store.shutdown().expect("store closes");
     directory.cleanup();
