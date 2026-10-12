@@ -52,6 +52,7 @@ do not silently download a toolchain or change a Windows security setting.
 ```powershell
 cargo xtask check-deps
 cargo xtask check-deferred
+cargo xtask check-packaging
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --profile local --offline --locked -- -D warnings
 cargo test --workspace --profile local --offline --locked
@@ -339,6 +340,25 @@ its 38 tests ran; the subsequent engine-identity test and workspace
 documentation-test stage were not reached. The console launch passed unsigned.
 The complete quality gate and D48 performance gate remain unresolved;
 `docs/p1-05-search.md` records both failures and the separate CPU diagnostic.
+
+## Packaging (P1-37)
+
+```powershell
+cargo xtask package
+```
+
+builds `atlas-app` with the `local` profile and its `installed` feature
+(data in `%LOCALAPPDATA%\Atlas\data`) into the separate
+`target\package-build` directory, so `target\local\atlas-app.exe` stays the
+development build using `AtlasProductPreview`. It writes a versioned folder
+and zip under `target\package`, with a manifest and the owner-run scripts
+from `packaging/`. It installs and registers nothing. The gate's
+`cargo xtask check-packaging` step refuses a `packaging/atlas-registration.ps1`
+that differs from the Rust registry table (regenerate it with
+`cargo xtask write-registration`) and parses every script without running
+it. Agents never run the packaging scripts; installation, registration and
+choosing the default browser are the owner's. See
+`docs/p1-37-installer-design.md`.
 
 ## Data and artifacts
 
