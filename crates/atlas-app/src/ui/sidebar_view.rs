@@ -15,9 +15,9 @@ use atlas_ui::{
     sidebar_setting,
 };
 use gpui::{
-    AppContext, ClickEvent, Context, Div, ElementId, InteractiveElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ParentElement, Role, Stateful, StatefulInteractiveElement,
-    Styled, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, ClickEvent, Context, Div, ElementId, InteractiveElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Role, Stateful,
+    StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 
 use crate::controls::control;
@@ -471,6 +471,7 @@ fn movable_row(
     title: String,
     cx: &mut Context<BrowserView>,
 ) -> Stateful<Div> {
+    let view = cx.entity().downgrade();
     // An Alt arrow that moves nothing goes on to the window's own binding (Alt Left is Back).
     let step = |step: Step| {
         move |this: &mut BrowserView, cx: &mut Context<BrowserView>| {
@@ -491,11 +492,14 @@ fn movable_row(
         .on_action(cx.listener(move |this, _: &MoveRowDown, _, cx| down(this, cx)))
         .on_action(cx.listener(move |this, _: &MoveRowOut, _, cx| out(this, cx)))
         .on_action(cx.listener(move |this, _: &MoveRowIn, _, cx| into(this, cx)))
-        // Mouse-down focused the row; a drag lets go of that focus, as a click does.
-        .on_drag(DraggedRow { entry, title }, |dragged, _, window, cx| {
-            window.blur(cx);
-            cx.new(|_| dragged.clone())
-        })
+        // A row focused from the keyboard and then dragged lets go of focus, as a click does.
+        .on_drag(
+            DraggedRow { entry, title },
+            move |dragged, _, window, cx| {
+                release_on_drag(&view, window, cx);
+                cx.new(|_| dragged.clone())
+            },
+        )
         .drag_over::<DraggedRow>(|style, _, _, _| style.bg(theme::preview_row_selected()))
         .on_drop(cx.listener(move |this, dragged: &DraggedRow, window, cx| {
             this.drop_saved_row(dragged.entry, DropTarget::Row(entry));
@@ -504,13 +508,24 @@ fn movable_row(
         }))
 }
 
+/// Releases row focus through the view at a drag's start; a view already gone (Atlas
+/// closing) leaves nothing to protect, so the window's focus is simply cleared.
+fn release_on_drag(view: &WeakEntity<BrowserView>, window: &mut Window, cx: &mut App) {
+    if view
+        .update(cx, |browser, cx| browser.release_row_focus(window, cx))
+        .is_err()
+    {
+        window.blur(cx);
+    }
+}
+
 /// The shared row shape: a titled row when labels show, a centred icon button otherwise.
 /// Every row is a tree item at its nesting level, keeping its title as the accessible name,
 /// and its own Tab stop with P1-36's focus ring: Enter or Space uses it (a keyboard click).
 // TODO(DW-61): one Tab stop for the tree with arrow keys between rows, Left and Right for
 // folders, and F6 landing on the active row.
 fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<Div> {
-    let row = control(div().id(id), Role::TreeItem, look.title.clone())
+    let row = without_mouse_focus(control(div().id(id), Role::TreeItem, look.title.clone()))
         .aria_level(look.depth + 1)
         .aria_selected(look.active)
         .key_context(ROW_CONTEXT)
@@ -558,7 +573,21 @@ fn row_icon(letter: &str, saved: bool) -> Div {
 
 /// A small control at the end of a wide row, named for screen readers.
 fn row_action(id: impl Into<ElementId>, glyph: &'static str, name: &'static str) -> Stateful<Div> {
-    control(div().id(id).px_1().rounded_md(), Role::Button, name).child(glyph)
+    without_mouse_focus(control(
+        div().id(id).px_1().rounded_md(),
+        Role::Button,
+        name,
+    ))
+    .child(glyph)
+}
+
+/// Keeps a mouse press from focusing a row or its buttons, so a right-click, a middle-click
+/// or a press released elsewhere never leaves the row's keys (Alt arrows, Delete) armed.
+/// Tab and F6 still focus them. GPUI focuses a focusable element on any mouse-down unless the
+/// event's default is prevented, and an element's own mouse-down listeners run before its
+/// focus transfer (`gpui-pre-0.3.8/src/elements/div.rs`, the focus listener's comment).
+fn without_mouse_focus(element: Stateful<Div>) -> Stateful<Div> {
+    element.on_any_mouse_down(|_, window, _| window.prevent_default())
 }
 
 /// Opens the palette: a labelled button when wide, an icon button otherwise.
