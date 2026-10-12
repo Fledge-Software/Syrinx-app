@@ -4,10 +4,10 @@ use atlas_platform::{DeletionJournal, JournalError};
 use atlas_search::{Catalogue, Target};
 use atlas_store::{
     HistoryDeletion, Store,
-    deletion::{DeletionCategory, DeletionRange},
+    deletion::{DeletionCategory, DeletionError, DeletionRange},
 };
 
-use super::{SessionError, history};
+use super::{ClearedHistory, SessionError, history};
 
 /// Brings the opened database level with the journal before anything reads history.
 ///
@@ -26,7 +26,25 @@ pub(super) fn reconcile(store: &Store, journal: &mut DeletionJournal) -> Result<
     complete_pending(journal)
 }
 
-/// Clears `[start, end)` Unix seconds and returns how many remembered addresses went away.
+/// Clears all history at start-up, after the owner confirmed an unusable journal's repair.
+/// Runs before the catalogue exists, so only the store and the journal change.
+pub(super) fn clear_all(store: &Store, journal: &mut DeletionJournal) -> Result<(), SessionError> {
+    let request = journal
+        .log()
+        .request(DeletionCategory::History, DeletionRange::all_time())
+        .map_err(journal_error)?;
+    journal.append(request).map_err(SessionError::Deletion)?;
+    let pending = journal
+        .log()
+        .pending()
+        .ok_or(journal_error(DeletionError::NoPendingClear))?;
+    store
+        .apply_history_deletions(&[pending])
+        .map_err(SessionError::Store)?;
+    complete_pending(journal)
+}
+
+/// Clears `[start, end)` Unix seconds and reports how much went away.
 ///
 /// The request is durable before anything is deleted and completion is written after both
 /// the database and the catalogue follow, so a crash in between finishes at the next start.
@@ -37,16 +55,20 @@ pub(super) fn clear(
     recorder: &mut history::HistoryRecorder,
     start: i64,
     end: i64,
-) -> Result<usize, SessionError> {
+) -> Result<ClearedHistory, SessionError> {
     let range = DeletionRange::new(start, end).map_err(journal_error)?;
     // An earlier clear that stopped part-way is finished before a new one may start.
-    finish_pending(store, journal, catalogue, recorder)?;
+    let earlier = finish_pending(store, journal, catalogue, recorder)?;
     let request = journal
         .log()
         .request(DeletionCategory::History, range)
         .map_err(journal_error)?;
     journal.append(request).map_err(SessionError::Deletion)?;
-    finish_pending(store, journal, catalogue, recorder)
+    let cleared = finish_pending(store, journal, catalogue, recorder)?;
+    Ok(ClearedHistory {
+        visits: earlier.visits + cleared.visits,
+        addresses: earlier.addresses + cleared.addresses,
+    })
 }
 
 fn finish_pending(
@@ -54,16 +76,19 @@ fn finish_pending(
     journal: &mut DeletionJournal,
     catalogue: &mut Catalogue,
     recorder: &mut history::HistoryRecorder,
-) -> Result<usize, SessionError> {
+) -> Result<ClearedHistory, SessionError> {
     let Some(pending) = journal.log().pending() else {
-        return Ok(0);
+        return Ok(ClearedHistory::default());
     };
     let deletion = store
         .apply_history_deletions(&[pending])
         .map_err(SessionError::Store)?;
     follow(catalogue, recorder, &deletion)?;
     complete_pending(journal)?;
-    Ok(deletion.removed.len())
+    Ok(ClearedHistory {
+        visits: deletion.visits,
+        addresses: deletion.removed.len(),
+    })
 }
 
 /// Removes or recomputes every catalogue row the clear touched, and the recorder's cursors.
@@ -95,6 +120,6 @@ fn complete_pending(journal: &mut DeletionJournal) -> Result<(), SessionError> {
     journal.append(completion).map_err(SessionError::Deletion)
 }
 
-fn journal_error(error: atlas_store::deletion::DeletionError) -> SessionError {
+fn journal_error(error: DeletionError) -> SessionError {
     SessionError::Deletion(JournalError::Deletion(error))
 }

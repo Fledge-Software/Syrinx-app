@@ -29,7 +29,7 @@ use windows::Win32::{
     },
 };
 
-pub use clear_data::{BrowsingDataKinds, ClearSpan};
+pub use clear_data::{BrowsingDataKinds, ClearOutcome, ClearSpan};
 use page::Page;
 
 const COMMAND_MESSAGE: u32 = WM_APP + 41;
@@ -138,7 +138,7 @@ pub enum BrowserEvent {
     /// The outcome of one `ClearData` request.
     DataCleared {
         request: u64,
-        result: Result<(), BrowserError>,
+        outcome: ClearOutcome,
     },
     Error {
         tab: Option<u64>,
@@ -195,7 +195,10 @@ pub enum BrowserError {
     Focus,
     Metadata,
     OverlayOwner,
-    ClearData,
+    /// WebView2 refused a data clear; `code` is its HRESULT.
+    ClearData {
+        code: i32,
+    },
     StillRunning,
     WorkerPanicked,
 }
@@ -462,9 +465,9 @@ impl BrowserState {
                 span,
             } => {
                 // The outcome always reaches the requester, never as an unrelated page error.
-                let result = clear_data::clear(&self.environment, self.parent, kinds, span);
+                let outcome = clear_data::clear(&self.environment, self.parent, kinds, span);
                 self.events
-                    .emit(BrowserEvent::DataCleared { request, result });
+                    .emit(BrowserEvent::DataCleared { request, outcome });
             }
             BrowserCommand::Resize(next) => {
                 next.validate()?;

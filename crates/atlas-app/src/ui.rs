@@ -4,6 +4,7 @@ mod clear_data;
 mod customize;
 mod favorites;
 mod history_list;
+mod history_repair;
 mod home;
 mod home_palette;
 mod navigation_intents;
@@ -107,6 +108,7 @@ pub struct BrowserView {
     model: TabModelSnapshot,
     session_revision: Option<u64>,
     recovery: Option<recovery::RecoveryCard>,
+    history_repair: Option<history_repair::HistoryRepairCard>,
     session: Option<SessionHandle>,
     browser: Option<BrowserHost>,
     session_stopped: bool,
@@ -153,6 +155,7 @@ impl BrowserView {
             model: TabModelSnapshot::default(),
             session_revision: None,
             recovery: None,
+            history_repair: None,
             session: None,
             browser: None,
             session_stopped: true,
@@ -280,6 +283,14 @@ impl BrowserView {
                             .to_owned();
                 }
             }
+            SessionEvent::HistoryRepairOffered(prompt) => {
+                if !self.closing {
+                    self.recovery = None;
+                    self.history_repair = Some(history_repair::HistoryRepairCard::new(prompt));
+                    self.message =
+                        "Clearing all history is needed before Atlas can continue.".to_owned();
+                }
+            }
             SessionEvent::Preferences {
                 settings,
                 destinations,
@@ -287,6 +298,7 @@ impl BrowserView {
             SessionEvent::Destinations(destinations) => self.destinations_changed(destinations),
             SessionEvent::State(snapshot) => {
                 self.recovery = None;
+                self.history_repair = None;
                 // Restored sessions already have saved revisions; only the first state is startup.
                 let previous_revision = self.session_revision.replace(snapshot.revision);
                 let initial = previous_revision.is_none();
@@ -370,6 +382,7 @@ impl BrowserView {
                 }
                 if fatal {
                     self.fail(format!("Storage stopped: {error}"));
+                    self.clear_data_session_lost();
                 } else {
                     self.message = error.to_string();
                 }
@@ -470,8 +483,8 @@ impl BrowserView {
             }
             BrowserEvent::Url { id, url } => self.metadata(id, None, Some(url)),
             BrowserEvent::Loading { .. } => {}
-            BrowserEvent::DataCleared { request, result } => {
-                self.browser_data_cleared(request, result);
+            BrowserEvent::DataCleared { request, outcome } => {
+                self.browser_data_cleared(request, outcome);
             }
             BrowserEvent::Shortcut(shortcut) => self.shortcut(shortcut, window, cx),
             BrowserEvent::PopupBlocked { id } => {
@@ -534,23 +547,30 @@ impl BrowserView {
     }
 
     fn command(&mut self, command: SessionCommand) {
+        self.try_command(command);
+    }
+
+    /// Queues a command for the session worker; returns whether it was queued.
+    fn try_command(&mut self, command: SessionCommand) -> bool {
         let ready = self.session_revision.is_some();
         let Some(session) = &self.session else {
             if session_command_allowed(self.closing, ready, &command) {
                 self.message = "Local storage is unavailable.".to_owned();
             }
-            return;
+            return false;
         };
-        if queue_session_command(
+        match queue_session_command(
             self.closing,
             ready,
             &mut self.home_palette,
             &session.commands,
             command,
-        )
-        .is_err()
-        {
-            self.fail("The session worker is unavailable.");
+        ) {
+            Ok(queued) => queued,
+            Err(_) => {
+                self.fail("The session worker is unavailable.");
+                false
+            }
         }
     }
 
@@ -1228,7 +1248,9 @@ fn session_command_allowed(closing: bool, ready: bool, command: &SessionCommand)
     ready
         || matches!(
             command,
-            SessionCommand::ConfirmRecovery { .. } | SessionCommand::Shutdown
+            SessionCommand::ConfirmRecovery { .. }
+                | SessionCommand::ConfirmHistoryRepair { .. }
+                | SessionCommand::Shutdown
         )
 }
 

@@ -74,6 +74,8 @@ pub struct RecordedVisit {
 /// What a D47 clear changed, so a running search catalogue can follow it.
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct HistoryDeletion {
+    /// Visits removed, including visits to addresses that keep older ones.
+    pub visits: usize,
     /// Addresses left without any visit, now gone from history.
     pub removed: Vec<NonZeroU64>,
     /// Addresses that lost some visits and keep others, with their recomputed totals.
@@ -84,6 +86,7 @@ impl fmt::Debug for HistoryDeletion {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("HistoryDeletion")
+            .field("visits", &self.visits)
             .field("removed", &self.removed.len())
             .field("changed", &self.changed.len())
             .finish()
@@ -231,11 +234,14 @@ fn delete(
 ) -> Result<HistoryDeletion, StoreError> {
     // Note the touched addresses first, so the caller learns which rows went or changed.
     let affected = affected_entries(connection, requests)?;
-    delete_ranges(connection, requests)?;
+    let visits = delete_ranges(connection, requests)?;
     if let Some(generation) = requests.iter().map(|request| request.generation()).max() {
         record_generation(connection, generation)?;
     }
-    let mut deletion = HistoryDeletion::default();
+    let mut deletion = HistoryDeletion {
+        visits,
+        ..HistoryDeletion::default()
+    };
     for id in affected {
         match entry(connection, id)? {
             Some(entry) => deletion.changed.push(entry),
@@ -323,12 +329,14 @@ pub(crate) fn record_generation(
 
 /// Removes visits in each cleared half-open range, then entries left without visits.
 /// This is the whole participant for a staged copy, which may predate the generation table.
+/// Returns how many visits were removed.
 pub(crate) fn delete_ranges(
     connection: &Connection,
     requests: &[DeletionRequest],
-) -> Result<(), StoreError> {
+) -> Result<usize, StoreError> {
+    let mut visits = 0;
     for range in history_ranges(requests) {
-        connection
+        visits += connection
             .execute(
                 "DELETE FROM history_visits WHERE visited_at >= ?1 AND visited_at < ?2",
                 params![range.start(), range.end()],
@@ -343,7 +351,8 @@ pub(crate) fn delete_ranges(
                  visit_count = (SELECT count(*) FROM history_visits WHERE url_id = history_urls.id),
                  last_visited = (SELECT max(visited_at) FROM history_visits WHERE url_id = history_urls.id);",
         )
-        .map_err(|error| database_error(StoreOperation::Write, error))
+        .map_err(|error| database_error(StoreOperation::Write, error))?;
+    Ok(visits)
 }
 
 /// Every remembered address in identity order, for rebuilding the search catalogue.

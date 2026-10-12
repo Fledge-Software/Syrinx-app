@@ -1,6 +1,9 @@
 //! Proves history recording, de-duplication, search and reopening through the session worker.
 
-use atlas_store::HistoryVisit;
+use atlas_store::{
+    HistoryVisit,
+    deletion::{DeletionCategory, DeletionRange},
+};
 
 use super::*;
 
@@ -208,7 +211,7 @@ fn clear(
     events: &mut UnboundedReceiver<SessionEvent>,
     start: i64,
     end: i64,
-) -> usize {
+) -> ClearedHistory {
     send(
         handle,
         SessionCommand::ClearHistory {
@@ -248,9 +251,15 @@ fn clearing_history_updates_search_at_once_and_stays_cleared_after_restart() {
     let before = history_hits(&handle, &mut events, "history").counts.total();
 
     // A range before any visit removes nothing; the current one removes both addresses.
-    assert_eq!(clear(&handle, &mut events, 0, 1), 0);
+    assert_eq!(clear(&handle, &mut events, 0, 1), ClearedHistory::default());
     let now = utc_seconds().expect("synthetic clock");
-    assert_eq!(clear(&handle, &mut events, now - 3_600, now + 1), 2);
+    assert_eq!(
+        clear(&handle, &mut events, now - 3_600, now + 1),
+        ClearedHistory {
+            visits: 2,
+            addresses: 2
+        }
+    );
     assert!(recent(&handle, &mut events).is_empty());
     assert_eq!(
         history_hits(&handle, &mut events, "history").counts.total(),
@@ -307,5 +316,158 @@ fn an_invalid_clear_range_is_refused_without_stopping_the_session() {
     }
     assert!(recent(&handle, &mut events).is_empty());
     stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+/// Opens a tab and records two synthetic visits, then stops the session.
+fn visit_two_pages(fixture: &Fixture) {
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    let tab = change(
+        &handle,
+        &mut events,
+        SessionCommand::NewTab {
+            address: FIRST.to_owned(),
+        },
+    )
+    .model
+    .active_id
+    .expect("synthetic tab is active");
+    observe(&handle, &mut events, tab, None, Some(FIRST));
+    observe(&handle, &mut events, tab, None, Some(SECOND));
+    assert_eq!(recent(&handle, &mut events).len(), 2);
+    stop(handle, &mut events);
+}
+
+/// Clears the last hour, then records one later visit, so the journal holds one clear.
+fn clear_then_visit_later(fixture: &Fixture) {
+    let (handle, mut events) = fixture.start();
+    let tab = state(&mut events)
+        .model
+        .active_id
+        .expect("synthetic tab is restored");
+    let now = utc_seconds().expect("synthetic clock");
+    clear(&handle, &mut events, now - 3_600, now + 1);
+    observe(&handle, &mut events, tab, None, Some(LATER));
+    assert_eq!(timeline(&recent(&handle, &mut events)), [(LATER, "")]);
+    stop(handle, &mut events);
+}
+
+fn journal_path(fixture: &Fixture) -> PathBuf {
+    fixture.0.join("atlas.deletions")
+}
+
+/// Removes the copies a repair preserves, which only this fixture created; returns how many.
+fn remove_preserved_journals(fixture: &Fixture) -> usize {
+    let mut removed = 0;
+    for entry in checked_io(fs::read_dir(&fixture.0)) {
+        let entry = checked_io(entry);
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .is_some_and(|name| name.starts_with("atlas.deletions.damaged-"))
+        {
+            checked_io(fs::remove_file(entry.path()));
+            removed += 1;
+        }
+    }
+    removed
+}
+
+fn repair_offer(
+    events: &mut UnboundedReceiver<SessionEvent>,
+    expected: HistoryRepairReason,
+) -> u64 {
+    match next_event(events) {
+        SessionEvent::HistoryRepairOffered(prompt) => {
+            assert_eq!(prompt.reason, expected);
+            prompt.offer_id
+        }
+        event => panic!("expected a history repair offer before any state, got {event:?}"),
+    }
+}
+
+/// Confirms the repair and proves every visit is gone, now and after a restart.
+fn confirm_repair_and_check_cleared(fixture: &Fixture, reason: HistoryRepairReason) {
+    let (handle, mut events) = fixture.start();
+    let offer_id = repair_offer(&mut events, reason);
+    send(&handle, SessionCommand::ConfirmHistoryRepair { offer_id });
+    state(&mut events);
+    assert!(recent(&handle, &mut events).is_empty());
+    stop(handle, &mut events);
+
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    assert!(recent(&handle, &mut events).is_empty());
+    stop(handle, &mut events);
+}
+
+#[test]
+fn a_damaged_journal_clears_nothing_until_the_owner_confirms_clearing_all_history() {
+    let fixture = Fixture::new();
+    visit_two_pages(&fixture);
+    clear_then_visit_later(&fixture);
+
+    // A complete record whose checksum no longer matches cannot be trusted or truncated.
+    let mut damaged = checked_io(fs::read(journal_path(&fixture)));
+    let last = damaged.len() - 1;
+    damaged[last] ^= 0xFF;
+    checked_io(fs::write(journal_path(&fixture), &damaged));
+
+    // Declining stops Atlas without touching the journal or the remaining history.
+    let (handle, mut events) = fixture.start();
+    repair_offer(&mut events, HistoryRepairReason::Damaged);
+    stop(handle, &mut events);
+    assert_eq!(checked_io(fs::read(journal_path(&fixture))), damaged);
+    assert_eq!(remove_preserved_journals(&fixture), 0);
+
+    confirm_repair_and_check_cleared(&fixture, HistoryRepairReason::Damaged);
+    assert_eq!(remove_preserved_journals(&fixture), 1);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_missing_journal_behind_the_database_offers_the_same_repair() {
+    let fixture = Fixture::new();
+    visit_two_pages(&fixture);
+    clear_then_visit_later(&fixture);
+
+    // Without the journal, a restored backup could bring cleared history back.
+    checked_io(fs::remove_file(journal_path(&fixture)));
+    confirm_repair_and_check_cleared(&fixture, HistoryRepairReason::Incomplete);
+    remove_preserved_journals(&fixture);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_clear_requested_before_a_crash_finishes_at_the_next_start() {
+    let fixture = Fixture::new();
+    visit_two_pages(&fixture);
+
+    // Step 1 alone is durable: the request is journaled, nothing is applied or completed.
+    let now = utc_seconds().expect("synthetic clock");
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let mut journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let range = DeletionRange::new(now - 3_600, now + 1).expect("valid synthetic range");
+    let request = journal
+        .log()
+        .request(DeletionCategory::History, range)
+        .expect("prepare synthetic request");
+    journal.append(request).expect("journal synthetic request");
+    drop(journal);
+    drop(lease);
+
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    assert!(recent(&handle, &mut events).is_empty());
+    stop(handle, &mut events);
+
+    // The start-up finished the clear, so the journal records it as complete.
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let journal = DeletionJournal::open(&lease).expect("reopen synthetic journal");
+    assert_eq!(journal.log().pending(), None);
+    assert_eq!(journal.log().completed_generation(), 1);
+    drop(journal);
+    drop(lease);
     fixture.cleanup();
 }

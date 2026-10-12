@@ -1,13 +1,15 @@
 //! Shows the clear-browsing-data dialog in the page card and reports each part's outcome (P1-27).
 
-use atlas_platform::browser::{BrowserCommand, BrowserError, BrowsingDataKinds, ClearSpan};
+use atlas_platform::browser::{
+    BrowserCommand, BrowserError, BrowsingDataKinds, ClearOutcome, ClearSpan,
+};
 use gpui::{
     Context, Div, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled, div, px,
 };
 
 use super::{BrowserView, button};
 use crate::{
-    session::{self, SessionCommand, SessionError},
+    session::{self, ClearedHistory, SessionCommand, SessionError},
     theme,
 };
 
@@ -81,8 +83,10 @@ struct Pending {
     request: u64,
     kinds: BrowsingDataKinds,
     period: Period,
-    history: Option<Option<Result<usize, String>>>,
+    history: Option<Option<Result<ClearedHistory, String>>>,
     engine: Option<Option<Result<(), String>>>,
+    /// A cleanup failure after the engine part, reported but not counted as a failed clear.
+    cleanup: Option<String>,
 }
 
 impl Pending {
@@ -162,6 +166,7 @@ impl ClearDataDialog {
             period: self.period,
             history: history.as_ref().map(|_| None),
             engine: Some(None),
+            cleanup: None,
         });
         self.outcome = None;
         let engine = BrowserCommand::ClearData {
@@ -176,16 +181,27 @@ impl ClearDataDialog {
     fn history_result(
         &mut self,
         request: u64,
-        result: Result<usize, SessionError>,
+        result: Result<ClearedHistory, SessionError>,
     ) -> Option<String> {
         let pending = self.pending.as_mut().filter(|p| p.request == request)?;
         pending.history = Some(Some(result.map_err(|error| error.to_string())));
         self.finish()
     }
 
-    fn engine_result(&mut self, request: u64, result: Result<(), BrowserError>) -> Option<String> {
+    fn engine_result(&mut self, request: u64, outcome: ClearOutcome) -> Option<String> {
         let pending = self.pending.as_mut().filter(|p| p.request == request)?;
-        pending.engine = Some(Some(result.map_err(|error| error.to_string())));
+        pending.engine = Some(Some(outcome.cleared.map_err(engine_error)));
+        pending.cleanup = outcome.closed.err().map(engine_error);
+        self.finish()
+    }
+
+    /// The session stopped before answering, so its part can no longer arrive.
+    fn session_lost(&mut self) -> Option<String> {
+        let pending = self.pending.as_mut()?;
+        if !matches!(pending.history, Some(None)) {
+            return None;
+        }
+        pending.history = Some(Some(Err(SessionError::StorageUnavailable.to_string())));
         self.finish()
     }
 
@@ -214,7 +230,10 @@ fn summary(pending: &Pending) -> String {
     let mut failures = Vec::new();
     if let Some(Some(result)) = &pending.history {
         match result {
-            Ok(removed) => cleared.push(format!("Atlas's browsing history ({removed} sites)")),
+            Ok(history) => cleared.push(format!(
+                "Atlas's browsing history ({} visits; {} sites no longer listed)",
+                history.visits, history.addresses
+            )),
             Err(error) => failures.push(format!(
                 "Atlas's browsing history was not cleared: {error}."
             )),
@@ -237,6 +256,11 @@ fn summary(pending: &Pending) -> String {
             pending.period.phrase()
         );
     }
+    if let Some(error) = &pending.cleanup {
+        failures.push(format!(
+            "The page engine's temporary view did not close: {error}; restart Atlas if pages misbehave."
+        ));
+    }
     for failure in failures {
         if !message.is_empty() {
             message.push(' ');
@@ -244,6 +268,19 @@ fn summary(pending: &Pending) -> String {
         message.push_str(&failure);
     }
     message
+}
+
+/// Names a page-engine failure in words, keeping WebView2's code for diagnosis.
+fn engine_error(error: BrowserError) -> String {
+    match error {
+        BrowserError::ClearData { code } => {
+            format!("WebView2 refused (error 0x{code:08X})")
+        }
+        BrowserError::QueueClosed | BrowserError::Wake => {
+            "the page engine is not running".to_owned()
+        }
+        _ => "the page engine failed".to_owned(),
+    }
 }
 
 fn engine_kinds(kinds: BrowsingDataKinds) -> String {
@@ -287,27 +324,44 @@ impl BrowserView {
         let Some((history, engine)) = self.clear_data.submit(now) else {
             return;
         };
-        if let Some(command) = history {
-            self.command(command);
-        }
-        let request = match &engine {
-            BrowserCommand::ClearData { request, .. } => *request,
-            _ => return,
+        let BrowserCommand::ClearData { request, .. } = &engine else {
+            return;
         };
-        // A refused page-engine request still reports, so the dialog cannot wait forever.
+        let request = *request;
+        // A request that could not be queued reports at once, so the dialog never waits forever.
+        if let Some(command) = history
+            && !self.try_command(command)
+        {
+            self.history_cleared(request, Err(SessionError::StorageUnavailable));
+        }
         if !self.page_command(engine) {
-            self.browser_data_cleared(request, Err(BrowserError::QueueClosed));
+            let refused = ClearOutcome {
+                cleared: Err(BrowserError::QueueClosed),
+                closed: Ok(()),
+            };
+            self.browser_data_cleared(request, refused);
         }
     }
 
-    pub(super) fn history_cleared(&mut self, request: u64, result: Result<usize, SessionError>) {
+    pub(super) fn history_cleared(
+        &mut self,
+        request: u64,
+        result: Result<ClearedHistory, SessionError>,
+    ) {
         if let Some(summary) = self.clear_data.history_result(request, result) {
             self.message = summary;
         }
     }
 
-    pub(super) fn browser_data_cleared(&mut self, request: u64, result: Result<(), BrowserError>) {
-        if let Some(summary) = self.clear_data.engine_result(request, result) {
+    pub(super) fn browser_data_cleared(&mut self, request: u64, outcome: ClearOutcome) {
+        if let Some(summary) = self.clear_data.engine_result(request, outcome) {
+            self.message = summary;
+        }
+    }
+
+    /// Ends a clear whose session part can no longer answer; the failure itself stays shown.
+    pub(super) fn clear_data_session_lost(&mut self) {
+        if let Some(summary) = self.clear_data.session_lost() {
             self.message = summary;
         }
     }
@@ -460,6 +514,13 @@ impl ReadyStyle for gpui::Stateful<Div> {
 mod tests {
     use super::*;
 
+    fn cleared(result: Result<(), BrowserError>) -> ClearOutcome {
+        ClearOutcome {
+            cleared: result,
+            closed: Ok(()),
+        }
+    }
+
     fn submitted(dialog: &mut ClearDataDialog) -> (Option<SessionCommand>, BrowserCommand) {
         dialog.submit(10_000).expect("a clear starts")
     }
@@ -492,12 +553,20 @@ mod tests {
 
         // A second submit waits; a stale reply is ignored; both parts must report.
         assert!(dialog.submit(10_000).is_none());
-        assert_eq!(dialog.history_result(request + 1, Ok(3)), None);
-        assert_eq!(dialog.history_result(request, Ok(3)), None);
+        let history = ClearedHistory {
+            visits: 5,
+            addresses: 3,
+        };
+        assert_eq!(dialog.history_result(request + 1, Ok(history)), None);
+        assert_eq!(dialog.history_result(request, Ok(history)), None);
         let summary = dialog
-            .engine_result(request, Ok(()))
+            .engine_result(request, cleared(Ok(())))
             .expect("both parts reported");
-        assert!(summary.starts_with("Cleared Atlas's browsing history (3 sites)"));
+        assert!(
+            summary.starts_with(
+                "Cleared Atlas's browsing history (5 visits; 3 sites no longer listed)"
+            )
+        );
         assert!(summary.ends_with("from the last hour."));
         assert!(dialog.submit(10_000).is_some());
     }
@@ -517,12 +586,52 @@ mod tests {
             panic!("the page engine clears its own copy");
         };
         assert_eq!(span, None);
-        dialog.history_result(request, Ok(0));
+        dialog.history_result(request, Ok(ClearedHistory::default()));
+        let refused = BrowserError::ClearData {
+            code: 0x8007_0005_u32 as i32,
+        };
         let summary = dialog
-            .engine_result(request, Err(BrowserError::ClearData))
+            .engine_result(request, cleared(Err(refused)))
             .expect("both parts reported");
-        assert!(summary.starts_with("Cleared Atlas's browsing history (0 sites) from all time."));
+        assert!(summary.starts_with(
+            "Cleared Atlas's browsing history (0 visits; 0 sites no longer listed) from all time."
+        ));
         assert!(summary.contains("visited-page records, cookies and site data were not cleared"));
+        assert!(summary.contains("error 0x80070005"));
+    }
+
+    #[test]
+    fn a_cleanup_failure_is_reported_apart_from_a_successful_clear() {
+        let mut dialog = ClearDataDialog::default();
+        dialog.show();
+        dialog.toggle(Kind::History);
+        dialog.toggle(Kind::Cache);
+        let (_, engine) = submitted(&mut dialog);
+        let BrowserCommand::ClearData { request, .. } = engine else {
+            panic!("the page engine clears its cache");
+        };
+        let outcome = ClearOutcome {
+            cleared: Ok(()),
+            closed: Err(BrowserError::ClearData { code: 1 }),
+        };
+        let summary = dialog.engine_result(request, outcome).expect("reported");
+        assert!(summary.starts_with("Cleared cached files from the last hour."));
+        assert!(summary.contains("temporary view did not close"));
+    }
+
+    #[test]
+    fn a_stopped_session_ends_the_wait_for_history() {
+        let mut dialog = ClearDataDialog::default();
+        dialog.show();
+        let (_, engine) = submitted(&mut dialog);
+        let BrowserCommand::ClearData { request, .. } = engine else {
+            panic!("the page engine clears its own copy");
+        };
+        assert_eq!(dialog.engine_result(request, cleared(Ok(()))), None);
+        let summary = dialog.session_lost().expect("the clear ends");
+        assert!(summary.contains("Atlas's browsing history was not cleared"));
+        assert!(dialog.submit(10_000).is_some());
+        assert_eq!(dialog.session_lost(), None);
     }
 
     #[test]
@@ -538,7 +647,7 @@ mod tests {
             panic!("the page engine clears its cache");
         };
         let summary = dialog
-            .engine_result(request, Ok(()))
+            .engine_result(request, cleared(Ok(())))
             .expect("one part reported");
         assert_eq!(summary, "Cleared cached files from the last hour.");
         assert_eq!(dialog.status(), Some(summary.as_str()));

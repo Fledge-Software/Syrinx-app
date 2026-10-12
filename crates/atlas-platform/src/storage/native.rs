@@ -278,6 +278,30 @@ pub(super) fn create_control(path: &Path) -> Result<File, LocationError> {
     control_file(path, true, LocationOperation::OpenControl)
 }
 
+/// Flushes a directory so a newly created entry's name survives a power loss.
+pub(super) fn flush_directory(
+    path: &Path,
+    operation: LocationOperation,
+) -> Result<(), LocationError> {
+    let wide = wide_file_path(path);
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            GENERIC_READ.0 | GENERIC_WRITE.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    }
+    .map_err(|error| os_error(operation, error))?;
+    let directory = unsafe { File::from_raw_handle(handle.0) };
+    directory
+        .sync_all()
+        .map_err(|error| io_error(operation, error))
+}
+
 /// Opens or creates the deletion journal with the same exclusive gate as the control file.
 pub(super) fn open_journal(path: &Path) -> Result<File, LocationError> {
     control_file(path, false, LocationOperation::OpenDeletionJournal)

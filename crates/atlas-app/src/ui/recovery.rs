@@ -34,6 +34,8 @@ impl BrowserView {
             "Closing Atlas…"
         } else if self.recovery.is_some() {
             "Restore your workspace from a backup?"
+        } else if self.history_repair.is_some() {
+            "Clear all browsing history to continue?"
         } else {
             "Opening your workspace…"
         };
@@ -61,16 +63,17 @@ impl BrowserView {
                 ));
             }
         }
+        card = self.history_repair_section(card, cx);
         if let Some(failure) = &self.failure {
             card = card.child(div().text_color(rgb(0xf2b5b5)).child(failure.clone()));
         }
         if !self.closing {
-            let label = if self
+            let undecided = self
                 .recovery
                 .as_ref()
                 .is_some_and(|recovery| !recovery.confirming)
-                && self.failure.is_none()
-            {
+                || self.history_repair.is_some();
+            let label = if undecided && self.failure.is_none() {
                 "Cancel and exit"
             } else {
                 "Close Atlas"

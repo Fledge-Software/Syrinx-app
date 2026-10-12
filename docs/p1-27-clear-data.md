@@ -29,10 +29,19 @@ place, the way the history list does, so no page sits under GPUI drawing.
   weeks, all time.
 - **Clear data** runs the clear. The dialog says "Clearing…" and then names
   exactly what was cleared and, separately, every part that failed and why,
-  for example: "Cleared Atlas's browsing history (12 sites) from the last
-  hour. The page engine's visited-page records, cookies and site data were
-  not cleared: …". The same summary appears in the footer, so it is not lost
-  if the dialog was closed meanwhile.
+  for example: "Cleared Atlas's browsing history (14 visits; 12 sites no
+  longer listed) from the last hour. The page engine's visited-page records,
+  cookies and site data were not cleared: WebView2 refused (error
+  0x80070005)." The visit count covers partial removals too: a site visited
+  both inside and outside the range loses only the visits inside it and stays
+  listed. The same summary appears in the footer, so it is not lost if the
+  dialog was closed meanwhile.
+- **No endless "Clearing…".** If the history part cannot be queued, or the
+  session worker stops before answering, the history part is reported as not
+  cleared ("Local storage is unavailable") instead of waiting. If WebView2
+  clears the data but its temporary controller then fails to close, the clear
+  is reported as done and the close failure is named separately, with its
+  error code.
 
 There is no command registry on this base (the palette's command work is
 P1-30/P1-31), so the dialog is not yet a palette command. Registering it
@@ -71,9 +80,18 @@ a restore cannot bring it back. A failure there is reported and can be retried.
 `atlas.deletions`, beside `atlas.db` and `atlas.lifecycle` in the data
 directory, holds P1-04's fixed-size, checksummed records
 (`crates/atlas-platform/src/storage/deletions.rs`). The running session holds
-it with an exclusive handle; appends are flushed before the caller acts. A
-torn tail is refused, never truncated. A zero-length file (a crash during
-creation) holds no record and is initialised.
+it with an exclusive handle; appends are flushed before the caller acts, and
+the folder itself is flushed after the file is first created, so the new
+directory entry survives a power cut.
+
+- A zero-length file or a torn header (a crash during creation) holds no
+  record and is initialised.
+- A tail shorter than one record (a crash in the middle of an append) is cut
+  off when the journal opens. That append never finished its flush, so no
+  caller acted on it: a cut-off request was never applied, and a cut-off
+  completion is simply written again by the next start's reconciliation.
+- A complete record whose checksum fails is refused, never cut off: it was
+  flushed, so something may already have acted on it.
 
 Schema version 5 adds `history_deletion_state`, the newest clear generation
 the database has applied. It is the barrier against a lost journal: every
@@ -81,11 +99,47 @@ start compares it with the journal and
 
 - replays any journal clear the database lacks (a restored or older file);
 - finishes an interrupted clear;
-- refuses to start if the database is ahead of the journal, because then the
-  journal has lost records and a later restore could resurrect history.
+- stops before opening anything else if the database is ahead of the
+  journal, because then the journal has lost records and a later restore
+  could resurrect history. The owner is offered the repair below.
 
 Each backup's completion record now carries the generation it holds, read
 from the copy's own database, instead of the old fixed zero.
+
+## When the journal cannot be trusted
+
+Two start-up states would otherwise lock the owner out of Atlas for good:
+a damaged complete record, and a database ahead of its journal (the journal
+was deleted, or replaced by an older copy). Atlas cannot reconstruct the
+lost ranges, and guessing could let a backup restore history the owner
+cleared. Instead, the start-up card says, in plain words, that Atlas's record
+of cleared history is damaged (or missing or older than the data) and that
+continuing requires clearing **all** browsing history; saved pages, open
+tabs and settings are kept. Nothing is changed unless the owner presses
+**Clear all history and continue**; closing Atlas instead leaves every file
+as it was.
+
+On confirmation (`DeletionJournal::rebuild`, `session/history_repair.rs`):
+
+1. the damaged journal's bytes are preserved beside it as
+   `atlas.deletions.damaged-<time>`, the way D46 keeps damaged databases;
+2. a new journal is written holding one completed **all-time** clear for
+   every generation up to the database's, then flushed with its folder;
+3. the start-up appends and runs one more all-time clear through the normal
+   request, apply and complete steps, so the live database is empty of
+   history before anything reads it.
+
+Why this honours D46 and D47: D47 requires that a restore can never bring
+cleared history back. Each rebuilt generation claims all time, a superset of
+whatever the lost record cleared, so replaying it onto any backup removes at
+least what the owner originally removed. Older backups stay usable as
+recovery points for everything else, as D47 intended, rather than being
+discarded. D46 requires the owner's confirmation before Atlas destroys
+state to recover from damage, and keeps damaged files; the repair asks
+first, explains what is lost and keeps the damaged journal. The rejected
+alternatives were refusing to start until someone repaired the file by hand
+(the original behaviour, which leaves the owner no way back into Atlas) and
+silently resetting the journal (which breaks D47).
 
 ## Recovery replay
 
@@ -113,6 +167,10 @@ backup's generation, because its stage was replayed before the intent existed.
   bookmarks, not history.
 - If both the journal and every backup newer than a clear are lost, and the
   database is replaced by an older copy by hand, nothing can detect it.
+- Ranges use the computer's clock. If the clock was wrong when a page was
+  visited, or is wrong when the owner clears, "last hour" means the last hour
+  by the clock's current reading, so a visit stamped in the future or the
+  far past can fall outside the chosen range. "All time" is unaffected.
 - History retention (DW-4) is not added: the policy (maximum age or row
   count, and its value) is an owner decision. The pruning machinery is ready:
   a retention clear is a range clear through the same participant.
@@ -126,14 +184,21 @@ All on disposable synthetic data with reserved domains:
   version 4 → 5 migration, staged replay on version 5 and version 4 copies,
   mismatch and missing-generation refusals, no side files after replay;
 - platform: journal creation, exclusivity, durable appends, refusal of a
-  rejected record, empty-file initialisation, torn-tail refusal; recovery of
+  rejected record, empty-file and torn-header initialisation, torn-tail
+  truncation, refusal of a damaged complete record until a rebuild that keeps
+  its bytes; recovery of
   a damaged primary from a backup with a nonzero generation that replays a
   later clear, and refusal when the journal lacks the backup's clear;
 - session: a clear updates search immediately, survives restart, and leaves
   the recorder unable to retract cleared visits; an invalid range is
-  refused without stopping the session;
+  refused without stopping the session; a damaged journal and a missing
+  journal behind the database each offer the repair, a declined repair
+  changes nothing, a confirmed one clears all history for good; a clear whose
+  request was journaled before a crash finishes at the next start;
 - dialog: matching spans for both parts, stale replies ignored, partial
-  failure wording, cache-only clears.
+  failure wording with WebView2's error code, a close failure reported apart
+  from a successful clear, a stopped session ending the wait, cache-only
+  clears.
 
 ## Owner checks
 
@@ -141,7 +206,7 @@ Use a disposable Atlas data folder if you prefer not to clear your own.
 
 1. Visit a few sites, open History (toolbar or Ctrl H), choose **Clear
    browsing data…**, keep "Browsing history" and "Last hour", and clear. The
-   summary names the number of sites; the history list and the palette's
+   summary names the number of visits and sites; the history list and the palette's
    History results no longer show them.
 2. Restart Atlas. The cleared sites stay gone from History and the palette.
 3. Tick only "Cached files" and clear: the summary says cached files were
@@ -151,3 +216,7 @@ Use a disposable Atlas data folder if you prefer not to clear your own.
    again yourself afterwards.)
 5. Close the dialog while a clear runs: the outcome still appears in the
    footer.
+6. Only with a disposable data folder: close Atlas, delete `atlas.deletions`
+   from it after clearing at least once, and start Atlas. The start-up card
+   asks to clear all browsing history; closing Atlas there changes nothing,
+   and confirming opens Atlas with an empty history.
