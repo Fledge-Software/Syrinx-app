@@ -188,17 +188,27 @@ Expiry is an ordinary D47 range clear, not a separate deletion path:
   (`Store::history_expiry_end`). Expired addresses therefore never reach the
   catalogue.
 - **The cutoff is 90 days before the earlier of the clock and the newest
-  stored visit.** A clock that jumps a year ahead therefore cannot expire the
-  most recent 90 days of real browsing; without the cap it would journal a
-  clear that also replays onto every backup.
+  stored visit, and it moves at most two days past the last applied cutoff
+  in one run.** Expiry is permanent: it is journaled and replays onto every
+  backup, so a wrong clock must not be able to cause it in one step. Capping
+  by the newest visit alone was not enough. One page visited under a clock a
+  year ahead becomes the newest visit, and the next idle check would then
+  expire all real history. With the step limit, such a clock moves the
+  cutoff two days per daily run, so it would take about six months of runs
+  to reach visits from the real present, and the owner notices the wrong
+  date long before. A saved cutoff ahead of the new candidate (a clock that
+  moved back) is ignored, so moving the clock back is harmless. Daily use
+  moves the cutoff one day per run, within the limit, so retention stays at
+  exactly 90 days.
 - While the session is idle, the check that also runs the daily backup calls
   `Worker::expire_while_idle`. A backlog left by the bound continues one batch
   per idle check; once nothing has expired, the next expiry waits a day.
-- The next due time is saved in the settings table (`history.expiry_due`,
-  kept out of the appearance settings handed to the window). A start within
-  a day of the last expiry skips it, so restarting many times a day adds
-  nothing to the journal. A saved time more than a day ahead, left by a clock
-  that moved back, is ignored.
+- The next due time and the last applied cutoff are saved in the settings
+  table (`history.expiry_due` and `history.expiry_cutoff`, kept out of the
+  appearance settings handed to the window). A start within a day of the
+  last expiry skips it, so restarting many times a day adds nothing to the
+  journal. A saved due time more than a day ahead, left by a clock that
+  moved back, is ignored at start-up and while idle.
 - Each expiry is journaled, applied and completed like an owner's clear, so a
   restored backup replays it and old visits cannot come back. Nothing is
   journaled when nothing has expired.
@@ -243,10 +253,16 @@ a second at D48's scale.
 - A retention batch that stops at its 2,000-visit bound leaves older visits
   in the catalogue until the idle checks catch up, a few minutes after the
   first start with a large backlog.
-- Visits recorded while the clock was far ahead carry that wrong time. Once
-  one exists, retention measures 90 days back from it, so real visits more
-  than 90 days older than that wrong visit can expire. The cap protects
-  against a jumped clock, not against browsing for a while under one.
+- Visits recorded while the clock was wrong keep that wrong time. A clock
+  left far ahead for months would, at two days per daily run, eventually
+  expire real history; the step limit turns a one-minute loss into a slow
+  one the owner can notice and stop by fixing the clock.
+- After Atlas has not run for a while, the cutoff catches up two days per
+  daily run, so history slightly older than 90 days can stay for about as
+  many extra days as the break lasted.
+- The first expiry on a profile has no saved cutoff, so it is not limited.
+  It runs at the first start of this version, when the clock is assumed
+  right.
 
 ## Tests
 
@@ -270,7 +286,9 @@ All on disposable synthetic data with reserved domains:
 - retention: the bounded expiry end (cutoff, limit, shared oldest second);
   start-up expiry of visits older than 90 days, journaled once, and a second
   start within the day that journals nothing even with a newly expired
-  visit; a clock a year ahead that expires nothing; idle expiry in bounded
+  visit; a clock a year ahead plus one visit under it, which moves the cutoff
+  only two days and expires nothing, and a clock moved back that keeps the
+  cutoff; daily use that keeps exactly 90 days; idle expiry in bounded
   batches with the catalogue following, then waiting a day; the version 5
   migration's time index;
 - repair crash safety: stopping after the replacement is written leaves the
