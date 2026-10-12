@@ -21,6 +21,8 @@ use super::{GuardedEntry, WindowsDirectoryLease, check_entry, native};
 
 /// Fixed name beside `atlas.db` and `atlas.lifecycle`; backups copy only the database.
 pub(super) const JOURNAL_NAME: &str = "atlas.deletions";
+/// A repair writes its new journal here, then renames it over the old one.
+const REPLACEMENT_SUFFIX: &str = ".rebuild";
 
 /// Reading stops one byte past the codec's limit, so an oversized file is refused, not truncated.
 const READ_LIMIT: u64 = 16 * 1024 * 1024 + 1;
@@ -118,34 +120,22 @@ impl DeletionJournal {
         })
     }
 
-    /// Replaces an unusable journal with `generation` completed all-time clears.
+    /// Replaces an unusable journal with `generation` completed all-time clears and one
+    /// requested all-time clear, which the start-up reconciliation then applies.
     ///
     /// Only for an owner-confirmed repair: every restore then clears all history, so no
     /// backup can bring back what the lost records covered. The old bytes are kept beside it.
+    /// The new journal is written aside and renamed into place, so a crash at any step leaves
+    /// either the old journal (and the repair is offered again) or the complete new one.
     pub fn rebuild(lease: &WindowsDirectoryLease, generation: u64) -> Result<Self, JournalError> {
         let (entry, _) = exclusive_entry(lease)?;
         let damaged = read_bounded(&entry.file)?;
         if !damaged.is_empty() {
             preserve_damaged(&entry.path, &damaged)?;
         }
-        let mut log = DeletionLog::default();
-        let mut bytes = EMPTY_DELETION_LOG.to_vec();
-        for _ in 0..generation {
-            let request = log.request(DeletionCategory::History, DeletionRange::all_time())?;
-            log.accept(request)?;
-            let completion = log.completion()?;
-            log.accept(completion)?;
-            bytes.extend_from_slice(&request.encode());
-            bytes.extend_from_slice(&completion.encode());
-        }
-        truncate(&entry.file, 0)?;
-        persist(&entry.file, 0, &bytes)?;
-        flush_parent(&entry.path)?;
-        Ok(Self {
-            entry,
-            log,
-            poisoned: false,
-        })
+        let replacement = write_replacement(&entry.path, &repaired_bytes(generation)?)?;
+        install_replacement(entry, replacement)?;
+        Self::open(lease)
     }
 
     pub fn log(&self) -> &DeletionLog {
@@ -212,6 +202,60 @@ fn exclusive_entry(lease: &WindowsDirectoryLease) -> Result<(GuardedEntry, bool)
     };
     let file = native::open_journal(&path)?;
     Ok((GuardedEntry::regular_file(path, file)?, existed))
+}
+
+/// Every earlier generation as a completed all-time clear, then one requested all-time clear.
+fn repaired_bytes(generation: u64) -> Result<Vec<u8>, DeletionError> {
+    let mut log = DeletionLog::default();
+    let mut bytes = EMPTY_DELETION_LOG.to_vec();
+    for _ in 0..generation {
+        let request = log.request(DeletionCategory::History, DeletionRange::all_time())?;
+        log.accept(request)?;
+        let completion = log.completion()?;
+        log.accept(completion)?;
+        bytes.extend_from_slice(&request.encode());
+        bytes.extend_from_slice(&completion.encode());
+    }
+    let pending = log.request(DeletionCategory::History, DeletionRange::all_time())?;
+    bytes.extend_from_slice(&pending.encode());
+    Ok(bytes)
+}
+
+/// The replacement written beside the journal, with the handle that will rename it.
+struct Replacement {
+    file: File,
+}
+
+/// Writes and flushes the new journal beside the old one, removing any earlier attempt's file.
+fn write_replacement(journal: &Path, bytes: &[u8]) -> Result<Replacement, LocationError> {
+    let path = replacement_path(journal);
+    let operation = LocationOperation::WriteDeletionJournal;
+    if native::optional_file(&path, operation)?.is_some() {
+        native::remove_checked_entry(&path, operation)?;
+    }
+    let file = native::create_movable(&path, operation)?;
+    persist(&file, 0, bytes)?;
+    Ok(Replacement { file })
+}
+
+/// Releases the old journal, renames the replacement over it and flushes the folder.
+fn install_replacement(entry: GuardedEntry, replacement: Replacement) -> Result<(), LocationError> {
+    let journal = entry.path.clone();
+    // The exclusive handle refuses the rename, so it is released just before.
+    drop(entry);
+    native::rename_replacing(
+        &replacement.file,
+        &journal,
+        LocationOperation::WriteDeletionJournal,
+    )?;
+    drop(replacement);
+    flush_parent(&journal)
+}
+
+fn replacement_path(journal: &Path) -> std::path::PathBuf {
+    let mut name = journal.as_os_str().to_owned();
+    name.push(REPLACEMENT_SUFFIX);
+    name.into()
 }
 
 /// The length of the header plus every whole record; anything after is a torn append.

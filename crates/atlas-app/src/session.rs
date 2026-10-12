@@ -5,6 +5,7 @@ mod history;
 mod history_repair;
 mod preferences;
 mod recovery;
+mod retention;
 
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
 pub use recovery::RecoveryPrompt;
@@ -369,8 +370,8 @@ fn open_session(
 ) -> Result<(Store, Worker), SessionError> {
     let lease = Arc::new(lease);
     let store = Store::open(lease.clone()).map_err(SessionError::Store)?;
-    let opened = open_journal(&store, &lease, repair)
-        .and_then(|journal| Worker::restore(&store, journal, repair));
+    let opened =
+        open_journal(&store, &lease, repair).and_then(|journal| Worker::restore(&store, journal));
     match opened {
         Ok(worker) => Ok((store, worker)),
         Err(error) => {
@@ -425,22 +426,20 @@ struct Worker {
 }
 
 impl Worker {
-    fn restore(
-        store: &Store,
-        mut deletions: DeletionJournal,
-        clear_all: bool,
-    ) -> Result<Self, SessionError> {
+    fn restore(store: &Store, mut deletions: DeletionJournal) -> Result<Self, SessionError> {
         // Cleared history must be gone before the catalogue or any list can read it.
         deletions::reconcile(store, &mut deletions)?;
-        if clear_all {
-            deletions::clear_all(store, &mut deletions)?;
-        }
+        let mut stored_preferences = preferences::restore(store)?;
         // Expired visits go before the catalogue loads; a large backlog continues while idle.
-        let next_expiry = deletions::expire_at_startup(
+        let saved_due = stored_preferences
+            .settings
+            .remove(retention::EXPIRY_DUE_KEY);
+        let next_expiry = retention::expire_at_startup(
             store,
             &mut deletions,
             utc_seconds()?,
-            deletions::EXPIRY_BATCH,
+            saved_due.as_deref(),
+            retention::EXPIRY_BATCH,
         )?;
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
@@ -454,7 +453,6 @@ impl Worker {
                 .upsert(history::history_entry(&entry))
                 .map_err(SessionError::Search)?;
         }
-        let stored_preferences = preferences::restore(store)?;
         Ok(Self {
             model,
             catalogue,
@@ -506,7 +504,7 @@ impl Worker {
                     let now = utc_seconds();
                     // A clock failure is reported once, by the backup check below.
                     if let Ok(now) = &now {
-                        self.expire_while_idle(store, *now, deletions::EXPIRY_BATCH, events)?;
+                        self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events)?;
                     }
                     // The store retains its daily due state; retries remain idle and bounded.
                     backup_while_idle(store, now, events)?;
@@ -674,7 +672,7 @@ impl Worker {
         if now < self.next_expiry {
             return Ok(());
         }
-        let expired = deletions::expire_live(
+        let expired = retention::expire_live(
             store,
             &mut self.deletions,
             &mut self.catalogue,
@@ -691,7 +689,7 @@ impl Worker {
             Err(error @ SessionError::Store(_)) => Err(error),
             Err(error) => {
                 // A journal refusal is shown once a day rather than at every idle check.
-                self.next_expiry = now.saturating_add(deletions::DAY_SECS);
+                self.next_expiry = now.saturating_add(retention::DAY_SECS);
                 emit_recoverable(events, error)
             }
         }

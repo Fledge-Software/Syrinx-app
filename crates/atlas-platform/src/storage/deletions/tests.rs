@@ -119,10 +119,16 @@ fn a_damaged_complete_record_is_refused_until_an_explicit_rebuild() {
         "Atlas's record of cleared history is damaged"
     );
 
-    // The confirmed repair keeps the damaged bytes and records two all-time clears.
+    // The confirmed repair keeps the damaged bytes, records two all-time clears and
+    // requests a third, which the start-up then applies.
     let rebuilt = DeletionJournal::rebuild(&lease, 2).expect("journal rebuilds");
     assert_eq!(rebuilt.log().completed_generation(), 2);
+    assert_eq!(
+        rebuilt.log().pending().map(|request| request.generation()),
+        Some(3)
+    );
     let replay = rebuilt.log().unapplied(0).expect("rebuilt log replays");
+    assert_eq!(replay.len(), 3);
     assert!(
         replay
             .iter()
@@ -146,5 +152,45 @@ fn a_damaged_complete_record_is_refused_until_an_explicit_rebuild() {
             .expect("rebuilt journal reads")
             .completed_generation(),
         2
+    );
+}
+
+#[test]
+fn a_repair_interrupted_at_any_step_leaves_the_old_journal_or_the_complete_new_one() {
+    let fixture = Fixture::new();
+    let lease = WindowsDirectoryLease::prepare(&fixture.root).expect("prepare synthetic location");
+    let path = fixture.root.join(JOURNAL_NAME);
+    let replacement = replacement_path(&path);
+    let mut damaged = one_clear(&lease);
+    let last = damaged.len() - 1;
+    damaged[last] ^= 0xff;
+    fs::write(&path, &damaged).expect("write synthetic damaged record");
+
+    // Stopped after writing the replacement: the old journal is untouched and still
+    // refused, so the owner is asked again.
+    let bytes = repaired_bytes(1).expect("synthetic repaired bytes");
+    drop(write_replacement(&path, &bytes).expect("write synthetic replacement"));
+    assert_eq!(fs::read(&replacement).expect("read replacement"), bytes);
+    assert_eq!(fs::read(&path).expect("old journal remains"), damaged);
+    assert!(matches!(
+        DeletionJournal::open(&lease),
+        Err(JournalError::Deletion(DeletionError::DamagedRecord))
+    ));
+
+    // The repeated repair discards the earlier attempt and installs a complete journal.
+    drop(DeletionJournal::rebuild(&lease, 1).expect("journal rebuilds"));
+    assert!(!replacement.exists());
+    assert_eq!(fs::read(&path).expect("read rebuilt journal"), bytes);
+
+    // Stopped before the start-up applied the requested clear: reopening still has it.
+    let reopened = DeletionJournal::open(&lease).expect("rebuilt journal reopens");
+    assert_eq!(reopened.log().completed_generation(), 1);
+    let pending = reopened
+        .log()
+        .pending()
+        .expect("all-time clear still requested");
+    assert_eq!(
+        (pending.generation(), pending.range()),
+        (2, DeletionRange::all_time())
     );
 }

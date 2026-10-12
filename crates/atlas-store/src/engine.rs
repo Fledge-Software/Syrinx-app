@@ -219,6 +219,11 @@ impl Store {
         self.read(|connection| history::expiry_end(connection, cutoff, limit))
     }
 
+    /// Unix seconds of the newest stored visit, or `None` without history.
+    pub fn newest_visit_time(&self) -> Result<Option<i64>, StoreError> {
+        self.read(|connection| history::newest_visit_time(connection))
+    }
+
     /// Every remembered address, for rebuilding the search catalogue at startup.
     pub fn history_entries(&self) -> Result<Vec<HistoryEntry>, StoreError> {
         self.read(|connection| history::entries(connection))

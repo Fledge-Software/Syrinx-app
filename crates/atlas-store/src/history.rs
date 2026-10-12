@@ -355,6 +355,15 @@ pub(crate) fn delete_ranges(
     Ok(visits)
 }
 
+/// Unix seconds of the newest stored visit, or `None` without history.
+pub(crate) fn newest_visit_time(connection: &Connection) -> Result<Option<i64>, StoreError> {
+    connection
+        .query_row("SELECT max(visited_at) FROM history_visits", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| database_error(StoreOperation::Read, error))
+}
+
 /// The end of the next expiry range `[0, end)`: `cutoff` when at most `limit` visits are
 /// older, otherwise the time of the first visit beyond `limit`. A range never ends on the
 /// oldest visit's own second, so each expiry removes something.

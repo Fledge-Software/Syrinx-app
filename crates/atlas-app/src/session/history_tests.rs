@@ -472,7 +472,7 @@ fn a_clear_requested_before_a_crash_finishes_at_the_next_start() {
     fixture.cleanup();
 }
 
-const DAY: i64 = deletions::DAY_SECS;
+const DAY: i64 = retention::DAY_SECS;
 
 /// Records synthetic visits straight into the store, at the given Unix seconds.
 fn seed_visits(fixture: &Fixture, visits: &[(&str, i64)]) {
@@ -486,8 +486,15 @@ fn seed_visits(fixture: &Fixture, visits: &[(&str, i64)]) {
     store.shutdown().expect("close synthetic store");
 }
 
+fn completed_clears(fixture: &Fixture) -> u64 {
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let journal = DeletionJournal::open(&lease).expect("reopen synthetic journal");
+    assert_eq!(journal.log().pending(), None);
+    journal.log().completed_generation()
+}
+
 #[test]
-fn start_up_expires_visits_older_than_ninety_days_through_the_journal() {
+fn start_up_expires_visits_older_than_ninety_days_at_most_once_a_day() {
     let fixture = Fixture::new();
     let now = utc_seconds().expect("synthetic clock");
     seed_visits(
@@ -496,7 +503,7 @@ fn start_up_expires_visits_older_than_ninety_days_through_the_journal() {
             (FIRST, now - 120 * DAY),
             (SECOND, now - 91 * DAY),
             (SECOND, now - 2 * DAY),
-            (LATER, now - DAY),
+            (LATER, now - 60),
         ],
     );
 
@@ -509,21 +516,38 @@ fn start_up_expires_visits_older_than_ninety_days_through_the_journal() {
     stop(handle, &mut events);
 
     // The expiry is a completed clear, so a restored backup loses those visits too.
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let journal = DeletionJournal::open(&lease).expect("reopen synthetic journal");
-    assert_eq!(journal.log().completed_generation(), 1);
-    assert_eq!(journal.log().pending(), None);
-    drop(journal);
-    drop(lease);
+    assert_eq!(completed_clears(&fixture), 1);
 
-    // Nothing else has expired, so the next start journals nothing new.
+    // Another start within the day journals nothing, even with a newly expired visit.
+    seed_visits(&fixture, &[(FIRST, now - 100 * DAY)]);
     let (handle, mut events) = fixture.start();
     state(&mut events);
+    assert_eq!(recent(&handle, &mut events).len(), 3);
     stop(handle, &mut events);
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let journal = DeletionJournal::open(&lease).expect("reopen synthetic journal");
-    assert_eq!(journal.log().completed_generation(), 1);
-    drop(journal);
+    assert_eq!(completed_clears(&fixture), 1);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_clock_far_ahead_never_expires_the_latest_ninety_days_of_visits() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    seed_visits(&fixture, &[(FIRST, now - 10 * DAY), (SECOND, now - DAY)]);
+    let lease =
+        Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let store = Store::open(lease.clone()).expect("open guarded synthetic store");
+    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let (sender, _events) = unbounded();
+
+    // A clock a year ahead finds nothing older than the newest visit's own 90 days.
+    worker
+        .expire_while_idle(&store, now + 365 * DAY, 10, &sender)
+        .expect("check with a synthetic future clock");
+    assert_eq!(store.recent_visits(10).expect("read").len(), 2);
+    assert_eq!(worker.deletions.log().completed_generation(), 0);
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
     drop(lease);
     fixture.cleanup();
 }
@@ -537,33 +561,33 @@ fn idle_expiry_runs_in_bounded_batches_then_waits_a_day() {
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let store = Store::open(lease.clone()).expect("open guarded synthetic store");
-    let mut worker = Worker::restore(&store, journal, false).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
     let (sender, _events) = unbounded();
-    let searchable = |worker: &Worker| {
-        store
-            .history_entries()
-            .expect("read synthetic history")
-            .into_iter()
-            .filter(|entry| worker.catalogue.get(Target::History(entry.id)).is_some())
-            .count()
-    };
-    assert_eq!(searchable(&worker), 2);
+    assert_eq!(worker.catalogue.len(), 2);
 
-    // Ninety-one days on, both visits have expired; a batch of one removes the older first.
+    // Ninety-one days of browsing later, both visits have expired; a batch of one removes
+    // the older first, and the catalogue follows.
     let later = now + 91 * DAY;
+    store
+        .record_visit(LATER.to_owned(), String::new(), later)
+        .expect("record a synthetic later visit");
     worker
         .expire_while_idle(&store, later, 1, &sender)
         .expect("expire first synthetic batch");
     assert_eq!(
         timeline(&store.recent_visits(10).expect("read")),
-        [(SECOND, "")]
+        [(LATER, ""), (SECOND, "")]
     );
-    assert_eq!(worker.catalogue.len(), searchable(&worker));
+    assert_eq!(worker.catalogue.len(), 1);
     assert_eq!(worker.next_expiry, later);
     worker
         .expire_while_idle(&store, later, 1, &sender)
         .expect("expire the synthetic backlog");
-    assert!(store.recent_visits(10).expect("read").is_empty());
+    assert_eq!(
+        timeline(&store.recent_visits(10).expect("read")),
+        [(LATER, "")]
+    );
+    assert_eq!(worker.catalogue.len(), 0);
     assert_eq!(worker.next_expiry, later + DAY);
 
     // Before the next day nothing runs, so the journal does not grow on every idle check.
@@ -574,5 +598,30 @@ fn idle_expiry_runs_in_bounded_batches_then_waits_a_day() {
     drop(worker);
     store.shutdown().expect("close synthetic store");
     drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_repair_stopped_before_its_clear_ran_finishes_at_the_next_start() {
+    let fixture = Fixture::new();
+    visit_two_pages(&fixture);
+    clear_then_visit_later(&fixture);
+    let mut damaged = checked_io(fs::read(journal_path(&fixture)));
+    let last = damaged.len() - 1;
+    damaged[last] ^= 0xFF;
+    checked_io(fs::write(journal_path(&fixture), &damaged));
+
+    // The owner confirmed and the new journal was installed, then Atlas stopped.
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    drop(DeletionJournal::rebuild(&lease, 1).expect("rebuild synthetic journal"));
+    drop(lease);
+
+    // The start-up applies the requested all-time clear without asking again.
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    assert!(recent(&handle, &mut events).is_empty());
+    stop(handle, &mut events);
+    assert_eq!(completed_clears(&fixture), 2);
+    assert_eq!(remove_preserved_journals(&fixture), 1);
     fixture.cleanup();
 }

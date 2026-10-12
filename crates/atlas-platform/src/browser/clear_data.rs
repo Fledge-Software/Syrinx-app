@@ -128,7 +128,11 @@ fn hidden_controller(
     unsafe { environment.CreateCoreWebView2Controller(HWND(parent as *mut _), &completion) }
         .map_err(clear_error)?;
     let controller = webview2_com::wait_with_pump(receive).map_err(pump_error)??;
-    unsafe { controller.SetIsVisible(false) }.map_err(clear_error)?;
+    if let Err(error) = unsafe { controller.SetIsVisible(false) } {
+        // Release the view; if even that fails, its failure is reported instead.
+        unsafe { controller.Close() }.map_err(clear_error)?;
+        return Err(clear_error(error));
+    }
     Ok(controller)
 }
 
