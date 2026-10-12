@@ -342,6 +342,19 @@ documentation-test stage were not reached. The console launch passed unsigned.
 The complete quality gate and D48 performance gate remain unresolved;
 `docs/p1-05-search.md` records both failures and the separate CPU diagnostic.
 
+## Palette acceptance (P1-33)
+
+`cargo xtask palette-acceptance` is on demand and not part of the gate. It
+builds the `local` app first, serves two synthetic pages on an ephemeral
+`127.0.0.1` port from the xtask process, and launches Atlas visibly with
+`--test-palette-acceptance <report.json> http://127.0.0.1:<port>` on a fresh
+synthetic profile. Atlas then times palette opening and per-keystroke ranking
+at 1,000, 10,000 and 100,000 in-memory synthetic rows, checks overlay focus and
+stacking, and closes itself. Reports go to `target\p1-33\` as JSON and a
+Markdown summary. Run it in the foreground on a quiet machine and leave the
+keyboard and mouse alone: focus checks need Atlas to be the active app. Method
+and results: `docs/p1-33-palette-acceptance.md`.
+
 ## Packaging (P1-37)
 
 ```powershell
