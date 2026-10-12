@@ -323,6 +323,16 @@ saved page. Folder open state is not saved, so after a restart every folder
 starts collapsed; this replaces P1-09's "every folder starts expanded",
 because expanding a 50,000-page import at start-up would build every row.
 
+**Visible change for the owner: every folder starts collapsed after a
+restart**, including folders the owner made and never imported, not only
+imported ones (`collapse_restored_folders`, called on the first session
+snapshot in `crates/atlas-app/src/ui.rs`). Folders created during a session
+still start expanded, and any folder can be expanded with one click. The
+alternative, keeping restored folders expanded, would make a restart after a
+large import build every row; remembering each folder's open state across
+restarts would avoid this trade-off but needs a stored setting, which is not
+part of this slice.
+
 **Large imports and later changes.** Before this review fix, every change
 after a 50,000-entry import (a title update or a navigation) took about one
 second in the worker, because the store deleted and re-inserted every saved
