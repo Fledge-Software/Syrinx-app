@@ -3,6 +3,9 @@
 mod bookmark_import;
 mod destinations;
 mod tabs;
+mod web_address;
+
+pub use web_address::{WebAddressError, web_address};
 
 pub use bookmark_import::{
     BookmarkImport, FolderRole, ImportError, ImportLimits, ImportSummary, ImportedBookmark,

@@ -434,6 +434,9 @@ dependencies = [
 [[package]]
 name = "atlas-core"
 version = "0.1.0"
+dependencies = [
+ "url",
+]
 
 [[package]]
 name = "atlas-platform"

@@ -11,6 +11,8 @@ pub(super) struct CardFrame {
     pub viewport_width: f32,
     pub viewport_height: f32,
     pub sidebar_width: f32,
+    /// The runtime notice's height while it shows under the toolbar, otherwise zero.
+    pub notice_height: f32,
     pub scale: f32,
 }
 
@@ -26,9 +28,9 @@ pub(super) fn edge_strip(sidebar_width: f32) -> (f32, f32) {
 pub(super) fn page_card_bounds(frame: CardFrame) -> PageBounds {
     let scale = usable_scale(frame.scale);
 
-    // Inset the card from the sidebar's strip, the toolbar, the footer and the right edge.
+    // Inset the card from the sidebar's strip, the toolbar and notice, the footer and the right.
     let (_, left) = edge_strip(frame.sidebar_width);
-    let top = TOOLBAR_HEIGHT + CARD_INSET;
+    let top = TOOLBAR_HEIGHT + finite_or_zero(frame.notice_height).max(0.) + CARD_INSET;
     let right = finite_or_zero(frame.viewport_width) - CARD_INSET;
     let bottom = finite_or_zero(frame.viewport_height) - FOOTER_HEIGHT - CARD_INSET;
 
@@ -75,8 +77,24 @@ mod tests {
             viewport_width: 1280.,
             viewport_height: 800.,
             sidebar_width,
+            notice_height: 0.,
             scale,
         }
+    }
+
+    #[test]
+    fn the_runtime_notice_pushes_the_card_down_by_its_height() {
+        let plain = page_card_bounds(frame(264., 1.25));
+        let noticed = page_card_bounds(CardFrame {
+            notice_height: 36.,
+            ..frame(264., 1.25)
+        });
+        assert_eq!(noticed.y - plain.y, 45);
+        assert_eq!(
+            noticed.y + noticed.height as i32,
+            plain.y + plain.height as i32
+        );
+        assert_eq!((noticed.x, noticed.width), (plain.x, plain.width));
     }
 
     #[test]
@@ -160,6 +178,7 @@ mod tests {
             viewport_width: 10.,
             viewport_height: 10.,
             sidebar_width: 264.,
+            notice_height: 0.,
             scale: 2.,
         });
         assert_eq!((bounds.width, bounds.height), (1, 1));
@@ -167,6 +186,7 @@ mod tests {
             viewport_width: f32::NAN,
             viewport_height: f32::INFINITY,
             sidebar_width: f32::NAN,
+            notice_height: f32::NAN,
             scale: 0.,
         });
         assert_eq!(invalid.x, CARD_INSET as i32);
