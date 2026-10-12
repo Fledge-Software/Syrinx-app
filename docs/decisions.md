@@ -5,6 +5,16 @@ Each entry says what changed and why. The spec's "Decisions already made"
 still stand unless an entry here says otherwise. Design decisions are
 recorded separately, in `design/README.md`.
 
+## 2026-10-12
+
+- **Focused pages receive find, history, print and zoom keys first.** The
+  owner chose Chrome-style handling for Ctrl F, Ctrl H, Ctrl P and Ctrl +,
+  Ctrl − and Ctrl 0. Atlas leaves those keys unhandled so the page can use
+  them; WebView2's enabled browser accelerators supply the fallback. Atlas's
+  own controls remain reachable from chrome and the command palette. Ctrl T,
+  W, L, K, Tab and Shift T retain their Atlas routes. This supersedes P1-13's
+  earlier interception of the page-owned keys.
+
 ## 2026-10-10
 
 - **Build the integrated browser next (D49).** After finding that the

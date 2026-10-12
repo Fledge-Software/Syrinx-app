@@ -1,10 +1,12 @@
 # P1-13: reachable browser essentials
 
-Everyday browser controls must work while a page owns keyboard focus. This
-slice routes Ctrl F/J/P, Ctrl +/−/0 and the owner-requested Ctrl H through the
-existing accelerator queue. Its synchronous callback still only marks the
-key handled and posts a message. No page script, identity override, dependency
-or vendor change is involved.
+Everyday browser controls must remain reachable without taking keys away from
+web applications. The owner's 2026-10-12 decision gives focused pages Ctrl F,
+Ctrl H, Ctrl P and Ctrl +/−/0 first, including numeric-keypad variants. Atlas
+leaves them unhandled and keeps WebView2 browser accelerators enabled for the
+engine fallback. Ctrl J and the existing Atlas tab/navigation shortcuts retain
+their queue-only handling. No page script, identity override, dependency or
+vendor change is involved.
 
 ## Implementation
 
@@ -13,8 +15,9 @@ interfaces through the controller. Find uses native matching and highlighting;
 downloads use the engine's minimal progress/cancel list; print opens preview,
 without submitting a job. Default context menus are explicitly enabled. Zoom
 steps are bounded and the toolbar displays the controller's actual percentage.
-The download event override is necessary: wry's default callback marks downloads
-handled and suppresses the engine's list even without an Atlas callback.
+Atlas supplies no wry download callbacks, so wry installs no download-start
+override and the engine already owns its list. The redundant `SetHandled(false)`
+handler was removed; Atlas observes download-dialog state for focus handling.
 
 `crates/atlas-app/src/ui/find.rs` owns the find bar. Opening it transfers native
 keyboard focus to Atlas and focuses its input. Enter/Next and Previous move
@@ -32,9 +35,13 @@ empty `Start` succeeded. Existing lifecycle assertions remain unchanged.
 Microsoft documents the intended native [find contract](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2find?view=webview2-1.0.3537.50)
 and [download dialog controls](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_9?view=webview2-1.0.4022.49).
 
-Ctrl H is forwarded and covered by the accelerator mapping test. This base has
-no history-list implementation: chrome reports that it awaits P1-20 integration.
-No later history feature was built in this slice.
+Find, Downloads, Print, History and zoom controls are available in the toolbar.
+They also appear by name in the existing local search palette, using its command
+targets. `crates/atlas-app/src/commands.rs` supplies the entries and action routes;
+the session seeds them on startup, and palette activation invokes the same
+actions as chrome. This base has no general command registry or history list.
+History reports that it awaits P1-20 integration; integration must connect both
+entry points to that list. No later history feature was built in this slice.
 
 ## Evidence and limits
 
@@ -53,8 +60,9 @@ runs are serialized. No test or security setting was weakened.
 Native checks use fresh synthetic profiles under this worktree's `target/`.
 They exercise commands after page focus, native focus return, two matches and
 clearing, download-dialog state, zoom readback and print-preview acceptance.
-Unit tests verify focused-page key mapping, command targeting, zoom boundaries
-and stale find results. These do not claim physical-key, visual layout, actual
+Unit tests verify that the page-owned keys are not intercepted, Atlas's retained
+key mappings, palette command search after restart, selection and action routes,
+zoom boundaries and stale find results. These do not claim physical-key, actual
 file-download or completed-print acceptance.
 
 The original intermittent lifecycle navigation timeout remains known and
@@ -63,15 +71,29 @@ run does not repair it; the owner expressly permits continuation.
 
 ## Owner visual checks
 
-Desktop inspection is unavailable in this session. The gate launches the
-application, but visual acceptance remains with the owner:
+The 2026-10-12 review continuation passed `cargo xtask check` in
+`target/restart-p1-13-gate-final.log`. The initial run in
+`target/restart-p1-13-gate.log` caught two status-label test expectations that
+needed the newly displayed command count; the exact assertions were updated.
+`target/restart-p1-13-native.log` passes all native suites, including downloads,
+find, zoom, print preview and the original lifecycle checks, without weakening
+their assertions or deadlines.
+
+Synthetic-profile desktop inspection confirmed the toolbar, searchable palette
+commands and History's integration message. The separate palette capture is
+`target/restart-p1-13-palette-history-command.png`. Opening Find from the palette
+and typing immediately after activation produced two native highlighted matches
+in `target/restart-p1-13-find-ready-find-result.png`. The earlier scripted run
+typed part of the command into the page before the palette was foreground;
+the final harness explicitly waited for the palette before typing its command.
+No daily profile or real account was used. Additional owner checks remain:
 
 1. Under `target/`, create an HTML file containing two occurrences of
    `syntheticneedle`, an input and an ordinary link. Serve that directory on
    loopback with `python -m http.server 8765 --bind 127.0.0.1 --directory <directory>`.
    Run `cargo atlas -- --test-data-dir <new-absolute-directory-under-target>` and
    open that local page with Ctrl L.
-2. Click the page input, press Ctrl F, and immediately type `syntheticneedle`
+2. Use the toolbar's Find control or select Find in page from Ctrl K, then type `syntheticneedle`
    without another click. The Atlas bar should show two matches and native
    highlights. Verify Enter/Next, Previous, clear, Escape and typing back in the
    page. Close/reopen Find rapidly, switch tabs and navigate while searching;
@@ -80,11 +102,14 @@ application, but visual acceptance remains with the owner:
    For an actual synthetic download, use a local text attachment and choose a
    destination under this worktree's `target/`; verify progress/completion and
    cancel. Do not use a personal download or profile for this acceptance check.
-4. Press Ctrl P and verify preview appears; cancel without printing. Right-click
+4. Use Print from the toolbar and palette and verify preview appears; cancel without printing. Right-click
    page text, its link and its input to verify the default context menus.
-5. Press Ctrl +, Ctrl − and Ctrl 0. Verify page scaling and toolbar percentage,
-   then repeat from chrome. Ctrl H should reach the explanatory history message
-   on this branch; the integrated history list must receive it after integration.
+5. Use the toolbar and palette zoom actions. Verify page scaling and toolbar
+   percentage. History in either surface should reach the explanatory message
+   on this branch; both must open the history list after P1-20 integration.
+6. With the page focused, verify Ctrl F/H/P and Ctrl +/−/0 reach the page first;
+   any key the page does not handle uses WebView2's own behavior. Confirm Ctrl
+   T/W/L/K/Tab/Shift T still reach Atlas.
 
 ## Integration handoff
 

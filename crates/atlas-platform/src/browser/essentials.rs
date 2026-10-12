@@ -3,9 +3,8 @@
 use std::{cell::Cell, rc::Rc};
 
 use webview2_com::{
-    DownloadStartingEventHandler, FindStartCompletedHandler,
-    IsDefaultDownloadDialogOpenChangedEventHandler, Microsoft::Web::WebView2::Win32::*,
-    ZoomFactorChangedEventHandler,
+    FindStartCompletedHandler, IsDefaultDownloadDialogOpenChangedEventHandler,
+    Microsoft::Web::WebView2::Win32::*, ZoomFactorChangedEventHandler,
 };
 use windows::{
     Win32::Foundation::E_POINTER,
@@ -172,17 +171,9 @@ fn emit_zoom(
 }
 
 fn register_downloads(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
-    // wry's default download callback suppresses UI. Restore the engine's progress/cancel UI.
-    let starting = DownloadStartingEventHandler::create(Box::new(move |_, args| {
-        let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
-        unsafe { args.SetHandled(false) }
-    }));
+    // Without wry download callbacks, the engine already owns its progress/cancel UI.
     let core = view.webview();
     let mut token = 0;
-    unsafe {
-        core.cast::<ICoreWebView2_4>()?
-            .add_DownloadStarting(&starting, &mut token)?;
-    }
     let changed =
         IsDefaultDownloadDialogOpenChangedEventHandler::create(Box::new(move |core, _| {
             let core = core.ok_or_else(|| windows::core::Error::from(E_POINTER))?;

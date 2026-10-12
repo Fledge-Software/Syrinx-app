@@ -86,6 +86,7 @@ pub(crate) fn load(
     }
 }
 
+// TODO(DW-7): Add remembered-choice removal through P1-29 settings or a P1-12 follow-up.
 pub(crate) fn save(
     connection: &Connection,
     origin: &str,
