@@ -273,8 +273,9 @@ contract. Records contain a category, half-open Unix-second range and
 generation, with damage detection and paired request/completion records.
 Pending clears, missing required generations and malformed records refuse
 replay. Diagnostic output redacts the ranges. This module performs no file
-I/O or history collection. P1-27 must persist the external generation barrier
-and connect all clearing participants before history clearing ships.
+I/O or history collection. P1-27 persists it as `atlas.deletions` beside the
+database, with schema 5's applied generation as the barrier, and connects the
+clearing and replay participants; see `docs/p1-27-clear-data.md`.
 
 `Store::backup_if_due(utc_seconds, idle)` is a blocking host-worker call on
 the existing writer queue. It takes a daily `VACUUM INTO` snapshot only when
@@ -292,8 +293,8 @@ it to cancel. Restoration preserves the old primary and sidecars locally,
 stages and validates a copy, and never replaces an unexpected destination.
 Known interrupted moves yield a renewed offer for the same source. Damaged
 intent or changed identities remain refused rather than guessed away.
-Schema-1 recovery refuses nonzero or pending deletion state until P1-27
-implements the actual replay participants.
+Since P1-27, recovery replays the deletion journal onto the staged copy before
+installing it, and refuses when the journal cannot cover a backup's clears.
 
 On 2026-10-10, P1-04 passed the complete `cargo xtask check`: dependency
 boundaries, formatting, Clippy, **138 tests**, documentation-test selection

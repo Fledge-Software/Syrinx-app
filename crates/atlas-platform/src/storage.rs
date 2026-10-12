@@ -1,11 +1,13 @@
 //! Retains checked directory and database identities for the store's lifetime.
 
 mod backup;
+mod deletions;
 mod native;
 mod recovery;
 mod session;
 mod startup;
 
+pub use deletions::{DeletionJournal, JournalError, read_deletion_log};
 pub use recovery::{RecoveryError, RecoveryOffer, RecoveryOutcome, offer_recovery};
 pub use startup::{StartupStorage, prepare_startup};
 

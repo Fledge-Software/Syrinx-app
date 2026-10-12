@@ -171,7 +171,10 @@ impl Intent {
     }
 }
 
-pub(super) fn offer(prepared: PreparedDirectory) -> Result<RecoveryOffer, RecoveryError> {
+pub(super) fn offer(
+    prepared: PreparedDirectory,
+    deletions: &DeletionLog,
+) -> Result<RecoveryOffer, RecoveryError> {
     let path = prepared.path.join(RECOVERY_INTENT_NAME);
     let intent_entry = GuardedEntry::regular_file(
         path.clone(),
@@ -186,9 +189,17 @@ pub(super) fn offer(prepared: PreparedDirectory) -> Result<RecoveryOffer, Recove
         .into_iter()
         .find(|entry| entry.metadata.id == intent.metadata.id)
         .ok_or(RecoveryError::NoValidBackup)?;
-    if backup.metadata != intent.metadata {
+    // The intent omits the clear generation; the stage was replayed before the intent existed.
+    let recorded = BackupMetadata {
+        deletion_generation: backup.metadata.deletion_generation,
+        ..intent.metadata
+    };
+    if backup.metadata != recorded {
         return Err(RecoveryError::MetadataMismatch);
     }
+    deletions
+        .unapplied(backup.metadata.deletion_generation)
+        .map_err(RecoveryError::Deletion)?;
     let source_path = normal_absolute_path(backup.file.database_path())?;
     let source = GuardedEntry::regular_file(
         source_path.clone(),
@@ -208,6 +219,7 @@ pub(super) fn offer(prepared: PreparedDirectory) -> Result<RecoveryOffer, Recove
         source,
         expected: Box::new(expected),
         primary,
+        deletions: deletions.clone(),
         continuation: Some(Box::new(Continuation {
             bundle,
             intent_entry,

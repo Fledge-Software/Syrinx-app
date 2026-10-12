@@ -17,7 +17,8 @@ use crate::error::{
     EncodingField, StoreError, StoreOperation, combine_results, database_error, with_cleanup,
 };
 use crate::history::{
-    self, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit, HistoryWrite, RecordedVisit,
+    self, HistoryDeletion, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit,
+    HistoryWrite, RecordedVisit,
 };
 use crate::preferences::{self, PreferenceWrite, StoredPreferences};
 use crate::{BackupOutcome, DirectoryLease, ShutdownState};
@@ -206,10 +207,32 @@ impl Store {
         self.write_entry(HistoryWrite::RemoveVisit(visit))
     }
 
-    /// Applies D47 history clears, here or on a restored copy; other categories are ignored.
-    pub fn apply_history_deletions(&self, requests: &[DeletionRequest]) -> Result<(), StoreError> {
-        self.write_history(HistoryWrite::Delete(requests.to_vec()))
-            .map(drop)
+    /// Applies D47 history clears and records the newest generation applied, in one
+    /// transaction. Reports what changed so a running catalogue can follow.
+    pub fn apply_history_deletions(
+        &self,
+        requests: &[DeletionRequest],
+    ) -> Result<HistoryDeletion, StoreError> {
+        match self.write_history(HistoryWrite::Delete(requests.to_vec()))? {
+            HistoryOutcome::Deleted(deletion) => Ok(deletion),
+            _ => Err(StoreError::InvalidEncoding(EncodingField::History)),
+        }
+    }
+
+    /// The newest D47 clear this database has applied; the journal must reach at least it.
+    pub fn history_deletion_generation(&self) -> Result<u64, StoreError> {
+        self.read(|connection| history::applied_generation(connection))
+    }
+
+    /// Where the next bounded history expiry `[0, end)` stops: at `cutoff`, or earlier so
+    /// that it removes at most `limit` visits. `None` when no visit is older than `cutoff`.
+    pub fn history_expiry_end(&self, cutoff: i64, limit: usize) -> Result<Option<i64>, StoreError> {
+        self.read(|connection| history::expiry_end(connection, cutoff, limit))
+    }
+
+    /// Unix seconds of the newest stored visit, or `None` without history.
+    pub fn newest_visit_time(&self) -> Result<Option<i64>, StoreError> {
+        self.read(|connection| history::newest_visit_time(connection))
     }
 
     /// Every remembered address, for rebuilding the search catalogue at startup.

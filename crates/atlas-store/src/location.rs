@@ -67,6 +67,10 @@ pub enum LocationOperation {
     RemoveBackup,
     PreserveDatabase,
     InstallDatabase,
+    OpenDeletionJournal,
+    ReadDeletionJournal,
+    WriteDeletionJournal,
+    FlushDeletionJournal,
 }
 
 /// Reports structural failures; native error messages may contain private data.

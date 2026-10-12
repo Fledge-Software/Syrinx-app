@@ -1,5 +1,6 @@
 //! Keeps page WebView2 objects on one Windows thread while Rust UI code exchanges owned commands.
 
+mod clear_data;
 mod environment;
 mod page;
 mod placement;
@@ -28,6 +29,7 @@ use windows::Win32::{
     },
 };
 
+pub use clear_data::{BrowsingDataKinds, ClearOutcome, ClearSpan};
 use page::Page;
 
 const COMMAND_MESSAGE: u32 = WM_APP + 41;
@@ -56,15 +58,37 @@ pub enum BrowserShortcut {
 }
 
 pub enum BrowserCommand {
-    Create { id: u64, url: String },
-    Navigate { id: u64, url: String },
-    Close { id: u64 },
+    Create {
+        id: u64,
+        url: String,
+    },
+    Navigate {
+        id: u64,
+        url: String,
+    },
+    Close {
+        id: u64,
+    },
     ShowActive(Option<u64>),
     Resize(PageBounds),
-    Back { id: u64 },
-    Forward { id: u64 },
-    Reload { id: u64 },
-    Focus { id: u64 },
+    Back {
+        id: u64,
+    },
+    Forward {
+        id: u64,
+    },
+    Reload {
+        id: u64,
+    },
+    Focus {
+        id: u64,
+    },
+    /// Clears WebView2's own data for the shared profile (P1-27); `span: None` is all time.
+    ClearData {
+        request: u64,
+        kinds: BrowsingDataKinds,
+        span: Option<ClearSpan>,
+    },
     Shutdown,
 }
 
@@ -112,6 +136,11 @@ pub enum BrowserEvent {
     Shortcut(BrowserShortcut),
     PopupBlocked {
         id: u64,
+    },
+    /// The outcome of one `ClearData` request.
+    DataCleared {
+        request: u64,
+        outcome: ClearOutcome,
     },
     Error {
         tab: Option<u64>,
@@ -168,6 +197,10 @@ pub enum BrowserError {
     Focus,
     Metadata,
     OverlayOwner,
+    /// WebView2 refused a data clear; `code` is its HRESULT.
+    ClearData {
+        code: i32,
+    },
     StillRunning,
     WorkerPanicked,
 }
@@ -431,6 +464,16 @@ impl BrowserState {
                     page.show(Some(*id) == active, self.bounds)?;
                 }
             }
+            BrowserCommand::ClearData {
+                request,
+                kinds,
+                span,
+            } => {
+                // The outcome always reaches the requester, never as an unrelated page error.
+                let outcome = clear_data::clear(&self.environment, self.parent, kinds, span);
+                self.events
+                    .emit(BrowserEvent::DataCleared { request, outcome });
+            }
             BrowserCommand::Resize(next) => {
                 next.validate()?;
                 for page in self.pages.values() {
@@ -467,7 +510,7 @@ impl BrowserCommand {
             | Self::Reload { id }
             | Self::Focus { id } => Some(*id),
             Self::ShowActive(id) => *id,
-            Self::Resize(_) | Self::Shutdown => None,
+            Self::Resize(_) | Self::ClearData { .. } | Self::Shutdown => None,
         }
     }
 }

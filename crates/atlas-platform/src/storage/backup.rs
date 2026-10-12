@@ -280,7 +280,7 @@ impl BackupFile for WindowsBackupFile {
     }
 
     fn publish(&self, metadata: BackupMetadata) -> Result<(), LocationError> {
-        if metadata.id != self.id || metadata.deletion_generation != 0 {
+        if metadata.id != self.id {
             return Err(LocationError::InvalidBackup);
         }
         self.revalidate()?;

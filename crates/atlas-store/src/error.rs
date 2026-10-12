@@ -5,6 +5,7 @@ use std::{error::Error, fmt};
 use atlas_core::SnapshotError;
 
 use crate::LocationError;
+use crate::deletion::DeletionError;
 
 /// The operation that failed, independent of its SQL or file path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,7 +70,10 @@ pub enum StoreError {
     BackupUnavailable,
     BackupVerificationFailed,
     InvalidBackupPath,
-    UnsupportedDeletionGeneration,
+    /// The deletion journal cannot account for this database's applied clears (D47).
+    Deletion(DeletionError),
+    /// A database's recorded clear generation differs from its backup's completion record.
+    DeletionGenerationMismatch,
     InvalidEncoding(EncodingField),
     InvalidSnapshot(SnapshotError),
     StaleRevision {
@@ -102,6 +106,12 @@ impl Error for StoreError {}
 impl From<LocationError> for StoreError {
     fn from(error: LocationError) -> Self {
         Self::Location(error)
+    }
+}
+
+impl From<DeletionError> for StoreError {
+    fn from(error: DeletionError) -> Self {
+        Self::Deletion(error)
     }
 }
 

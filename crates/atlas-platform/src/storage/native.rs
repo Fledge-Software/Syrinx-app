@@ -3,7 +3,8 @@
 mod maintenance;
 
 pub(super) use maintenance::{
-    open_movable, open_readonly, remove_checked_directory, remove_checked_file, rename_no_replace,
+    create_movable, open_movable, open_readonly, remove_checked_directory, remove_checked_entry,
+    remove_checked_file, rename_no_replace, rename_replacing,
 };
 
 use std::{
@@ -271,14 +272,47 @@ pub(super) fn create_new_file(
 }
 
 pub(super) fn open_control(path: &Path) -> Result<File, LocationError> {
-    control_file(path, false)
+    control_file(path, false, LocationOperation::OpenControl)
 }
 
 pub(super) fn create_control(path: &Path) -> Result<File, LocationError> {
-    control_file(path, true)
+    control_file(path, true, LocationOperation::OpenControl)
 }
 
-fn control_file(path: &Path, create_new: bool) -> Result<File, LocationError> {
+/// Flushes a directory so a newly created entry's name survives a power loss.
+pub(super) fn flush_directory(
+    path: &Path,
+    operation: LocationOperation,
+) -> Result<(), LocationError> {
+    let wide = wide_file_path(path);
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            GENERIC_READ.0 | GENERIC_WRITE.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    }
+    .map_err(|error| os_error(operation, error))?;
+    let directory = unsafe { File::from_raw_handle(handle.0) };
+    directory
+        .sync_all()
+        .map_err(|error| io_error(operation, error))
+}
+
+/// Opens or creates the deletion journal with the same exclusive gate as the control file.
+pub(super) fn open_journal(path: &Path) -> Result<File, LocationError> {
+    control_file(path, false, LocationOperation::OpenDeletionJournal)
+}
+
+fn control_file(
+    path: &Path,
+    create_new: bool,
+    operation: LocationOperation,
+) -> Result<File, LocationError> {
     // No sharing excludes another reader, writer or deleter until this gate closes.
     let wide = wide_file_path(path);
     let opened = unsafe {
@@ -297,7 +331,7 @@ fn control_file(path: &Path, create_new: bool) -> Result<File, LocationError> {
         Err(error) if error.code() == HRESULT::from_win32(ERROR_SHARING_VIOLATION.0) => {
             Err(LocationError::StorageBusy)
         }
-        Err(error) => Err(os_error(LocationOperation::OpenControl, error)),
+        Err(error) => Err(os_error(operation, error)),
     }
 }
 

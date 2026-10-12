@@ -7,8 +7,11 @@ use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
 use super::{TestDirectory, close, fixture};
-use crate::deletion::{DeletionCategory, DeletionLog, DeletionRange};
-use crate::{EncodingField, HistoryVisit, Store, StoreError, StoreOperation, records, schema};
+use crate::deletion::{DeletionCategory, DeletionError, DeletionLog, DeletionRange};
+use crate::{
+    EncodingField, HistoryVisit, Store, StoreError, StoreOperation, records,
+    replay_history_deletions, schema,
+};
 
 const FIRST: &str = "https://history-first.example.test/";
 const SECOND: &str = "https://history-second.example.test/";
@@ -205,9 +208,9 @@ fn upgrade_from_folders_schema_keeps_the_session_and_starts_empty_history() {
 
     let connection = directory.connection();
     assert_eq!(user_version(&connection), schema::SCHEMA_VERSION);
-    assert_eq!(schema::SCHEMA_VERSION, 4);
+    assert_eq!(schema::SCHEMA_VERSION, 5);
     close(connection);
-    let store = Store::open(directory.lease()).expect("version 4 database reopens");
+    let store = Store::open(directory.lease()).expect("current database reopens");
     assert_eq!(store.load().expect("session reloads").snapshot, fixture());
     assert_eq!(store.history_entries().expect("history reloads").len(), 1);
     store.shutdown().expect("store closes");
@@ -310,6 +313,7 @@ fn cleared_history_stays_cleared_when_an_older_copy_is_restored_and_replayed() {
         .expect("live clear applies");
     log.accept(log.completion().expect("completion prepared"))
         .expect("completion recorded");
+    assert_eq!(store.history_deletion_generation(), Ok(1));
     let cleared = store.history_entries().expect("cleared entries read");
     let cleared_visits = store.recent_visits(10).expect("cleared visits read");
     assert_eq!(
@@ -324,6 +328,7 @@ fn cleared_history_stays_cleared_when_an_older_copy_is_restored_and_replayed() {
     // The older copy still holds the cleared visits until the completed clears replay.
     let restored = Store::open(older.lease()).expect("older copy opens");
     assert_eq!(restored.history_entries().expect("older entries").len(), 3);
+    assert_eq!(restored.history_deletion_generation(), Ok(0));
     let replay = log.replay_after(0).expect("completed clears replay");
     restored
         .apply_history_deletions(replay)
@@ -338,4 +343,227 @@ fn cleared_history_stays_cleared_when_an_older_copy_is_restored_and_replayed() {
     restored.shutdown().expect("restored store closes");
     live.cleanup();
     older.cleanup();
+}
+
+#[test]
+fn a_clear_reports_removed_and_changed_addresses_and_records_its_generation() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("new store opens");
+    let first = store
+        .record_visit(FIRST.to_owned(), "Synthetic first".to_owned(), 100)
+        .expect("first visit records")
+        .entry;
+    store
+        .record_visit(FIRST.to_owned(), String::new(), 300)
+        .expect("repeat visit records");
+    let second = store
+        .record_visit(SECOND.to_owned(), String::new(), 250)
+        .expect("second visit records")
+        .entry;
+    let third = store
+        .record_visit(THIRD.to_owned(), String::new(), 50)
+        .expect("third visit records")
+        .entry;
+    assert_eq!(store.history_deletion_generation(), Ok(0));
+
+    let mut log = DeletionLog::default();
+    let range = DeletionRange::new(200, 400).expect("synthetic range");
+    let request = log
+        .request(DeletionCategory::History, range)
+        .expect("request accepted");
+    log.accept(request).expect("request recorded");
+    let pending = log.pending().expect("clear is pending");
+    let deletion = store
+        .apply_history_deletions(&[pending])
+        .expect("clear applies");
+
+    // The second address lost its only visit; the first keeps its older one.
+    assert_eq!(deletion.visits, 2);
+    assert_eq!(deletion.removed, [second.id]);
+    assert_eq!(deletion.changed.len(), 1);
+    let changed = &deletion.changed[0];
+    assert_eq!(changed.id, first.id);
+    assert_eq!((changed.visit_count, changed.last_visited), (1, 100));
+    assert_eq!(changed.title, "Synthetic first");
+    assert!(!format!("{deletion:?}").contains("history-first"));
+    assert_eq!(
+        store.history_entries().expect("entries read"),
+        [changed.clone(), third]
+    );
+    assert_eq!(store.history_deletion_generation(), Ok(1));
+
+    // Replaying an older request again deletes nothing and never lowers the generation.
+    let empty = DeletionLog::default();
+    assert!(empty.unapplied(0).expect("empty log").is_empty());
+    let repeated = store
+        .apply_history_deletions(&[pending])
+        .expect("repeat applies");
+    assert!(repeated.removed.is_empty() && repeated.changed.is_empty());
+    store.shutdown().expect("store closes");
+    let store = Store::open(directory.lease()).expect("store reopens");
+    assert_eq!(store.history_deletion_generation(), Ok(1));
+    store.shutdown().expect("store closes");
+    directory.cleanup();
+}
+
+#[test]
+fn version_4_history_upgrades_to_an_unapplied_deletion_generation() {
+    let directory = TestDirectory::new();
+    let connection = preferences_database(&directory);
+    let history = schema::history_migration();
+    connection
+        .execute_batch(&format!("{history} PRAGMA user_version = 4;"))
+        .expect("create synthetic version 4 history");
+    connection
+        .execute(
+            "INSERT INTO history_urls(address, title, visit_count, last_visited)
+             VALUES (?1, 'Synthetic', 1, 10)",
+            [FIRST],
+        )
+        .expect("seed synthetic address");
+    connection
+        .execute(
+            "INSERT INTO history_visits(url_id, visited_at) VALUES (1, 10)",
+            [],
+        )
+        .expect("seed synthetic visit");
+    close(connection);
+
+    let store = Store::open(directory.lease()).expect("version 4 database upgrades");
+    assert_eq!(store.history_deletion_generation(), Ok(0));
+    assert_eq!(store.history_entries().expect("history kept").len(), 1);
+    store.shutdown().expect("store closes");
+    let connection = directory.connection();
+    assert_eq!(user_version(&connection), 5);
+    assert!(object_exists(&connection, "history_deletion_state"));
+    assert!(object_exists(&connection, "history_visits_by_time"));
+    close(connection);
+    directory.cleanup();
+}
+
+/// Records one completed clear of `[start, end)` in the log, as the session's journal would.
+fn completed_clear(log: &mut DeletionLog, start: i64, end: i64) {
+    let range = DeletionRange::new(start, end).expect("synthetic range");
+    let request = log
+        .request(DeletionCategory::History, range)
+        .expect("request accepted");
+    log.accept(request).expect("request recorded");
+    log.accept(log.completion().expect("completion prepared"))
+        .expect("completion recorded");
+}
+
+fn no_sidecars(directory: &TestDirectory) -> bool {
+    ["atlas.db-wal", "atlas.db-shm", "atlas.db-journal"]
+        .iter()
+        .all(|name| !directory.path.join(name).exists())
+}
+
+#[test]
+fn staged_replay_clears_an_older_copy_records_its_generation_and_leaves_no_sidecars() {
+    let live = TestDirectory::new();
+    let staged = TestDirectory::new();
+    let store = Store::open(live.lease()).expect("live store opens");
+    for (address, at) in [(FIRST, 100), (SECOND, 200), (THIRD, 300)] {
+        store
+            .record_visit(address.to_owned(), String::new(), at)
+            .expect("synthetic visit records");
+    }
+    store.shutdown().expect("live store closes");
+    fs::copy(live.database_path(), staged.database_path()).expect("copy synthetic snapshot");
+
+    let mut log = DeletionLog::default();
+    completed_clear(&mut log, 150, 250);
+    completed_clear(&mut log, 290, 310);
+    replay_history_deletions(staged.lease().as_ref(), &log, 0).expect("staged replay applies");
+    assert!(no_sidecars(&staged));
+
+    let restored = Store::open(staged.lease()).expect("replayed copy opens");
+    assert_eq!(restored.history_deletion_generation(), Ok(2));
+    assert_eq!(
+        timeline(&restored.recent_visits(10).expect("visits read")),
+        [(FIRST, 100)]
+    );
+    restored.shutdown().expect("replayed copy closes");
+
+    // A completion record that disagrees with the copy, or a journal missing its generation,
+    // refuses the copy rather than guessing.
+    assert_eq!(
+        replay_history_deletions(staged.lease().as_ref(), &log, 0),
+        Err(StoreError::DeletionGenerationMismatch)
+    );
+    assert_eq!(
+        replay_history_deletions(staged.lease().as_ref(), &DeletionLog::default(), 2),
+        Err(StoreError::Deletion(DeletionError::MissingGeneration))
+    );
+    // A copy that already has every clear is left as it was.
+    replay_history_deletions(staged.lease().as_ref(), &log, 2).expect("nothing to replay");
+    live.cleanup();
+    staged.cleanup();
+}
+
+#[test]
+fn staged_replay_clears_version_4_history_without_changing_its_schema() {
+    let directory = TestDirectory::new();
+    let connection = preferences_database(&directory);
+    let history = schema::history_migration();
+    connection
+        .execute_batch(&format!(
+            "{history} PRAGMA user_version = 4;
+             INSERT INTO history_urls(address, title, visit_count, last_visited)
+                 VALUES ('{FIRST}', '', 1, 10), ('{SECOND}', '', 1, 20);
+             INSERT INTO history_visits(url_id, visited_at) VALUES (1, 10), (2, 20);"
+        ))
+        .expect("create synthetic version 4 history");
+    close(connection);
+
+    let mut log = DeletionLog::default();
+    completed_clear(&mut log, 15, 25);
+    // A version 4 copy predates generation records, so its completion record says zero.
+    assert_eq!(
+        replay_history_deletions(directory.lease().as_ref(), &log, 1),
+        Err(StoreError::DeletionGenerationMismatch)
+    );
+    replay_history_deletions(directory.lease().as_ref(), &log, 0).expect("version 4 replay");
+    assert!(no_sidecars(&directory));
+    let connection = directory.connection();
+    assert_eq!(user_version(&connection), 4);
+    let remaining: i64 = connection
+        .query_row("SELECT count(*) FROM history_urls", [], |row| row.get(0))
+        .expect("count synthetic addresses");
+    assert_eq!(remaining, 1);
+    close(connection);
+
+    // Opening migrates it to version 5 at generation zero; startup then replays again harmlessly.
+    let store = Store::open(directory.lease()).expect("version 4 copy upgrades");
+    assert_eq!(store.history_deletion_generation(), Ok(0));
+    let replay = log.unapplied(0).expect("journal covers the copy");
+    let repeated = store
+        .apply_history_deletions(replay)
+        .expect("replay repeats");
+    assert!(repeated.removed.is_empty());
+    assert_eq!(store.history_deletion_generation(), Ok(1));
+    store.shutdown().expect("store closes");
+    directory.cleanup();
+}
+
+#[test]
+fn an_expiry_ends_at_the_cutoff_or_after_at_most_its_limit_of_visits() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("new store opens");
+    assert_eq!(store.history_expiry_end(1_000, 10), Ok(None));
+    for (address, visited_at) in [(FIRST, 100), (FIRST, 100), (SECOND, 200), (SECOND, 900)] {
+        store
+            .record_visit(address.to_owned(), String::new(), visited_at)
+            .expect("synthetic visit records");
+    }
+
+    // Nothing older than the cutoff; everything fits; a limit stops at the next visit.
+    assert_eq!(store.history_expiry_end(100, 10), Ok(None));
+    assert_eq!(store.history_expiry_end(1_000, 10), Ok(Some(1_000)));
+    assert_eq!(store.history_expiry_end(1_000, 2), Ok(Some(200)));
+    // Visits sharing the oldest second are removed together, so a batch is never empty.
+    assert_eq!(store.history_expiry_end(1_000, 1), Ok(Some(101)));
+    assert_eq!(store.history_expiry_end(1_000, 0), Ok(Some(101)));
+    store.shutdown().expect("store closes");
+    directory.cleanup();
 }

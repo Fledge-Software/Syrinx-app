@@ -10,6 +10,9 @@ const MAX_LOG_BYTES: usize = 16 * 1024 * 1024;
 /// Initial bytes for an exclusively created journal; a missing or empty file is not a journal.
 pub const EMPTY_DELETION_LOG: &[u8] = b"ATLAS-DELETE-001";
 
+/// The length of one encoded record, so a writer can recognise a torn final append.
+pub const DELETION_RECORD_BYTES: usize = RECORD_SIZE;
+
 /// The only durable browsing category introduced by this contract; unknown kinds fail closed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeletionCategory {
@@ -35,6 +38,14 @@ impl DeletionRange {
             return Err(DeletionError::InvalidRange);
         }
         Ok(Self { start, end })
+    }
+
+    /// Every visit Atlas can store (`visited_at >= 0`), for clearing all history.
+    pub fn all_time() -> Self {
+        Self {
+            start: 0,
+            end: i64::MAX,
+        }
     }
 
     pub fn start(self) -> i64 {
@@ -188,6 +199,24 @@ impl DeletionLog {
             .last()
             .copied()
             .filter(|request| request.generation > self.completed_generation)
+    }
+
+    /// The newest durable request's generation, whether completed or still pending.
+    pub fn last_generation(&self) -> u64 {
+        self.requests.last().map_or(0, |request| request.generation)
+    }
+
+    /// Lists every durable request a copy at `applied_generation` lacks, including a pending
+    /// one: a requested clear is the owner's intent, so applying it early never over-deletes.
+    pub fn unapplied(&self, applied_generation: u64) -> Result<&[DeletionRequest], DeletionError> {
+        if applied_generation > self.last_generation() {
+            return Err(DeletionError::MissingGeneration);
+        }
+        let applied =
+            usize::try_from(applied_generation).map_err(|_| DeletionError::MissingGeneration)?;
+        self.requests
+            .get(applied..)
+            .ok_or(DeletionError::MissingGeneration)
     }
 
     /// Lists completed clears that a staged candidate has not yet applied.

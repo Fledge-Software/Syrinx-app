@@ -12,9 +12,9 @@ use windows::{
     Win32::{
         Foundation::{GENERIC_READ, GENERIC_WRITE},
         Storage::FileSystem::{
-            CreateFileW, DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-            FILE_FLAG_OPEN_REPARSE_POINT, FILE_RENAME_INFO, FILE_SHARE_READ, FileDispositionInfo,
-            FileRenameInfo, OPEN_EXISTING, SetFileInformationByHandle,
+            CREATE_NEW, CreateFileW, DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_RENAME_INFO, FILE_SHARE_MODE, FILE_SHARE_READ,
+            FileDispositionInfo, FileRenameInfo, OPEN_EXISTING, SetFileInformationByHandle,
         },
     },
     core::PCWSTR,
@@ -72,7 +72,56 @@ pub(in crate::storage) fn rename_no_replace(
     destination: &Path,
     operation: LocationOperation,
 ) -> Result<(), LocationError> {
-    // FILE_RENAME_INFO targets the retained handle and refuses an existing destination.
+    rename_handle(file, destination, false, operation)
+}
+
+/// Atomically replaces `destination` with the retained handle's file; the destination must
+/// not be open without delete sharing.
+pub(in crate::storage) fn rename_replacing(
+    file: &File,
+    destination: &Path,
+    operation: LocationOperation,
+) -> Result<(), LocationError> {
+    rename_handle(file, destination, true, operation)
+}
+
+/// Creates a fresh, unshared file that can later be renamed through its own handle.
+pub(in crate::storage) fn create_movable(
+    path: &Path,
+    operation: LocationOperation,
+) -> Result<File, LocationError> {
+    let wide = wide_file_path(path);
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            GENERIC_READ.0 | GENERIC_WRITE.0 | DELETE.0,
+            FILE_SHARE_MODE(0),
+            None,
+            CREATE_NEW,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    }
+    .map_err(|error| os_error(operation, error))?;
+    Ok(unsafe { File::from_raw_handle(handle.0) })
+}
+
+/// Removes a regular file left by an interrupted write, through a checked handle.
+pub(in crate::storage) fn remove_checked_entry(
+    path: &Path,
+    operation: LocationOperation,
+) -> Result<(), LocationError> {
+    let file = open_movable(path, operation)?;
+    dispose(&file, operation)
+}
+
+fn rename_handle(
+    file: &File,
+    destination: &Path,
+    replace: bool,
+    operation: LocationOperation,
+) -> Result<(), LocationError> {
+    // FILE_RENAME_INFO targets the retained handle; `replace` decides an existing destination.
     let wide = wide_file_path(destination);
     let filename_bytes = (wide.len() - 1)
         .checked_mul(size_of::<u16>())
@@ -88,7 +137,7 @@ pub(in crate::storage) fn rename_no_replace(
         vec![FILE_RENAME_INFO::default(); buffer_bytes.div_ceil(size_of::<FILE_RENAME_INFO>())];
     buffer[0].FileNameLength =
         u32::try_from(filename_bytes).map_err(|_| LocationError::PathTooLong)?;
-    buffer[0].Anonymous.ReplaceIfExists = false;
+    buffer[0].Anonymous.ReplaceIfExists = replace;
     // The typed allocation has the API structure's alignment and room for the trailing UTF-16 name.
     unsafe {
         let filename = buffer
@@ -133,15 +182,19 @@ fn remove_identity(file: File, identity: &FileIdentity) -> Result<(), LocationEr
     if entry_info(&file)?.identity != *identity {
         return Err(LocationError::IdentityChanged);
     }
+    dispose(&file, LocationOperation::RemoveBackup)
+}
+
+fn dispose(file: &File, operation: LocationOperation) -> Result<(), LocationError> {
     let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
     // Removal occurs only for the checked handle, never a path resolved after validation.
     unsafe {
         SetFileInformationByHandle(
-            file_handle(&file),
+            file_handle(file),
             FileDispositionInfo,
             (&raw const disposition).cast(),
             size_of::<FILE_DISPOSITION_INFO>() as u32,
         )
     }
-    .map_err(|error| os_error(LocationOperation::RemoveBackup, error))
+    .map_err(|error| os_error(operation, error))
 }
