@@ -160,6 +160,33 @@ by the replay, and the normal start replays again after migrating it, which
 deletes nothing twice. An interrupted recovery's resume path accepts the
 backup's generation, because its stage was replayed before the intent existed.
 
+## History retention (DW-4)
+
+The owner decided on 2026-10-12 that history is kept for 90 days. Without a
+bound, every visit stays forever and start-up loads every remembered address
+into the search catalogue, so both the database and start-up time grow
+without limit (D48 plans for 100,000 rows).
+
+Expiry is an ordinary D47 range clear, not a separate deletion path:
+
+- At start-up, after reconciliation and before the catalogue loads,
+  `deletions::expire_at_startup` clears `[0, end)`, where `end` is 90 days
+  ago, or earlier if more than 2,000 visits are that old
+  (`Store::history_expiry_end`). Expired addresses therefore never reach the
+  catalogue.
+- While the session is idle, the check that also runs the daily backup calls
+  `Worker::expire_while_idle`. A backlog left by the bound continues one batch
+  per idle check; once nothing has expired, the next expiry waits a day.
+- Each expiry is journaled, applied and completed like an owner's clear, so a
+  restored backup replays it and old visits cannot come back. Nothing is
+  journaled when nothing has expired, so the journal grows by at most one
+  clear a day.
+- A journal refusal during an idle expiry is shown once and retried the next
+  day; a storage failure stops the session, as it does for an owner's clear.
+
+The rejected alternatives were a visit-count cap (the owner chose an age),
+and unjournaled pruning, which a backup restore would undo.
+
 ## Known limits
 
 - Open tabs keep their addresses and their back and forward lists, and the
@@ -171,10 +198,9 @@ backup's generation, because its stage was replayed before the intent existed.
   visited, or is wrong when the owner clears, "last hour" means the last hour
   by the clock's current reading, so a visit stamped in the future or the
   far past can fall outside the chosen range. "All time" is unaffected.
-- History retention (DW-4) is not added: the policy (maximum age or row
-  count, and its value) is an owner decision. The pruning machinery is ready:
-  a retention clear is a range clear through the same participant.
-  Recommendation: keep 90 days, matching Chromium-based browsers.
+- A retention batch that stops at its 2,000-visit bound leaves older visits
+  in the catalogue until the idle checks catch up, a few minutes after the
+  first start with a large backlog.
 
 ## Tests
 
@@ -195,6 +221,10 @@ All on disposable synthetic data with reserved domains:
   journal behind the database each offer the repair, a declined repair
   changes nothing, a confirmed one clears all history for good; a clear whose
   request was journaled before a crash finishes at the next start;
+- retention: the bounded expiry end (cutoff, limit, shared oldest second);
+  start-up expiry of visits older than 90 days, journaled once and not
+  repeated when nothing else has expired; idle expiry in bounded batches with
+  the catalogue following, then waiting a day;
 - dialog: matching spans for both parts, stale replies ignored, partial
   failure wording with WebView2's error code, a close failure reported apart
   from a successful clear, a stopped session ending the wait, cache-only

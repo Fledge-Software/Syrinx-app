@@ -544,3 +544,25 @@ fn staged_replay_clears_version_4_history_without_changing_its_schema() {
     store.shutdown().expect("store closes");
     directory.cleanup();
 }
+
+#[test]
+fn an_expiry_ends_at_the_cutoff_or_after_at_most_its_limit_of_visits() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("new store opens");
+    assert_eq!(store.history_expiry_end(1_000, 10), Ok(None));
+    for (address, visited_at) in [(FIRST, 100), (FIRST, 100), (SECOND, 200), (SECOND, 900)] {
+        store
+            .record_visit(address.to_owned(), String::new(), visited_at)
+            .expect("synthetic visit records");
+    }
+
+    // Nothing older than the cutoff; everything fits; a limit stops at the next visit.
+    assert_eq!(store.history_expiry_end(100, 10), Ok(None));
+    assert_eq!(store.history_expiry_end(1_000, 10), Ok(Some(1_000)));
+    assert_eq!(store.history_expiry_end(1_000, 2), Ok(Some(200)));
+    // Visits sharing the oldest second are removed together, so a batch is never empty.
+    assert_eq!(store.history_expiry_end(1_000, 1), Ok(Some(101)));
+    assert_eq!(store.history_expiry_end(1_000, 0), Ok(Some(101)));
+    store.shutdown().expect("store closes");
+    directory.cleanup();
+}

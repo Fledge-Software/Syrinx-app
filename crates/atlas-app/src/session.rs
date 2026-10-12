@@ -415,6 +415,8 @@ struct Worker {
     catalogue: Catalogue,
     history: HistoryRecorder,
     deletions: DeletionJournal,
+    /// Unix seconds when history retention next expires old visits (DW-4).
+    next_expiry: i64,
     revision: u64,
     previous_shutdown: ShutdownState,
     destinations: QuickDestinations,
@@ -433,13 +435,20 @@ impl Worker {
         if clear_all {
             deletions::clear_all(store, &mut deletions)?;
         }
+        // Expired visits go before the catalogue loads; a large backlog continues while idle.
+        let next_expiry = deletions::expire_at_startup(
+            store,
+            &mut deletions,
+            utc_seconds()?,
+            deletions::EXPIRY_BATCH,
+        )?;
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
         let snapshot = model.snapshot();
         let mut catalogue = Catalogue::new();
         sync_catalogue(&mut catalogue, &TabModelSnapshot::default(), &snapshot)?;
         // Durable history joins the catalogue once; later visits update it row by row.
-        // TODO(DW-4): bound this load by history retention before D48's 100,000-row scale.
+        // Retention keeps this load to about 90 days of history.
         for entry in store.history_entries().map_err(SessionError::Store)? {
             catalogue
                 .upsert(history::history_entry(&entry))
@@ -451,6 +460,7 @@ impl Worker {
             catalogue,
             history: HistoryRecorder::restored(&snapshot),
             deletions,
+            next_expiry,
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
@@ -493,8 +503,13 @@ impl Worker {
                     self.settle_titles(store, false, events)?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let now = utc_seconds();
+                    // A clock failure is reported once, by the backup check below.
+                    if let Ok(now) = &now {
+                        self.expire_while_idle(store, *now, deletions::EXPIRY_BATCH, events)?;
+                    }
                     // The store retains its daily due state; retries remain idle and bounded.
-                    backup_while_idle(store, utc_seconds(), events)?;
+                    backup_while_idle(store, now, events)?;
                     delay = BACKUP_CHECK_INTERVAL;
                 }
             }
@@ -646,6 +661,40 @@ impl Worker {
         };
         emit(events, SessionEvent::HistoryCleared { request_id, result })?;
         fatal.map_or(Ok(()), Err)
+    }
+
+    /// Expires history past the retention when due, one bounded batch per idle check.
+    fn expire_while_idle(
+        &mut self,
+        store: &Store,
+        now: i64,
+        limit: usize,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        if now < self.next_expiry {
+            return Ok(());
+        }
+        let expired = deletions::expire_live(
+            store,
+            &mut self.deletions,
+            &mut self.catalogue,
+            &mut self.history,
+            now,
+            limit,
+        );
+        match expired {
+            Ok(next) => {
+                self.next_expiry = next;
+                Ok(())
+            }
+            // Storage failures stop the session, as they do for an owner's clear.
+            Err(error @ SessionError::Store(_)) => Err(error),
+            Err(error) => {
+                // A journal refusal is shown once a day rather than at every idle check.
+                self.next_expiry = now.saturating_add(deletions::DAY_SECS);
+                emit_recoverable(events, error)
+            }
+        }
     }
 
     fn history_destination(&self, id: NonZeroU64) -> Result<SessionCommand, SessionError> {
