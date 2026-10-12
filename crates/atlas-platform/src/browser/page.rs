@@ -17,7 +17,7 @@ use webview2_com::{
 use windows::{
     Win32::{
         Foundation::E_POINTER,
-        UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT},
+        UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_RMENU, VK_SHIFT},
     },
     core::{BOOL, Interface, PWSTR},
 };
@@ -321,8 +321,9 @@ fn keyboard_shortcut(key: u32, peek_generation: u64) -> Option<BrowserShortcut> 
     let control = unsafe { GetKeyState(i32::from(VK_CONTROL.0)) } < 0;
     let shift = unsafe { GetKeyState(i32::from(VK_SHIFT.0)) } < 0;
     let alt = unsafe { GetKeyState(i32::from(VK_MENU.0)) } < 0;
+    let right_alt = unsafe { GetKeyState(i32::from(VK_RMENU.0)) } < 0;
     peek_escape(key, control, shift, alt, peek_generation)
-        .or_else(|| shortcut_for_modifiers(key, control, shift, alt))
+        .or_else(|| shortcut_for_modifiers(key, control, shift, alt, right_alt))
 }
 
 /// Preserve page Escape unless this exact popup was visible when the key arrived.
@@ -342,8 +343,9 @@ fn shortcut_for_modifiers(
     control: bool,
     shift: bool,
     alt: bool,
+    right_alt: bool,
 ) -> Option<BrowserShortcut> {
-    if key == 0x53 && control && alt && !shift {
+    if key == 0x53 && control && alt && !shift && !right_alt {
         return Some(BrowserShortcut::ToggleSidebar);
     }
     if alt && !control && !shift {
@@ -401,10 +403,22 @@ mod tests {
                 for shift in [false, true] {
                     let expected =
                         (control && alt && !shift).then_some(BrowserShortcut::ToggleSidebar);
-                    assert_eq!(shortcut_for_modifiers(0x53, control, shift, alt), expected);
+                    assert_eq!(
+                        shortcut_for_modifiers(0x53, control, shift, alt, false),
+                        expected
+                    );
                 }
             }
         }
+    }
+
+    #[test]
+    fn altgr_s_stays_with_the_page() {
+        assert_eq!(shortcut_for_modifiers(0x53, true, false, true, true), None);
+        assert_eq!(
+            shortcut_for_modifiers(0x53, true, false, true, false),
+            Some(BrowserShortcut::ToggleSidebar)
+        );
     }
 
     #[test]
@@ -443,22 +457,25 @@ mod tests {
             (0x52, false, BrowserShortcut::Reload),
         ] {
             assert_eq!(
-                shortcut_for_modifiers(key, true, shift, false),
+                shortcut_for_modifiers(key, true, shift, false, false),
                 Some(expected)
             );
-            assert_eq!(shortcut_for_modifiers(key, false, shift, false), None);
-            assert_eq!(shortcut_for_modifiers(key, true, shift, true), None);
+            assert_eq!(
+                shortcut_for_modifiers(key, false, shift, false, false),
+                None
+            );
+            assert_eq!(shortcut_for_modifiers(key, true, shift, true, false), None);
         }
         assert_eq!(
-            shortcut_for_modifiers(0x25, false, false, true),
+            shortcut_for_modifiers(0x25, false, false, true, false),
             Some(BrowserShortcut::Back)
         );
         assert_eq!(
-            shortcut_for_modifiers(0x27, false, false, true),
+            shortcut_for_modifiers(0x27, false, false, true, false),
             Some(BrowserShortcut::Forward)
         );
         assert_eq!(
-            shortcut_for_modifiers(0x74, false, false, false),
+            shortcut_for_modifiers(0x74, false, false, false, false),
             Some(BrowserShortcut::Reload)
         );
     }
@@ -466,19 +483,22 @@ mod tests {
     #[test]
     fn unrelated_and_extra_modified_keys_stay_with_the_page() {
         for key in [0x41, 0x43, 0x46, 0x53, 0x56, 0x58, 0x5A] {
-            assert_eq!(shortcut_for_modifiers(key, true, false, false), None);
+            assert_eq!(shortcut_for_modifiers(key, true, false, false, false), None);
         }
         for key in [0x57, 0x4C, 0x4B, 0x44, 0x52] {
-            assert_eq!(shortcut_for_modifiers(key, true, true, false), None);
+            assert_eq!(shortcut_for_modifiers(key, true, true, false, false), None);
         }
         for (control, shift, alt) in [
             (true, false, false),
             (false, true, false),
             (false, false, true),
         ] {
-            assert_eq!(shortcut_for_modifiers(0x74, control, shift, alt), None);
+            assert_eq!(
+                shortcut_for_modifiers(0x74, control, shift, alt, false),
+                None
+            );
         }
-        assert_eq!(shortcut_for_modifiers(0x25, true, false, true), None);
-        assert_eq!(shortcut_for_modifiers(0x27, false, true, true), None);
+        assert_eq!(shortcut_for_modifiers(0x25, true, false, true, false), None);
+        assert_eq!(shortcut_for_modifiers(0x27, false, true, true, false), None);
     }
 }

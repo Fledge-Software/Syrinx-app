@@ -2,9 +2,9 @@
 
 use std::time::Instant;
 
-use atlas_platform::browser::overlay_pointer;
-use atlas_ui::sidebar::{PEEK_EDGE_ZONE, PEEK_WIDTH};
-use gpui::WeakEntity;
+use atlas_platform::browser::{OverlayMonitor, overlay_monitor, overlay_pointer};
+use atlas_ui::sidebar::{PEEK_EDGE_ZONE, PEEK_WIDTH, in_peek_zone};
+use gpui::{Pixels, WeakEntity};
 
 use super::{
     peek_state::{HoverSample, PeekState, SAMPLE_INTERVAL},
@@ -79,13 +79,12 @@ impl PeekView {
 }
 
 impl BrowserView {
-    /// Only a hovered hidden edge starts sampling; ordinary idle windows have no timer.
+    /// Hover and eligibility transitions start sampling; a pointer away from the edge stops it.
     pub(super) fn watch_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.peek_monitoring || !self.sidebar_sizing.state().can_peek() || self.closing {
             return;
         }
         self.peek_monitoring = true;
-        self.peek_state = PeekState::Idle;
         let started = Instant::now();
         cx.spawn_in(window, async move |view, cx| {
             loop {
@@ -113,7 +112,7 @@ impl BrowserView {
             match overlay_pointer(self.parent_hwnd, self.peek.as_ref().map(|peek| peek.hwnd)) {
                 Ok(pointer) => pointer,
                 Err(error) => {
-                    self.message = error.to_owned();
+                    self.message = error;
                     self.retire_peek(cx);
                     self.peek_monitoring = false;
                     cx.notify();
@@ -122,33 +121,35 @@ impl BrowserView {
             };
         let scale = window.scale_factor();
         let y = pointer.y as f32 / scale;
-        let edge = (0. ..PEEK_EDGE_ZONE).contains(&(pointer.x as f32 / scale))
+        let edge = in_peek_zone(self.sidebar_sizing.state(), pointer.x as f32 / scale)
             && (page_card::chrome_height(self.sidebar_sizing.width())
                 ..f32::from(window.viewport_size().height) - FOOTER_HEIGHT)
                 .contains(&y);
-        let eligible = pointer.active
-            && !self.closing
-            && self.palette.is_none()
-            && self.sidebar_sizing.state().can_peek()
-            && !self.sidebar_sizing.is_dragging();
-        self.peek_state.sample(
-            elapsed,
-            HoverSample {
-                eligible,
-                edge,
-                popup: pointer.in_popup,
-                pressed: pointer.pressed,
-            },
+        let eligible = peek_eligible(
+            pointer.active,
+            self.closing,
+            self.palette.is_some(),
+            self.sidebar_sizing.state(),
+            self.sidebar_sizing.is_dragging(),
         );
+        let sample = HoverSample {
+            eligible,
+            edge,
+            popup: pointer.in_popup,
+            pressed: pointer.pressed,
+        };
+        self.peek_state.sample(elapsed, sample);
         if self.peek_state == PeekState::Open && self.peek.is_none() {
             self.open_peek(window, cx);
         } else if self.peek_state != PeekState::Open && self.peek.is_some() {
             self.retire_peek(cx);
+            self.peek_state.sample(elapsed, sample);
             if pointer.active && !pointer.pressed && self.palette.is_none() {
                 self.focus_page(window);
             }
         }
-        let watching = eligible && (edge || self.peek.is_some());
+        let watching = (eligible && (edge || self.peek.is_some()))
+            || (self.peek_state == PeekState::Suppressed && pointer.pressed);
         self.peek_monitoring = watching;
         watching
     }
@@ -161,27 +162,24 @@ impl BrowserView {
             "Sidebar popup was not created.".to_owned()
         )));
         let created_native = native.clone();
-        let pointer = match overlay_pointer(parent, None) {
-            Ok(pointer) => pointer,
+        let main_bounds = window.bounds();
+        let scale = window.scale_factor();
+        let anchor = peek_anchor(main_bounds, scale);
+        let monitor = match overlay_monitor(anchor.0, anchor.1) {
+            Ok(monitor) => monitor,
             Err(error) => {
-                self.message = error.to_owned();
+                self.message = error;
                 self.peek_state.dismiss();
                 return;
             }
         };
-        let scale = window.scale_factor();
-        let top = page_card::chrome_height(0.);
-        let bounds = Bounds::new(
-            point(
-                px(pointer.client_screen_x as f32 / scale + PEEK_EDGE_ZONE),
-                px(pointer.client_screen_y as f32 / scale + top),
-            ),
-            size(
-                px(PEEK_WIDTH),
-                px((f32::from(window.viewport_size().height) - top - FOOTER_HEIGHT).max(1.)),
-            ),
+        let bounds = peek_bounds(
+            main_bounds,
+            f32::from(window.viewport_size().height),
+            scale,
+            &monitor,
         );
-        let display_id = window.display(cx).map(|display| display.id());
+        let display_id = Some(gpui::DisplayId::new(monitor.id));
         let opened = cx.open_window(
             WindowOptions {
                 kind: WindowKind::PopUp,
@@ -315,7 +313,7 @@ impl BrowserView {
             match overlay_pointer(self.parent_hwnd, self.peek.as_ref().map(|peek| peek.hwnd)) {
                 Ok(pointer) => pointer.active,
                 Err(error) => {
-                    self.message = error.to_owned();
+                    self.message = error;
                     false
                 }
             };
@@ -377,9 +375,48 @@ impl BrowserView {
         self.retire_palette(cx);
         let previous = self.sidebar_sizing.state();
         self.sidebar_sizing.toggle_hidden();
-        self.sidebar_state_settled(previous, cx);
+        self.sidebar_state_settled(previous, window, cx);
         self.focus_page(window);
     }
+}
+
+/// The physical edge anchor uses GPUI's window origin, not a client point at another DPI.
+fn peek_anchor(main: Bounds<Pixels>, scale: f32) -> (i32, i32) {
+    (
+        ((f32::from(main.origin.x) + PEEK_EDGE_ZONE) * scale).round() as i32,
+        ((f32::from(main.origin.y) + page_card::chrome_height(0.)) * scale).round() as i32,
+    )
+}
+
+/// Keep the popup on the edge's monitor, using that monitor's logical coordinate system.
+fn peek_bounds(
+    main: Bounds<Pixels>,
+    viewport_height: f32,
+    scale: f32,
+    monitor: &OverlayMonitor,
+) -> Bounds<Pixels> {
+    let (anchor_x, anchor_y) = peek_anchor(main, scale);
+    let width = (PEEK_WIDTH * monitor.scale).min((monitor.right - monitor.left) as f32);
+    let height = ((viewport_height - page_card::chrome_height(0.) - FOOTER_HEIGHT) * scale)
+        .max(1.)
+        .min((monitor.bottom - monitor.top) as f32);
+    // GPUI recenters windows whose center misses the selected monitor. Clamp before creation.
+    let left = (anchor_x as f32).clamp(monitor.left as f32, monitor.right as f32 - width);
+    let top = (anchor_y as f32).clamp(monitor.top as f32, monitor.bottom as f32 - height);
+    Bounds::new(
+        point(px(left / monitor.scale), px(top / monitor.scale)),
+        size(px(width / monitor.scale), px(height / monitor.scale)),
+    )
+}
+
+fn peek_eligible(
+    active: bool,
+    closing: bool,
+    palette_open: bool,
+    state: atlas_ui::SidebarWidthState,
+    dragging: bool,
+) -> bool {
+    active && !closing && !palette_open && state.can_peek() && !dragging
 }
 
 /// Dismissed and replaced popups cannot act on the current window.
@@ -391,11 +428,120 @@ fn current_action(closing: bool, current: Option<u64>, incoming: u64) -> bool {
 mod tests {
     use super::*;
 
+    fn monitor(left: i32, right: i32, scale: f32) -> OverlayMonitor {
+        OverlayMonitor {
+            id: 1,
+            scale,
+            left,
+            right,
+            top: 0,
+            bottom: 1440,
+        }
+    }
+
+    fn main_bounds(x: f32, y: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(x), px(y)), size(px(1280.), px(800.)))
+    }
+
     #[test]
-    fn deferred_actions_only_reach_their_live_popup() {
-        assert!(current_action(false, Some(7), 7));
-        assert!(!current_action(false, Some(8), 7));
-        assert!(!current_action(false, None, 7));
-        assert!(!current_action(true, Some(7), 7));
+    fn placement_stays_on_the_left_monitor_when_the_owner_straddles() {
+        // The owner's center is on the right monitor, but its exposed edge is on the left.
+        let bounds = peek_bounds(main_bounds(-400., 100.), 800., 1., &monitor(-1920, 0, 1.));
+        assert_eq!(
+            bounds,
+            Bounds::new(point(px(-392.), px(136.)), size(px(264.), px(736.)))
+        );
+    }
+
+    #[test]
+    fn placement_converts_the_owner_origin_to_the_edge_monitors_scale() {
+        // A 150% owner begins at physical x=1500; its left edge remains on the 100% monitor.
+        let bounds = peek_bounds(main_bounds(1000., 100.), 800., 1.5, &monitor(0, 1920, 1.));
+        assert_eq!(
+            bounds,
+            Bounds::new(point(px(1512.), px(204.)), size(px(264.), px(1104.)))
+        );
+        // Reverse the scale direction: a 100% owner overlaps a 200% monitor on its left.
+        let bounds = peek_bounds(main_bounds(-800., 100.), 800., 1., &monitor(-2560, 0, 2.));
+        assert_eq!(
+            bounds,
+            Bounds::new(point(px(-396.), px(68.)), size(px(264.), px(368.)))
+        );
+    }
+
+    #[test]
+    fn placement_near_a_monitor_boundary_keeps_its_center_on_that_monitor() {
+        let bounds = peek_bounds(main_bounds(-100., 100.), 800., 1., &monitor(-1920, 0, 1.));
+        assert_eq!(bounds.origin, point(px(-264.), px(136.)));
+        assert_eq!(bounds.center(), point(px(-132.), px(504.)));
+    }
+
+    #[test]
+    fn palette_open_prevents_peek() {
+        assert!(!peek_eligible(
+            true,
+            false,
+            true,
+            atlas_ui::SidebarWidthState::Hidden,
+            false
+        ));
+    }
+
+    #[test]
+    fn dragging_prevents_peek() {
+        assert!(!peek_eligible(
+            true,
+            false,
+            false,
+            atlas_ui::SidebarWidthState::Hidden,
+            true
+        ));
+    }
+
+    #[test]
+    fn inactive_window_prevents_peek() {
+        assert!(!peek_eligible(
+            false,
+            false,
+            false,
+            atlas_ui::SidebarWidthState::Hidden,
+            false
+        ));
+    }
+
+    #[test]
+    fn only_a_live_hidden_sidebar_can_peek() {
+        use atlas_ui::SidebarWidthState::*;
+        assert!(peek_eligible(true, false, false, Hidden, false));
+        assert!(!peek_eligible(true, true, false, Hidden, false));
+        for state in [Compact, Wide] {
+            assert!(!peek_eligible(true, false, false, state, false));
+        }
+    }
+
+    #[test]
+    fn queued_dismissal_cannot_close_a_replacement_popup() {
+        let deliver = |current: &mut Option<u64>, closing, queued| {
+            if current_action(closing, *current, queued) {
+                *current = None;
+            }
+        };
+        let mut current = Some(8);
+        deliver(&mut current, false, 7);
+        assert_eq!(
+            current,
+            Some(8),
+            "the replacement survives an old dismissal"
+        );
+        deliver(&mut current, true, 8);
+        assert_eq!(
+            current,
+            Some(8),
+            "shutdown retains sole ownership of teardown"
+        );
+        deliver(&mut current, false, 8);
+        assert_eq!(current, None, "the current dismissal takes effect");
+        deliver(&mut current, false, 8);
+        assert_eq!(current, None, "duplicate delivery is harmless");
     }
 }

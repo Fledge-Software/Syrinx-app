@@ -14,8 +14,10 @@ The hidden edge remains an 8 logical-pixel drag strip. Resting there for
 opening an overlay while reaching for the resize handle; immediate opening
 would compete with a press. A press cancels the pending hover and starts the
 existing drag. The strip remains exposed while the popup is open, so pressing
-there closes the peek and still starts a drag. Leaving the edge is required
-before a dismissed peek can open again.
+there closes the peek and still starts a drag. Press suppression survives the
+whole drag, even outside the edge or while ineligible. Release starts a fresh
+250 ms delay when hidden at the edge. Escape or row dismissal still requires
+leaving the edge before another peek.
 
 `ui/peek_state.rs` implements and tests the pure timing/press state machine.
 `ui/peek.rs` samples native pointer position every 25 ms only while monitoring
@@ -24,7 +26,8 @@ does not receive mouse moves. Opening is no earlier than 250 ms; a busy UI
 thread can delay it. Pointer departure, Escape, row/Favorite activation,
 window deactivation, movement/resizing, minimization and shutdown retire the
 popup. Moving or resizing dismisses it rather than leaving it at stale screen
-coordinates. Placement uses the owner's current display and scale. There is
+coordinates. Placement starts at GPUI's window bounds and selects the monitor
+under the exposed edge, using that monitor's scale. There is
 no slide animation.
 
 The peek renders `sidebar_view::sidebar_at`, the same rows, folder expansion,
@@ -49,25 +52,72 @@ WebView2 accelerator callback only handles and queues the shortcut, with its
 existing auto-repeat guard; it does no cross-process COM work. GPUI and the
 palette forward the same action. No command registry exists on this base.
 The existing settings table stores both `sidebar.width_state` and
-`sidebar.last_visible_state`; older profiles without the second key restore
-wide when first pinning a hidden sidebar. A popup never changes these settings.
+`sidebar.last_visible_state`. The second key remembers the visible width because
+`sidebar.width_state` holds Hidden while hidden. Older profiles without the
+second key restore wide when first pinning a hidden sidebar. A popup never changes these settings.
 
 The main window now uses a client title bar with GPUI's native Windows caption
-hit areas and the approved 36 px height token. Its caption buttons use text
-glyphs because the app does not register the UI library's icon bundle. When the
-sidebar is hidden, back, forward, reload and the address button occupy that
+hit areas and the approved 36 px height token. Its caption buttons use
+Segoe MDL2 Assets glyphs because the app does not register the UI
+library's icon bundle. The middle control switches from maximize to restore
+when maximized. GPUI's `WindowControlArea::Max` retains native snap hit-testing.
+When the sidebar is hidden, back, forward, reload and the address button occupy that
 bar beside the window controls. Visible states retain their separate toolbar.
 `ui/page_card.rs::chrome_height` reserves the correct height and its tests
 check the card starts below the controls at five scales. The address button
 opens the palette. The normal native close callback still requests durable
 shutdown before removing the owner.
 
+## Review fixes
+
+The independent approve-with-fixes review found that edge placement and hover
+rearming needed more coverage. Placement now converts the GPUI window origin
+through physical coordinates to the edge monitor's logical coordinates and
+clamps to that monitor before creation. This prevents GPUI's off-monitor
+recentering, including when the owner straddles monitors at different scales.
+The platform manifest explicitly enables the existing Windows GDI and DPI API
+features for this lookup; dependency versions and the lockfile remain unchanged.
+
+Hidden-state settlement, main-window activation and palette completion restart
+sampling for a stationary pointer. Eligibility uses a pure predicate, and edge
+membership calls `atlas_ui::sidebar::in_peek_zone`. A held press remains exactly
+`Suppressed` through ineligible drag samples; explicit dismissal is separate.
+Page-focused Ctrl Alt S rejects right Alt, preserving AltGr+S. Native pointer
+and monitor failures retain their operation, HRESULT and Windows message.
+
+Regression tests cover straddling, both mixed-scale directions, monitor-edge
+clamping, each eligibility blocker, stationary-pointer rearming, drag suppression,
+AltGr, native error details and caption state. Navigation-width tests assert
+concrete expected values at named widths; queued-dismissal coverage exercises a
+replacement popup, shutdown, valid delivery and duplicate delivery.
+
 ## Validation
 
 Logs live under this worktree's `target/`; they contain synthetic test evidence
 and are not committed. No dependency pins, vendor source or lockfile changed.
 
-On 2026-10-12, `cargo xtask check` passed with exit code 0; the final log is
+The review-fix gate passed on 2026-10-12 with exit code 0 in
+`target/p1-17-review-gate-2.log`: dependency boundaries, deferred markers,
+formatting, Clippy with warnings denied, **611 tests** (133 app, 78 platform
+unit tests, and the rest of the workspace), documentation-test selection and
+the application smoke run. No tests were ignored or filtered. The first attempt
+caught a missing `gpui::Pixels` import; its failure is preserved in
+`target/p1-17-review-gate-1.log`. The import was fixed without weakening checks.
+Test temporary directories and smoke profiles were redirected into this
+worktree's `target/review-temp/`.
+
+A fresh synthetic Home window was inspected using only its own native handle.
+The captures `target/p1-17-review-normal-dpi.png` and
+`target/p1-17-review-maximized-dpi.png` show the minimize and close glyphs, the
+normal maximize square and the maximized overlapping restore glyph. Native
+maximize, restore and minimize state checks passed; the window closed through
+its normal close request. `target/p1-17-review-window-dpi-inspection.log`
+records those checks. The first capture attempt used DPI-virtualized bounds
+and clipped the image; only the inspection thread's DPI awareness was corrected.
+No Windows setting changed. Snap-layout hover, page-focus transitions and
+physical mixed-monitor placement still require the manual checks below.
+
+The original branch gate on 2026-10-12 passed with exit code 0; its log is
 `target/p1-17-gate-complete.log`. Dependency boundaries, deferred markers,
 formatting, Clippy with warnings denied, all 599 tests and the application
 smoke launch passed. This includes 123 app tests, 76 platform unit tests and
@@ -87,9 +137,9 @@ window-bound Favorites forms and secondary-display placement. A follow-up
 review also checked the conditional Escape routing, generation guards and
 activation check before a queued action can restore focus.
 
-Native desktop inspection could not run after the restart: the local Computer
+Before these review fixes, native desktop inspection could not run after the restart: the local Computer
 Use helper returned "native pipe is unavailable ... (os error 2)" both before
-and after resetting its session. Therefore actual popup appearance, hit testing,
+and after resetting its session. Actual popup appearance, hit testing,
 Alt Tab, page focus and multi-monitor acceptance remain the owner's checks
 below. The gate's smoke launch and the native test of popup ownership are
 narrower evidence, not substitutes for those checks.
@@ -98,8 +148,8 @@ Shared existing files changed are `crates/atlas-app/src/ui.rs`, `main.rs`,
 `palette.rs`, `ui/sidebar_view.rs`, `ui/favorites.rs` and `ui/page_card.rs`;
 `crates/atlas-platform/src/browser.rs` and `browser/page.rs`;
 `crates/atlas-ui/src/sidebar.rs`; and the implementation ledger, plan's DW-3
-row and traps document. The workspace manifests, lockfile and platform
-`lib.rs` are unchanged. New files are the peek, timing and title-bar modules,
+row and traps document. The workspace root manifest, lockfile and platform `lib.rs` are unchanged.
+The review adds only Windows API feature declarations to the platform manifest. New files are the peek, timing and title-bar modules,
 the platform pointer helper, the synthetic HTML fixture and this note.
 
 ## Owner's manual checks
@@ -156,9 +206,14 @@ successful cycle does not prove reliability.
 6. With the peek open, Alt Tab to another app. The peek must disappear and
    Atlas must not steal focus back. It must not have its own Alt Tab entry or
    remain topmost above the other app. Return: the page should be usable.
-7. Reopen, minimize, restore, maximize/restore, move the window and resize it.
+7. Wide and compact now show the custom Atlas title bar too. In wide, compact
+   and hidden, check minimize, maximize, restore and close glyphs; maximized must
+   show the overlapping restore glyph and the accessible label Restore. Hover
+   maximize/restore to check Windows snap layouts. Reopen the peek, minimize,
+   restore, maximize/restore, move the window and resize it.
    Each transition should dismiss the peek, with no detached window. Repeat
-   across monitors at different display scales if available. Verify title-bar
+   across monitors at different display scales if available, including a window
+   straddling their boundary with its left edge on the other monitor. Verify title-bar
    dragging, double-click maximize, and back/forward/reload/address clicks do
    not interfere with each other.
 8. Close Atlas while peeking using its close button. Separately, Alt F4 while
@@ -167,5 +222,11 @@ successful cycle does not prove reliability.
    the main window because hover did not take focus.
    There must be no orphan popup or lingering synthetic Atlas process. Start
    again and check that a fresh hover still works after every dismissal path.
+
+9. Keep the pointer on the strip while hiding with Ctrl Alt S, returning after
+   Alt Tab, and closing the palette. Each must begin a fresh hover delay without
+   leaving and re-entering. Drag to hidden and release on the strip: it must wait
+   a full delay after release, with no popup while pressed. On an AltGr layout,
+   AltGr+S must type into the synthetic page input without toggling the sidebar.
 
 Owner acceptance and independent branch review remain separate from the gate.
