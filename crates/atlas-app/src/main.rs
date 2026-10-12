@@ -1,6 +1,7 @@
 //! Opens the integrated browser and keeps its native workers alive through orderly shutdown.
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+mod acceptance;
 mod appearance;
 mod controls;
 mod navigation;
@@ -44,8 +45,11 @@ const DATA_FOLDER: &str = if cfg!(feature = "installed") {
 
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let smoke_requested = arguments.iter().any(|argument| argument == "--smoke");
-    let options = match parse_arguments(arguments).and_then(run_mode) {
+    // Unattended runs report startup problems on stderr only, never in an invisible message box.
+    let smoke_requested = arguments
+        .iter()
+        .any(|argument| argument == "--smoke" || argument == ACCEPTANCE_FLAG);
+    let mut options = match parse_arguments(arguments).and_then(run_mode) {
         Ok(RunMode::Browser(options)) => options,
         Ok(RunMode::PaletteSample) => return run_palette_sample(),
         Err(message) => {
@@ -70,8 +74,13 @@ fn main() -> ExitCode {
         }
     };
     // The GUI's orderly timeout cannot run while startup or its event thread is stalled.
-    let watchdog = if options.smoke {
-        match smoke_watchdog::SmokeWatchdog::start() {
+    let watchdog = if options.smoke || options.acceptance.is_some() {
+        let started = if options.smoke {
+            smoke_watchdog::SmokeWatchdog::start()
+        } else {
+            smoke_watchdog::SmokeWatchdog::start_acceptance()
+        };
+        match started {
             Ok(watchdog) => Some(watchdog),
             Err(error) => {
                 eprintln!("{error}");
@@ -83,7 +92,8 @@ fn main() -> ExitCode {
     };
     let outcome = Arc::new(AtomicU8::new(0));
     let result = outcome.clone();
-    let smoke = options.smoke;
+    // Smoke and acceptance runs succeed only when they report success themselves.
+    let unattended = options.smoke || options.acceptance.is_some();
     let mut links = Some(links);
     gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);
@@ -107,10 +117,14 @@ fn main() -> ExitCode {
             },
             |window, cx| {
                 let view = cx.new(|cx| {
+                    let checks = ui::LaunchChecks {
+                        smoke: options.smoke,
+                        suspended_tabs: options.suspended_tabs,
+                        acceptance: options.acceptance.take(),
+                    };
                     ui::BrowserView::new(
                         options.directory,
-                        options.smoke,
-                        options.suspended_tabs,
+                        checks,
                         result.clone(),
                         links.take(),
                         window,
@@ -151,7 +165,7 @@ fn main() -> ExitCode {
     // Release the profile only now, after the store and pages have shut down.
     let links_dropped = instance.links_dropped();
     drop(instance);
-    if links_dropped && !smoke {
+    if links_dropped && !unattended {
         notice::show_warning(
             "Atlas was closing when a link arrived, so the link was not opened. Open it again.",
         );
@@ -162,7 +176,7 @@ fn main() -> ExitCode {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-    if outcome.load(Ordering::Acquire) == 2 || smoke && outcome.load(Ordering::Acquire) != 1 {
+    if outcome.load(Ordering::Acquire) == 2 || unattended && outcome.load(Ordering::Acquire) != 1 {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
@@ -198,6 +212,8 @@ struct Options {
     link: Option<LinkRequest>,
     /// P1-15's measurement mode: this many synthetic tabs suspended in a fresh profile.
     suspended_tabs: usize,
+    /// P1-33's palette acceptance run, in a fresh profile against synthetic loopback pages.
+    acceptance: Option<acceptance::AcceptancePlan>,
 }
 
 /// Becomes this profile's running Atlas, or returns `None` once the running one has the link.
@@ -225,10 +241,15 @@ struct Arguments {
     test_directory: Option<PathBuf>,
     link: Option<LinkRequest>,
     suspended_tabs: usize,
+    acceptance: Option<acceptance::AcceptancePlan>,
 }
 
+const ACCEPTANCE_FLAG: &str = "--test-palette-acceptance";
+
 const USAGE: &str = "Atlas accepts --smoke, --test-data-dir <directory>, --palette-sample, \
-                     --test-suspended-tabs <1-32> or -- followed by one http(s) link.";
+                     --test-suspended-tabs <1-32>, \
+                     --test-palette-acceptance <report.json> <http://127.0.0.1:port> \
+                     or -- followed by one http(s) link.";
 
 /// Reads options, then at most one link after `--`. Everything after `--` is the link, so a
 /// crafted link from a registered handler cannot add options such as `--test-data-dir`.
@@ -247,6 +268,8 @@ fn parse_arguments(
             parsed.smoke = true;
         } else if argument == "--test-suspended-tabs" {
             parsed.suspended_tabs = suspended_tab_count(arguments.next())?;
+        } else if argument == ACCEPTANCE_FLAG {
+            parsed.acceptance = Some(acceptance_plan(arguments.next(), arguments.next())?);
         } else if argument == "--test-data-dir" {
             let directory = arguments
                 .next()
@@ -257,15 +280,21 @@ fn parse_arguments(
         }
     }
     let measuring = parsed.suspended_tabs > 0;
-    let other_than_sample =
-        parsed.smoke || measuring || parsed.test_directory.is_some() || parsed.link.is_some();
+    let accepting = parsed.acceptance.is_some();
+    let other_than_sample = parsed.smoke
+        || measuring
+        || accepting
+        || parsed.test_directory.is_some()
+        || parsed.link.is_some();
     if parsed.palette_sample && other_than_sample {
         return Err("--palette-sample takes no other arguments.");
     }
-    if parsed.smoke && measuring {
-        return Err("Use smoke or suspended-tab measurement separately.");
+    let unattended_modes = [parsed.smoke, measuring, accepting];
+    if unattended_modes.iter().filter(|chosen| **chosen).count() > 1 {
+        return Err("Use smoke, suspended-tab measurement or palette acceptance separately.");
     }
-    if (parsed.smoke || measuring) && (parsed.test_directory.is_some() || parsed.link.is_some()) {
+    let unattended = unattended_modes.contains(&true);
+    if unattended && (parsed.test_directory.is_some() || parsed.link.is_some()) {
         return Err("The automatic smoke check always uses a fresh profile and no link.");
     }
     Ok(parsed)
@@ -283,6 +312,19 @@ fn suspended_tab_count(value: Option<OsString>) -> Result<usize, &'static str> {
         return Err("Synthetic suspended tab count must be 1 through 32.");
     }
     Ok(count)
+}
+
+/// Reads P1-33's report path and synthetic loopback page server.
+fn acceptance_plan(
+    report: Option<OsString>,
+    page_base: Option<OsString>,
+) -> Result<acceptance::AcceptancePlan, &'static str> {
+    let report = report.ok_or("The palette acceptance run needs a report path.")?;
+    let page_base = page_base.ok_or("The palette acceptance run needs its page server.")?;
+    let page_base = page_base
+        .to_str()
+        .ok_or("The acceptance page server is not text.")?;
+    acceptance::AcceptancePlan::new(PathBuf::from(report), page_base)
 }
 
 /// Exactly one argument may follow `--`, and it must be an http(s) link.
@@ -305,10 +347,11 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
         test_directory,
         link,
         suspended_tabs,
+        acceptance,
         ..
     } = arguments;
-    // Smoke and measurement runs always use a fresh synthetic profile.
-    let fresh_profile = smoke || suspended_tabs > 0;
+    // Smoke, measurement and acceptance runs always use a fresh synthetic profile.
+    let fresh_profile = smoke || suspended_tabs > 0 || acceptance.is_some();
     let directory = if fresh_profile {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -331,6 +374,7 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
         smoke,
         link,
         suspended_tabs,
+        acceptance,
     }))
 }
 
@@ -352,6 +396,16 @@ mod tests {
     use std::{fs, io::Write};
 
     use super::*;
+
+    const PAGE_BASE: &str = "http://127.0.0.1:50123";
+
+    #[test]
+    fn the_acceptance_run_takes_a_report_path_and_a_loopback_page_server() {
+        let parsed = parse(&[ACCEPTANCE_FLAG, "report.json", PAGE_BASE]).expect("acceptance");
+        let plan = parsed.acceptance.expect("acceptance plan");
+        assert_eq!(plan.report, PathBuf::from("report.json"));
+        assert_eq!(plan.page_base, PAGE_BASE);
+    }
 
     fn parse(arguments: &[&str]) -> Result<Arguments, &'static str> {
         parse_arguments(arguments.iter().map(OsString::from))
@@ -406,6 +460,23 @@ mod tests {
             ][..],
             &["--smoke", "--test-suspended-tabs", "4"][..],
             &["--test-suspended-tabs", "33"][..],
+            &[ACCEPTANCE_FLAG, "report.json"][..],
+            &[ACCEPTANCE_FLAG, "report.json", "https://www.example.com"][..],
+            &["--smoke", ACCEPTANCE_FLAG, "report.json", PAGE_BASE][..],
+            &[
+                ACCEPTANCE_FLAG,
+                "report.json",
+                PAGE_BASE,
+                "--test-data-dir",
+                "Synthetic",
+            ][..],
+            &[
+                ACCEPTANCE_FLAG,
+                "report.json",
+                PAGE_BASE,
+                "--",
+                "https://example.test/",
+            ][..],
         ] {
             let parsed = parse(arguments);
             assert!(parsed.is_err(), "{arguments:?} gave {parsed:?}");
