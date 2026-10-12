@@ -110,6 +110,16 @@ impl Wake for ThreadWake {
 }
 
 fn next_event(events: &mut UnboundedReceiver<SessionEvent>) -> SessionEvent {
+    // The startup preferences event has its own tests; tab-model tests read past it.
+    loop {
+        match next_any_event(events) {
+            SessionEvent::Preferences { .. } => continue,
+            event => return event,
+        }
+    }
+}
+
+fn next_any_event(events: &mut UnboundedReceiver<SessionEvent>) -> SessionEvent {
     // Wake directly on events, with a deadline so a broken worker cannot hang the gate.
     let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
     let mut context = Context::from_waker(&waker);
@@ -1600,3 +1610,6 @@ fn healthy_existing_primary_starts_directly_with_its_saved_state() {
     stop(handle, &mut events);
     fixture.cleanup();
 }
+
+#[path = "preference_tests.rs"]
+mod preference_tests;
