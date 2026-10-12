@@ -9,7 +9,8 @@ use super::TITLE_BAR_HEIGHT;
 use crate::theme;
 
 /// Native hit areas retain Windows dragging, snap, minimize and durable close callbacks.
-pub(super) fn title_bar(content: Div) -> Div {
+pub(super) fn title_bar(content: Div, maximized: bool) -> Div {
+    let (maximize_label, maximize_glyph) = maximize_control(maximized);
     div()
         .h(px(TITLE_BAR_HEIGHT))
         .flex_none()
@@ -30,17 +31,22 @@ pub(super) fn title_bar(content: Div) -> Div {
         )
         .children(
             [
-                ("caption-minimize", "Minimize", "−", WindowControlArea::Min),
+                (
+                    "caption-minimize",
+                    "Minimize",
+                    "\u{E921}",
+                    WindowControlArea::Min,
+                ),
                 (
                     "caption-maximize",
-                    "Maximize or restore",
-                    "□",
+                    maximize_label,
+                    maximize_glyph,
                     WindowControlArea::Max,
                 ),
                 (
                     "caption-close",
                     "Close Atlas",
-                    "×",
+                    "\u{E8BB}",
                     WindowControlArea::Close,
                 ),
             ]
@@ -55,10 +61,31 @@ pub(super) fn title_bar(content: Div) -> Div {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_lg()
+                    .font_family("Segoe MDL2 Assets")
+                    .text_size(px(10.))
                     .window_control_area(area)
                     .hover(|style| style.bg(theme::line()))
                     .child(glyph)
             }),
         )
+}
+
+/// Segoe MDL2 Assets supplies the Windows caption outlines without bundled assets.
+fn maximize_control(maximized: bool) -> (&'static str, &'static str) {
+    if maximized {
+        ("Restore", "\u{E923}")
+    } else {
+        ("Maximize", "\u{E922}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maximize_caption_tracks_window_state() {
+        assert_eq!(maximize_control(false), ("Maximize", "\u{E922}"));
+        assert_eq!(maximize_control(true), ("Restore", "\u{E923}"));
+    }
 }

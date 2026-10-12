@@ -180,7 +180,13 @@ impl BrowserView {
             sidebar_edge_focus: cx.focus_handle(),
             _drag_activation_watch: cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
-                    this.sidebar_drag_abandoned(cx);
+                    this.sidebar_drag_abandoned(window, cx);
+                } else {
+                    // Returning from our own popup must preserve Escape's edge dismissal.
+                    if !this.peek_monitoring {
+                        this.peek_state.rearm();
+                    }
+                    this.watch_peek(window, cx);
                 }
             }),
             message: "Opening your workspace…".to_owned(),
@@ -830,7 +836,8 @@ impl BrowserView {
         if self.closing {
             return;
         }
-        if event.finishes_entry() {
+        let finishes_entry = event.finishes_entry();
+        if finishes_entry {
             self.pending_query = None;
             self.home_palette.finish_entry();
         }
@@ -878,6 +885,10 @@ impl BrowserView {
                 self.palette = None;
                 self.focus_page(window);
             }
+        }
+        if finishes_entry {
+            self.peek_state.rearm();
+            self.watch_peek(window, cx);
         }
         cx.notify();
     }
@@ -1083,7 +1094,7 @@ impl Render for BrowserView {
                 .size_full()
                 .flex()
                 .flex_col()
-                .child(title_bar(div().child("Atlas")))
+                .child(title_bar(div().child("Atlas"), window.is_maximized()))
                 .child(self.startup_panel(cx));
         }
         if self.browser_ready && !self.closing {
@@ -1104,19 +1115,19 @@ impl Render for BrowserView {
             .track_focus(&self.focus)
             .flex()
             .flex_col()
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                this.sidebar_drag_moved(event, cx);
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.sidebar_drag_moved(event, window, cx);
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, _, cx| {
-                    this.sidebar_drag_released(f32::from(event.position.x), cx);
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.sidebar_drag_released(f32::from(event.position.x), window, cx);
                 }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, _, cx| {
-                    this.sidebar_drag_released(f32::from(event.position.x), cx);
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.sidebar_drag_released(f32::from(event.position.x), window, cx);
                 }),
             )
             .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
@@ -1176,16 +1187,19 @@ impl Render for BrowserView {
                     this.page_command(BrowserCommand::Reload { id: id.get() });
                 }
             }))
-            .child(title_bar(if self.sidebar_sizing.width() == 0. {
-                div()
-                    .w(px(page_card::titlebar_navigation_width(f32::from(
-                        window.viewport_size().width,
-                    ))))
-                    .min_w_0()
-                    .child(self.toolbar(cx))
-            } else {
-                div().h_full().flex().items_center().child("Atlas")
-            }))
+            .child(title_bar(
+                if self.sidebar_sizing.width() == 0. {
+                    div()
+                        .w(px(page_card::titlebar_navigation_width(f32::from(
+                            window.viewport_size().width,
+                        ))))
+                        .min_w_0()
+                        .child(self.toolbar(cx))
+                } else {
+                    div().h_full().flex().items_center().child("Atlas")
+                },
+                window.is_maximized(),
+            ))
             .when(self.sidebar_sizing.width() > 0., |root| {
                 root.child(self.toolbar(cx))
             })

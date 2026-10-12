@@ -12,8 +12,10 @@ pub(super) enum PeekState {
     Waiting(Duration),
     Open,
     Suppressed,
+    Dismissed,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct HoverSample {
     pub eligible: bool,
     pub edge: bool,
@@ -22,19 +24,31 @@ pub(super) struct HoverSample {
 }
 
 impl PeekState {
-    /// A dismissal or press requires leaving the edge before another hover can open it.
+    /// Explicit dismissal requires leaving the edge; a held press keeps its suppression.
     pub fn dismiss(&mut self) {
-        *self = Self::Suppressed;
+        if *self != Self::Suppressed {
+            *self = Self::Dismissed;
+        }
+    }
+
+    /// Becoming eligible again starts a fresh delay but cannot cancel a held press.
+    pub fn rearm(&mut self) {
+        if *self != Self::Suppressed {
+            *self = Self::Idle;
+        }
     }
 
     /// Uses elapsed monotonic time, never the number of timer ticks.
     pub fn sample(&mut self, now: Duration, sample: HoverSample) {
-        if !sample.eligible || !(sample.edge || sample.popup) {
-            *self = Self::Idle;
+        if sample.pressed && (sample.edge || *self == Self::Suppressed) {
+            *self = Self::Suppressed;
             return;
         }
-        if sample.pressed && sample.edge {
-            self.dismiss();
+        if *self == Self::Suppressed {
+            *self = Self::Idle;
+        }
+        if !sample.eligible || !(sample.edge || sample.popup) {
+            *self = Self::Idle;
             return;
         }
         match self {
@@ -79,15 +93,16 @@ mod tests {
     }
 
     #[test]
-    fn press_cancels_wait_and_release_does_not_open_under_the_pointer() {
+    fn press_cancels_wait_and_release_starts_a_new_full_delay() {
         let mut state = PeekState::default();
         sample(&mut state, 0, true, false, false);
         sample(&mut state, 200, true, false, true);
-        sample(&mut state, 500, true, false, false);
         assert_eq!(state, PeekState::Suppressed);
-        sample(&mut state, 525, false, false, false);
-        sample(&mut state, 550, true, false, false);
-        sample(&mut state, 800, true, false, false);
+        sample(&mut state, 500, true, false, false);
+        assert_eq!(state, PeekState::Waiting(Duration::from_millis(500)));
+        sample(&mut state, 749, true, false, false);
+        assert_eq!(state, PeekState::Waiting(Duration::from_millis(500)));
+        sample(&mut state, 750, true, false, false);
         assert_eq!(state, PeekState::Open);
     }
 
@@ -115,7 +130,47 @@ mod tests {
         let mut state = PeekState::Open;
         state.dismiss();
         sample(&mut state, 1000, true, false, false);
+        assert_eq!(state, PeekState::Dismissed);
+    }
+
+    #[test]
+    fn eligibility_transitions_rearm_a_stationary_pointer() {
+        // Hidden state, main-window activation and palette closure all use this path.
+        for cause in ["sidebar hidden", "window activated", "palette closed"] {
+            let mut state = PeekState::Dismissed;
+            state.rearm();
+            sample(&mut state, 1000, true, false, false);
+            assert_eq!(
+                state,
+                PeekState::Waiting(Duration::from_millis(1000)),
+                "{cause}"
+            );
+            sample(&mut state, 1250, true, false, false);
+            assert_eq!(state, PeekState::Open, "{cause}");
+        }
+    }
+
+    #[test]
+    fn suppression_survives_drag_and_rearming_until_release() {
+        let mut state = PeekState::Idle;
+        sample(&mut state, 0, true, false, true);
+        state.rearm();
+        state.sample(
+            Duration::from_millis(500),
+            HoverSample {
+                eligible: false,
+                edge: false,
+                popup: false,
+                pressed: true,
+            },
+        );
         assert_eq!(state, PeekState::Suppressed);
+        state.rearm();
+        assert_eq!(state, PeekState::Suppressed);
+        sample(&mut state, 1000, true, false, false);
+        assert_eq!(state, PeekState::Waiting(Duration::from_millis(1000)));
+        sample(&mut state, 1250, true, false, false);
+        assert_eq!(state, PeekState::Open);
     }
 
     #[test]
@@ -131,12 +186,12 @@ mod tests {
             Duration::from_millis(700),
             HoverSample {
                 eligible: !sizing.is_dragging(),
-                edge: true,
+                edge: false,
                 popup: false,
                 pressed: true,
             },
         );
-        assert_ne!(state, PeekState::Open);
+        assert_eq!(state, PeekState::Suppressed);
         assert_eq!(sizing.release(), Some(atlas_ui::SidebarWidthState::Wide));
     }
 }

@@ -14,7 +14,7 @@ use atlas_ui::{
 };
 use gpui::{
     Context, Div, ElementId, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, div,
+    MouseMoveEvent, ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px,
 };
 
@@ -106,8 +106,8 @@ impl BrowserView {
             .track_focus(&self.sidebar_edge_focus)
             .tab_index(0)
             .focus(|style| style.bg(theme::line()))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                this.sidebar_edge_key(event, cx);
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.sidebar_edge_key(event, window, cx);
             }))
             .w(px(end - start))
             .flex_none()
@@ -133,13 +133,18 @@ impl BrowserView {
 
     /// Follows the pointer while the edge is held. GPUI captures the mouse on press, so moves
     /// over the page's web view still arrive here.
-    pub(super) fn sidebar_drag_moved(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+    pub(super) fn sidebar_drag_moved(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.sidebar_sizing.is_dragging() {
             return;
         }
         // A release outside every window can be lost; the next move without a button ends it.
         if !event.dragging() {
-            self.sidebar_drag_released(f32::from(event.position.x), cx);
+            self.sidebar_drag_released(f32::from(event.position.x), window, cx);
             return;
         }
         if self.sidebar_sizing.drag_to(f32::from(event.position.x)) {
@@ -150,24 +155,34 @@ impl BrowserView {
     /// Snaps a drag released at `pointer_x` to wide, favicon-only or hidden. GPUI stops
     /// reporting moves outside the window, so the release position decides. Selection is
     /// untouched.
-    pub(super) fn sidebar_drag_released(&mut self, pointer_x: f32, cx: &mut Context<Self>) {
+    pub(super) fn sidebar_drag_released(
+        &mut self,
+        pointer_x: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let previous = self.sidebar_sizing.state();
         if self.sidebar_sizing.release_at(pointer_x).is_some() {
-            self.sidebar_state_settled(previous, cx);
+            self.sidebar_state_settled(previous, window, cx);
         }
     }
 
     /// Settles a drag at its current width when Atlas loses activation (Alt Tab, a dialog),
     /// because the mouse capture and the release that would end it go elsewhere.
-    pub(super) fn sidebar_drag_abandoned(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn sidebar_drag_abandoned(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let previous = self.sidebar_sizing.state();
         if self.sidebar_sizing.release().is_some() {
-            self.sidebar_state_settled(previous, cx);
+            self.sidebar_state_settled(previous, window, cx);
         }
     }
 
     /// Left narrows and Right widens the sidebar by one state from the focused edge.
-    fn sidebar_edge_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn sidebar_edge_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let current = self.sidebar_sizing.state();
         let next = match event.keystroke.key.as_str() {
             "left" => current.narrower(),
@@ -175,17 +190,22 @@ impl BrowserView {
             _ => return,
         };
         cx.stop_propagation();
-        self.set_sidebar_state(next, cx);
+        self.set_sidebar_state(next, window, cx);
     }
 
-    fn set_sidebar_state(&mut self, state: SidebarWidthState, cx: &mut Context<Self>) {
+    fn set_sidebar_state(
+        &mut self,
+        state: SidebarWidthState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.sidebar_sizing.is_dragging() && self.sidebar_sizing.state() == state {
             return;
         }
         self.retire_peek(cx);
         let previous = self.sidebar_sizing.state();
         self.sidebar_sizing.set_state(state);
-        self.sidebar_state_settled(previous, cx);
+        self.sidebar_state_settled(previous, window, cx);
     }
 
     /// Shows the width state saved last time; this restores, so nothing is saved back.
@@ -197,8 +217,13 @@ impl BrowserView {
     pub(super) fn sidebar_state_settled(
         &mut self,
         previous: SidebarWidthState,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.sidebar_sizing.state().can_peek() {
+            self.peek_state.rearm();
+            self.watch_peek(window, cx);
+        }
         if let Some(setting) = settled_sidebar_setting(previous, self.sidebar_sizing.state()) {
             let (_, visible) = sidebar_setting(self.sidebar_sizing.last_visible());
             self.command(SessionCommand::SaveSettings(vec![

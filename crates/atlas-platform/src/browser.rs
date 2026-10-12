@@ -29,7 +29,7 @@ use windows::Win32::{
     },
 };
 
-pub use overlay::{OverlayPointer, overlay_pointer};
+pub use overlay::{OverlayMonitor, OverlayPointer, overlay_monitor, overlay_pointer};
 use page::Page;
 
 const COMMAND_MESSAGE: u32 = WM_APP + 41;

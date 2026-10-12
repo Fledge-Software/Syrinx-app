@@ -145,11 +145,15 @@ mod tests {
 
     #[test]
     fn title_bar_navigation_reserves_drag_and_caption_buttons_at_every_window_width() {
-        for viewport in [800., 1024., 1280., 1920.] {
-            let right = 12. + titlebar_navigation_width(viewport);
-            let caption_left = viewport - 3. * TITLE_BAR_HEIGHT;
-            assert_eq!(caption_left - right, 64.);
-            assert!(titlebar_navigation_width(viewport) >= 616.);
+        for (name, viewport, expected) in [
+            ("narrow", 800., 616.),
+            ("small desktop", 1024., 840.),
+            ("default", 1280., 1096.),
+            ("full HD", 1920., 1736.),
+            ("controls fill the width", 184., 0.),
+            ("controls exceed the width", 100., 0.),
+        ] {
+            assert_eq!(titlebar_navigation_width(viewport), expected, "{name}");
         }
         for viewport in [0., -1., f32::NAN] {
             assert_eq!(titlebar_navigation_width(viewport), 0.);
