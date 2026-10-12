@@ -68,8 +68,17 @@ impl HiddenTimer {
 
     /// WebView2 started a main-frame navigation, including redirects and page-initiated ones.
     pub(super) fn navigation_started(&mut self, id: u64, now: Instant) {
-        // A chain of confirmed navigations keeps the first start, so the limit still applies.
-        let started = self.loading.map_or(now, |loading| loading.started);
+        let requested = self.live_request(now);
+        let started = match (requested, self.loading) {
+            // Atlas's own request superseded whatever was loading; the new load starts there.
+            (Some(requested), _) => requested,
+            // A redirect keeps its navigation id, and its first start, so the limit still applies.
+            (None, Some(loading)) if loading.id == id => loading.started,
+            // A hidden page's own navigation loop stays bounded by the first start.
+            (None, Some(loading)) if !self.visible => loading.started,
+            // Otherwise it is a new navigation, even if a superseded load has not reported back.
+            _ => now,
+        };
         self.loading = Some(Loading { id, started });
         self.requested = None;
         self.rearm(now);
@@ -103,11 +112,14 @@ impl HiddenTimer {
         !self.visible && self.due.is_some_and(|due| due <= now)
     }
 
+    /// A request WebView2 never started (a same-document jump, say) expires at the limit.
+    fn live_request(&self, now: Instant) -> Option<Instant> {
+        self.requested
+            .filter(|requested| *requested + LOADING_LIMIT > now)
+    }
+
     fn rearm(&mut self, now: Instant) {
-        // A request WebView2 never started (a same-document jump, say) expires at the limit.
-        self.requested = self
-            .requested
-            .filter(|requested| *requested + LOADING_LIMIT > now);
+        self.requested = self.live_request(now);
         let in_flight = [self.loading.map(|loading| loading.started), self.requested]
             .into_iter()
             .flatten()
@@ -176,6 +188,7 @@ mod tests {
         let mut timer = hidden_loading(start, 1);
         timer.navigation_started(2, start + Duration::from_secs(1));
         timer.navigation_completed(1, start + Duration::from_secs(2));
+        // A hidden page's own new navigation keeps the first start.
         assert_eq!(timer.due(), Some(start + LOADING_LIMIT));
         timer.navigation_completed(2, start + Duration::from_secs(3));
         assert_eq!(timer.due(), Some(start + Duration::from_secs(3) + GRACE));
@@ -195,10 +208,69 @@ mod tests {
     fn a_load_that_never_finishes_is_due_at_the_loading_limit() {
         let start = Instant::now();
         let mut timer = hidden_loading(start, 5);
-        // Redirects and chained navigations keep the first start time.
-        timer.navigation_started(6, start + Duration::from_secs(50));
+        // A redirect keeps its navigation id and the first start time.
+        timer.navigation_started(5, start + Duration::from_secs(50));
         assert!(!timer.suspension_due(start + LOADING_LIMIT - Duration::from_millis(1)));
         assert!(timer.suspension_due(start + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn a_new_navigation_over_a_hung_load_is_dated_from_its_own_start() {
+        let start = Instant::now();
+        let hung = start + LOADING_LIMIT + Duration::from_secs(10);
+        // A shown tab's load hangs past the limit, then Atlas navigates it and hides it.
+        let mut requested = HiddenTimer::new(start);
+        requested.shown(true, start);
+        requested.navigation_started(1, start);
+        requested.navigation_requested(hung);
+        // The new start can arrive before the superseded load's cancelled completion.
+        requested.navigation_started(2, hung + Duration::from_millis(100));
+        requested.shown(false, hung + Duration::from_millis(500));
+        assert_eq!(requested.due(), Some(hung + LOADING_LIMIT));
+
+        // A page-initiated navigation while shown is new too, and keeps its start once hidden.
+        let mut clicked = HiddenTimer::new(start);
+        clicked.shown(true, start);
+        clicked.navigation_started(1, start);
+        clicked.navigation_started(2, hung);
+        clicked.shown(false, hung + Duration::from_millis(500));
+        assert_eq!(clicked.due(), Some(hung + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn a_hidden_navigation_loop_is_suspended_within_the_limit_of_its_first_start() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.navigation_started(1, start);
+        // Script or meta-refresh keeps starting new navigations that never finish.
+        for (step, id) in (2..20).enumerate() {
+            let now = start + Duration::from_secs(3 * (step as u64 + 1));
+            timer.navigation_started(id, now);
+            assert_eq!(timer.due(), Some(start + LOADING_LIMIT));
+        }
+        assert!(timer.suspension_due(start + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn a_redirect_after_a_request_keeps_the_request_time() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.navigation_requested(start);
+        timer.navigation_started(3, start + Duration::from_secs(2));
+        timer.navigation_started(3, start + Duration::from_secs(40));
+        assert_eq!(timer.due(), Some(start + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn an_expired_request_does_not_date_a_later_start() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.shown(true, start);
+        timer.navigation_requested(start);
+        let later = start + LOADING_LIMIT + Duration::from_secs(5);
+        timer.navigation_started(8, later);
+        timer.shown(false, later);
+        assert_eq!(timer.due(), Some(later + LOADING_LIMIT));
     }
 
     #[test]
