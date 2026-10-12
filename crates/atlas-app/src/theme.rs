@@ -110,6 +110,16 @@ pub(crate) fn accent() -> Rgba {
     token(|palette| palette.accent.ink)
 }
 
+/// The keyboard focus ring and its inner line (`atlas_ui::focus`).
+pub(crate) fn focus_ring() -> (Rgba, Rgba) {
+    CURRENT.with_borrow(|palette| {
+        (
+            rgba(atlas_ui::focus::ring_color(&palette.accent)),
+            rgba(atlas_ui::focus::ring_inner_color(&palette.accent)),
+        )
+    })
+}
+
 // The preview's selected-row grey was an opaque stand-in (P1-07). Live palettes need it to
 // follow Paper too, so it now reads the canvas token. The palette's former "Search the web"
 // grey went with P1-30, whose palette reads every colour from `current()`.

@@ -19,6 +19,8 @@ use gpui::{
     prelude::FluentBuilder, px,
 };
 
+use crate::controls::control;
+
 use super::{
     BrowserView, button,
     page_card::edge_strip,
@@ -104,9 +106,11 @@ impl BrowserView {
             .role(Role::Splitter)
             .aria_label("Resize sidebar")
             .aria_description(self.sidebar_sizing.state().name())
+            .aria_orientation(gpui::Orientation::Vertical)
+            .aria_keyshortcuts("ArrowLeft ArrowRight")
             .track_focus(&self.sidebar_edge_focus)
             .tab_index(0)
-            .focus(|style| style.bg(theme::line()))
+            .focus(|style| crate::controls::focus_ring(style.bg(theme::line())))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.sidebar_edge_key(event, window, cx);
             }))
@@ -415,13 +419,13 @@ fn folder_row(
 }
 
 /// The shared row shape: a titled row when labels show, a centred icon button otherwise.
-/// Every row is a tree item at its nesting level, keeping its title as the accessible name.
+/// Every row is a tree item at its nesting level, keeping its title as the accessible name,
+/// and its own Tab stop: Enter or Space opens it.
+// TODO(DW-61): one Tab stop for the tree with arrow keys between rows, Left and Right for
+// folders, and F6 landing on the active row.
 fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<Div> {
-    let row = div()
-        .id(id)
-        .role(Role::TreeItem)
+    let row = control(div().id(id), Role::TreeItem, look.title.clone())
         .aria_level(look.depth + 1)
-        .aria_label(look.title.clone())
         .aria_selected(look.active)
         .h(px(ROW_HEIGHT))
         .flex_none()
@@ -467,12 +471,7 @@ fn row_icon(letter: &str, saved: bool) -> Div {
 
 /// A small control at the end of a wide row, named for screen readers.
 fn row_action(id: impl Into<ElementId>, glyph: &'static str, name: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(name)
-        .px_1()
-        .child(glyph)
+    control(div().id(id).px_1().rounded_md(), Role::Button, name).child(glyph)
 }
 
 /// Opens the palette: a labelled button when wide, an icon button otherwise.
@@ -497,7 +496,11 @@ fn plugin_section(labels: bool) -> Div {
                     .child("PLUGINS"),
             )
             .children(PLUGINS.map(|name| {
+                // Not yet a control: screen readers read it as a label until plugins exist.
                 div()
+                    .id(name)
+                    .role(Role::Label)
+                    .aria_label(format!("{name} · coming soon"))
                     .px_2()
                     .py_1()
                     .text_color(theme::icon_dim())
@@ -507,6 +510,7 @@ fn plugin_section(labels: bool) -> Div {
     section.children(PLUGINS.map(|name| {
         div()
             .id(name)
+            .role(Role::Label)
             .aria_label(format!("{name} · coming soon"))
             .w(px(ICON_BUTTON))
             .h(px(ICON_BUTTON))
@@ -549,10 +553,7 @@ fn tabs_header(labels: bool, cx: &mut Context<BrowserView>) -> Div {
 
 /// A square icon button the width of the favicon-only column.
 fn icon_button(id: &'static str, glyph: &'static str, name: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(name)
+    control(div().id(id), Role::Button, name)
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
         .flex()

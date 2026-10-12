@@ -128,11 +128,9 @@ impl BrowserView {
         if self.find.is_some() { 48. } else { 0. }
     }
 
-    pub(super) fn find_bar(&self, cx: &mut Context<Self>) -> Div {
-        let Some(bar) = &self.find else {
-            return div();
-        };
-        div()
+    pub(super) fn find_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let bar = self.find.as_ref()?;
+        let bar = div()
             .key_context("AtlasFind")
             .h(px(48.))
             .flex()
@@ -143,7 +141,11 @@ impl BrowserView {
                 this.dismiss_find(window);
                 cx.notify();
             }))
-            .child(div().w(px(280.)).child(Input::new(&bar.input)))
+            .child(
+                div()
+                    .w(px(280.))
+                    .child(Input::new(&bar.input).aria_label("Find in page")),
+            )
             .child(match bar.count {
                 Some(count) => format!("{count} matches"),
                 None => "Searching…".into(),
@@ -154,14 +156,19 @@ impl BrowserView {
             )
             .child(
                 button("find-next", "Next")
+                    .aria_keyshortcuts("Enter")
                     .on_click(cx.listener(|this, _, _, _| this.find_step(false))),
             )
             .child(
-                button("find-close", "Close").on_click(cx.listener(|this, _, window, cx| {
-                    this.dismiss_find(window);
-                    cx.notify();
-                })),
-            )
+                button("find-close", "Close")
+                    .aria_label("Close find")
+                    .aria_keyshortcuts("Escape")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dismiss_find(window);
+                        cx.notify();
+                    })),
+            );
+        Some(bar)
     }
 }
 

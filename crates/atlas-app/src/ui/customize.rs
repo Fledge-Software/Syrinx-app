@@ -6,17 +6,18 @@ use atlas_core::QuickDestinations;
 use atlas_ui::metrics::{radius, text};
 use atlas_ui::{ACCENT_PRESETS, Accent, Color, Palette, PaletteId, palette};
 use gpui::{
-    App, AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Stateful,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    App, AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Role,
+    Stateful, StatefulInteractiveElement, Styled, Subscription, Toggled, Window, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use super::BrowserView;
 use crate::appearance::{Appearance, accent_hex, parse_accent};
+use crate::controls::control;
 use crate::session::SessionCommand;
 use crate::theme::{self, rgba};
 
-/// The preset names, used as element ids until P1-36 adds accessible names.
+/// The preset names: element ids and the swatches' accessible names.
 const ACCENT_NAMES: [&str; 4] = ["Coral", "Blue", "Mint", "Gold"];
 const SWATCH_SIZE: f32 = 28.;
 
@@ -79,6 +80,8 @@ impl BrowserView {
     ) -> Stateful<Div> {
         div()
             .id("customize-panel")
+            .role(Role::Dialog)
+            .aria_label("Customize")
             .occlude()
             .absolute()
             .top(px(60.))
@@ -111,8 +114,7 @@ impl BrowserView {
                     .child("Customize"),
             )
             .child(
-                div()
-                    .id("customize-close")
+                control(div().id("customize-close"), Role::Button, "Close Customize")
                     .size(px(28.))
                     .rounded(px(7.))
                     .flex()
@@ -166,16 +168,21 @@ impl BrowserView {
         for (index, color) in ACCENT_PRESETS.into_iter().enumerate() {
             let selected = chosen.accent.fill() == color;
             swatches = swatches.child(
-                accent_swatch(ACCENT_NAMES[index], palette, color, selected).on_click(cx.listener(
-                    move |this, _, window, cx| {
-                        this.home.custom_accent = None;
-                        let appearance = Appearance {
-                            accent: Accent::new(color),
-                            ..this.home.appearance
-                        };
-                        this.choose_appearance(appearance, window, cx);
-                    },
-                )),
+                accent_swatch(
+                    ACCENT_NAMES[index],
+                    ACCENT_NAMES[index],
+                    palette,
+                    color,
+                    selected,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.home.custom_accent = None;
+                    let appearance = Appearance {
+                        accent: Accent::new(color),
+                        ..this.home.appearance
+                    };
+                    this.choose_appearance(appearance, window, cx);
+                })),
             );
         }
         swatches = swatches
@@ -204,8 +211,7 @@ impl BrowserView {
         let appearance = self.home.appearance;
         // A custom accent shows as a filled swatch; otherwise the dashed "+" invites one.
         let button = if appearance.uses_preset_accent() {
-            div()
-                .id("accent-custom")
+            control(div().id("accent-custom"), Role::Button, "Custom accent")
                 .size(px(SWATCH_SIZE))
                 .flex_none()
                 .rounded_full()
@@ -218,7 +224,13 @@ impl BrowserView {
                 .justify_center()
                 .child("+")
         } else {
-            accent_swatch("accent-custom", palette, appearance.accent.fill(), true)
+            accent_swatch(
+                "accent-custom",
+                "Custom accent",
+                palette,
+                appearance.accent.fill(),
+                true,
+            )
         };
         button
             .cursor_pointer()
@@ -274,27 +286,31 @@ impl BrowserView {
         } else {
             (palette.field, palette.icon_dim)
         };
-        let mut switch = div()
-            .id("reduce-transparency")
-            .w(px(36.))
-            .h(px(20.))
-            .flex_none()
-            .rounded(px(10.))
-            .border_1()
-            .border_color(rgba(palette.key))
-            .bg(rgba(track))
-            .p(px(2.))
-            .flex()
-            .items_center()
-            .cursor_pointer()
-            .child(div().size(px(14.)).rounded_full().bg(rgba(knob)))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                let appearance = Appearance {
-                    reduce_transparency: !on,
-                    ..this.home.appearance
-                };
-                this.choose_appearance(appearance, window, cx);
-            }));
+        let mut switch = control(
+            div().id("reduce-transparency"),
+            Role::Switch,
+            "Reduce transparency",
+        )
+        .aria_toggled(toggled(on))
+        .w(px(36.))
+        .h(px(20.))
+        .flex_none()
+        .rounded(px(10.))
+        .border_1()
+        .border_color(rgba(palette.key))
+        .bg(rgba(track))
+        .p(px(2.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .child(div().size(px(14.)).rounded_full().bg(rgba(knob)))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            let appearance = Appearance {
+                reduce_transparency: !on,
+                ..this.home.appearance
+            };
+            this.choose_appearance(appearance, window, cx);
+        }));
         if on {
             switch = switch.justify_end();
         }
@@ -353,8 +369,9 @@ fn palette_row(panel: &Palette, id: PaletteId, accent: Accent, selected: bool) -
     } else {
         (Color::rgba(0, 0, 0, 0.), panel.panel_divider)
     };
-    let mut row = div()
-        .id(id.id())
+    let mut row = control(div().id(id.id()), Role::RadioButton, id.name())
+        .aria_description(palette_description(id))
+        .aria_toggled(toggled(selected))
         .h(px(56.))
         .w_full()
         .flex_none()
@@ -435,14 +452,20 @@ fn palette_miniature(sample: &Palette) -> Div {
         )
 }
 
+/// A radio button's or switch's checked state for screen readers.
+fn toggled(on: bool) -> Toggled {
+    if on { Toggled::True } else { Toggled::False }
+}
+
 fn accent_swatch(
     id: impl Into<gpui::ElementId>,
+    name: &'static str,
     palette: &Palette,
     color: Color,
     selected: bool,
 ) -> Stateful<Div> {
-    let mut swatch = div()
-        .id(id)
+    let mut swatch = control(div().id(id), Role::RadioButton, name)
+        .aria_toggled(toggled(selected))
         .size(px(SWATCH_SIZE))
         .flex_none()
         .rounded_full()
@@ -460,7 +483,7 @@ fn custom_accent_field(custom: &CustomAccent, palette: &Palette) -> Div {
         .flex()
         .flex_col()
         .gap(px(4.))
-        .child(Input::new(&custom.input));
+        .child(Input::new(&custom.input).aria_label("Custom accent colour"));
     if let Some(error) = custom.error {
         field = field.child(
             div()

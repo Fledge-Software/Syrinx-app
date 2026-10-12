@@ -2,6 +2,7 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod appearance;
+mod controls;
 mod navigation;
 mod palette;
 mod palette_sample;
