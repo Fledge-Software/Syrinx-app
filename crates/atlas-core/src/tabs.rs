@@ -191,6 +191,8 @@ pub enum TabError {
     IdExhausted,
     SavedPageIdExhausted,
     SavedFolderIdExhausted,
+    /// Folder names may not be empty or only spaces (owner decision, 2026-10-12).
+    EmptyFolderTitle,
 }
 
 impl fmt::Display for TabError {
@@ -226,6 +228,7 @@ impl fmt::Display for TabError {
             Self::SavedFolderIdExhausted => {
                 formatter.write_str("no unused saved folder IDs remain")
             }
+            Self::EmptyFolderTitle => formatter.write_str("folder names cannot be empty"),
         }
     }
 }

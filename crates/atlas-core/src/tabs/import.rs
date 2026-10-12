@@ -1,7 +1,7 @@
 //! Appends a whole subtree of unloaded saved rows in one step, as bookmark import needs (P1-22).
 
 use super::{SavedEntryId, SavedFolder, SavedFolderId, SavedPage, SavedPlacement};
-use super::{TabError, TabMetadata, TabModel};
+use super::{TabError, TabMetadata, TabModel, folders::require_folder_title};
 
 /// One row of a saved subtree to add; folders hold their rows in visible order.
 #[derive(Clone, Eq, PartialEq)]
@@ -29,13 +29,15 @@ impl TabModel {
     /// Adds a top-level folder at the end of the saved rows, holding `items` as unloaded saved
     /// pages and nested folders in their given order. Nothing is opened.
     ///
-    /// Identities are checked for exhaustion first, so a failure leaves the model unchanged.
+    /// Folder names and identity exhaustion are checked first, so a failure leaves the model
+    /// unchanged.
     pub fn append_saved_folder(
         &mut self,
         title: String,
         items: Vec<NewSavedItem>,
     ) -> Result<AppendedSavedTree, TabError> {
-        let (folders, pages) = count_items(&items);
+        require_folder_title(&title)?;
+        let (folders, pages) = count_items(&items)?;
         self.reserve_identities(folders + 1, pages)?;
         let root = self.allocate_folder_id()?;
         self.push_folder(root, title, None);
@@ -110,22 +112,23 @@ impl TabModel {
     }
 }
 
-/// Counts nested folders and pages without recursion.
-fn count_items(items: &[NewSavedItem]) -> (usize, usize) {
+/// Counts nested folders and pages without recursion, refusing any unnamed folder.
+fn count_items(items: &[NewSavedItem]) -> Result<(usize, usize), TabError> {
     let (mut folders, mut pages) = (0, 0);
     let mut pending: Vec<&[NewSavedItem]> = vec![items];
     while let Some(rows) = pending.pop() {
         for item in rows {
             match item {
                 NewSavedItem::Page(_) => pages += 1,
-                NewSavedItem::Folder { items, .. } => {
+                NewSavedItem::Folder { title, items } => {
+                    require_folder_title(title)?;
                     folders += 1;
                     pending.push(items);
                 }
             }
         }
     }
-    (folders, pages)
+    Ok((folders, pages))
 }
 
 // Titles and addresses are the owner's data, so diagnostics show only the shape.

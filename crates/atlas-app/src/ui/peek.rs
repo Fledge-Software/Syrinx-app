@@ -352,6 +352,7 @@ impl BrowserView {
 
     /// Input subscriptions belong to their window, so a transient form cannot cross windows.
     fn close_peek_editor(&mut self) {
+        self.folder_editor = None;
         if self
             .home
             .editor

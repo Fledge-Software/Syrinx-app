@@ -3,9 +3,9 @@
 use std::collections::BTreeSet;
 
 use atlas_core::{
-    Activation, FolderRemoval, SavedEntryId, SavedFolderId, SavedFolderSnapshot, SavedPageId,
-    SavedPlacement, SidebarRow, SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata,
-    TabModel, TabModelSnapshot,
+    Activation, FolderRemoval, NewSavedItem, SavedEntryId, SavedFolderId, SavedFolderSnapshot,
+    SavedPageId, SavedPlacement, SidebarRow, SnapshotError, Tab, TabError, TabId, TabKind,
+    TabMetadata, TabModel, TabModelSnapshot,
 };
 
 fn metadata(number: usize) -> TabMetadata {
@@ -338,7 +338,7 @@ fn reordering_uses_final_positions_and_rejects_bad_destinations() -> Result<(), 
         Err(TabError::UnknownSavedFolder(stale_folder))
     );
     assert_eq!(
-        model.rename_folder(stale_folder, String::new()),
+        model.rename_folder(stale_folder, "Synthetic stale".to_owned()),
         Err(TabError::UnknownSavedFolder(stale_folder))
     );
     assert_eq!(
@@ -656,5 +656,53 @@ fn long_folder_operation_sequences_preserve_tree_invariants() -> Result<(), TabE
         }
     }
     assert!(issued_folders.len() > 20);
+    Ok(())
+}
+
+#[test]
+fn empty_or_blank_folder_names_are_refused_without_change() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let named = folder(&mut model, "named", None);
+    let before = model.snapshot();
+    for blank in ["", " ", "\t\n", "\u{3000}"] {
+        assert_eq!(
+            model.create_folder(blank.to_owned(), None),
+            Err(TabError::EmptyFolderTitle),
+            "{blank:?}"
+        );
+        assert_eq!(
+            model.rename_folder(named, blank.to_owned()),
+            Err(TabError::EmptyFolderTitle),
+            "{blank:?}"
+        );
+    }
+    // A whole subtree is refused when any folder inside it is unnamed.
+    let nested_blank = vec![NewSavedItem::Folder {
+        title: "Synthetic outer".to_owned(),
+        items: vec![NewSavedItem::Folder {
+            title: " ".to_owned(),
+            items: vec![NewSavedItem::Page(metadata(1))],
+        }],
+    }];
+    assert_eq!(
+        model.append_saved_folder("Synthetic import".to_owned(), nested_blank),
+        Err(TabError::EmptyFolderTitle)
+    );
+    assert_eq!(
+        model.append_saved_folder(String::new(), Vec::new()),
+        Err(TabError::EmptyFolderTitle)
+    );
+    assert_eq!(model.snapshot(), before);
+    assert_eq!(
+        TabError::EmptyFolderTitle.to_string(),
+        "folder names cannot be empty"
+    );
+
+    // Surrounding spaces are allowed and kept; only an all-blank name is refused.
+    model.rename_folder(named, " Synthetic spaced ".to_owned())?;
+    assert_eq!(
+        model.get_folder(named).map(|folder| folder.title()),
+        Some(" Synthetic spaced ")
+    );
     Ok(())
 }

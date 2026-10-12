@@ -267,13 +267,6 @@ impl BrowserView {
         true
     }
 
-    /// Folder open state is not saved, so restored folders start collapsed; a large import
-    /// expanded at start-up would build every one of its rows.
-    pub(super) fn collapse_restored_folders(&mut self, model: &TabModelSnapshot) {
-        self.collapsed_folders
-            .extend(model.saved_folders.iter().map(|folder| folder.id));
-    }
-
     /// Closes an open preview without importing, as when Atlas closes.
     pub(super) fn close_import_preview(&mut self, cx: &mut Context<Self>) {
         let Stage::Previewing(handle) = std::mem::take(&mut self.importer.stage) else {

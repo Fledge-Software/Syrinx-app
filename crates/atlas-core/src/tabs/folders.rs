@@ -80,6 +80,14 @@ pub struct RemovedSavedEntries {
     pub pages: Vec<SavedPage>,
 }
 
+/// Refuses a folder name that is empty or only whitespace; the title is otherwise kept as given.
+pub(super) fn require_folder_title(title: &str) -> Result<(), TabError> {
+    if title.trim().is_empty() {
+        return Err(TabError::EmptyFolderTitle);
+    }
+    Ok(())
+}
+
 impl TabModel {
     /// Folders in visible depth-first order.
     pub fn saved_folders(&self) -> &[SavedFolder] {
@@ -120,6 +128,7 @@ impl TabModel {
         parent: Option<SavedFolderId>,
     ) -> Result<SavedFolderId, TabError> {
         // Validate and allocate before changing the tree so failures leave it untouched.
+        require_folder_title(&title)?;
         self.require_folder(parent)?;
         let id = self.allocate_folder_id()?;
         let position = self.append_position(parent)?;
@@ -136,6 +145,7 @@ impl TabModel {
     }
 
     pub fn rename_folder(&mut self, id: SavedFolderId, title: String) -> Result<(), TabError> {
+        require_folder_title(&title)?;
         let folder = self
             .folders
             .iter_mut()

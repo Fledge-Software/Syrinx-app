@@ -5,6 +5,8 @@ mod customize;
 mod essentials;
 mod favorites;
 mod find;
+mod folder_editor;
+mod folder_expansion;
 mod fullscreen;
 mod history_list;
 mod history_repair;
@@ -23,6 +25,7 @@ mod popups;
 mod process_recovery;
 mod recovery;
 mod runtime_notice;
+mod saved_moves;
 mod security;
 mod sidebar_rows;
 mod sidebar_view;
@@ -36,7 +39,7 @@ mod shutdown_tests;
 
 use std::{
     cell::RefCell,
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     num::NonZeroU64,
     path::PathBuf,
     rc::Rc,
@@ -139,6 +142,7 @@ pub fn bind_keys(cx: &mut App) {
     import::bind_keys(cx);
     essentials::bind_zoom_keys(cx);
     find::bind_keys(cx);
+    folder_editor::bind_keys(cx);
 }
 
 fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
@@ -240,6 +244,9 @@ pub struct BrowserView {
     bounds: Option<PageBounds>,
     sidebar_sizing: SidebarSizing,
     collapsed_folders: HashSet<SavedFolderId>,
+    /// The expanded folders as last stored in settings (P1-21).
+    expanded_saved: BTreeSet<SavedFolderId>,
+    folder_editor: Option<folder_editor::FolderEditor>,
     sidebar_edge_focus: FocusHandle,
     /// Ends a sidebar drag when the window deactivates; dropping it unsubscribes.
     _drag_activation_watch: Subscription,
@@ -309,6 +316,8 @@ impl BrowserView {
             bounds: None,
             sidebar_sizing: SidebarSizing::default(),
             collapsed_folders: HashSet::new(),
+            expanded_saved: BTreeSet::new(),
+            folder_editor: None,
             sidebar_edge_focus: cx.focus_handle(),
             _drag_activation_watch: cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
@@ -458,6 +467,7 @@ impl BrowserView {
                 destinations,
             } => {
                 self.runtime_settings_loaded(&settings);
+                self.restore_folder_expansion(&settings);
                 self.restore_preferences(&settings, destinations, window, cx);
             }
             SessionEvent::Destinations(destinations) => self.destinations_changed(destinations),
@@ -490,6 +500,8 @@ impl BrowserView {
                     self.clear_data.close();
                 }
                 self.model = snapshot.model;
+                self.save_folder_expansion();
+                self.follow_folder_editor();
                 self.crashes.retain(&self.model);
                 self.zoom_levels
                     .retain(|id, _| self.model.tabs.iter().any(|tab| tab.id.get() == *id));
