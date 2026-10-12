@@ -10,5 +10,9 @@ publish.workspace = true
 atlas-core = { path = "../atlas-core" }
 frizbee.workspace = true
 
+[features]
+# Opt-in timing diagnostics over the 100,000-row acceptance workload; see docs/p1-05-search.md.
+acceptance-diagnostics = []
+
 [lints]
 workspace = true

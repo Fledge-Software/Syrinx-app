@@ -2293,7 +2293,7 @@ is claimed for this new source. Root execution commands are:
 
 ```powershell
 cargo test -p xtask --profile local --offline --locked benchmark::tests -- --test-threads=1
-cargo test -p atlas-search --profile local --offline --locked catalogue::acceptance_comparison::unicode_selected_unchanged_acceptance_workload_comparison -- --nocapture --test-threads=1
+cargo test -p atlas-search --profile local --offline --locked --features acceptance-diagnostics catalogue::acceptance_comparison::unicode_selected_unchanged_acceptance_workload_comparison -- --nocapture --test-threads=1
 ```
 
 Independent source review passed the extraction and complete comparison. Scoped
@@ -2478,3 +2478,57 @@ report path each time and no competing builds. Stop if baseline results differ
 materially from the historical 10/26. Retain every p95, maximum and failed report.
 P1-05 remains partial; D48 is unchanged. The diagnostic gains justify quiet
 remeasurement, not a budget change or a claim that the design cannot meet it.
+
+### Review corrections: diagnostics out of the gate — 2026-10-12
+
+Review found three problems with the partition change, and this section records
+how each was corrected.
+
+**The timing diagnostics ran in every gate.** `acceptance_comparison.rs` held
+three ordinary tests: `partitioned_unchanged_acceptance_workload_comparison`,
+`complete_workload_stage_profile` and the earlier
+`unicode_selected_unchanged_acceptance_workload_comparison`. Each builds the
+100,000-row workload and runs over a thousand complete queries, so every
+`cargo xtask check` paid for more than 2,000 queries and printed timings taken
+on a busy machine, which mean nothing. The module now compiles only with the
+new opt-in `acceptance-diagnostics` feature of `atlas-search`. The gate builds
+default features, so it no longer runs them. `#[ignore]` was rejected because
+the repository forbids it; moving them into `cargo xtask bench` was rejected
+because they compare test-only strategies through private catalogue functions
+that a separate binary cannot reach. Their correctness assertions remain in
+the gate on small data: the existing partition regressions compare the serial,
+partitioned and exhaustive paths, the membership-order tests cover that
+strategy, and the new
+`public_partitioned_query_matches_exhaustive_for_acceptance_shapes` runs the
+acceptance query shapes through the public `query` at the 16,384-row
+threshold against the exhaustive oracle. Run a diagnostic explicitly with:
+
+```powershell
+cargo test -p atlas-search --profile local --offline --locked --features acceptance-diagnostics catalogue::acceptance_comparison::partitioned_unchanged_acceptance_workload_comparison -- --nocapture --test-threads=1
+cargo test -p atlas-search --profile local --offline --locked --features acceptance-diagnostics catalogue::acceptance_comparison::complete_workload_stage_profile -- --nocapture --test-threads=1
+```
+
+Because the gate's Clippy step does not enable the feature, check the module
+with `cargo clippy -p atlas-search --all-targets --features
+acceptance-diagnostics --profile local --offline --locked -- -D warnings` after
+changing it. That check passed for this correction.
+
+**A refused worker thread was silently discarded.** When the operating system
+refused to start a partition worker, the code searched that partition on the
+caller, which keeps results complete, but it dropped the `io::Error`. The
+fallback stays, and the refusal is now counted: `Catalogue::worker_fallbacks()`
+returns a `WorkerFallbacks` value with the number of refused workers and the
+last error kind. The new regression
+`refused_workers_fall_back_to_complete_results_and_are_recorded` uses a
+test-only strategy whose workers are always refused, checks exhaustive parity
+and checks that three refusals are recorded for nineteen rows.
+
+**The quiet-machine result needs the machine's shape.** Each partitioned query
+starts three native threads beside the caller, so its timing depends on how
+many logical processors are free. The quiet-machine acceptance record must
+state the logical processor count, for example from
+`$env:NUMBER_OF_PROCESSORS`, beside the three baseline and three candidate
+reports. An optional seventh run with Atlas open and a few ordinary pages
+loaded shows how the four partitions behave when other work competes for
+cores. Record it as a separate under-load result; it does not replace the
+quiet acceptance runs, and D48 is judged on the quiet ones.

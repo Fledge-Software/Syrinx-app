@@ -1,12 +1,44 @@
 //! Splits exact counting and bounded ranking over disjoint borrowed catalogue rows.
 
-use std::{ops::Range, thread};
+use std::{io, ops::Range, thread};
 
 use super::*;
 use crate::score_cache::SharedScores;
 
 const PARTITIONS: usize = 4;
 pub(super) const MIN_ROWS: usize = 16_384;
+
+/// How partition workers start; tests can make the operating system refuse them.
+#[derive(Clone, Copy)]
+pub(super) enum WorkerStart {
+    Native,
+    #[cfg(test)]
+    Refused,
+}
+
+impl WorkerStart {
+    fn spawn<'scope, T: Send + 'scope>(
+        self,
+        workers: &'scope thread::Scope<'scope, '_>,
+        work: impl FnOnce() -> T + Send + 'scope,
+    ) -> io::Result<thread::ScopedJoinHandle<'scope, T>> {
+        match self {
+            Self::Native => thread::Builder::new().spawn_scoped(workers, work),
+            #[cfg(test)]
+            Self::Refused => Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "synthetic worker refusal",
+            )),
+        }
+    }
+}
+
+/// Exact counts and local finalists, plus every worker the operating system refused.
+pub(super) struct PartitionOutcome {
+    pub(super) counts: ScopeCounts,
+    pub(super) finalists: Vec<Ranked>,
+    pub(super) refused: Vec<io::ErrorKind>,
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct Rows<'a> {
@@ -167,26 +199,33 @@ impl<'a> Rows<'a> {
         scope: Scope,
         now: i64,
         policy: SearchPolicy,
-    ) -> Result<(ScopeCounts, Vec<Ranked>), SearchError> {
+        start: WorkerStart,
+    ) -> Result<PartitionOutcome, SearchError> {
         if self.entries.is_empty() {
-            return Ok((ScopeCounts::default(), Vec::new()));
+            return Ok(PartitionOutcome {
+                counts: ScopeCounts::default(),
+                finalists: Vec::new(),
+                refused: Vec::new(),
+            });
         }
         thread::scope(|workers| {
             let shared = QueryScoreCache::shared_groups(text, self.groups.slots());
             let width = self.entries.len().div_ceil(PARTITIONS);
             let mut pending = Vec::new();
             let mut completed = Vec::new();
-            for start in (width..self.entries.len()).step_by(width) {
-                let range = start..(start + width).min(self.entries.len());
+            let mut refused = Vec::new();
+            for first in (width..self.entries.len()).step_by(width) {
+                let range = first..(first + width).min(self.entries.len());
                 let worker_range = range.clone();
                 let worker_scores = shared.clone();
-                let worker = thread::Builder::new().spawn_scoped(workers, move || {
+                let worker = start.spawn(workers, move || {
                     self.search(worker_range, text, scope, now, policy, worker_scores)
                 });
                 match worker {
                     Ok(worker) => pending.push(worker),
                     // Resource exhaustion degrades to serial work without losing any rows.
-                    Err(_) => {
+                    Err(error) => {
+                        refused.push(error.kind());
                         completed.push(self.search(range, text, scope, now, policy, shared.clone()))
                     }
                 }
@@ -217,7 +256,11 @@ impl<'a> Rows<'a> {
                 counts.commands += partition_counts.commands;
                 finalists.extend(ranked);
             }
-            Ok((counts, finalists))
+            Ok(PartitionOutcome {
+                counts,
+                finalists,
+                refused,
+            })
         })
     }
 }
