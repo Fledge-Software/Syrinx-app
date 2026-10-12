@@ -180,4 +180,39 @@ mod tests {
             Some((id, "about:blank".to_owned()))
         );
     }
+
+    fn open_web(model: &mut TabModel, address: &str) -> TabId {
+        model
+            .open(
+                TabKind::Web,
+                TabMetadata {
+                    address: address.to_owned(),
+                    ..TabMetadata::default()
+                },
+                Activation::Foreground,
+            )
+            .expect("open synthetic web tab")
+    }
+
+    #[test]
+    fn restored_session_requests_only_the_active_page() {
+        // A restored model has a background tab and an unloaded saved row; neither loads.
+        let mut model = TabModel::new();
+        let saved = open_web(&mut model, FIRST);
+        model.save_page(saved).expect("save synthetic page");
+        model.close(saved).expect("unload synthetic saved page");
+        let background = open_web(&mut model, FIRST);
+        let active = open_web(&mut model, LATEST);
+        let restored = TabModel::from_snapshot(model.snapshot())
+            .expect("restore synthetic snapshot")
+            .snapshot();
+        let mut intents = NavigationIntents::default();
+        assert_eq!(
+            intents.desired_page(&restored, true, false),
+            Some((active, LATEST.to_owned()))
+        );
+        assert!(restored.tabs.iter().any(|tab| tab.id == background));
+        assert_eq!(restored.saved_pages.len(), 1);
+        assert!(restored.tabs.iter().all(|tab| tab.saved_page_id.is_none()));
+    }
 }
