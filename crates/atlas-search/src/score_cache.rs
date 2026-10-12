@@ -1,6 +1,9 @@
 //! Reuses equivalent field scores within one query while retaining each original field for display.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
 
 use frizbee::Matcher;
 
@@ -14,10 +17,13 @@ const MAX_ENTRIES: usize = 512;
 // Key payload is bounded separately from the map's at-most-512 entry overhead.
 const MAX_KEY_BYTES: usize = 256 * 1_024;
 
+pub(crate) type SharedScores = Arc<[OnceLock<Option<u16>>]>;
+
 pub(crate) struct QueryScoreCache {
     digits: Option<[u8; 10]>,
     scores: HashMap<Vec<u8>, Option<u16>>,
     group_scores: Option<Vec<Option<Option<u16>>>>,
+    shared: Option<SharedScores>,
     key_bytes: usize,
     computed: usize,
     reused: usize,
@@ -30,6 +36,7 @@ impl QueryScoreCache {
             digits: digit_classes(query),
             scores: HashMap::new(),
             group_scores: None,
+            shared: None,
             key_bytes: 0,
             computed: 0,
             reused: 0,
@@ -39,9 +46,30 @@ impl QueryScoreCache {
     /// Group IDs and the matcher's configuration stay unchanged until this query finishes.
     pub(crate) fn with_groups(query: &str, slots: usize) -> Self {
         let mut cache = Self::new(query);
-        if !query.is_empty() && query_safe(query) {
+        if can_reuse_groups(query) {
             cache.group_scores = Some(vec![None; slots]);
         }
+        cache
+    }
+
+    /// Partitions share only digit-free equivalence groups, during this one immutable query.
+    /// All participants keep the same query, matcher configuration and live group IDs.
+    pub(crate) fn shared_groups(query: &str, slots: usize) -> Option<SharedScores> {
+        can_reuse_groups(query).then(|| {
+            (0..slots)
+                .map(|_| OnceLock::new())
+                .collect::<Vec<_>>()
+                .into()
+        })
+    }
+
+    pub(crate) fn with_shared_groups(
+        query: &str,
+        slots: usize,
+        shared: Option<SharedScores>,
+    ) -> Self {
+        let mut cache = Self::with_groups(query, slots);
+        cache.shared = shared;
         cache
     }
 
@@ -59,6 +87,21 @@ impl QueryScoreCache {
         let cached = scores.get(slot).ok_or(SearchError::InconsistentMatch)?;
         if original.len() > MAX_FIELD_BYTES {
             return Err(SearchError::InconsistentMatch);
+        }
+        if let Some(shared) = &self.shared {
+            let shared = shared.get(slot).ok_or(SearchError::InconsistentMatch)?;
+            let mut computed = false;
+            // OnceLock permits one original representative to score while equivalent rows wait.
+            let score = *shared.get_or_init(|| {
+                computed = true;
+                Self::match_original(matcher, original)
+            });
+            if computed {
+                self.computed += 1;
+            } else {
+                self.reused += 1;
+            }
+            return Ok(score);
         }
         if let Some(score) = cached {
             self.reused += 1;
@@ -124,8 +167,16 @@ impl QueryScoreCache {
 
     fn compute(&mut self, matcher: &mut Matcher, original: &str) -> Option<u16> {
         self.computed += 1;
+        Self::match_original(matcher, original)
+    }
+
+    fn match_original(matcher: &mut Matcher, original: &str) -> Option<u16> {
         matcher.match_one(original, 0).map(|found| found.score)
     }
+}
+
+fn can_reuse_groups(query: &str) -> bool {
+    !query.is_empty() && query_safe(query)
 }
 
 fn digit_classes(query: &str) -> Option<[u8; 10]> {
@@ -142,6 +193,9 @@ fn digit_classes(query: &str) -> Option<[u8; 10]> {
         }
     }))
 }
+
+#[cfg(test)]
+mod shared_tests;
 
 #[cfg(test)]
 mod tests {

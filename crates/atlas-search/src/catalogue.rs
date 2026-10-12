@@ -19,6 +19,7 @@ use crate::{
 };
 
 mod membership;
+mod partition;
 use membership::GroupedMembership;
 mod highlight_cache;
 use highlight_cache::HighlightCache;
@@ -35,6 +36,7 @@ mod range_index;
 #[derive(Clone, Copy)]
 enum QueryStrategy {
     Bounded,
+    Partitioned,
     Filtered,
     #[cfg(test)]
     Exhaustive,
@@ -287,10 +289,12 @@ impl Catalogue {
         now: i64,
         policy: SearchPolicy,
     ) -> Result<SearchResults, SearchError> {
-        let strategy = if policy.max_typos <= 1 {
-            QueryStrategy::Bounded
-        } else {
+        let strategy = if policy.max_typos > 1 {
             QueryStrategy::Filtered
+        } else if self.len() >= partition::MIN_ROWS {
+            QueryStrategy::Partitioned
+        } else {
+            QueryStrategy::Bounded
         };
         self.query_with_strategy(text, scope, now, policy, strategy, &mut Unobserved)
     }
@@ -342,6 +346,12 @@ impl Catalogue {
         } else {
             match strategy {
                 QueryStrategy::Bounded => self.rank_bounded(text, scope, now, policy, observer)?,
+                QueryStrategy::Partitioned => {
+                    let (counts, ranked) =
+                        partition::Rows::new(self).search_partitions(text, scope, now, policy)?;
+                    self.ranked.extend(ranked);
+                    counts
+                }
                 QueryStrategy::Filtered => self.rank_matches(text, scope, now, policy, true)?,
                 #[cfg(test)]
                 QueryStrategy::Exhaustive => self.rank_matches(text, scope, now, policy, false)?,
@@ -462,34 +472,21 @@ impl Catalogue {
 
     fn rank_from_candidates<Observer: QueryObserver>(
         &mut self,
-        mut ranking: CandidateRanking,
+        ranking: CandidateRanking,
         now: i64,
         policy: SearchPolicy,
         observer: &mut Observer,
     ) -> Result<ScopeCounts, SearchError> {
-        observer.candidates(ranking.candidates.len() + ranking.direct_count);
-        observer.stage_finished(QueryStage::MembershipAndCandidates);
-        let mut pending = BinaryHeap::from(ranking.candidates);
-
-        // Heap construction is linear; stop only when every remaining bound loses to the cutoff.
-        while let Some(Reverse(candidate)) = pending.pop() {
-            if ranking.selected.len() == policy.limit
-                && ranking
-                    .selected
-                    .peek()
-                    .is_some_and(|worst| Ranked::compare(&candidate, worst) != Ordering::Less)
-            {
-                break;
-            }
-            let ranked =
-                self.score_candidate(candidate.index, now, policy.boosts, &mut ranking.scores)?;
-            observer.candidate_scored();
-            retain_best(&mut ranking.selected, ranked, policy.limit);
-        }
-        let (computed, reused) = ranking.scores.stats();
-        observer.field_scores(computed, reused);
-        self.ranked.extend(ranking.selected);
-        Ok(ranking.counts)
+        let rows = partition::Rows::from_parts(
+            &self.entries,
+            &self.field_masks,
+            &self.digit_counts,
+            &self.field_groups,
+            &self.groups,
+        );
+        let (counts, ranked) = rows.select(ranking, &mut self.matcher, now, policy, observer)?;
+        self.ranked.extend(ranked);
+        Ok(counts)
     }
 
     fn bound_candidates(
@@ -499,35 +496,10 @@ impl Catalogue {
         now: i64,
         policy: SearchPolicy,
     ) -> Result<(ScopeCounts, Vec<Reverse<Ranked>>), SearchError> {
-        let mut membership = GroupedMembership::new(text, policy.max_typos, &self.groups);
-        let bound = QueryBound::new(text);
-        let mut counts = ScopeCounts::default();
-        let mut candidates = Vec::new();
-
-        // Count the title/address union in every scope, including rows outside the display limit.
-        for (index, (entry, masks)) in self.entries.iter().zip(&self.field_masks).enumerate() {
-            if !membership.entry_matches_counted(
-                entry,
-                masks,
-                self.field_groups[index],
-                &self.digit_counts[index],
-            )? {
-                continue;
-            }
-            counts.include(entry.target);
-            if policy.limit > 0 && scope.includes(entry.target) {
-                candidates.push(Reverse(Ranked::new(
-                    index,
-                    entry,
-                    masks.score_upper_bound(entry, &bound),
-                    now,
-                    policy.boosts,
-                )));
-            }
-        }
-        Ok((counts, candidates))
+        partition::Rows::new(self).bound_candidates(0..self.len(), text, scope, now, policy)
     }
 
+    #[cfg(test)]
     fn score_candidate(
         &mut self,
         index: usize,
@@ -535,16 +507,14 @@ impl Catalogue {
         weights: BoostWeights,
         scores: &mut QueryScoreCache,
     ) -> Result<Ranked, SearchError> {
-        let entry = self
-            .entries
-            .get(index)
-            .ok_or(SearchError::InvalidMatchIndex)?;
-        let groups = self
-            .field_groups
-            .get(index)
-            .ok_or(SearchError::InvalidMatchIndex)?;
-        let base = score_fields(entry, *groups, &mut self.matcher, scores)?;
-        Ok(Ranked::new(index, entry, base, now, weights))
+        partition::Rows::from_parts(
+            &self.entries,
+            &self.field_masks,
+            &self.digit_counts,
+            &self.field_groups,
+            &self.groups,
+        )
+        .score_candidate(index, &mut self.matcher, now, weights, scores)
     }
 
     fn build_hits<Observer: QueryObserver>(
