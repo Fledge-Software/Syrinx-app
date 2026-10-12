@@ -2,6 +2,7 @@
 
 mod essentials;
 mod find;
+mod fullscreen;
 mod home_palette;
 mod navigation_intents;
 mod navigation_status;
@@ -10,6 +11,7 @@ mod permissions;
 mod popups;
 mod recovery;
 mod security;
+mod suspended_fixture;
 
 #[cfg(test)]
 mod shutdown_tests;
@@ -68,7 +70,8 @@ actions!(
         SavePage,
         Back,
         Forward,
-        Reload
+        Reload,
+        Fullscreen
     ]
 );
 
@@ -85,6 +88,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-left", Back, None),
         KeyBinding::new("alt-right", Forward, None),
         KeyBinding::new("ctrl-r", Reload, None),
+        KeyBinding::new("f11", Fullscreen, None),
     ]);
     crate::palette::bind_keys(cx);
     essentials::bind_keys(cx);
@@ -97,6 +101,8 @@ struct PalettePopup {
 }
 
 pub struct BrowserView {
+    fullscreen: Option<(u64, bool)>,
+    suspended_fixture: suspended_fixture::SuspendedFixture,
     connections: std::collections::HashMap<u64, atlas_platform::browser::ConnectionState>,
     find: Option<find::FindBar>,
     find_sequence: u64,
@@ -136,11 +142,14 @@ impl BrowserView {
     pub fn new(
         data_dir: PathBuf,
         smoke: bool,
+        suspended_tabs: usize,
         outcome: Arc<AtomicU8>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut view = Self {
+            fullscreen: None,
+            suspended_fixture: suspended_fixture::SuspendedFixture::new(suspended_tabs),
             connections: std::collections::HashMap::new(),
             find: None,
             find_sequence: 0,
@@ -308,6 +317,10 @@ impl BrowserView {
                     self.commit_popup(request, target);
                 }
                 self.sync_pages();
+                self.restore_fullscreen_if_hidden(window);
+                if initial {
+                    self.seed_suspended_fixture();
+                }
                 // Only committed model changes invalidate an open palette's catalogue snapshot.
                 if changed
                     && !self.closing
@@ -321,7 +334,7 @@ impl BrowserView {
                         address: "about:blank".to_owned(),
                     });
                 }
-                if new_home && !self.closing && !self.smoke {
+                if new_home && !self.closing && !self.smoke && !self.suspended_fixture.enabled() {
                     self.open_palette(false, window, cx);
                 }
             }
@@ -378,6 +391,9 @@ impl BrowserView {
     }
 
     fn browser_event(&mut self, event: BrowserEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(event) = event.into_current() else {
+            return;
+        };
         if let Some(message) = self.navigation_status.observe(
             &event,
             &self.model,
@@ -388,6 +404,11 @@ impl BrowserView {
             self.message = message.to_owned();
         }
         match event {
+            BrowserEvent::Callback { .. } => unreachable!("callback envelopes are unwrapped once"),
+            BrowserEvent::Fullscreen { id, active } => self.page_fullscreen(id, active, window),
+            BrowserEvent::Suspended { id, suspended } => {
+                self.suspended_fixture.observe(id, suspended)
+            }
             BrowserEvent::Connection { id, state } => self.observe_connection(id, state),
             BrowserEvent::ZoomChanged { id, factor } => {
                 self.zoom_levels.insert(id, factor);
@@ -574,6 +595,9 @@ impl BrowserView {
         }
         self.popup_pages
             .retain(|id| self.model.tabs.iter().any(|tab| tab.id == *id));
+        if self.sync_suspended_fixture() {
+            return;
+        }
         let desired = self
             .navigation_intents
             .desired_page(&self.model, self.browser_ready, self.smoke)
@@ -659,6 +683,7 @@ impl BrowserView {
             return;
         }
         match shortcut {
+            BrowserShortcut::Fullscreen => self.fullscreen_shortcut(window),
             BrowserShortcut::Find => self.open_find(window, cx),
             BrowserShortcut::Downloads
             | BrowserShortcut::Print
@@ -994,19 +1019,29 @@ impl BrowserView {
     fn resize_pages(&mut self, window: &Window) {
         let viewport = window.viewport_size();
         let scale = window.scale_factor();
-        let bounds = (
-            ((SIDEBAR_WIDTH + 8.) * scale) as i32,
-            ((TOOLBAR_HEIGHT + self.permission_height() + self.find_height() + 8.) * scale) as i32,
-            ((f32::from(viewport.width) - SIDEBAR_WIDTH - 16.).max(1.) * scale) as u32,
-            ((f32::from(viewport.height)
-                - TOOLBAR_HEIGHT
-                - self.permission_height()
-                - self.find_height()
-                - FOOTER_HEIGHT
-                - 16.)
-                .max(1.)
-                * scale) as u32,
-        );
+        let bounds = if self.fullscreen.is_some() {
+            (
+                0,
+                0,
+                (f32::from(viewport.width) * scale) as u32,
+                (f32::from(viewport.height) * scale) as u32,
+            )
+        } else {
+            (
+                ((SIDEBAR_WIDTH + 8.) * scale) as i32,
+                ((TOOLBAR_HEIGHT + self.permission_height() + self.find_height() + 8.) * scale)
+                    as i32,
+                ((f32::from(viewport.width) - SIDEBAR_WIDTH - 16.).max(1.) * scale) as u32,
+                ((f32::from(viewport.height)
+                    - TOOLBAR_HEIGHT
+                    - self.permission_height()
+                    - self.find_height()
+                    - FOOTER_HEIGHT
+                    - 16.)
+                    .max(1.)
+                    * scale) as u32,
+            )
+        };
         if self.bounds != Some(bounds)
             && self.page_command(BrowserCommand::Resize(PageBounds {
                 x: bounds.0,
@@ -1255,6 +1290,15 @@ impl Render for BrowserView {
         if self.browser_ready && !self.closing {
             self.resize_pages(window);
         }
+        if self.fullscreen.is_some() {
+            return div()
+                .size_full()
+                .track_focus(&self.focus)
+                .on_action(cx.listener(|this, _: &Fullscreen, window, cx| {
+                    this.fullscreen_shortcut(window);
+                    cx.notify();
+                }));
+        }
         let mut page = div().flex_1().h_full();
         if self.shown.is_none() {
             page = page
@@ -1275,6 +1319,10 @@ impl Render for BrowserView {
                 ));
         }
         let chrome = div()
+            .on_action(cx.listener(|this, _: &Fullscreen, window, cx| {
+                this.fullscreen_shortcut(window);
+                cx.notify();
+            }))
             .size_full()
             .text_color(rgb(0xecedf0))
             .text_sm()

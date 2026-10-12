@@ -3,7 +3,9 @@
 mod environment;
 mod essentials;
 pub use essentials::PageAction;
+mod lifecycle;
 mod page;
+pub use lifecycle::CallbackTicket;
 mod permissions;
 mod popups;
 mod security;
@@ -47,6 +49,7 @@ pub struct PageBounds {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserShortcut {
+    Fullscreen,
     Find,
     Downloads,
     Print,
@@ -68,6 +71,9 @@ pub enum BrowserShortcut {
 }
 
 pub enum BrowserCommand {
+    ExitFullscreen {
+        id: u64,
+    },
     PageAction {
         id: u64,
         action: PageAction,
@@ -119,6 +125,19 @@ impl fmt::Debug for BrowserCommand {
 }
 
 pub enum BrowserEvent {
+    /// Unwrap with into_current before handling a native callback.
+    Callback {
+        ticket: CallbackTicket,
+        event: Box<BrowserEvent>,
+    },
+    Fullscreen {
+        id: u64,
+        active: bool,
+    },
+    Suspended {
+        id: u64,
+        suspended: bool,
+    },
     Connection {
         id: u64,
         state: ConnectionState,
@@ -241,6 +260,7 @@ pub enum BrowserError {
     Settings,
     EventRegistration,
     Navigation,
+    Suspension,
     Visibility,
     Bounds,
     Focus,
@@ -285,7 +305,7 @@ impl BrowserHost {
             .spawn(move || {
                 let completion = HostCompletion {
                     stopped: worker_stopped,
-                    events: EventSink(events),
+                    events: EventSink(events, None),
                 };
                 let mut message = MSG::default();
                 // The return only says whether a message existed; either result creates the queue.
@@ -352,10 +372,55 @@ impl Drop for BrowserHost {
 }
 
 #[derive(Clone)]
-struct EventSink(UnboundedSender<BrowserEvent>);
+struct EventSink(
+    UnboundedSender<BrowserEvent>,
+    Option<lifecycle::CallbackLife>,
+);
+
+impl BrowserEvent {
+    pub fn into_current(self) -> Option<Self> {
+        match self {
+            Self::Callback { ticket, event } => ticket.current().then_some(*event),
+            event => Some(event),
+        }
+    }
+}
 
 impl EventSink {
+    fn for_page(&self, life: lifecycle::CallbackLife) -> Self {
+        Self(self.0.clone(), Some(life))
+    }
+    fn accepts_callbacks(&self) -> bool {
+        self.1
+            .as_ref()
+            .is_none_or(|life| life.ticket(false).current())
+    }
+    fn prepare(&self, event: BrowserEvent) -> Option<BrowserEvent> {
+        let event = if let Some(life) = &self.1 {
+            let lifetime_only = matches!(
+                event,
+                BrowserEvent::ProcessFailed { .. }
+                    | BrowserEvent::Suspended { .. }
+                    | BrowserEvent::PermissionFinished { .. }
+                    | BrowserEvent::Error { .. }
+            );
+            let ticket = life.ticket(lifetime_only);
+            if !ticket.current() {
+                return None;
+            }
+            BrowserEvent::Callback {
+                ticket,
+                event: Box::new(event),
+            }
+        } else {
+            event
+        };
+        Some(event)
+    }
     fn emit(&self, event: BrowserEvent) {
+        let Some(event) = self.prepare(event) else {
+            return;
+        };
         if self.0.unbounded_send(event).is_err() {
             // The owner UI is gone; terminate this thread instead of keeping its pages alive.
             unsafe { PostQuitMessage(0) };
@@ -378,14 +443,17 @@ impl Drop for HostCompletion {
 
 #[derive(Clone)]
 struct ShortcutSink {
-    send: Sender<BrowserShortcut>,
+    send: Sender<BrowserEvent>,
     thread_id: u32,
 }
 
 impl ShortcutSink {
-    fn post(&self, shortcut: BrowserShortcut) -> Result<(), BrowserError> {
+    fn post(&self, shortcut: BrowserShortcut, events: EventSink) -> Result<(), BrowserError> {
+        let Some(event) = events.prepare(BrowserEvent::Shortcut(shortcut)) else {
+            return Ok(());
+        };
         self.send
-            .send(shortcut)
+            .send(event)
             .map_err(|_| BrowserError::QueueClosed)?;
         unsafe { PostThreadMessageW(self.thread_id, COMMAND_MESSAGE, WPARAM(0), LPARAM(0)) }
             .map_err(|_| BrowserError::Wake)
@@ -416,6 +484,7 @@ fn run(
     };
     events.emit(BrowserEvent::Ready);
 
+    let mut timer = lifecycle::WakeTimer::default();
     loop {
         // Creation pumps messages internally; drain commands before blocking again.
         if !drain_commands(&incoming, events, |command| state.apply(command)) {
@@ -424,11 +493,20 @@ fn run(
         // Nested controller creation can consume wake messages, but cannot consume this queue.
         loop {
             match shortcuts.try_recv() {
-                Ok(shortcut) => events.emit(BrowserEvent::Shortcut(shortcut)),
+                Ok(event) => events.emit(event),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return Err(BrowserError::QueueClosed),
             }
         }
+        for (id, page) in &state.pages {
+            if let Err(error) = page.tick() {
+                events.emit(BrowserEvent::Error {
+                    tab: Some(*id),
+                    error,
+                });
+            }
+        }
+        timer.arm(state.pages.values().filter_map(Page::suspend_due).min())?;
         let mut message = MSG::default();
         match unsafe { GetMessageW(&mut message, None, 0, 0) }.0 {
             -1 => return Err(BrowserError::MessageLoop),
@@ -562,7 +640,8 @@ fn dispatch(message: MSG) {
 impl BrowserCommand {
     fn tab_id(&self) -> Option<u64> {
         match self {
-            Self::PageAction { id, .. }
+            Self::ExitFullscreen { id }
+            | Self::PageAction { id, .. }
             | Self::ResolvePermission { id, .. }
             | Self::AdoptPopup { id, .. }
             | Self::Create { id, .. }
@@ -657,25 +736,29 @@ mod tests {
         }
 
         let mut applied = Vec::new();
-        assert!(!drain_commands(&incoming, &EventSink(events), |command| {
-            match command {
-                BrowserCommand::Create { id: 7, url } => {
-                    assert!(received.try_recv().is_err(), "no premature acknowledgment");
-                    assert_eq!(url, "https://first.example.test/");
-                    applied.push("create");
+        assert!(!drain_commands(
+            &incoming,
+            &EventSink(events, None),
+            |command| {
+                match command {
+                    BrowserCommand::Create { id: 7, url } => {
+                        assert!(received.try_recv().is_err(), "no premature acknowledgment");
+                        assert_eq!(url, "https://first.example.test/");
+                        applied.push("create");
+                    }
+                    BrowserCommand::Navigate { id: 7, url } => {
+                        assert!(matches!(
+                            received.try_recv(),
+                            Ok(BrowserEvent::Created { id: 7 })
+                        ));
+                        assert_eq!(url, "https://second.example.test/");
+                        applied.push("navigate");
+                    }
+                    _ => panic!("shutdown must stop command application"),
                 }
-                BrowserCommand::Navigate { id: 7, url } => {
-                    assert!(matches!(
-                        received.try_recv(),
-                        Ok(BrowserEvent::Created { id: 7 })
-                    ));
-                    assert_eq!(url, "https://second.example.test/");
-                    applied.push("navigate");
-                }
-                _ => panic!("shutdown must stop command application"),
+                Ok(())
             }
-            Ok(())
-        }));
+        ));
         assert_eq!(applied, ["create", "navigate"]);
         assert!(matches!(
             incoming.try_recv(),
@@ -701,14 +784,18 @@ mod tests {
             })
             .expect("queue synthetic navigation");
         let mut applied = 0;
-        assert!(drain_commands(&incoming, &EventSink(events), |command| {
-            applied += 1;
-            match command {
-                BrowserCommand::Create { .. } => Err(BrowserError::CreatePage),
-                BrowserCommand::Navigate { .. } => Err(BrowserError::UnknownTab),
-                _ => panic!("unexpected synthetic command"),
+        assert!(drain_commands(
+            &incoming,
+            &EventSink(events, None),
+            |command| {
+                applied += 1;
+                match command {
+                    BrowserCommand::Create { .. } => Err(BrowserError::CreatePage),
+                    BrowserCommand::Navigate { .. } => Err(BrowserError::UnknownTab),
+                    _ => panic!("unexpected synthetic command"),
+                }
             }
-        }));
+        ));
         assert_eq!(applied, 2);
         assert!(matches!(
             received.try_recv(),
@@ -735,14 +822,18 @@ mod tests {
             commands
                 .send(BrowserCommand::AdoptPopup { request: 41, id: 8 })
                 .expect("queue synthetic popup adoption");
-            assert!(drain_commands(&incoming, &EventSink(events), |command| {
-                assert!(matches!(
-                    command,
-                    BrowserCommand::AdoptPopup { request: 41, id: 8 }
-                ));
-                assert!(received.try_recv().is_err(), "no premature acknowledgment");
-                result
-            }));
+            assert!(drain_commands(
+                &incoming,
+                &EventSink(events, None),
+                |command| {
+                    assert!(matches!(
+                        command,
+                        BrowserCommand::AdoptPopup { request: 41, id: 8 }
+                    ));
+                    assert!(received.try_recv().is_err(), "no premature acknowledgment");
+                    result
+                }
+            ));
             match result {
                 Ok(()) => assert!(matches!(
                     received.try_recv(),
@@ -769,11 +860,15 @@ mod tests {
             .expect("queue synthetic close");
         drop(commands);
         let mut closed = false;
-        assert!(!drain_commands(&incoming, &EventSink(events), |command| {
-            assert!(matches!(command, BrowserCommand::Close { id: 9 }));
-            closed = true;
-            Ok(())
-        }));
+        assert!(!drain_commands(
+            &incoming,
+            &EventSink(events, None),
+            |command| {
+                assert!(matches!(command, BrowserCommand::Close { id: 9 }));
+                closed = true;
+                Ok(())
+            }
+        ));
         assert!(closed);
         assert!(received.try_recv().is_err());
     }

@@ -105,6 +105,9 @@ impl Permissions {
         unsafe {
             extended.SetSavesInProfile(false)?;
         }
+        if !events.accepts_callbacks() {
+            return Ok(());
+        }
         let mut native_kind = COREWEBVIEW2_PERMISSION_KIND::default();
         unsafe {
             args.PermissionKind(&mut native_kind)?;

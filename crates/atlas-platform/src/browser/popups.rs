@@ -69,6 +69,9 @@ impl PopupRequests {
             unsafe {
                 args.SetHandled(true)?;
             }
+            if !events.accepts_callbacks() {
+                return Ok(());
+            }
             let result = requests.enqueue(opener, args, events.clone());
             if let Err(error) = &result {
                 events.emit(BrowserEvent::Error {

@@ -75,6 +75,7 @@ fn main() -> ExitCode {
                     ui::BrowserView::new(
                         options.directory,
                         options.smoke,
+                        options.suspended_tabs,
                         result.clone(),
                         window,
                         cx,
@@ -126,15 +127,27 @@ fn main() -> ExitCode {
 struct Options {
     directory: PathBuf,
     smoke: bool,
+    suspended_tabs: usize,
 }
 
 fn options() -> Result<Options, &'static str> {
     let mut smoke = false;
+    let mut suspended_tabs = 0;
     let mut test_directory = None;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == "--smoke" {
             smoke = true;
+        } else if argument == "--test-suspended-tabs" {
+            let value = arguments.next().ok_or("Synthetic tab count is missing.")?;
+            suspended_tabs = value
+                .to_str()
+                .ok_or("Synthetic tab count is not text.")?
+                .parse::<usize>()
+                .map_err(|_| "Synthetic tab count must be an integer.")?;
+            if !(1..=32).contains(&suspended_tabs) {
+                return Err("Synthetic suspended tab count must be 1 through 32.");
+            }
         } else if argument == "--test-data-dir" {
             test_directory = Some(PathBuf::from(
                 arguments
@@ -145,10 +158,13 @@ fn options() -> Result<Options, &'static str> {
             return Err("Atlas accepts --smoke or --test-data-dir <directory>.");
         }
     }
-    if smoke && test_directory.is_some() {
+    if (smoke || suspended_tabs > 0) && test_directory.is_some() {
         return Err("The automatic smoke check always uses a fresh profile.");
     }
-    let directory = if smoke {
+    if smoke && suspended_tabs > 0 {
+        return Err("Use smoke or suspended-tab measurement separately.");
+    }
+    let directory = if smoke || suspended_tabs > 0 {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| "The system clock is unavailable.")?
@@ -162,10 +178,14 @@ fn options() -> Result<Options, &'static str> {
         )
         .join("AtlasProductPreview")
     };
-    if smoke {
+    if smoke || suspended_tabs > 0 {
         reserve_smoke_directory(&directory)?;
     }
-    Ok(Options { directory, smoke })
+    Ok(Options {
+        directory,
+        smoke,
+        suspended_tabs,
+    })
 }
 
 fn reserve_smoke_directory(directory: &Path) -> Result<(), &'static str> {
