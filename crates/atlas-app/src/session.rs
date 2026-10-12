@@ -14,8 +14,8 @@ use std::{
 };
 
 use atlas_core::{
-    Activation, SavedPageId, SnapshotError, TabError, TabId, TabKind, TabMetadata, TabModel,
-    TabModelSnapshot,
+    Activation, BookmarkImport, ImportCommit, SavedPageId, SnapshotError, TabError, TabId, TabKind,
+    TabMetadata, TabModel, TabModelSnapshot, commit_bookmark_import,
 };
 use atlas_platform::{StartupStorage, WindowsDirectoryLease};
 use atlas_search::{
@@ -67,6 +67,12 @@ pub enum SessionCommand {
         address: Option<String>,
     },
     ReopenClosed,
+    /// Writes a confirmed bookmark import as one new folder of unloaded saved pages (P1-22).
+    ImportBookmarks {
+        request_id: u64,
+        import: Box<BookmarkImport>,
+        folder_title: String,
+    },
     Query {
         request_id: u64,
         text: String,
@@ -103,6 +109,11 @@ pub enum SessionEvent {
     Search {
         request_id: u64,
         result: Result<SearchResults, SessionError>,
+    },
+    /// Sent after the import's single save committed, or when the model refused it unchanged.
+    Imported {
+        request_id: u64,
+        result: Result<ImportCommit, SessionError>,
     },
     Failure {
         error: SessionError,
@@ -361,6 +372,14 @@ impl Worker {
             // Failures carry the same identity as successful replies, so stale queries stay silent.
             return emit(events, SessionEvent::Search { request_id, result });
         }
+        if let SessionCommand::ImportBookmarks {
+            request_id,
+            import,
+            folder_title,
+        } = command
+        {
+            return self.import_bookmarks(store, request_id, &import, folder_title, events);
+        }
 
         // Invalid or stale commands do not mutate the model and remain recoverable UI errors.
         let navigating = matches!(&command, SessionCommand::NavigateActive { .. });
@@ -378,13 +397,7 @@ impl Worker {
                 },
             );
         }
-        let after = self.model.snapshot();
-        if before != after {
-            self.revision = store
-                .save(self.revision, after.clone())
-                .map_err(SessionError::Store)?;
-            sync_catalogue(&mut self.catalogue, &before, &after)?;
-        }
+        let after = self.persist(store, &before)?;
         let created = after
             .tabs
             .iter()
@@ -393,6 +406,46 @@ impl Worker {
             .collect();
         let navigate = if navigating { after.active_id } else { None };
         self.publish(events, created, navigate, home_entry)
+    }
+
+    /// Saves the model if it changed since `before`, in one store transaction, then reindexes.
+    fn persist(
+        &mut self,
+        store: &Store,
+        before: &TabModelSnapshot,
+    ) -> Result<TabModelSnapshot, SessionError> {
+        let after = self.model.snapshot();
+        if *before != after {
+            self.revision = store
+                .save(self.revision, after.clone())
+                .map_err(SessionError::Store)?;
+            sync_catalogue(&mut self.catalogue, before, &after)?;
+        }
+        Ok(after)
+    }
+
+    /// Adds the whole import in memory, then commits it with a single save.
+    fn import_bookmarks(
+        &mut self,
+        store: &Store,
+        request_id: u64,
+        import: &BookmarkImport,
+        folder_title: String,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let before = self.model.snapshot();
+        // A refused import leaves the model unchanged and is not fatal.
+        let commit = match commit_bookmark_import(&mut self.model, import, folder_title) {
+            Ok(commit) => commit,
+            Err(error) => {
+                let result = Err(SessionError::Model(error));
+                return emit(events, SessionEvent::Imported { request_id, result });
+            }
+        };
+        self.persist(store, &before)?;
+        let result = Ok(commit);
+        emit(events, SessionEvent::Imported { request_id, result })?;
+        self.publish(events, Vec::new(), None, None)
     }
 
     fn publish(
@@ -533,7 +586,9 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
             model.reopen_closed().map_err(SessionError::Model)?;
         }
         SessionCommand::ConfirmRecovery { .. } => return Err(SessionError::RecoveryUnavailable),
-        SessionCommand::Query { .. } | SessionCommand::Shutdown => {}
+        SessionCommand::Query { .. }
+        | SessionCommand::ImportBookmarks { .. }
+        | SessionCommand::Shutdown => {}
     }
     Ok(())
 }

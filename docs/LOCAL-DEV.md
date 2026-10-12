@@ -22,7 +22,8 @@ commits still require the owner's request. There is no remote or push.
   APIs or copied spike implementations.
 - `crates/atlas-core` owns live tab identities, selection and ordering, a
   20-entry closed-web-tab history, and saved-page identities that survive
-  closing their live page. It has no third-party dependency. The sidebar and
+  closing their live page. Its one third-party dependency is `url` (owner
+  approval 2026-10-12, DW-1), for the shared web-address rule. The sidebar and
   palette will consume its shared row projection; this slice adds no UI,
   database, folder manager or importer.
 

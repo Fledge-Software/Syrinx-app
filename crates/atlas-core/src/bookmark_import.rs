@@ -2,12 +2,17 @@
 
 mod address;
 mod builder;
+mod commit;
 mod text;
 mod tokenizer;
 
 use std::fmt;
 
 use builder::Builder;
+pub use commit::{
+    DEFAULT_IMPORT_FOLDER, ImportCommit, RejectedBookmark, commit_bookmark_import,
+    import_folder_title,
+};
 use tokenizer::{Token, Tokenizer};
 
 /// The declaration Chrome, Edge and Firefox put first in every bookmarks export.

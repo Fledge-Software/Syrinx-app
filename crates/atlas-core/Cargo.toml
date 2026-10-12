@@ -7,5 +7,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+# The owner approved `url` on 2026-10-12 so navigation and import share one address rule (DW-1).
+[dependencies]
+url.workspace = true
+
 [lints]
 workspace = true
