@@ -1,6 +1,7 @@
 //! Serializes durable writes and keeps two read connections behind independent locks.
 
 use std::fmt;
+use std::num::NonZeroU64;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -11,7 +12,13 @@ use std::thread::{self, JoinHandle};
 use atlas_core::{Destination, DestinationSurface, TabModelSnapshot};
 use rusqlite::{Connection, OpenFlags};
 
-use crate::error::{StoreError, StoreOperation, combine_results, database_error, with_cleanup};
+use crate::deletion::DeletionRequest;
+use crate::error::{
+    EncodingField, StoreError, StoreOperation, combine_results, database_error, with_cleanup,
+};
+use crate::history::{
+    self, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit, HistoryWrite, RecordedVisit,
+};
 use crate::preferences::{self, PreferenceWrite, StoredPreferences};
 use crate::{BackupOutcome, DirectoryLease, ShutdownState};
 use crate::{backup, records, schema};
@@ -84,13 +91,11 @@ impl Store {
 
     /// Reads one committed revision. This blocks on a reader lock and SQLite's busy timeout.
     pub fn load(&self) -> Result<StoredSnapshot, StoreError> {
-        // Alternate readers; each connection is accessed by only one caller at a time.
-        let readers = self.readers.as_ref().ok_or(StoreError::Closed)?;
-        let index = self.next_reader.fetch_add(1, Ordering::Relaxed) % readers.len();
-        let mut reader = readers[index]
-            .lock()
-            .map_err(|_| StoreError::ReaderPoisoned)?;
-        let stored = records::load(&mut reader.connection, schema::CURRENT_GENERATION)?;
+        // Reading here and then telling the writer means load now depends on the writer: it
+        // fails with WorkerUnavailable if the writer stopped, waits behind queued saves or a
+        // backup, and the writer keeps one more full snapshot. Load runs once, at start-up.
+        let stored =
+            self.read(|connection| records::load(connection, schema::CURRENT_GENERATION))?;
         // A revision's rows never change, so the writer may compare the next save with it.
         let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
         writer
@@ -102,12 +107,7 @@ impl Store {
 
     /// Reads the owner's settings and tiles from one committed snapshot. This blocks.
     pub fn load_preferences(&self) -> Result<StoredPreferences, StoreError> {
-        let readers = self.readers.as_ref().ok_or(StoreError::Closed)?;
-        let index = self.next_reader.fetch_add(1, Ordering::Relaxed) % readers.len();
-        let mut reader = readers[index]
-            .lock()
-            .map_err(|_| StoreError::ReaderPoisoned)?;
-        preferences::load(&mut reader.connection)
+        self.read(preferences::load)
     }
 
     /// Inserts or replaces settings keys in one transaction. This blocks on the writer queue.
@@ -174,6 +174,84 @@ impl Store {
         result.recv().map_err(|_| StoreError::WorkerUnavailable)?
     }
 
+    /// Records one visit (P1-20) at `visited_at` Unix seconds. An empty title keeps a known one.
+    pub fn record_visit(
+        &self,
+        address: String,
+        title: String,
+        visited_at: i64,
+    ) -> Result<RecordedVisit, StoreError> {
+        match self.write_history(HistoryWrite::Record {
+            address,
+            title,
+            visited_at,
+        })? {
+            HistoryOutcome::Recorded(recorded) => Ok(recorded),
+            _ => Err(StoreError::InvalidEncoding(EncodingField::History)),
+        }
+    }
+
+    /// Updates a remembered address's title; `None` means the entry no longer exists.
+    pub fn retitle_history(
+        &self,
+        id: NonZeroU64,
+        title: String,
+    ) -> Result<Option<HistoryEntry>, StoreError> {
+        self.write_entry(HistoryWrite::Retitle { id, title })
+    }
+
+    /// Retracts one visit, such as a failed navigation. Returns the address's remaining
+    /// totals, or `None` when no visit remains for it.
+    pub fn remove_visit(&self, visit: NonZeroU64) -> Result<Option<HistoryEntry>, StoreError> {
+        self.write_entry(HistoryWrite::RemoveVisit(visit))
+    }
+
+    /// Applies D47 history clears, here or on a restored copy; other categories are ignored.
+    pub fn apply_history_deletions(&self, requests: &[DeletionRequest]) -> Result<(), StoreError> {
+        self.write_history(HistoryWrite::Delete(requests.to_vec()))
+            .map(drop)
+    }
+
+    /// Every remembered address, for rebuilding the search catalogue at startup.
+    pub fn history_entries(&self) -> Result<Vec<HistoryEntry>, StoreError> {
+        self.read(|connection| history::entries(connection))
+    }
+
+    /// At most `limit` visits, newest first.
+    pub fn recent_visits(&self, limit: usize) -> Result<Vec<HistoryVisit>, StoreError> {
+        self.read(|connection| history::recent(connection, limit))
+    }
+
+    fn read<T>(
+        &self,
+        query: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        // Alternate readers; each connection is accessed by only one caller at a time.
+        let readers = self.readers.as_ref().ok_or(StoreError::Closed)?;
+        let index = self.next_reader.fetch_add(1, Ordering::Relaxed) % readers.len();
+        let mut reader = readers[index]
+            .lock()
+            .map_err(|_| StoreError::ReaderPoisoned)?;
+        query(&mut reader.connection)
+    }
+
+    fn write_entry(&self, write: HistoryWrite) -> Result<Option<HistoryEntry>, StoreError> {
+        match self.write_history(write)? {
+            HistoryOutcome::Entry(entry) => Ok(entry),
+            _ => Err(StoreError::InvalidEncoding(EncodingField::History)),
+        }
+    }
+
+    fn write_history(&self, write: HistoryWrite) -> Result<HistoryOutcome, StoreError> {
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::History(HistoryRequest { write, reply }))
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
+    }
+
     /// Closes readers, drains the writer and reports all shutdown failures. This blocks.
     pub fn shutdown(mut self) -> Result<(), StoreError> {
         self.close_all(true)
@@ -230,6 +308,7 @@ enum WriterRequest {
         change: PreferenceWrite,
         reply: mpsc::SyncSender<Result<(), StoreError>>,
     },
+    History(HistoryRequest),
 }
 
 struct WriterHandle {
@@ -364,6 +443,10 @@ fn serve_writes(
             }
             WriterRequest::Preferences { change, reply } => {
                 let result = preferences::write(&mut writer.connection, &change);
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::History(HistoryRequest { write, reply }) => {
+                let result = history::write(&mut writer.connection, write);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
         }

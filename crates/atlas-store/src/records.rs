@@ -83,7 +83,9 @@ fn read_snapshot(
     let saved_pages = read_saved_pages(connection)?;
     let tree = match generation {
         SchemaGeneration::FlatSaved => flat_tree(&saved_pages),
-        SchemaGeneration::Folders | SchemaGeneration::Preferences => read_saved_tree(connection)?,
+        SchemaGeneration::Folders | SchemaGeneration::Preferences | SchemaGeneration::History => {
+            read_saved_tree(connection)?
+        }
     };
     let snapshot = TabModelSnapshot {
         tabs: read_tabs(connection)?,
