@@ -33,7 +33,8 @@ pub struct RecoveryOffer {
     prepared: PreparedDirectory,
     backup: BackupEntry,
     source: GuardedEntry,
-    expected: StoredSnapshot,
+    // Boxed: a folder-bearing snapshot would otherwise dominate `StartupStorage`'s size.
+    expected: Box<StoredSnapshot>,
     primary: Vec<PrimaryFile>,
     continuation: Option<Box<resume::Continuation>>,
 }
@@ -139,7 +140,7 @@ pub(super) fn offer_prepared(prepared: PreparedDirectory) -> Result<RecoveryOffe
                     prepared,
                     backup,
                     source,
-                    expected,
+                    expected: Box::new(expected),
                     primary,
                     continuation: None,
                 });

@@ -100,6 +100,17 @@ accepts a version 1 backup as a flat tree without migrating it; restoring one
 lets the next writer upgrade it, so D46 recovery is not broken by the new
 schema. Reader connections still require the current schema.
 
+One small `atlas-platform` change follows from the larger snapshot: the
+private `RecoveryOffer::expected` field is now boxed, because the two new
+vectors pushed `StartupStorage` over Clippy's `large_enum_variant` limit.
+Behaviour and public API are unchanged.
+
+## Gate
+
+`cargo xtask check` passed on this machine (454 tests, smoke run included);
+the log is `target/p1-21-gate.log`. No Application Control (os error 4551)
+block occurred.
+
 ## Tests
 
 All data is synthetic (`example.test` addresses, made-up titles) and every
