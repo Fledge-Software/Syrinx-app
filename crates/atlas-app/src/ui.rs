@@ -405,6 +405,10 @@ impl BrowserView {
         let Some(event) = event.into_current() else {
             return;
         };
+        if process_recovery::smoke_process_failure(self.smoke, &event, &self.outcome) {
+            self.request_close(cx);
+            return;
+        }
         if let Some(message) = self.navigation_status.observe(
             &event,
             &self.model,
@@ -415,24 +419,33 @@ impl BrowserView {
             self.message = message.to_owned();
         }
         match event {
-            BrowserEvent::PageCrashed { id } => self.page_crashed(id, window),
+            BrowserEvent::PageCrashed { id } => {
+                self.page_crashed(id, window);
+                self.recovery_focus(window, cx);
+            }
             BrowserEvent::PageRestored { id } => {
                 self.crashes.restored(id);
+                self.recovery_focus(window, cx);
             }
             BrowserEvent::RecoveryStarted { sequence, tabs } => {
-                self.browser_recovering(sequence, tabs, window)
+                self.browser_recovering(sequence, tabs, window);
+                self.recovery_focus(window, cx);
             }
             BrowserEvent::RecoveryFinished {
                 sequence,
                 restored: _,
                 failed,
+                stopped,
             } => {
-                if self.crashes.finished(sequence) {
-                    self.message = if failed.is_empty() {
+                if self.crashes.finished(sequence, stopped) {
+                    self.message = if stopped {
+                        "Browser engine stopped. Reload a tab to try again.".into()
+                    } else if failed.is_empty() {
                         "Page engine recovered. Your tabs are intact.".into()
                     } else {
                         "Some pages could not be restored. Reload an affected tab to retry.".into()
                     };
+                    self.recovery_focus(window, cx);
                 }
             }
             BrowserEvent::Callback { .. } => unreachable!("callback envelopes are unwrapped once"),
@@ -508,7 +521,7 @@ impl BrowserView {
             }
             BrowserEvent::ProcessFailed { id, kind } => {
                 if self.active_page_feedback(id) {
-                    self.message = if kind == 2 {
+                    self.message = if kind == atlas_platform::browser::RENDER_PROCESS_UNRESPONSIVE {
                         "This page is not responding. You can wait or reload it.".into()
                     } else {
                         "A page component failed; the engine is handling its recovery.".into()
