@@ -213,6 +213,12 @@ impl Store {
         self.read(|connection| history::applied_generation(connection))
     }
 
+    /// Where the next bounded history expiry `[0, end)` stops: at `cutoff`, or earlier so
+    /// that it removes at most `limit` visits. `None` when no visit is older than `cutoff`.
+    pub fn history_expiry_end(&self, cutoff: i64, limit: usize) -> Result<Option<i64>, StoreError> {
+        self.read(|connection| history::expiry_end(connection, cutoff, limit))
+    }
+
     /// Every remembered address, for rebuilding the search catalogue at startup.
     pub fn history_entries(&self) -> Result<Vec<HistoryEntry>, StoreError> {
         self.read(|connection| history::entries(connection))

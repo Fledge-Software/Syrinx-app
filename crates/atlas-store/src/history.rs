@@ -355,6 +355,38 @@ pub(crate) fn delete_ranges(
     Ok(visits)
 }
 
+/// The end of the next expiry range `[0, end)`: `cutoff` when at most `limit` visits are
+/// older, otherwise the time of the first visit beyond `limit`. A range never ends on the
+/// oldest visit's own second, so each expiry removes something.
+pub(crate) fn expiry_end(
+    connection: &Connection,
+    cutoff: i64,
+    limit: usize,
+) -> Result<Option<i64>, StoreError> {
+    let limit = i64::try_from(limit).map_err(|_| StoreError::TooManyRecords)?;
+    let oldest: Option<i64> = connection
+        .query_row(
+            "SELECT min(visited_at) FROM history_visits WHERE visited_at < ?1",
+            [cutoff],
+            |row| row.get(0),
+        )
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    let Some(oldest) = oldest else {
+        return Ok(None);
+    };
+    let beyond: Option<i64> = connection
+        .query_row(
+            "SELECT visited_at FROM history_visits WHERE visited_at < ?1
+             ORDER BY visited_at LIMIT 1 OFFSET ?2",
+            params![cutoff, limit],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    // `oldest < cutoff`, so `oldest + 1` cannot overflow and never passes `cutoff`.
+    Ok(Some(beyond.map_or(cutoff, |time| time.max(oldest + 1))))
+}
+
 /// Every remembered address in identity order, for rebuilding the search catalogue.
 pub(crate) fn entries(connection: &Connection) -> Result<Vec<HistoryEntry>, StoreError> {
     let mut statement = connection

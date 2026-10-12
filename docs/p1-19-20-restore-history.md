@@ -178,7 +178,8 @@ mapping there; the coordinator will connect it to this list
 (`toggle_history` in `ui.rs`) at integration. Until then Ctrl H works while
 Atlas's own interface has focus, and the toolbar button works in both cases.
 
-**Unbounded growth (DW-4):** every visit is kept and every remembered address
+**Unbounded growth (DW-4, done in P1-27's follow-up: 90-day retention, see
+`docs/p1-27-clear-data.md`):** every visit is kept and every remembered address
 is loaded into the catalogue at start-up. Retention and pruning before D48's
 100,000-row scale are registered as DW-4 in the plan's "Deferred work" table
 (owning slice P1-27, or a P1-20 follow-up), with a `TODO(DW-4)` at the load
