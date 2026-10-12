@@ -27,11 +27,13 @@ impl ContrastCheck {
         self.ratio >= self.minimum
     }
 
-    /// A stable label for reports and the recorded-failure list: `palette/foreground/background`.
+    /// A stable label for reports and the recorded-failure list:
+    /// `palette/accent/foreground/background`, the accent as six lowercase hex digits.
     pub fn label(&self) -> String {
         format!(
-            "{}/{}/{}",
+            "{}/{:06x}/{}/{}",
             self.palette.id(),
+            self.accent.to_rgba_u32() >> 8,
             self.foreground,
             self.background
         )
@@ -139,8 +141,8 @@ fn is_icon_surface(name: &str) -> bool {
 }
 
 fn tile_checks(palette: &Palette) -> Vec<ContrastCheck> {
-    // Monogram letters are text on their tile, which may itself be translucent.
-    let ground = palette.ground.representative();
+    // Monogram letters are text on their tile, which may itself be translucent (Glass).
+    let grounds = palette.ground.presented_colors();
     let plugins = [
         ("plugin_forge", palette.plugins.forge),
         ("plugin_notes", palette.plugins.notes),
@@ -155,7 +157,10 @@ fn tile_checks(palette: &Palette) -> Vec<ContrastCheck> {
         .zip(palette.tiles)
         .chain(plugins)
         .map(|(name, tile)| {
-            let background = vec![tile.background.over(ground)];
+            let background: Vec<Color> = grounds
+                .iter()
+                .map(|ground| tile.background.over(*ground))
+                .collect();
             measure(
                 palette,
                 name,
@@ -172,7 +177,8 @@ fn accent_checks(
     palette: &Palette,
     backgrounds: &[(&'static str, Vec<Color>)],
 ) -> Vec<ContrastCheck> {
-    // Badge numbers are text on the accent; the accent ink marks selection on surfaces.
+    // Badge numbers are text on the accent; the accent ink marks selection on surfaces and
+    // also draws matched characters as text in palette rows (canvas `Palette.dc.html`).
     let accent = palette.accent;
     let mut checks = vec![measure(
         palette,
@@ -194,7 +200,34 @@ fn accent_checks(
             NON_TEXT_MINIMUM,
         ));
     }
+    for (background_name, background) in ink_text_backgrounds(palette, backgrounds) {
+        checks.push(measure(
+            palette,
+            "accent_ink_text",
+            accent.ink,
+            background_name,
+            &background,
+            TEXT_MINIMUM,
+        ));
+    }
     checks
+}
+
+fn ink_text_backgrounds(
+    palette: &Palette,
+    backgrounds: &[(&'static str, Vec<Color>)],
+) -> Vec<(&'static str, Vec<Color>)> {
+    // Palette rows: plain panel, and the selected row's accent wash over the panel.
+    let panels = backgrounds
+        .iter()
+        .find(|(name, _)| *name == "panel")
+        .map(|(_, colors)| colors.clone())
+        .unwrap_or_default();
+    let selected = panels
+        .iter()
+        .map(|panel| palette.accent.soft.over(*panel))
+        .collect();
+    vec![("panel", panels), ("panel_row_selected", selected)]
 }
 
 fn measure(
@@ -229,20 +262,61 @@ mod tests {
     /// Pairs below their WCAG minimum in the canvas values, recorded for the owner's review in
     /// `docs/p1-07-design-tokens.md` rather than silently retuned. Any change here is a design change.
     const RECORDED_FAILURES: &[&str] = &[
-        "glass/accent_ink/card",
-        "glass/text_muted/card",
-        "glass/text_muted/field",
-        "glass/text_muted/ground",
-        "glass/text_muted/pill",
-        "glass/text_muted/row_selected",
-        "glass/text_muted/surface",
-        "glass/text_secondary/pill",
-        "glass/text_secondary/row_selected",
-        "glass/text_secondary_bright/row_selected",
-        "graphite/text_muted/row_selected",
-        "haze/text_muted/field",
-        "haze/text_muted/row_selected",
-        "tint/text_muted/row_selected",
+        "glass/6ea8ff/accent_ink/card",
+        "glass/6ea8ff/text_muted/card",
+        "glass/6ea8ff/text_muted/field",
+        "glass/6ea8ff/text_muted/ground",
+        "glass/6ea8ff/text_muted/pill",
+        "glass/6ea8ff/text_muted/row_selected",
+        "glass/6ea8ff/text_muted/surface",
+        "glass/6ea8ff/text_secondary/pill",
+        "glass/6ea8ff/text_secondary/row_selected",
+        "glass/6ea8ff/text_secondary_bright/row_selected",
+        "glass/6fd3a8/text_muted/card",
+        "glass/6fd3a8/text_muted/field",
+        "glass/6fd3a8/text_muted/ground",
+        "glass/6fd3a8/text_muted/pill",
+        "glass/6fd3a8/text_muted/row_selected",
+        "glass/6fd3a8/text_muted/surface",
+        "glass/6fd3a8/text_secondary/pill",
+        "glass/6fd3a8/text_secondary/row_selected",
+        "glass/6fd3a8/text_secondary_bright/row_selected",
+        "glass/e8c16a/text_muted/card",
+        "glass/e8c16a/text_muted/field",
+        "glass/e8c16a/text_muted/ground",
+        "glass/e8c16a/text_muted/pill",
+        "glass/e8c16a/text_muted/row_selected",
+        "glass/e8c16a/text_muted/surface",
+        "glass/e8c16a/text_secondary/pill",
+        "glass/e8c16a/text_secondary/row_selected",
+        "glass/e8c16a/text_secondary_bright/row_selected",
+        "glass/ff8a65/text_muted/card",
+        "glass/ff8a65/text_muted/field",
+        "glass/ff8a65/text_muted/ground",
+        "glass/ff8a65/text_muted/pill",
+        "glass/ff8a65/text_muted/row_selected",
+        "glass/ff8a65/text_muted/surface",
+        "glass/ff8a65/text_secondary/pill",
+        "glass/ff8a65/text_secondary/row_selected",
+        "glass/ff8a65/text_secondary_bright/row_selected",
+        "graphite/6ea8ff/text_muted/row_selected",
+        "graphite/6fd3a8/text_muted/row_selected",
+        "graphite/e8c16a/text_muted/row_selected",
+        "graphite/ff8a65/text_muted/row_selected",
+        "haze/6ea8ff/text_muted/field",
+        "haze/6ea8ff/text_muted/row_selected",
+        "haze/6fd3a8/text_muted/field",
+        "haze/6fd3a8/text_muted/row_selected",
+        "haze/e8c16a/text_muted/field",
+        "haze/e8c16a/text_muted/row_selected",
+        "haze/ff8a65/text_muted/field",
+        "haze/ff8a65/text_muted/row_selected",
+        "paper/6fd3a8/accent_ink_text/panel",
+        "paper/6fd3a8/accent_ink_text/panel_row_selected",
+        "paper/e8c16a/accent_ink_text/panel",
+        "paper/e8c16a/accent_ink_text/panel_row_selected",
+        "tint/6fd3a8/text_muted/row_selected",
+        "tint/e8c16a/text_muted/row_selected",
     ];
 
     #[test]
@@ -273,15 +347,7 @@ mod tests {
         let report: Vec<String> = audit_all()
             .iter()
             .filter(|check| !check.passes())
-            .map(|check| {
-                format!(
-                    "{} with accent {:08X}: {:.2} < {}",
-                    check.label(),
-                    check.accent.to_rgba_u32(),
-                    check.ratio,
-                    check.minimum
-                )
-            })
+            .map(|check| format!("{}: {:.2} < {}", check.label(), check.ratio, check.minimum))
             .collect();
         assert_eq!(
             failures,
@@ -289,6 +355,37 @@ mod tests {
             "contrast report:\n{}",
             report.join("\n")
         );
+    }
+
+    #[test]
+    fn translucent_glass_tiles_are_measured_over_every_wallpaper() {
+        let glass = palette(PaletteId::Glass, Accent::default());
+        let tile = glass.tiles[0];
+        let worst = glass
+            .ground
+            .presented_colors()
+            .iter()
+            .map(|ground| {
+                let background = tile.background.over(*ground);
+                contrast_ratio(tile.foreground, background)
+            })
+            .fold(f64::INFINITY, f64::min);
+        let check = audit(&glass)
+            .into_iter()
+            .find(|check| check.foreground == "tile_0")
+            .expect("tile 0 is audited");
+        assert_eq!(check.ratio, worst);
+    }
+
+    #[test]
+    fn labels_tell_accents_apart() {
+        let default = audit(&palette(PaletteId::Paper, Accent::default()));
+        let green = audit(&palette(
+            PaletteId::Paper,
+            Accent::new(Color::hex(0x6FD3A8)),
+        ));
+        assert_eq!(default[0].label(), "paper/ff8a65/text/ground");
+        assert_ne!(default[0].label(), green[0].label());
     }
 
     #[test]
