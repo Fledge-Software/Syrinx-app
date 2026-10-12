@@ -22,9 +22,10 @@ use gpui::{
 
 use super::{
     BrowserView, button,
+    folder_cards::keyboard_button,
     folder_editor::{
         DeleteFolderContents, DraggedRow, MoveRowDown, MoveRowIn, MoveRowOut, MoveRowUp, OpenRow,
-        PressButton, ROW_CONTEXT, RemoveRow, RenameRow, keyboard_button,
+        PressButton, ROW_CONTEXT, RemoveRow, RenameRow,
     },
     page_card::edge_strip,
     saved_moves::{DropTarget, Step},
@@ -322,17 +323,22 @@ impl BrowserView {
             depth,
             saved: true,
         };
+        let target = ActivationTarget::Saved(saved_id);
         let row = row_frame(("saved", saved_id.get()), look, labels)
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.open_saved_row(saved_id, window, cx);
+                this.activate_row(target, window, cx);
             }))
             .on_action(cx.listener(move |this, _: &OpenRow, window, cx| {
-                this.open_saved_row(saved_id, window, cx);
-            }))
-            .on_action(cx.listener(move |this, _: &RemoveRow, _, cx| {
-                this.command(SessionCommand::Unsave(saved_id));
-                cx.notify();
+                this.activate_row(target, window, cx);
             }));
+        // The confirmation for an unopened page needs the wide sidebar's card.
+        let row = if labels || live.is_some() {
+            row.on_action(cx.listener(move |this, _: &RemoveRow, window, cx| {
+                this.request_page_removal(saved_id, window, cx);
+            }))
+        } else {
+            row
+        };
         let mut row = movable_row(row, SavedEntryId::Page(saved_id), title, cx);
         if !labels {
             return row;
@@ -351,19 +357,11 @@ impl BrowserView {
         row.child(
             row_action(("unsave", saved_id.get()), "−", "Remove saved page")
                 .text_color(theme::icon_dim())
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
-                    this.command(SessionCommand::Unsave(saved_id));
-                    cx.notify();
+                    this.request_page_removal(saved_id, window, cx);
                 })),
         )
-    }
-
-    /// Opens or focuses a saved page through the one activation path, as a click does.
-    fn open_saved_row(&mut self, id: SavedPageId, window: &mut Window, cx: &mut Context<Self>) {
-        self.activate(ActivationTarget::Saved(id));
-        self.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
-        cx.notify();
     }
 
     fn ordinary_row(
@@ -380,12 +378,13 @@ impl BrowserView {
             depth: 0,
             saved: false,
         };
+        let target = ActivationTarget::Tab(id);
         let row = row_frame(("tab", id.get()), look, labels)
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.open_tab_row(id, window, cx);
+                this.activate_row(target, window, cx);
             }))
             .on_action(cx.listener(move |this, _: &OpenRow, window, cx| {
-                this.open_tab_row(id, window, cx);
+                this.activate_row(target, window, cx);
             }));
         if !labels {
             return row;
@@ -399,12 +398,6 @@ impl BrowserView {
                 },
             )),
         )
-    }
-
-    fn open_tab_row(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
-        self.activate(ActivationTarget::Tab(id));
-        self.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
-        cx.notify();
     }
 
     /// A folder row: its arrow toggles the contents. Renaming and removal need the wide
@@ -476,10 +469,14 @@ fn movable_row(
     title: String,
     cx: &mut Context<BrowserView>,
 ) -> Stateful<Div> {
+    // An Alt arrow that moves nothing goes on to the window's own binding (Alt Left is Back).
     let step = |step: Step| {
         move |this: &mut BrowserView, cx: &mut Context<BrowserView>| {
-            this.move_saved_row(entry, step);
-            cx.notify();
+            if this.move_saved_row(entry, step) {
+                cx.notify();
+            } else {
+                cx.propagate();
+            }
         }
     };
     let (up, down, out, into) = (

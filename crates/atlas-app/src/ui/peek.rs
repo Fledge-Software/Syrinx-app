@@ -350,6 +350,13 @@ impl BrowserView {
         }
     }
 
+    /// Whether `window` is the open peek popup rather than the main window.
+    pub(super) fn is_peek_window(&self, window: &Window) -> bool {
+        self.peek
+            .as_ref()
+            .is_some_and(|peek| Window::window_handle(window) == peek.window.into())
+    }
+
     /// Input subscriptions belong to their window, so a transient form cannot cross windows.
     fn close_peek_editor(&mut self) {
         self.folder_editor = None;

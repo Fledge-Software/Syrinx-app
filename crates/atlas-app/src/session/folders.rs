@@ -1,6 +1,6 @@
 //! Carries the sidebar's folder edits to the one tab model on the session worker (P1-21).
 
-use atlas_core::{FolderRemoval, SavedEntryId, SavedFolderId, TabError, TabModel};
+use atlas_core::{FolderContents, FolderRemoval, SavedEntryId, SavedFolderId, TabError, TabModel};
 
 /// One owner edit of the saved tree. Each is applied and persisted like any other tab command.
 #[derive(Clone, Eq, PartialEq)]
@@ -14,10 +14,15 @@ pub enum FolderCommand {
         id: SavedFolderId,
         title: String,
     },
-    /// Removes a folder; the sidebar sends `RemoveContents` only after the owner confirms.
+    /// Removes a folder and lifts its contents one level up: the default, which loses nothing.
     Remove {
         id: SavedFolderId,
-        removal: FolderRemoval,
+    },
+    /// Deletes a folder with everything in it, sent only after the owner confirmed `expected`;
+    /// the model refuses it if the folder holds anything else by then.
+    DeleteWithContents {
+        id: SavedFolderId,
+        expected: FolderContents,
     },
     /// Moves a saved page or a whole folder to a final position among `parent`'s children.
     Move {
@@ -33,7 +38,12 @@ impl FolderCommand {
         match self {
             Self::Create { title, parent } => model.create_folder(title, parent).map(|_| ()),
             Self::Rename { id, title } => model.rename_folder(id, title),
-            Self::Remove { id, removal } => model.remove_folder(id, removal).map(|_| ()),
+            Self::Remove { id } => model
+                .remove_folder(id, FolderRemoval::MoveContentsUp)
+                .map(|_| ()),
+            Self::DeleteWithContents { id, expected } => {
+                model.delete_folder_confirmed(id, expected).map(|_| ())
+            }
             Self::Move {
                 entry,
                 parent,
@@ -50,6 +60,7 @@ impl std::fmt::Debug for FolderCommand {
             Self::Create { .. } => "Create",
             Self::Rename { .. } => "Rename",
             Self::Remove { .. } => "Remove",
+            Self::DeleteWithContents { .. } => "DeleteWithContents",
             Self::Move { .. } => "Move",
         };
         write!(formatter, "FolderCommand::{kind} {{ .. }}")
@@ -109,11 +120,7 @@ mod tests {
         assert_eq!(model.saved_parent(page)?, Some(folder));
 
         // The default removal keeps the page, which takes the folder's place.
-        FolderCommand::Remove {
-            id: folder,
-            removal: FolderRemoval::MoveContentsUp,
-        }
-        .apply(&mut model)?;
+        FolderCommand::Remove { id: folder }.apply(&mut model)?;
         assert!(model.saved_folders().is_empty());
         assert_eq!(model.saved_parent(page)?, None);
         assert_eq!(model.saved_pages().len(), 1);
@@ -132,9 +139,27 @@ mod tests {
         }
         .apply(&mut model)?;
         let live = model.tabs()[0].id();
-        FolderCommand::Remove {
+        // A count taken before another page arrived no longer matches, so nothing is deleted.
+        let stale = FolderContents {
+            pages: 0,
+            folders: 0,
+        };
+        let before = model.snapshot();
+        assert_eq!(
+            FolderCommand::DeleteWithContents {
+                id: folder,
+                expected: stale,
+            }
+            .apply(&mut model),
+            Err(TabError::FolderContentsChanged(folder))
+        );
+        assert_eq!(model.snapshot(), before);
+        FolderCommand::DeleteWithContents {
             id: folder,
-            removal: FolderRemoval::RemoveContents,
+            expected: FolderContents {
+                pages: 1,
+                folders: 0,
+            },
         }
         .apply(&mut model)?;
         assert!(model.saved_pages().is_empty());

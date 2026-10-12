@@ -5,7 +5,8 @@ mod import;
 mod snapshot;
 
 pub use folders::{
-    FolderRemoval, RemovedSavedEntries, SavedEntryId, SavedFolder, SavedFolderId, SavedPlacement,
+    FolderContents, FolderRemoval, RemovedSavedEntries, SavedEntryId, SavedFolder, SavedFolderId,
+    SavedPlacement, saved_folder_contents,
 };
 pub use import::{AppendedSavedTree, NewSavedItem};
 pub use snapshot::{
@@ -193,6 +194,8 @@ pub enum TabError {
     SavedFolderIdExhausted,
     /// Folder names may not be empty or only spaces (owner decision, 2026-10-12).
     EmptyFolderTitle,
+    /// A confirmed delete no longer matches what the owner was shown, so nothing is deleted.
+    FolderContentsChanged(SavedFolderId),
 }
 
 impl fmt::Display for TabError {
@@ -229,6 +232,11 @@ impl fmt::Display for TabError {
                 formatter.write_str("no unused saved folder IDs remain")
             }
             Self::EmptyFolderTitle => formatter.write_str("folder names cannot be empty"),
+            Self::FolderContentsChanged(id) => write!(
+                formatter,
+                "folder {} changed after its deletion was confirmed",
+                id.get()
+            ),
         }
     }
 }

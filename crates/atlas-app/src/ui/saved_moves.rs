@@ -1,6 +1,6 @@
 //! Works out where a saved row goes for a keyboard move or a drop, without a window (P1-21).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use atlas_core::{SavedEntryId, SavedFolderId, SavedPlacement};
 
@@ -103,29 +103,6 @@ pub(super) fn drop_move(
         index,
     };
     (current_place(layout, dragged)? != (parent, index)).then_some(destination)
-}
-
-/// How many saved pages and folders are nested inside `folder`, at any depth.
-pub(super) fn contents(layout: &[SavedPlacement], folder: SavedFolderId) -> (usize, usize) {
-    let mut inside = HashSet::from([folder]);
-    let (mut pages, mut folders) = (0, 0);
-    // Depth-first order puts each parent before its contents, so one pass finds them all.
-    for placement in layout {
-        if !placement
-            .parent
-            .is_some_and(|parent| inside.contains(&parent))
-        {
-            continue;
-        }
-        match placement.entry {
-            SavedEntryId::Page(_) => pages += 1,
-            SavedEntryId::Folder(id) => {
-                folders += 1;
-                inside.insert(id);
-            }
-        }
-    }
-    (pages, folders)
 }
 
 /// The folder holding `entry` (`Some(None)` at the top level), or `None` if it is unknown.
@@ -285,6 +262,28 @@ mod tests {
         assert_eq!(keyboard_move(&layout, page(2), Step::In), None);
     }
 
+    /// `move_saved_row` lets an Alt arrow go on to the window (Alt Left is Back) exactly when
+    /// no move is planned, so a top-level row never swallows Back.
+    #[test]
+    fn edge_steps_plan_nothing_so_the_key_reaches_the_window() {
+        let layout = tree();
+        for (entry, step) in [
+            (page(1), Step::Out),
+            (page(4), Step::Out),
+            (dir(1), Step::Out),
+            (page(1), Step::Up),
+            (page(1), Step::In),
+        ] {
+            assert_eq!(
+                keyboard_move(&layout, entry, step),
+                None,
+                "{entry:?} {step:?}"
+            );
+        }
+        // Inside a folder, Alt Left is a real move and is consumed.
+        assert!(keyboard_move(&layout, page(2), Step::Out).is_some());
+    }
+
     #[test]
     fn unknown_rows_do_not_move() {
         let layout = tree();
@@ -357,12 +356,34 @@ mod tests {
         assert_eq!(drop_move(&layout, page(3), DropTarget::Row(dir(2))), None);
     }
 
-    #[test]
-    fn contents_count_every_nested_row() {
-        let layout = tree();
-        assert_eq!(contents(&layout, folder(1)), (2, 1));
-        assert_eq!(contents(&layout, folder(2)), (1, 0));
-        assert_eq!(contents(&layout, folder(7)), (0, 0));
+    /// Drops of a folder onto anything inside it plan nothing, and the model refuses them too.
+    fn assert_cycles_refused(
+        model: &mut TabModel,
+        rows: &[SavedEntryId],
+        entry: SavedEntryId,
+    ) -> usize {
+        let mut refused = 0;
+        for &target in rows {
+            if target == entry || !within(model.saved_layout(), target, entry) {
+                continue;
+            }
+            assert_eq!(
+                drop_move(model.saved_layout(), entry, DropTarget::Row(target)),
+                None
+            );
+            let destination = match target {
+                SavedEntryId::Folder(folder) => Some(folder),
+                SavedEntryId::Page(_) => parent_of(model.saved_layout(), target).flatten(),
+            };
+            let before = model.snapshot();
+            assert!(matches!(
+                model.move_saved_entry(entry, destination, 0),
+                Err(atlas_core::TabError::FolderCycle { .. })
+            ));
+            assert_eq!(model.snapshot(), before);
+            refused += 1;
+        }
+        refused
     }
 
     /// Every computed move is one the model accepts and lands exactly where it said.
@@ -388,9 +409,11 @@ mod tests {
             .chain([SavedEntryId::Folder(outer), SavedEntryId::Folder(inner)])
             .collect();
         let steps = [Step::Up, Step::Down, Step::Out, Step::In];
+        let (mut applied, mut refused_cycles) = (0, 0);
         for round in 0..200 {
             let entry = rows[round % rows.len()];
             let target = rows[(round * 7 + 3) % rows.len()];
+            refused_cycles += assert_cycles_refused(&mut model, &rows, entry);
             let planned = if round % 3 == 0 {
                 drop_move(model.saved_layout(), entry, DropTarget::Row(target))
             } else {
@@ -400,11 +423,16 @@ mod tests {
                 continue;
             };
             model.move_saved_entry(planned.entry, planned.parent, planned.index)?;
+            applied += 1;
             assert_eq!(
                 current_place(model.saved_layout(), planned.entry),
                 Some((planned.parent, planned.index))
             );
+            // The core's own snapshot validation checks the whole tree after every move.
+            TabModel::from_snapshot(model.snapshot()).expect("the tree stays valid");
         }
+        assert!(applied >= 60, "only {applied} moves were applied");
+        assert!(refused_cycles > 0, "no cycle refusal was exercised");
         Ok(())
     }
 }

@@ -5,6 +5,7 @@ mod customize;
 mod essentials;
 mod favorites;
 mod find;
+mod folder_cards;
 mod folder_editor;
 mod folder_expansion;
 mod fullscreen;
@@ -501,7 +502,6 @@ impl BrowserView {
                 }
                 self.model = snapshot.model;
                 self.save_folder_expansion();
-                self.follow_folder_editor();
                 self.crashes.retain(&self.model);
                 self.zoom_levels
                     .retain(|id, _| self.model.tabs.iter().any(|tab| tab.id.get() == *id));
@@ -516,6 +516,8 @@ impl BrowserView {
                         .unwrap_or(saved_message)
                         .to_owned();
                 }
+                // After the status line, so a withdrawn removal card can explain itself.
+                self.follow_folder_editor();
                 if let Some(id) = snapshot.navigate
                     && !self.closing
                 {
