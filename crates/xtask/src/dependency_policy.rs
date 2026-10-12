@@ -27,7 +27,9 @@ pub fn check_metadata(metadata: &Value) -> Result<Vec<String>, String> {
         check_direct_dependencies(name, package, &workspace, &mut violations);
         check_update_verifier_features(name, package, &mut violations);
         check_shell_paths(name, &workspace, &mut violations);
+        check_network_declarations(name, package, &mut violations);
     }
+    check_headless_network_reach(metadata, &mut violations)?;
     Ok(violations.into_iter().collect())
 }
 
@@ -307,6 +309,163 @@ fn append_workspace_dependencies(
     }
 }
 
+/// Crates that open network connections. Typing must stay on the machine (D9) and Atlas makes no
+/// network call of its own, so Atlas's crates never depend on them; WebView2 loads every page.
+const NETWORK_CRATES: [&str; 22] = [
+    "reqwest",
+    "gpui-pre-reqwest",
+    "gpui-pre-http-client",
+    "http-client",
+    "hyper",
+    "hyper-util",
+    "h2",
+    "ureq",
+    "curl",
+    "isahc",
+    "surf",
+    "attohttpc",
+    "minreq",
+    "tokio",
+    "async-net",
+    "async-std",
+    "socket2",
+    "mio",
+    "tungstenite",
+    "quinn",
+    "trust-dns-resolver",
+    "hickory-resolver",
+];
+
+/// `windows` feature prefixes that expose Windows networking or HTTP APIs.
+const NETWORK_WINDOWS_FEATURES: [&str; 5] = [
+    "Win32_Networking",
+    "Win32_NetworkManagement",
+    "Win32_Web",
+    "Networking",
+    "Web",
+];
+
+fn check_network_declarations(name: &str, package: &Package, violations: &mut BTreeSet<String>) {
+    // Neither a network crate nor a Windows networking namespace may be declared by Atlas.
+    for declaration in &package.declarations {
+        if NETWORK_CRATES.contains(&declaration.name.as_str()) {
+            violations.insert(format!(
+                "{name} -> {}: Atlas's crates may not use a network client (D9)",
+                declaration.name
+            ));
+        }
+        if !matches!(declaration.name.as_str(), "windows" | "windows-sys") {
+            continue;
+        }
+        for feature in declaration
+            .features
+            .iter()
+            .filter(|feature| is_network_feature(feature))
+        {
+            violations.insert(format!(
+                "{name} -> {}: feature {feature} exposes Windows networking (D9)",
+                declaration.name
+            ));
+        }
+    }
+}
+
+fn is_network_feature(feature: &str) -> bool {
+    NETWORK_WINDOWS_FEATURES.iter().any(|prefix| {
+        feature == *prefix
+            || feature
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('_'))
+    })
+}
+
+/// Follows Cargo's resolved graph from each headless crate, so the catalogue, store and core
+/// that rank typed text cannot reach a network crate even through a third-party library.
+fn check_headless_network_reach(
+    metadata: &Value,
+    violations: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    let graph = read_resolved_graph(metadata)?;
+    for member in required_array(metadata, "workspace_members", "cargo metadata")? {
+        let Some(id) = member.as_str() else {
+            continue;
+        };
+        let Some(name) = graph.names.get(id) else {
+            continue;
+        };
+        if !needs_shell_isolation(name) {
+            continue;
+        }
+        if let Some(path) = network_path(id, &graph) {
+            violations.insert(format!(
+                "{}: a headless crate reaches a network client (D9)",
+                path.join(" -> ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Package names and resolved dependency edges, keyed by Cargo's package ID.
+struct ResolvedGraph {
+    names: BTreeMap<String, String>,
+    edges: BTreeMap<String, Vec<String>>,
+}
+
+fn read_resolved_graph(metadata: &Value) -> Result<ResolvedGraph, String> {
+    // The full (not `--no-deps`) metadata carries the resolved graph this check needs.
+    let mut names = BTreeMap::new();
+    for package in required_array(metadata, "packages", "cargo metadata")? {
+        let id = required_string(package, "id", "package")?;
+        let name = normalize_name(required_string(package, "name", "package")?);
+        names.insert(id.to_owned(), name);
+    }
+    let resolve = metadata
+        .get("resolve")
+        .filter(|value| value.is_object())
+        .ok_or("cargo metadata must include the resolved dependency graph")?;
+    let mut edges = BTreeMap::new();
+    for node in required_array(resolve, "nodes", "cargo metadata.resolve")? {
+        let id = required_string(node, "id", "resolve node")?;
+        let dependencies = required_array(node, "deps", "resolve node")?
+            .iter()
+            .map(|dependency| required_string(dependency, "pkg", "resolve dependency"))
+            .map(|pkg| pkg.map(str::to_owned))
+            .collect::<Result<Vec<_>, _>>()?;
+        edges.insert(id.to_owned(), dependencies);
+    }
+    Ok(ResolvedGraph { names, edges })
+}
+
+// Breadth-first search for the shortest package path to a network crate.
+fn network_path(start: &str, graph: &ResolvedGraph) -> Option<Vec<String>> {
+    let mut pending = VecDeque::from([(start.to_owned(), vec![start.to_owned()])]);
+    let mut visited = BTreeSet::new();
+    while let Some((id, path)) = pending.pop_front() {
+        if !visited.insert(id.clone()) {
+            continue;
+        }
+        let name = graph.names.get(&id).map_or(id.as_str(), String::as_str);
+        if NETWORK_CRATES.contains(&name) {
+            return Some(path.iter().map(|step| display_name(step, graph)).collect());
+        }
+        for dependency in graph.edges.get(&id).into_iter().flatten() {
+            let mut next = path.clone();
+            next.push(dependency.clone());
+            pending.push_back((dependency.clone(), next));
+        }
+    }
+    None
+}
+
+fn display_name(id: &str, graph: &ResolvedGraph) -> String {
+    graph
+        .names
+        .get(id)
+        .cloned()
+        .unwrap_or_else(|| id.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
@@ -322,7 +481,93 @@ mod tests {
             .iter()
             .map(|package| package["id"].clone())
             .collect();
-        json!({"version": 1, "packages": packages, "workspace_members": members})
+        json!({
+            "version": 1,
+            "packages": packages,
+            "workspace_members": members,
+            "resolve": {"nodes": []}
+        })
+    }
+
+    fn node(name: &str, dependencies: &[&str]) -> Value {
+        let deps: Vec<Value> = dependencies
+            .iter()
+            .map(|dependency| json!({"pkg": format!("workspace:{dependency}")}))
+            .collect();
+        json!({"id": format!("workspace:{name}"), "deps": deps})
+    }
+
+    #[test]
+    fn rejects_network_clients_and_windows_networking() -> Result<(), String> {
+        // D9: no Atlas crate may declare a network client or a Windows networking namespace.
+        let input = metadata(vec![
+            package("atlas-app", json!([{"name": "reqwest", "kind": "dev"}])),
+            package(
+                "atlas-platform",
+                json!([{
+                    "name": "windows",
+                    "features": [
+                        "Win32_Foundation",
+                        "Win32_Networking_WinSock",
+                        "Web_Http",
+                        "Win32_WebUi",
+                        "Networkingish"
+                    ]
+                }]),
+            ),
+        ]);
+        let violations = check_metadata(&input)?;
+        assert_eq!(violations.len(), 3, "{violations:?}");
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("atlas-app -> reqwest"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("Win32_Networking_WinSock"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("Web_Http"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn headless_crates_cannot_reach_a_network_client_transitively() -> Result<(), String> {
+        // The shell may inherit GPUI's client; the crates that rank typed text may not.
+        let mut input = metadata(vec![
+            package("atlas-search", json!([{"name": "helper"}])),
+            package("atlas-app", json!([{"name": "gpui-pre"}])),
+        ]);
+        input["packages"]
+            .as_array_mut()
+            .ok_or("synthetic packages")?
+            .extend([
+                package("helper", json!([])),
+                package("gpui-pre", json!([])),
+                package("hyper", json!([])),
+            ]);
+        input["resolve"]["nodes"] = json!([
+            node("atlas-search", &["helper"]),
+            node("helper", &["hyper"]),
+            node("atlas-app", &["gpui-pre"]),
+            node("gpui-pre", &["hyper"]),
+            node("hyper", &[]),
+        ]);
+        let violations = check_metadata(&input)?;
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].contains("atlas-search -> helper -> hyper"));
+
+        input
+            .as_object_mut()
+            .ok_or("synthetic metadata")?
+            .remove("resolve");
+        assert!(check_metadata(&input).is_err());
+        Ok(())
     }
 
     #[test]
@@ -420,12 +665,14 @@ mod tests {
             ]),
         )]);
         let violations = check_metadata(&input)?;
-        assert_eq!(violations.len(), 2);
-        assert!(
-            violations
-                .iter()
-                .any(|message| message.contains("Win32_Networking_WinHttp"))
-        );
+        // WinHTTP breaks both the verifier's feature list and D9's networking rule.
+        assert_eq!(violations.len(), 3, "{violations:?}");
+        assert!(violations.iter().any(|message| {
+            message.contains("Win32_Networking_WinHttp is not allowed for the update verifier")
+        }));
+        assert!(violations.iter().any(|message| {
+            message.contains("Win32_Networking_WinHttp exposes Windows networking (D9)")
+        }));
         assert!(
             violations
                 .iter()
