@@ -76,6 +76,8 @@ impl fmt::Debug for BrowserCommand {
 
 pub enum BrowserEvent {
     Ready,
+    /// The runtime version, sent once after `Ready`; `None` when WebView2 cannot report it.
+    RuntimeVersion(Option<String>),
     Created {
         id: u64,
     },
@@ -334,6 +336,9 @@ fn run(
         },
     };
     events.emit(BrowserEvent::Ready);
+    events.emit(BrowserEvent::RuntimeVersion(environment::runtime_version(
+        &state.environment,
+    )));
 
     loop {
         // Creation pumps messages internally; drain commands before blocking again.
