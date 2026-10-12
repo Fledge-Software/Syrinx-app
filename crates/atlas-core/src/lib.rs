@@ -1,6 +1,7 @@
 //! Owns Atlas's application state independently of its interface and browser engine.
 
 mod bookmark_import;
+mod destinations;
 mod tabs;
 mod web_address;
 
@@ -11,6 +12,11 @@ pub use bookmark_import::{
     ImportSummary, ImportedBookmark, ImportedFolder, ImportedItem, RejectedBookmark, SkipReason,
     SkippedEntry, commit_bookmark_import, import_folder_title, parse_bookmark_html,
     parse_bookmark_html_with_limits,
+};
+
+pub use destinations::{
+    BuiltInPlugin, Destination, DestinationEdit, DestinationError, DestinationSurface,
+    DestinationTarget, MAX_DESTINATIONS, QuickDestinations,
 };
 
 pub use tabs::{
