@@ -15,7 +15,7 @@ use atlas_ui::{
 };
 use gpui::{
     Context, Div, ElementId, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, div,
+    MouseMoveEvent, ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px,
 };
 
@@ -32,6 +32,7 @@ const ROW_HEIGHT: f32 = 36.;
 const FOLDER_INDENT: f32 = 12.;
 const MONOGRAM_SIZE: f32 = 20.;
 const PLUGINS: [&str; 3] = ["Forge", "Notes", "Fledge"];
+const LAST_VISIBLE_KEY: &str = "sidebar.last_visible_state";
 
 /// What a row shows: its icon letter, title and selection, and how deep it is nested.
 struct RowLook {
@@ -46,7 +47,15 @@ impl BrowserView {
     /// The sidebar at the width the sizing reserves. Narrower than favicon-only (hidden, or
     /// mid-drag) it draws only its unpadded background, so it is exactly that wide.
     pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> Div {
-        let width = self.sidebar_sizing.width();
+        self.sidebar_at(
+            self.sidebar_sizing.width(),
+            self.sidebar_sizing.labels_visible(),
+            cx,
+        )
+    }
+
+    /// The popup and persistent sidebar share all content and listeners.
+    pub(super) fn sidebar_at(&self, width: f32, labels: bool, cx: &mut Context<Self>) -> Div {
         let frame = div()
             .w(px(width))
             .flex_none()
@@ -56,7 +65,6 @@ impl BrowserView {
         if !draws_content(width) {
             return frame;
         }
-        let labels = self.sidebar_sizing.labels_visible();
         frame
             .pt_3()
             .pb_3()
@@ -99,19 +107,25 @@ impl BrowserView {
             .track_focus(&self.sidebar_edge_focus)
             .tab_index(0)
             .focus(|style| style.bg(theme::line()))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                this.sidebar_edge_key(event, cx);
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.sidebar_edge_key(event, window, cx);
             }))
             .w(px(end - start))
             .flex_none()
             .h_full()
             .cursor_col_resize()
+            .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                if *hovered {
+                    this.watch_peek(window, cx);
+                }
+            }))
             .when(dragging, |edge| edge.bg(theme::accent()))
             .hover(|style| style.bg(theme::line()))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
+                    this.retire_peek(cx);
                     this.sidebar_sizing.begin_drag(f32::from(event.position.x));
                     cx.notify();
                 }),
@@ -120,13 +134,18 @@ impl BrowserView {
 
     /// Follows the pointer while the edge is held. GPUI captures the mouse on press, so moves
     /// over the page's web view still arrive here.
-    pub(super) fn sidebar_drag_moved(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+    pub(super) fn sidebar_drag_moved(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.sidebar_sizing.is_dragging() {
             return;
         }
         // A release outside every window can be lost; the next move without a button ends it.
         if !event.dragging() {
-            self.sidebar_drag_released(f32::from(event.position.x), cx);
+            self.sidebar_drag_released(f32::from(event.position.x), window, cx);
             return;
         }
         if self.sidebar_sizing.drag_to(f32::from(event.position.x)) {
@@ -137,24 +156,34 @@ impl BrowserView {
     /// Snaps a drag released at `pointer_x` to wide, favicon-only or hidden. GPUI stops
     /// reporting moves outside the window, so the release position decides. Selection is
     /// untouched.
-    pub(super) fn sidebar_drag_released(&mut self, pointer_x: f32, cx: &mut Context<Self>) {
+    pub(super) fn sidebar_drag_released(
+        &mut self,
+        pointer_x: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let previous = self.sidebar_sizing.state();
         if self.sidebar_sizing.release_at(pointer_x).is_some() {
-            self.sidebar_state_settled(previous, cx);
+            self.sidebar_state_settled(previous, window, cx);
         }
     }
 
     /// Settles a drag at its current width when Atlas loses activation (Alt Tab, a dialog),
     /// because the mouse capture and the release that would end it go elsewhere.
-    pub(super) fn sidebar_drag_abandoned(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn sidebar_drag_abandoned(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let previous = self.sidebar_sizing.state();
         if self.sidebar_sizing.release().is_some() {
-            self.sidebar_state_settled(previous, cx);
+            self.sidebar_state_settled(previous, window, cx);
         }
     }
 
     /// Left narrows and Right widens the sidebar by one state from the focused edge.
-    fn sidebar_edge_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn sidebar_edge_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let current = self.sidebar_sizing.state();
         let next = match event.keystroke.key.as_str() {
             "left" => current.narrower(),
@@ -162,28 +191,46 @@ impl BrowserView {
             _ => return,
         };
         cx.stop_propagation();
-        self.set_sidebar_state(next, cx);
+        self.set_sidebar_state(next, window, cx);
     }
 
-    fn set_sidebar_state(&mut self, state: SidebarWidthState, cx: &mut Context<Self>) {
+    fn set_sidebar_state(
+        &mut self,
+        state: SidebarWidthState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.sidebar_sizing.is_dragging() && self.sidebar_sizing.state() == state {
             return;
         }
+        self.retire_peek(cx);
         let previous = self.sidebar_sizing.state();
         self.sidebar_sizing.set_state(state);
-        self.sidebar_state_settled(previous, cx);
+        self.sidebar_state_settled(previous, window, cx);
     }
 
     /// Shows the width state saved last time; this restores, so nothing is saved back.
     pub(super) fn restore_sidebar_state(&mut self, settings: &BTreeMap<String, String>) {
-        self.sidebar_sizing
-            .set_state(restored_sidebar_state(settings));
+        self.sidebar_sizing = restored_sidebar_sizing(settings);
     }
 
     /// Saves a changed state (DW-2) and redraws; render then moves the page card.
-    fn sidebar_state_settled(&mut self, previous: SidebarWidthState, cx: &mut Context<Self>) {
+    pub(super) fn sidebar_state_settled(
+        &mut self,
+        previous: SidebarWidthState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sidebar_sizing.state().can_peek() {
+            self.peek_state.rearm();
+            self.watch_peek(window, cx);
+        }
         if let Some(setting) = settled_sidebar_setting(previous, self.sidebar_sizing.state()) {
-            self.command(SessionCommand::SaveSettings(vec![setting]));
+            let (_, visible) = sidebar_setting(self.sidebar_sizing.last_visible());
+            self.command(SessionCommand::SaveSettings(vec![
+                setting,
+                (LAST_VISIBLE_KEY.to_owned(), visible),
+            ]));
         }
         cx.notify();
     }
@@ -268,8 +315,9 @@ impl BrowserView {
             saved: true,
         };
         let mut row = row_frame(("saved", saved_id.get()), look, labels).on_click(cx.listener(
-            move |this, _, _, cx| {
+            move |this, _, window, cx| {
                 this.activate(ActivationTarget::Saved(saved_id));
+                this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
                 cx.notify();
             },
         ));
@@ -313,8 +361,9 @@ impl BrowserView {
             saved: false,
         };
         let row = row_frame(("tab", id.get()), look, labels).on_click(cx.listener(
-            move |this, _, _, cx| {
+            move |this, _, window, cx| {
                 this.activate(ActivationTarget::Tab(id));
+                this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
                 cx.notify();
             },
         ));
@@ -470,10 +519,11 @@ fn plugin_section(labels: bool) -> Div {
 
 /// The tab section's header with its new-tab button.
 fn tabs_header(labels: bool, cx: &mut Context<BrowserView>) -> Div {
-    let new_tab = cx.listener(|this, _, _, cx| {
+    let new_tab = cx.listener(|this, _, window, cx| {
         this.command(SessionCommand::NewTab {
             address: "about:blank".to_owned(),
         });
+        this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
         cx.notify();
     });
     let header = div().flex().items_center();
@@ -529,6 +579,18 @@ fn restored_sidebar_state(settings: &BTreeMap<String, String>) -> SidebarWidthSt
         .unwrap_or(SidebarWidthState::Wide)
 }
 
+/// Retain the width to pin even when the saved presentation starts hidden.
+fn restored_sidebar_sizing(settings: &BTreeMap<String, String>) -> atlas_ui::SidebarSizing {
+    let visible = settings
+        .get(LAST_VISIBLE_KEY)
+        .and_then(|value| parse_sidebar_setting(value))
+        .filter(|state| !state.can_peek())
+        .unwrap_or(SidebarWidthState::Wide);
+    let mut sizing = atlas_ui::SidebarSizing::new(visible);
+    sizing.set_state(restored_sidebar_state(settings));
+    sizing
+}
+
 /// A saved page shows its title, or its address when it has none.
 fn title_or_address(title: &str, address: &str) -> String {
     if title.is_empty() {
@@ -576,6 +638,20 @@ mod tests {
         for state in SidebarWidthState::ALL {
             let restored = restored_sidebar_state(&stored([sidebar_setting(state)]));
             assert_eq!(restored, state);
+        }
+    }
+
+    #[test]
+    fn hidden_restart_pins_the_previously_visible_width() {
+        for state in [SidebarWidthState::Wide, SidebarWidthState::Compact] {
+            let (_, value) = sidebar_setting(state);
+            let mut sizing = restored_sidebar_sizing(&stored([
+                sidebar_setting(SidebarWidthState::Hidden),
+                (LAST_VISIBLE_KEY.to_owned(), value),
+            ]));
+            assert_eq!(sizing.width(), 0.);
+            sizing.toggle_hidden();
+            assert_eq!(sizing.state(), state);
         }
     }
 

@@ -13,12 +13,15 @@ mod navigation_intents;
 mod navigation_status;
 mod page_card;
 mod page_lifecycle;
+mod peek;
+mod peek_state;
 mod recovery;
 mod runtime_notice;
 mod sidebar_rows;
 mod sidebar_view;
 mod tile_editor;
 mod tiles;
+mod title_bar;
 
 #[cfg(test)]
 mod shutdown_tests;
@@ -44,9 +47,10 @@ use atlas_platform::browser::{
 };
 use atlas_platform::instance::LinkFeed;
 use atlas_search::{BlankQuery, BoostWeights, Scope, SearchPolicy, Target};
-use atlas_ui::SidebarSizing;
+use atlas_ui::{SidebarSizing, metrics::chrome::TITLE_BAR_HEIGHT};
 use futures::{StreamExt, channel::mpsc::unbounded};
 use gpui::StatefulInteractiveElement;
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Bounds, Context, Div, Entity, FocusHandle, InteractiveElement, IntoElement,
     KeyBinding, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Render, Stateful, Styled,
@@ -55,6 +59,7 @@ use gpui::{
 };
 use gpui_component::Root;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use title_bar::title_bar;
 
 use home_palette::HomePaletteIntent;
 use navigation_intents::NavigationIntents;
@@ -84,7 +89,9 @@ actions!(
         Back,
         Forward,
         Reload,
-        ShowHistory
+        ShowHistory,
+        ToggleSidebar,
+        DismissPeek
     ]
 );
 
@@ -103,6 +110,12 @@ pub fn bind_keys(cx: &mut App) {
         .collect();
     // The palette is where commands run, so it is not itself a command.
     bindings.push(KeyBinding::new("ctrl-k", Palette, None));
+    // The sidebar toggle and peek dismissal are window keys, not palette commands.
+    bindings.extend([
+        KeyBinding::new("ctrl-alt-s", ToggleSidebar, None),
+        KeyBinding::new("escape", DismissPeek, Some("Atlas")),
+        KeyBinding::new("escape", crate::palette::Dismiss, Some("AtlasPeek")),
+    ]);
     cx.bind_keys(bindings);
     crate::palette::bind_keys(cx);
     import::bind_keys(cx);
@@ -193,6 +206,12 @@ pub struct BrowserView {
     focus: FocusHandle,
     palette: Option<PalettePopup>,
     commands: Rc<CommandRegistry>,
+    main_window: gpui::AnyWindowHandle,
+    peek: Option<peek::PeekPopup>,
+    peek_state: peek_state::PeekState,
+    peek_monitoring: bool,
+    peek_generation: u64,
+    _peek_bounds_watch: Subscription,
     home_palette: HomePaletteIntent,
     importer: import::BookmarkImporter,
     home: home::HomeState,
@@ -240,7 +259,13 @@ impl BrowserView {
             sidebar_edge_focus: cx.focus_handle(),
             _drag_activation_watch: cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
-                    this.sidebar_drag_abandoned(cx);
+                    this.sidebar_drag_abandoned(window, cx);
+                } else {
+                    // Returning from our own popup must preserve Escape's edge dismissal.
+                    if !this.peek_monitoring {
+                        this.peek_state.rearm();
+                    }
+                    this.watch_peek(window, cx);
                 }
             }),
             message: "Opening your workspace…".to_owned(),
@@ -248,6 +273,18 @@ impl BrowserView {
             focus: cx.focus_handle(),
             palette: None,
             commands: Rc::new(CommandRegistry::browser()),
+            main_window: Window::window_handle(window),
+            peek: None,
+            peek_state: peek_state::PeekState::default(),
+            peek_monitoring: false,
+            peek_generation: 0,
+            _peek_bounds_watch: cx.observe_window_bounds(window, |this, window, cx| {
+                let was_open = this.peek.is_some();
+                this.retire_peek(cx);
+                if was_open && window.is_window_active() {
+                    this.focus_page(window);
+                }
+            }),
             home_palette: HomePaletteIntent::default(),
             importer: import::BookmarkImporter::default(),
             home: home::HomeState::default(),
@@ -725,6 +762,7 @@ impl BrowserView {
         {
             self.shown = next;
             if self.palette.is_none()
+                && self.peek.is_none()
                 && let Some(id) = next
             {
                 self.page_command(BrowserCommand::Focus { id: id.get() });
@@ -782,6 +820,10 @@ impl BrowserView {
             return;
         }
         match shortcut {
+            BrowserShortcut::DismissPeek(generation) => {
+                self.dismiss_peek(generation, window, cx);
+            }
+            BrowserShortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
             BrowserShortcut::NewTab => self.command(SessionCommand::NewTab {
                 address: "about:blank".to_owned(),
             }),
@@ -811,6 +853,11 @@ impl BrowserView {
     }
 
     fn open_palette(&mut self, address: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if Window::window_handle(window) != self.main_window {
+            self.queue_peek_action(peek::PeekAction::Palette(address), window, cx);
+            return;
+        }
+        self.retire_peek(cx);
         if self.closing || self.session_revision.is_none() {
             return;
         }
@@ -954,7 +1001,8 @@ impl BrowserView {
         if self.closing {
             return;
         }
-        if event.finishes_entry() {
+        let finishes_entry = event.finishes_entry();
+        if finishes_entry {
             self.pending_query = None;
             self.home_palette.finish_entry();
         }
@@ -1019,6 +1067,10 @@ impl BrowserView {
                 self.palette = None;
                 self.focus_page(window);
             }
+        }
+        if finishes_entry {
+            self.peek_state.rearm();
+            self.watch_peek(window, cx);
         }
         cx.notify();
     }
@@ -1087,6 +1139,7 @@ impl BrowserView {
         }
         self.closing = true;
         self.stop_link_feed();
+        self.retire_peek(cx);
         self.retire_palette(cx);
         self.close_import_preview(cx);
         self.message = "Saving and closing…".to_owned();
@@ -1183,7 +1236,16 @@ impl BrowserView {
 
     fn toolbar(&self, cx: &mut Context<Self>) -> Div {
         div()
-            .h(px(TOOLBAR_HEIGHT))
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .h(px(if self.sidebar_sizing.width() == 0. {
+                TITLE_BAR_HEIGHT
+            } else {
+                TOOLBAR_HEIGHT
+            }))
             .px_3()
             .flex()
             .items_center()
@@ -1214,6 +1276,9 @@ impl BrowserView {
             .child(
                 div()
                     .id("address")
+                    .role(gpui::Role::Button)
+                    .aria_label("Search or enter address")
+                    .min_w_0()
                     .flex_1()
                     .h(px(34.))
                     .px_3()
@@ -1222,7 +1287,7 @@ impl BrowserView {
                     .flex()
                     .items_center()
                     .overflow_hidden()
-                    .cursor_text()
+                    .cursor_pointer()
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_palette(true, window, cx)),
                     )
@@ -1250,7 +1315,12 @@ impl BrowserView {
 impl Render for BrowserView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.session_revision.is_none() {
-            return self.startup_panel(cx);
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(title_bar(div().child("Atlas"), window.is_maximized()))
+                .child(self.startup_panel(cx));
         }
         if self.browser_ready && !self.closing {
             self.resize_pages(window);
@@ -1273,6 +1343,7 @@ impl Render for BrowserView {
         };
         div()
             .size_full()
+            .key_context("Atlas")
             .bg(theme::window_fill())
             .text_color(theme::text())
             .text_sm()
@@ -1280,21 +1351,31 @@ impl Render for BrowserView {
             .track_focus(&self.focus)
             .flex()
             .flex_col()
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                this.sidebar_drag_moved(event, cx);
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.sidebar_drag_moved(event, window, cx);
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, _, cx| {
-                    this.sidebar_drag_released(f32::from(event.position.x), cx);
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.sidebar_drag_released(f32::from(event.position.x), window, cx);
                 }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, _, cx| {
-                    this.sidebar_drag_released(f32::from(event.position.x), cx);
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.sidebar_drag_released(f32::from(event.position.x), window, cx);
                 }),
             )
+            .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
+                this.toggle_sidebar(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DismissPeek, window, cx| {
+                if let Some(generation) = this.peek.as_ref().map(|peek| peek.generation) {
+                    this.dismiss_peek(generation, window, cx);
+                } else {
+                    cx.propagate();
+                }
+            }))
             .on_action(cx.listener(|this, _: &NewTab, _, cx| {
                 this.command(SessionCommand::NewTab {
                     address: "about:blank".to_owned(),
@@ -1346,7 +1427,22 @@ impl Render for BrowserView {
                 this.toggle_history();
                 cx.notify();
             }))
-            .child(self.toolbar(cx))
+            .child(title_bar(
+                if self.sidebar_sizing.width() == 0. {
+                    div()
+                        .w(px(page_card::titlebar_navigation_width(f32::from(
+                            window.viewport_size().width,
+                        ))))
+                        .min_w_0()
+                        .child(self.toolbar(cx))
+                } else {
+                    div().h_full().flex().items_center().child("Atlas")
+                },
+                window.is_maximized(),
+            ))
+            .when(self.sidebar_sizing.width() > 0., |root| {
+                root.child(self.toolbar(cx))
+            })
             .children(self.runtime_banner(cx))
             .child(
                 div()

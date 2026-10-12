@@ -2,6 +2,7 @@
 
 mod clear_data;
 mod environment;
+mod overlay;
 mod page;
 mod placement;
 
@@ -11,7 +12,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender, TryRecvError},
     },
     thread::{self, JoinHandle},
@@ -30,6 +31,7 @@ use windows::Win32::{
 };
 
 pub use clear_data::{BrowsingDataKinds, ClearOutcome, ClearSpan};
+pub use overlay::{OverlayMonitor, OverlayPointer, overlay_monitor, overlay_pointer};
 use page::Page;
 
 const COMMAND_MESSAGE: u32 = WM_APP + 41;
@@ -55,6 +57,8 @@ pub enum BrowserShortcut {
     Back,
     Forward,
     Reload,
+    ToggleSidebar,
+    DismissPeek(u64),
 }
 
 pub enum BrowserCommand {
@@ -217,6 +221,7 @@ pub struct BrowserHost {
     commands: Sender<BrowserCommand>,
     thread_id: u32,
     stopped: Arc<AtomicBool>,
+    peek_generation: Arc<AtomicU64>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -233,6 +238,8 @@ impl BrowserHost {
         let (started, ready) = mpsc::sync_channel(1);
         let stopped = Arc::new(AtomicBool::new(false));
         let worker_stopped = stopped.clone();
+        let peek_generation = Arc::new(AtomicU64::new(0));
+        let worker_peek = peek_generation.clone();
 
         // Establish the message queue before exposing its thread ID to callers.
         let worker = thread::Builder::new()
@@ -256,6 +263,7 @@ impl BrowserHost {
                     incoming,
                     &completion.events,
                     thread_id,
+                    worker_peek,
                 ) {
                     completion
                         .events
@@ -269,6 +277,7 @@ impl BrowserHost {
                 commands,
                 thread_id,
                 stopped,
+                peek_generation,
                 worker: Some(worker),
             },
             outgoing,
@@ -281,6 +290,11 @@ impl BrowserHost {
             .map_err(|_| BrowserError::QueueClosed)?;
         unsafe { PostThreadMessageW(self.thread_id, COMMAND_MESSAGE, WPARAM(0), LPARAM(0)) }
             .map_err(|_| BrowserError::Wake)
+    }
+
+    /// Escape belongs to a live peek only; zero leaves it with the focused page.
+    pub fn set_peek_generation(&self, generation: u64) {
+        self.peek_generation.store(generation, Ordering::Release);
     }
 
     /// Join only after `Stopped`, so the GUI does not wait while WebView2 needs its parent.
@@ -335,6 +349,7 @@ impl Drop for HostCompletion {
 struct ShortcutSink {
     send: Sender<BrowserShortcut>,
     thread_id: u32,
+    peek_generation: Arc<AtomicU64>,
 }
 
 impl ShortcutSink {
@@ -353,6 +368,7 @@ fn run(
     incoming: Receiver<BrowserCommand>,
     events: &EventSink,
     thread_id: u32,
+    peek_generation: Arc<AtomicU64>,
 ) -> Result<(), BrowserError> {
     let _apartment = environment::Apartment::new()?;
     let environment = environment::create(&profile)?;
@@ -366,6 +382,7 @@ fn run(
         shortcuts: ShortcutSink {
             send: shortcut_send,
             thread_id,
+            peek_generation,
         },
     };
     events.emit(BrowserEvent::Ready);

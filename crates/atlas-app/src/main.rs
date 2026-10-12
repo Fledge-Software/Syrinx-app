@@ -96,6 +96,7 @@ fn main() -> ExitCode {
                     cx,
                 ))),
                 titlebar: Some(TitlebarOptions {
+                    appears_transparent: true,
                     title: Some("Atlas · integrated preview".into()),
                     ..Default::default()
                 }),
