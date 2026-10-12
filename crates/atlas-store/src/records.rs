@@ -1,12 +1,14 @@
 //! Encodes complete tab snapshots and commits their records and revision together.
 
 use atlas_core::{
-    SavedPageId, SavedPageSnapshot, TabId, TabKind, TabMetadata, TabModelSnapshot, TabSnapshot,
+    SavedEntryId, SavedFolderId, SavedFolderSnapshot, SavedPageId, SavedPageSnapshot,
+    SavedPlacement, TabId, TabKind, TabMetadata, TabModelSnapshot, TabSnapshot,
 };
 use rusqlite::{Connection, Row, Transaction, TransactionBehavior, params, types::ValueRef};
 
 use crate::engine::StoredSnapshot;
 use crate::error::{EncodingField, StoreError, StoreOperation, database_error, with_cleanup};
+use crate::schema::{CURRENT_GENERATION, SchemaGeneration};
 
 struct SessionState {
     revision: u64,
@@ -15,13 +17,28 @@ struct SessionState {
     last_saved_page_id: u64,
 }
 
-pub(crate) fn load(connection: &mut Connection) -> Result<StoredSnapshot, StoreError> {
+/// The saved folders, their tree and their watermark, as one generation stores them.
+struct SavedTree {
+    folders: Vec<SavedFolderSnapshot>,
+    layout: Vec<SavedPlacement>,
+    last_saved_folder_id: u64,
+}
+
+pub(crate) fn load(
+    connection: &mut Connection,
+    generation: SchemaGeneration,
+) -> Result<StoredSnapshot, StoreError> {
     // All tables come from the same SQLite read snapshot, even while the writer commits.
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Deferred)
         .map_err(|error| database_error(StoreOperation::BeginRead, error))?;
-    let result = read_snapshot(&transaction);
+    let result = read_snapshot(&transaction, generation);
     finish_transaction(transaction, result)
+}
+
+/// Reads and validates current-schema records inside a caller's transaction.
+pub(crate) fn read_current(connection: &Connection) -> Result<StoredSnapshot, StoreError> {
+    read_snapshot(connection, CURRENT_GENERATION)
 }
 
 pub(crate) fn save(
@@ -38,14 +55,25 @@ pub(crate) fn save(
     finish_transaction(transaction, result)
 }
 
-fn read_snapshot(connection: &Connection) -> Result<StoredSnapshot, StoreError> {
+fn read_snapshot(
+    connection: &Connection,
+    generation: SchemaGeneration,
+) -> Result<StoredSnapshot, StoreError> {
     let state = read_state(connection)?;
+    let saved_pages = read_saved_pages(connection)?;
+    let tree = match generation {
+        SchemaGeneration::FlatSaved => flat_tree(&saved_pages),
+        SchemaGeneration::Folders => read_saved_tree(connection)?,
+    };
     let snapshot = TabModelSnapshot {
         tabs: read_tabs(connection)?,
-        saved_pages: read_saved_pages(connection)?,
+        saved_pages,
+        saved_folders: tree.folders,
+        saved_layout: tree.layout,
         active_id: state.active_id,
         last_tab_id: state.last_tab_id,
         last_saved_page_id: state.last_saved_page_id,
+        last_saved_folder_id: tree.last_saved_folder_id,
     };
     snapshot.validate()?;
     Ok(StoredSnapshot {
@@ -105,6 +133,116 @@ fn read_saved_pages(connection: &Connection) -> Result<Vec<SavedPageSnapshot>, S
     Ok(pages)
 }
 
+/// A version 1 database has no folders: every saved page sits at the top level, in order.
+fn flat_tree(pages: &[SavedPageSnapshot]) -> SavedTree {
+    SavedTree {
+        folders: Vec::new(),
+        layout: pages
+            .iter()
+            .map(|page| SavedPlacement {
+                entry: SavedEntryId::Page(page.id),
+                parent: None,
+            })
+            .collect(),
+        last_saved_folder_id: 0,
+    }
+}
+
+fn read_saved_tree(connection: &Connection) -> Result<SavedTree, StoreError> {
+    Ok(SavedTree {
+        folders: read_saved_folders(connection)?,
+        layout: read_saved_layout(connection)?,
+        last_saved_folder_id: read_folder_watermark(connection)?,
+    })
+}
+
+fn read_saved_folders(connection: &Connection) -> Result<Vec<SavedFolderSnapshot>, StoreError> {
+    // Unplaced folders sort first, so core validation rejects them instead of hiding them.
+    let mut statement = connection
+        .prepare_cached("SELECT f.id, f.title FROM saved_folders AS f LEFT JOIN saved_layout AS l ON l.folder_id = f.id ORDER BY l.entry_order")
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    let mut folders = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| database_error(StoreOperation::Read, error))?
+    {
+        folders.push(SavedFolderSnapshot {
+            id: saved_folder_id(row, 0)?,
+            title: text(row, 1)?,
+        });
+    }
+    Ok(folders)
+}
+
+fn read_saved_layout(connection: &Connection) -> Result<Vec<SavedPlacement>, StoreError> {
+    let mut statement = connection
+        .prepare_cached("SELECT entry_order, page_id, folder_id, parent_folder_id FROM saved_layout ORDER BY entry_order")
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    let mut layout = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| database_error(StoreOperation::Read, error))?
+    {
+        check_order(row, 0, layout.len(), EncodingField::SavedLayout)?;
+        layout.push(SavedPlacement {
+            entry: layout_entry(row)?,
+            parent: match value(row, 3)? {
+                ValueRef::Null => None,
+                _ => Some(saved_folder_id(row, 3)?),
+            },
+        });
+    }
+    Ok(layout)
+}
+
+fn layout_entry(row: &Row<'_>) -> Result<SavedEntryId, StoreError> {
+    // Exactly one of the page and folder columns names the entry.
+    match (value(row, 1)?, value(row, 2)?) {
+        (ValueRef::Null, ValueRef::Null) | (ValueRef::Blob(_), ValueRef::Blob(_)) => {
+            Err(StoreError::InvalidEncoding(EncodingField::SavedLayout))
+        }
+        (_, ValueRef::Null) => Ok(SavedEntryId::Page(saved_page_id(row, 1)?)),
+        _ => Ok(SavedEntryId::Folder(saved_folder_id(row, 2)?)),
+    }
+}
+
+fn read_folder_watermark(connection: &Connection) -> Result<u64, StoreError> {
+    let mut statement = connection
+        .prepare_cached("SELECT singleton, last_saved_folder_id FROM saved_folder_state")
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| database_error(StoreOperation::Read, error))?;
+    let row = rows
+        .next()
+        .map_err(|error| database_error(StoreOperation::Read, error))?
+        .ok_or(StoreError::InvalidEncoding(
+            EncodingField::SavedFolderWatermark,
+        ))?;
+    if integer(row, 0, EncodingField::SavedFolderWatermark)? != 1 {
+        return Err(StoreError::InvalidEncoding(
+            EncodingField::SavedFolderWatermark,
+        ));
+    }
+    let watermark = unsigned(row, 1, EncodingField::SavedFolderWatermark)?;
+    if rows
+        .next()
+        .map_err(|error| database_error(StoreOperation::Read, error))?
+        .is_some()
+    {
+        return Err(StoreError::InvalidEncoding(
+            EncodingField::SavedFolderWatermark,
+        ));
+    }
+    Ok(watermark)
+}
+
 fn read_tabs(connection: &Connection) -> Result<Vec<TabSnapshot>, StoreError> {
     let mut statement = connection
         .prepare_cached("SELECT id, live_order, kind, title, address, favicon, badge, saved_page_id FROM live_tabs ORDER BY live_order")
@@ -145,6 +283,7 @@ fn replace_snapshot(
     }
     if snapshot.last_tab_id < previous.last_tab_id
         || snapshot.last_saved_page_id < previous.last_saved_page_id
+        || snapshot.last_saved_folder_id < read_folder_watermark(connection)?
     {
         return Err(StoreError::WatermarkRegression);
     }
@@ -153,12 +292,15 @@ fn replace_snapshot(
         .checked_add(1)
         .ok_or(StoreError::RevisionExhausted)?;
 
-    // Clear selection before replacing rows, then restore it with the new counters.
+    // Clear selection and the tree before replacing rows, then restore them with the new counters.
     connection
-        .execute_batch("UPDATE session_state SET active_tab_id = NULL; DELETE FROM live_tabs; DELETE FROM saved_pages;")
+        .execute_batch("UPDATE session_state SET active_tab_id = NULL; DELETE FROM saved_layout; DELETE FROM live_tabs; DELETE FROM saved_pages; DELETE FROM saved_folders;")
         .map_err(|error| database_error(StoreOperation::Write, error))?;
+    write_saved_folders(connection, &snapshot.saved_folders)?;
     write_saved_pages(connection, &snapshot.saved_pages)?;
+    write_saved_layout(connection, &snapshot.saved_layout)?;
     write_tabs(connection, &snapshot.tabs)?;
+    write_folder_watermark(connection, snapshot.last_saved_folder_id)?;
     let active_id = snapshot.active_id.map(|id| id.get().to_be_bytes());
     let updated = connection
         .execute(
@@ -190,6 +332,61 @@ fn write_saved_pages(
                 page.metadata.badge
             ])
             .map_err(|error| database_error(StoreOperation::Write, error))?;
+    }
+    Ok(())
+}
+
+fn write_saved_folders(
+    connection: &Connection,
+    folders: &[SavedFolderSnapshot],
+) -> Result<(), StoreError> {
+    let mut statement = connection
+        .prepare_cached("INSERT INTO saved_folders(id, title) VALUES (?1, ?2)")
+        .map_err(|error| database_error(StoreOperation::Write, error))?;
+    for folder in folders {
+        statement
+            .execute(params![folder.id.get().to_be_bytes(), folder.title])
+            .map_err(|error| database_error(StoreOperation::Write, error))?;
+    }
+    Ok(())
+}
+
+fn write_saved_layout(
+    connection: &Connection,
+    layout: &[SavedPlacement],
+) -> Result<(), StoreError> {
+    let mut statement = connection
+        .prepare_cached("INSERT INTO saved_layout(entry_order, page_id, folder_id, parent_folder_id) VALUES (?1, ?2, ?3, ?4)")
+        .map_err(|error| database_error(StoreOperation::Write, error))?;
+    for (position, placement) in layout.iter().enumerate() {
+        let (page_id, folder_id) = match placement.entry {
+            SavedEntryId::Page(id) => (Some(id.get().to_be_bytes()), None),
+            SavedEntryId::Folder(id) => (None, Some(id.get().to_be_bytes())),
+        };
+        let parent_id = placement.parent.map(|id| id.get().to_be_bytes());
+        statement
+            .execute(params![
+                order_value(position)?,
+                page_id,
+                folder_id,
+                parent_id
+            ])
+            .map_err(|error| database_error(StoreOperation::Write, error))?;
+    }
+    Ok(())
+}
+
+fn write_folder_watermark(connection: &Connection, watermark: u64) -> Result<(), StoreError> {
+    let updated = connection
+        .execute(
+            "UPDATE saved_folder_state SET last_saved_folder_id = ?1 WHERE singleton = 1",
+            [watermark.to_be_bytes()],
+        )
+        .map_err(|error| database_error(StoreOperation::Write, error))?;
+    if updated != 1 {
+        return Err(StoreError::InvalidEncoding(
+            EncodingField::SavedFolderWatermark,
+        ));
     }
     Ok(())
 }
@@ -243,6 +440,11 @@ fn tab_id(row: &Row<'_>, column: usize, field: EncodingField) -> Result<TabId, S
 fn saved_page_id(row: &Row<'_>, column: usize) -> Result<SavedPageId, StoreError> {
     SavedPageId::new(unsigned(row, column, EncodingField::SavedPageId)?)
         .map_err(|_| StoreError::InvalidEncoding(EncodingField::SavedPageId))
+}
+
+fn saved_folder_id(row: &Row<'_>, column: usize) -> Result<SavedFolderId, StoreError> {
+    SavedFolderId::new(unsigned(row, column, EncodingField::SavedFolderId)?)
+        .map_err(|_| StoreError::InvalidEncoding(EncodingField::SavedFolderId))
 }
 
 fn optional_tab_id(row: &Row<'_>, column: usize) -> Result<Option<TabId>, StoreError> {
