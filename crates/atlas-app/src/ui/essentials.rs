@@ -22,13 +22,29 @@ pub(super) fn bind_keys(cx: &mut App) {
 }
 
 impl BrowserView {
+    pub(super) fn palette_command(
+        &mut self,
+        id: NonZeroU64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(shortcut) = crate::commands::shortcut(id) else {
+            return;
+        };
+        window.activate_window();
+        // A queued native Focus would steal focus back after open_find focuses its input.
+        if shortcut != BrowserShortcut::Find {
+            self.focus_page(window);
+        }
+        self.shortcut(shortcut, window, cx);
+    }
+
     pub(super) fn essential_shortcut(&mut self, shortcut: BrowserShortcut) {
         if self.closing {
             return;
         }
         if shortcut == BrowserShortcut::History {
-            self.message =
-                "History shortcut received; the history list awaits P1-20 integration.".into();
+            self.message = "The history list awaits P1-20 integration.".into();
             return;
         }
         if let Some(command) = page_action(self.shown.map(TabId::get), shortcut) {
@@ -71,6 +87,7 @@ impl BrowserView {
             ("find", "Find", BrowserShortcut::Find),
             ("downloads", "Downloads", BrowserShortcut::Downloads),
             ("print", "Print", BrowserShortcut::Print),
+            ("history", "History", BrowserShortcut::History),
             ("zoom-out", "−", BrowserShortcut::ZoomOut),
         ] {
             controls = controls.child(button(id, label).on_click(cx.listener(
