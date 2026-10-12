@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use super::registration::{ACCEPTS_OPEN_URL, EXECUTABLE, GENERATED_SCRIPT, PRODUCT};
+use super::registration::{ACCEPTS_OPEN_URL, DATA_FOLDER, EXECUTABLE, GENERATED_SCRIPT, PRODUCT};
 
 /// Manifest file name at the package root; the install script and P1-38 read it.
 pub const MANIFEST: &str = "atlas-package.json";
@@ -80,6 +80,7 @@ pub fn render(identity: &BuildIdentity, files: &[PackagedFile]) -> Result<String
         "signed": false,
         "executable": EXECUTABLE,
         "accepts_open_url": ACCEPTS_OPEN_URL,
+        "data_folder": DATA_FOLDER,
         "files": files.iter().map(file_entry).collect::<Vec<Value>>(),
     });
     serde_json::to_string_pretty(&manifest)
@@ -175,6 +176,7 @@ mod tests {
         assert_eq!(manifest["signed"], false);
         assert_eq!(manifest["executable"], "atlas-app.exe");
         assert_eq!(manifest["accepts_open_url"], ACCEPTS_OPEN_URL);
+        assert_eq!(manifest["data_folder"], DATA_FOLDER);
         let listed: Vec<_> = manifest["files"]
             .as_array()
             .unwrap()

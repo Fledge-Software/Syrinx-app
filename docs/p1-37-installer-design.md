@@ -57,9 +57,13 @@ per-user browser registration; `unregister-atlas.ps1` removes it and, with
 - P1-38's signed update packages can reuse the same layout and manifest.
 
 The cost is polish: there is no wizard, and PowerShell's default execution
-policy on Windows 11 refuses unsigned scripts, so the owner starts each one
-with `powershell -ExecutionPolicy Bypass -File ...`. That flag applies to
-that one PowerShell process only; it changes no Windows setting.
+policy on Windows 11 client editions (`Restricted`) refuses every script, so
+the owner starts each one with
+`powershell -ExecutionPolicy RemoteSigned -File ...`. That flag applies to
+that one PowerShell process only and changes no Windows setting. Under
+`RemoteSigned`, local unsigned scripts run, but a script carrying the Mark of
+the Web (downloaded, or unzipped from a downloaded zip) is refused unless
+signed. `Bypass` was rejected because it would skip that check silently.
 
 **Rejected: MSIX.** `makeappx.exe` is present, but an MSIX package must be
 signed by a certificate the machine trusts before Windows installs it. Atlas
@@ -98,14 +102,15 @@ over MSI semantics.
 Atlas stays unsigned for now (D38). What the owner will see:
 
 - **Files built on this machine** carry no Mark of the Web, the marker
-  Windows adds to downloaded files, so SmartScreen's "Windows protected
-  your PC" prompt does not appear for them.
-- **A zip copied from elsewhere** (a browser download, an email) does carry
-  the Mark of the Web. Running `atlas-app.exe` from it then shows "Windows
-  protected your PC" with an "unknown publisher"; the owner chooses "More
-  info", then "Run anyway". PowerShell also refuses or prompts for marked
-  scripts. Building locally avoids this; `Unblock-File` removes the marker
-  if the owner trusts the copy.
+  Windows adds to downloaded files. SmartScreen's "Windows protected your
+  PC" prompt does not appear for them, and `RemoteSigned` runs the scripts.
+- **A zip copied from elsewhere** (a browser download, an email) carries the
+  Mark of the Web, and unzipping with Explorer passes it to every file.
+  `RemoteSigned` then refuses the unsigned scripts, and `atlas-app.exe` shows
+  "Windows protected your PC" with an unknown publisher. This is the check
+  working. If the owner has confirmed where the zip came from, they run
+  `Unblock-File` on the zip before unzipping it (or on each extracted file),
+  which removes the marker; otherwise they build the package locally.
 - **Smart App Control** can block unsigned executables outright, with no
   "Run anyway" (`docs/LOCAL-DEV.md`, `docs/trapstoknow.md`). The owner has
   turned it off on this machine (2026-10-12); a fresh Windows install may
@@ -114,7 +119,9 @@ Atlas stays unsigned for now (D38). What the owner will see:
   does not require a signature to list a browser there.
 
 Nothing in this slice turns off or works around SmartScreen, Smart App
-Control or execution policy.
+Control or execution policy. Every script and the Installed apps uninstall
+command use `-ExecutionPolicy RemoteSigned`; `cargo xtask check-packaging`
+refuses `Bypass` in any script.
 
 ## Where things live
 
@@ -122,82 +129,94 @@ Control or execution policy.
 | --- | --- | --- |
 | Program files | `%LOCALAPPDATA%\Programs\Atlas\` | Replaced on upgrade; removed by `unregister-atlas.ps1 -Uninstall`. |
 | Previous version | `%LOCALAPPDATA%\Programs\Atlas.previous\` | One kept for manual rollback; replaced on the next upgrade. |
-| Atlas data (current preview) | `%LOCALAPPDATA%\AtlasProductPreview\` (`State`, `WebView2`) | Never touched by install or upgrade; kept on uninstall unless the owner types DELETE. |
-| Atlas data (platform default) | `%LOCALAPPDATA%\Atlas\data\` | Same. `WindowsDirectoryLease::discover` uses it; the app does not yet. |
+| Installed Atlas's data | `%LOCALAPPDATA%\Atlas\data\` (`State`, `WebView2`) | Never touched by install or upgrade; kept on uninstall unless the owner types DELETE. |
+| Development and preview data | `%LOCALAPPDATA%\AtlasProductPreview\` | Not used by the installed app; uninstall offers it only with `-IncludePreviewData`. |
 | Registration | `HKCU` keys listed below | Written by `register-atlas.ps1`; removed by `unregister-atlas.ps1`. |
 | Start menu shortcut | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Atlas.lnk` | Same as registration. |
 
 `%LOCALAPPDATA%\Programs` is Windows' conventional per-user program folder.
 All data stays in local, never roaming, app data (D13). The program folder
 and data folders never overlap; `install-atlas.ps1` refuses an install
-folder inside a data folder, and an xtask test checks the defaults.
+folder inside either data folder, and an xtask test checks the defaults.
 
-The two data folders are an open thread for the owner, not something this
-slice settles: the integrated preview writes `AtlasProductPreview`, while
-the platform's production default is `Atlas\data`. Moving the app to the
-production folder needs a data move or an import, which belongs to its own
-slice. The uninstall script asks about each folder separately.
+The owner decided on 2026-10-12 that the installed Atlas keeps its data in
+`%LOCALAPPDATA%\Atlas\data`, separate from `AtlasProductPreview`, which
+development and preview runs (`cargo atlas`) keep using. Nothing is moved:
+the installed app starts empty. `cargo xtask package` builds `atlas-app`
+with its `installed` Cargo feature, which switches one constant
+(`DATA_FOLDER` in `crates/atlas-app/src/main.rs`). A feature was chosen over
+a run-time switch because the folder is then fixed in the shipped
+executable and cannot be redirected by a command-line argument. An xtask
+test checks that the constant and the packaging table name the same folders,
+and the manifest records `data_folder`.
 
 ## Browser registration
 
-These are every value `register-atlas.ps1` writes. All are under
+The table below is every value the scripts handle. All are under
 `HKEY_CURRENT_USER`; nothing goes to `HKEY_LOCAL_MACHINE`. `{exe}` is the
 installed `atlas-app.exe`, `{dir}` its folder and `{version}` the manifest's
-version. The source of truth is `VALUES` in
-`crates/xtask/src/packaging/registration.rs`.
+version. The source of truth is `VALUES` and `SHARED_VALUES` in
+`crates/xtask/src/packaging/registration.rs`; `cargo xtask
+write-registration` renders this table and `packaging/atlas-registration.ps1`
+from it, and the gate fails if either differs.
 
-`Software\Clients\StartMenuInternet\Atlas` registers Atlas as a browser:
-
+<!-- BEGIN GENERATED REGISTRY TABLE -->
 | Key under `HKCU\` | Value | Data |
 | --- | --- | --- |
-| `Software\Clients\StartMenuInternet\Atlas` | (default) | `Atlas` |
-| `...\Atlas\DefaultIcon` | (default) | `{exe},0` |
-| `...\Atlas\shell\open\command` | (default) | `"{exe}"` |
-| `...\Atlas\Capabilities` | `ApplicationName` | `Atlas` |
-| `...\Atlas\Capabilities` | `ApplicationDescription` | `Atlas web browser` |
-| `...\Atlas\Capabilities` | `ApplicationIcon` | `{exe},0` |
-| `...\Atlas\Capabilities\StartMenu` | `StartMenuInternet` | `Atlas` |
-| `...\Atlas\Capabilities\URLAssociations` | `http` | `AtlasURL` |
-| `...\Atlas\Capabilities\URLAssociations` | `https` | `AtlasURL` |
+| `Software\Clients\StartMenuInternet\AtlasBrowser` | `AtlasPackagingOwner` | `atlas-packaging-v1` |
+| `Software\Clients\StartMenuInternet\AtlasBrowser` | `(default)` | `Atlas` |
+| `Software\Clients\StartMenuInternet\AtlasBrowser\DefaultIcon` | `(default)` | `{exe},0` |
+| `Software\Clients\StartMenuInternet\AtlasBrowser\shell\open\command` | `(default)` | `"{exe}"` |
+| `Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities` | `ApplicationName` | `Atlas` |
+| `Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities` | `ApplicationDescription` | `Atlas web browser` |
+| `Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities` | `ApplicationIcon` | `{exe},0` |
+| `Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities\StartMenu` | `StartMenuInternet` | `AtlasBrowser` |
+| `Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities\URLAssociations` | `http` | `AtlasBrowserURL` |
+| `Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities\URLAssociations` | `https` | `AtlasBrowserURL` |
+| `Software\Classes\AtlasBrowserURL` | `AtlasPackagingOwner` | `atlas-packaging-v1` |
+| `Software\Classes\AtlasBrowserURL` | `(default)` | `Atlas URL` |
+| `Software\Classes\AtlasBrowserURL` | `FriendlyTypeName` | `Atlas URL` |
+| `Software\Classes\AtlasBrowserURL\Application` | `ApplicationName` | `Atlas` |
+| `Software\Classes\AtlasBrowserURL\Application` | `ApplicationDescription` | `Atlas web browser` |
+| `Software\Classes\AtlasBrowserURL\Application` | `ApplicationIcon` | `{exe},0` |
+| `Software\Classes\AtlasBrowserURL\DefaultIcon` | `(default)` | `{exe},0` |
+| `Software\Classes\AtlasBrowserURL\shell\open\command` | `(default)` | `"{exe}" --open-url %1` |
+| `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `AtlasPackagingOwner` | `atlas-packaging-v1` |
+| `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `DisplayName` | `Atlas` |
+| `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `DisplayVersion` | `{version}` |
+| `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `DisplayIcon` | `{exe},0` |
+| `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `InstallLocation` | `{dir}` |
+| `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `UninstallString` | `powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "{dir}\unregister-atlas.ps1" -Uninstall -PauseAtEnd` |
+| `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `NoModify` | DWORD 1 |
+| `Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser` | `NoRepair` | DWORD 1 |
+| `Software\RegisteredApplications` | `AtlasBrowser` | `Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities` |
+<!-- END GENERATED REGISTRY TABLE -->
 
-`RegisteredApplications` points Windows at those capabilities. It is a key
-every browser shares, so Atlas writes and later removes only its own value:
+What the keys do:
 
-| Key under `HKCU\` | Value | Data |
-| --- | --- | --- |
-| `Software\RegisteredApplications` | `Atlas` | `Software\Clients\StartMenuInternet\Atlas\Capabilities` |
+- **`StartMenuInternet\AtlasBrowser`** registers Atlas as a browser;
+  `Capabilities` says it handles `http` and `https` links through the
+  `AtlasBrowserURL` ProgID (programmatic identifier: the named handler a
+  link scheme or file type is associated with).
+- **`RegisteredApplications`** points Windows at those capabilities. Every
+  browser shares that key, so Atlas writes only its `AtlasBrowser` value.
+- **`Classes\AtlasBrowserURL`** is the ProgID whose `shell\open\command`
+  opens a link. It deliberately has no `URL Protocol` value: that value
+  would turn the ProgID into a new `atlasbrowserurl:` link scheme, which
+  http and https handling does not need.
+- **`Uninstall\AtlasBrowser`** is the Installed apps entry. Its uninstall
+  command passes `-PauseAtEnd` so the window stays open long enough to read.
 
-`AtlasURL` is the ProgID (programmatic identifier: the named handler a file
-type or link scheme is associated with) that opens a link:
-
-| Key under `HKCU\` | Value | Data |
-| --- | --- | --- |
-| `Software\Classes\AtlasURL` | (default) | `Atlas URL` |
-| `Software\Classes\AtlasURL` | `FriendlyTypeName` | `Atlas URL` |
-| `Software\Classes\AtlasURL` | `URL Protocol` | (empty) |
-| `Software\Classes\AtlasURL\Application` | `ApplicationName` | `Atlas` |
-| `Software\Classes\AtlasURL\Application` | `ApplicationDescription` | `Atlas web browser` |
-| `Software\Classes\AtlasURL\Application` | `ApplicationIcon` | `{exe},0` |
-| `Software\Classes\AtlasURL\DefaultIcon` | (default) | `{exe},0` |
-| `Software\Classes\AtlasURL\shell\open\command` | (default) | `"{exe}" --open-url %1` |
-
-The Installed apps entry, so the owner can uninstall from Settings:
-
-| Key under `HKCU\` | Value | Data |
-| --- | --- | --- |
-| `Software\Microsoft\Windows\CurrentVersion\Uninstall\Atlas` | `DisplayName` | `Atlas` |
-| same | `DisplayVersion` | `{version}` |
-| same | `DisplayIcon` | `{exe},0` |
-| same | `InstallLocation` | `{dir}` |
-| same | `UninstallString` | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{dir}\unregister-atlas.ps1" -Uninstall` |
-| same | `NoModify` | DWORD 1 |
-| same | `NoRepair` | DWORD 1 |
-
-`unregister-atlas.ps1` deletes the three key trees Atlas owns
-(`StartMenuInternet\Atlas`, `Classes\AtlasURL`, `Uninstall\Atlas`) and the
-single `Atlas` value under `RegisteredApplications`. A test fails if any
-written value would be left behind, or if a shared key were ever listed for
-whole-tree deletion. After writing or removing keys, both scripts call
+**Ownership.** "Atlas" is a common name, so every key Atlas owns is named
+`AtlasBrowser` (or `AtlasBrowserURL`) and carries an owner marker value,
+`AtlasPackagingOwner = atlas-packaging-v1`. `register-atlas.ps1` refuses,
+before writing anything, if one of those keys exists without the marker or
+if the shared `RegisteredApplications` value points elsewhere.
+`unregister-atlas.ps1` deletes a key tree only when it carries the marker,
+and the shared value only while it still holds Atlas's data. Tests check
+that every owned root has a marker, that unregistering covers every value
+registering writes, and that no shared key is ever deleted whole. After
+writing or removing keys, both scripts call
 `SHChangeNotify(SHCNE_ASSOCCHANGED)` so Explorer re-reads associations.
 
 What is deliberately absent:
@@ -209,7 +228,7 @@ What is deliberately absent:
   Windows 11 protects the default browser with a hashed `UserChoice` value
   and expects the owner to pick it in Settings > Apps > Default apps. The
   script can open that page (`-OpenDefaultApps`, using
-  `ms-settings:defaultapps?registeredAppUser=Atlas`) and stops there.
+  `ms-settings:defaultapps?registeredAppUser=AtlasBrowser`) and stops there.
 - **No legacy `InstallInfo` show/hide-icons commands** and no
   `AppUserModelId`: Atlas sets no explicit application user model ID, and
   writing one the process does not use would mis-group taskbar entries.
@@ -223,7 +242,7 @@ When the owner clicks a link elsewhere, Windows runs
 following Chrome's `--single-argument` pattern: P1-34 must read the raw
 command line after `--open-url ` as exactly one URL, so a crafted link
 containing quotes or spaces cannot smuggle extra switches into Atlas. P1-34
-also validates the scheme (http and https only) and forwards the link to an
+also accepts only http and https links and forwards them to an
 already-running Atlas.
 
 **Today's `atlas-app.exe` refuses any argument it does not know**
@@ -233,6 +252,30 @@ registration table is therefore `false`; it is copied into the generated
 script and the manifest, and `register-atlas.ps1` warns the owner not to
 choose Atlas as default until a build that accepts links is installed.
 P1-34 sets it to `true` when it lands.
+
+## Script safeguards
+
+The scripts were reviewed but cannot be run by an agent, so their guards are
+kept simple and shared through `packaging/atlas-common.ps1`:
+
+- Every folder goes through `Resolve-AtlasFolder`, which makes it absolute,
+  trims a trailing backslash and refuses a drive root. Without the trim,
+  `...\Atlas\` would put the staging folder inside the target.
+- The install refuses to install into or below the unzipped package, and
+  refuses while Atlas runs from the program folder, `.previous` or `.new`.
+- A manifest is accepted only when its file list equals the fixed package
+  layout, so it cannot name paths outside the folder.
+- A program folder is deleted only when its manifest shows this tooling made
+  it; the manifest is deleted last, so a partial failure can be retried.
+- `-Uninstall` compares the folder it runs from with the registered
+  `InstallLocation` and changes nothing if they differ, so running it from
+  an unzipped package cannot delete the wrong folder.
+- If data deletion is partial (WebView2 can still hold files), the script
+  reports how many items remain instead of claiming success.
+- No script uses `using module`, the one construct that loads code while
+  PowerShell parses a file; the gate checks this, then parses every script
+  with `[System.Management.Automation.Language.Parser]::ParseFile`, which
+  runs nothing.
 
 ## Upgrade
 
@@ -291,17 +334,20 @@ cargo xtask package
 ```
 
 This runs `cargo xtask check-packaging`, builds `atlas-app` with the `local`
-profile, and writes `target\package\Atlas-<version>-<commit>[-dirty]-x64\`
-and a zip of it, using Windows' own `tar.exe`. A `-dirty` name means the
-working tree had uncommitted changes. The manifest records the version,
-commit, dirty flag, target, profile, `signed: false`, the executable, whether
-it accepts links, and each file's size and SHA-256. It holds no timestamp, so
+profile and its `installed` feature (data in `Atlas\data`), and writes
+`target\package\Atlas-<version>-<commit>[-dirty]-x64\` and a zip of it,
+using Windows' own `tar.exe`. A `-dirty` name means the working tree had
+uncommitted changes. The manifest records the version, commit, dirty flag,
+target, profile, `signed: false`, the executable, whether it accepts links,
+the data folder, and each file's size and SHA-256. It holds no timestamp, so
 one build always yields one manifest. Nothing is installed or registered.
 
 `cargo xtask check-packaging` runs in the gate. It refuses
-`packaging/atlas-registration.ps1` if it differs from the Rust table (run
-`cargo xtask write-registration` after changing the table) and parses every
-script with PowerShell's parser without running it.
+`packaging/atlas-registration.ps1` or this document's registry table if
+either differs from the Rust table (run `cargo xtask write-registration`
+after changing the table), refuses `using module`, `ExecutionPolicy Bypass`
+and machine-wide browser keys in any script, and parses every script with
+PowerShell's parser without running it.
 
 ## Owner checklist
 
@@ -312,14 +358,16 @@ administrator) PowerShell window.
 
 1. `cargo xtask package` in the repository, or receive a zip and confirm
    where it came from.
-2. Unzip it, for example to `Downloads`.
-3. `powershell -ExecutionPolicy Bypass -File <unzipped>\install-atlas.ps1`
+2. Unzip it, for example to `Downloads`. For a zip that was downloaded or
+   emailed, and only after confirming its source, run `Unblock-File` on the
+   zip first; otherwise `RemoteSigned` refuses its scripts.
+3. `powershell -ExecutionPolicy RemoteSigned -File <unzipped>\install-atlas.ps1`
 4. Check the message names `%LOCALAPPDATA%\Programs\Atlas` and a WebView2
    runtime version.
 
 **Register and choose the default browser**
 
-5. `powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\Atlas\register-atlas.ps1" -OpenDefaultApps`
+5. `powershell -ExecutionPolicy RemoteSigned -File "$env:LOCALAPPDATA\Programs\Atlas\register-atlas.ps1" -OpenDefaultApps`
 6. If it warns that this build cannot open links yet, stop here: Atlas is
    in the Start menu and Default apps, but do not make it the default until
    a P1-34 build is installed.
@@ -331,22 +379,27 @@ administrator) PowerShell window.
 8. Close Atlas.
 9. Unzip the new package and run its `install-atlas.ps1` as in step 3.
 10. Start Atlas and check that tabs, saved pages and sign-ins are intact.
+    (The first installed start is empty by design: the installed app uses
+    `Atlas\data`, not the preview's `AtlasProductPreview`.)
 11. If something is wrong, close Atlas and rename `Programs\Atlas.previous`
     back to `Programs\Atlas` (keep the newer folder aside); say if the older
     version refuses the database.
 
 **Unregister only (keep Atlas installed)**
 
-12. `powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\Atlas\unregister-atlas.ps1"`
+12. `powershell -ExecutionPolicy RemoteSigned -File "$env:LOCALAPPDATA\Programs\Atlas\unregister-atlas.ps1"`
 13. Choose another default browser if Windows asks.
 
 **Uninstall (data is kept by default)**
 
 14. Settings > Apps > Installed apps > Atlas > Uninstall, or step 12 with
-    `-Uninstall`.
-15. For each Atlas data folder it lists, press Enter to keep it. Type
+    `-Uninstall`, run from the installed folder.
+15. When it shows `%LOCALAPPDATA%\Atlas\data`, press Enter to keep it. Type
     `DELETE` only to erase saved pages, history, settings, backups and
-    website sign-ins permanently.
+    website sign-ins permanently. The development preview folder is offered
+    only with `-IncludePreviewData`, as a separate question.
+16. If it reports that items remain, close every Atlas window and delete
+    the folder it names by hand.
 
 ## What "done" means for P1-37
 

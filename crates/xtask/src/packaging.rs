@@ -27,6 +27,8 @@ pub fn package(root: &Path) -> Result<(), String> {
             "build",
             "--package",
             "atlas-app",
+            "--features",
+            "installed",
             "--profile",
             "local",
             "--offline",
@@ -49,37 +51,115 @@ pub fn package(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Refuse script drift from the Rust registration table and any PowerShell syntax error.
+/// Design doc whose registry table is rendered from the same Rust table.
+const DESIGN_DOC: &str = r"docs\p1-37-installer-design.md";
+const TABLE_START: &str = "<!-- BEGIN GENERATED REGISTRY TABLE -->";
+const TABLE_END: &str = "<!-- END GENERATED REGISTRY TABLE -->";
+
+/// Text a packaging script must never contain, with the reason shown on failure.
+const FORBIDDEN_SCRIPT_TEXT: [(&str, &str); 3] = [
+    // `using module` loads a module while parsing, so the parse check would no longer be inert.
+    ("using module", "would load code while the gate parses it"),
+    (
+        "ExecutionPolicy Bypass",
+        "skips the Mark-of-the-Web check; use RemoteSigned",
+    ),
+    ("HKLM:\\SOFTWARE\\Clients", "would register machine-wide"),
+];
+
+/// Refuse drift from the Rust registration table, forbidden script text and PowerShell syntax errors.
 pub fn check(root: &Path) -> Result<(), String> {
     check_generated_script(root)?;
-    let scripts: Vec<PathBuf> = manifest::SCRIPTS
-        .iter()
-        .map(|script| root.join(SCRIPT_FOLDER).join(script))
-        .collect();
+    check_design_doc_table(root)?;
+    let scripts = script_paths(root);
+    check_script_rules(&scripts)?;
     parse_powershell(&scripts)?;
     println!("Packaging scripts match the registration table and parse.");
     Ok(())
 }
 
-/// Rewrite the generated registration data after the Rust table changes.
+/// Rewrite the generated registration data and the design doc's table after the Rust table changes.
 pub fn write_registration(root: &Path) -> Result<(), String> {
     let path = root.join(SCRIPT_FOLDER).join(GENERATED_SCRIPT);
-    fs::write(&path, registration::render_script())
+    fs::write(&path, rendered_script())
         .map_err(|error| format!("Could not write {}: {error}", path.display()))?;
-    println!("Wrote {}.", path.display());
+    let doc_path = root.join(DESIGN_DOC);
+    let doc = read_text(&doc_path)?;
+    fs::write(&doc_path, with_doc_table(&doc)?)
+        .map_err(|error| format!("Could not write {}: {error}", doc_path.display()))?;
+    println!("Wrote {} and {}.", path.display(), doc_path.display());
     Ok(())
+}
+
+fn rendered_script() -> String {
+    registration::render_script(&manifest::layout())
+}
+
+fn script_paths(root: &Path) -> Vec<PathBuf> {
+    manifest::SCRIPTS
+        .iter()
+        .map(|script| root.join(SCRIPT_FOLDER).join(script))
+        .collect()
+}
+
+fn read_text(path: &Path) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|error| format!("Could not read {}: {error}", path.display()))
 }
 
 fn check_generated_script(root: &Path) -> Result<(), String> {
     // Compare without line endings: git may check the file out with LF or CRLF.
     let path = root.join(SCRIPT_FOLDER).join(GENERATED_SCRIPT);
-    let committed = fs::read_to_string(&path)
-        .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
-    if normalized(&committed) != normalized(&registration::render_script()) {
+    if normalized(&read_text(&path)?) != normalized(&rendered_script()) {
         return Err(format!(
             "{} differs from the registration table; run `cargo xtask write-registration`.",
             path.display()
         ));
+    }
+    Ok(())
+}
+
+fn check_design_doc_table(root: &Path) -> Result<(), String> {
+    let path = root.join(DESIGN_DOC);
+    let doc = normalized(&read_text(&path)?);
+    if doc != normalized(&with_doc_table(&doc)?) {
+        return Err(format!(
+            "{}'s registry table differs from the registration table; run `cargo xtask write-registration`.",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Replace the text between the doc's table markers with the rendered table.
+fn with_doc_table(doc: &str) -> Result<String, String> {
+    let doc = normalized(doc);
+    let (Some(start), Some(end)) = (doc.find(TABLE_START), doc.find(TABLE_END)) else {
+        return Err(format!("{DESIGN_DOC} lacks its generated-table markers."));
+    };
+    let body_start = start + TABLE_START.len();
+    if end < body_start {
+        return Err(format!("{DESIGN_DOC}'s table markers are out of order."));
+    }
+    Ok(format!(
+        "{}\n{}\n{}",
+        &doc[..body_start],
+        registration::render_doc_table(),
+        &doc[end..]
+    ))
+}
+
+fn check_script_rules(scripts: &[PathBuf]) -> Result<(), String> {
+    let mut violations = Vec::new();
+    for path in scripts {
+        let text = read_text(path)?;
+        for (forbidden, reason) in FORBIDDEN_SCRIPT_TEXT {
+            if text.contains(forbidden) {
+                violations.push(format!("{}: `{forbidden}` {reason}.", path.display()));
+            }
+        }
+    }
+    if !violations.is_empty() {
+        return Err(violations.join("\n"));
     }
     Ok(())
 }
@@ -89,7 +169,8 @@ fn normalized(text: &str) -> String {
 }
 
 fn parse_powershell(scripts: &[PathBuf]) -> Result<(), String> {
-    // Parse only: the PowerShell parser reads each file without running any of it.
+    // Parse only: ParseFile reads each file without running it, and the scripts avoid
+    // `using module`, the one construct that loads code at parse time.
     let list = scripts
         .iter()
         .map(|path| format!("'{}'", path.display().to_string().replace('\'', "''")))
@@ -227,6 +308,44 @@ mod tests {
     #[test]
     fn committed_registration_script_matches_the_table() {
         check_generated_script(&repository()).unwrap();
+    }
+
+    #[test]
+    fn design_doc_table_matches_the_table() {
+        check_design_doc_table(&repository()).unwrap();
+    }
+
+    #[test]
+    fn scripts_avoid_forbidden_text() {
+        check_script_rules(&script_paths(&repository())).unwrap();
+    }
+
+    #[test]
+    fn entry_scripts_normalize_folders_before_using_them() {
+        // The scripts cannot run in tests; check they route folders through the shared guard.
+        for script in [
+            "install-atlas.ps1",
+            "register-atlas.ps1",
+            "unregister-atlas.ps1",
+        ] {
+            let text = read_text(&repository().join(SCRIPT_FOLDER).join(script)).unwrap();
+            assert!(
+                text.contains("= Resolve-AtlasFolder $InstallDirectory"),
+                "{script} must normalize its install folder"
+            );
+        }
+        let common = read_text(&repository().join(SCRIPT_FOLDER).join("atlas-common.ps1")).unwrap();
+        assert!(common.contains("TrimEnd('\\')") && common.contains("GetPathRoot"));
+    }
+
+    #[test]
+    fn doc_table_replacement_keeps_surrounding_text() {
+        let doc = format!("intro\n{TABLE_START}\nold\n{TABLE_END}\noutro\n");
+        let updated = with_doc_table(&doc).unwrap();
+        assert!(updated.starts_with("intro\n"));
+        assert!(updated.ends_with(&format!("{TABLE_END}\noutro\n")));
+        assert!(!updated.contains("\nold\n"));
+        assert!(with_doc_table("no markers").is_err());
     }
 
     #[test]

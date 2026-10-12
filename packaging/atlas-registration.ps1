@@ -3,41 +3,48 @@
 # Every key is under HKEY_CURRENT_USER. Nothing here sets the default browser.
 
 $AtlasProduct = 'Atlas'
+$AtlasRegistryName = 'AtlasBrowser'
 $AtlasExecutable = 'atlas-app.exe'
 $AtlasInstallFolder = 'Programs\Atlas'
-$AtlasDataFolders = @('AtlasProductPreview', 'Atlas\data')
+$AtlasDataFolder = 'Atlas\data'
+$AtlasPreviewDataFolder = 'AtlasProductPreview'
+$AtlasPackageFiles = @('atlas-app.exe', 'atlas-common.ps1', 'atlas-registration.ps1', 'install-atlas.ps1', 'register-atlas.ps1', 'unregister-atlas.ps1')
 $AtlasOpenUrlSwitch = '--open-url'
 $AtlasAcceptsOpenUrl = $false
+$AtlasOwnerMarkerName = 'AtlasPackagingOwner'
+$AtlasOwnerMarkerData = 'atlas-packaging-v1'
+$AtlasUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'
 
 $AtlasRegistryValues = @(
-    @{ Key = 'Software\Clients\StartMenuInternet\Atlas'; Name = ''; Kind = 'String'; Data = 'Atlas' }
-    @{ Key = 'Software\Clients\StartMenuInternet\Atlas\DefaultIcon'; Name = ''; Kind = 'String'; Data = '{exe},0' }
-    @{ Key = 'Software\Clients\StartMenuInternet\Atlas\shell\open\command'; Name = ''; Kind = 'String'; Data = '"{exe}"' }
-    @{ Key = 'Software\Clients\StartMenuInternet\Atlas\Capabilities'; Name = 'ApplicationName'; Kind = 'String'; Data = 'Atlas' }
-    @{ Key = 'Software\Clients\StartMenuInternet\Atlas\Capabilities'; Name = 'ApplicationDescription'; Kind = 'String'; Data = 'Atlas web browser' }
-    @{ Key = 'Software\Clients\StartMenuInternet\Atlas\Capabilities'; Name = 'ApplicationIcon'; Kind = 'String'; Data = '{exe},0' }
-    @{ Key = 'Software\Clients\StartMenuInternet\Atlas\Capabilities\StartMenu'; Name = 'StartMenuInternet'; Kind = 'String'; Data = 'Atlas' }
-    @{ Key = 'Software\Clients\StartMenuInternet\Atlas\Capabilities\URLAssociations'; Name = 'http'; Kind = 'String'; Data = 'AtlasURL' }
-    @{ Key = 'Software\Clients\StartMenuInternet\Atlas\Capabilities\URLAssociations'; Name = 'https'; Kind = 'String'; Data = 'AtlasURL' }
-    @{ Key = 'Software\RegisteredApplications'; Name = 'Atlas'; Kind = 'String'; Data = 'Software\Clients\StartMenuInternet\Atlas\Capabilities' }
-    @{ Key = 'Software\Classes\AtlasURL'; Name = ''; Kind = 'String'; Data = 'Atlas URL' }
-    @{ Key = 'Software\Classes\AtlasURL'; Name = 'FriendlyTypeName'; Kind = 'String'; Data = 'Atlas URL' }
-    @{ Key = 'Software\Classes\AtlasURL'; Name = 'URL Protocol'; Kind = 'String'; Data = '' }
-    @{ Key = 'Software\Classes\AtlasURL\Application'; Name = 'ApplicationName'; Kind = 'String'; Data = 'Atlas' }
-    @{ Key = 'Software\Classes\AtlasURL\Application'; Name = 'ApplicationDescription'; Kind = 'String'; Data = 'Atlas web browser' }
-    @{ Key = 'Software\Classes\AtlasURL\Application'; Name = 'ApplicationIcon'; Kind = 'String'; Data = '{exe},0' }
-    @{ Key = 'Software\Classes\AtlasURL\DefaultIcon'; Name = ''; Kind = 'String'; Data = '{exe},0' }
-    @{ Key = 'Software\Classes\AtlasURL\shell\open\command'; Name = ''; Kind = 'String'; Data = '"{exe}" --open-url %1' }
-    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Atlas'; Name = 'DisplayName'; Kind = 'String'; Data = 'Atlas' }
-    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Atlas'; Name = 'DisplayVersion'; Kind = 'String'; Data = '{version}' }
-    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Atlas'; Name = 'DisplayIcon'; Kind = 'String'; Data = '{exe},0' }
-    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Atlas'; Name = 'InstallLocation'; Kind = 'String'; Data = '{dir}' }
-    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Atlas'; Name = 'UninstallString'; Kind = 'String'; Data = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{dir}\unregister-atlas.ps1" -Uninstall' }
-    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Atlas'; Name = 'NoModify'; Kind = 'DWord'; Data = 1 }
-    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Atlas'; Name = 'NoRepair'; Kind = 'DWord'; Data = 1 }
+    @{ Key = 'Software\Clients\StartMenuInternet\AtlasBrowser'; Name = 'AtlasPackagingOwner'; Kind = 'String'; Data = 'atlas-packaging-v1' }
+    @{ Key = 'Software\Clients\StartMenuInternet\AtlasBrowser'; Name = ''; Kind = 'String'; Data = 'Atlas' }
+    @{ Key = 'Software\Clients\StartMenuInternet\AtlasBrowser\DefaultIcon'; Name = ''; Kind = 'String'; Data = '{exe},0' }
+    @{ Key = 'Software\Clients\StartMenuInternet\AtlasBrowser\shell\open\command'; Name = ''; Kind = 'String'; Data = '"{exe}"' }
+    @{ Key = 'Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities'; Name = 'ApplicationName'; Kind = 'String'; Data = 'Atlas' }
+    @{ Key = 'Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities'; Name = 'ApplicationDescription'; Kind = 'String'; Data = 'Atlas web browser' }
+    @{ Key = 'Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities'; Name = 'ApplicationIcon'; Kind = 'String'; Data = '{exe},0' }
+    @{ Key = 'Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities\StartMenu'; Name = 'StartMenuInternet'; Kind = 'String'; Data = 'AtlasBrowser' }
+    @{ Key = 'Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities\URLAssociations'; Name = 'http'; Kind = 'String'; Data = 'AtlasBrowserURL' }
+    @{ Key = 'Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities\URLAssociations'; Name = 'https'; Kind = 'String'; Data = 'AtlasBrowserURL' }
+    @{ Key = 'Software\Classes\AtlasBrowserURL'; Name = 'AtlasPackagingOwner'; Kind = 'String'; Data = 'atlas-packaging-v1' }
+    @{ Key = 'Software\Classes\AtlasBrowserURL'; Name = ''; Kind = 'String'; Data = 'Atlas URL' }
+    @{ Key = 'Software\Classes\AtlasBrowserURL'; Name = 'FriendlyTypeName'; Kind = 'String'; Data = 'Atlas URL' }
+    @{ Key = 'Software\Classes\AtlasBrowserURL\Application'; Name = 'ApplicationName'; Kind = 'String'; Data = 'Atlas' }
+    @{ Key = 'Software\Classes\AtlasBrowserURL\Application'; Name = 'ApplicationDescription'; Kind = 'String'; Data = 'Atlas web browser' }
+    @{ Key = 'Software\Classes\AtlasBrowserURL\Application'; Name = 'ApplicationIcon'; Kind = 'String'; Data = '{exe},0' }
+    @{ Key = 'Software\Classes\AtlasBrowserURL\DefaultIcon'; Name = ''; Kind = 'String'; Data = '{exe},0' }
+    @{ Key = 'Software\Classes\AtlasBrowserURL\shell\open\command'; Name = ''; Kind = 'String'; Data = '"{exe}" --open-url %1' }
+    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'AtlasPackagingOwner'; Kind = 'String'; Data = 'atlas-packaging-v1' }
+    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'DisplayName'; Kind = 'String'; Data = 'Atlas' }
+    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'DisplayVersion'; Kind = 'String'; Data = '{version}' }
+    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'DisplayIcon'; Kind = 'String'; Data = '{exe},0' }
+    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'InstallLocation'; Kind = 'String'; Data = '{dir}' }
+    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'UninstallString'; Kind = 'String'; Data = 'powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "{dir}\unregister-atlas.ps1" -Uninstall -PauseAtEnd' }
+    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'NoModify'; Kind = 'DWord'; Data = 1 }
+    @{ Key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser'; Name = 'NoRepair'; Kind = 'DWord'; Data = 1 }
 )
 
-$AtlasOwnedKeys = @('Software\Clients\StartMenuInternet\Atlas', 'Software\Classes\AtlasURL', 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Atlas')
+$AtlasOwnedKeys = @('Software\Clients\StartMenuInternet\AtlasBrowser', 'Software\Classes\AtlasBrowserURL', 'Software\Microsoft\Windows\CurrentVersion\Uninstall\AtlasBrowser')
 $AtlasSharedValues = @(
-    @{ Key = 'Software\RegisteredApplications'; Name = 'Atlas' }
+    @{ Key = 'Software\RegisteredApplications'; Name = 'AtlasBrowser'; Kind = 'String'; Data = 'Software\Clients\StartMenuInternet\AtlasBrowser\Capabilities' }
 )
