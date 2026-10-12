@@ -2,14 +2,32 @@
 
 use std::time::Duration;
 
-use rusqlite::{Connection, TransactionBehavior};
-use rusqlite_migration::{M, Migrations};
+use rusqlite::{Connection, Transaction, TransactionBehavior};
+use rusqlite_migration::{HookError, HookResult, M, Migrations};
 
 use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x4154_4c53;
-pub(crate) const SCHEMA_VERSION: i64 = 1;
+pub(crate) const SCHEMA_VERSION: i64 = 2;
+
+/// The record layout of a recognized Atlas database, by `user_version`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SchemaGeneration {
+    /// Version 1 (P1-03): saved pages form one flat, ordered list.
+    FlatSaved,
+    /// Version 2 (P1-21): saved pages and folders form an ordered tree.
+    Folders,
+}
+
+pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Folders;
+
+/// What a database file holds before Atlas writes to it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Identity {
+    Empty,
+    Atlas(SchemaGeneration),
+}
 
 const SAVED_TABLE: &str = "CREATE TABLE saved_pages (
     id BLOB PRIMARY KEY NOT NULL CHECK(length(id) = 8 AND id != zeroblob(8)),
@@ -31,6 +49,25 @@ const LIVE_TABLE: &str = "CREATE TABLE live_tabs (
     saved_page_id BLOB UNIQUE REFERENCES saved_pages(id)
         CHECK(saved_page_id IS NULL OR
             (length(saved_page_id) = 8 AND saved_page_id != zeroblob(8) AND kind = 0))
+) STRICT";
+
+const FOLDERS_TABLE: &str = "CREATE TABLE saved_folders (
+    id BLOB PRIMARY KEY NOT NULL CHECK(length(id) = 8 AND id != zeroblob(8)),
+    title TEXT NOT NULL
+) STRICT";
+
+// Every saved page and folder in visible depth-first order, with its parent folder.
+const LAYOUT_TABLE: &str = "CREATE TABLE saved_layout (
+    entry_order INTEGER PRIMARY KEY CHECK(entry_order >= 0),
+    page_id BLOB UNIQUE REFERENCES saved_pages(id),
+    folder_id BLOB UNIQUE REFERENCES saved_folders(id),
+    parent_folder_id BLOB REFERENCES saved_folders(id),
+    CHECK((page_id IS NULL) != (folder_id IS NULL))
+) STRICT";
+
+const FOLDER_STATE_TABLE: &str = "CREATE TABLE saved_folder_state (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    last_saved_folder_id BLOB NOT NULL CHECK(length(last_saved_folder_id) = 8)
 ) STRICT";
 
 const STATE_TABLE: &str = "CREATE TABLE session_state (
@@ -59,11 +96,11 @@ pub(crate) fn prepare_writer(
     connection: &mut Connection,
     previous_shutdown: ShutdownState,
 ) -> Result<(), StoreError> {
-    // Refuse foreign, altered and future schemas before changing persistent settings.
-    let new_database = inspect_identity(connection)?;
-    if !new_database {
-        validate_schema(connection)?;
-        crate::records::load(connection)?;
+    // Refuse foreign, altered and future schemas, and damaged records, before any change.
+    let identity = inspect_identity(connection)?;
+    if let Identity::Atlas(generation) = identity {
+        validate_schema(connection, generation)?;
+        crate::records::load(connection, generation)?;
         if previous_shutdown == ShutdownState::Unclean {
             quick_check(connection)?;
         }
@@ -78,14 +115,13 @@ pub(crate) fn prepare_writer(
         .execute_batch("PRAGMA synchronous = NORMAL;")
         .map_err(|error| database_error(StoreOperation::Configure, error))?;
 
-    // The application marker, all tables and the initial state share the migration transaction.
-    if new_database {
-        let sql = initial_schema();
-        let migrations = Migrations::new(vec![M::up(&sql).foreign_key_check()]);
-        apply_migrations(connection, &migrations)?;
-        crate::records::load(connection)?;
+    // Pending migrations, and for a new file the application marker, share one transaction.
+    if identity != Identity::Atlas(CURRENT_GENERATION) {
+        let scripts = MigrationScripts::new();
+        apply_migrations(connection, &scripts.migrations())?;
+        crate::records::load(connection, CURRENT_GENERATION)?;
     }
-    validate_schema(connection)?;
+    validate_schema(connection, CURRENT_GENERATION)?;
     optimize(connection)
 }
 
@@ -98,7 +134,7 @@ pub(crate) fn validate_backup(
 ) -> Result<crate::StoredSnapshot, StoreError> {
     // A backup is already complete; validation never migrates it or enables a writable journal.
     configure_connection(connection)?;
-    prepare_reader(connection)?;
+    let generation = prepare_reader(connection)?;
     integrity_check(
         connection,
         "PRAGMA integrity_check",
@@ -119,7 +155,8 @@ pub(crate) fn validate_backup(
     }
     drop(rows);
     drop(statement);
-    crate::records::load(connection)
+    // An older backup stays valid; restoring it lets the next writer migrate it.
+    crate::records::load(connection, generation)
 }
 
 fn integrity_check(
@@ -154,18 +191,19 @@ fn integrity_check(
     Ok(())
 }
 
-pub(crate) fn prepare_reader(connection: &Connection) -> Result<(), StoreError> {
+pub(crate) fn prepare_reader(connection: &Connection) -> Result<SchemaGeneration, StoreError> {
     // Reader connections cannot change records even if a later query is written incorrectly.
-    if inspect_identity(connection)? {
+    let Identity::Atlas(generation) = inspect_identity(connection)? else {
         return Err(StoreError::SchemaMismatch);
-    }
-    validate_schema(connection)?;
+    };
+    validate_schema(connection, generation)?;
     connection
         .execute_batch("PRAGMA synchronous = NORMAL; PRAGMA query_only = ON;")
-        .map_err(|error| database_error(StoreOperation::Configure, error))
+        .map_err(|error| database_error(StoreOperation::Configure, error))?;
+    Ok(generation)
 }
 
-fn inspect_identity(connection: &Connection) -> Result<bool, StoreError> {
+fn inspect_identity(connection: &Connection) -> Result<Identity, StoreError> {
     let application_id: i64 = connection
         .query_row("PRAGMA application_id", [], |row| row.get(0))
         .map_err(|error| database_error(StoreOperation::InspectSchema, error))?;
@@ -180,26 +218,66 @@ fn inspect_identity(connection: &Connection) -> Result<bool, StoreError> {
         )
         .map_err(|error| database_error(StoreOperation::InspectSchema, error))?;
     if application_id == 0 && version == 0 && object_count == 0 {
-        return Ok(true);
+        return Ok(Identity::Empty);
     }
     if application_id != APPLICATION_ID {
         return Err(StoreError::ForeignDatabase);
     }
-    if version > SCHEMA_VERSION {
-        return Err(StoreError::FutureSchema { version });
+    match version {
+        1 => Ok(Identity::Atlas(SchemaGeneration::FlatSaved)),
+        2 => Ok(Identity::Atlas(SchemaGeneration::Folders)),
+        version if version > SCHEMA_VERSION => Err(StoreError::FutureSchema { version }),
+        _ => Err(StoreError::SchemaMismatch),
     }
-    if version != SCHEMA_VERSION {
-        return Err(StoreError::SchemaMismatch);
-    }
-    Ok(false)
 }
 
+/// Version 1: the flat saved-page schema created by P1-03.
 pub(crate) fn initial_schema() -> String {
     format!(
         "{SAVED_TABLE}; {LIVE_TABLE}; {STATE_TABLE};
          INSERT INTO session_state VALUES (1, zeroblob(8), NULL, zeroblob(8), zeroblob(8));
          PRAGMA application_id = {APPLICATION_ID};"
     )
+}
+
+/// Version 2: adds folders and places every existing saved page at the top level, in order.
+/// It only creates and fills its own tables, so it composes with unrelated later migrations.
+pub(crate) fn folders_migration() -> String {
+    format!(
+        "{FOLDERS_TABLE}; {LAYOUT_TABLE}; {FOLDER_STATE_TABLE};
+         INSERT INTO saved_folder_state VALUES (1, zeroblob(8));
+         INSERT INTO saved_layout(entry_order, page_id, folder_id, parent_folder_id)
+             SELECT saved_order, id, NULL, NULL FROM saved_pages;"
+    )
+}
+
+/// Owns the migration SQL that `rusqlite_migration` borrows, numbered by position.
+pub(crate) struct MigrationScripts {
+    initial: String,
+    folders: String,
+}
+
+impl MigrationScripts {
+    pub(crate) fn new() -> Self {
+        Self {
+            initial: initial_schema(),
+            folders: folders_migration(),
+        }
+    }
+
+    pub(crate) fn migrations(&self) -> Migrations<'_> {
+        Migrations::new(vec![
+            M::up(&self.initial).foreign_key_check(),
+            M::up_with_hook(&self.folders, check_migrated_records).foreign_key_check(),
+        ])
+    }
+}
+
+fn check_migrated_records(transaction: &Transaction<'_>) -> HookResult {
+    // Refuse to commit a migration whose result is not a complete, valid saved tree.
+    crate::records::read_current(transaction)
+        .map(drop)
+        .map_err(|error| HookError::Hook(error.to_string()))
 }
 
 pub(crate) fn apply_migrations(
@@ -225,20 +303,38 @@ pub(crate) fn apply_migrations(
     Err(with_cleanup(error, rollback))
 }
 
-fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
+/// Tables of each generation, sorted by name as `sqlite_schema` lists them.
+fn expected_tables(generation: SchemaGeneration) -> &'static [(&'static str, &'static str)] {
+    match generation {
+        SchemaGeneration::FlatSaved => &[
+            ("live_tabs", LIVE_TABLE),
+            ("saved_pages", SAVED_TABLE),
+            ("session_state", STATE_TABLE),
+        ],
+        SchemaGeneration::Folders => &[
+            ("live_tabs", LIVE_TABLE),
+            ("saved_folder_state", FOLDER_STATE_TABLE),
+            ("saved_folders", FOLDERS_TABLE),
+            ("saved_layout", LAYOUT_TABLE),
+            ("saved_pages", SAVED_TABLE),
+            ("session_state", STATE_TABLE),
+        ],
+    }
+}
+
+fn validate_schema(
+    connection: &Connection,
+    generation: SchemaGeneration,
+) -> Result<(), StoreError> {
     // Match the owned schema exactly; a copied marker alone does not identify an Atlas database.
-    let expected = [
-        ("live_tabs", LIVE_TABLE),
-        ("saved_pages", SAVED_TABLE),
-        ("session_state", STATE_TABLE),
-    ];
+    let expected = expected_tables(generation);
     let mut statement = connection
         .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name")
         .map_err(|error| database_error(StoreOperation::InspectSchema, error))?;
     let mut rows = statement
         .query([])
         .map_err(|error| database_error(StoreOperation::InspectSchema, error))?;
-    for (name, sql) in expected {
+    for &(name, sql) in expected {
         let row = rows
             .next()
             .map_err(|error| database_error(StoreOperation::InspectSchema, error))?

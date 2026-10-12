@@ -3,6 +3,8 @@
 mod tabs;
 
 pub use tabs::{
-    Activation, SavedPage, SavedPageId, SavedPageSnapshot, SidebarRow, SnapshotError, Tab,
-    TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, TabSnapshot,
+    Activation, FolderRemoval, RemovedSavedEntries, SavedEntryId, SavedFolder, SavedFolderId,
+    SavedFolderSnapshot, SavedPage, SavedPageId, SavedPageSnapshot, SavedPlacement, SidebarRow,
+    SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot,
+    TabSnapshot,
 };

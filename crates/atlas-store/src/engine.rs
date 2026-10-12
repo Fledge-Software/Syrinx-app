@@ -89,7 +89,7 @@ impl Store {
         let mut reader = readers[index]
             .lock()
             .map_err(|_| StoreError::ReaderPoisoned)?;
-        records::load(&mut reader.connection)
+        records::load(&mut reader.connection, schema::CURRENT_GENERATION)
     }
 
     /// Commits only if `expected_revision` is current. A lost reply requires reloading the revision.
@@ -335,7 +335,12 @@ impl LeasedConnection {
             ConnectionRole::Writer(previous_shutdown) => {
                 schema::prepare_writer(&mut self.connection, previous_shutdown)?;
             }
-            ConnectionRole::Reader => schema::prepare_reader(&self.connection)?,
+            ConnectionRole::Reader => {
+                // The writer migrates first, so a reader only ever sees the current schema.
+                if schema::prepare_reader(&self.connection)? != schema::CURRENT_GENERATION {
+                    return Err(StoreError::SchemaMismatch);
+                }
+            }
         }
         self.lease.revalidate()?;
         Ok(())
