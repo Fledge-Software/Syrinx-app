@@ -139,9 +139,9 @@ disposable databases with synthetic labels and `example.test` addresses
   would be wrong every evening in the owner's time zone, so the date waits
   for a one-function local-calendar helper in `atlas-platform` (owned by the
   platform work, not this slice).
-- **Sidebar presentation hookup.** The storage above is ready; wiring it to
-  the drag release and to start-up is DW-2, done at integration with the
-  sidebar branch. Customize does not show the presentation.
+- **Sidebar presentation hookup.** Wired at the 2026-10-12 integration merge
+  with the sidebar branch (DW-2, Done): a changed settled state is saved and
+  start-up restores it. Customize does not show the presentation.
 - **The default palette shows briefly at start-up.** The saved appearance
   arrives from the session worker after it opens the database; reading the
   database on the GUI thread before the window opens would break the rule

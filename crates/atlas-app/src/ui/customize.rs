@@ -28,7 +28,8 @@ pub(super) struct CustomAccent {
 }
 
 impl BrowserView {
-    /// Shows the stored appearance and tiles; this restores, so nothing is saved back.
+    /// Shows the stored appearance, sidebar width state and tiles; this restores, so nothing
+    /// is saved back.
     pub(super) fn restore_preferences(
         &mut self,
         settings: &BTreeMap<String, String>,
@@ -37,6 +38,7 @@ impl BrowserView {
         cx: &mut App,
     ) {
         self.home.destinations = destinations;
+        self.restore_sidebar_state(settings);
         let (appearance, unreadable) = Appearance::from_settings(settings);
         if !unreadable.0.is_empty() {
             self.message =

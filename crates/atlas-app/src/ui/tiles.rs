@@ -37,7 +37,7 @@ pub(super) fn unavailable_message(plugin: BuiltInPlugin) -> String {
     )
 }
 
-/// The tile's monogram: the label's first letter or digit, uppercased.
+/// The placeholder letter for a tile or sidebar row: its first letter or digit, uppercased.
 pub(super) fn monogram(label: &str) -> String {
     label
         .chars()
@@ -146,7 +146,10 @@ mod tests {
         assert_eq!(monogram("synthetic"), "S");
         assert_eq!(monogram("  ☆ 9 lives"), "9");
         assert_eq!(monogram("éclair"), "É");
+        assert_eq!(monogram("  https://example.test/"), "H");
+        assert_eq!(monogram("42 notes"), "4");
         assert_eq!(monogram("☆"), "·");
+        assert_eq!(monogram(""), "·");
     }
 
     #[test]
