@@ -1,0 +1,233 @@
+//! Decides when a hidden page may be suspended, so a page is never frozen mid-load.
+
+use std::time::{Duration, Instant};
+
+/// How long a hidden page stays awake after its navigation finishes or it is hidden idle.
+pub(super) const GRACE: Duration = Duration::from_secs(5);
+/// A load that never finishes must not keep a hidden page awake forever.
+pub(super) const LOADING_LIMIT: Duration = Duration::from_secs(60);
+
+/// The main-frame navigation a page is waiting on; `id` is unknown until WebView2 reports it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Loading {
+    id: Option<u64>,
+    started: Instant,
+}
+
+/// When the page may next be suspended: never while shown, `GRACE` after it settles while
+/// hidden, and no later than `LOADING_LIMIT` after a load that is still running began.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct HiddenTimer {
+    visible: bool,
+    loading: Option<Loading>,
+    due: Option<Instant>,
+}
+
+impl HiddenTimer {
+    /// A new page starts hidden and idle.
+    pub(super) fn new(now: Instant) -> Self {
+        Self {
+            visible: false,
+            loading: None,
+            due: Some(now + GRACE),
+        }
+    }
+
+    pub(super) fn visible(&self) -> bool {
+        self.visible
+    }
+
+    pub(super) fn due(&self) -> Option<Instant> {
+        self.due
+    }
+
+    /// The page was shown or hidden.
+    pub(super) fn shown(&mut self, visible: bool, now: Instant) {
+        self.visible = visible;
+        self.rearm(now);
+    }
+
+    /// Atlas asked for a navigation; WebView2 reports its id when it starts.
+    pub(super) fn navigation_requested(&mut self, now: Instant) {
+        self.start(None, now);
+    }
+
+    /// Atlas's navigation request failed before WebView2 accepted it.
+    pub(super) fn navigation_refused(&mut self, now: Instant) {
+        if self.loading.is_some_and(|loading| loading.id.is_none()) {
+            self.loading = None;
+        }
+        self.rearm(now);
+    }
+
+    /// WebView2 started a main-frame navigation, including redirects and page-initiated ones.
+    pub(super) fn navigation_started(&mut self, id: u64, now: Instant) {
+        self.start(Some(id), now);
+    }
+
+    /// A navigation finished, successfully or not. A superseded one's late completion is ignored.
+    pub(super) fn navigation_completed(&mut self, id: u64, now: Instant) {
+        match self.loading {
+            Some(Loading {
+                id: Some(current), ..
+            }) if current == id => self.loading = None,
+            Some(_) => return,
+            None => {}
+        }
+        self.rearm(now);
+    }
+
+    /// Resuming, or a refused suspension, restarts the countdown, never sooner than `GRACE`.
+    pub(super) fn restart(&mut self, now: Instant) {
+        self.rearm(now);
+        // A load past its limit would otherwise retry a refused suspension immediately.
+        self.due = self.due.map(|due| due.max(now + GRACE));
+    }
+
+    /// A suspension request is in progress; no second one is due until it reports back.
+    pub(super) fn suspension_requested(&mut self) {
+        self.due = None;
+    }
+
+    pub(super) fn suspension_due(&self, now: Instant) -> bool {
+        !self.visible && self.due.is_some_and(|due| due <= now)
+    }
+
+    fn start(&mut self, id: Option<u64>, now: Instant) {
+        // A chain of navigations keeps the first start, so the loading limit still applies.
+        let started = self.loading.map_or(now, |loading| loading.started);
+        self.loading = Some(Loading { id, started });
+        self.rearm(now);
+    }
+
+    fn rearm(&mut self, now: Instant) {
+        self.due = match (self.visible, self.loading) {
+            (true, _) => None,
+            (false, Some(loading)) => Some(loading.started + LOADING_LIMIT),
+            (false, None) => Some(now + GRACE),
+        };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hidden_loading(now: Instant, id: u64) -> HiddenTimer {
+        let mut timer = HiddenTimer::new(now);
+        timer.navigation_requested(now);
+        timer.navigation_started(id, now);
+        timer
+    }
+
+    #[test]
+    fn a_hidden_idle_page_is_due_after_the_grace() {
+        let start = Instant::now();
+        let timer = HiddenTimer::new(start);
+        assert!(!timer.suspension_due(start + GRACE - Duration::from_millis(1)));
+        assert!(timer.suspension_due(start + GRACE));
+    }
+
+    #[test]
+    fn a_loading_hidden_page_waits_for_completion_then_the_grace() {
+        let start = Instant::now();
+        let mut timer = hidden_loading(start, 7);
+        // A slow load passes the old five-second point without becoming due.
+        assert!(!timer.suspension_due(start + Duration::from_secs(30)));
+        let finished = start + Duration::from_secs(30);
+        timer.navigation_completed(7, finished);
+        assert!(!timer.suspension_due(finished + GRACE - Duration::from_millis(1)));
+        assert!(timer.suspension_due(finished + GRACE));
+    }
+
+    #[test]
+    fn a_failed_navigation_also_settles_the_page() {
+        let start = Instant::now();
+        let mut timer = hidden_loading(start, 3);
+        timer.navigation_completed(3, start + Duration::from_secs(2));
+        assert_eq!(timer.due(), Some(start + Duration::from_secs(2) + GRACE));
+    }
+
+    #[test]
+    fn a_new_navigation_while_hidden_rearms_the_countdown() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        let started = start + Duration::from_secs(4);
+        timer.navigation_started(9, started);
+        assert!(!timer.suspension_due(start + GRACE));
+        timer.navigation_completed(9, started + Duration::from_secs(1));
+        assert_eq!(timer.due(), Some(started + Duration::from_secs(1) + GRACE));
+    }
+
+    #[test]
+    fn a_superseded_navigation_completion_does_not_settle_the_current_one() {
+        let start = Instant::now();
+        let mut timer = hidden_loading(start, 1);
+        timer.navigation_started(2, start + Duration::from_secs(1));
+        timer.navigation_completed(1, start + Duration::from_secs(2));
+        assert_eq!(timer.due(), Some(start + LOADING_LIMIT));
+        timer.navigation_completed(2, start + Duration::from_secs(3));
+        assert_eq!(timer.due(), Some(start + Duration::from_secs(3) + GRACE));
+    }
+
+    #[test]
+    fn a_completion_before_webview2_reports_the_requested_id_is_ignored() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.navigation_requested(start);
+        // An earlier navigation's late completion cannot settle the requested one.
+        timer.navigation_completed(4, start + Duration::from_secs(1));
+        assert_eq!(timer.due(), Some(start + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn a_load_that_never_finishes_is_due_at_the_loading_limit() {
+        let start = Instant::now();
+        let mut timer = hidden_loading(start, 5);
+        // Redirects and chained navigations keep the first start time.
+        timer.navigation_started(6, start + Duration::from_secs(50));
+        assert!(!timer.suspension_due(start + LOADING_LIMIT - Duration::from_millis(1)));
+        assert!(timer.suspension_due(start + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn a_shown_page_is_never_due_and_hiding_mid_load_keeps_the_limit() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.shown(true, start);
+        timer.navigation_started(8, start);
+        assert_eq!(timer.due(), None);
+        assert!(!timer.suspension_due(start + LOADING_LIMIT * 2));
+        timer.shown(false, start + Duration::from_secs(1));
+        assert_eq!(timer.due(), Some(start + LOADING_LIMIT));
+        timer.navigation_completed(8, start + Duration::from_secs(2));
+        assert_eq!(timer.due(), Some(start + Duration::from_secs(2) + GRACE));
+    }
+
+    #[test]
+    fn a_refused_request_clears_only_an_unconfirmed_navigation() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.navigation_requested(start);
+        timer.navigation_refused(start + Duration::from_secs(1));
+        assert_eq!(timer.due(), Some(start + Duration::from_secs(1) + GRACE));
+        let mut confirmed = hidden_loading(start, 2);
+        confirmed.navigation_refused(start + Duration::from_secs(1));
+        assert_eq!(confirmed.due(), Some(start + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn a_pending_suspension_is_not_due_twice_and_restart_rearms() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.suspension_requested();
+        assert!(!timer.suspension_due(start + LOADING_LIMIT));
+        timer.restart(start + Duration::from_secs(1));
+        assert_eq!(timer.due(), Some(start + Duration::from_secs(1) + GRACE));
+        // A refused suspension past the loading limit waits a grace before retrying.
+        let mut stuck = hidden_loading(start, 1);
+        let late = start + LOADING_LIMIT + Duration::from_secs(1);
+        stuck.restart(late);
+        assert_eq!(stuck.due(), Some(late + GRACE));
+    }
+}

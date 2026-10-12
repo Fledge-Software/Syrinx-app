@@ -61,7 +61,7 @@ type Exercise = fn(
 ) -> Result<(), String>;
 
 const DEADLINE: Duration = Duration::from_secs(45);
-/// Longer than the platform's five-second grace before a hidden page is suspended.
+/// Longer than the platform's five-second grace before an idle hidden page is suspended.
 const STALL_PAST_SUSPENSION_GRACE: Duration = Duration::from_secs(6);
 static TRACE: AtomicBool = AtomicBool::new(false);
 const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Synthetic close fixture</title>\
@@ -254,8 +254,8 @@ fn exercise(
 }
 
 /// Creates a page that closes itself after loading, and waits for its load and close request.
-/// The page is shown once created: a hidden page is suspended after the platform's grace
-/// period, which freezes a slow load and its close timer until the deadline expires.
+/// The page is shown once created, so hidden-page suspension and the throttled timers of a
+/// hidden page cannot delay its close request past the deadline.
 fn create_close_fixture(
     host: &BrowserHost,
     events: &mut UnboundedReceiver<BrowserEvent>,
@@ -595,8 +595,10 @@ fn respond(mut stream: TcpStream, stall: &mut Option<Duration>) -> Result<(), St
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",
         page.len()
     );
-    // Hold only the first close page, so the other suites keep their prompt responses.
-    let held = if suite_page.is_none() {
+    // Hold the slow suspension page, and the first close page only when asked to.
+    let held = if suspension::is_slow(&request[..length]) {
+        Some(STALL_PAST_SUSPENSION_GRACE)
+    } else if suite_page.is_none() {
         stall.take()
     } else {
         None
