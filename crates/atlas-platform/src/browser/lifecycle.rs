@@ -206,31 +206,25 @@ impl Lifecycle {
     pub(super) fn register_navigation(&self, view: &WebView) -> Result<(), BrowserError> {
         let starts = self.state.clone();
         let started = NavigationStartingEventHandler::create(Box::new(move |_, args| {
-            let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
-            let mut id = 0;
-            unsafe { args.NavigationId(&mut id) }?;
-            starts
-                .borrow_mut()
-                .timer
-                .navigation_started(id, Instant::now());
+            let id = navigation_id(args, |args, id| unsafe { args.NavigationId(id) })?;
+            let now = Instant::now();
+            starts.borrow_mut().timer.navigation_started(id, now);
             Ok(())
         }));
         let completions = self.state.clone();
         let completed = NavigationCompletedEventHandler::create(Box::new(move |_, args| {
-            let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
-            let mut id = 0;
-            unsafe { args.NavigationId(&mut id) }?;
-            completions
-                .borrow_mut()
-                .timer
-                .navigation_completed(id, Instant::now());
+            let id = navigation_id(args, |args, id| unsafe { args.NavigationId(id) })?;
+            let now = Instant::now();
+            completions.borrow_mut().timer.navigation_completed(id, now);
             Ok(())
         }));
+        // The handlers live as long as the controller, so their tokens are never removed.
         let core = view.webview();
-        let mut token = 0;
-        unsafe { core.add_NavigationStarting(&started, &mut token) }
+        let mut starting_token = 0;
+        unsafe { core.add_NavigationStarting(&started, &mut starting_token) }
             .map_err(|_| BrowserError::EventRegistration)?;
-        unsafe { core.add_NavigationCompleted(&completed, &mut token) }
+        let mut completed_token = 0;
+        unsafe { core.add_NavigationCompleted(&completed, &mut completed_token) }
             .map_err(|_| BrowserError::EventRegistration)
     }
 
@@ -324,6 +318,17 @@ impl Drop for Lifecycle {
         self.state.borrow_mut().alive = false;
         self.life.retire();
     }
+}
+
+/// Reads the `NavigationId` both navigation event argument types carry.
+fn navigation_id<Args>(
+    args: Option<Args>,
+    read: impl FnOnce(&Args, &mut u64) -> windows::core::Result<()>,
+) -> windows::core::Result<u64> {
+    let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+    let mut id = 0;
+    read(&args, &mut id)?;
+    Ok(id)
 }
 
 pub(super) fn register_fullscreen(
