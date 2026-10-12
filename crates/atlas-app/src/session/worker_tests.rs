@@ -946,13 +946,24 @@ fn assert_only_live_search(
     };
     assert_eq!(request_id, 73);
     let results = result.expect("synthetic live-only search succeeds");
-    assert_eq!(results.counts.total(), 1);
+    // The live navigation is also one history row (P1-20); the saved row is gone.
+    assert_eq!(results.counts.total(), 2);
     assert_eq!(results.counts.tabs, 1);
     assert_eq!(results.counts.saved, 0);
-    assert_eq!(results.hits.len(), 1);
-    assert_eq!(results.hits[0].target, Target::Tab(id));
-    assert_eq!(results.hits[0].title, metadata.title);
-    assert_eq!(results.hits[0].address, metadata.address);
+    assert_eq!(results.counts.history, 1);
+    let tab = results
+        .hits
+        .iter()
+        .find(|hit| hit.target == Target::Tab(id))
+        .expect("live tab is searchable");
+    assert_eq!(tab.title, metadata.title);
+    assert_eq!(tab.address, metadata.address);
+    let history = results
+        .hits
+        .iter()
+        .find(|hit| matches!(hit.target, Target::History(_)))
+        .expect("visit is searchable");
+    assert_eq!(history.address, metadata.address);
 }
 
 #[test]
@@ -1610,6 +1621,12 @@ fn healthy_existing_primary_starts_directly_with_its_saved_state() {
     stop(handle, &mut events);
     fixture.cleanup();
 }
+
+#[path = "crash_restart_tests.rs"]
+mod crash_restart;
+
+#[path = "history_tests.rs"]
+mod history_recording;
 
 #[path = "preference_tests.rs"]
 mod preference_tests;
