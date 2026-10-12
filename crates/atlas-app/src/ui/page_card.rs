@@ -1,0 +1,142 @@
+//! Places the page web view inside the card beside the sidebar, in physical pixels.
+
+use atlas_platform::browser::PageBounds;
+use atlas_ui::metrics::chrome::CARD_INSET;
+
+use super::{FOOTER_HEIGHT, TOOLBAR_HEIGHT};
+
+/// The window's logical size and scale, and the width the sidebar reserves right now.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CardFrame {
+    pub viewport_width: f32,
+    pub viewport_height: f32,
+    pub sidebar_width: f32,
+    pub scale: f32,
+}
+
+/// The page card's physical bounds. The child web view does not follow the window on its own
+/// (`docs/trapstoknow.md`), so this runs on every drag step, resize and DPI change.
+pub(super) fn page_card_bounds(frame: CardFrame) -> PageBounds {
+    let scale = usable_scale(frame.scale);
+    let sidebar = finite_or_zero(frame.sidebar_width).max(0.);
+
+    // Inset the card from the sidebar, the toolbar, the footer and the window's right edge.
+    let left = sidebar + CARD_INSET;
+    let top = TOOLBAR_HEIGHT + CARD_INSET;
+    let right = finite_or_zero(frame.viewport_width) - CARD_INSET;
+    let bottom = finite_or_zero(frame.viewport_height) - FOOTER_HEIGHT - CARD_INSET;
+
+    // Round each edge rather than each size, so neighbouring edges never drift apart.
+    let (x, width) = physical_span(left, right, scale);
+    let (y, height) = physical_span(top, bottom, scale);
+    PageBounds {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// A span's physical start and length, never shorter than one pixel.
+fn physical_span(start: f32, end: f32, scale: f32) -> (i32, u32) {
+    let first = (start * scale).round();
+    let last = (end * scale).round();
+    let length = (last - first).max(1.);
+    (first as i32, length as u32)
+}
+
+/// GPUI reports a positive scale; anything else is treated as 100 %.
+fn usable_scale(scale: f32) -> f32 {
+    if scale.is_finite() && scale > 0. {
+        scale
+    } else {
+        1.
+    }
+}
+
+fn finite_or_zero(value: f32) -> f32 {
+    if value.is_finite() { value } else { 0. }
+}
+
+#[cfg(test)]
+mod tests {
+    use atlas_ui::SidebarWidthState;
+
+    use super::*;
+
+    fn frame(sidebar_width: f32, scale: f32) -> CardFrame {
+        CardFrame {
+            viewport_width: 1280.,
+            viewport_height: 800.,
+            sidebar_width,
+            scale,
+        }
+    }
+
+    #[test]
+    fn the_card_starts_one_inset_right_of_each_sidebar_state() {
+        for state in SidebarWidthState::ALL {
+            let bounds = page_card_bounds(frame(state.reserved_width(), 1.));
+            let left = state.reserved_width() + CARD_INSET;
+            assert_eq!(bounds.x, left as i32, "{}", state.name());
+            assert_eq!(bounds.width, (1280. - CARD_INSET - left) as u32);
+            assert_eq!(bounds.y, (TOOLBAR_HEIGHT + CARD_INSET) as i32);
+            assert_eq!(
+                bounds.height,
+                (800. - TOOLBAR_HEIGHT - FOOTER_HEIGHT - 2. * CARD_INSET) as u32
+            );
+        }
+    }
+
+    #[test]
+    fn a_narrower_sidebar_gives_the_page_exactly_that_width() {
+        let wide = page_card_bounds(frame(SidebarWidthState::Wide.reserved_width(), 1.));
+        let hidden = page_card_bounds(frame(SidebarWidthState::Hidden.reserved_width(), 1.));
+        let right_edge = |bounds: PageBounds| bounds.x + bounds.width as i32;
+        assert_eq!(right_edge(wide), right_edge(hidden));
+        assert_eq!(
+            hidden.width - wide.width,
+            SidebarWidthState::Wide.reserved_width() as u32
+        );
+    }
+
+    #[test]
+    fn bounds_scale_to_physical_pixels() {
+        let logical = page_card_bounds(frame(52., 1.));
+        let scaled = page_card_bounds(frame(52., 1.5));
+        assert_eq!(scaled.x, 90);
+        assert_eq!(scaled.y, 84);
+        assert_eq!(scaled.width, (logical.width as f32 * 1.5).round() as u32);
+        assert_eq!(scaled.height, (logical.height as f32 * 1.5).round() as u32);
+    }
+
+    #[test]
+    fn the_right_edge_stays_put_while_a_fractional_drag_moves_the_left() {
+        let expected = ((1280. - CARD_INSET) * 1.25f32).round() as i32;
+        let mut width = 0.;
+        while width <= 264. {
+            let bounds = page_card_bounds(frame(width, 1.25));
+            assert_eq!(bounds.x + bounds.width as i32, expected, "at {width}");
+            width += 0.3;
+        }
+    }
+
+    #[test]
+    fn a_tiny_or_invalid_window_still_gets_a_one_pixel_card() {
+        let bounds = page_card_bounds(CardFrame {
+            viewport_width: 10.,
+            viewport_height: 10.,
+            sidebar_width: 264.,
+            scale: 2.,
+        });
+        assert_eq!((bounds.width, bounds.height), (1, 1));
+        let invalid = page_card_bounds(CardFrame {
+            viewport_width: f32::NAN,
+            viewport_height: f32::INFINITY,
+            sidebar_width: f32::NAN,
+            scale: 0.,
+        });
+        assert_eq!(invalid.x, CARD_INSET as i32);
+        assert_eq!((invalid.width, invalid.height), (1, 1));
+    }
+}
