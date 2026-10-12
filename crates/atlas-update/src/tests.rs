@@ -1,15 +1,20 @@
 //! Tampering tests on synthetic packages signed by keys generated in-process.
 
 use std::collections::BTreeMap;
-use std::io::{self, Cursor};
+use std::fs::{self, OpenOptions};
+use std::io::{Cursor, Read};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cng;
 use crate::cng::test_keys::TestKeyPair;
 use crate::error::{ManifestProblem, PathProblem, UpdateError};
 use crate::{
-    DetachedSignature, FileEntry, KeyId, KeySet, MAX_FILE_BYTES, MAX_FILES, MAX_MANIFEST_BYTES,
-    Manifest, PackagePath, Payload, PinnedKey, SIGNATURE_BYTES, VerifiedManifest, Version,
-    read_bounded, verify_manifest,
+    DetachedSignature, DirectoryPayload, FileEntry, KeyId, KeySet, MAX_FILE_BYTES, MAX_FILES,
+    MAX_MANIFEST_BYTES, Manifest, PackagePath, Payload, PinnedKey, SIGNATURE_BYTES,
+    VerifiedManifest, Version, read_bounded, verify_manifest,
 };
 
 const INSTALLED: Version = Version::new(1, 2, 0);
@@ -24,12 +29,12 @@ struct MemoryPayload {
 impl Payload for MemoryPayload {
     type File = Cursor<Vec<u8>>;
 
-    fn names(&mut self) -> io::Result<Vec<String>> {
+    fn names(&mut self) -> Result<Vec<String>, UpdateError> {
         Ok(self.files.keys().cloned().collect())
     }
 
-    fn open(&mut self, path: &str) -> io::Result<Option<Self::File>> {
-        Ok(self.files.get(path).cloned().map(Cursor::new))
+    fn open(&mut self, path: &PackagePath) -> Result<Option<Self::File>, UpdateError> {
+        Ok(self.files.get(path.as_str()).cloned().map(Cursor::new))
     }
 }
 
@@ -117,6 +122,11 @@ fn manifest_problem(result: Result<impl Sized, UpdateError>) -> Option<ManifestP
     }
 }
 
+/// Verify a payload, discarding the handles it would install from.
+fn check_payload(verified: &VerifiedManifest, payload: impl Payload) -> Result<(), UpdateError> {
+    verified.verify_payload(payload).map(drop)
+}
+
 fn hex(byte: char) -> String {
     std::iter::repeat_n(byte, 64).collect()
 }
@@ -127,7 +137,7 @@ fn valid_package_verifies() -> Result<(), UpdateError> {
     let verified = package.verify()?;
     assert_eq!(verified.manifest().version(), OFFERED);
     assert_eq!(verified.manifest().files().len(), 3);
-    verified.verify_payload(&mut package.payload.clone())
+    check_payload(&verified, package.payload.clone())
 }
 
 #[test]
@@ -184,7 +194,7 @@ fn a_flipped_payload_byte_is_refused() -> Result<(), UpdateError> {
             bytes[0] ^= 0x01;
         }
         assert_eq!(
-            verified.verify_payload(&mut payload),
+            check_payload(&verified, payload),
             Err(UpdateError::HashMismatch {
                 path: path.to_owned()
             })
@@ -240,17 +250,13 @@ fn the_production_placeholder_trusts_nothing() -> Result<(), UpdateError> {
 
 #[test]
 fn invalid_and_duplicate_pinned_keys_are_refused() -> Result<(), UpdateError> {
-    assert_eq!(
-        KeySet::new(&[PinnedKey::new([0u8; 64])]).err(),
-        Some(UpdateError::InvalidKey)
-    );
+    let zero = KeySet::new(&[PinnedKey::new([0u8; 64])]).err();
+    assert!(matches!(zero, Some(UpdateError::InvalidKey { status }) if status < 0));
     let point = TestKeyPair::generate()?.public_point()?;
     let mut off_curve = point;
     off_curve[63] ^= 0x01;
-    assert_eq!(
-        KeySet::new(&[PinnedKey::new(off_curve)]).err(),
-        Some(UpdateError::InvalidKey)
-    );
+    let off_curve = KeySet::new(&[PinnedKey::new(off_curve)]).err();
+    assert!(matches!(off_curve, Some(UpdateError::InvalidKey { status }) if status < 0));
     let duplicate = [PinnedKey::new(point), PinnedKey::new(point)];
     assert_eq!(
         KeySet::new(&duplicate).err(),
@@ -289,7 +295,7 @@ fn truncation_is_refused() -> Result<(), UpdateError> {
         bytes.pop();
     }
     assert!(matches!(
-        verified.verify_payload(&mut payload),
+        check_payload(&verified, payload),
         Err(UpdateError::SizeMismatch { .. })
     ));
 
@@ -321,7 +327,7 @@ fn oversized_inputs_are_refused() -> Result<(), UpdateError> {
         bytes.extend_from_slice(&[0u8; 4096]);
     }
     assert!(matches!(
-        verified.verify_payload(&mut payload),
+        check_payload(&verified, payload),
         Err(UpdateError::SizeMismatch { .. })
     ));
 
@@ -572,7 +578,7 @@ fn unlisted_and_missing_payload_files_are_refused() -> Result<(), UpdateError> {
         .files
         .insert("payload.dll".to_owned(), b"unlisted".to_vec());
     assert_eq!(
-        verified.verify_payload(&mut extra),
+        check_payload(&verified, extra),
         Err(UpdateError::UnlistedFile {
             name: "payload.dll".to_owned()
         })
@@ -581,7 +587,7 @@ fn unlisted_and_missing_payload_files_are_refused() -> Result<(), UpdateError> {
     let mut missing = package.payload.clone();
     missing.files.remove("resources/notes.txt");
     assert_eq!(
-        verified.verify_payload(&mut missing),
+        check_payload(&verified, missing),
         Err(UpdateError::MissingFile {
             path: "resources/notes.txt".to_owned()
         })
@@ -611,4 +617,246 @@ fn versions_parse_only_in_canonical_form() {
     }
     assert!(Version::new(1, 10, 0) > Version::new(1, 9, 99));
     assert!(Version::new(2, 0, 0) > Version::new(1, 99, 99));
+}
+
+#[test]
+fn listed_sizes_over_the_package_total_are_refused() {
+    let mut text = String::from("atlas-update-manifest 1\nversion 1.3.0\nminimum-version 1.0.0\n");
+    for index in 0..5 {
+        text.push_str(&format!(
+            "file {} {MAX_FILE_BYTES} part{index}.bin\n",
+            hex('0')
+        ));
+    }
+    assert_eq!(
+        manifest_problem(Manifest::parse(text.as_bytes())),
+        Some(ManifestProblem::TotalTooLarge)
+    );
+}
+
+#[test]
+fn a_signature_by_one_pinned_key_cannot_claim_another() -> Result<(), UpdateError> {
+    let package = valid_package()?;
+    let other = TestKeyPair::generate()?;
+    let other_point = other.public_point()?;
+    let signer_point = package.signer.public_point()?;
+    let both = KeySet::new(&[PinnedKey::new(signer_point), PinnedKey::new(other_point)])?;
+
+    // Each key's honest signature verifies under the two-key set.
+    verify_manifest(&package.manifest, &package.signature, &both, INSTALLED)?;
+    let honest_other = sign(&other, &package.manifest)?;
+    verify_manifest(&package.manifest, &honest_other, &both, INSTALLED)?;
+
+    // The signer's signature relabelled with the other key's identifier fails.
+    let forged = DetachedSignature::new(
+        KeyId::of(&other_point)?,
+        package.signer.sign(&cng::sha256(&package.manifest)?)?,
+    );
+    let result = verify_manifest(&package.manifest, &forged.to_bytes(), &both, INSTALLED);
+    assert_eq!(result.err(), Some(UpdateError::BadSignature));
+    Ok(())
+}
+
+#[test]
+fn a_newer_package_still_refuses_an_installation_below_its_minimum() -> Result<(), UpdateError> {
+    let minimum = Version::new(1, 5, 0);
+    let package = package_with(Version::new(2, 0, 0), minimum, synthetic_files())?;
+    assert_eq!(
+        package.verify().err(),
+        Some(UpdateError::InstalledTooOld {
+            installed: INSTALLED,
+            minimum
+        })
+    );
+    let at_minimum = verify_manifest(
+        &package.manifest,
+        &package.signature,
+        &package.keys,
+        minimum,
+    );
+    assert!(at_minimum.is_ok());
+    Ok(())
+}
+
+#[test]
+fn a_file_cannot_double_as_a_directory() {
+    let header = "atlas-update-manifest 1\nversion 1.3.0\nminimum-version 1.0.0\n";
+    for paths in [
+        ["a", "a/b"],
+        ["LIB/x.dll", "lib"],
+        ["Docs/a.txt", "docs"],
+        ["A", "a/b"],
+    ] {
+        let text = format!(
+            "{header}file {zero} 0 {}\nfile {zero} 0 {}\n",
+            paths[0],
+            paths[1],
+            zero = hex('0')
+        );
+        assert_eq!(
+            manifest_problem(Manifest::parse(text.as_bytes())),
+            Some(ManifestProblem::PathCollision),
+            "{paths:?}"
+        );
+    }
+    let siblings = format!(
+        "{header}file {zero} 0 a/b\nfile {zero} 0 a/c\nfile {zero} 0 ab\n",
+        zero = hex('0')
+    );
+    assert!(Manifest::parse(siblings.as_bytes()).is_ok());
+}
+
+/// A fresh, uniquely named synthetic staging area under the temporary directory.
+struct Scratch {
+    root: PathBuf,
+}
+
+impl Scratch {
+    fn new() -> Result<Self, std::io::Error> {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let name = format!(
+            "atlas-update-test-{}-{nanos}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let root = std::env::temp_dir().join(name);
+        fs::create_dir(&root)?;
+        Ok(Self { root })
+    }
+
+    /// Write the synthetic files into `staging`, returning that directory.
+    fn stage(&self, files: &BTreeMap<String, Vec<u8>>) -> Result<PathBuf, std::io::Error> {
+        let staging = self.root.join("staging");
+        fs::create_dir(&staging)?;
+        for (name, bytes) in files {
+            let path = staging.join(name.replace('/', "\\"));
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(path, bytes)?;
+        }
+        Ok(staging)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        // Removal does not follow junctions; a failure leaves only synthetic files behind.
+        if let Err(error) = fs::remove_dir_all(&self.root) {
+            eprintln!("could not remove {}: {error}", self.root.display());
+        }
+    }
+}
+
+fn io_error(error: std::io::Error) -> UpdateError {
+    UpdateError::Read {
+        what: "test scratch".to_owned(),
+        kind: error.kind(),
+    }
+}
+
+#[test]
+fn a_staging_directory_installs_from_held_deny_write_handles() -> Result<(), UpdateError> {
+    let package = valid_package()?;
+    let scratch = Scratch::new().map_err(io_error)?;
+    let staging = scratch.stage(&synthetic_files()).map_err(io_error)?;
+    let verified = package.verify()?;
+    let mut payload = verified.verify_payload(DirectoryPayload::open(&staging)?)?;
+
+    // The returned handles are rewound and hold exactly the verified bytes.
+    let expected = synthetic_files();
+    for file in payload.files_mut() {
+        let path = file.entry().path().as_str().to_owned();
+        let mut bytes = Vec::new();
+        file.reader().read_to_end(&mut bytes).map_err(io_error)?;
+        assert_eq!(Some(&bytes), expected.get(&path), "{path}");
+    }
+
+    // While they are held, no other handle can write the file or rename its directory.
+    let write = OpenOptions::new()
+        .write(true)
+        .open(staging.join("atlas.exe"));
+    assert_eq!(write.err().and_then(|error| error.raw_os_error()), Some(32));
+    let rename = fs::rename(staging.join("resources"), staging.join("moved"));
+    assert!(rename.is_err());
+    drop(payload);
+    let write = OpenOptions::new()
+        .write(true)
+        .open(staging.join("atlas.exe"));
+    assert!(write.is_ok());
+    Ok(())
+}
+
+#[test]
+fn a_staging_directory_must_use_the_manifest_case_and_hold_nothing_else() -> Result<(), UpdateError>
+{
+    let package = valid_package()?;
+    let verified = package.verify()?;
+
+    let mut renamed = synthetic_files();
+    if let Some(bytes) = renamed.remove("atlas.exe") {
+        renamed.insert("Atlas.exe".to_owned(), bytes);
+    }
+    let scratch = Scratch::new().map_err(io_error)?;
+    let staging = scratch.stage(&renamed).map_err(io_error)?;
+    assert_eq!(
+        check_payload(&verified, DirectoryPayload::open(&staging)?),
+        Err(UpdateError::UnlistedFile {
+            name: "Atlas.exe".to_owned()
+        })
+    );
+
+    let scratch = Scratch::new().map_err(io_error)?;
+    let staging = scratch.stage(&synthetic_files()).map_err(io_error)?;
+    fs::create_dir(staging.join("extra")).map_err(io_error)?;
+    assert_eq!(
+        check_payload(&verified, DirectoryPayload::open(&staging)?),
+        Err(UpdateError::UnlistedFile {
+            name: "extra".to_owned()
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn a_junction_in_a_staging_directory_is_refused() -> Result<(), UpdateError> {
+    let package = valid_package()?;
+    let verified = package.verify()?;
+    let scratch = Scratch::new().map_err(io_error)?;
+
+    // Put the real resources outside the staging directory and link them in with a junction.
+    let mut files = synthetic_files();
+    let outside = scratch.root.join("outside");
+    fs::create_dir(&outside).map_err(io_error)?;
+    for (name, leaf) in [
+        ("resources/notes.txt", "notes.txt"),
+        ("resources/empty.bin", "empty.bin"),
+    ] {
+        let bytes = files.remove(name).ok_or_else(|| UpdateError::MissingFile {
+            path: name.to_owned(),
+        })?;
+        fs::write(outside.join(leaf), bytes).map_err(io_error)?;
+    }
+    let staging = scratch.stage(&files).map_err(io_error)?;
+    let status = Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(staging.join("resources"))
+        .arg(&outside)
+        .stdout(Stdio::null())
+        .status()
+        .map_err(io_error)?;
+    assert!(status.success(), "mklink /J failed");
+
+    assert_eq!(
+        check_payload(&verified, DirectoryPayload::open(&staging)?),
+        Err(UpdateError::UnsafeEntry {
+            name: "resources".to_owned()
+        })
+    );
+    Ok(())
 }

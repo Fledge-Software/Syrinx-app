@@ -525,3 +525,8 @@ The dependency check (`crates/xtask/src/dependency_policy.rs`) still allows
 only `atlas-platform` to use WebView2, wry and `windows-sys`; `atlas-update`
 is the single other crate allowed `windows`, and every workspace crate is
 refused a dependency on `atlas-update` until P1-39 is approved.
+`atlas-update` may request only the `windows` features `Win32_Foundation`
+and `Win32_Security_Cryptography`, with default features disabled; any other
+feature, including a networking namespace, fails the check. The
+staging-directory payload uses only `std::fs` with Windows open flags, so it
+needs no further feature.

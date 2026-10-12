@@ -88,6 +88,10 @@ Windows without escaping it or naming something other than a plain file:
 Two paths that differ only in letter case are duplicates, because the
 Windows file system treats them as one file; an exact duplicate is also
 refused. The sorted order makes duplicates adjacent and the check exact.
+For the same reason a path may not also be, ignoring letter case, a
+directory of another listed path: `lib` and `LIB/x.dll`, or `a` and `a/b`,
+are refused as a collision, because one name cannot be both a file and a
+directory on disk.
 
 **Bounds.** The verifier never trusts a size it has not bounded. A manifest
 is at most 2 MiB (room for the most files with the longest paths), a package
@@ -138,12 +142,55 @@ signed.
    than the installed version. Refusing equal versions stops an attacker
    replaying today's package to force a reinstall over a repaired or
    reconfigured installation.
-6. For the payload: refuse any file present but not listed, then read each
-   listed file, refusing a missing file, a wrong size or a wrong hash.
+6. For the payload: refuse any entry present but not listed (in exact
+   letter case, apart from the directories that hold listed files), then
+   read each listed file, refusing a missing file, a wrong size or a wrong
+   hash.
 
 Every refusal is a typed `UpdateError`; the verifier does not panic on any
 input, and its tests feed it truncated, flipped, oversized, duplicated and
 traversing inputs. Nothing in `atlas-update` writes to disk.
+
+## Installing exactly the verified bytes
+
+Verification holds only for the bytes it read. If P1-39 verified a staging
+folder and then copied it with a second open, a process running as the same
+user could swap `atlas.exe` in between, and the copy would install bytes
+nobody checked. The API therefore makes the safe path the easy one:
+`VerifiedManifest::verify_payload` takes the payload by value and returns a
+`VerifiedPayload` holding, for each listed file, the very handle that was
+hashed, rewound to its start. P1-39 installs by reading those handles and
+must never reopen a payload file by name.
+
+The `Payload` trait states the rules a source must keep: `names()` returns
+every entry, files and directories, in its stored letter case; links,
+junctions and other reparse points are refused; and `open()` returns the
+plain file itself, read-only, refusing writers. `DirectoryPayload` is the
+staging-directory implementation and enforces them on Windows:
+
+- every handle is opened with read-only sharing, so while the
+  `VerifiedPayload` lives no other handle can write, rename or delete a
+  verified file, and opening fails if a writer already holds one;
+- every directory in the staging tree is opened the same way and held for
+  the payload's lifetime, so a verified directory cannot be renamed and
+  replaced by a junction between listing and reading;
+- entries are opened with `FILE_FLAG_OPEN_REPARSE_POINT` and both the
+  listing and each opened handle refuse the reparse-point attribute, so a
+  symbolic link or junction (for example a `resources` junction pointing
+  outside the staging folder) is refused rather than followed;
+- names are compared with the manifest in exact case, so `Atlas.exe` on disk
+  does not stand in for a listed `atlas.exe`.
+
+The tests build staging folders of synthetic files under the temporary
+directory, check that the held handles return the listed bytes and block a
+writer and a rename, and refuse a wrong-case name, an extra directory and a
+junction created with `mklink /J`. P1-39 should still stage into a folder
+only Atlas can write, as a second layer.
+
+Releasing a CNG handle cannot report a failure from `Drop`, so
+`atlas-update` writes such a failure to standard error. It only happens if a
+handle Atlas created is already invalid, which would be a bug. P1-39 should
+route these messages to Atlas's own logging once it connects the verifier.
 
 What rollback protection does not cover: an attacker who can serve old but
 still newer packages can hold Atlas at, say, 1.2 when 1.5 exists (a "freeze"
@@ -212,7 +259,11 @@ verifier to Windows, which v1 already is (D2).
 Because only `atlas-platform` may use `windows` directly, the dependency
 check now names `atlas-update` as the one other crate allowed the `windows`
 bindings (not WebView2 or wry), and refuses any workspace crate that depends
-on `atlas-update` until P1-39 is approved.
+on `atlas-update` until P1-39 is approved. It also lists the exact
+`windows` features the verifier may enable, `Win32_Foundation` and
+`Win32_Security_Cryptography`, with default features off, so adding a
+networking namespace such as `Win32_Networking_WinHttp` fails
+`cargo xtask check-deps`.
 
 ## What P1-39 needs from the owner
 

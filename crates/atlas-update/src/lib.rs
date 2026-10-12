@@ -3,6 +3,7 @@
 //! The format and key handling are in `docs/p1-38-update-format.md`.
 
 mod cng;
+mod directory;
 mod error;
 mod keys;
 mod manifest;
@@ -14,13 +15,14 @@ mod version;
 #[cfg(test)]
 mod tests;
 
+pub use directory::DirectoryPayload;
 pub use error::{ManifestProblem, PathProblem, UpdateError};
 pub use keys::{KeyId, KeySet, PRODUCTION_KEYS, PinnedKey};
 pub use manifest::{
     FileEntry, MAX_FILE_BYTES, MAX_FILES, MAX_MANIFEST_BYTES, MAX_TOTAL_BYTES, Manifest,
 };
 pub use path::{MAX_COMPONENT_BYTES, MAX_COMPONENTS, MAX_PATH_BYTES, PackagePath};
-pub use payload::{Payload, read_bounded};
+pub use payload::{Payload, VerifiedFile, VerifiedPayload, read_bounded};
 pub use signature::{DetachedSignature, SIGNATURE_BYTES};
 pub use version::Version;
 
@@ -42,7 +44,12 @@ impl VerifiedManifest {
     }
 
     /// Check that the payload holds exactly the listed files with their sizes and hashes.
-    pub fn verify_payload<P: Payload>(&self, payload: &mut P) -> Result<(), UpdateError> {
+    ///
+    /// The result holds the hashed handles; install from them, never by reopening the files.
+    pub fn verify_payload<P: Payload>(
+        &self,
+        payload: P,
+    ) -> Result<VerifiedPayload<P>, UpdateError> {
         payload::verify(self.manifest.files(), payload)
     }
 }

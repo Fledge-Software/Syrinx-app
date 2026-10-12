@@ -1,6 +1,6 @@
 //! SHA-256 and ECDSA P-256 through Windows CNG, so no new cryptography crate is needed.
 
-use windows::Win32::Foundation::{NTSTATUS, STATUS_INVALID_SIGNATURE};
+use windows::Win32::Foundation::{NTSTATUS, STATUS_INVALID_SIGNATURE, STATUS_SUCCESS};
 use windows::Win32::Security::Cryptography::{
     BCRYPT_ALG_HANDLE, BCRYPT_ECCPUBLIC_BLOB, BCRYPT_ECDSA_P256_ALGORITHM,
     BCRYPT_ECDSA_PUBLIC_P256_MAGIC, BCRYPT_FLAGS, BCRYPT_HASH_HANDLE, BCRYPT_KEY_HANDLE,
@@ -157,7 +157,7 @@ fn import_public_key(point: &[u8; 64]) -> Result<PublicKey, UpdateError> {
         )
     };
     if status.is_err() {
-        return Err(UpdateError::InvalidKey);
+        return Err(UpdateError::InvalidKey { status: status.0 });
     }
     Ok(PublicKey {
         key: Key(handle),
@@ -179,11 +179,17 @@ pub(crate) fn verify_signature(
     let public = import_public_key(point)?;
     let status =
         unsafe { BCryptVerifySignature(public.key.0, None, digest, signature, BCRYPT_FLAGS(0)) };
+    // Only exact success is a valid signature; any other status is a refusal or an error.
+    if status == STATUS_SUCCESS {
+        return Ok(true);
+    }
     if status == STATUS_INVALID_SIGNATURE {
         return Ok(false);
     }
-    check(status, "verifying a signature")?;
-    Ok(true)
+    Err(UpdateError::Crypto {
+        operation: "verifying a signature",
+        status: status.0,
+    })
 }
 
 /// In-process key pairs that exist only for the duration of a test.
@@ -237,7 +243,10 @@ pub(crate) mod test_keys {
             check(status, "exporting a test key")?;
             let magic = BCRYPT_ECDSA_PUBLIC_P256_MAGIC.to_le_bytes();
             if written != 72 || blob[..4] != magic {
-                return Err(UpdateError::InvalidKey);
+                return Err(UpdateError::Crypto {
+                    operation: "exporting a test key",
+                    status: 0,
+                });
             }
             let mut point = [0u8; 64];
             point.copy_from_slice(&blob[8..]);
