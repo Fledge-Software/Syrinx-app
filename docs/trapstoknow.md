@@ -12,6 +12,18 @@ you found it in the commit message, not here.
 
 ## Page tabs: WebView2 through wry
 
+- **An empty native Find.Start can leave its completion pending.** The P1-13
+  fixture on this runtime completed a nonempty two-match search, but an empty
+  term never completed. Atlas opens its own find input without calling Start;
+  clearing calls Stop. Query IDs must change on both edits and bar reopen, since
+  native cancellation cannot retract an event already queued to the UI. Moving
+  logical GPUI focus alone is insufficient: transfer Windows focus from the page
+  child to the chrome parent before typing. See `docs/p1-13-essentials.md`.
+- **Do not build an example while its executable is running.** On Windows,
+  the gate also links examples. Running the native fixture concurrently caused
+  LNK1104 against its own executable. Serialize the native fixture and gate;
+  do not kill another session's processes or relocate executables.
+
 - **A consent click grants a replacement prompt.** Capture the displayed
   tab/request identity in each callback and give each prompt's buttons distinct
   element IDs. Reject a delayed click after navigation, tab change or a new

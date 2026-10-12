@@ -9,6 +9,9 @@ mod popups;
 #[path = "page_close/permissions.rs"]
 mod permissions;
 
+#[path = "page_close/essentials.rs"]
+mod essentials;
+
 use std::{
     fs,
     io::{self, Read, Write},
@@ -59,7 +62,7 @@ fn main() -> ExitCode {
     let watchdog = match thread::Builder::new()
         .name("atlas-close-harness-deadline".into())
         .spawn(
-            move || match cancellation.recv_timeout(Duration::from_secs(180)) {
+            move || match cancellation.recv_timeout(Duration::from_secs(240)) {
                 Ok(()) => {}
                 Err(error) => {
                     eprintln!("Synthetic page-close harness deadline failed: {error}.");
@@ -98,7 +101,7 @@ fn run() -> Result<(), String> {
     let profile = reserve_profile()?;
     let server = Server::start()?;
     let result = run_browser(profile, &server.url, exercise);
-    // Run both suites even if one fails; separate fresh profiles keep their evidence independent.
+    // Run every suite even if one fails; fresh profiles keep their evidence independent.
     let popup_result =
         reserve_profile().and_then(|profile| run_browser(profile, &server.url, popups::exercise));
     if popup_result.is_ok() {
@@ -111,8 +114,16 @@ fn run() -> Result<(), String> {
             "Synthetic permission deny, allow, repeated prompt and default notification UI passed."
         );
     }
+    let essentials_result = reserve_profile()
+        .and_then(|profile| run_browser(profile, &server.url, essentials::exercise));
+    if essentials_result.is_ok() {
+        println!("Synthetic native find, download list, zoom and print-preview command passed.");
+    }
     combine(
-        combine(combine(result, popup_result), permission_result),
+        combine(
+            combine(combine(result, popup_result), permission_result),
+            essentials_result,
+        ),
         server.stop(),
     )
 }
@@ -467,6 +478,7 @@ fn respond(mut stream: TcpStream) -> Result<(), String> {
     }
     let page = popups::response(&request[..length])
         .or_else(|| permissions::response(&request[..length]))
+        .or_else(|| essentials::response(&request[..length]))
         .unwrap_or(PAGE);
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",

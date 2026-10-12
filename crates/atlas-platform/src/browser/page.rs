@@ -44,6 +44,7 @@ impl HasWindowHandle for Parent {
 
 pub(super) struct Page {
     permissions: super::permissions::Permissions,
+    essentials: super::essentials::Essentials,
     view: WebView,
 }
 
@@ -68,6 +69,7 @@ impl Page {
             .with_focused(false)
             .with_devtools(false)
             .with_clipboard(false)
+            .with_default_context_menus(true)
             .with_bounds(rect(bounds))
             .with_document_title_changed_handler(move |title| {
                 titles.emit(BrowserEvent::Title { id, title })
@@ -96,8 +98,13 @@ impl Page {
         register_navigation(&view, id, events.clone())?;
         register_process_failure(&view, id, events.clone())?;
         let permissions = super::permissions::Permissions::register(&view, id, events.clone())?;
+        let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
         register_shortcuts(&view, shortcuts, id, events)?;
-        Ok(Self { permissions, view })
+        Ok(Self {
+            permissions,
+            essentials,
+            view,
+        })
     }
 
     pub(super) fn webview(&self) -> webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2 {
@@ -125,6 +132,7 @@ impl Page {
 
     pub(super) fn apply(&self, command: BrowserCommand) -> Result<(), BrowserError> {
         match command {
+            BrowserCommand::PageAction { action, .. } => self.essentials.apply(&self.view, action),
             BrowserCommand::ResolvePermission {
                 request, allowed, ..
             } => self.permissions.resolve(request, allowed),
@@ -327,6 +335,13 @@ fn shortcut_for_modifiers(
         return None;
     }
     match (key, shift) {
+        (0x46, false) => Some(BrowserShortcut::Find),
+        (0x4A, false) => Some(BrowserShortcut::Downloads),
+        (0x50, false) => Some(BrowserShortcut::Print),
+        (0x48, false) => Some(BrowserShortcut::History),
+        (0xBB | 0x6B, _) => Some(BrowserShortcut::ZoomIn),
+        (0xBD | 0x6D, false) => Some(BrowserShortcut::ZoomOut),
+        (0x30 | 0x60, false) => Some(BrowserShortcut::ZoomReset),
         (0x54, false) => Some(BrowserShortcut::NewTab),
         (0x54, true) => Some(BrowserShortcut::ReopenTab),
         (0x57, false) => Some(BrowserShortcut::CloseTab),
@@ -378,6 +393,17 @@ mod tests {
             (0x4B, false, BrowserShortcut::Palette),
             (0x44, false, BrowserShortcut::SavePage),
             (0x52, false, BrowserShortcut::Reload),
+            (0x46, false, BrowserShortcut::Find),
+            (0x4A, false, BrowserShortcut::Downloads),
+            (0x50, false, BrowserShortcut::Print),
+            (0x48, false, BrowserShortcut::History),
+            (0xBB, true, BrowserShortcut::ZoomIn),
+            (0xBB, false, BrowserShortcut::ZoomIn),
+            (0x6B, false, BrowserShortcut::ZoomIn),
+            (0xBD, false, BrowserShortcut::ZoomOut),
+            (0x6D, false, BrowserShortcut::ZoomOut),
+            (0x30, false, BrowserShortcut::ZoomReset),
+            (0x60, false, BrowserShortcut::ZoomReset),
         ] {
             assert_eq!(
                 shortcut_for_modifiers(key, true, shift, false),
@@ -402,10 +428,10 @@ mod tests {
 
     #[test]
     fn unrelated_and_extra_modified_keys_stay_with_the_page() {
-        for key in [0x41, 0x43, 0x46, 0x53, 0x56, 0x58, 0x5A] {
+        for key in [0x41, 0x43, 0x53, 0x56, 0x58, 0x5A] {
             assert_eq!(shortcut_for_modifiers(key, true, false, false), None);
         }
-        for key in [0x57, 0x4C, 0x4B, 0x44, 0x52] {
+        for key in [0x57, 0x4C, 0x4B, 0x44, 0x52, 0x46, 0x4A, 0x50, 0x48] {
             assert_eq!(shortcut_for_modifiers(key, true, true, false), None);
         }
         for (control, shift, alt) in [
