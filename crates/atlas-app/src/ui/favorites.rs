@@ -2,9 +2,9 @@
 
 use atlas_core::DestinationSurface;
 use atlas_ui::Palette;
-use atlas_ui::metrics::text;
+use atlas_ui::metrics::{chrome::ICON_BUTTON, text};
 use gpui::{
-    Context, Div, FontWeight, InteractiveElement, ParentElement, Stateful,
+    Context, Div, FontWeight, InteractiveElement, ParentElement, Role, Stateful,
     StatefulInteractiveElement, Styled, div, px,
 };
 
@@ -17,10 +17,22 @@ const COLUMNS: u16 = 4;
 const TILE_HEIGHT: f32 = 46.;
 const TILE_RADIUS: f32 = 12.;
 const LETTER_SIZE: f32 = 17.;
+/// Favicon-only mode's single column of icon-button-sized tiles.
+const COMPACT_RADIUS: f32 = 8.;
+const COMPACT_LETTER_SIZE: f32 = 13.;
 
 impl BrowserView {
+    /// Favorites at the sidebar's width: the full section when labels show, otherwise one
+    /// column of icon tiles that fits the favicon-only sidebar.
+    pub(super) fn favorites(&self, labels: bool, cx: &mut Context<Self>) -> Div {
+        if labels {
+            return self.favorites_section(cx);
+        }
+        self.favorites_column(cx)
+    }
+
     /// The Favorites heading, grid and, while one is open, the Favorites tile form.
-    pub(super) fn favorites(&self, cx: &mut Context<Self>) -> Div {
+    fn favorites_section(&self, cx: &mut Context<Self>) -> Div {
         let palette = theme::current();
         let surface = DestinationSurface::Favorites;
         let mut section = div()
@@ -63,6 +75,8 @@ impl BrowserView {
             let opened = tile.clone();
             let mut cell = div()
                 .id(("favorite", index))
+                .role(Role::Button)
+                .aria_label(tile.label.clone())
                 .flex()
                 .flex_col()
                 .items_center()
@@ -90,10 +104,42 @@ impl BrowserView {
     fn add_favorite(&self, palette: &Palette, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
             .id("favorite-add")
+            .role(Role::Button)
+            .aria_label("Add favorite")
             .cursor_pointer()
             .child(tiles::add_face(palette, TILE_HEIGHT, TILE_RADIUS).w_full())
             .on_click(cx.listener(|this, _, window, cx| {
                 this.start_tile_editor(DestinationSurface::Favorites, None, window, cx);
             }))
+    }
+
+    /// Favicon-only Favorites: each tile as a named icon that opens it. Editing needs the
+    /// wide sidebar, so the add tile and the tile form are left out here.
+    fn favorites_column(&self, cx: &mut Context<Self>) -> Div {
+        let palette = theme::current();
+        let favorites = self.home.destinations.list(DestinationSurface::Favorites);
+        let mut column = div().flex().flex_col().gap_1();
+        for (index, tile) in favorites.iter().enumerate() {
+            let opened = tile.clone();
+            column = column.child(
+                div()
+                    .id(("favorite", index))
+                    .role(Role::Button)
+                    .aria_label(tile.label.clone())
+                    .cursor_pointer()
+                    .child(tiles::tile_face(
+                        &palette,
+                        tile,
+                        ICON_BUTTON,
+                        COMPACT_RADIUS,
+                        COMPACT_LETTER_SIZE,
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.open_tile(&opened);
+                        cx.notify();
+                    })),
+            );
+        }
+        column
     }
 }
