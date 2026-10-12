@@ -9,9 +9,9 @@ use futures::channel::mpsc::UnboundedSender;
 use windows::{
     Win32::{
         Foundation::{
-            ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_MORE_DATA,
-            ERROR_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE,
-            GetLastError, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+            ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_NOT_FOUND,
+            ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, GetLastError,
+            HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
         Storage::FileSystem::{
             CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE,
@@ -32,7 +32,7 @@ use windows::{
         },
         UI::WindowsAndMessaging::AllowSetForegroundWindow,
     },
-    core::{HRESULT, HSTRING},
+    core::HSTRING,
 };
 
 use super::{
@@ -50,6 +50,8 @@ pub(super) enum Delivery {
         foreground_granted: bool,
     },
     Refused,
+    /// The pipe belongs to a process of another user; nothing was sent to it.
+    Foreign,
     /// Nobody listens, the listener is busy or closing, or it hung up: try again shortly.
     Unavailable,
 }
@@ -83,7 +85,9 @@ impl StopSignal {
 /// The listener thread and the switch that ends it.
 pub(super) struct PipeServer {
     stop: StopSignal,
-    worker: Option<JoinHandle<()>>,
+    worker: Option<JoinHandle<OwnedHandle>>,
+    /// The pipe after the listener stops, held so no other process can take the name yet.
+    retained: Option<OwnedHandle>,
 }
 
 impl PipeServer {
@@ -98,11 +102,12 @@ impl PipeServer {
         let worker_stop = stop.clone();
         let worker = thread::Builder::new()
             .name("atlas-links".into())
-            .spawn(move || serve(&pipe, &worker_stop, &requests))
+            .spawn(move || serve(pipe, &worker_stop, &requests))
             .map_err(|_| InstanceError::ThreadStart)?;
         Ok(Self {
             stop,
             worker: Some(worker),
+            retained: None,
         })
     }
 
@@ -110,7 +115,7 @@ impl PipeServer {
         self.stop.clone()
     }
 
-    /// Stops the listener and waits for it to close the pipe.
+    /// Stops the listener and waits for it, keeping the pipe name reserved.
     pub(super) fn stop_and_join(&mut self) {
         let Some(worker) = self.worker.take() else {
             return;
@@ -120,15 +125,22 @@ impl PipeServer {
             eprintln!("{error}");
             return;
         }
-        if worker.join().is_err() {
-            eprintln!("Atlas's link listener stopped unexpectedly.");
+        match worker.join() {
+            Ok(pipe) => self.retained = Some(pipe),
+            Err(_) => eprintln!("Atlas's link listener stopped unexpectedly."),
         }
+    }
+
+    /// Stops the listener and gives up the pipe name.
+    pub(super) fn close(&mut self) {
+        self.stop_and_join();
+        self.retained = None;
     }
 }
 
 impl Drop for PipeServer {
     fn drop(&mut self) {
-        self.stop_and_join();
+        self.close();
     }
 }
 
@@ -158,29 +170,33 @@ fn create_pipe(name: &str, owner: &OwnerOnly) -> Result<OwnedHandle, InstanceErr
     Err(InstanceError::Pipe)
 }
 
-/// Answers one launch at a time until the stop signal is raised.
-fn serve(pipe: &OwnedHandle, stop: &StopSignal, requests: &UnboundedSender<LinkRequest>) {
+/// Answers one launch at a time until the stop signal is raised, then hands the pipe back.
+fn serve(
+    pipe: OwnedHandle,
+    stop: &StopSignal,
+    requests: &UnboundedSender<LinkRequest>,
+) -> OwnedHandle {
     let mut operation = match Operation::new() {
         Ok(operation) => operation,
         Err(error) => {
             eprintln!("{error}");
-            return;
+            return pipe;
         }
     };
     let mut buffer = vec![0u8; MAX_MESSAGE_BYTES];
     loop {
         match operation.connect(pipe.0, stop) {
             Outcome::Done(_) => converse(&mut operation, pipe.0, &mut buffer, stop, requests),
-            Outcome::Stopped => return,
+            Outcome::Stopped => return pipe,
             // A client that vanished while connecting only leaves the instance to reset.
-            Outcome::TimedOut | Outcome::Failed(_) => {}
+            Outcome::TimedOut | Outcome::Failed => {}
         }
         if let Err(error) = unsafe { DisconnectNamedPipe(pipe.0) } {
             eprintln!("Atlas's link listener stopped: {error}");
-            return;
+            return pipe;
         }
         if stop.raised() {
-            return;
+            return pipe;
         }
     }
 }
@@ -193,17 +209,21 @@ fn converse(
     stop: &StopSignal,
     requests: &UnboundedSender<LinkRequest>,
 ) {
-    let reply = match operation.read(pipe, buffer) {
+    // Every step also ends on the stop event, so closing never waits for a slow client.
+    let reply = match operation.read(pipe, buffer, Some(stop)) {
         Outcome::Done(length) => decide(&buffer[..length as usize], stop, requests),
-        Outcome::Failed(code) if code == ERROR_MORE_DATA.to_hresult() => REFUSED,
-        // The client gave up before sending anything; there is no one to answer.
-        Outcome::Failed(_) | Outcome::TimedOut | Outcome::Stopped => return,
+        Outcome::Stopped => CLOSING,
+        // An overlong, broken or silent request is refused rather than left unanswered.
+        Outcome::Failed | Outcome::TimedOut => REFUSED,
     };
-    if !matches!(operation.write(pipe, &[reply]), Outcome::Done(1)) {
+    if !matches!(
+        operation.write(pipe, &[reply], Some(stop)),
+        Outcome::Done(1)
+    ) {
         return;
     }
     // Disconnecting discards an unread reply, so wait for the client to read it and close.
-    let _client_hung_up = operation.read(pipe, buffer);
+    let _client_hung_up = operation.read(pipe, buffer, Some(stop));
 }
 
 /// The reply to one request; only a well-formed http(s) link or an activation is queued.
@@ -220,19 +240,30 @@ fn decide(message: &[u8], stop: &StopSignal, requests: &UnboundedSender<LinkRequ
     }
 }
 
-/// Sends one request to the running Atlas and reads its one-byte answer.
-pub(super) fn send(name: &str, message: &[u8]) -> Result<Delivery, InstanceError> {
+/// Sends one request to the running Atlas and reads its one-byte answer. The pipe's name is
+/// predictable, so its server must run as this user before anything is sent or granted.
+pub(super) fn send(
+    name: &str,
+    message: &[u8],
+    owner: &OwnerOnly,
+) -> Result<Delivery, InstanceError> {
     let Some(pipe) = open_client(name)? else {
         return Ok(Delivery::Unavailable);
     };
-    let foreground_granted = grant_foreground(pipe.0);
+    let Some(server) = server_process(pipe.0) else {
+        return Ok(Delivery::Unavailable);
+    };
+    if !owner.owns_process(server) {
+        return Ok(Delivery::Foreign);
+    }
+    let foreground_granted = grant_foreground(server);
     let mut operation = Operation::new()?;
-    let written = operation.write(pipe.0, message);
+    let written = operation.write(pipe.0, message, None);
     if !matches!(written, Outcome::Done(length) if length as usize == message.len()) {
         return Ok(Delivery::Unavailable);
     }
     let mut reply = [0u8; 1];
-    Ok(match (operation.read(pipe.0, &mut reply), reply[0]) {
+    Ok(match (operation.read(pipe.0, &mut reply, None), reply[0]) {
         (Outcome::Done(1), ACCEPTED) => Delivery::Accepted { foreground_granted },
         (Outcome::Done(1), REFUSED) => Delivery::Refused,
         // Closing, a timeout or a broken pipe: retry until this launch can own the profile.
@@ -268,19 +299,24 @@ fn open_client(name: &str) -> Result<Option<OwnedHandle>, InstanceError> {
     Ok(Some(pipe))
 }
 
-/// Lets the running Atlas come forward; Windows allows this only from the foreground launch.
-fn grant_foreground(pipe: HANDLE) -> bool {
+/// The process that created the pipe, or `None` if Windows cannot say.
+fn server_process(pipe: HANDLE) -> Option<u32> {
     let mut process = 0u32;
     if unsafe { GetNamedPipeServerProcessId(pipe, &mut process) }.is_err() {
-        return false;
+        return None;
     }
+    Some(process)
+}
+
+/// Lets the running Atlas come forward; Windows allows this only from the foreground launch.
+fn grant_foreground(process: u32) -> bool {
     unsafe { AllowSetForegroundWindow(process) }.is_ok()
 }
 
 /// How one overlapped step ended.
 enum Outcome {
     Done(u32),
-    Failed(HRESULT),
+    Failed,
     TimedOut,
     Stopped,
 }
@@ -311,16 +347,16 @@ impl Operation {
         self.finish(pipe, started, INFINITE, Some(stop))
     }
 
-    fn read(&mut self, pipe: HANDLE, buffer: &mut [u8]) -> Outcome {
+    fn read(&mut self, pipe: HANDLE, buffer: &mut [u8], stop: Option<&StopSignal>) -> Outcome {
         self.prepare();
         let started = unsafe { ReadFile(pipe, Some(buffer), None, Some(&mut self.overlapped)) };
-        self.finish(pipe, started, IO_TIMEOUT_MS, None)
+        self.finish(pipe, started, IO_TIMEOUT_MS, stop)
     }
 
-    fn write(&mut self, pipe: HANDLE, bytes: &[u8]) -> Outcome {
+    fn write(&mut self, pipe: HANDLE, bytes: &[u8], stop: Option<&StopSignal>) -> Outcome {
         self.prepare();
         let started = unsafe { WriteFile(pipe, Some(bytes), None, Some(&mut self.overlapped)) };
-        self.finish(pipe, started, IO_TIMEOUT_MS, None)
+        self.finish(pipe, started, IO_TIMEOUT_MS, stop)
     }
 
     fn prepare(&mut self) {
@@ -344,7 +380,7 @@ impl Operation {
         match started {
             Ok(()) => return self.result(pipe),
             Err(error) if error.code() != ERROR_IO_PENDING.to_hresult() => {
-                return Outcome::Failed(error.code());
+                return Outcome::Failed;
             }
             Err(_) => {}
         }
@@ -366,7 +402,7 @@ impl Operation {
         let mut bytes = 0u32;
         match unsafe { GetOverlappedResult(pipe, &self.overlapped, &mut bytes, false) } {
             Ok(()) => Outcome::Done(bytes),
-            Err(error) => Outcome::Failed(error.code()),
+            Err(_) => Outcome::Failed,
         }
     }
 
@@ -380,7 +416,7 @@ impl Operation {
             (_, Ok(())) => Outcome::Done(bytes),
             (Ok(()), Err(_)) => interrupted,
             (Err(error), Err(_)) if error.code() == ERROR_NOT_FOUND.to_hresult() => interrupted,
-            (Err(error), Err(_)) => Outcome::Failed(error.code()),
+            (Err(_), Err(_)) => Outcome::Failed,
         }
     }
 }

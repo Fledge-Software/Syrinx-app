@@ -11,10 +11,11 @@ use windows::{
                 SDDL_REVISION_1,
             },
             GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
-            TOKEN_USER, TokenUser,
+            TOKEN_USER, TokenSessionId, TokenUser,
         },
         System::Threading::{
-            CreateMutexW, GetCurrentProcess, OpenProcessToken, ReleaseMutex, WaitForSingleObject,
+            CreateMutexW, GetCurrentProcess, OpenProcess, OpenProcessToken,
+            PROCESS_QUERY_LIMITED_INFORMATION, ReleaseMutex, WaitForSingleObject,
         },
     },
     core::{HSTRING, PWSTR},
@@ -41,12 +42,15 @@ impl Drop for OwnedHandle {
 /// A security descriptor that grants access to the current user alone.
 pub(super) struct OwnerOnly {
     sid: String,
+    session: u32,
     descriptor: PSECURITY_DESCRIPTOR,
 }
 
 impl OwnerOnly {
     pub(super) fn current_user() -> Result<Self, InstanceError> {
-        let sid = current_user_sid()?;
+        let token = process_token(unsafe { GetCurrentProcess() })?;
+        let sid = token_user_sid(&token)?;
+        let session = token_session(&token)?;
         // A protected DACL with one entry: full access for this user, nothing inherited.
         let sddl = HSTRING::from(format!("D:P(A;;GA;;;{sid})"));
         let mut descriptor = PSECURITY_DESCRIPTOR::default();
@@ -59,11 +63,34 @@ impl OwnerOnly {
             )
         }
         .map_err(|_| InstanceError::Security)?;
-        Ok(Self { sid, descriptor })
+        Ok(Self {
+            sid,
+            session,
+            descriptor,
+        })
     }
 
     pub(super) fn sid(&self) -> &str {
         &self.sid
+    }
+
+    /// The Windows session this process runs in, so two sign-ins of one user stay apart.
+    pub(super) fn session(&self) -> u32 {
+        self.session
+    }
+
+    /// Whether `process` runs as this user; anything that cannot be checked counts as foreign.
+    pub(super) fn owns_process(&self, process: u32) -> bool {
+        let Ok(handle) =
+            (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process) })
+        else {
+            return false;
+        };
+        let handle = OwnedHandle(handle);
+        match process_token(handle.0).and_then(|token| token_user_sid(&token)) {
+            Ok(sid) => same_user(&self.sid, &sid),
+            Err(_) => false,
+        }
     }
 
     /// Attributes for a new object; they borrow this descriptor and must not outlive it.
@@ -131,13 +158,16 @@ impl Drop for NamedMutex {
     }
 }
 
-/// The current user's SID in string form, as `S-1-5-21-…`.
-fn current_user_sid() -> Result<String, InstanceError> {
+/// Opens a process's access token for reading its user and session.
+fn process_token(process: HANDLE) -> Result<OwnedHandle, InstanceError> {
     let mut token = HANDLE::default();
-    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
+    unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) }
         .map_err(|_| InstanceError::Identity)?;
-    let token = OwnedHandle(token);
+    Ok(OwnedHandle(token))
+}
 
+/// The token's user SID in string form, as `S-1-5-21-…`.
+fn token_user_sid(token: &OwnedHandle) -> Result<String, InstanceError> {
     // The first call fails by design and reports the size of the user record.
     let mut length = 0u32;
     let sizing = unsafe { GetTokenInformation(token.0, TokenUser, None, 0, &mut length) };
@@ -166,6 +196,27 @@ fn current_user_sid() -> Result<String, InstanceError> {
     sid
 }
 
+fn token_session(token: &OwnedHandle) -> Result<u32, InstanceError> {
+    let mut session = 0u32;
+    let mut length = 0u32;
+    unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenSessionId,
+            Some((&raw mut session).cast()),
+            size_of::<u32>() as u32,
+            &mut length,
+        )
+    }
+    .map_err(|_| InstanceError::Identity)?;
+    Ok(session)
+}
+
+/// SID strings compare without regard to case; an empty SID never matches.
+pub(super) fn same_user(expected: &str, actual: &str) -> bool {
+    !expected.is_empty() && expected.eq_ignore_ascii_case(actual)
+}
+
 /// Frees memory Windows allocated for a conversion result.
 fn free_local(memory: *mut core::ffi::c_void) {
     if memory.is_null() {
@@ -186,5 +237,32 @@ mod tests {
         let owner = OwnerOnly::current_user().expect("owner-only descriptor");
         assert!(owner.sid().starts_with("S-1-"), "{}", owner.sid());
         assert!(!owner.attributes().lpSecurityDescriptor.is_null());
+        assert!(
+            owner.owns_process(std::process::id()),
+            "this process runs as this user"
+        );
+    }
+
+    #[test]
+    fn only_the_same_user_sid_matches() {
+        assert!(same_user("S-1-5-21-1-2-3-1001", "S-1-5-21-1-2-3-1001"));
+        assert!(same_user("S-1-5-21-1-2-3-1001", "s-1-5-21-1-2-3-1001"));
+        for other in [
+            "S-1-5-21-1-2-3-1002",
+            "S-1-5-18",
+            "S-1-5-21-1-2-3-10011",
+            "",
+        ] {
+            assert!(!same_user("S-1-5-21-1-2-3-1001", other), "{other}");
+        }
+        assert!(!same_user("", ""));
+    }
+
+    #[test]
+    fn a_process_that_cannot_be_inspected_is_foreign() {
+        let owner = OwnerOnly::current_user().expect("owner-only descriptor");
+        // Process 0 is the System Idle Process; ordinary users cannot open its token.
+        assert!(!owner.owns_process(0));
+        assert!(!owner.owns_process(u32::MAX));
     }
 }

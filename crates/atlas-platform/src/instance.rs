@@ -10,6 +10,10 @@ mod tests;
 use std::{
     fmt,
     path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -28,6 +32,10 @@ pub const FORWARD_PATIENCE: Duration = Duration::from_secs(15);
 
 /// The pause between attempts, short enough that a link opens promptly once Atlas listens.
 const RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
+/// How long a new running Atlas waits for its predecessor to give up the pipe name, which
+/// happens just after the predecessor releases the mutex.
+const PIPE_HANDOVER: Duration = Duration::from_secs(3);
 
 /// What this launch became.
 pub enum Claim {
@@ -52,6 +60,8 @@ pub enum InstanceError {
     Mutex,
     /// Another process already holds this profile's link pipe.
     PipeTaken,
+    /// The process holding the link pipe runs as another Windows user.
+    ForeignListener,
     /// The link pipe failed in a way a retry would not fix.
     Pipe,
     /// The running Atlas refused the link.
@@ -71,10 +81,18 @@ impl fmt::Display for InstanceError {
             Self::Identity => "Atlas cannot identify the signed-in Windows user.",
             Self::Security => "Atlas cannot restrict its link channel to this user.",
             Self::Mutex => "Atlas cannot check whether it is already running.",
-            Self::PipeTaken => "Another program already holds Atlas's link channel.",
+            Self::PipeTaken => {
+                "Another program holds Atlas's link channel, so Atlas cannot start. \
+                 Sign out of Windows and back in, then try again."
+            }
+            Self::ForeignListener => {
+                "Atlas's link channel belongs to another Windows user, so the link was not sent."
+            }
             Self::Pipe => "Atlas's link channel failed.",
             Self::Refused => "The running Atlas refused the link.",
-            Self::NoResponse => "The running Atlas did not answer in time.",
+            Self::NoResponse => {
+                "Atlas is running but did not answer in time, so the link was not opened."
+            }
             Self::ThreadStart => "Atlas cannot start its link listener.",
             Self::Queue => "Atlas's link queue is unavailable.",
         })
@@ -89,13 +107,30 @@ pub struct PrimaryInstance {
     server: PipeServer,
     sender: UnboundedSender<LinkRequest>,
     requests: Option<UnboundedReceiver<LinkRequest>>,
+    dropped: DroppedLinks,
     lock: NamedMutex,
 }
 
-/// The forwarded requests for the window, and the switch that stops accepting more.
+/// The forwarded requests for the window, the switch that stops accepting more, and where
+/// the window records a link that arrived too late to open.
 pub struct LinkFeed {
     pub requests: UnboundedReceiver<LinkRequest>,
     pub stop: StopSignal,
+    pub dropped: DroppedLinks,
+}
+
+/// Set when an accepted link reached a window that was already closing.
+#[derive(Clone, Default)]
+pub struct DroppedLinks(Arc<AtomicBool>);
+
+impl DroppedLinks {
+    pub fn record(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub fn any(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
 }
 
 impl PrimaryInstance {
@@ -110,15 +145,23 @@ impl PrimaryInstance {
         Ok(LinkFeed {
             requests,
             stop: self.server.stop_signal(),
+            dropped: self.dropped.clone(),
         })
+    }
+
+    /// Whether a forwarded link was accepted but never opened because Atlas was closing.
+    pub fn links_dropped(&self) -> bool {
+        self.dropped.any()
     }
 }
 
 impl Drop for PrimaryInstance {
     fn drop(&mut self) {
-        // Close the pipe before the mutex, so a waiting launch takes over only a quiet profile.
+        // Keep the pipe name until the mutex is released, so no other process can take it
+        // between the two; the successor waits briefly for the name (`PIPE_HANDOVER`).
         self.server.stop_and_join();
         self.lock.release();
+        self.server.close();
     }
 }
 
@@ -130,7 +173,7 @@ pub fn claim(
     patience: Duration,
 ) -> Result<Claim, InstanceError> {
     let owner = OwnerOnly::current_user()?;
-    let names = InstanceNames::new(directory, owner.sid())?;
+    let names = InstanceNames::new(directory, owner.sid(), owner.session())?;
     let mut lock = NamedMutex::open(&names.mutex, &owner)?;
     let message = request.encode();
     let deadline = Instant::now() + patience;
@@ -138,11 +181,12 @@ pub fn claim(
         if lock.try_acquire()? {
             return become_primary(lock, &names, &owner);
         }
-        match pipe::send(&names.pipe, &message)? {
+        match pipe::send(&names.pipe, &message, &owner)? {
             Delivery::Accepted { foreground_granted } => {
                 return Ok(Claim::Forwarded { foreground_granted });
             }
             Delivery::Refused => return Err(InstanceError::Refused),
+            Delivery::Foreign => return Err(InstanceError::ForeignListener),
             Delivery::Unavailable => {}
         }
         if Instant::now() >= deadline {
@@ -159,11 +203,29 @@ fn become_primary(
     owner: &OwnerOnly,
 ) -> Result<Claim, InstanceError> {
     let (sender, requests) = unbounded();
-    let server = PipeServer::start(&names.pipe, owner, sender.clone())?;
+    let server = start_listening(&names.pipe, owner, &sender)?;
     Ok(Claim::Primary(PrimaryInstance {
         server,
         sender,
         requests: Some(requests),
+        dropped: DroppedLinks::default(),
         lock,
     }))
+}
+
+/// Creates the pipe, waiting briefly while a predecessor that just exited still holds it.
+fn start_listening(
+    pipe_name: &str,
+    owner: &OwnerOnly,
+    sender: &UnboundedSender<LinkRequest>,
+) -> Result<PipeServer, InstanceError> {
+    let deadline = Instant::now() + PIPE_HANDOVER;
+    loop {
+        match PipeServer::start(pipe_name, owner, sender.clone()) {
+            Err(InstanceError::PipeTaken) if Instant::now() < deadline => {
+                thread::sleep(RETRY_INTERVAL);
+            }
+            started => return started,
+        }
+    }
 }

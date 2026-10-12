@@ -1,4 +1,4 @@
-//! Names the mutex and pipe after the user and profile, so test profiles never reach the owner's.
+//! Names the mutex and pipe after the user, session and profile, so test profiles never meet.
 
 use std::path::Path;
 
@@ -11,10 +11,16 @@ pub(super) struct InstanceNames {
 }
 
 impl InstanceNames {
-    pub(super) fn new(directory: &Path, user_sid: &str) -> Result<Self, InstanceError> {
-        let stem = format!("AtlasInstance-{user_sid}-{:016x}", profile_key(directory)?);
+    /// The pipe namespace is machine-wide while `Local\` is per session, so the stem also
+    /// names the session: both objects then have the same scope.
+    pub(super) fn new(
+        directory: &Path,
+        user_sid: &str,
+        session: u32,
+    ) -> Result<Self, InstanceError> {
+        let key = profile_key(directory)?;
+        let stem = format!("AtlasInstance-{user_sid}-s{session}-{key:016x}");
         Ok(Self {
-            // `Local\` keeps the mutex inside this Windows session.
             mutex: format!("Local\\{stem}"),
             pipe: format!(r"\\.\pipe\{stem}"),
         })
@@ -67,23 +73,23 @@ mod tests {
     }
 
     #[test]
-    fn names_carry_the_user_and_the_profile() {
-        let names = InstanceNames::new(Path::new(r"C:\Synthetic\Profile"), "S-1-5-21-0-0-0-1000")
-            .expect("names");
+    fn names_carry_the_user_the_session_and_the_profile() {
+        let profile = Path::new(r"C:\Synthetic\Profile");
+        let names = InstanceNames::new(profile, "S-1-5-21-0-0-0-1000", 1).expect("names");
         assert!(
             names
                 .mutex
-                .starts_with(r"Local\AtlasInstance-S-1-5-21-0-0-0-1000-")
+                .starts_with(r"Local\AtlasInstance-S-1-5-21-0-0-0-1000-s1-")
         );
         assert!(
             names
                 .pipe
-                .starts_with(r"\\.\pipe\AtlasInstance-S-1-5-21-0-0-0-1000-")
+                .starts_with(r"\\.\pipe\AtlasInstance-S-1-5-21-0-0-0-1000-s1-")
         );
-        let other_user =
-            InstanceNames::new(Path::new(r"C:\Synthetic\Profile"), "S-1-5-21-0-0-0-1001")
-                .expect("names");
+        let other_user = InstanceNames::new(profile, "S-1-5-21-0-0-0-1001", 1).expect("names");
         assert_ne!(names.pipe, other_user.pipe);
+        let other_session = InstanceNames::new(profile, "S-1-5-21-0-0-0-1000", 2).expect("names");
+        assert_ne!(names.pipe, other_session.pipe);
     }
 
     #[test]
