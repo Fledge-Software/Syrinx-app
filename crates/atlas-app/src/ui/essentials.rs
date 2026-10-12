@@ -9,14 +9,18 @@ actions!(
     [Find, Downloads, Print, ZoomIn, ZoomOut, ZoomReset]
 );
 
-/// Binds the zoom keys while Atlas chrome has focus; the registry cannot spell `=` or `-`.
-/// A focused page keeps these keys first (owner decision, 2026-10-12).
+/// Zoom in's chrome keys; the registry's shortcut syntax cannot spell `=` or `+`.
+const ZOOM_IN_KEYS: [&str; 2] = ["ctrl-=", "ctrl-+"];
+/// Zoom out's chrome key; the registry's shortcut syntax cannot spell `-`.
+const ZOOM_OUT_KEY: &str = "ctrl--";
+
+/// Binds the zoom keys the registry cannot hold, while Atlas chrome has focus. Reset zoom's
+/// Ctrl 0 comes from the registry. A focused page keeps these keys first (owner, 2026-10-12).
 pub(super) fn bind_zoom_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("ctrl-=", ZoomIn, None),
-        KeyBinding::new("ctrl-+", ZoomIn, None),
-        KeyBinding::new("ctrl--", ZoomOut, None),
-        KeyBinding::new("ctrl-0", ZoomReset, None),
+        KeyBinding::new(ZOOM_IN_KEYS[0], ZoomIn, None),
+        KeyBinding::new(ZOOM_IN_KEYS[1], ZoomIn, None),
+        KeyBinding::new(ZOOM_OUT_KEY, ZoomOut, None),
     ]);
 }
 
@@ -111,6 +115,23 @@ fn page_action(id: Option<u64>, shortcut: BrowserShortcut) -> Option<BrowserComm
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chrome_only_zoom_keys_never_shadow_a_registry_shortcut() {
+        let registry = CommandRegistry::browser();
+        let registered: Vec<&str> = registry
+            .iter()
+            .filter_map(|(_, command)| command.shortcut.as_ref())
+            .map(atlas_core::Shortcut::keystroke)
+            .collect();
+        for key in ZOOM_IN_KEYS.into_iter().chain([ZOOM_OUT_KEY]) {
+            assert!(!registered.contains(&key), "{key} is also a registry key");
+        }
+        assert!(
+            registered.contains(&"ctrl-0"),
+            "Reset zoom uses the registry"
+        );
+    }
 
     #[test]
     fn page_focused_actions_target_only_the_shown_live_view() {

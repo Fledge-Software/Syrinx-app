@@ -55,6 +55,14 @@ pub(super) fn exercise(
         }
     }
     println!("Eight native IsSuspended readbacks passed.");
+    // Move the card while every page is suspended; the page shown next resumes, then takes it.
+    let card = PageBounds {
+        x: 20,
+        y: 40,
+        width: 400,
+        height: 300,
+    };
+    send(host, BrowserCommand::Resize(card))?;
     send(host, BrowserCommand::ShowActive(Some(1500)))?;
     while !matches!(
         checked_event(events, deadline)?,
@@ -63,7 +71,14 @@ pub(super) fn exercise(
             suspended: false
         }
     ) {}
-    println!("Synthetic activation resumed tab 1500.");
+    lifecycle::barrier(host, events, deadline)?;
+    let shown = lifecycle::shown_child_rect(parent)?;
+    if shown.right - shown.left != card.width as i32
+        || shown.bottom - shown.top != card.height as i32
+    {
+        return Err("Resumed synthetic page did not take the card moved while suspended".into());
+    }
+    println!("Synthetic activation resumed tab 1500 at the card moved while it was suspended.");
     // Close and recreate a logical identity while old callbacks may still be queued.
     for id in 1500..1508 {
         send(host, BrowserCommand::Close { id })?;

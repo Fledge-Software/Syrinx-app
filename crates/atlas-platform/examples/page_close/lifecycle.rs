@@ -335,6 +335,14 @@ fn window_rect(child: HWND) -> Result<RECT, String> {
 }
 
 pub(super) fn require_visible(child: HWND, expected: bool) -> Result<(), String> {
+    if is_visible(child)? != expected {
+        return Err("Synthetic child visibility did not follow the active page.".into());
+    }
+    Ok(())
+}
+
+/// The child's own visibility bit; the harness parent stays hidden, so ancestors are ignored.
+fn is_visible(child: HWND) -> Result<bool, String> {
     require_window(child, true)?;
     unsafe { SetLastError(ERROR_SUCCESS) };
     let style = unsafe { GetWindowLongPtrW(child, GWL_STYLE) };
@@ -342,11 +350,21 @@ pub(super) fn require_visible(child: HWND, expected: bool) -> Result<(), String>
     if style == 0 && error != ERROR_SUCCESS {
         return Err(format!("Read synthetic child style failed ({}).", error.0));
     }
-    // The harness parent stays hidden; inspect the child's own visibility bit, not ancestor visibility.
-    if (style as u32 & WS_VISIBLE.0 != 0) != expected {
-        return Err("Synthetic child visibility did not follow the active page.".into());
+    Ok(style as u32 & WS_VISIBLE.0 != 0)
+}
+
+/// The bounds of the one visible page child; several or none is a failure.
+pub(super) fn shown_child_rect(parent: HWND) -> Result<RECT, String> {
+    let mut shown = Vec::new();
+    for child in children(parent)? {
+        if is_visible(child)? {
+            shown.push(child);
+        }
     }
-    Ok(())
+    let [child] = shown.as_slice() else {
+        return Err("Synthetic parent does not show exactly one page child.".into());
+    };
+    window_rect(*child)
 }
 
 struct Children {
