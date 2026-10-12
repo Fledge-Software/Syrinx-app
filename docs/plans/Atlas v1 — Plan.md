@@ -839,6 +839,15 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
   completion. D49 subsequently approves bringing the integrated browser
   forward; checks and commit/merge approvals still apply. Report tested
   progress and concrete blockers against that target.
+- **P1-22 acceptance (deferred work):** the bookmark-import parser on
+  `claude/p1-22-import-parser` checks addresses with its own syntactic rule,
+  because navigation's `url`-based `web_address`
+  (`crates/atlas-app/src/navigation.rs`) cannot move into the dependency-free
+  `atlas-core` without the owner's approval. P1-22 is not complete until its
+  commit step re-checks every imported address with navigation's rule,
+  through one shared function rather than a copy, and reports failures as
+  skipped instead of writing them. Unifying the two rules is part of that
+  step; see `docs/p1-22-import-parser.md`.
 - **P1-05 acceptance:** retain D48 while profiling the failed search benchmark.
   Windows Application Control also blocks the rebuilt gate runner and store
   test executable (error 4551), including unchanged retries. Build helpers

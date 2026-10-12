@@ -155,18 +155,30 @@ impl<'a> Builder<'a> {
     /// Opens a pending heading's folder, or a list with no heading of its own.
     fn open_list(&mut self, line: usize) -> Result<(), ImportError> {
         self.finish_link()?;
-        // Bound every open list, including headingless ones, beyond the outer list.
-        if self.frames.len() > self.limits.max_depth {
-            return Err(self.too_deep(line));
-        }
         let frame = match std::mem::replace(&mut self.pending, Pending::None) {
             Pending::Heading {
                 folder, text, line, ..
             } => Frame::Folder(self.start_folder(folder, &text, line)?),
-            _ => Frame::List,
+            _ => self.start_bare_list(line)?,
         };
         self.frames.push(frame);
         Ok(())
+    }
+
+    /// Bounds headingless lists separately from folder depth; the outer list is one.
+    fn start_bare_list(&self, line: usize) -> Result<Frame, ImportError> {
+        let open = self
+            .frames
+            .iter()
+            .filter(|frame| matches!(frame, Frame::List))
+            .count();
+        if open >= self.limits.max_bare_lists {
+            return Err(ImportError::TooManyBareLists {
+                line,
+                limit: self.limits.max_bare_lists,
+            });
+        }
+        Ok(Frame::List)
     }
 
     /// Names a new folder and checks its depth and the entry bound.
