@@ -121,9 +121,8 @@ impl BrowserView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("Atlas"),
             )
-            // The canvas's local date waits for a calendar helper in `atlas-platform`, the only
-            // crate allowed to call Win32; a UTC date would be wrong each evening.
             .child(div().flex_1())
+            .child(home_date(palette))
             .child(
                 control(div().id("customize"), Role::Button, "Customize")
                     .aria_expanded(self.home.customize_open)
@@ -467,6 +466,30 @@ fn plugin_card(palette: &Palette, plugin: BuiltInPlugin) -> Stateful<Div> {
                         .child("Not available yet"),
                 ),
         )
+}
+
+/// The header's local date, or a plain notice when Windows cannot format it (the error goes to
+/// stderr). Read at each render, so an idle window keeps yesterday's date until it redraws.
+fn local_date() -> String {
+    match atlas_platform::calendar::local_date_heading() {
+        Ok(date) => date,
+        Err(error) => {
+            eprintln!("Atlas could not format the local date: {error}");
+            "Date unavailable".to_owned()
+        }
+    }
+}
+
+/// The header's date as static text a screen reader reads as "Today, <date>".
+fn home_date(palette: &Palette) -> Stateful<Div> {
+    let date = local_date();
+    div()
+        .id("home-date")
+        .role(Role::Label)
+        .aria_label(format!("Today, {date}"))
+        .text_color(rgba(palette.icon_dim))
+        .text_size(px(text::ADDRESS))
+        .child(date)
 }
 
 fn section_heading(palette: &Palette, title: &'static str) -> Div {
