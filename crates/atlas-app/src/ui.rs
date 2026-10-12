@@ -1,10 +1,15 @@
 //! Connects the shared session to browser chrome without running storage or search on the UI thread.
 
+mod customize;
+mod favorites;
+mod home;
 mod home_palette;
 mod navigation_intents;
 mod navigation_status;
 mod page_lifecycle;
 mod recovery;
+mod tile_editor;
+mod tiles;
 
 #[cfg(test)]
 mod shutdown_tests;
@@ -111,6 +116,7 @@ pub struct BrowserView {
     focus: FocusHandle,
     palette: Option<PalettePopup>,
     home_palette: HomePaletteIntent,
+    home: home::HomeState,
     parent_hwnd: isize,
     query_sequence: u64,
     pending_query: Option<(u64, u64)>,
@@ -149,6 +155,7 @@ impl BrowserView {
             focus: cx.focus_handle(),
             palette: None,
             home_palette: HomePaletteIntent::default(),
+            home: home::HomeState::default(),
             parent_hwnd: 0,
             query_sequence: 0,
             pending_query: None,
@@ -248,6 +255,11 @@ impl BrowserView {
                             .to_owned();
                 }
             }
+            SessionEvent::Preferences {
+                settings,
+                destinations,
+            } => self.restore_preferences(&settings, destinations, window, cx),
+            SessionEvent::Destinations(destinations) => self.destinations_changed(destinations),
             SessionEvent::State(snapshot) => {
                 self.recovery = None;
                 // Restored sessions already have saved revisions; only the first state is startup.
@@ -1126,6 +1138,7 @@ impl BrowserView {
                     cx.listener(|this, _, window, cx| this.open_palette(false, window, cx)),
                 ),
             )
+            .child(self.favorites(cx))
             .child(
                 div()
                     .text_xs()
@@ -1180,27 +1193,14 @@ impl Render for BrowserView {
         if self.browser_ready && !self.closing {
             self.resize_pages(window);
         }
-        let mut page = div().flex_1().h_full();
-        if self.shown.is_none() {
-            page = page
-                .bg(theme::ground())
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_4()
-                .child(div().text_3xl().child("Your workspace, together."))
-                .child(
-                    div()
-                        .text_color(theme::icon_dim())
-                        .child("Open a page, or press Ctrl K to find your tabs and saved pages."),
-                )
-                .child(button("home-search", "Search or enter address").on_click(
-                    cx.listener(|this, _, window, cx| this.open_palette(false, window, cx)),
-                ));
-        }
+        let page = if self.shown.is_none() {
+            self.home_page(cx)
+        } else {
+            div().flex_1().h_full()
+        };
         div()
             .size_full()
+            .bg(theme::window_fill())
             .text_color(theme::text())
             .text_sm()
             .font_family("Segoe UI Variable Text")
