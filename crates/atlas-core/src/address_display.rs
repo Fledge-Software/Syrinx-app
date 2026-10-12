@@ -1,8 +1,9 @@
 //! Shows a page's address readably without letting the text disguise which site it is (P1-32).
 
-/// The address as the owner reads it: percent-escapes in the path, query and fragment are
-/// decoded only into visible, non-deceptive characters, and the host always stays in its ASCII
-/// (punycode) form, so a look-alike Unicode name can never pose as a familiar site.
+/// The address as the owner reads it: scheme, host and port, never a user name or password;
+/// percent-escapes in the path, query and fragment decoded only into visible, non-deceptive
+/// characters; and the host always in its ASCII (punycode) form, so neither a look-alike Unicode
+/// name nor `familiar.example@other.test` can pose as a familiar site.
 ///
 /// Anything that is not an `http`/`https` address is returned unchanged.
 pub fn readable_address(address: &str) -> String {
@@ -12,10 +13,16 @@ pub fn readable_address(address: &str) -> String {
     if !matches!(parsed.scheme(), "http" | "https") {
         return address.to_owned();
     }
-    // `url` already serializes the host as ASCII; only the part after the port is decoded.
-    let origin = &parsed[..url::Position::AfterPort];
+    let Some(host) = parsed.host_str() else {
+        return address.to_owned();
+    };
+    // `url` serializes the host as ASCII (IPv6 in brackets); credentials are left out.
+    let port = parsed
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
     let rest = &parsed[url::Position::BeforePath..];
-    format!("{origin}{}", decode_visible(rest))
+    format!("{}://{host}{port}{}", parsed.scheme(), decode_visible(rest))
 }
 
 /// Decodes each run of `%XX` escapes that forms valid UTF-8, keeping the escape for any
@@ -72,28 +79,30 @@ fn push_run(output: &mut String, run: &str, bytes: &[u8]) {
 }
 
 /// Decoded ASCII is limited to letters, digits and `-._~`, so a reserved character such as `/`,
-/// `?`, `#`, `&` or `%` never changes how the address reads. Other characters are shown unless
-/// they are invisible, change text direction or imitate an address separator.
+/// `?`, `#`, `&` or `%` never changes how the address reads. Other characters are shown only when
+/// they are letters or digits: punctuation, symbols, spaces, format and private-use characters
+/// and unassigned code points (none of which are alphanumeric) stay escaped. Right-to-left
+/// letters also stay escaped so they cannot reorder the address, as do a few known look-alikes.
 fn shows_safely(character: char) -> bool {
     if character.is_ascii() {
         return character.is_ascii_alphanumeric() || "-._~".contains(character);
     }
-    !(character.is_control() || character.is_whitespace() || is_deceptive(character))
+    character.is_alphanumeric() && !is_right_to_left(character) && !is_look_alike(character)
 }
 
-fn is_deceptive(character: char) -> bool {
+// Hebrew, Arabic, Syriac, Thaana, N'Ko and the other right-to-left blocks.
+fn is_right_to_left(character: char) -> bool {
     matches!(
         u32::from(character),
-        // Soft hyphen, combining grapheme joiner, Arabic letter mark and Hangul fillers.
-        0x00AD | 0x034F | 0x061C | 0x115F | 0x1160 | 0x3164 | 0xFFA0
-        // Khmer vowel inherents, Mongolian selectors and zero-width or direction marks.
-        | 0x17B4..=0x17B5 | 0x180B..=0x180F | 0x200B..=0x200F | 0x202A..=0x202E
-        // Word joiners, invisible operators, direction isolates and variation selectors.
-        | 0x2060..=0x206F | 0xFE00..=0xFE0F | 0xFEFF | 0xFFF0..=0xFFFF
-        | 0x1D173..=0x1D17A | 0xE0000..=0xE0FFF
-        // Characters that look like `/`, `?`, `#` or `.` in an address.
-        | 0x0337 | 0x0338 | 0x2024 | 0x2044 | 0x2215 | 0x29F8 | 0x3002 | 0xFE52 | 0xFF03
-        | 0xFF0E | 0xFF0F | 0xFF1F
+        0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF
+    )
+}
+
+// Letters that are invisible fillers, or that pass for an address separator.
+fn is_look_alike(character: char) -> bool {
+    matches!(
+        u32::from(character),
+        0x115F | 0x1160 | 0x3164 | 0xFFA0 | 0x3007 | 0x2571 | 0x2800 | 0xFF61 | 0xFE56 | 0xFE5F
     )
 }
 
@@ -134,11 +143,56 @@ mod tests {
         let address = "https://example.test/a%2Fb%3Fc%23d%25e%26f%3Dg%20h%0Ai";
         assert_eq!(readable_address(address), address);
         for character in [
-            '\u{202E}', '\u{200B}', '\u{FEFF}', '\u{2215}', '\u{FF0F}', '\u{3000}',
+            // Direction, zero-width and space characters.
+            '\u{202E}',
+            '\u{200B}',
+            '\u{FEFF}',
+            '\u{3000}',
+            '\u{00A0}',
+            '\u{2800}',
+            // Separator look-alikes.
+            '\u{2215}',
+            '\u{FF0F}',
+            '\u{2571}',
+            '\u{FF61}',
+            '\u{FE56}',
+            '\u{FE5F}',
+            '\u{3164}',
+            // Format characters (Cf), private use (Co) and an unassigned code point (Cn).
+            '\u{0600}',
+            '\u{0605}',
+            '\u{06DD}',
+            '\u{070F}',
+            '\u{13430}',
+            '\u{1343F}',
+            '\u{1BCA0}',
+            '\u{1BCA3}',
+            '\u{E000}',
+            '\u{F0000}',
+            '\u{0378}',
+            // Right-to-left letters, which could reorder the address around them.
+            '\u{05D0}',
+            '\u{0627}',
         ] {
             let address = format!("https://example.test/a{}b", escaped(character));
             assert_eq!(readable_address(&address), address, "{character:?}");
         }
+    }
+
+    #[test]
+    fn user_names_and_passwords_are_never_shown() {
+        assert_eq!(
+            readable_address("https://accounts.example.com@evil.test/"),
+            "https://evil.test/"
+        );
+        assert_eq!(
+            readable_address("http://user:synthetic-secret@evil.test:8443/p?q#f"),
+            "http://evil.test:8443/p?q#f"
+        );
+        assert_eq!(
+            readable_address("https://user@[2001:db8::1]:8443/"),
+            "https://[2001:db8::1]:8443/"
+        );
     }
 
     #[test]
