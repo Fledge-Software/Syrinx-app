@@ -93,6 +93,9 @@ impl Page {
             settings.cast().map_err(|_| BrowserError::Settings)?;
         unsafe { settings.SetIsPasswordAutosaveEnabled(false) }
             .map_err(|_| BrowserError::Settings)?;
+        // Unhandled page keys retain the engine's default browser actions.
+        unsafe { settings.SetAreBrowserAcceleratorKeysEnabled(true) }
+            .map_err(|_| BrowserError::Settings)?;
         super::security::register(&view, id, events.clone())?;
         popups.register(&view, id, events.clone())?;
         register_source(&view, id, events.clone())?;
@@ -336,13 +339,7 @@ fn shortcut_for_modifiers(
         return None;
     }
     match (key, shift) {
-        (0x46, false) => Some(BrowserShortcut::Find),
         (0x4A, false) => Some(BrowserShortcut::Downloads),
-        (0x50, false) => Some(BrowserShortcut::Print),
-        (0x48, false) => Some(BrowserShortcut::History),
-        (0xBB | 0x6B, _) => Some(BrowserShortcut::ZoomIn),
-        (0xBD | 0x6D, false) => Some(BrowserShortcut::ZoomOut),
-        (0x30 | 0x60, false) => Some(BrowserShortcut::ZoomReset),
         (0x54, false) => Some(BrowserShortcut::NewTab),
         (0x54, true) => Some(BrowserShortcut::ReopenTab),
         (0x57, false) => Some(BrowserShortcut::CloseTab),
@@ -394,17 +391,7 @@ mod tests {
             (0x4B, false, BrowserShortcut::Palette),
             (0x44, false, BrowserShortcut::SavePage),
             (0x52, false, BrowserShortcut::Reload),
-            (0x46, false, BrowserShortcut::Find),
             (0x4A, false, BrowserShortcut::Downloads),
-            (0x50, false, BrowserShortcut::Print),
-            (0x48, false, BrowserShortcut::History),
-            (0xBB, true, BrowserShortcut::ZoomIn),
-            (0xBB, false, BrowserShortcut::ZoomIn),
-            (0x6B, false, BrowserShortcut::ZoomIn),
-            (0xBD, false, BrowserShortcut::ZoomOut),
-            (0x6D, false, BrowserShortcut::ZoomOut),
-            (0x30, false, BrowserShortcut::ZoomReset),
-            (0x60, false, BrowserShortcut::ZoomReset),
         ] {
             assert_eq!(
                 shortcut_for_modifiers(key, true, shift, false),
@@ -425,6 +412,16 @@ mod tests {
             shortcut_for_modifiers(0x74, false, false, false),
             Some(BrowserShortcut::Reload)
         );
+    }
+
+    #[test]
+    fn find_history_print_and_zoom_keys_reach_the_page_before_the_engine() {
+        // Include shifted plus and the numeric keypad variants.
+        for key in [0x46, 0x48, 0x50, 0xBB, 0x6B, 0xBD, 0x6D, 0x30, 0x60] {
+            for shift in [false, true] {
+                assert_eq!(shortcut_for_modifiers(key, true, shift, false), None);
+            }
+        }
     }
 
     #[test]
