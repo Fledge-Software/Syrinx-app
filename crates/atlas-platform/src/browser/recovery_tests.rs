@@ -108,6 +108,7 @@ impl Fixture {
                     height: 600,
                 },
                 parent: parent.0 as isize,
+                page_text_policy: page_text::SharedPolicy::default(),
                 events: EventSink(events, None),
                 shortcuts: NativeSink {
                     send,
