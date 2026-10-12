@@ -167,7 +167,7 @@ fn parse_file_lines<'a>(
     lines: impl Iterator<Item = (usize, &'a str)>,
 ) -> Result<Vec<FileEntry>, UpdateError> {
     let mut files: Vec<FileEntry> = Vec::new();
-    let mut folded_paths = BTreeSet::new();
+    let mut folded = FoldedNames::default();
     let mut total: u64 = 0;
     let mut last_line = 3;
     for (number, line) in lines {
@@ -177,9 +177,9 @@ fn parse_file_lines<'a>(
         }
         let entry = parse_file_line(line).map_err(|problem| manifest_error(number, problem))?;
         check_order(files.last(), &entry).map_err(|problem| manifest_error(number, problem))?;
-        if !folded_paths.insert(entry.path.folded()) {
-            return Err(manifest_error(number, ManifestProblem::DuplicatePath));
-        }
+        folded
+            .insert(&entry.path)
+            .map_err(|problem| manifest_error(number, problem))?;
         total = total
             .checked_add(entry.size)
             .filter(|sum| *sum <= MAX_TOTAL_BYTES)
@@ -190,6 +190,37 @@ fn parse_file_lines<'a>(
         return Err(manifest_error(last_line, ManifestProblem::NoFiles));
     }
     Ok(files)
+}
+
+/// File and directory names as Windows compares them, with ASCII letter case folded.
+#[derive(Default)]
+struct FoldedNames {
+    files: BTreeSet<String>,
+    directories: BTreeSet<String>,
+}
+
+impl FoldedNames {
+    /// Refuse a path that repeats a file or makes a file double as a directory.
+    fn insert(&mut self, path: &PackagePath) -> Result<(), ManifestProblem> {
+        let folded = path.folded();
+        if self.files.contains(&folded) {
+            return Err(ManifestProblem::DuplicatePath);
+        }
+        let ancestors: Vec<&str> = folded
+            .match_indices('/')
+            .map(|(index, _)| &folded[..index])
+            .collect();
+        let file_as_directory = ancestors
+            .iter()
+            .any(|ancestor| self.files.contains(*ancestor));
+        if file_as_directory || self.directories.contains(&folded) {
+            return Err(ManifestProblem::PathCollision);
+        }
+        self.directories
+            .extend(ancestors.into_iter().map(str::to_owned));
+        self.files.insert(folded);
+        Ok(())
+    }
 }
 
 /// Split `file <hash> <size> <path>` and validate each field.

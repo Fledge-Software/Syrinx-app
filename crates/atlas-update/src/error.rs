@@ -18,8 +18,8 @@ pub enum UpdateError {
     UnknownKey,
     /// The signature does not verify against the named pinned key.
     BadSignature,
-    /// A pinned public key is not a valid P-256 point.
-    InvalidKey,
+    /// A pinned public key is not a valid P-256 point; CNG's status is kept.
+    InvalidKey { status: i32 },
     /// Two pinned keys share an identifier.
     DuplicateKey,
     /// Windows CNG reported a failure other than a bad signature.
@@ -50,6 +50,8 @@ pub enum UpdateError {
     SizeMismatch { path: String, expected: u64 },
     /// A listed file's SHA-256 hash differs from the manifest.
     HashMismatch { path: String },
+    /// A payload entry is a link, junction, other reparse point or non-Unicode name.
+    UnsafeEntry { name: String },
     /// Reading part of the package failed.
     Read { what: String, kind: io::ErrorKind },
 }
@@ -79,6 +81,8 @@ pub enum ManifestProblem {
     Path(PathProblem),
     /// Two paths are equal, or equal ignoring ASCII letter case.
     DuplicatePath,
+    /// A file path is also, ignoring ASCII letter case, a directory of another file.
+    PathCollision,
     /// File lines are not in ascending byte order of path.
     Unsorted,
     /// The manifest lists no files.
@@ -122,7 +126,12 @@ impl fmt::Display for UpdateError {
             Self::SignatureFormat => formatter.write_str("signature has an unknown format"),
             Self::UnknownKey => formatter.write_str("signature names no pinned key"),
             Self::BadSignature => formatter.write_str("signature does not verify"),
-            Self::InvalidKey => formatter.write_str("pinned key is not a valid P-256 point"),
+            Self::InvalidKey { status } => {
+                write!(
+                    formatter,
+                    "pinned key is not a valid P-256 point ({status:#010x})"
+                )
+            }
             Self::DuplicateKey => formatter.write_str("two pinned keys share an identifier"),
             Self::Crypto { operation, status } => {
                 write!(formatter, "{operation} failed with status {status:#010x}")
@@ -142,6 +151,7 @@ impl fmt::Display for UpdateError {
                 write!(formatter, "{path} is not {expected} bytes")
             }
             Self::HashMismatch { path } => write!(formatter, "{path} has the wrong hash"),
+            Self::UnsafeEntry { name } => write!(formatter, "unsafe payload entry {name}"),
             Self::Read { what, kind } => write!(formatter, "reading {what} failed: {kind}"),
         }
     }
