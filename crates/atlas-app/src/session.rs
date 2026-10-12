@@ -1,5 +1,6 @@
 //! Keeps model, persistence and catalogue work off the browser's event thread.
 
+mod deletions;
 mod history;
 mod preferences;
 mod recovery;
@@ -20,7 +21,7 @@ use atlas_core::{
     Activation, DestinationEdit, DestinationError, DestinationSurface, QuickDestinations,
     SavedPageId, SnapshotError, TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot,
 };
-use atlas_platform::{StartupStorage, WindowsDirectoryLease};
+use atlas_platform::{DeletionJournal, JournalError, StartupStorage, WindowsDirectoryLease};
 use atlas_search::{
     Catalogue, Entry, Scope, SearchError, SearchPolicy, SearchResults, Target, Usage,
 };
@@ -96,6 +97,12 @@ pub enum SessionCommand {
         request_id: u64,
         limit: usize,
     },
+    /// Clears history visited in `[start, end)` Unix seconds through D47's journal (P1-27).
+    ClearHistory {
+        request_id: u64,
+        start: i64,
+        end: i64,
+    },
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -138,6 +145,11 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<Vec<HistoryVisit>, SessionError>,
     },
+    /// How many remembered addresses a `ClearHistory` request removed, or why it failed.
+    HistoryCleared {
+        request_id: u64,
+        result: Result<usize, SessionError>,
+    },
     Failure {
         error: SessionError,
         fatal: bool,
@@ -154,6 +166,8 @@ pub enum SessionError {
     Snapshot(SnapshotError),
     Search(SearchError),
     Destination(DestinationError),
+    /// The history-deletion journal refused or failed a record (D47).
+    Deletion(JournalError),
     NoActiveTab,
     HistoryUnavailable,
     ClockUnavailable,
@@ -184,6 +198,7 @@ impl fmt::Display for SessionError {
             Self::Snapshot(error) => write!(formatter, "Cannot restore the session: {error}"),
             Self::Search(error) => write!(formatter, "Local search failed: {error}"),
             Self::Destination(error) => write!(formatter, "Cannot change this tile: {error}"),
+            Self::Deletion(error) => write!(formatter, "Cannot clear history safely: {error}"),
             Self::NoActiveTab => formatter.write_str("There is no active page to save"),
             Self::HistoryUnavailable => {
                 formatter.write_str("This history entry is no longer available")
@@ -301,8 +316,10 @@ fn startup_session(
 }
 
 fn open_session(lease: WindowsDirectoryLease) -> Result<(Store, Worker), SessionError> {
+    // The journal lives beside the database and is held for the whole session (D47).
+    let journal = DeletionJournal::open(&lease).map_err(SessionError::Deletion)?;
     let store = Store::open(Arc::new(lease)).map_err(SessionError::Store)?;
-    match Worker::restore(&store) {
+    match Worker::restore(&store, journal) {
         Ok(worker) => Ok((store, worker)),
         Err(error) => {
             // Recovery cannot overlap live connections or conceal a failed close.
@@ -330,6 +347,7 @@ struct Worker {
     model: TabModel,
     catalogue: Catalogue,
     history: HistoryRecorder,
+    deletions: DeletionJournal,
     revision: u64,
     previous_shutdown: ShutdownState,
     destinations: QuickDestinations,
@@ -338,7 +356,9 @@ struct Worker {
 }
 
 impl Worker {
-    fn restore(store: &Store) -> Result<Self, SessionError> {
+    fn restore(store: &Store, mut deletions: DeletionJournal) -> Result<Self, SessionError> {
+        // Cleared history must be gone before the catalogue or any list can read it.
+        deletions::reconcile(store, &mut deletions)?;
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
         let snapshot = model.snapshot();
@@ -356,6 +376,7 @@ impl Worker {
             model,
             catalogue,
             history: HistoryRecorder::restored(&snapshot),
+            deletions,
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
@@ -453,6 +474,11 @@ impl Worker {
                 let result = store.recent_visits(limit).map_err(SessionError::Store);
                 return emit(events, SessionEvent::History { request_id, result });
             }
+            SessionCommand::ClearHistory {
+                request_id,
+                start,
+                end,
+            } => return self.clear_history(store, request_id, start, end, events),
             SessionCommand::OpenHistory(id) => match self.history_destination(id) {
                 Ok(command) => command,
                 Err(error) => return emit_recoverable(events, error),
@@ -518,6 +544,31 @@ impl Worker {
         });
         // Failures carry the same identity as successful replies, so stale queries stay silent.
         emit(events, SessionEvent::Search { request_id, result })
+    }
+
+    fn clear_history(
+        &mut self,
+        store: &Store,
+        request_id: u64,
+        start: i64,
+        end: i64,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let result = deletions::clear(
+            store,
+            &mut self.deletions,
+            &mut self.catalogue,
+            &mut self.history,
+            start,
+            end,
+        );
+        // The dialog always hears the outcome; storage failures still stop the session.
+        let fatal = match &result {
+            Err(SessionError::Store(error)) => Some(SessionError::Store(error.clone())),
+            _ => None,
+        };
+        emit(events, SessionEvent::HistoryCleared { request_id, result })?;
+        fatal.map_or(Ok(()), Err)
     }
 
     fn history_destination(&self, id: NonZeroU64) -> Result<SessionCommand, SessionError> {
@@ -690,6 +741,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         // Reads, history lookups and preferences are answered before the model is consulted.
         SessionCommand::Query { .. }
         | SessionCommand::RecentHistory { .. }
+        | SessionCommand::ClearHistory { .. }
         | SessionCommand::OpenHistory(_)
         | SessionCommand::ObserveNavigation { .. }
         | SessionCommand::SaveSettings(_)

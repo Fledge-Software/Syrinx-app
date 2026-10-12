@@ -134,12 +134,6 @@ fn publication_freezes_files_and_removal_requires_only_this_owned_bundle() {
         output.publish(metadata(BackupId(0))),
         Err(LocationError::InvalidBackup)
     );
-    let mut unsupported = expected;
-    unsupported.deletion_generation = 1;
-    assert_eq!(
-        output.publish(unsupported),
-        Err(LocationError::InvalidBackup)
-    );
     output.flush().expect("flush synthetic image");
     output
         .publish(expected)

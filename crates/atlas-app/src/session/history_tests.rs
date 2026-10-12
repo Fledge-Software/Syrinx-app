@@ -202,3 +202,110 @@ fn opening_a_missing_history_entry_is_a_recoverable_failure() {
     stop(handle, &mut events);
     fixture.cleanup();
 }
+
+fn clear(
+    handle: &SessionHandle,
+    events: &mut UnboundedReceiver<SessionEvent>,
+    start: i64,
+    end: i64,
+) -> usize {
+    send(
+        handle,
+        SessionCommand::ClearHistory {
+            request_id: 47,
+            start,
+            end,
+        },
+    );
+    match next_event(events) {
+        SessionEvent::HistoryCleared { request_id, result } => {
+            assert_eq!(request_id, 47);
+            result.expect("synthetic clear succeeds")
+        }
+        event => panic!("expected a synthetic clear result, got {event:?}"),
+    }
+}
+
+#[test]
+fn clearing_history_updates_search_at_once_and_stays_cleared_after_restart() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    let tab = change(
+        &handle,
+        &mut events,
+        SessionCommand::NewTab {
+            address: FIRST.to_owned(),
+        },
+    )
+    .model
+    .active_id
+    .expect("synthetic tab is active");
+    observe(&handle, &mut events, tab, None, Some(FIRST));
+    observe(&handle, &mut events, tab, None, Some(SECOND));
+    assert_eq!(recent(&handle, &mut events).len(), 2);
+    // The open tab's own row also matches, so compare against the count before clearing.
+    let before = history_hits(&handle, &mut events, "history").counts.total();
+
+    // A range before any visit removes nothing; the current one removes both addresses.
+    assert_eq!(clear(&handle, &mut events, 0, 1), 0);
+    let now = utc_seconds().expect("synthetic clock");
+    assert_eq!(clear(&handle, &mut events, now - 3_600, now + 1), 2);
+    assert!(recent(&handle, &mut events).is_empty());
+    assert_eq!(
+        history_hits(&handle, &mut events, "history").counts.total(),
+        before - 2
+    );
+
+    // A failed navigation after the clear retracts nothing that was already cleared,
+    // and the next visit records normally.
+    send(
+        &handle,
+        SessionCommand::ObserveNavigation {
+            id: tab,
+            success: false,
+        },
+    );
+    observe(&handle, &mut events, tab, None, Some(LATER));
+    assert_eq!(timeline(&recent(&handle, &mut events)), [(LATER, "")]);
+    stop(handle, &mut events);
+
+    // The journal and the database agree after a restart; nothing comes back.
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    assert_eq!(timeline(&recent(&handle, &mut events)), [(LATER, "")]);
+    let results = history_hits(&handle, &mut events, "history");
+    assert!(
+        results
+            .hits
+            .iter()
+            .all(|hit| hit.address != FIRST && hit.address != SECOND)
+    );
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+#[test]
+fn an_invalid_clear_range_is_refused_without_stopping_the_session() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(
+        &handle,
+        SessionCommand::ClearHistory {
+            request_id: 48,
+            start: 10,
+            end: 10,
+        },
+    );
+    match next_event(&mut events) {
+        SessionEvent::HistoryCleared { request_id, result } => {
+            assert_eq!(request_id, 48);
+            assert!(matches!(result, Err(SessionError::Deletion(_))));
+        }
+        event => panic!("expected a refused synthetic clear, got {event:?}"),
+    }
+    assert!(recent(&handle, &mut events).is_empty());
+    stop(handle, &mut events);
+    fixture.cleanup();
+}

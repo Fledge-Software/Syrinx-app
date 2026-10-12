@@ -15,7 +15,9 @@ use std::{
 
 use atlas_store::{
     BackupArchive, BackupEntry, BackupMetadata, DirectoryLease, LocationError, LocationOperation,
-    StoreError, StoredSnapshot, deletion::DeletionLog, validate_backup, validate_database,
+    StoreError, StoredSnapshot,
+    deletion::{DeletionError, DeletionLog},
+    replay_history_deletions, validate_backup, validate_database,
 };
 
 use super::{
@@ -36,6 +38,8 @@ pub struct RecoveryOffer {
     // Boxed: a folder-bearing snapshot would otherwise dominate `StartupStorage`'s size.
     expected: Box<StoredSnapshot>,
     primary: Vec<PrimaryFile>,
+    /// The journal the staged copy is replayed against before it may become live (D47).
+    deletions: DeletionLog,
     continuation: Option<Box<resume::Continuation>>,
 }
 
@@ -63,7 +67,8 @@ pub enum RecoveryError {
         skipped: usize,
     },
     HealthyPrimary,
-    DeletionReplayRequired,
+    /// The deletion journal cannot cover a backup's clears; no older copy is offered instead.
+    Deletion(DeletionError),
     MetadataMismatch,
     ClockUnavailable,
     InvalidIntent,
@@ -95,13 +100,13 @@ struct PrimaryFile {
 }
 
 /// Offers the newest valid snapshot only for an absent or demonstrably damaged primary.
+/// `deletions` is the journal read beside the database; confirmation replays it (D47).
 pub fn offer_recovery(
     directory: &Path,
     deletions: &DeletionLog,
 ) -> Result<RecoveryOffer, RecoveryError> {
-    require_zero_generation(deletions)?;
     let prepared = prepare_directory(directory, Arc::new(native::WindowsProbe))?;
-    offer_prepared(prepared)
+    offer_prepared(prepared, deletions)
 }
 
 pub(super) fn has_intent(prepared: &PreparedDirectory) -> Result<bool, LocationError> {
@@ -112,9 +117,12 @@ pub(super) fn has_intent(prepared: &PreparedDirectory) -> Result<bool, LocationE
     .is_some())
 }
 
-pub(super) fn offer_prepared(prepared: PreparedDirectory) -> Result<RecoveryOffer, RecoveryError> {
+pub(super) fn offer_prepared(
+    prepared: PreparedDirectory,
+    deletions: &DeletionLog,
+) -> Result<RecoveryOffer, RecoveryError> {
     if has_intent(&prepared)? {
-        return resume::offer(prepared);
+        return resume::offer(prepared, deletions);
     }
     prepared.control.revalidate()?;
     let primary = capture_primary(&prepared)?;
@@ -128,9 +136,10 @@ pub(super) fn offer_prepared(prepared: PreparedDirectory) -> Result<RecoveryOffe
     // Hold the selected source against writes for the entire offer and confirmation.
     let mut newer_schema = 0;
     for backup in candidates {
-        if backup.metadata.deletion_generation != 0 {
-            return Err(RecoveryError::DeletionReplayRequired);
-        }
+        // A journal that lacks a backup's clears is damaged; refuse rather than pick an older copy.
+        deletions
+            .unapplied(backup.metadata.deletion_generation)
+            .map_err(RecoveryError::Deletion)?;
         let path = normal_absolute_path(backup.file.database_path())?;
         let source = GuardedEntry::regular_file(
             path.clone(),
@@ -147,6 +156,7 @@ pub(super) fn offer_prepared(prepared: PreparedDirectory) -> Result<RecoveryOffe
                     source,
                     expected: Box::new(expected),
                     primary,
+                    deletions: deletions.clone(),
                     continuation: None,
                 });
             }
@@ -186,6 +196,16 @@ impl RecoveryOffer {
         let bundle = RecoveryBundle::create(&self.prepared)?;
         let stage = bundle.copy_source(&self.source.file)?;
         validate_expected(&self.prepared, &stage, &self.expected)?;
+
+        // Cleared history is removed from the copy before the intent can expose it (D47).
+        let stage = replay_stage(
+            &self.prepared,
+            &bundle,
+            stage,
+            &self.deletions,
+            self.backup.metadata.deletion_generation,
+        )?;
+        validate_expected(&self.prepared, &stage, &self.expected)?;
         let intent = resume::Intent::new(
             &bundle,
             self.backup.metadata,
@@ -216,13 +236,6 @@ impl RecoveryOffer {
             preserved_files,
         })
     }
-}
-
-pub(super) fn require_zero_generation(deletions: &DeletionLog) -> Result<(), RecoveryError> {
-    if deletions.pending().is_some() || deletions.completed_generation() != 0 {
-        return Err(RecoveryError::DeletionReplayRequired);
-    }
-    Ok(())
 }
 
 fn capture_primary(prepared: &PreparedDirectory) -> Result<Vec<PrimaryFile>, RecoveryError> {
@@ -412,6 +425,74 @@ impl RecoveryBundle {
             return Err(LocationError::IdentityChanged.into());
         }
         Ok(entry)
+    }
+}
+
+/// Replays the journal on the staged copy and rebinds the same file afterwards.
+fn replay_stage(
+    prepared: &PreparedDirectory,
+    bundle: &RecoveryBundle,
+    stage: GuardedEntry,
+    deletions: &DeletionLog,
+    recorded_generation: u64,
+) -> Result<GuardedEntry, RecoveryError> {
+    let path = stage.path.clone();
+    let identity = stage.identity;
+    // SQLite needs write sharing, which the retained read-only guard excludes.
+    drop(stage);
+    let lease = StageLease {
+        prepared,
+        bundle: &bundle.entry,
+        named: path.clone(),
+        sqlite_path: sqlite_database_path(&path),
+        identity,
+    };
+    replay_history_deletions(&lease, deletions, recorded_generation)?;
+    let entry = GuardedEntry::regular_file(
+        path.clone(),
+        native::open_readonly(&path, LocationOperation::ReadBackup)?,
+    )?;
+    if entry.identity != identity {
+        return Err(LocationError::IdentityChanged.into());
+    }
+    // The bundle must again hold only its expected names before an intent refers to it.
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut sidecar = path.clone().into_os_string();
+        sidecar.push(suffix);
+        if native::optional_file(Path::new(&sidecar), LocationOperation::ReadBackup)?.is_some() {
+            return Err(LocationError::IdentityChanged.into());
+        }
+    }
+    Ok(entry)
+}
+
+/// Lets SQLite write the staged copy while its directory and identity stay checked.
+struct StageLease<'a> {
+    prepared: &'a PreparedDirectory,
+    bundle: &'a GuardedEntry,
+    named: PathBuf,
+    sqlite_path: PathBuf,
+    identity: super::FileIdentity,
+}
+
+impl DirectoryLease for StageLease<'_> {
+    fn database_path(&self) -> &Path {
+        &self.sqlite_path
+    }
+
+    fn revalidate(&self) -> Result<(), LocationError> {
+        self.prepared.revalidate()?;
+        self.bundle
+            .revalidate(true, LocationOperation::OpenDirectory)?;
+        // A metadata-only probe does not conflict with SQLite's own open handle.
+        let named = native::optional_file(&self.named, LocationOperation::ReadBackup)?
+            .ok_or(LocationError::IdentityChanged)?;
+        let info = native::entry_info(&named)?;
+        super::check_entry(&info, false)?;
+        if info.identity != self.identity {
+            return Err(LocationError::IdentityChanged);
+        }
+        Ok(())
     }
 }
 

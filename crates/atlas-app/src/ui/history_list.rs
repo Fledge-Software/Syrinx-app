@@ -109,6 +109,14 @@ pub(super) fn render(list: &HistoryList, cx: &mut Context<BrowserView>) -> Div {
         .gap_2()
         .child(div().flex_1().text_xl().child("History"))
         .child(
+            button("history-clear-data", "Clear browsing data…").on_click(cx.listener(
+                |this, _, _, cx| {
+                    this.open_clear_data();
+                    cx.notify();
+                },
+            )),
+        )
+        .child(
             button("history-close", "Close · Ctrl H").on_click(cx.listener(|this, _, _, cx| {
                 this.toggle_history();
                 cx.notify();

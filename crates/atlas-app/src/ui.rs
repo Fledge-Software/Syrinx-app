@@ -1,5 +1,6 @@
 //! Connects the shared session to browser chrome without running storage or search on the UI thread.
 
+mod clear_data;
 mod customize;
 mod favorites;
 mod history_list;
@@ -117,6 +118,7 @@ pub struct BrowserView {
     navigation_intents: NavigationIntents,
     navigation_status: NavigationStatus,
     history: history_list::HistoryList,
+    clear_data: clear_data::ClearDataDialog,
     shown: Option<TabId>,
     bounds: Option<PageBounds>,
     sidebar_sizing: SidebarSizing,
@@ -162,6 +164,7 @@ impl BrowserView {
             navigation_intents: NavigationIntents::default(),
             navigation_status: NavigationStatus::default(),
             history: history_list::HistoryList::default(),
+            clear_data: clear_data::ClearDataDialog::default(),
             shown: None,
             bounds: None,
             sidebar_sizing: SidebarSizing::default(),
@@ -304,6 +307,7 @@ impl BrowserView {
                 // Switching or opening a page leaves the history list for that page.
                 if snapshot.model.active_id != self.model.active_id {
                     self.history.close();
+                    self.clear_data.close();
                 }
                 self.model = snapshot.model;
                 self.navigation_status.retain(&self.model);
@@ -356,6 +360,9 @@ impl BrowserView {
             }
             SessionEvent::History { request_id, result } => {
                 self.history.receive(request_id, result);
+            }
+            SessionEvent::HistoryCleared { request_id, result } => {
+                self.history_cleared(request_id, result);
             }
             SessionEvent::Failure { error, fatal } => {
                 if self.smoke {
@@ -463,6 +470,9 @@ impl BrowserView {
             }
             BrowserEvent::Url { id, url } => self.metadata(id, None, Some(url)),
             BrowserEvent::Loading { .. } => {}
+            BrowserEvent::DataCleared { request, result } => {
+                self.browser_data_cleared(request, result);
+            }
             BrowserEvent::Shortcut(shortcut) => self.shortcut(shortcut, window, cx),
             BrowserEvent::PopupBlocked { id } => {
                 if self.active_page_feedback(id) {
@@ -591,10 +601,11 @@ impl BrowserView {
             }
             self.navigation_intents.creation_queued(*id, queued);
         }
-        // The history list occupies the page card, so no page is shown beneath it.
+        // The history list and clear dialog occupy the page card, so no page is shown beneath.
+        let card_free = !self.history.is_open() && !self.clear_data.is_open();
         let next = desired
             .map(|(id, _)| id)
-            .filter(|id| self.loaded.contains(id) && !self.history.is_open());
+            .filter(|id| self.loaded.contains(id) && card_free);
         if next != self.shown && self.page_command(BrowserCommand::ShowActive(next.map(TabId::get)))
         {
             self.shown = next;
@@ -1072,7 +1083,12 @@ impl Render for BrowserView {
             self.resize_pages(window);
         }
         // The history list takes the page card's place until it is closed.
-        let page = if self.history.is_open() {
+        let page = if self.clear_data.is_open() {
+            div()
+                .flex_1()
+                .h_full()
+                .child(clear_data::render(&self.clear_data, cx))
+        } else if self.history.is_open() {
             div()
                 .flex_1()
                 .h_full()

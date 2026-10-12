@@ -4,6 +4,6 @@ pub mod browser;
 mod storage;
 
 pub use storage::{
-    RecoveryError, RecoveryOffer, RecoveryOutcome, StartupStorage, WindowsDirectoryLease,
-    offer_recovery, prepare_startup,
+    DeletionJournal, JournalError, RecoveryError, RecoveryOffer, RecoveryOutcome, StartupStorage,
+    WindowsDirectoryLease, offer_recovery, prepare_startup, read_deletion_log,
 };
