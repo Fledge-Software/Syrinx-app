@@ -442,6 +442,7 @@ dependencies = [
  "atlas-store",
  "futures",
  "raw-window-handle",
+ "rusqlite",
  "webview2-com",
  "windows 0.62.2",
  "wry",

@@ -11,8 +11,8 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use atlas_core::{
-    Activation, SavedPageId, SavedPageSnapshot, TabId, TabKind, TabMetadata, TabModel,
-    TabModelSnapshot, TabSnapshot,
+    Activation, SavedEntryId, SavedPageId, SavedPageSnapshot, SavedPlacement, TabId, TabKind,
+    TabMetadata, TabModel, TabModelSnapshot, TabSnapshot,
 };
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
@@ -279,10 +279,13 @@ fn foreign_future_and_altered_schemas_are_refused_without_rewriting_the_file() {
         ),
         (
             format!(
-                "PRAGMA application_id = {}; PRAGMA user_version = 2; CREATE TABLE future_data(value TEXT);",
-                schema::APPLICATION_ID
+                "PRAGMA application_id = {}; PRAGMA user_version = {}; CREATE TABLE future_data(value TEXT);",
+                schema::APPLICATION_ID,
+                schema::SCHEMA_VERSION + 1
             ),
-            StoreError::FutureSchema { version: 2 },
+            StoreError::FutureSchema {
+                version: schema::SCHEMA_VERSION + 1,
+            },
         ),
     ] {
         let directory = TestDirectory::new();
@@ -341,9 +344,15 @@ fn full_u64_identities_and_exhausted_revision_roundtrip_exactly() {
             id: saved_id,
             metadata: metadata(2),
         }],
+        saved_folders: Vec::new(),
+        saved_layout: vec![SavedPlacement {
+            entry: SavedEntryId::Page(saved_id),
+            parent: None,
+        }],
         active_id: Some(tab_id),
         last_tab_id: u64::MAX,
         last_saved_page_id: u64::MAX,
+        last_saved_folder_id: u64::MAX,
     };
     let store = Store::open(directory.lease()).expect("synthetic store opens");
     store
@@ -422,9 +431,8 @@ fn malformed_current_snapshot_is_refused_before_changing_journal_mode() {
     let directory = TestDirectory::new();
     let mut connection = directory.connection();
     schema::configure_connection(&connection).expect("configure synthetic connection");
-    let initial = schema::initial_schema();
-    let migrations = Migrations::new(vec![M::up(&initial).foreign_key_check()]);
-    schema::apply_migrations(&mut connection, &migrations)
+    let scripts = schema::MigrationScripts::new();
+    schema::apply_migrations(&mut connection, &scripts.migrations())
         .expect("initialize current schema without enabling WAL");
     connection
         .execute_batch(
@@ -605,4 +613,5 @@ fn store_and_snapshot_debug_redact_paths_and_all_metadata_fields() {
     directory.cleanup();
 }
 
+mod folders;
 mod lifecycle;

@@ -387,17 +387,64 @@ fn future_schema_refusal_does_not_rewrite_the_backup() {
     let connection =
         Connection::open(file.database_path()).unwrap_or_else(|_| panic!("open synthetic backup"));
     connection
-        .execute_batch("PRAGMA user_version = 2")
+        .execute_batch(&format!(
+            "PRAGMA user_version = {}",
+            schema::SCHEMA_VERSION + 1
+        ))
         .expect("create future schema marker");
     assert!(connection.close().is_ok(), "close synthetic connection");
     let original = fs::read(file.database_path()).expect("read synthetic bytes");
     assert_eq!(
         validate_backup(&file),
-        Err(StoreError::FutureSchema { version: 2 })
+        Err(StoreError::FutureSchema {
+            version: schema::SCHEMA_VERSION + 1
+        })
     );
     assert_eq!(
         fs::read(file.database_path()).expect("read unchanged synthetic bytes"),
         original
+    );
+    fixture.finish();
+}
+
+#[test]
+fn newer_schema_backups_are_skipped_by_scheduling_and_never_pruned() {
+    let mut fixture = Fixture::new();
+    let mut schedule = BackupSchedule::default();
+    for day in 0..7 {
+        fixture
+            .attempt(&mut schedule, day * 86_400)
+            .expect("backup succeeds");
+    }
+    let oldest = File::new(Arc::clone(&fixture.archive), BackupId(1));
+    let connection = Connection::open(oldest.database_path())
+        .unwrap_or_else(|_| panic!("open synthetic backup"));
+    connection
+        .execute_batch(&format!(
+            "PRAGMA user_version = {}",
+            schema::SCHEMA_VERSION + 1
+        ))
+        .expect("mark synthetic backup as newer");
+    assert!(connection.close().is_ok(), "close synthetic connection");
+    let original = fs::read(oldest.database_path()).expect("read synthetic bytes");
+
+    // A fresh scan skips the newer backup instead of failing, and rotation never removes it.
+    let mut restarted = BackupSchedule::default();
+    assert!(matches!(
+        fixture.attempt(&mut restarted, 7 * 86_400),
+        Ok(BackupOutcome::Created(_))
+    ));
+    assert_eq!(
+        fs::read(oldest.database_path()).expect("reread synthetic bytes"),
+        original
+    );
+    assert_eq!(
+        fixture
+            .archive
+            .candidates()
+            .expect("candidates remain")
+            .len(),
+        8
     );
     fixture.finish();
 }
