@@ -78,13 +78,24 @@ fn preferences_arrive_before_state_and_survive_restart() {
         &handle,
         edit(
             DestinationSurface::QuickAccess,
-            DestinationEdit::Move { from: 1, to: 0 },
+            DestinationEdit::Move {
+                from: 1,
+                to: 0,
+                expected: tile("Synthetic bravo"),
+            },
         ),
     );
     let latest = edited(&mut events);
     send(
         &handle,
         SessionCommand::SaveSettings(vec![("appearance.palette".to_owned(), "haze".to_owned())]),
+    );
+    // The sidebar presentation (DW-2) uses the same table through its documented key.
+    send(
+        &handle,
+        SessionCommand::SaveSettings(vec![atlas_ui::sidebar_setting(
+            atlas_ui::SidebarWidthState::Compact,
+        )]),
     );
     stop(handle, &mut events);
 
@@ -93,6 +104,12 @@ fn preferences_arrive_before_state_and_survive_restart() {
     assert_eq!(
         settings.get("appearance.palette").map(String::as_str),
         Some("haze")
+    );
+    assert_eq!(
+        settings
+            .get(atlas_ui::SIDEBAR_WIDTH_STATE_KEY)
+            .and_then(|value| atlas_ui::parse_sidebar_setting(value)),
+        Some(atlas_ui::SidebarWidthState::Compact)
     );
     assert_eq!(destinations, latest);
     let labels: Vec<_> = destinations
@@ -116,7 +133,10 @@ fn refused_tile_edits_report_without_stopping_the_worker() {
         &handle,
         edit(
             DestinationSurface::Favorites,
-            DestinationEdit::Remove { index: 0 },
+            DestinationEdit::Remove {
+                index: 0,
+                expected: tile("Synthetic absent"),
+            },
         ),
     );
     assert!(matches!(
@@ -135,6 +155,50 @@ fn refused_tile_edits_report_without_stopping_the_worker() {
         },
     );
     assert_eq!(opened.model.tabs.len(), 1);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_double_clicked_remove_queued_twice_removes_one_tile() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    preferences(&mut events);
+    state(&mut events);
+    for label in ["Synthetic one", "Synthetic two"] {
+        send(
+            &handle,
+            edit(
+                DestinationSurface::QuickAccess,
+                DestinationEdit::Add(tile(label)),
+            ),
+        );
+        edited(&mut events);
+    }
+    // Both clicks were made against "Synthetic one" before the first was acknowledged.
+    let remove = DestinationEdit::Remove {
+        index: 0,
+        expected: tile("Synthetic one"),
+    };
+    send(
+        &handle,
+        edit(DestinationSurface::QuickAccess, remove.clone()),
+    );
+    send(&handle, edit(DestinationSurface::QuickAccess, remove));
+    let after_first = edited(&mut events);
+    assert!(matches!(
+        next_any_event(&mut events),
+        SessionEvent::Failure {
+            error: SessionError::Destination(atlas_core::DestinationError::Changed),
+            fatal: false,
+        }
+    ));
+    let labels: Vec<_> = after_first
+        .list(DestinationSurface::QuickAccess)
+        .iter()
+        .map(|tile| tile.label.as_str())
+        .collect();
+    assert_eq!(labels, ["Synthetic two"]);
     stop(handle, &mut events);
     fixture.cleanup();
 }

@@ -266,7 +266,7 @@ impl BrowserView {
         if editing {
             // In edit mode a click edits the tile instead of opening it.
             cell = cell
-                .child(self.tile_controls(palette, surface, index, count, cx))
+                .child(self.tile_controls(palette, surface, (index, tile), count, cx))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.start_tile_editor(surface, Some(index), window, cx);
                 }));
@@ -296,52 +296,41 @@ impl BrowserView {
             }))
     }
 
-    /// Move-left, remove and move-right buttons under a tile in edit mode.
+    /// Move-left, remove and move-right buttons under a tile in edit mode. Each edit carries the
+    /// tile it was made against, so a repeated or late click cannot hit the tile that moved up.
     pub(super) fn tile_controls(
         &self,
         palette: &Palette,
         surface: DestinationSurface,
-        index: usize,
+        (index, tile): (usize, &Destination),
         count: usize,
         cx: &mut Context<Self>,
     ) -> Div {
+        let edit_button = |id: &'static str, glyph: &'static str, edit: DestinationEdit| {
+            small_button((id, index), glyph, palette).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.edit_tiles(surface, edit.clone());
+                    cx.notify();
+                },
+            ))
+        };
+        let moved = |to: usize| DestinationEdit::Move {
+            from: index,
+            to,
+            expected: tile.clone(),
+        };
         let mut controls = div().flex().gap(px(2.));
         if index > 0 {
-            controls = controls.child(small_button(("tile-left", index), "‹", palette).on_click(
-                cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.edit_tiles(
-                        surface,
-                        DestinationEdit::Move {
-                            from: index,
-                            to: index - 1,
-                        },
-                    );
-                    cx.notify();
-                }),
-            ));
+            controls = controls.child(edit_button("tile-left", "‹", moved(index - 1)));
         }
-        controls = controls.child(small_button(("tile-remove", index), "×", palette).on_click(
-            cx.listener(move |this, _, _, cx| {
-                cx.stop_propagation();
-                this.edit_tiles(surface, DestinationEdit::Remove { index });
-                cx.notify();
-            }),
-        ));
+        let removed = DestinationEdit::Remove {
+            index,
+            expected: tile.clone(),
+        };
+        controls = controls.child(edit_button("tile-remove", "×", removed));
         if index + 1 < count {
-            controls = controls.child(small_button(("tile-right", index), "›", palette).on_click(
-                cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.edit_tiles(
-                        surface,
-                        DestinationEdit::Move {
-                            from: index,
-                            to: index + 1,
-                        },
-                    );
-                    cx.notify();
-                }),
-            ));
+            controls = controls.child(edit_button("tile-right", "›", moved(index + 1)));
         }
         controls
     }

@@ -2,6 +2,7 @@
 
 use atlas_core::{
     BuiltInPlugin, Destination, DestinationEdit, DestinationSurface, DestinationTarget,
+    QuickDestinations,
 };
 use atlas_ui::Palette;
 use atlas_ui::metrics::{radius, text};
@@ -25,8 +26,8 @@ pub(super) enum TargetChoice {
 /// An open add/change form for one surface.
 pub(super) struct TileEditor {
     pub(super) surface: DestinationSurface,
-    /// `None` adds a tile; `Some` replaces the tile at that position.
-    index: Option<usize>,
+    /// `None` adds a tile; `Some` replaces this tile, which was at this position when opened.
+    editing: Option<(usize, Destination)>,
     label: Entity<InputState>,
     address: Entity<InputState>,
     target: TargetChoice,
@@ -44,6 +45,11 @@ impl BrowserView {
         cx: &mut Context<Self>,
     ) {
         let existing = index.and_then(|index| self.home.destinations.list(surface).get(index));
+        // A click on a tile that has just gone must not turn into an "add" form.
+        if index.is_some() && existing.is_none() {
+            return;
+        }
+        let editing = index.zip(existing.cloned());
         let (label_text, address_text, target) = match existing {
             Some(tile) => match &tile.target {
                 DestinationTarget::Web(address) => {
@@ -79,7 +85,7 @@ impl BrowserView {
         ];
         self.home.editor = Some(TileEditor {
             surface,
-            index,
+            editing,
             label,
             address,
             target,
@@ -104,13 +110,34 @@ impl BrowserView {
             }
         };
         let surface = editor.surface;
-        let edit = match editor.index {
-            Some(index) => DestinationEdit::Replace { index, tile },
+        let edit = match editor.editing.clone() {
+            Some((index, expected)) => DestinationEdit::Replace {
+                index,
+                expected,
+                tile,
+            },
             None => DestinationEdit::Add(tile),
         };
         self.home.editor = None;
         self.edit_tiles(surface, edit);
         cx.notify();
+    }
+
+    /// Takes the worker's latest lists and closes a change form whose tile moved or went away.
+    pub(super) fn destinations_changed(&mut self, destinations: QuickDestinations) {
+        self.home.destinations = destinations;
+        let Some(editor) = &self.home.editor else {
+            return;
+        };
+        if !editor_still_current(
+            editor.surface,
+            editor.editing.as_ref(),
+            &self.home.destinations,
+        ) {
+            self.home.editor = None;
+            self.message =
+                "That tile changed while you were editing it. Open it again to edit.".to_owned();
+        }
     }
 
     /// The form itself, drawn under the surface it edits.
@@ -134,7 +161,7 @@ impl BrowserView {
                 cx.notify();
             })));
         }
-        let title = if editor.index.is_some() {
+        let title = if editor.editing.is_some() {
             "Change tile"
         } else {
             "Add tile"
@@ -193,6 +220,15 @@ impl BrowserView {
                 ),
         )
     }
+}
+
+/// Whether a change form still points at the tile it was opened on; an add form always does.
+fn editor_still_current(
+    surface: DestinationSurface,
+    editing: Option<&(usize, Destination)>,
+    destinations: &QuickDestinations,
+) -> bool {
+    editing.is_none_or(|(index, original)| destinations.list(surface).get(*index) == Some(original))
 }
 
 /// Builds the tile the form describes, or explains what to fix.
@@ -294,6 +330,39 @@ mod tests {
                 "{address}"
             );
         }
+    }
+
+    #[test]
+    fn a_change_form_closes_when_its_tile_moves_or_goes() {
+        let tile = |label: &str| {
+            tile_from_form(label, "example.test", TargetChoice::Website).expect("synthetic tile")
+        };
+        let surface = DestinationSurface::QuickAccess;
+        let lists = |labels: &[&str]| {
+            QuickDestinations::from_lists(
+                labels.iter().map(|label| tile(label)).collect(),
+                Vec::new(),
+            )
+            .expect("synthetic lists")
+        };
+        let opened = (2, tile("Three"));
+        // Removing an earlier tile shifts "Three" to index 1: the form must close.
+        assert!(!editor_still_current(
+            surface,
+            Some(&opened),
+            &lists(&["Two", "Three", "Four"])
+        ));
+        assert!(!editor_still_current(
+            surface,
+            Some(&opened),
+            &lists(&["One", "Two"])
+        ));
+        assert!(editor_still_current(
+            surface,
+            Some(&opened),
+            &lists(&["One", "Two", "Three"])
+        ));
+        assert!(editor_still_current(surface, None, &lists(&[])));
     }
 
     #[test]

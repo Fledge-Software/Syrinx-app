@@ -258,8 +258,8 @@ impl BrowserView {
             SessionEvent::Preferences {
                 settings,
                 destinations,
-            } => self.restore_preferences(&settings, destinations, window),
-            SessionEvent::Destinations(destinations) => self.home.destinations = destinations,
+            } => self.restore_preferences(&settings, destinations, window, cx),
+            SessionEvent::Destinations(destinations) => self.destinations_changed(destinations),
             SessionEvent::State(snapshot) => {
                 self.recovery = None;
                 // Restored sessions already have saved revisions; only the first state is startup.
