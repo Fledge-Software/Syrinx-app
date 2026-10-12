@@ -9,6 +9,7 @@ mod page_lifecycle;
 mod permissions;
 mod popups;
 mod recovery;
+mod security;
 
 #[cfg(test)]
 mod shutdown_tests;
@@ -96,6 +97,7 @@ struct PalettePopup {
 }
 
 pub struct BrowserView {
+    connections: std::collections::HashMap<u64, atlas_platform::browser::ConnectionState>,
     find: Option<find::FindBar>,
     find_sequence: u64,
     zoom_levels: std::collections::HashMap<u64, f64>,
@@ -139,6 +141,7 @@ impl BrowserView {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut view = Self {
+            connections: std::collections::HashMap::new(),
             find: None,
             find_sequence: 0,
             zoom_levels: std::collections::HashMap::new(),
@@ -385,6 +388,7 @@ impl BrowserView {
             self.message = message.to_owned();
         }
         match event {
+            BrowserEvent::Connection { id, state } => self.observe_connection(id, state),
             BrowserEvent::ZoomChanged { id, factor } => {
                 self.zoom_levels.insert(id, factor);
             }
@@ -579,6 +583,7 @@ impl BrowserView {
         }
         let removed = page_lifecycle::removed(&self.model, &self.loaded, &self.pending_pages);
         for id in removed {
+            self.connections.remove(&id.get());
             self.forget_find(id.get(), false);
             if self.page_command(BrowserCommand::Close { id: id.get() }) {
                 self.loaded.remove(&id);
@@ -1044,6 +1049,7 @@ impl BrowserView {
                     cx.notify();
                 })),
             )
+            .child(self.connection_display())
             .child(
                 div()
                     .id("address")

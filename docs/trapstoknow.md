@@ -12,6 +12,20 @@ you found it in the commit message, not here.
 
 ## Page tabs: WebView2 through wry
 
+- **Certificate failure is an expected navigation failure, not successful loading.**
+  WebView2 can emit failed NavigationCompleted before ServerCertificateErrorDetected.
+  P1-14 explicitly cancels and reads back the action; keep rejection sticky through
+  completion and match navigation IDs before accepting success. Its negative fixture
+  accepts only its own expected failure, without changing shared fixture checks.
+  Cancellation may retain the old document, so a source-change assertion needs a
+  distinct recovery address. An initial already-blank view need not change source.
+  See `docs/p1-14-security-display.md` and its native logs.
+- **The local SslStream server could not use its ephemeral certificate key.**
+  P1-14's initial helper failed with “No credentials are available in the security
+  package.” Do not fix this by persisting keys outside the fixture or installing
+  a trusted certificate. The installed Python standard library serves the same
+  fresh untrusted certificate from files confined to the synthetic target folder.
+
 - **An empty native Find.Start can leave its completion pending.** The P1-13
   fixture on this runtime completed a nonempty two-match search, but an empty
   term never completed. Atlas opens its own find input without calling Start;
@@ -298,6 +312,11 @@ you found it in the commit message, not here.
 
 ## Repository and research
 
+- **Windows PowerShell can replace Unicode in a native-program pipeline.**
+  An edit piped to Python lost its middle-dot separator, so a replacement did
+  not match and a P1-14 label regression failed. Use direct patches for Unicode
+  text, or ASCII script literals with Unicode escapes; UTF-8 file reads alone
+  do not control the shell's pipe encoding.
 - **Files on disk have CRLF line endings; git stores LF.** This machine's
   system git config sets `core.autocrlf=true` and `.gitattributes` sets
   `* text=auto`, so `git ls-files --eol` shows `i/lf w/crlf` for most text

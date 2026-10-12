@@ -6,6 +6,8 @@ pub use essentials::PageAction;
 mod page;
 mod permissions;
 mod popups;
+mod security;
+pub use security::{ConnectionScheme, ConnectionState, ConnectionStatus};
 
 use std::{
     collections::HashMap,
@@ -117,6 +119,10 @@ impl fmt::Debug for BrowserCommand {
 }
 
 pub enum BrowserEvent {
+    Connection {
+        id: u64,
+        state: ConnectionState,
+    },
     FindCompleted {
         id: u64,
         request: u64,
@@ -231,6 +237,7 @@ pub enum BrowserError {
     Popup,
     Permission,
     PageControl,
+    Security,
     Settings,
     EventRegistration,
     Navigation,
