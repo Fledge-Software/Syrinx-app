@@ -6,17 +6,19 @@ use atlas_core::{
     SavedFolderId, SavedFolderSnapshot, SavedPageId, SavedPageSnapshot, TabId, TabSnapshot,
 };
 use atlas_ui::{
-    metrics::chrome::{CARD_INSET, ICON_BUTTON},
-    sidebar::{SIDEBAR_PADDING_LEFT, SIDEBAR_PADDING_RIGHT},
+    SidebarWidthState,
+    metrics::chrome::ICON_BUTTON,
+    sidebar::{SIDEBAR_PADDING_LEFT, SIDEBAR_PADDING_RIGHT, draws_content},
 };
 use gpui::{
-    Context, Div, ElementId, InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, div, prelude::FluentBuilder,
-    px,
+    Context, Div, ElementId, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, div,
+    prelude::FluentBuilder, px,
 };
 
 use super::{
     BrowserView, button,
+    page_card::edge_strip,
     sidebar_rows::{SavedRow, monogram, visible_saved_rows},
 };
 use crate::{session::SessionCommand, theme};
@@ -37,7 +39,8 @@ struct RowLook {
 }
 
 impl BrowserView {
-    /// The sidebar at the width the sizing reserves; a hidden sidebar draws nothing.
+    /// The sidebar at the width the sizing reserves. Narrower than favicon-only (hidden, or
+    /// mid-drag) it draws only its unpadded background, so it is exactly that wide.
     pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> Div {
         let width = self.sidebar_sizing.width();
         let frame = div()
@@ -46,7 +49,7 @@ impl BrowserView {
             .h_full()
             .overflow_hidden()
             .bg(theme::ground());
-        if width <= 0. {
+        if !draws_content(width) {
             return frame;
         }
         let labels = self.sidebar_sizing.labels_visible();
@@ -78,14 +81,23 @@ impl BrowserView {
             )
     }
 
-    /// The strip between the sidebar and the page card that the owner drags.
+    /// The strip between the sidebar and the page card that the owner drags. It also takes
+    /// keyboard focus: Left and Right step between the three states.
     pub(super) fn sidebar_edge(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let dragging = self.sidebar_sizing.is_dragging();
+        let (start, end) = edge_strip(self.sidebar_sizing.width());
         div()
             .id("sidebar-edge")
             .role(Role::Splitter)
             .aria_label("Resize sidebar")
-            .w(px(CARD_INSET))
+            .aria_description(self.sidebar_sizing.state().name())
+            .track_focus(&self.sidebar_edge_focus)
+            .tab_index(0)
+            .focus(|style| style.bg(theme::line()))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                this.sidebar_edge_key(event, cx);
+            }))
+            .w(px(end - start))
             .flex_none()
             .h_full()
             .cursor_col_resize()
@@ -109,7 +121,7 @@ impl BrowserView {
         }
         // A release outside every window can be lost; the next move without a button ends it.
         if !event.dragging() {
-            self.sidebar_drag_released(cx);
+            self.sidebar_drag_released(f32::from(event.position.x), cx);
             return;
         }
         if self.sidebar_sizing.drag_to(f32::from(event.position.x)) {
@@ -117,16 +129,51 @@ impl BrowserView {
         }
     }
 
-    /// Snaps a released drag to wide, favicon-only or hidden. Selection is untouched.
-    pub(super) fn sidebar_drag_released(&mut self, cx: &mut Context<Self>) {
-        // TODO(DW-2): persist the settled state once atlas-store has a settings table (P1-29).
-        if self.sidebar_sizing.release().is_some() {
-            cx.notify();
+    /// Snaps a drag released at `pointer_x` to wide, favicon-only or hidden. GPUI stops
+    /// reporting moves outside the window, so the release position decides. Selection is
+    /// untouched.
+    pub(super) fn sidebar_drag_released(&mut self, pointer_x: f32, cx: &mut Context<Self>) {
+        if self.sidebar_sizing.release_at(pointer_x).is_some() {
+            self.sidebar_state_settled(cx);
         }
     }
 
+    /// Settles a drag at its current width when Atlas loses activation (Alt Tab, a dialog),
+    /// because the mouse capture and the release that would end it go elsewhere.
+    pub(super) fn sidebar_drag_abandoned(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar_sizing.release().is_some() {
+            self.sidebar_state_settled(cx);
+        }
+    }
+
+    /// Left narrows and Right widens the sidebar by one state from the focused edge.
+    fn sidebar_edge_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let current = self.sidebar_sizing.state();
+        let next = match event.keystroke.key.as_str() {
+            "left" => current.narrower(),
+            "right" => current.wider(),
+            _ => return,
+        };
+        cx.stop_propagation();
+        self.set_sidebar_state(next, cx);
+    }
+
+    fn set_sidebar_state(&mut self, state: SidebarWidthState, cx: &mut Context<Self>) {
+        if !self.sidebar_sizing.is_dragging() && self.sidebar_sizing.state() == state {
+            return;
+        }
+        self.sidebar_sizing.set_state(state);
+        self.sidebar_state_settled(cx);
+    }
+
+    /// Redraws after the sidebar settles; render then moves the page card.
+    fn sidebar_state_settled(&mut self, cx: &mut Context<Self>) {
+        // TODO(DW-2): persist the settled state once atlas-store has a settings table (P1-29).
+        cx.notify();
+    }
+
     /// Saved rows in layout order (skipping collapsed folders), then ordinary tabs.
-    fn rows(&self, labels: bool, cx: &mut Context<Self>) -> Div {
+    fn rows(&self, labels: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         let pages: HashMap<SavedPageId, &SavedPageSnapshot> = self
             .model
             .saved_pages
@@ -139,7 +186,13 @@ impl BrowserView {
             .iter()
             .map(|folder| (folder.id, folder))
             .collect();
-        let mut rows = div().flex().flex_col().gap_1();
+        let mut rows = div()
+            .id("sidebar-rows")
+            .role(Role::Tree)
+            .aria_label("Saved and open tabs")
+            .flex()
+            .flex_col()
+            .gap_1();
         for row in visible_saved_rows(&self.model.saved_layout, &self.collapsed_folders) {
             let element = match row {
                 SavedRow::Folder {
@@ -278,7 +331,6 @@ fn folder_row(
         saved: true,
     };
     row_frame(("folder", id.get()), look, labels)
-        .role(Role::TreeItem)
         .aria_expanded(expanded)
         .on_click(cx.listener(move |this, _, _, cx| {
             this.toggle_folder(id);
@@ -287,11 +339,12 @@ fn folder_row(
 }
 
 /// The shared row shape: a titled row when labels show, a centred icon button otherwise.
-/// Both keep the title as the accessible name.
+/// Every row is a tree item at its nesting level, keeping its title as the accessible name.
 fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<Div> {
     let row = div()
         .id(id)
-        .role(Role::Tab)
+        .role(Role::TreeItem)
+        .aria_level(look.depth + 1)
         .aria_label(look.title.clone())
         .aria_selected(look.active)
         .h(px(ROW_HEIGHT))

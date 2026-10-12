@@ -34,8 +34,9 @@ use futures::{StreamExt, channel::mpsc::unbounded};
 use gpui::StatefulInteractiveElement;
 use gpui::{
     App, AppContext, Bounds, Context, Div, Entity, FocusHandle, InteractiveElement, IntoElement,
-    KeyBinding, MouseButton, MouseMoveEvent, ParentElement, Render, Stateful, Styled, Window,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, div, point, px, rgb, size,
+    KeyBinding, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Render, Stateful, Styled,
+    Subscription, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, div,
+    point, px, rgb, size,
 };
 use gpui_component::Root;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -111,6 +112,9 @@ pub struct BrowserView {
     bounds: Option<PageBounds>,
     sidebar_sizing: SidebarSizing,
     collapsed_folders: HashSet<SavedFolderId>,
+    sidebar_edge_focus: FocusHandle,
+    /// Ends a sidebar drag when the window deactivates; dropping it unsubscribes.
+    _drag_activation_watch: Subscription,
     message: String,
     failure: Option<String>,
     focus: FocusHandle,
@@ -151,6 +155,12 @@ impl BrowserView {
             bounds: None,
             sidebar_sizing: SidebarSizing::default(),
             collapsed_folders: HashSet::new(),
+            sidebar_edge_focus: cx.focus_handle(),
+            _drag_activation_watch: cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.sidebar_drag_abandoned(cx);
+                }
+            }),
             message: "Opening your workspace…".to_owned(),
             failure: None,
             focus: cx.focus_handle(),
@@ -1043,11 +1053,15 @@ impl Render for BrowserView {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| this.sidebar_drag_released(cx)),
+                cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                    this.sidebar_drag_released(f32::from(event.position.x), cx);
+                }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| this.sidebar_drag_released(cx)),
+                cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                    this.sidebar_drag_released(f32::from(event.position.x), cx);
+                }),
             )
             .on_action(cx.listener(|this, _: &NewTab, _, cx| {
                 this.command(SessionCommand::NewTab {
