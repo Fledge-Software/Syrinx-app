@@ -66,6 +66,10 @@ It returns failure on startup errors or timeout. The generated directory is
 reserved with exclusive creation before startup; an existing path is refused.
 A separate watchdog bounds this synthetic test at 30 seconds even if GPUI
 stalls or orderly shutdown never finishes. Normal launches have no watchdog.
+The watchdog exits with code 124 on its deadline or 125 if its control channel
+disconnects. It performs no output before exiting, so a locked stderr stream
+cannot prevent termination. A subprocess regression verifies both exits while
+holding stderr locked; other smoke failures retain their existing diagnostics.
 Normal `cargo atlas` uses
 `%LOCALAPPDATA%\AtlasProductPreview`, separate from the Phase 0 profiles;
 its State and WebView2 subfolders persist between launches. Compiling alone

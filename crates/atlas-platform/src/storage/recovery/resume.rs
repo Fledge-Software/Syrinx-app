@@ -208,13 +208,13 @@ pub(super) fn offer(prepared: PreparedDirectory) -> Result<RecoveryOffer, Recove
         source,
         expected,
         primary,
-        continuation: Some(Continuation {
+        continuation: Some(Box::new(Continuation {
             bundle,
             intent_entry,
             intent,
             stage,
             installed,
-        }),
+        })),
     })
 }
 

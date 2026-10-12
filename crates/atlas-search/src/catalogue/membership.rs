@@ -80,6 +80,49 @@ impl<'a> GroupedMembership<'a> {
         self.entry_matches_selected(entry, masks, ids, [true; 2])
     }
 
+    #[cfg(test)]
+    pub(super) fn entry_matches_counted_cached_first(
+        &mut self,
+        entry: &Entry,
+        masks: &FieldMasks,
+        ids: [Option<GroupId>; 2],
+        counts: &[DigitCounts; 2],
+    ) -> Result<bool, SearchError> {
+        let possible = self.digits.as_ref().map_or([true; 2], |digits| {
+            counts.map(|counts| digits.may_match(&counts))
+        });
+        for (field, text, id, possible) in [
+            (TextField::Title, entry.title.as_str(), ids[0], possible[0]),
+            (
+                TextField::Address,
+                entry.address.as_str(),
+                ids[1],
+                possible[1],
+            ),
+        ] {
+            if !possible {
+                continue;
+            }
+            // Reuse an exact answer before repeating the conservative mask check.
+            if let (Some(memo), Some(id)) = (&self.memo, id)
+                && let Some(Some(matched)) = memo.get((id.get() - 1) as usize)
+            {
+                if *matched {
+                    return Ok(true);
+                }
+                continue;
+            }
+            // Missing slots retain the original mask-before-error ordering.
+            if !self.may_match_field(masks, field, id) {
+                continue;
+            }
+            if self.field_matches(text, masks.is_ascii(field), id)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn entry_matches_selected(
         &mut self,
         entry: &Entry,
@@ -144,6 +187,9 @@ impl<'a> GroupedMembership<'a> {
 
 #[cfg(test)]
 mod projection_tests;
+
+#[cfg(test)]
+mod cached_first_tests;
 
 fn matches(
     membership: &Membership,

@@ -35,7 +35,7 @@ pub struct RecoveryOffer {
     source: GuardedEntry,
     expected: StoredSnapshot,
     primary: Vec<PrimaryFile>,
-    continuation: Option<resume::Continuation>,
+    continuation: Option<Box<resume::Continuation>>,
 }
 
 impl fmt::Debug for RecoveryOffer {
@@ -96,12 +96,19 @@ pub fn offer_recovery(
 ) -> Result<RecoveryOffer, RecoveryError> {
     require_zero_generation(deletions)?;
     let prepared = prepare_directory(directory, Arc::new(native::WindowsProbe))?;
-    if native::optional_file(
+    offer_prepared(prepared)
+}
+
+pub(super) fn has_intent(prepared: &PreparedDirectory) -> Result<bool, LocationError> {
+    Ok(native::optional_file(
         &prepared.path.join(RECOVERY_INTENT_NAME),
         LocationOperation::OpenRecoveryIntent,
     )?
-    .is_some()
-    {
+    .is_some())
+}
+
+pub(super) fn offer_prepared(prepared: PreparedDirectory) -> Result<RecoveryOffer, RecoveryError> {
+    if has_intent(&prepared)? {
         return resume::offer(prepared);
     }
     prepared.control.revalidate()?;
@@ -152,7 +159,7 @@ impl RecoveryOffer {
     /// The caller must obtain the owner's confirmation before consuming the offer.
     pub fn confirm(mut self) -> Result<RecoveryOutcome, RecoveryError> {
         if let Some(continuation) = self.continuation.take() {
-            return resume::confirm(self, continuation);
+            return resume::confirm(self, *continuation);
         }
         self.prepared.revalidate()?;
         self.prepared.control.revalidate()?;
@@ -198,7 +205,7 @@ impl RecoveryOffer {
     }
 }
 
-fn require_zero_generation(deletions: &DeletionLog) -> Result<(), RecoveryError> {
+pub(super) fn require_zero_generation(deletions: &DeletionLog) -> Result<(), RecoveryError> {
     if deletions.pending().is_some() || deletions.completed_generation() != 0 {
         return Err(RecoveryError::DeletionReplayRequired);
     }

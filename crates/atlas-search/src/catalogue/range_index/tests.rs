@@ -9,6 +9,7 @@ use crate::membership::indexed::diagnostic;
 mod bound_reuse;
 mod bounds;
 mod in_place;
+mod membership_order;
 mod mutation_costs;
 mod projection;
 mod restore;

@@ -7,11 +7,15 @@ pub(super) use maintenance::{
 };
 
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fs::File,
     io,
     mem::size_of,
-    os::windows::{ffi::OsStringExt, io::AsRawHandle, io::FromRawHandle},
+    os::windows::{
+        ffi::{OsStrExt, OsStringExt},
+        io::AsRawHandle,
+        io::FromRawHandle,
+    },
     path::{Path, PathBuf},
     thread,
 };
@@ -19,23 +23,34 @@ use std::{
 use atlas_store::{LocationError, LocationOperation};
 use windows::{
     Storage::Provider::StorageProviderSyncRootManager,
+    Wdk::{
+        Foundation::OBJECT_ATTRIBUTES,
+        Storage::FileSystem::{
+            FILE_CREATE, FILE_DIRECTORY_FILE, FILE_SYNCHRONOUS_IO_NONALERT, NtCreateFile,
+        },
+    },
     Win32::{
         Foundation::{
             ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SHARING_VIOLATION,
-            GENERIC_READ, GENERIC_WRITE, HANDLE,
+            GENERIC_READ, GENERIC_WRITE, HANDLE, OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE,
+            RtlNtStatusToDosError, STATUS_SUCCESS, UNICODE_STRING,
         },
         Storage::FileSystem::{
-            CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
-            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAGS_AND_ATTRIBUTES,
-            FILE_ID_INFO, FILE_INFO_BY_HANDLE_CLASS, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
-            FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO,
-            FileAttributeTagInfo, FileIdInfo, FileStandardInfo, GETFINALPATHNAMEBYHANDLE_FLAGS,
-            GetDriveTypeW, GetFileInformationByHandleEx, GetFinalPathNameByHandleW, OPEN_ALWAYS,
-            OPEN_EXISTING, VOLUME_NAME_DOS,
+            CREATE_NEW, CreateFileW, FILE_ACCESS_RIGHTS, FILE_ATTRIBUTE_NORMAL,
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAGS_AND_ATTRIBUTES, FILE_ID_INFO,
+            FILE_INFO_BY_HANDLE_CLASS, FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED,
+            FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_MODE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileAttributeTagInfo, FileIdInfo,
+            FileStandardInfo, GETFINALPATHNAMEBYHANDLE_FLAGS, GetDriveTypeW,
+            GetFileInformationByHandleEx, GetFinalPathNameByHandleW, OPEN_ALWAYS, OPEN_EXISTING,
+            SYNCHRONIZE, VOLUME_NAME_DOS,
         },
         System::{
             Com::CoTaskMemFree,
+            IO::IO_STATUS_BLOCK,
             WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize},
+            WindowsProgramming::FILE_CREATED,
         },
         UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath},
     },
@@ -78,7 +93,7 @@ pub(super) fn local_data_directory() -> Result<PathBuf, LocationError> {
 }
 
 pub(super) fn open_directory(path: &Path, follow_link: bool) -> Result<File, LocationError> {
-    // Candidate ancestors are inspected themselves, not followed through links.
+    // Metadata checks remain compatible with existing retained handles.
     let flags = if follow_link {
         FILE_FLAG_BACKUP_SEMANTICS
     } else {
@@ -87,11 +102,80 @@ pub(super) fn open_directory(path: &Path, follow_link: bool) -> Result<File, Loc
     open_existing(path, flags).map_err(|error| os_error(LocationOperation::OpenDirectory, error))
 }
 
-pub(super) fn optional_directory(path: &Path) -> Result<Option<File>, LocationError> {
-    // An absent component can be created only after its existing parents pass.
-    match open_existing(
+pub(super) fn open_retained_directory(path: &Path) -> Result<File, LocationError> {
+    // Attribute-only probes do not participate in Windows' delete-sharing checks.
+    open_with_access(
         path,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
+    )
+    .map_err(|error| os_error(LocationOperation::OpenDirectory, error))
+}
+
+pub(super) fn create_directory(parent: &File, component: &OsStr) -> Result<File, LocationError> {
+    // Atomic creation retains the new child itself, without reopening its mutable name.
+    super::validate_component(component)?;
+    let mut wide: Vec<_> = component.encode_wide().collect();
+    let bytes = wide
+        .len()
+        .checked_mul(size_of::<u16>())
+        .ok_or(LocationError::PathTooLong)?;
+    let bytes = u16::try_from(bytes).map_err(|_| LocationError::PathTooLong)?;
+    let name = UNICODE_STRING {
+        Length: bytes,
+        MaximumLength: bytes,
+        Buffer: PWSTR(wide.as_mut_ptr()),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: file_handle(parent),
+        ObjectName: &name,
+        Attributes: OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
+        ..OBJECT_ATTRIBUTES::default()
+    };
+    let mut handle = HANDLE::default();
+    let mut completion = IO_STATUS_BLOCK::default();
+    let status = unsafe {
+        NtCreateFile(
+            &mut handle,
+            FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | SYNCHRONIZE,
+            &attributes,
+            &mut completion,
+            None,
+            FILE_ATTRIBUTE_NORMAL,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_CREATE,
+            FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+            None,
+            0,
+        )
+    };
+    if status.0 < 0 {
+        let code = unsafe { RtlNtStatusToDosError(status) };
+        return Err(os_error(
+            LocationOperation::CreateDirectory,
+            windows::core::Error::from_hresult(HRESULT::from_win32(code)),
+        ));
+    }
+    if handle.is_invalid() {
+        return Err(LocationError::IdentityChanged);
+    }
+    let file = unsafe { File::from_raw_handle(handle.0) };
+    if status != STATUS_SUCCESS
+        || unsafe { completion.Anonymous.Status } != STATUS_SUCCESS
+        || completion.Information != FILE_CREATED as usize
+    {
+        return Err(LocationError::IdentityChanged);
+    }
+    Ok(file)
+}
+
+pub(super) fn optional_directory(path: &Path) -> Result<Option<File>, LocationError> {
+    // Retain each present directory; absence is allowed only after its parents pass.
+    match open_with_access(
+        path,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
     ) {
         Ok(file) => Ok(Some(file)),
         Err(error)
@@ -108,10 +192,26 @@ pub(super) fn optional_file(
     path: &Path,
     operation: LocationOperation,
 ) -> Result<Option<File>, LocationError> {
+    optional_file_with_access(path, operation, FILE_READ_ATTRIBUTES)
+}
+
+pub(super) fn optional_retained_file(
+    path: &Path,
+    operation: LocationOperation,
+) -> Result<Option<File>, LocationError> {
+    optional_file_with_access(path, operation, FILE_READ_ATTRIBUTES | FILE_READ_DATA)
+}
+
+fn optional_file_with_access(
+    path: &Path,
+    operation: LocationOperation,
+    access: FILE_ACCESS_RIGHTS,
+) -> Result<Option<File>, LocationError> {
     // Only an absent file is optional; a missing parent or access failure is not.
-    match open_existing(
+    match open_with_access(
         path,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+        access,
     ) {
         Ok(file) => Ok(Some(file)),
         Err(error) if error.code() == HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0) => Ok(None),
@@ -136,7 +236,7 @@ pub(super) fn create_database(path: &Path) -> Result<File, LocationError> {
     match created {
         Ok(handle) => Ok(unsafe { File::from_raw_handle(handle.0) }),
         Err(error) if error.code() == HRESULT::from_win32(ERROR_FILE_EXISTS.0) => {
-            optional_file(path, LocationOperation::OpenDatabase)?
+            optional_retained_file(path, LocationOperation::OpenDatabase)?
                 .ok_or(LocationError::IdentityChanged)
         }
         Err(error) => Err(os_error(LocationOperation::CreateDatabase, error)),
@@ -148,7 +248,7 @@ pub(super) fn create_new_file(
     operation: LocationOperation,
     shared_write: bool,
 ) -> Result<File, LocationError> {
-    // Fresh archive outputs must never adopt a pre-existing file after a creation race.
+    // Fresh outputs must never adopt a pre-existing file after a creation race.
     let share = if shared_write {
         FILE_SHARE_READ | FILE_SHARE_WRITE
     } else {
@@ -171,6 +271,14 @@ pub(super) fn create_new_file(
 }
 
 pub(super) fn open_control(path: &Path) -> Result<File, LocationError> {
+    control_file(path, false)
+}
+
+pub(super) fn create_control(path: &Path) -> Result<File, LocationError> {
+    control_file(path, true)
+}
+
+fn control_file(path: &Path, create_new: bool) -> Result<File, LocationError> {
     // No sharing excludes another reader, writer or deleter until this gate closes.
     let wide = wide_file_path(path);
     let opened = unsafe {
@@ -179,7 +287,7 @@ pub(super) fn open_control(path: &Path) -> Result<File, LocationError> {
             GENERIC_READ.0 | GENERIC_WRITE.0,
             FILE_SHARE_MODE(0),
             None,
-            OPEN_ALWAYS,
+            if create_new { CREATE_NEW } else { OPEN_ALWAYS },
             FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
             None,
         )
@@ -246,12 +354,21 @@ pub(super) fn io_error(operation: LocationOperation, error: io::Error) -> Locati
 }
 
 fn open_existing(path: &Path, flags: FILE_FLAGS_AND_ATTRIBUTES) -> windows::core::Result<File> {
-    // Excluding delete sharing retains the inspected name until the handle closes.
+    // Metadata probes can inspect names already retained by an exclusive control handle.
+    open_with_access(path, flags, FILE_READ_ATTRIBUTES)
+}
+
+fn open_with_access(
+    path: &Path,
+    flags: FILE_FLAGS_AND_ATTRIBUTES,
+    access: FILE_ACCESS_RIGHTS,
+) -> windows::core::Result<File> {
+    // Data/list access engages sharing checks; metadata-only callers inspect identities.
     let wide = wide_file_path(path);
     let handle = unsafe {
         CreateFileW(
             PCWSTR(wide.as_ptr()),
-            FILE_READ_ATTRIBUTES.0,
+            access.0,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             None,
             OPEN_EXISTING,

@@ -4,6 +4,154 @@ This ledger prevents tested foundations from being mistaken for a finished brows
 
 ## Current checkpoint — 2026-10-11
 
+The atomic startup and retained-handle correction now pass the complete
+normal-desktop gate: 436 tests, dependency boundaries, formatting, Clippy,
+documentation tests and synthetic application smoke. Evidence is
+`target/continuation-atomic-startup-desktop-gate.log`, SHA-256
+`5654ffa30e3f5af2b8711410ea862db2d5dcb8c42b474450b294048f49ccad79`.
+The current `target/local/atlas-app.exe` SHA-256 is
+`252044439eb668680360e28009a3245e2992a754cb22d82b2dae8b6b8839982d`.
+This supersedes the pending-validation checkpoints below. The restricted-context
+gate passed all tests but timed out in smoke with watchdog code 124; its log
+remains `target/continuation-atomic-startup-full-gate.log`. The unchanged binary
+then passed normal-desktop smoke and the complete normal-desktop gate. This
+does not establish the cause or resolution of the original WebView2 crash.
+Native typing/focus acceptance remains open. No commit or merge was made.
+
+The approved atomic startup implementation is now frozen after independent
+review. Its first platform run exposed two genuine rename-protection failures:
+metadata-only handles did not enforce the intended sharing denial. The private
+guarded-open correction preserves metadata-only control/sidecar inspection,
+keeps both failing assertions and adds three compatibility regressions.
+All 60 focused platform storage tests now pass in
+`target/continuation-atomic-startup-guarded-platform-tests.log`; the initial
+55-pass/two-failure evidence remains in
+`target/continuation-atomic-startup-platform-tests.log`. Worker and full-gate
+validation are pending. This supersedes the incomplete-source notes below,
+but does not replace the last verified application binary yet.
+
+The owner approved the three Windows binding features in
+`docs/missing-primary-startup-review.md`; the usability chat has resumed
+the missing-primary startup implementation and its remaining regressions.
+Its retained recovery and session paths have independent source review, but
+the fresh-start branch deliberately fails closed pending atomic creation.
+The 13 added regressions have not been executed. This partial source state
+is not covered by the 411-test gate below and is not a usable replacement
+for the last verified binary. Only the exact three-feature amendment is now
+authorized; no new build or native run has been started for this partial work.
+
+The palette now forwards the 11 existing browser shortcuts without ending its
+event stream. Independent review caught and corrected a queued Ctrl K/L then
+Enter/Escape race: obsolete popup refocus no longer discards the retained
+identity needed by the completion event. The corrected full gate passes all
+411 tests (78 app tests), dependency checks, formatting, Clippy and synthetic
+smoke in `target/continuation-palette-refocus-gate.log`, SHA-256
+`10ddb5b7f6b9167614d710f049305859c52499855c4eb993cfe766403e945742`.
+Current `target/local/atlas-app.exe` SHA-256 is
+`4c437c976290615a00ee06287b5338b94b26267e1546002d8b307674d55cdfde`.
+Native caret/focus verification and the original crash remain unresolved.
+The preceding 409-test shortcut gate remains evidence of a test-coverage gap,
+not acceptance of its known race. No Cargo/native execution remains active.
+
+The latest shutdown-action correction retires the palette and rejects new user
+commands once closing begins, while preserving final browser metadata and
+ordered worker shutdown. Independent source review passes. The full gate passes
+407 tests (75 application tests), dependency checks, formatting, Clippy and
+synthetic app smoke in `target/continuation-shutdown-actions-gate.log`, SHA-256
+`a9a3838e16c4916f394b7aded39daee7401841ba1c82ce39aefe641813ad9e8b`.
+The latest verified `target/local/atlas-app.exe` SHA-256 is
+`2e3bc975b0b1ea894c12a4c94f5171401635324712b1e0d378f72cf558b47b9e`.
+Visual acceptance remains open. The Unicode-selected search experiment also
+passes its two focused tests in `target/continuation-unicode-selected-triplets.log`;
+the later unchanged 26-case comparison also preserves all 1,040 exact results.
+Independent timing review rejects promotion: the paired diagnostic baseline
+passes 8/26 case thresholds and the candidate 5/26, with inconsistent accented
+query results and regressions among equivalent ASCII controls. These are
+diagnostic results, distinct from the earlier production 10/26 measurement.
+Production search is unchanged; see `docs/p1-05-search.md` for full evidence.
+
+The owner requested browser-first work on October 11: make browsing usable and
+reliable before returning to plugins, Fledge, Notes or Forge. The remaining
+plans stay approved and deferred; their requirements and approval limits have
+not changed. The preceding integrated checkpoint is committed locally as
+`8239511`, with no merge or push. New investigation and corrections follow it.
+
+The continuation uses three coordinated chats for crash diagnostics,
+navigation reliability and browser usability, with independent subagent review.
+The integration chat alone runs Cargo, native harnesses and window checks.
+The independent slice audit corrects the earlier informal 20%-of-all-v1
+estimate: roughly 15–25% of the browser plan has implementation, with only
+four of forty slices fully accepted and merged. Partial-credit arithmetic is
+not effort weighting or an acceptance result. See the current
+`docs/parallel-browser-usability-review-2026-10-10.md` assessment.
+
+The first correction after that checkpoint fixes the synthetic close-page
+server's inherited nonblocking socket mode. The explicit example regression
+passes one test; the built harness then passes one normal-desktop run with all
+12 lifecycle cycles and multi-page shutdown. Evidence is
+`target/continuation-blocking-fixture-test.log`,
+`target/continuation-blocking-fixture-build.log` and
+`target/continuation-blocking-fixture-native.*`; harness SHA-256 is
+`3a8fc36f2723bba0d66a05a31bfcb35d14337eee5873b77c501b7a7966c9f651`.
+This confirms the socket defect and a corrected fixture run, not the cause of
+every older navigation failure or the original breakpoint. The send-error
+reporting and open-palette refresh corrections are independently reviewed.
+The first full-gate attempt stopped on formatting; that failure remains in
+`target/continuation-browser-first-gate.log`. After `cargo fmt --all`, the
+repeat full gate passes all 382 tests and application smoke, with no ignored
+tests, in `target/continuation-browser-first-formatted-gate.log` (SHA-256
+`5cc1618aed8eda7ece671bceeb3d4f465ff4c2996e6b150f139a57d2b0dcae68`).
+The rebuilt application SHA-256 is
+`0da392f0800e5e3b739bfeabe8122903111d38301e41a6d610168e0b882debd3`.
+
+The integration agent observed another concrete UI defect on the unchanged
+synthetic `0fe3b8da…` build: Ctrl T created a second Home tab and opened the
+palette; Ctrl W delivered to the main window closed that tab while the open
+palette retained two rows and its old count across later snapshots. The
+main window was deliberately activated by the input tool, so this is not a
+page-focused or palette-focused shortcut test. Maximizing kept the owned
+palette visible, and clicking a result dismissed it. This observation directs
+the palette refresh correction; it does not establish full resize/focus
+acceptance. The rebuilt app launched with a fresh synthetic profile, recorded
+in `target/continuation-browser-first-visible.json`, but Computer Use returned
+`failed to activate captured window` on both initial activation and the allowed
+selection-refresh retry. UI automation stopped. This is no new visual pass
+and does not establish an application failure; before/after verification is
+still required.
+
+The next independently reviewed increment adds explicit failed-start backup
+confirmation and makes smoke watchdog termination independent of stderr.
+All 70 application tests pass in
+`target/continuation-recovery-watchdog-tests.log`, including cancellation,
+stale confirmation, one-time restore and restart, and both watchdog exits
+while stderr is locked. Missing-primary preflight and visual recovery
+acceptance remain open. The complete gate then passes all 400 tests, dependency
+checks, formatting, Clippy and fresh synthetic app smoke in
+`target/continuation-recovery-watchdog-full-gate.log` (SHA-256
+`afa83cd812bae5dda7be9f1f5f68f18d9003658ed9f0ef72b40da25ead10be2e`).
+The latest verified `target/local/atlas-app.exe` SHA-256 is
+`9b2fded8f7dc79d436ddbfe15af63133a1be005645c188c98750f17fcfb36119`.
+The cached-first experiment passes correctness but remains test-only because
+paired measurements show regressions in long near-match and mixed no-match.
+
+The isolated process-role diagnostic has not run: its original build and one
+unchanged compiler-trace attempt both exit 101 while loading `gpui_macros`.
+Evidence remains in `target/continuation-process-role-build.log` and
+`target/continuation-process-role-build-trace.log`. The trace's ordinary-library
+metadata rejection precedes a normal procedural-macro fallback; it is not by
+itself the cause. No dependency, cache or security setting was changed.
+
+A single explicit-import compiler probe then exposed the hidden loader error:
+Windows Application Control blocks that exact diagnostic macro DLL with error
+4551. `target/macro-load-probe/result.json` records its unchanged SHA-256 and
+exit 1; `stderr.log` preserves the compiler diagnostic. The compiler reports
+five internal loader retries, not five agent compiler invocations. No Atlas
+application ran. The diagnostic build path stops here without a security,
+signing or cache workaround. This explains that build failure, not the original
+WebView2 breakpoint.
+
+### Preceding committed checkpoint
+
 The owner-approved stable visible “Go to …” row is implemented and reviewed;
 address selection survives asynchronous local results. The full gate
 `target/continuation-socket-close-commit-gate.log` exited zero: all 376 tests pass (54 app,

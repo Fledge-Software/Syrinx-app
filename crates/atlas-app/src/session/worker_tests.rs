@@ -11,7 +11,7 @@ use std::{
 };
 
 use atlas_search::{BlankQuery, BoostWeights};
-use atlas_store::{DirectoryLease, validate_backup};
+use atlas_store::{BackupOutcome, DirectoryLease, StoredSnapshot, validate_backup};
 use futures::Stream;
 
 use super::*;
@@ -20,7 +20,7 @@ static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 const SAVED_ADDRESS: &str = "https://saved-session.example.test/original";
 const LIVE_ADDRESS: &str = "https://live-session.example.test/latest";
 
-struct Fixture(PathBuf);
+struct Fixture(PathBuf, PathBuf);
 
 impl Fixture {
     fn new() -> Self {
@@ -35,7 +35,7 @@ impl Fixture {
             std::process::id()
         ));
         checked_io(fs::create_dir(&path));
-        Self(path)
+        Self(path.join("State"), path)
     }
 
     fn start(&self) -> (SessionHandle, UnboundedReceiver<SessionEvent>) {
@@ -43,6 +43,8 @@ impl Fixture {
     }
 
     fn cleanup(self) {
+        assert_eq!(self.0.parent(), Some(self.1.as_path()));
+        assert_eq!(self.0, self.1.join("State"));
         // Native capabilities remove only recognized backups; unknown entries prevent cleanup.
         let lease = WindowsDirectoryLease::prepare(&self.0).expect("guard owned fixture cleanup");
         let archive = lease.backup_archive().expect("native archive exists");
@@ -68,6 +70,7 @@ impl Fixture {
         }
         remove_if_present(&self.0.join("backups"), true);
         checked_io(fs::remove_dir(self.0));
+        checked_io(fs::remove_dir(self.1));
     }
 }
 
@@ -1027,6 +1030,573 @@ fn removed_saved_row_stays_removed_after_live_reopen_stale_callbacks_and_restart
     assert!(restored.created.is_empty());
     assert_eq!(restored.navigate, None);
     assert_only_live_search(&handle, &mut events, replacement, &metadata);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+const DAMAGED_RECOVERY_PRIMARY: &[u8] = b"synthetic damaged session recovery primary";
+const RECOVERY_BACKUP_TIME: i64 = 1_800_086_400;
+
+fn seed_recovery(fixture: &Fixture) -> StoredSnapshot {
+    // Two snapshots make the offered date and restored model distinguish the newest backup.
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic recovery store");
+    let store = Store::open(Arc::new(lease)).expect("open synthetic recovery store");
+    let mut model = TabModel::new();
+    let saved = model
+        .open(
+            TabKind::Web,
+            TabMetadata {
+                title: "Synthetic saved recovery page".to_owned(),
+                address: SAVED_ADDRESS.to_owned(),
+                ..TabMetadata::default()
+            },
+            Activation::Foreground,
+        )
+        .expect("create synthetic saved page");
+    model
+        .save_page(saved)
+        .expect("save synthetic recovery destination");
+    let revision = store
+        .save(0, model.snapshot())
+        .expect("save first recovery state");
+    assert!(matches!(
+        store.backup_if_due(RECOVERY_BACKUP_TIME - 86_400, true),
+        Ok(BackupOutcome::Created(_))
+    ));
+    model
+        .update_metadata(
+            saved,
+            TabMetadata {
+                title: "Synthetic latest recovery page".to_owned(),
+                address: LIVE_ADDRESS.to_owned(),
+                ..TabMetadata::default()
+            },
+        )
+        .expect("navigate synthetic saved instance");
+    let snapshot = model.snapshot();
+    let revision = store
+        .save(revision, snapshot.clone())
+        .expect("save newest recovery state");
+    assert!(matches!(
+        store.backup_if_due(RECOVERY_BACKUP_TIME, true),
+        Ok(BackupOutcome::Created(metadata)) if metadata.created_at == RECOVERY_BACKUP_TIME
+    ));
+    store.shutdown().expect("close synthetic recovery seed");
+    StoredSnapshot { revision, snapshot }
+}
+
+fn damage_recovery_primary(fixture: &Fixture) {
+    checked_io(fs::write(
+        fixture.0.join("atlas.db"),
+        DAMAGED_RECOVERY_PRIMARY,
+    ));
+}
+
+fn recovery_offer(events: &mut UnboundedReceiver<SessionEvent>) -> u64 {
+    match next_event(events) {
+        SessionEvent::RecoveryOffered(prompt) => {
+            assert_eq!(prompt.created_at, RECOVERY_BACKUP_TIME);
+            prompt.offer_id
+        }
+        event => panic!("expected a synthetic recovery offer before any state, got {event:?}"),
+    }
+}
+
+fn recovery_unavailable(events: &mut UnboundedReceiver<SessionEvent>) {
+    assert!(matches!(
+        next_event(events),
+        SessionEvent::Failure {
+            error: SessionError::RecoveryUnavailable,
+            fatal: false
+        }
+    ));
+}
+
+fn assert_unreplaced_primary(fixture: &Fixture) {
+    assert_eq!(
+        checked_io(fs::read(fixture.0.join("atlas.db"))),
+        DAMAGED_RECOVERY_PRIMARY
+    );
+    assert!(!fixture.0.join("atlas.recovery-intent").exists());
+}
+
+fn remove_preserved_recovery_bundle(fixture: &Fixture, expected_primary: Option<&[u8]>) {
+    use std::os::windows::fs::MetadataExt;
+
+    // Only a successful recovery in this exclusively created fixture owns these originals.
+    let mut bundles = Vec::new();
+    for entry in checked_io(fs::read_dir(&fixture.0)) {
+        let entry = checked_io(entry);
+        let name = entry.file_name();
+        let Some(name) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("recovery-"))
+        else {
+            continue;
+        };
+        let (stamp, sequence) = name
+            .split_once('-')
+            .expect("recognized recovery bundle name");
+        assert_eq!(stamp.len(), 32);
+        assert_eq!(sequence.len(), 16);
+        assert!(
+            stamp
+                .bytes()
+                .chain(sequence.bytes())
+                .all(|byte| byte.is_ascii_hexdigit())
+        );
+        let path = entry.path();
+        assert_eq!(path.parent(), Some(fixture.0.as_path()));
+        let metadata = checked_io(fs::symlink_metadata(&path));
+        assert!(metadata.is_dir());
+        assert_eq!(
+            metadata.file_attributes() & 0x400,
+            0,
+            "refuse reparse points"
+        );
+        bundles.push(path);
+    }
+    assert_eq!(
+        bundles.len(),
+        1,
+        "one confirmation creates one recovery bundle"
+    );
+    let bundle = &bundles[0];
+    if let Some(expected) = expected_primary {
+        assert_eq!(checked_io(fs::read(bundle.join("atlas.db"))), expected);
+    } else {
+        assert!(checked_io(fs::read_dir(bundle)).next().is_none());
+    }
+    for entry in checked_io(fs::read_dir(bundle)) {
+        let entry = checked_io(entry);
+        assert!(matches!(
+            entry.file_name().to_str(),
+            Some("atlas.db" | "atlas.db-wal" | "atlas.db-shm" | "atlas.db-journal")
+        ));
+        let path = entry.path();
+        assert_eq!(path.parent(), Some(bundle.as_path()));
+        let metadata = checked_io(fs::symlink_metadata(&path));
+        assert!(metadata.is_file());
+        assert_eq!(
+            metadata.file_attributes() & 0x400,
+            0,
+            "refuse reparse points"
+        );
+        checked_io(fs::remove_file(path));
+    }
+    checked_io(fs::remove_dir(bundle));
+}
+
+#[test]
+fn recovery_offer_waits_for_confirmation_and_shutdown_cancels_without_replacement() {
+    let fixture = Fixture::new();
+    seed_recovery(&fixture);
+    damage_recovery_primary(&fixture);
+    let (handle, mut events) = fixture.start();
+    let offer_id = recovery_offer(&mut events);
+    assert_unreplaced_primary(&fixture);
+    assert!(matches!(
+        WindowsDirectoryLease::prepare(&fixture.0),
+        Err(LocationError::StorageBusy)
+    ));
+
+    // Neither a stale confirmation nor a normal tab command can bypass the offer.
+    send(
+        &handle,
+        SessionCommand::ConfirmRecovery {
+            offer_id: offer_id.wrapping_add(1),
+        },
+    );
+    recovery_unavailable(&mut events);
+    send(
+        &handle,
+        SessionCommand::NewTab {
+            address: "https://blocked-recovery.example.test/".to_owned(),
+        },
+    );
+    recovery_unavailable(&mut events);
+    assert_unreplaced_primary(&fixture);
+    stop(handle, &mut events);
+    assert_unreplaced_primary(&fixture);
+
+    // A second worker can acquire the cancelled offer; no restoration occurred implicitly.
+    let (handle, mut events) = fixture.start();
+    let next_offer_id = recovery_offer(&mut events);
+    assert_ne!(next_offer_id, offer_id);
+    send(&handle, SessionCommand::ConfirmRecovery { offer_id });
+    recovery_unavailable(&mut events);
+    assert_unreplaced_primary(&fixture);
+    stop(handle, &mut events);
+    assert_unreplaced_primary(&fixture);
+    fixture.cleanup();
+}
+
+#[test]
+fn matching_recovery_confirmation_restores_once_and_survives_restart() {
+    let fixture = Fixture::new();
+    let expected = seed_recovery(&fixture);
+    damage_recovery_primary(&fixture);
+    let (handle, mut events) = fixture.start();
+    let offer_id = recovery_offer(&mut events);
+    assert_unreplaced_primary(&fixture);
+    send(&handle, SessionCommand::ConfirmRecovery { offer_id });
+    let restored = state(&mut events);
+    assert_eq!(restored.revision, expected.revision);
+    assert_eq!(restored.model, expected.snapshot);
+    assert!(restored.created.is_empty());
+    assert_eq!(restored.navigate, None);
+    assert!(!fixture.0.join("atlas.recovery-intent").exists());
+
+    send(&handle, SessionCommand::ConfirmRecovery { offer_id });
+    recovery_unavailable(&mut events);
+    stop(handle, &mut events);
+    let (handle, mut events) = fixture.start();
+    let restarted = state(&mut events);
+    assert_eq!(restarted.revision, expected.revision);
+    assert_eq!(restarted.model, expected.snapshot);
+    assert_eq!(restarted.previous_shutdown, ShutdownState::Clean);
+    stop(handle, &mut events);
+    remove_preserved_recovery_bundle(&fixture, Some(DAMAGED_RECOVERY_PRIMARY));
+    fixture.cleanup();
+}
+
+#[test]
+fn dropping_recovery_event_receiver_releases_offer_without_confirmation() {
+    let fixture = Fixture::new();
+    seed_recovery(&fixture);
+    damage_recovery_primary(&fixture);
+    let (handle, mut events) = fixture.start();
+    recovery_offer(&mut events);
+    disconnect_recovery(handle, events);
+    assert_unreplaced_primary(&fixture);
+    let (handle, mut events) = fixture.start();
+    recovery_offer(&mut events);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+#[test]
+fn busy_startup_remains_the_original_fatal_error_without_a_recovery_offer() {
+    let fixture = Fixture::new();
+    seed_recovery(&fixture);
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("hold synthetic storage lock");
+    let before = checked_io(fs::read(fixture.0.join("atlas.db")));
+    let (handle, mut events) = fixture.start();
+    let expected = SessionError::Location(LocationError::StorageBusy);
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::Failure { error, fatal: true } if error == expected
+    ));
+    assert!(matches!(next_event(&mut events), SessionEvent::Stopped));
+    assert_eq!(handle.join(), Err(expected));
+    assert_eq!(checked_io(fs::read(fixture.0.join("atlas.db"))), before);
+    drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn damaged_startup_without_a_backup_preserves_both_failure_and_primary() {
+    let fixture = Fixture::new();
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic empty store");
+    let store = Store::open(Arc::new(lease)).expect("open synthetic empty store");
+    store
+        .shutdown()
+        .expect("close synthetic store without backups");
+    damage_recovery_primary(&fixture);
+    let (handle, mut events) = fixture.start();
+    let error = match next_event(&mut events) {
+        SessionEvent::Failure { error, fatal: true } => error,
+        event => panic!("expected failed synthetic recovery without an offer, got {event:?}"),
+    };
+    let SessionError::RecoveryFailed { startup, recovery } = &error else {
+        panic!("expected both synthetic startup and recovery failures");
+    };
+    assert!(matches!(
+        startup.as_ref(),
+        SessionError::Store(StoreError::Database { code: Some(code), .. })
+            if code & 0xff == 26
+    ));
+    assert_eq!(
+        recovery,
+        &atlas_platform::RecoveryError::NoValidBackup.to_string()
+    );
+    assert!(matches!(next_event(&mut events), SessionEvent::Stopped));
+    assert_eq!(handle.join(), Err(error));
+    assert_unreplaced_primary(&fixture);
+    fixture.cleanup();
+}
+
+fn assert_no_recovery_event(events: &mut UnboundedReceiver<SessionEvent>) {
+    let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
+    let mut context = Context::from_waker(&waker);
+    assert!(matches!(
+        Pin::new(events).poll_next(&mut context),
+        Poll::Pending
+    ));
+}
+
+#[test]
+fn ordinary_read_failure_on_healthy_primary_never_authorizes_recovery() {
+    let fixture = Fixture::new();
+    seed_recovery(&fixture);
+    let before = checked_io(fs::read(fixture.0.join("atlas.db")));
+    let original = SessionError::Store(StoreError::Database {
+        operation: atlas_store::StoreOperation::Read,
+        code: Some(10),
+    });
+    let (commands, receiver) = mpsc::channel();
+    commands
+        .send(SessionCommand::Shutdown)
+        .expect("bound an unexpected recovery offer");
+    let (sender, mut events) = unbounded();
+    assert_eq!(
+        recovery::confirm_failed_start(&fixture.0, original.clone(), &receiver, &sender),
+        Err(SessionError::RecoveryFailed {
+            startup: Box::new(original),
+            recovery: atlas_platform::RecoveryError::HealthyPrimary.to_string(),
+        })
+    );
+    assert_no_recovery_event(&mut events);
+    assert!(matches!(receiver.try_recv(), Ok(SessionCommand::Shutdown)));
+    assert_eq!(checked_io(fs::read(fixture.0.join("atlas.db"))), before);
+    assert!(!fixture.0.join("atlas.recovery-intent").exists());
+    fixture.cleanup();
+}
+
+#[test]
+fn uncertain_cleanup_and_rollback_errors_refuse_even_a_recoverable_primary() {
+    let fixture = Fixture::new();
+    seed_recovery(&fixture);
+    damage_recovery_primary(&fixture);
+    let read = StoreError::Database {
+        operation: atlas_store::StoreOperation::Read,
+        code: Some(10),
+    };
+    let close = StoreError::Database {
+        operation: atlas_store::StoreOperation::Close,
+        code: Some(10),
+    };
+    for original in [
+        SessionError::CleanupFailed {
+            primary: Box::new(SessionError::Store(read.clone())),
+            cleanup: close.clone(),
+        },
+        SessionError::Store(StoreError::CleanupFailed {
+            primary: Box::new(read),
+            cleanup: Box::new(close),
+        }),
+        SessionError::Store(StoreError::Database {
+            operation: atlas_store::StoreOperation::Rollback,
+            code: Some(10),
+        }),
+    ] {
+        // A mistaken offer must terminate promptly, then fail the exact-error assertion.
+        let (commands, receiver) = mpsc::channel();
+        commands
+            .send(SessionCommand::Shutdown)
+            .expect("bound an unexpected recovery offer");
+        let (sender, mut events) = unbounded();
+        assert_eq!(
+            recovery::confirm_failed_start(&fixture.0, original.clone(), &receiver, &sender),
+            Err(original)
+        );
+        assert_no_recovery_event(&mut events);
+        assert!(matches!(receiver.try_recv(), Ok(SessionCommand::Shutdown)));
+        assert_unreplaced_primary(&fixture);
+    }
+    fixture.cleanup();
+}
+
+fn disconnect_recovery(handle: SessionHandle, events: UnboundedReceiver<SessionEvent>) {
+    drop(events);
+    // Retain the command sender: event receiver loss alone must release storage ownership.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !handle.worker.is_finished() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(!remaining.is_zero(), "recovery disconnect deadline expired");
+        thread::park_timeout(remaining.min(Duration::from_millis(10)));
+    }
+    assert_eq!(handle.join(), Err(SessionError::EventReceiverClosed));
+}
+
+fn recovery_backup_files(fixture: &Fixture) -> Vec<(PathBuf, Vec<u8>)> {
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard seeded backup inventory");
+    let archive = lease.backup_archive().expect("seeded backup archive");
+    let candidates = archive.candidates().expect("read seeded backup inventory");
+    assert_eq!(candidates.len(), 2);
+    let mut files = Vec::new();
+    for candidate in candidates {
+        let database = candidate.file.database_path().to_owned();
+        let marker = database.parent().expect("backup bundle").join("complete");
+        for path in [database, marker] {
+            let bytes = checked_io(fs::read(&path));
+            files.push((path, bytes));
+        }
+    }
+    files
+}
+
+fn remove_seeded_primary(fixture: &Fixture) {
+    // The seed has closed every connection; remove only this test's established primary.
+    for name in ["atlas.db-wal", "atlas.db-shm", "atlas.db-journal"] {
+        assert!(!fixture.0.join(name).exists());
+    }
+    checked_io(fs::remove_file(fixture.0.join("atlas.db")));
+    assert_primary_absent(fixture);
+}
+
+fn assert_primary_absent(fixture: &Fixture) {
+    assert!(!fixture.0.join("atlas.db").exists());
+    assert!(!fixture.0.join("atlas.recovery-intent").exists());
+}
+
+fn assert_files_unchanged(files: &[(PathBuf, Vec<u8>)]) {
+    for (path, expected) in files {
+        assert_eq!(checked_io(fs::read(path)), *expected);
+    }
+}
+
+fn refused_missing_primary(fixture: &Fixture) {
+    let expected = SessionError::Recovery(atlas_platform::RecoveryError::NoValidBackup.to_string());
+    let (handle, mut events) = fixture.start();
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::Failure { error, fatal: true } if error == expected
+    ));
+    assert!(matches!(next_event(&mut events), SessionEvent::Stopped));
+    assert_eq!(handle.join(), Err(expected));
+    assert_primary_absent(fixture);
+}
+
+#[test]
+fn missing_primary_offer_cancels_and_disconnects_without_creating_a_database() {
+    let fixture = Fixture::new();
+    seed_recovery(&fixture);
+    let retained_files = recovery_backup_files(&fixture);
+    let lifecycle = fixture.0.join("atlas.lifecycle");
+    let lifecycle_before = checked_io(fs::read(&lifecycle));
+    remove_seeded_primary(&fixture);
+
+    let (handle, mut events) = fixture.start();
+    let first_offer = recovery_offer(&mut events);
+    assert_primary_absent(&fixture);
+    assert_files_unchanged(&retained_files);
+    assert!(matches!(
+        WindowsDirectoryLease::prepare(&fixture.0),
+        Err(LocationError::StorageBusy)
+    ));
+    stop(handle, &mut events);
+    assert_primary_absent(&fixture);
+    assert_files_unchanged(&retained_files);
+    assert_eq!(checked_io(fs::read(&lifecycle)), lifecycle_before);
+
+    let (handle, mut events) = fixture.start();
+    let next_offer = recovery_offer(&mut events);
+    assert_ne!(next_offer, first_offer);
+    send(
+        &handle,
+        SessionCommand::ConfirmRecovery {
+            offer_id: first_offer,
+        },
+    );
+    recovery_unavailable(&mut events);
+    assert_primary_absent(&fixture);
+    disconnect_recovery(handle, events);
+    assert_primary_absent(&fixture);
+    assert_files_unchanged(&retained_files);
+    assert_eq!(checked_io(fs::read(&lifecycle)), lifecycle_before);
+
+    // Receiver loss releases the retained guard without installing the offered backup.
+    let (handle, mut events) = fixture.start();
+    recovery_offer(&mut events);
+    stop(handle, &mut events);
+    assert_primary_absent(&fixture);
+    assert_files_unchanged(&retained_files);
+    assert_eq!(checked_io(fs::read(&lifecycle)), lifecycle_before);
+    fixture.cleanup();
+}
+
+#[test]
+fn missing_primary_confirmation_restores_the_offered_snapshot_once() {
+    let fixture = Fixture::new();
+    let expected = seed_recovery(&fixture);
+    let backups = recovery_backup_files(&fixture);
+    remove_seeded_primary(&fixture);
+    let (handle, mut events) = fixture.start();
+    let offer_id = recovery_offer(&mut events);
+    assert_primary_absent(&fixture);
+    send(&handle, SessionCommand::ConfirmRecovery { offer_id });
+    let restored = state(&mut events);
+    assert_eq!(restored.model, expected.snapshot);
+    assert_eq!(restored.revision, expected.revision);
+    assert!(restored.created.is_empty());
+    assert_eq!(restored.navigate, None);
+    assert!(fixture.0.join("atlas.db").is_file());
+    assert!(!fixture.0.join("atlas.recovery-intent").exists());
+    send(&handle, SessionCommand::ConfirmRecovery { offer_id });
+    recovery_unavailable(&mut events);
+    stop(handle, &mut events);
+
+    let (handle, mut events) = fixture.start();
+    let restarted = state(&mut events);
+    assert_eq!(restarted.model, expected.snapshot);
+    assert_eq!(restarted.revision, expected.revision);
+    assert_eq!(restarted.previous_shutdown, ShutdownState::Clean);
+    stop(handle, &mut events);
+    assert_files_unchanged(&backups);
+    remove_preserved_recovery_bundle(&fixture, None);
+    fixture.cleanup();
+}
+
+#[test]
+fn existing_empty_state_is_refused_without_blank_initialization() {
+    let fixture = Fixture::new();
+    checked_io(fs::create_dir(&fixture.0));
+    refused_missing_primary(&fixture);
+    // A second attempt must not mistake the first attempt's empty lifecycle for freshness.
+    refused_missing_primary(&fixture);
+    fixture.cleanup();
+}
+
+#[test]
+fn missing_primary_with_invalid_backup_markers_never_falls_through_to_empty_state() {
+    let fixture = Fixture::new();
+    seed_recovery(&fixture);
+    let originals = recovery_backup_files(&fixture);
+    let malformed = b"synthetic invalid backup completion marker";
+    let mut retained_files = Vec::new();
+    for (path, original) in &originals {
+        if path.file_name().is_some_and(|name| name == "complete") {
+            checked_io(fs::write(path, malformed));
+            retained_files.push((path.clone(), malformed.to_vec()));
+        } else {
+            retained_files.push((path.clone(), original.clone()));
+        }
+    }
+    remove_seeded_primary(&fixture);
+    refused_missing_primary(&fixture);
+    assert_files_unchanged(&retained_files);
+
+    // Restore only the owned marker bytes so capability-based fixture cleanup can recognize them.
+    for (path, original) in originals {
+        if path.file_name().is_some_and(|name| name == "complete") {
+            checked_io(fs::write(path, original));
+        }
+    }
+    fixture.cleanup();
+}
+
+#[test]
+fn healthy_existing_primary_starts_directly_with_its_saved_state() {
+    let fixture = Fixture::new();
+    let expected = seed_recovery(&fixture);
+    let (handle, mut events) = fixture.start();
+    let restored = state(&mut events);
+    assert_eq!(restored.model, expected.snapshot);
+    assert_eq!(restored.revision, expected.revision);
+    assert_eq!(restored.previous_shutdown, ShutdownState::Clean);
+    assert!(restored.created.is_empty());
+    assert_eq!(restored.navigate, None);
     stop(handle, &mut events);
     fixture.cleanup();
 }

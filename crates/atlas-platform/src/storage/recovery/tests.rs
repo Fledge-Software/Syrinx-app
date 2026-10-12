@@ -230,6 +230,29 @@ fn every_interrupted_stage_requires_a_new_offer_and_can_finish_the_same_source()
     }
 }
 
+#[test]
+fn guarded_startup_resumes_the_exact_pending_source_before_normal_open() {
+    for completed_moves in [0, 4, 5] {
+        let fixture = Fixture::new();
+        let backups = seeded(&fixture, 1);
+        damage(&fixture, true);
+        let offer = offer_recovery(&fixture.root, &DeletionLog::default())
+            .expect("initial synthetic offer");
+        interrupt(offer, completed_moves);
+        let crate::StartupStorage::Recovery(renewed) =
+            crate::prepare_startup(&fixture.root, &DeletionLog::default())
+                .expect("guarded startup must reconcile pending intent")
+        else {
+            panic!("pending recovery must require confirmation even after installation");
+        };
+        assert_eq!(renewed.metadata(), backups[0].0);
+        renewed
+            .confirm()
+            .expect("confirm the same synthetic source");
+        restored(&fixture, &backups[0].1);
+    }
+}
+
 fn interrupt(offer: RecoveryOffer, completed_moves: usize) {
     let bundle = RecoveryBundle::create(&offer.prepared).expect("create synthetic recovery bundle");
     let stage = bundle

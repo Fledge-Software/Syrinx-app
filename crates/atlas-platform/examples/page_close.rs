@@ -403,12 +403,7 @@ fn serve(listener: TcpListener, stopping: Arc<AtomicBool>) -> Result<(), String>
 }
 
 fn respond(mut stream: TcpStream) -> Result<(), String> {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .map_err(|error| io_error("bound synthetic request read", error))?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(1)))
-        .map_err(|error| io_error("bound synthetic response write", error))?;
+    configure_stream(&stream)?;
     let mut request = [0u8; 4_096];
     let mut length = 0;
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -446,6 +441,19 @@ fn respond(mut stream: TcpStream) -> Result<(), String> {
         .map_err(|error| io_error("send synthetic response", error))
 }
 
+fn configure_stream(stream: &TcpStream) -> Result<(), String> {
+    // Windows accepts inherit nonblocking mode; the timeouts below require blocking I/O.
+    stream
+        .set_nonblocking(false)
+        .map_err(|error| io_error("configure synthetic request blocking reads", error))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|error| io_error("bound synthetic request read", error))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(1)))
+        .map_err(|error| io_error("bound synthetic response write", error))
+}
+
 fn io_error(operation: &str, error: io::Error) -> String {
     format!(
         "{operation} failed ({:?}, code {:?}).",
@@ -458,5 +466,45 @@ fn combine(primary: Result<(), String>, cleanup: Result<(), String>) -> Result<(
     match (primary, cleanup) {
         (Ok(()), result) | (result, Ok(())) => result,
         (Err(primary), Err(cleanup)) => Err(format!("{primary} Cleanup also failed: {cleanup}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Duration, Ipv4Addr, Read, TcpListener, TcpStream, configure_stream, io};
+
+    #[test]
+    fn accepted_stream_waits_for_request_data_after_configuration() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .expect("bind synthetic stream-mode listener");
+        listener
+            .set_nonblocking(true)
+            .expect("configure synthetic listener polling");
+        let address = listener
+            .local_addr()
+            .expect("read synthetic listener address");
+        // Keep the peer open and silent until both reads finish, so neither can observe EOF.
+        let client = TcpStream::connect(address).expect("connect synthetic silent client");
+        let (mut stream, _) = listener.accept().expect("accept synthetic silent client");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("bound the unconfigured stream probe");
+        let mut byte = [0u8; 1];
+
+        // An inherited nonblocking read returns immediately even though the client remains open.
+        let unconfigured = stream
+            .read(&mut byte)
+            .expect_err("no request bytes were sent");
+        assert_eq!(unconfigured.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(unconfigured.raw_os_error(), Some(10035));
+
+        // Exercise the same setup used by respond, without relying on an elapsed-time threshold.
+        configure_stream(&stream).expect("configure synthetic accepted stream");
+        let configured = stream
+            .read(&mut byte)
+            .expect_err("silent client must time out");
+        assert_eq!(configured.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(configured.raw_os_error(), Some(10060));
+        drop(client);
     }
 }

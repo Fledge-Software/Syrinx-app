@@ -2000,3 +2000,349 @@ fails. Historical full-benchmark timing differences do not isolate a speedup.
 All 160 search unit tests pass in the combined gate, but Windows blocks the
 separate public matcher-test executable with error 4551; no whole-gate pass
 or WebView2 crash resolution is claimed.
+
+### Next bounded proposal — 2026-10-11
+
+Evaluate the existing test-only group-bound cache before adding another search
+algorithm. Production `Catalogue::bound_candidates` still computes both field
+score bounds for every visible matching row. The preserved
+`target/continuation-highlight-traces-stages.log` attributes the broad query's
+median sample to 4.632 ms in membership/candidates, 2.686 ms in heap/scoring and
+0.067 ms in highlights, with 100,000 candidates but only four original field
+scores computed. This older diagnostic supports removing repeated candidate
+work; it does not isolate bound arithmetic or measure the current narrowed
+projection. The latest complete production report remains 10/26 under D48.
+
+`candidate.rs::GroupBoundCache` and
+`catalogue/range_index/tests/bound_reuse.rs` already implement a private,
+query-local comparison. They reuse identical conservative field bounds through
+existing group IDs while leaving row counts, boosts, candidate order, exact
+scoring and highlights unchanged. They do not activate the range index.
+The preserved `target/continuation-socket-close-commit-gate.log` records all four
+bound-reuse tests passing, but no standalone timing output was found among the
+target-root logs reviewed. Cheap bound arithmetic competes with allocation,
+slot lookup and branching, so reuse counts alone cannot establish a speedup.
+
+The concrete next action belongs to the integration chat's serialized queue:
+
+```powershell
+cargo test -p atlas-search --profile local --offline --locked catalogue::range_index::tests::bound_reuse -- --nocapture --test-threads=1
+```
+
+Preserve the existing diagnostic first: fourteen queries, two fixtures, two
+modes, complete production/exhaustive equality and identical candidate bounds.
+Its twenty-result, five-sample timings remain diagnostic. If they support the
+cache, the smallest follow-up implementation assignment is `candidate.rs` and
+`catalogue.rs`, with `bound_reuse.rs` retaining the uncached oracle and adding
+the same paired comparison at fifty results. Keep existing tests for digit
+bypass, Unicode/NUL, long fields, malformed/recycled group IDs, extreme boosts,
+scopes, zero limits and mutations. No promotion is authorized by this proposal.
+
+Before retaining a production change, require independent review, focused tests,
+the full gate and the unchanged 26-case complete-query benchmark with exact
+integer checksum/count parity. Retain every failed or regressed result. D48
+completion still needs its prescribed three fresh-process acceptance runs; a
+small measured improvement does not complete P1-05. No benchmark, build or source
+implementation ran during this read-only diagnosis, and historical records above
+remain intact.
+
+### Bound-reuse diagnostic result — 2026-10-11
+
+The integration chat ran the isolated comparison in
+`target/continuation-bound-reuse-browser-first.log`, SHA-256
+`360dbe46cbb324d837d431e3e847fd80cafa4c5d5f1179f2f0f506bf770401d7`.
+All four focused tests passed in 19.24 seconds; 160 other search tests and five
+public matcher tests were filtered out. All 56 expected case/fixture/mode rows
+are present. Every pair preserves total field-bound requests, original-mode
+reuse is zero, and the test's candidate-bound and complete-result assertions
+passed. The complete 28-pair table, including min/max, median differences and
+work counts, is `target/continuation-bound-reuse-browser-first-analysis.md`.
+
+Keep the cache test-only. Existing/mixed broad medians improve from
+8.518/13.374 ms to 7.858/12.213 ms, and word improves from 3.928/12.700 ms to
+3.495/11.695 ms. However, existing composed-accent rises from 10.712 to
+11.924 ms despite replacing 197,820 bound calculations with reuse. Existing
+long-near-match remains essentially unchanged at 12.601 versus 12.650 ms
+despite 19,927 reuses. Mixed typed-two also rises slightly, from 10.951 to
+11.016 ms. Reduced work does not consistently reduce complete query time.
+
+Controls further limit causal interpretation: existing/mixed no-match medians
+fall from 1.945/1.874 to 1.631/1.591 ms with zero bound requests, while mixed
+uppercase rises from 4.417 to 5.215 ms with zero requests. These differences
+cannot be attributed to saved bound calculations; timing variation and cache
+setup/path overhead remain possible contributors. Do not average these controls
+or regressions away to claim a speedup.
+
+The timed path includes query setup, complete scope counts, boosts, exact
+ranking, highlights and owned results, but uses twenty returned hits. Each
+printed work count belongs to its mode's independently selected median-total
+sample. Only min/median/max are retained in the log, so paired differences,
+variance, p95 and statistical significance cannot be reconstructed. Under the
+predeclared criteria this is mixed, insufficient evidence for production
+promotion, not a correctness rejection or D48 acceptance. No production source
+changed; the unchanged full benchmark remains 10/26.
+
+### Cached-first membership experiment — 2026-10-11
+
+The next narrow experiment removes repeated presence-mask work before an
+already-known membership result. Production `GroupedMembership` checks the
+field mask before consulting its query-local group memo. A populated memo is
+already an exact true/false answer for digit-free queries and equivalent field
+groups; rechecking the conservative mask cannot improve that answer. This
+targets per-row membership work identified in the preserved candidate profiles,
+separately from the inconclusive bound-cache experiment above.
+
+The test-only alternate entry point preserves digit-count rejection first. It
+uses only populated, in-bounds memo slots; cached false continues to the other
+field, while cached true accepts the row. Missing, cold and malformed IDs follow
+the original mask-first path, preserving cases where a mask rejects before ID
+validation. Numeric queries and unsupported budgets retain their existing
+behavior. No memo survives a query or a group mutation. Independent guard review
+supports this equivalence; runtime validation is pending.
+
+Only test-only code is added in `catalogue/membership.rs`, its new
+`membership/cached_first_tests.rs`, the strategy wiring in `catalogue.rs`, and
+`catalogue/range_index/tests/membership_order.rs` with its private declaration.
+Existing production method bodies are unchanged. The full-query adapter changes
+only the membership call and retains original counts, bounds, boosts, exact
+scoring and highlights. Focused regressions cover both fields, masks and invalid
+IDs, Unicode/NUL, digit variants, unsupported paths, scopes, limits, boosts and
+mutation. The original production and exhaustive results remain oracles.
+
+The diagnostic uses the unchanged two 100,000-row fixtures and fourteen queries
+with fifty returned hits, two warmups and five retained alternating same-generation
+pairs. It prints all 140 individual pairs in nanoseconds plus 56 mode summaries.
+Timing includes fresh memo preparation/cleanup and complete owned results;
+fixture revisions, equality assertions and returned-result destruction are
+outside timing. Warm cached fields may save work, but cold or mask-rejected
+fields may incur an extra lookup. Neither a speedup nor production promotion is
+claimed. The integration chat exclusively owns serialized execution.
+
+Final independent source review found no actionable issue in the frozen
+experiment. Six focused helper regressions and two full-query tests await
+execution. Scoped formatting and whitespace checks pass; no Cargo command or
+performance measurement ran in this implementation chat. Run the helper filter
+`catalogue::membership::cached_first_tests` first, then
+`catalogue::range_index::tests::membership_order`, with the optimized local
+profile, locked/offline dependencies, captured output and one test thread.
+
+### Cached-first paired results — 2026-10-11
+
+The integration chat ran validation with no competing Cargo or native run.
+All six helper regressions passed in
+`target/continuation-cached-first-correctness.log` (SHA-256
+`0ca02d1498fdfe842d758e00a210d47fc5cc115564e21e3a967d1bfc6a42fcc2`).
+Both full-query tests passed in 16.57 seconds in
+`target/continuation-cached-first-membership-order.log` (SHA-256
+`4a5cb52d8b536d6baad90c009889758a4fb850df13f9a555fb0a78ef0a1685a2`).
+The commands filtered out the remaining search tests and all five public matcher
+tests; these are focused passes, not a new full gate.
+
+Independent analysis verifies 140 unique raw pairs, all five pass indices and
+the alternating order for each of 28 case/fixture combinations. All 56 summaries
+match their raw extrema and medians within printed rounding. The test assertions
+confirm complete production/exhaustive equality, including counts, scores,
+ordering, original strings, highlights and generation. The complete comparison
+is `target/continuation-cached-first-paired-analysis.md`; it includes paired
+median differences and separates the two execution orders.
+
+Keep the unconditional cached-first experiment test-only. Existing-corpus
+typed-two, typed-three, word, uppercase, CJK and emoji improve in all five
+pairs, so this is not simply a case of the second mode always winning. However,
+existing long-near-match loses all five pairs, with a paired median increase
+of 0.918 ms; mixed no-match also loses all five, increasing 0.466 ms. Both
+regressions persist in each execution order. The latter is a zero-result query,
+not proof of zero memo work: this experiment does not instrument cache hits.
+
+Separate mode medians would conceal some outcomes. Existing long-match appears
+to improve from 7.667 to 7.017 ms, yet only two pairs improve and its paired
+median increases 0.520 ms. Mixed typed-three similarly improves its mode median
+from 10.978 to 10.474 ms while its paired median increases 0.112 ms. Numeric
+rare-identity bypasses memo reuse but still changes by paired medians of
++0.034/+0.048 ms for existing/mixed fixtures; timing and alternate-path overhead
+cannot be separated from that control alone.
+
+For original-first/cached-first-first order, existing-fixture improvement counts
+are 31/42 and 20/28; mixed-fixture counts are 24/42 and 17/28. These pooled counts
+do not erase per-case losses. Five pairs cannot establish D48 p95, significance
+or repeatability across processes. The evidence rejects unconditional production
+adoption at this checkpoint. Any narrower proposal must first explain, from
+source, how it avoids added cold/mask-rejected lookup cost while retaining the
+same guards and errors; do not select query categories merely because they won
+this run. No production source or acceptance criterion changed.
+
+### Unicode-selected membership follow-up — 2026-10-11
+
+The integration chat's subsequent unchanged-source full gate passed all 400
+tests and application smoke in `target/continuation-recovery-watchdog-full-gate.log`.
+That validates the prior test-only experiment's integration, not its performance.
+
+The next authorized test-only comparison selects cached-first membership once
+per query only when the query is non-ASCII. This guard has a source reason:
+`AsciiPresence::new` produces no presence mask for such queries, and grouped
+fields with an active memo bypass the separate projection filter. Their original
+presence-mask gate therefore cannot reject. ASCII queries retain the old path,
+avoiding an added memo probe before a potentially useful rejection. Ungrouped
+fields still use the original projection and matching path on a cache miss.
+Independent review confirmed these guards; this is not a query-string exception
+chosen to hide a benchmark failure.
+
+The existing original and unconditional cached-first variants remain intact.
+New tests in `catalogue/range_index/tests/membership_order.rs` compare all three
+modes through the complete query path. Mode selection is timed; all modes use
+the existing strategy and helper. Production methods, helper guards, dependencies
+and public APIs remain unchanged. The selected mode must preserve complete results
+under every scope, limits, boosts, supported and fallback budgets, and mutations.
+
+The new diagnostic keeps the two fixtures, fourteen queries and fifty-result
+limit. After two warmup triplets, it retains six same-generation triplets,
+cycling all six permutations of the three modes. Each mode occupies each timing
+position twice, and each pair appears in either order three times. It prints
+168 raw triplets with order and generation, plus 84 summaries. Six-sample medians
+average the central two values; they remain diagnostic, not D48 p95. ASCII
+selected-versus-original comparisons are controls: both take the old membership
+path, so their timing differences cannot establish a shortcut benefit. The
+integration chat owns all execution; no new timing outcome is claimed here.
+
+Final independent source review passed the frozen two-test addition. Scoped
+formatting and whitespace checks passed, with no direct generic frizbee calls
+added. The selected mode is algorithmically equivalent to original on ASCII
+queries and to unconditional cached-first on Unicode queries; differences within
+those equivalent comparisons measure selection overhead and variation, not a new
+matching algorithm. Runtime validation remains pending. The exact isolated command
+is:
+
+```powershell
+cargo test -p atlas-search --profile local --offline --locked catalogue::range_index::tests::membership_order::unicode_selected -- --nocapture --test-threads=1
+```
+
+### Unicode-selected triplet results — 2026-10-11
+
+Both focused tests passed in 21.33 seconds in
+`target/continuation-unicode-selected-triplets.log`, SHA-256
+`bc2d639a67d386a619834ad2184759010123601219024f75f0ac86e36eaa46c9`.
+The run filtered out 172 other search tests and all five public matcher tests;
+it is not a new full gate. Two independent analyses and the coordinating review
+verified 168 unique triplets, all six permutations for every case/fixture,
+balanced positions and pairwise order, and all 84 summaries against raw timings.
+The passing tests retain complete production/exhaustive result equality.
+`target/continuation-unicode-selected-triplets-analysis.md` contains all 28
+comparisons, paired differences, equivalent-mode comparisons and order splits.
+
+Unicode-selected beats original in 43 of 48 Unicode samples. Each of the six
+execution orders improves seven or eight of its eight Unicode comparisons;
+the median paired improvement by order ranges from 0.689 to 1.013 ms. Existing
+CJK and emoji, and all four mixed-fixture Unicode cases, improve in all six
+samples. Their paired median changes are respectively -0.369, -0.807, -1.184
+(mixed composed), -1.487 (mixed decomposed), -1.085 and -0.985 ms.
+
+Existing decomposed-accent improves four of six samples, with a paired median
+change of -1.506 ms. Existing composed-accent remains inconclusive: three of six
+improve, paired median change is -0.082 ms, and separate mode medians increase
+from 10.651 to 10.761 ms. The selected-original order split reverses sign for
+that case. Do not describe every Unicode workload as improved.
+
+The algorithm-equivalent controls are approximately centered in aggregate:
+Unicode selected versus unconditional cached-first improves 25/48 samples with
+pooled paired median -0.042 ms; ASCII selected versus original improves 63/120
+with median -0.048 ms. However, their individual differences span
+-3.359 to +5.385 ms and -7.793 to +4.152 ms respectively. Those outliers limit
+claims about small individual changes. Control differences are timing variation
+or selection/path overhead, not a membership shortcut gain.
+
+Keep source test-only pending review. Unlike unconditional adoption, the guarded
+candidate now has a source-supported boundary and a Unicode benefit that survives
+balanced execution order. Recommend retaining it for a reviewed comparison over
+the complete unchanged 26-case workload, including all ASCII controls and both
+accent cases, rather than selecting only winning cases. The independent challenge
+also emphasizes that the existing accent results need confirmation. This is a
+recommendation for the integration owner, not production promotion: six samples
+in one process establish neither D48 p95 nor repeatability nor zero ASCII
+overhead. The production benchmark remains 10/26, and no production code changed.
+
+### Complete-workload comparison prepared — 2026-10-11
+
+The authorized diagnostic now reuses the actual benchmark workload through the
+private source module `crates/xtask/src/benchmark/workload.rs`. Its corpus
+construction, insertion permutation, case texts/scopes, policy, reference time,
+generation refresh and constants were mechanically extracted from `benchmark.rs`.
+Both consumers import the same definitions; no copy of the fixture, new dependency
+or public search API is introduced. A shared private `case_index` preserves the
+existing rotation expression. Before/after source review found the moved function
+bodies identical, with the original benchmark loop changing only that helper call.
+Its validation, checksums, timing boundaries, JSON output and acceptance logic
+remain unchanged.
+
+The new `atlas-search` test-only `catalogue/acceptance_comparison.rs` compares
+actual production `Catalogue::query` with the Unicode-selected test strategy.
+It retains all 100,000 rows, 26 cases, fifty results, five warmup passes and forty
+measured passes. Rotation resets after warmups exactly as in the benchmark.
+Each case pair receives one revision, so both modes see the same generation;
+pass parity gives each mode twenty first runs per case. All 1,040 measured pairs
+are retained and printed after measurement, including integer nanoseconds,
+generation, order, all scope counts and hit counts. Complete `SearchResults`
+equality checks original text, scores, ranking, counts and highlights outside
+timing. The first warmup also compares every case with the exhaustive oracle.
+
+This is a paired diagnostic, not a replacement for the unchanged acceptance
+command or its three fresh-process requirement. It intentionally retains timing
+failures as data rather than failing its correctness test on a slow case. The
+preserved raw samples permit per-case nearest-rank p95, maximum and paired/order
+analysis afterward. No production search path has changed, and no runtime result
+is claimed for this new source. Root execution commands are:
+
+```powershell
+cargo test -p xtask --profile local --offline --locked benchmark::tests -- --test-threads=1
+cargo test -p atlas-search --profile local --offline --locked catalogue::acceptance_comparison::unicode_selected_unchanged_acceptance_workload_comparison -- --nocapture --test-threads=1
+```
+
+Independent source review passed the extraction and complete comparison. Scoped
+formatting and whitespace checks passed; compilation and runtime validation
+remain pending exclusively with the integration chat. The frozen experiment
+adds no direct generic frizbee calls and leaves the earlier diagnostics intact.
+
+### Complete-workload comparison result — 2026-10-11
+
+All seven existing benchmark regressions passed in
+`target/continuation-shared-workload-tests.log`, SHA-256
+`13e27c29faa8e7c6a152e6b3529ccb5441cbabb43a87186aa7bb10f7084285bf`.
+The complete comparison passed its correctness test in 19.96 seconds in
+`target/continuation-unicode-full-comparison.log`, SHA-256
+`ae4b10d9c6476566c4ad90d8d4276e4b95194dec6cfc2fe83ab1bfc3ee064b66`.
+It filtered out 174 other search tests and five public matcher tests. This is
+focused correctness evidence, not a new full gate or a performance pass.
+
+Two independent analyses and the coordinating review verified all 1,040 unique
+case/pass pairs, forty samples and twenty first runs per mode for every case,
+the unchanged case rotation, and contiguous generations 100131 through 101170.
+Scope count bounds and limited hit counts are valid. The passing test establishes
+complete result equality on every pair and exhaustive equality during the first
+warmup. All 26 p95/max/order comparisons are preserved in
+`target/continuation-unicode-full-comparison-analysis.md`.
+
+Do not promote this candidate. With nearest-rank p95 taken from sample 38 of 40
+and the unchanged strict 5 ms limit, the paired diagnostic yields 8/26 passing
+baseline cases and 5/26 candidate cases. Highest p95 is 18.0562 versus 17.5281 ms;
+worst samples are 19.8957 versus 19.6607 ms. The candidate improves nine case p95s
+and eight paired case medians, which does not outweigh the remaining failures.
+These diagnostic verdicts do not replace the historical production benchmark's
+10/26 record or prove a production regression between runs.
+
+CJK improves in 37/40 pairs, with p95 4.6193 to 3.5488 ms; emoji improves in 36/40,
+with p95 4.1675 to 3.0485 ms. Both benefits persist in either execution order.
+Composed-accent improves 28/40 pairs but its p95 barely changes, 15.6680 to
+15.6125 ms. Its paired median is -0.071 ms when baseline runs first versus
+-1.608 ms when candidate runs first. Decomposed-accent improves only 22/40 pairs
+and its p95 worsens from 15.1061 to 16.3135 ms. General Unicode tail improvement
+is therefore not established.
+
+ASCII semantic controls improve only 380/880 pairs, with positive paired median
+changes in eighteen of twenty-two cases. Address-only, tabs-scope and uppercase
+lose their baseline passing verdicts: respectively 4.9883 to 5.0747, 4.9235 to
+5.4703, and 4.8970 to 5.2451 ms. The candidate uses a separate compiled test
+adapter, so these differences cannot be attributed solely to Unicode selection.
+Adapter/code-generation effects and timing variation remain unresolved. Preserve
+this negative result rather than promoting the gate or restricting evaluation
+to CJK and emoji. Any future implementation proposal must address that limitation
+before another production decision. No production search code changed; D48 and
+its three-process acceptance requirement remain unmet.
