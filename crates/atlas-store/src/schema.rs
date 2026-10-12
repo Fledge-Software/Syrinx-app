@@ -9,7 +9,7 @@ use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x4154_4c53;
-pub(crate) const SCHEMA_VERSION: i64 = 1;
+pub(crate) const SCHEMA_VERSION: i64 = 2;
 
 const SAVED_TABLE: &str = "CREATE TABLE saved_pages (
     id BLOB PRIMARY KEY NOT NULL CHECK(length(id) = 8 AND id != zeroblob(8)),
@@ -79,9 +79,12 @@ pub(crate) fn prepare_writer(
         .map_err(|error| database_error(StoreOperation::Configure, error))?;
 
     // The application marker, all tables and the initial state share the migration transaction.
-    if new_database {
+    {
         let sql = initial_schema();
-        let migrations = Migrations::new(vec![M::up(&sql).foreign_key_check()]);
+        let migrations = Migrations::new(vec![
+            M::up(&sql).foreign_key_check(),
+            M::up(crate::permissions::TABLE).foreign_key_check(),
+        ]);
         apply_migrations(connection, &migrations)?;
         crate::records::load(connection)?;
     }
@@ -188,7 +191,7 @@ fn inspect_identity(connection: &Connection) -> Result<bool, StoreError> {
     if version > SCHEMA_VERSION {
         return Err(StoreError::FutureSchema { version });
     }
-    if version != SCHEMA_VERSION {
+    if !(1..=SCHEMA_VERSION).contains(&version) {
         return Err(StoreError::SchemaMismatch);
     }
     Ok(false)
@@ -227,11 +230,17 @@ pub(crate) fn apply_migrations(
 
 fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
     // Match the owned schema exactly; a copied marker alone does not identify an Atlas database.
-    let expected = [
+    let mut expected = vec![
         ("live_tabs", LIVE_TABLE),
         ("saved_pages", SAVED_TABLE),
         ("session_state", STATE_TABLE),
     ];
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|error| database_error(StoreOperation::InspectSchema, error))?;
+    if version >= 2 {
+        expected.push(("site_permissions", crate::permissions::TABLE));
+    }
     let mut statement = connection
         .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name")
         .map_err(|error| database_error(StoreOperation::InspectSchema, error))?;

@@ -6,6 +6,9 @@ mod lifecycle;
 #[path = "page_close/popups.rs"]
 mod popups;
 
+#[path = "page_close/permissions.rs"]
+mod permissions;
+
 use std::{
     fs,
     io::{self, Read, Write},
@@ -56,7 +59,7 @@ fn main() -> ExitCode {
     let watchdog = match thread::Builder::new()
         .name("atlas-close-harness-deadline".into())
         .spawn(
-            move || match cancellation.recv_timeout(Duration::from_secs(120)) {
+            move || match cancellation.recv_timeout(Duration::from_secs(180)) {
                 Ok(()) => {}
                 Err(error) => {
                     eprintln!("Synthetic page-close harness deadline failed: {error}.");
@@ -101,7 +104,17 @@ fn run() -> Result<(), String> {
     if popup_result.is_ok() {
         println!("Synthetic popup opener, message reply and native page focus passed.");
     }
-    combine(combine(result, popup_result), server.stop())
+    let permission_result = reserve_profile()
+        .and_then(|profile| run_browser(profile, &server.url, permissions::exercise));
+    if permission_result.is_ok() {
+        println!(
+            "Synthetic permission deny, allow, repeated prompt and default notification UI passed."
+        );
+    }
+    combine(
+        combine(combine(result, popup_result), permission_result),
+        server.stop(),
+    )
 }
 
 fn reserve_profile() -> Result<PathBuf, String> {
@@ -452,7 +465,9 @@ fn respond(mut stream: TcpStream) -> Result<(), String> {
             Err(error) => return Err(io_error("read synthetic request", error)),
         }
     }
-    let page = popups::response(&request[..length]).unwrap_or(PAGE);
+    let page = popups::response(&request[..length])
+        .or_else(|| permissions::response(&request[..length]))
+        .unwrap_or(PAGE);
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",
         page.len()

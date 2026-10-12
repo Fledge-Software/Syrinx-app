@@ -2,6 +2,7 @@
 
 mod environment;
 mod page;
+mod permissions;
 mod popups;
 
 use std::{
@@ -56,17 +57,43 @@ pub enum BrowserShortcut {
 }
 
 pub enum BrowserCommand {
-    Create { id: u64, url: String },
-    AdoptPopup { request: u64, id: u64 },
-    CancelPopup { request: u64 },
-    Navigate { id: u64, url: String },
-    Close { id: u64 },
+    ResolvePermission {
+        id: u64,
+        request: u64,
+        allowed: bool,
+    },
+    Create {
+        id: u64,
+        url: String,
+    },
+    AdoptPopup {
+        request: u64,
+        id: u64,
+    },
+    CancelPopup {
+        request: u64,
+    },
+    Navigate {
+        id: u64,
+        url: String,
+    },
+    Close {
+        id: u64,
+    },
     ShowActive(Option<u64>),
     Resize(PageBounds),
-    Back { id: u64 },
-    Forward { id: u64 },
-    Reload { id: u64 },
-    Focus { id: u64 },
+    Back {
+        id: u64,
+    },
+    Forward {
+        id: u64,
+    },
+    Reload {
+        id: u64,
+    },
+    Focus {
+        id: u64,
+    },
     Shutdown,
 }
 
@@ -77,6 +104,16 @@ impl fmt::Debug for BrowserCommand {
 }
 
 pub enum BrowserEvent {
+    PermissionRequested {
+        id: u64,
+        request: u64,
+        uri: String,
+        kind: atlas_store::PermissionKind,
+    },
+    PermissionFinished {
+        id: u64,
+        request: u64,
+    },
     Ready,
     Created {
         id: u64,
@@ -166,6 +203,7 @@ pub enum BrowserError {
     UnknownTab,
     CreatePage,
     Popup,
+    Permission,
     Settings,
     EventRegistration,
     Navigation,
@@ -490,7 +528,8 @@ fn dispatch(message: MSG) {
 impl BrowserCommand {
     fn tab_id(&self) -> Option<u64> {
         match self {
-            Self::AdoptPopup { id, .. }
+            Self::ResolvePermission { id, .. }
+            | Self::AdoptPopup { id, .. }
             | Self::Create { id, .. }
             | Self::Navigate { id, .. }
             | Self::Close { id }

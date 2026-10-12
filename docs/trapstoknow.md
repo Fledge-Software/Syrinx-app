@@ -12,6 +12,22 @@ you found it in the commit message, not here.
 
 ## Page tabs: WebView2 through wry
 
+- **A consent click grants a replacement prompt.** Capture the displayed
+  tab/request identity in each callback and give each prompt's buttons distinct
+  element IDs. Reject a delayed click after navigation, tab change or a new
+  request. Also disable WebView2 permission persistence with `SavesInProfile`
+  false; otherwise a one-shot choice becomes durable outside Atlas's store.
+  Source: P1-12 independent review, stale-action regression and native fixture
+  in `docs/p1-12-permissions.md`.
+
+- **The original lifecycle fixture sometimes times out during navigation.**
+  Its fixture-navigation wait has failed before popups and during repeated
+  cycles. P1-12's run passed, which does not establish a fix. Preserve its
+  assertions and deadlines, record the individual suite result, and keep the
+  original timeout separate from new slice failures. The owner explicitly
+  authorized P1-12 through P1-14 despite this pre-existing intermittent failure.
+  Sources: `docs/fixture-transport-timing-review.md` and `docs/p1-11-popups.md`.
+
 - **A native fixture rejects popup focus before trying it.** Windows may
   deny `SetForegroundWindow` for a background process even though WebView2's
   `MoveFocus` succeeds. Keep foreground denial diagnostic and require the

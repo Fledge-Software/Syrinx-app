@@ -6,7 +6,9 @@ pub mod deletion;
 mod engine;
 mod error;
 mod location;
+mod permissions;
 mod records;
+pub use permissions::PermissionKind;
 mod schema;
 
 pub use backup::{BackupOutcome, validate_backup, validate_database};

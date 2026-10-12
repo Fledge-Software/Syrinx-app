@@ -4,6 +4,7 @@ mod home_palette;
 mod navigation_intents;
 mod navigation_status;
 mod page_lifecycle;
+mod permissions;
 mod popups;
 mod recovery;
 
@@ -91,6 +92,7 @@ struct PalettePopup {
 }
 
 pub struct BrowserView {
+    permissions: Vec<permissions::Prompt>,
     model: TabModelSnapshot,
     session_revision: Option<u64>,
     recovery: Option<recovery::RecoveryCard>,
@@ -130,6 +132,7 @@ impl BrowserView {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut view = Self {
+            permissions: Vec::new(),
             model: TabModelSnapshot::default(),
             session_revision: None,
             recovery: None,
@@ -307,6 +310,11 @@ impl BrowserView {
                     self.open_palette(false, window, cx);
                 }
             }
+            SessionEvent::Permission {
+                id,
+                request,
+                result,
+            } => self.permission_result(id, request, result),
             SessionEvent::PopupRejected { request } => {
                 self.page_command(BrowserCommand::CancelPopup { request });
             }
@@ -365,6 +373,15 @@ impl BrowserView {
             self.message = message.to_owned();
         }
         match event {
+            BrowserEvent::PermissionRequested {
+                id,
+                request,
+                uri,
+                kind,
+            } => self.permission_requested(id, request, &uri, kind),
+            BrowserEvent::PermissionFinished { id, request } => {
+                self.permission_finished(id, request)
+            }
             BrowserEvent::Ready => {
                 self.browser_ready = true;
                 self.resize_pages(window);
@@ -941,10 +958,15 @@ impl BrowserView {
         let scale = window.scale_factor();
         let bounds = (
             ((SIDEBAR_WIDTH + 8.) * scale) as i32,
-            ((TOOLBAR_HEIGHT + 8.) * scale) as i32,
+            ((TOOLBAR_HEIGHT + self.permission_height() + 8.) * scale) as i32,
             ((f32::from(viewport.width) - SIDEBAR_WIDTH - 16.).max(1.) * scale) as u32,
-            ((f32::from(viewport.height) - TOOLBAR_HEIGHT - FOOTER_HEIGHT - 16.).max(1.) * scale)
-                as u32,
+            ((f32::from(viewport.height)
+                - TOOLBAR_HEIGHT
+                - self.permission_height()
+                - FOOTER_HEIGHT
+                - 16.)
+                .max(1.)
+                * scale) as u32,
         );
         if self.bounds != Some(bounds)
             && self.page_command(BrowserCommand::Resize(PageBounds {
@@ -1267,6 +1289,7 @@ impl Render for BrowserView {
                 }
             }))
             .child(self.toolbar(cx))
+            .child(self.permission_bar(cx))
             .child(
                 div()
                     .flex_1()
@@ -1342,7 +1365,7 @@ fn page_command_allowed(closing: bool, command: &BrowserCommand) -> bool {
     !closing || matches!(command, BrowserCommand::Shutdown)
 }
 
-fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
+fn button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .px_3()
