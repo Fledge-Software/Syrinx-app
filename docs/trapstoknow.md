@@ -131,17 +131,18 @@ you found it in the commit message, not here.
   Create one environment once and pass it to every tab. A popup that becomes
   a tab must use the opener's environment and profile and must not have
   navigated, or `window.opener` breaks. Source: note 08, section 5 (high).
-- **A hidden page's slow load never completes, and no error says why.** Atlas
-  suspends a hidden page five seconds after it was hidden or last navigated
-  (`browser/lifecycle.rs`, P1-15), and `TrySuspend` succeeds while a load is
-  still in flight. The frozen renderer then sends no `NavigationCompleted`
-  and no close request until the page is shown. A native fixture that waits
-  on a hidden page must show it once `Created` arrives, or bound its work far
-  below the grace. A hidden close page's 100 ms timer also fired 0.3–4.3 s
-  late, against about 0.1 s once shown. Source: the lifecycle-timeout
-  diagnosis in `docs/p1-11-popups.md`; a 6 s held response reproduced the
-  recorded failure 2/2 before the fix, and `page_close --stall-first-close`
-  now repeats that hold as a regression check (observed; high).
+- **`TrySuspend` succeeds on a page that is still loading, and the frozen
+  page then reports nothing.** No `NavigationCompleted` or close request
+  arrives until the page is resumed, and no error says why. Atlas therefore
+  starts a hidden page's suspension countdown only when its navigation
+  completes (`browser/hidden_timer.rs`, owner decision 2026-10-12); keep it
+  that way, and never time suspension from when a load starts. Separately, a
+  hidden page's script timers run late: the close fixture's 100 ms timer
+  fired 0.3–4.3 s late while hidden, against about 0.1 s once shown, so a
+  native fixture that waits on page script should show the page once
+  `Created` arrives. Source: the lifecycle-timeout diagnosis in
+  `docs/p1-11-popups.md`; a 6 s held response reproduced the recorded
+  failure 2/2 under the old timer (observed; high).
 - **`TrySuspend` fails with `ERROR_INVALID_STATE`** if the web view is still
   visible. Call `set_visible(false)` first. Use either suspend and resume or
   the memory-usage level on a tab, not both. Source: note 08, section 5

@@ -101,7 +101,7 @@ fn lifecycle_cycle(
     require_children(parent, &[survivor])?;
     create_close_fixture(host, events, parent, &[survivor], id, url, deadline)?;
     let child = other_child(parent, survivor)?;
-    // The fixture showed the new page so suspension could not freeze its load.
+    // The fixture showed the new page so suspension could not delay its close.
     require_visible(child, true)?;
     require_visible(survivor, false)?;
 

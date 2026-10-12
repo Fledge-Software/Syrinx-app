@@ -212,8 +212,11 @@ suites, not a lifecycle failure. Those permission and certificate timeouts
 were not reproduced under `--trace` and remain undiagnosed. The lifecycle
 suite now prints its own pass line.
 
-Whether Atlas should suspend a hidden page while it is still loading is a
-product question, now under the v1 plan's "Open threads".
+The owner then decided (2026-10-12) that a hidden page's suspension countdown
+starts when its navigation finishes, so a loading page is no longer frozen.
+That product change is described in `docs/p1-15-suspension-fullscreen.md`;
+the fixture still shows its close pages, because a hidden page's script
+timers also run late.
 
 ## Owner checks after the gate and native fixture pass
 
