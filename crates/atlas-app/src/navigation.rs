@@ -44,15 +44,9 @@ fn submission_text(input: &str) -> Result<&str, &'static str> {
     Ok(text)
 }
 
+// Navigation and bookmark import share one address rule in `atlas-core` (DW-1).
 fn web_address(text: &str) -> Result<String, &'static str> {
-    let address = url::Url::parse(text).map_err(|_| "That address is not valid.")?;
-    if address.host_str().is_none() {
-        return Err("That address needs a website name.");
-    }
-    if !address.username().is_empty() || address.password().is_some() {
-        return Err("Sign in on the website instead of putting credentials in an address.");
-    }
-    Ok(address.into())
+    atlas_core::web_address(text).map_err(atlas_core::WebAddressError::message)
 }
 
 fn web_search(text: &str) -> String {

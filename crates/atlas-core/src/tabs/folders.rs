@@ -383,7 +383,7 @@ impl TabModel {
         self.tabs[..boundary].sort_by_key(|tab| tab.saved_page_id.and_then(page_position));
     }
 
-    fn allocate_folder_id(&mut self) -> Result<SavedFolderId, TabError> {
+    pub(super) fn allocate_folder_id(&mut self) -> Result<SavedFolderId, TabError> {
         // A removed folder identity stays retired, like saved-page and live-tab identities.
         let next = self
             .last_folder_id

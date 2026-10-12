@@ -1,6 +1,7 @@
 //! Connects the shared session to browser chrome without running storage or search on the UI thread.
 
 mod home_palette;
+mod import;
 mod navigation_intents;
 mod navigation_status;
 mod page_lifecycle;
@@ -111,6 +112,7 @@ pub struct BrowserView {
     focus: FocusHandle,
     palette: Option<PalettePopup>,
     home_palette: HomePaletteIntent,
+    importer: import::BookmarkImporter,
     parent_hwnd: isize,
     query_sequence: u64,
     pending_query: Option<(u64, u64)>,
@@ -149,6 +151,7 @@ impl BrowserView {
             focus: cx.focus_handle(),
             palette: None,
             home_palette: HomePaletteIntent::default(),
+            importer: import::BookmarkImporter::default(),
             parent_hwnd: 0,
             query_sequence: 0,
             pending_query: None,
@@ -315,6 +318,9 @@ impl BrowserView {
                         self.outcome.store(2, Ordering::Release);
                     }
                 }
+            }
+            SessionEvent::Imported { request_id, result } => {
+                self.bookmarks_imported(request_id, result);
             }
             SessionEvent::Failure { error, fatal } => {
                 if self.smoke {
@@ -781,6 +787,11 @@ impl BrowserView {
                     scope: Scope::Everything,
                 });
             }
+            // `>import bookmarks` is the palette's one command until the command registry exists.
+            PaletteEvent::Submit { text, .. } if import::is_import_command(&text) => {
+                self.palette = None;
+                self.start_bookmark_import(window, cx);
+            }
             PaletteEvent::Submit { text, force_search } => {
                 self.palette = None;
                 self.navigate(text, force_search);
@@ -845,6 +856,7 @@ impl BrowserView {
         }
         self.closing = true;
         self.retire_palette(cx);
+        self.close_import_preview(cx);
         self.message = "Saving and closing…".to_owned();
         if self.browser_stopped && !self.session_stopped {
             self.command(SessionCommand::Shutdown);

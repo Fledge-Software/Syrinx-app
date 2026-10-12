@@ -175,7 +175,8 @@ fn malformed_export_recovers_from_missing_and_stray_tags() {
             "0:link:Unquoted=https://unquoted.example.test/path",
             "0:folder:Heading without list",
             "0:folder:Unclosed heading",
-            "1:link:Spaced title=https://Upper.Example.Test/Path",
+            // The shared address rule lower-cases the host, as navigation does.
+            "1:link:Spaced title=https://upper.example.test/Path",
             "1:link:Inside a stray tag bold &copy; text=https://stray.example.test/",
             "0:link:After stray closes=https://after-stray.example.test/",
             "0:folder:Never closed",

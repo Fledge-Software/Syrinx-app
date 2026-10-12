@@ -914,7 +914,7 @@ slice it belongs to, so whoever comes back to it knows when it is due.
 
 | ID | Deferred work and why | Owning slice | Status | Issue |
 | --- | --- | --- | --- | --- |
-| DW-1 | Unify the bookmark parser's address check with navigation's `web_address` (`crates/atlas-app/src/navigation.rs`) through one shared function in `atlas-core`; the owner approved `atlas-core` using `url` for this on 2026-10-12. Until then the parser uses a stricter syntactic copy, and the import commit step must re-check every address with navigation's rule and report failures as skipped. P1-22 is not complete until this is done. | P1-22 | Open | |
+| DW-1 | Unify the bookmark parser's address check with navigation's `web_address` (`crates/atlas-app/src/navigation.rs`) through one shared function in `atlas-core`; the owner approved `atlas-core` using `url` for this on 2026-10-12. Until then the parser uses a stricter syntactic copy, and the import commit step must re-check every address with navigation's rule and report failures as skipped. P1-22 is not complete until this is done. **Done 2026-10-12** on `claude/p1-22-import-commit`: `atlas_core::web_address` is the one rule; navigation and the parser call it, the parser's copy is deleted, and the commit step re-checks with it. | P1-22 | Done | |
 
 ## Issue map
 
