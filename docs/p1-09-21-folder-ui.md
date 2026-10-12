@@ -144,8 +144,14 @@ longer binds its own Enter/Space actions or draws its own focus border: the
 one `on_click` per row (`activate_row` for pages and tabs, the toggle for
 folders) serves mouse and keyboard alike. A folder click lets go of focus only
 when it came from the mouse (`ClickEvent::is_keyboard`). Focus also leaves a
-row after its "×" unload button, at the start of a drag and after a drop, so
-no mouse gesture leaves a row's keys armed. "Letting go" focuses the window's
+row after its "×" unload button, at the start of a drag and after a drop.
+After the merge, a mouse press no longer focuses a row or its buttons at all
+(`without_mouse_focus` prevents GPUI's focus-on-mouse-down), so a right-click,
+a middle-click or a press released elsewhere cannot leave a row's keys
+armed either; Tab and F6 still focus rows. There is no GPUI test harness in
+this workspace (its `test-support` feature is not enabled, and enabling it is
+a dependency change), so this is covered by the owner's check 6 rather than
+an automated test. "Letting go" focuses the window's
 root handle, as P1-36's `focus_page` does. Enter on the removal card itself
 still means Remove, but Enter on a focused button inside the card is passed
 on to that button.
@@ -258,6 +264,9 @@ example `https://example.com`) and save them with Ctrl D or the palette.
    load, press Alt Left: the page goes back and the row stays in its folder.
    Click a saved page row, then press Delete: nothing happens in the sidebar.
    Tab to an unopened saved page and press Delete: a card asks first.
+   Right-click or middle-click a row inside a folder, or press on it and
+   release the mouse elsewhere, then press Alt Left: nothing in the sidebar
+   moves (on a page, it goes Back).
 7. **Expansion survives restart.** Leave one folder open and one closed,
    quit Atlas, start it again with the same `--test-data-dir`: the same folder
    is open and the other closed. Import a bookmarks file with folders
