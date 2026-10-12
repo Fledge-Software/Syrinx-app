@@ -132,6 +132,19 @@ impl Fixture {
             })
             .expect("create synthetic controller");
     }
+    /// Exhausts the automatic budget through `failing`, leaving every tab crashed and the engine stopped.
+    fn stop_engine(&mut self, failing: u64) {
+        for _ in 0..ATTEMPT_LIMIT {
+            let failure = self.state().pages[&failing].synthetic_failure(failing, 0);
+            self.state().native_event(failure);
+            let due = self.state().recovery.due.expect("scheduled rebuild");
+            self.state().recovery_tick(due);
+        }
+        let failure = self.state().pages[&failing].synthetic_failure(failing, 0);
+        self.state().native_event(failure);
+        assert!(self.state().recovery.stopped);
+        assert!(self.state().environment.is_none());
+    }
     fn drain(&mut self) -> Vec<BrowserEvent> {
         let mut result = Vec::new();
         loop {
@@ -398,9 +411,9 @@ fn repeated_native_failures_stop_and_owner_reload_recovers_retained_tabs() {
         .state()
         .recovery_tick(Instant::now() + ATTEMPT_WINDOW * 2);
     assert!(fixture.state().pages.is_empty());
-    assert_eq!(
-        fixture.state().ensure_environment(),
-        Err(BrowserError::Recovery)
+    assert!(
+        fixture.state().environment.is_none(),
+        "elapsed time must not restart a stopped engine"
     );
     assert!(fixture.drain().iter().any(|event| matches!(event, BrowserEvent::RecoveryFinished { stopped: true, failed, .. } if failed == &[21, 22])));
     fixture
@@ -417,4 +430,91 @@ fn repeated_native_failures_stop_and_owner_reload_recovers_retained_tabs() {
     assert_eq!(fixture.state().pages[&21].destination(), "about:blank");
     assert!(fixture.state().unavailable.is_empty());
     assert!(fixture.drain().iter().any(|event| matches!(event, BrowserEvent::RecoveryFinished { stopped: false, restored, failed, .. } if restored == &[21] && failed.is_empty())));
+}
+
+#[test]
+fn closing_every_crashed_tab_after_the_cap_lets_a_new_tab_start_the_engine() {
+    let mut fixture = Fixture::new();
+    fixture.create(31);
+    fixture.create(32);
+    fixture.stop_engine(31);
+    assert_eq!(fixture.state().unavailable_tabs(), [31, 32]);
+    fixture
+        .state()
+        .apply(BrowserCommand::Close { id: 31 })
+        .expect("close first crashed tab");
+    assert!(
+        fixture.state().recovery.stopped,
+        "a remaining crashed tab keeps the engine stopped"
+    );
+    fixture
+        .state()
+        .apply(BrowserCommand::Close { id: 32 })
+        .expect("close last crashed tab");
+    assert!(!fixture.state().recovery.stopped);
+    assert!(fixture.state().recovery.attempts.is_empty());
+    fixture.drain();
+
+    fixture.create(33);
+    assert!(fixture.state().environment.is_some());
+    assert_eq!(fixture.state().pages.len(), 1);
+    assert_eq!(fixture.state().pages[&33].destination(), "about:blank");
+    assert!(fixture.state().unavailable.is_empty());
+    assert!(
+        !fixture
+            .drain()
+            .iter()
+            .any(|event| matches!(event, BrowserEvent::RecoveryStarted { .. })),
+        "nothing remained to restore"
+    );
+}
+
+#[test]
+fn new_tab_after_the_cap_is_an_owner_retry_that_restores_crashed_tabs() {
+    let mut fixture = Fixture::new();
+    fixture.create(41);
+    fixture.create(42);
+    fixture.stop_engine(41);
+    fixture.drain();
+
+    fixture.create(43);
+    assert!(!fixture.state().recovery.stopped);
+    assert_eq!(
+        fixture.state().recovery.attempts.len(),
+        1,
+        "the owner retry starts a fresh budget"
+    );
+    assert!(fixture.state().environment.is_some());
+    assert!(fixture.state().unavailable.is_empty());
+    let mut live: Vec<_> = fixture.state().pages.keys().copied().collect();
+    live.sort_unstable();
+    assert_eq!(live, [41, 42, 43]);
+    assert!(fixture.drain().iter().any(|event| matches!(event, BrowserEvent::RecoveryFinished { stopped: false, restored, failed, .. } if restored == &[41, 42] && failed.is_empty())));
+
+    // The fresh budget allows automatic recovery again.
+    let failure = fixture.state().pages[&43].synthetic_failure(43, 0);
+    fixture.state().native_event(failure);
+    assert!(fixture.state().recovery.due.is_some());
+}
+
+#[test]
+fn closing_a_crashed_tab_leaves_a_running_budget_untouched() {
+    let mut fixture = Fixture::new();
+    fixture.create(51);
+    fixture.create(52);
+    let failure = fixture.state().pages[&51].synthetic_failure(51, 0);
+    fixture.state().native_event(failure);
+    let due = fixture.state().recovery.due.expect("scheduled rebuild");
+    fixture.state().recovery_tick(due);
+    let renderer = fixture.state().pages[&52].synthetic_failure(52, 1);
+    fixture.state().native_event(renderer);
+    fixture
+        .state()
+        .apply(BrowserCommand::Close { id: 52 })
+        .expect("close crashed renderer tab");
+    assert_eq!(
+        fixture.state().recovery.attempts.len(),
+        1,
+        "only a stopped engine forgets its attempts"
+    );
 }
