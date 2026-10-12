@@ -20,8 +20,8 @@ pub fn writer(engine: &str, directory: &Path) -> Result<()> {
     }
     let path = &directory.join("synthetic-cache.db");
     let connection = store::open(path)?;
-    connection
-        .execute_batch("PRAGMA cache_size=8; BEGIN IMMEDIATE; DELETE FROM pages WHERE rowid=5;")?;
+    connection.execute_batch("PRAGMA cache_size=8; BEGIN IMMEDIATE;")?;
+    store::remove(&connection, 5)?;
     for id in [3, 1005].into_iter().chain(1_000_000..1_000_064) {
         let mut document = corpus::document(id);
         document.body = "interruptedphantom ".repeat(8192);

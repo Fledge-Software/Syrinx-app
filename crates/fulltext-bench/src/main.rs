@@ -78,6 +78,9 @@ fn run(directory: &Path, count: usize, name: &str, corpus: Corpus) -> Result<()>
     );
     timed("bulk", || engine.batch(&documents, &[], false))?;
     println!("disk_after_bulk,{}", disk_size(directory)?);
+    // The only consolidation in a run; later mutations rely on each engine's deletion path.
+    timed("maintenance_once", || engine.optimize())?;
+    println!("disk_after_maintenance,{}", disk_size(directory)?);
     queries(&engine)?;
     timed("add_1000", || {
         let documents: Vec<_> = (count..count + 1000)
@@ -101,7 +104,7 @@ fn run(directory: &Path, count: usize, name: &str, corpus: Corpus) -> Result<()>
     timed("delete_1000", || {
         engine.batch(&[], &(1000..2000).collect::<Vec<_>>(), true)
     })?;
-    let expired = timed("expiry_and_maintenance", || engine.expire())?;
+    let expired = timed("expiry", || engine.expire())?;
     println!(
         "expired_count,{expired}\ndisk_after_expiry,{}",
         disk_size(directory)?
@@ -114,22 +117,19 @@ fn run(directory: &Path, count: usize, name: &str, corpus: Corpus) -> Result<()>
     timed("interrupted_writer_until_kill", || {
         recovery::interrupt(name, directory)
     })?;
-    timed("reopen_and_verify", || {
-        let recovered = Engine::open(name, directory)?;
-        recovered.verify(expected)?;
-        recovered.close()
-    })?;
+    // Time reopening apart from each engine's own, differently shaped verification.
+    let recovered = timed("reopen", || Engine::open(name, directory))?;
+    timed("verify_after_reopen", || recovered.verify(expected))?;
+    recovered.close()?;
     let mut recovered = Engine::open(name, directory)?;
-    timed("stale_replay_and_verify", || {
-        let documents: Vec<_> = (0..2000)
-            .map(|id| corpus.document(id))
-            .filter(|document| {
-                document.captured <= corpus::CUTOFF || (1000..2000).contains(&document.id)
-            })
-            .collect();
-        recovered.replay(&documents)?;
-        recovered.verify(expected)
-    })?;
+    let stale: Vec<_> = (0..2000)
+        .map(|id| corpus.document(id))
+        .filter(|document| {
+            document.captured <= corpus::CUTOFF || (1000..2000).contains(&document.id)
+        })
+        .collect();
+    timed("stale_replay", || recovered.replay(&stale))?;
+    timed("verify_after_replay", || recovered.verify(expected))?;
     recovered.close()?;
     let final_engine = Engine::open(name, directory)?;
     final_engine.verify(expected)?;
@@ -145,7 +145,7 @@ fn queries(engine: &Engine) -> Result<()> {
         let mut returned = 0usize;
         for _ in 0..101 {
             let start = Instant::now();
-            returned += engine.query(query)?;
+            returned += engine.query(query)?.len();
             samples.push(start.elapsed().as_secs_f64() * 1000.0);
         }
         let first = samples.remove(0);
@@ -157,6 +157,9 @@ fn queries(engine: &Engine) -> Result<()> {
             samples[99],
             engine.hits(query)?
         );
+        // Ranked IDs, outside timing, let separate runs compare the engines' top 20.
+        let top: Vec<_> = engine.query(query)?.iter().map(u64::to_string).collect();
+        println!("top,{query},{}", top.join(";"));
     }
     Ok(())
 }
