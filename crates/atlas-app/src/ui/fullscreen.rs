@@ -45,9 +45,15 @@ impl BrowserView {
         }
     }
 
-    pub(super) fn page_fullscreen(&mut self, id: u64, active: bool, window: &mut Window) {
+    pub(super) fn page_fullscreen(
+        &mut self,
+        id: u64,
+        active: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.fullscreen_pages.observe(id, active);
-        self.restore_fullscreen_if_hidden(window);
+        self.restore_fullscreen_if_hidden(window, cx);
     }
 
     pub(super) fn fullscreen_shortcut(&mut self, window: &mut Window) {
@@ -64,7 +70,11 @@ impl BrowserView {
         }
     }
 
-    pub(super) fn restore_fullscreen_if_hidden(&mut self, window: &mut Window) {
+    pub(super) fn restore_fullscreen_if_hidden(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.fullscreen_pages
             .pages
             .retain(|id| self.model.tabs.iter().any(|tab| tab.id.get() == *id));
@@ -80,6 +90,8 @@ impl BrowserView {
         if let Some(id) = target
             && self.fullscreen.is_none()
         {
+            // A fullscreen page has no sidebar, so an open peek closes now, not on its next sample.
+            self.retire_peek(cx);
             let was_fullscreen = window.is_fullscreen();
             self.fullscreen = Some((id, was_fullscreen));
             if !was_fullscreen {

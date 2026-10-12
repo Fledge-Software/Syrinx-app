@@ -148,13 +148,14 @@ impl Page {
         Ok(())
     }
 
-    /// Shows or hides the page, first moving a page about to appear to the card's bounds.
-    /// The lifecycle resumes a suspended page before it becomes visible.
+    /// Shows or hides the page. A page about to appear is resumed first, then moved to the
+    /// card's bounds, then made visible; hiding needs no bounds.
     pub(super) fn show(&self, visible: bool, card: PageBounds) -> Result<(), BrowserError> {
-        if let Some(bounds) = self.placement.get().on_show(visible, card) {
-            self.set_bounds(bounds)?;
-        }
-        self.lifecycle.show(&self.view, visible)?;
+        let place = || match self.placement.get().on_show(visible, card) {
+            Some(bounds) => self.set_bounds(bounds),
+            None => Ok(()),
+        };
+        self.lifecycle.show(&self.view, visible, place)?;
         self.update_placement(|placement| placement.shown(visible));
         Ok(())
     }

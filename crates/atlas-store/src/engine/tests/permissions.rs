@@ -86,6 +86,49 @@ fn version_5_upgrades_to_6_keeping_session_history_and_clear_generation() {
 }
 
 #[test]
+fn permission_hook_refuses_rows_and_rolls_back_to_the_intact_version_5_schema() {
+    // The migration's own SQL succeeds here; only its hook sees the seeded row and refuses.
+    let directory = TestDirectory::new();
+    let mut connection = deletions_database(&directory);
+    let seeded = format!(
+        "{} INSERT INTO site_permissions(origin, kind, allowed)
+             VALUES ('https://seeded.example.test', 1, 1);",
+        schema::permissions_migration()
+    );
+    let initial = schema::initial_schema();
+    let folders = schema::folders_migration();
+    let preferences = schema::preferences_migration();
+    let history = schema::history_migration();
+    let deletions = schema::deletions_migration();
+    let migrations = Migrations::new(vec![
+        M::up(&initial).foreign_key_check(),
+        M::up(&folders).foreign_key_check(),
+        M::up(&preferences),
+        M::up(&history).foreign_key_check(),
+        M::up(&deletions),
+        M::up_with_hook(&seeded, schema::check_migrated_permissions),
+    ]);
+    assert!(matches!(
+        schema::apply_migrations(&mut connection, &migrations),
+        Err(StoreError::Database {
+            operation: StoreOperation::Migrate,
+            ..
+        })
+    ));
+    assert!(connection.is_autocommit());
+    assert_eq!(user_version(&connection), 5);
+    assert!(!object_exists(&connection, "site_permissions"));
+    assert!(object_exists(&connection, "history_deletion_state"));
+    close(connection);
+
+    // The untouched version 5 file still opens and upgrades through the real migration.
+    let store = Store::open(directory.lease()).expect("intact version 5 database upgrades");
+    assert_eq!(store.load().expect("session kept").snapshot, fixture());
+    store.shutdown().expect("store closes");
+    directory.cleanup();
+}
+
+#[test]
 fn failed_permission_migration_rolls_back_to_the_intact_version_5_schema() {
     // A conflicting table fails the migration's own SQL before anything commits.
     let directory = TestDirectory::new();

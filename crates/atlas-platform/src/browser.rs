@@ -729,14 +729,7 @@ impl BrowserState {
                 span,
             } => {
                 // The outcome always reaches the requester, never as an unrelated page error.
-                let outcome = match &self.environment {
-                    Some(environment) => clear_data::clear(environment, self.parent, kinds, span),
-                    // P1-16 is rebuilding the engine; the owner can clear again once it is back.
-                    None => ClearOutcome {
-                        cleared: Err(BrowserError::Recovery),
-                        closed: Ok(()),
-                    },
-                };
+                let outcome = clear_outcome(self.environment.as_ref(), self.parent, kinds, span);
                 self.events
                     .emit(BrowserEvent::DataCleared { request, outcome });
             }
@@ -763,6 +756,42 @@ impl BrowserState {
             }
         }
         Ok(())
+    }
+}
+
+/// Clears through the shared environment. While P1-16 rebuilds the engine there is none, and
+/// the owner is told to clear again once it is back.
+fn clear_outcome(
+    environment: Option<&ICoreWebView2Environment>,
+    parent: isize,
+    kinds: BrowsingDataKinds,
+    span: Option<ClearSpan>,
+) -> ClearOutcome {
+    let Some(environment) = environment else {
+        return ClearOutcome {
+            cleared: Err(BrowserError::Recovery),
+            closed: Ok(()),
+        };
+    };
+    clear_data::clear(environment, parent, kinds, span)
+}
+
+#[cfg(test)]
+mod clear_tests {
+    use super::*;
+
+    #[test]
+    fn a_clear_during_engine_recovery_reports_recovery_without_touching_a_window() {
+        let kinds = BrowsingDataKinds {
+            history: true,
+            cookies_and_site_data: true,
+            cached_files: true,
+        };
+        for span in [None, Some(ClearSpan { start: 0, end: 60 })] {
+            let outcome = clear_outcome(None, 0, kinds, span);
+            assert_eq!(outcome.cleared, Err(BrowserError::Recovery));
+            assert_eq!(outcome.closed, Ok(()));
+        }
     }
 }
 

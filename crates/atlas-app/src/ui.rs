@@ -516,7 +516,7 @@ impl BrowserView {
                 // Work that waited for the session to accept commands.
                 self.open_forwarded_links();
                 self.save_runtime_version();
-                self.restore_fullscreen_if_hidden(window);
+                self.restore_fullscreen_if_hidden(window, cx);
                 if initial {
                     self.seed_suspended_fixture();
                 }
@@ -660,7 +660,7 @@ impl BrowserView {
                 }
             }
             BrowserEvent::Callback { .. } => unreachable!("callback envelopes are unwrapped once"),
-            BrowserEvent::Fullscreen { id, active } => self.page_fullscreen(id, active, window),
+            BrowserEvent::Fullscreen { id, active } => self.page_fullscreen(id, active, window, cx),
             BrowserEvent::Suspended { id, suspended } => {
                 self.suspended_fixture.observe(id, suspended)
             }

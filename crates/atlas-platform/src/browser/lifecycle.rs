@@ -172,13 +172,21 @@ impl Lifecycle {
         }
     }
 
-    pub(super) fn show(&self, view: &WebView, visible: bool) -> Result<(), BrowserError> {
+    /// Shows or hides the page. `place` runs after a resume and before the page becomes
+    /// visible, so a suspended controller is never asked to take new bounds.
+    pub(super) fn show(
+        &self,
+        view: &WebView,
+        visible: bool,
+        place: impl FnOnce() -> Result<(), BrowserError>,
+    ) -> Result<(), BrowserError> {
         if self.state.borrow().visible == visible {
-            return Ok(());
+            return place();
         }
         if visible {
             self.resume(view)?;
         }
+        place()?;
         // IsVisible must be false before TrySuspend is ever issued.
         view.set_visible(visible)
             .map_err(|_| BrowserError::Visibility)?;

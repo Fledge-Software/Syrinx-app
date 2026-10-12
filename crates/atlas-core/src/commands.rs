@@ -339,8 +339,8 @@ impl CommandRegistry {
 
 /// The built-in commands, in the order the palette lists them for `>`.
 ///
-/// Zoom has no registry shortcut: `ctrl-=` and `ctrl--` use punctuation keys that `Shortcut`
-/// does not spell, so the application binds all three zoom keys beside the registry bindings.
+/// Zoom in and Zoom out have no registry shortcut: `ctrl-=` and `ctrl--` use punctuation keys
+/// that `Shortcut` does not spell, so the application binds them beside the registry bindings.
 fn browser_commands() -> Vec<Command> {
     use BrowserAction::*;
     use Enablement::*;
@@ -479,7 +479,7 @@ fn browser_commands() -> Vec<Command> {
             "actual size 100",
             ActivePage,
             ResetZoom,
-            None,
+            Some("ctrl-0"),
         ),
     ]
     .into_iter()
@@ -550,7 +550,7 @@ mod tests {
                 (browser(BrowserAction::Print), Some("ctrl-p")),
                 (browser(BrowserAction::ZoomIn), None),
                 (browser(BrowserAction::ZoomOut), None),
-                (browser(BrowserAction::ResetZoom), None),
+                (browser(BrowserAction::ResetZoom), Some("ctrl-0")),
             ]
         );
         // Keys follow registration order, so both the palette and search agree on them.

@@ -51,6 +51,11 @@ impl SchemaGeneration {
     pub(crate) fn has_deletion_state(self) -> bool {
         self >= Self::Deletions
     }
+
+    /// Whether this generation (version 6 or later) stores remembered site permissions.
+    fn has_permissions(self) -> bool {
+        self >= Self::Permissions
+    }
 }
 
 /// What a database file holds before Atlas writes to it.
@@ -428,7 +433,7 @@ fn check_migrated_deletions(transaction: &Transaction<'_>) -> HookResult {
     }
 }
 
-fn check_migrated_permissions(transaction: &Transaction<'_>) -> HookResult {
+pub(crate) fn check_migrated_permissions(transaction: &Transaction<'_>) -> HookResult {
     // The new table must start empty, so every site still asks before the commit.
     match crate::permissions::count(transaction) {
         Ok(0) => Ok(()),
@@ -536,28 +541,29 @@ const DELETION_ADDED_OBJECTS: &[SchemaObject] = &[
 ];
 
 /// Version 6 adds the remembered site permission table to version 5.
-const PERMISSION_ADDED_OBJECTS: &[SchemaObject] = &[
-    table("history_deletion_state", DELETION_STATE_TABLE),
-    SchemaObject {
-        kind: "index",
-        name: "history_visits_by_time",
-        table: "history_visits",
-        sql: HISTORY_TIME_INDEX,
-    },
-    table("site_permissions", crate::permissions::TABLE),
-];
+const PERMISSION_ADDED_OBJECTS: &[SchemaObject] =
+    &[table("site_permissions", crate::permissions::TABLE)];
 
 /// Objects of each generation, sorted by name as `sqlite_schema` lists them.
+/// Versions 5 and 6 each add their objects on top of every earlier version's.
 fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> {
-    let (added, base): (&[SchemaObject], _) = match generation {
-        SchemaGeneration::FlatSaved => (&[], FLAT_OBJECTS),
-        SchemaGeneration::Folders => (&[], FOLDER_OBJECTS),
-        SchemaGeneration::Preferences => (&[], PREFERENCE_OBJECTS),
-        SchemaGeneration::History => (&[], HISTORY_OBJECTS),
-        SchemaGeneration::Deletions => (DELETION_ADDED_OBJECTS, HISTORY_OBJECTS),
-        SchemaGeneration::Permissions => (PERMISSION_ADDED_OBJECTS, HISTORY_OBJECTS),
+    let base = match generation {
+        SchemaGeneration::FlatSaved => FLAT_OBJECTS,
+        SchemaGeneration::Folders => FOLDER_OBJECTS,
+        SchemaGeneration::Preferences => PREFERENCE_OBJECTS,
+        SchemaGeneration::History | SchemaGeneration::Deletions | SchemaGeneration::Permissions => {
+            HISTORY_OBJECTS
+        }
     };
-    let mut objects: Vec<_> = added.iter().chain(base).collect();
+    let additions = [
+        (generation.has_deletion_state(), DELETION_ADDED_OBJECTS),
+        (generation.has_permissions(), PERMISSION_ADDED_OBJECTS),
+    ];
+    let added = additions
+        .into_iter()
+        .filter_map(|(present, objects)| present.then_some(objects))
+        .flatten();
+    let mut objects: Vec<_> = base.iter().chain(added).collect();
     // Byte order of names, as `ORDER BY name` lists them under SQLite's binary collation.
     objects.sort_by_key(|object| object.name);
     objects
