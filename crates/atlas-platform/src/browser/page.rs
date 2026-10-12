@@ -6,13 +6,16 @@ use raw_window_handle::{
     HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle,
 };
 use webview2_com::{
-    AcceleratorKeyPressedEventHandler, CoTaskMemPWSTR,
+    AcceleratorKeyPressedEventHandler, CoTaskMemPWSTR, FocusChangedEventHandler,
     Microsoft::Web::WebView2::Win32::{
         COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+        COREWEBVIEW2_MOVE_FOCUS_REASON, COREWEBVIEW2_MOVE_FOCUS_REASON_NEXT,
+        COREWEBVIEW2_MOVE_FOCUS_REASON_PREVIOUS, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
         COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_PROCESS_FAILED_KIND,
         ICoreWebView2Environment, ICoreWebView2Settings4,
     },
-    NavigationCompletedEventHandler, ProcessFailedEventHandler, SourceChangedEventHandler,
+    MoveFocusRequestedEventHandler, NavigationCompletedEventHandler, ProcessFailedEventHandler,
+    SourceChangedEventHandler,
 };
 use windows::{
     Win32::{
@@ -111,6 +114,8 @@ impl Page {
         register_process_failure(&view, id, events.clone(), shortcuts.clone())?;
         let permissions = super::permissions::Permissions::register(&view, id, events.clone())?;
         let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
+        register_focus_arrival(&view, id, events.clone())?;
+        register_focus_departure(&view, shortcuts.clone(), id, events.clone())?;
         register_shortcuts(&view, shortcuts, id, events)?;
         Ok(Self {
             destination,
@@ -395,6 +400,61 @@ fn register_shortcuts(
     .map_err(|_| BrowserError::EventRegistration)
 }
 
+/// Tells Atlas when the page takes keyboard focus, so the chrome stops showing a focus ring.
+fn register_focus_arrival(view: &WebView, id: u64, events: EventSink) -> Result<(), BrowserError> {
+    let handler = FocusChangedEventHandler::create(Box::new(move |_controller, _args| {
+        events.emit(BrowserEvent::PageFocused { id });
+        Ok(())
+    }));
+    let mut token = 0;
+    unsafe { view.controller().add_GotFocus(&handler, &mut token) }
+        .map_err(|_| BrowserError::EventRegistration)
+}
+
+/// Tab past the page's last (or Shift Tab before its first) element moves to Atlas's
+/// neighbouring pane, as F6 does. Like the accelerator handler it only marks and posts.
+fn register_focus_departure(
+    view: &WebView,
+    shortcuts: NativeSink,
+    id: u64,
+    events: EventSink,
+) -> Result<(), BrowserError> {
+    let handler = MoveFocusRequestedEventHandler::create(Box::new(move |_controller, args| {
+        if !events.accepts_callbacks() {
+            return Ok(());
+        }
+        let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+        let mut reason = COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC;
+        unsafe { args.Reason(&mut reason) }?;
+        let Some(shortcut) = departure_shortcut(reason) else {
+            return Ok(());
+        };
+        unsafe { args.SetHandled(true) }?;
+        if let Err(error) = shortcuts.post(BrowserEvent::Shortcut(shortcut), &events) {
+            events.emit(BrowserEvent::Error {
+                tab: Some(id),
+                error,
+            });
+        }
+        Ok(())
+    }));
+    let mut token = 0;
+    unsafe {
+        view.controller()
+            .add_MoveFocusRequested(&handler, &mut token)
+    }
+    .map_err(|_| BrowserError::EventRegistration)
+}
+
+/// Which pane move a page's focus departure asks for; a programmatic request stays put.
+fn departure_shortcut(reason: COREWEBVIEW2_MOVE_FOCUS_REASON) -> Option<BrowserShortcut> {
+    match reason {
+        COREWEBVIEW2_MOVE_FOCUS_REASON_NEXT => Some(BrowserShortcut::FocusNextPane),
+        COREWEBVIEW2_MOVE_FOCUS_REASON_PREVIOUS => Some(BrowserShortcut::LeavePageBackward),
+        _ => None,
+    }
+}
+
 fn keyboard_shortcut(key: u32, peek_generation: u64) -> Option<BrowserShortcut> {
     let control = unsafe { GetKeyState(i32::from(VK_CONTROL.0)) } < 0;
     let shift = unsafe { GetKeyState(i32::from(VK_SHIFT.0)) } < 0;
@@ -438,6 +498,14 @@ fn shortcut_for_modifiers(
     }
     if key == 0x74 && !control && !alt && !shift {
         return Some(BrowserShortcut::Reload);
+    }
+    // F6 and Shift F6 leave the page for Atlas's next or previous pane (P1-36).
+    if key == 0x75 && !control && !alt {
+        return Some(if shift {
+            BrowserShortcut::FocusPreviousPane
+        } else {
+            BrowserShortcut::FocusNextPane
+        });
     }
     if !control || alt {
         return None;
@@ -492,6 +560,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn f6_moves_between_panes_and_shift_reverses() {
+        assert_eq!(
+            shortcut_for_modifiers(0x75, false, false, false, false),
+            Some(BrowserShortcut::FocusNextPane)
+        );
+        assert_eq!(
+            shortcut_for_modifiers(0x75, false, true, false, false),
+            Some(BrowserShortcut::FocusPreviousPane)
+        );
+        for (control, alt) in [(true, false), (false, true), (true, true)] {
+            assert_eq!(
+                shortcut_for_modifiers(0x75, control, false, alt, false),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn tabbing_out_of_a_page_moves_panes_but_scripted_focus_stays() {
+        assert_eq!(
+            departure_shortcut(COREWEBVIEW2_MOVE_FOCUS_REASON_NEXT),
+            Some(BrowserShortcut::FocusNextPane)
+        );
+        assert_eq!(
+            departure_shortcut(COREWEBVIEW2_MOVE_FOCUS_REASON_PREVIOUS),
+            Some(BrowserShortcut::LeavePageBackward)
+        );
+        assert_eq!(
+            departure_shortcut(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC),
+            None
+        );
     }
 
     #[test]

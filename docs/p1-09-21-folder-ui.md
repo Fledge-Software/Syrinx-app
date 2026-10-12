@@ -103,7 +103,7 @@ Keyboard, in every width where rows show:
 
 | Key on a focused row | Effect |
 | --- | --- |
-| Tab / Shift Tab | Moves focus between rows and buttons; the focused row has an accent outline. |
+| Tab / Shift Tab | Moves focus between rows and buttons; the focused row shows P1-36's focus ring. |
 | Enter or Space | Opens or focuses a saved page or tab (through `activate()`), then hands focus to the page; or toggles a folder. |
 | Alt Up / Alt Down | Moves the row one place among its siblings. |
 | Alt Left | Moves the row out of its folder, just after that folder. On a top-level row nothing moves and the key goes on to Back. |
@@ -136,6 +136,24 @@ with Enter or Space keeps focus on its row, so the tree can still be walked.
 tree, with arrow keys moving between rows. The moves here use Alt plus an
 arrow, which that plan leaves free, so they will not clash; plain arrows stay
 unbound on rows. Until then each row is its own Tab stop.
+
+**After the P1-36 merge.** Rows, form buttons and "New folder" are P1-36
+`control()`/`push_button` elements, so they carry its focus ring and GPUI turns
+Enter or Space on a focused one into a keyboard click. This branch therefore no
+longer binds its own Enter/Space actions or draws its own focus border: the
+one `on_click` per row (`activate_row` for pages and tabs, the toggle for
+folders) serves mouse and keyboard alike. A folder click lets go of focus only
+when it came from the mouse (`ClickEvent::is_keyboard`). Focus also leaves a
+row after its "×" unload button, at the start of a drag and after a drop, so
+no mouse gesture leaves a row's keys armed. "Letting go" focuses the window's
+root handle, as P1-36's `focus_page` does. Enter on the removal card itself
+still means Remove, but Enter on a focused button inside the card is passed
+on to that button.
+
+**F6.** P1-36's F6 lands on the sidebar pane's first control, which is the
+Search button at the top of the sidebar, not a row; rows are further Tab
+stops. Landing on the active row is part of DW-61 (P1-36's register), not of
+this branch.
 
 The pure rules behind the moves live in `ui/saved_moves.rs`: `keyboard_move`
 and `drop_move` turn a gesture into the model's final-position move, and

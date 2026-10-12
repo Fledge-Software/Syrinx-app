@@ -4,7 +4,8 @@ use atlas_search::{SearchHit, Target};
 use atlas_ui::metrics::{radius, text};
 use gpui::{
     AnyElement, Context, Div, FontWeight, HighlightStyle, Hsla, InteractiveElement, IntoElement,
-    ParentElement, Stateful, StatefulInteractiveElement, Styled, StyledText, div, px,
+    ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, StyledText, Toggled, div,
+    px,
 };
 
 use super::{
@@ -13,6 +14,7 @@ use super::{
     display::{Highlighted, Preview, ROW_TEXT_LIMIT, Section, highlight, row_title},
     query::{Chip, View},
 };
+use crate::controls::control;
 use crate::theme::{self, rgba};
 
 const LIST_WIDTH: f32 = 440.;
@@ -45,23 +47,32 @@ pub(super) fn chips(view: &PaletteView, cx: &mut Context<PaletteView>) -> Div {
     let mut row = div().px_4().pb_3().flex().items_center().gap_2();
     for (index, chip) in Chip::ALL.into_iter().enumerate() {
         let selected = selected_chip == Some(chip);
-        let mut element = div()
-            .id(("chip", index))
-            .h(px(26.))
-            .px_3()
-            .rounded(px(13.))
-            .border_1()
-            .flex()
-            .items_center()
-            .gap(px(7.))
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _, window, cx| this.choose_chip(chip, window, cx)))
-            .child(chip.label())
-            .child(
-                div()
-                    .text_color(rgba(tokens.text_muted))
-                    .child(view.choices.counts.get(chip).to_string()),
-            );
+        let count = view.choices.counts.get(chip);
+        let mut element = control(
+            div().id(("chip", index)),
+            Role::RadioButton,
+            format!("{} {count}", chip.label()),
+        )
+        .aria_toggled(if selected {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .h(px(26.))
+        .px_3()
+        .rounded(px(13.))
+        .border_1()
+        .flex()
+        .items_center()
+        .gap(px(7.))
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _, window, cx| this.choose_chip(chip, window, cx)))
+        .child(chip.label())
+        .child(
+            div()
+                .text_color(rgba(tokens.text_muted))
+                .child(count.to_string()),
+        );
         element = if selected {
             element
                 .bg(rgba(tokens.chip_selected))
@@ -82,6 +93,8 @@ pub(super) fn list(view: &PaletteView, wide: bool, cx: &mut Context<PaletteView>
     let tokens = theme::current();
     let mut rows = div()
         .id("results")
+        .role(Role::ListBox)
+        .aria_label("Results")
         .flex_1()
         .min_h_0()
         .px(px(10.))
@@ -123,17 +136,21 @@ pub(super) fn list(view: &PaletteView, wide: bool, cx: &mut Context<PaletteView>
 fn address_row(view: &PaletteView, address: &str, cx: &mut Context<PaletteView>) -> AnyElement {
     let request_id = view.choices.request_id;
     let title = highlight(&format!("Go to {address}"), &[], ROW_TEXT_LIMIT);
-    row_frame("go-to-address".into(), view.choices.selected == Some(0))
-        .on_click(cx.listener(move |this, _, window, cx| {
-            if this.choices.request_id != request_id {
-                return;
-            }
-            this.choices.select(0);
-            this.submit(false, window, cx);
-        }))
-        .child(glyph("→"))
-        .child(row_text(title))
-        .into_any_element()
+    row_frame(
+        "go-to-address".into(),
+        title.text.clone(),
+        view.choices.selected == Some(0),
+    )
+    .on_click(cx.listener(move |this, _, window, cx| {
+        if this.choices.request_id != request_id {
+            return;
+        }
+        this.choices.select(0);
+        this.submit(false, window, cx);
+    }))
+    .child(glyph("→"))
+    .child(row_text(title))
+    .into_any_element()
 }
 
 fn result_row(
@@ -152,7 +169,9 @@ fn result_row(
             .map(|shortcut| key_hint(&shortcut.label()).into_any_element()),
         None => (!hit.title.is_empty()).then(|| trailing_address(hit).into_any_element()),
     };
-    row_frame(("result", index).into(), selected)
+    let title = row_title(hit, ROW_TEXT_LIMIT);
+    row_frame(("result", index).into(), title.text.clone(), selected)
+        .aria_description(format!("{} {}", target_kind(target), hit.address))
         .on_click(cx.listener(move |this, _, window, cx| {
             let Some(event) = this.choices.activation(request_id, target) else {
                 return;
@@ -160,15 +179,22 @@ fn result_row(
             this.finish(event, window, cx);
         }))
         .child(glyph(target_glyph(target)))
-        .child(row_text(row_title(hit, ROW_TEXT_LIMIT)))
+        .child(row_text(title))
         .children(trailing)
         .into_any_element()
 }
 
-fn row_frame(id: gpui::ElementId, selected: bool) -> Stateful<Div> {
+/// A result row, named and marked selected for screen readers. Arrow keys move the
+/// selection while focus stays in the query field, so rows take no Tab stop.
+// TODO(DW-60): announce the moving selection; GPUI honours an active descendant only
+// under the focused node, and the query field is the rows' sibling.
+fn row_frame(id: gpui::ElementId, name: String, selected: bool) -> Stateful<Div> {
     let tokens = theme::current();
     let row = div()
         .id(id)
+        .role(Role::ListBoxOption)
+        .aria_label(name)
+        .aria_selected(selected)
         .h(px(ROW_HEIGHT))
         .flex_shrink_0()
         .px(px(10.))
@@ -184,6 +210,16 @@ fn row_frame(id: gpui::ElementId, selected: bool) -> Stateful<Div> {
             .font_weight(FontWeight::MEDIUM)
     } else {
         row.text_color(rgba(tokens.text_secondary_bright))
+    }
+}
+
+/// What kind of row a screen reader is on; the glyph alone says nothing.
+fn target_kind(target: Target) -> &'static str {
+    match target {
+        Target::Command(_) => "Command",
+        Target::Tab(_) => "Open tab",
+        Target::Saved(_) => "Saved page",
+        Target::History(_) => "History",
     }
 }
 
@@ -304,8 +340,8 @@ fn web_search_row(cx: &mut Context<PaletteView>) -> Div {
         .border_t_1()
         .border_color(rgba(tokens.panel_divider))
         .child(
-            div()
-                .id("web-search")
+            control(div().id("web-search"), Role::Button, "Search the web")
+                .aria_keyshortcuts("Alt+Enter")
                 .h(px(40.))
                 .px(px(10.))
                 .rounded(px(radius::TILE))

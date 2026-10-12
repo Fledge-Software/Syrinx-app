@@ -15,17 +15,18 @@ use atlas_ui::{
     sidebar_setting,
 };
 use gpui::{
-    AppContext, Context, Div, ElementId, InteractiveElement, KeyDownEvent, MouseButton,
+    AppContext, ClickEvent, Context, Div, ElementId, InteractiveElement, KeyDownEvent, MouseButton,
     MouseDownEvent, MouseMoveEvent, ParentElement, Role, Stateful, StatefulInteractiveElement,
     Styled, Window, div, prelude::FluentBuilder, px,
 };
 
+use crate::controls::control;
+
 use super::{
     BrowserView, button,
-    folder_cards::keyboard_button,
     folder_editor::{
-        DeleteFolderContents, DraggedRow, MoveRowDown, MoveRowIn, MoveRowOut, MoveRowUp, OpenRow,
-        PressButton, ROW_CONTEXT, RemoveRow, RenameRow,
+        DeleteFolderContents, DraggedRow, MoveRowDown, MoveRowIn, MoveRowOut, MoveRowUp,
+        ROW_CONTEXT, RemoveRow, RenameRow,
     },
     page_card::edge_strip,
     saved_moves::{DropTarget, Step},
@@ -112,9 +113,11 @@ impl BrowserView {
             .role(Role::Splitter)
             .aria_label("Resize sidebar")
             .aria_description(self.sidebar_sizing.state().name())
+            .aria_orientation(gpui::Orientation::Vertical)
+            .aria_keyshortcuts("ArrowLeft ArrowRight")
             .track_focus(&self.sidebar_edge_focus)
             .tab_index(0)
-            .focus(|style| style.bg(theme::line()))
+            .focus(|style| crate::controls::focus_ring(style.bg(theme::line())))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.sidebar_edge_key(event, window, cx);
             }))
@@ -324,13 +327,11 @@ impl BrowserView {
             saved: true,
         };
         let target = ActivationTarget::Saved(saved_id);
-        let row = row_frame(("saved", saved_id.get()), look, labels)
-            .on_click(cx.listener(move |this, _, window, cx| {
+        let row = row_frame(("saved", saved_id.get()), look, labels).on_click(cx.listener(
+            move |this, _, window, cx| {
                 this.activate_row(target, window, cx);
-            }))
-            .on_action(cx.listener(move |this, _: &OpenRow, window, cx| {
-                this.activate_row(target, window, cx);
-            }));
+            },
+        ));
         // The confirmation for an unopened page needs the wide sidebar's card.
         let row = if labels || live.is_some() {
             row.on_action(cx.listener(move |this, _: &RemoveRow, window, cx| {
@@ -346,9 +347,11 @@ impl BrowserView {
         if let Some(id) = live {
             row = row.child(
                 row_action(("unload", id.get()), "×", "Unload page").on_click(cx.listener(
-                    move |this, _, _, cx| {
+                    move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.command(SessionCommand::CloseTab(id));
+                        // The row stays, so its keys must not keep applying after the click.
+                        this.release_row_focus(window, cx);
                         cx.notify();
                     },
                 )),
@@ -379,13 +382,11 @@ impl BrowserView {
             saved: false,
         };
         let target = ActivationTarget::Tab(id);
-        let row = row_frame(("tab", id.get()), look, labels)
-            .on_click(cx.listener(move |this, _, window, cx| {
+        let row = row_frame(("tab", id.get()), look, labels).on_click(cx.listener(
+            move |this, _, window, cx| {
                 this.activate_row(target, window, cx);
-            }))
-            .on_action(cx.listener(move |this, _: &OpenRow, window, cx| {
-                this.activate_row(target, window, cx);
-            }));
+            },
+        ));
         if !labels {
             return row;
         }
@@ -422,13 +423,11 @@ impl BrowserView {
             .aria_expanded(expanded)
             // A click lets go of focus, as page rows do, so Alt Left then means Back; a
             // keyboard toggle keeps focus on the row so the tree can still be walked.
-            .on_click(cx.listener(move |this, _, window, cx| {
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.toggle_folder(id);
-                window.blur(cx);
-                cx.notify();
-            }))
-            .on_action(cx.listener(move |this, _: &OpenRow, _, cx| {
-                this.toggle_folder(id);
+                if !event.is_keyboard() {
+                    this.release_row_focus(window, cx);
+                }
                 cx.notify();
             }));
         let row = movable_row(row, SavedEntryId::Folder(id), folder.title.clone(), cx);
@@ -492,31 +491,29 @@ fn movable_row(
         .on_action(cx.listener(move |this, _: &MoveRowDown, _, cx| down(this, cx)))
         .on_action(cx.listener(move |this, _: &MoveRowOut, _, cx| out(this, cx)))
         .on_action(cx.listener(move |this, _: &MoveRowIn, _, cx| into(this, cx)))
-        .on_drag(DraggedRow { entry, title }, |dragged, _, _, cx| {
+        // Mouse-down focused the row; a drag lets go of that focus, as a click does.
+        .on_drag(DraggedRow { entry, title }, |dragged, _, window, cx| {
+            window.blur(cx);
             cx.new(|_| dragged.clone())
         })
         .drag_over::<DraggedRow>(|style, _, _, _| style.bg(theme::preview_row_selected()))
-        .on_drop(cx.listener(move |this, dragged: &DraggedRow, _, cx| {
+        .on_drop(cx.listener(move |this, dragged: &DraggedRow, window, cx| {
             this.drop_saved_row(dragged.entry, DropTarget::Row(entry));
+            this.release_row_focus(window, cx);
             cx.notify();
         }))
 }
 
 /// The shared row shape: a titled row when labels show, a centred icon button otherwise.
-/// Every row is a focusable tree item at its nesting level, keeping its title as the
-/// accessible name; the focused row shows an accent outline (what Enter will act on).
+/// Every row is a tree item at its nesting level, keeping its title as the accessible name,
+/// and its own Tab stop with P1-36's focus ring: Enter or Space uses it (a keyboard click).
+// TODO(DW-61): one Tab stop for the tree with arrow keys between rows, Left and Right for
+// folders, and F6 landing on the active row.
 fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<Div> {
-    let row = div()
-        .id(id)
-        .role(Role::TreeItem)
+    let row = control(div().id(id), Role::TreeItem, look.title.clone())
         .aria_level(look.depth + 1)
-        .aria_label(look.title.clone())
         .aria_selected(look.active)
         .key_context(ROW_CONTEXT)
-        .tab_index(0)
-        .border_1()
-        .border_color(gpui::transparent_black())
-        .focus(|style| style.border_color(theme::accent()))
         .h(px(ROW_HEIGHT))
         .flex_none()
         .rounded_md()
@@ -561,12 +558,7 @@ fn row_icon(letter: &str, saved: bool) -> Div {
 
 /// A small control at the end of a wide row, named for screen readers.
 fn row_action(id: impl Into<ElementId>, glyph: &'static str, name: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(name)
-        .px_1()
-        .child(glyph)
+    control(div().id(id).px_1().rounded_md(), Role::Button, name).child(glyph)
 }
 
 /// Opens the palette: a labelled button when wide, an icon button otherwise.
@@ -591,7 +583,11 @@ fn plugin_section(labels: bool) -> Div {
                     .child("PLUGINS"),
             )
             .children(PLUGINS.map(|name| {
+                // Not yet a control: screen readers read it as a label until plugins exist.
                 div()
+                    .id(name)
+                    .role(Role::Label)
+                    .aria_label(format!("{name} · coming soon"))
                     .px_2()
                     .py_1()
                     .text_color(theme::icon_dim())
@@ -601,6 +597,7 @@ fn plugin_section(labels: bool) -> Div {
     section.children(PLUGINS.map(|name| {
         div()
             .id(name)
+            .role(Role::Label)
             .aria_label(format!("{name} · coming soon"))
             .w(px(ICON_BUTTON))
             .h(px(ICON_BUTTON))
@@ -644,12 +641,8 @@ fn tabs_header(labels: bool, cx: &mut Context<BrowserView>) -> Div {
                 .child("SAVED & OPEN TABS"),
         )
         .child(
-            keyboard_button(button("new-folder", "New folder"))
-                .aria_label("New folder")
-                .on_click(cx.listener(|this, _, window, cx| this.start_new_folder(window, cx)))
-                .on_action(cx.listener(|this, _: &PressButton, window, cx| {
-                    this.start_new_folder(window, cx);
-                })),
+            button("new-folder", "New folder")
+                .on_click(cx.listener(|this, _, window, cx| this.start_new_folder(window, cx))),
         )
         .child(
             button("new-tab", "+")
@@ -660,10 +653,7 @@ fn tabs_header(labels: bool, cx: &mut Context<BrowserView>) -> Div {
 
 /// A square icon button the width of the favicon-only column.
 fn icon_button(id: &'static str, glyph: &'static str, name: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(name)
+    control(div().id(id), Role::Button, name)
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
         .flex()
