@@ -12,6 +12,16 @@ you found it in the commit message, not here.
 
 ## Page tabs: WebView2 through wry
 
+- **A native fixture rejects popup focus before trying it.** Windows may
+  deny `SetForegroundWindow` for a background process even though WebView2's
+  `MoveFocus` succeeds. Keep foreground denial diagnostic and require the
+  synthetic child to report `document.hasFocus()` after the production focus
+  command. P1-11's 2026-10-12 run passed that assertion with foreground
+  activation denied. This proves page focus, not GPUI visual acceptance.
+  Sources: `docs/p1-11-popups.md` and Microsoft's
+  [foreground activation rules](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
+  (documented restriction and native observation).
+
 - **A synthetic Windows HTTP server drops a connection before request bytes
   arrive.** An accepted socket inherits the listener's nonblocking mode;
   setting read/write timeouts does not make it blocking. Explicitly set each

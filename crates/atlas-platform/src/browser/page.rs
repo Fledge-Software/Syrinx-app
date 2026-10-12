@@ -22,8 +22,7 @@ use windows::{
     core::{BOOL, Interface, PWSTR},
 };
 use wry::{
-    NewWindowResponse, PageLoadEvent, Rect, WebView, WebViewBuilder, WebViewBuilderExtWindows,
-    WebViewExtWindows,
+    PageLoadEvent, Rect, WebView, WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows,
     dpi::{PhysicalPosition, PhysicalSize},
 };
 
@@ -55,11 +54,11 @@ impl Page {
         bounds: PageBounds,
         events: EventSink,
         shortcuts: ShortcutSink,
+        popups: super::popups::PopupRequests,
     ) -> Result<Self, BrowserError> {
         let parent = Parent(NonZeroIsize::new(parent).ok_or(BrowserError::InvalidWindow)?);
         let titles = events.clone();
         let loading = events.clone();
-        let popups = events.clone();
         let closes = events.clone();
         let view = WebViewBuilder::new()
             .with_environment(environment.clone())
@@ -77,10 +76,6 @@ impl Page {
                     loading: matches!(state, PageLoadEvent::Started),
                 })
             })
-            .with_new_window_req_handler(move |_url, _features| {
-                popups.emit(BrowserEvent::PopupBlocked { id });
-                NewWindowResponse::Deny
-            })
             .with_window_close_requested_handler(move || {
                 // Native teardown waits for the persisted model, outside this callback.
                 closes.emit(BrowserEvent::CloseRequested { id });
@@ -94,11 +89,16 @@ impl Page {
             settings.cast().map_err(|_| BrowserError::Settings)?;
         unsafe { settings.SetIsPasswordAutosaveEnabled(false) }
             .map_err(|_| BrowserError::Settings)?;
+        popups.register(&view, id, events.clone())?;
         register_source(&view, id, events.clone())?;
         register_navigation(&view, id, events.clone())?;
         register_process_failure(&view, id, events.clone())?;
         register_shortcuts(&view, shortcuts, id, events)?;
         Ok(Self { view })
+    }
+
+    pub(super) fn webview(&self) -> webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2 {
+        self.view.webview()
     }
 
     pub(super) fn navigate(&self, url: &str) -> Result<(), BrowserError> {
@@ -156,7 +156,7 @@ impl Page {
     }
 }
 
-fn validate_url(url: &str) -> Result<(), BrowserError> {
+pub(super) fn validate_url(url: &str) -> Result<(), BrowserError> {
     if url.contains('\0')
         || !(url.starts_with("https://") || url.starts_with("http://") || url == "about:blank")
     {

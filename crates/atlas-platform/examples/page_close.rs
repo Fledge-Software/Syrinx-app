@@ -3,6 +3,9 @@
 #[path = "page_close/lifecycle.rs"]
 mod lifecycle;
 
+#[path = "page_close/popups.rs"]
+mod popups;
+
 use std::{
     fs,
     io::{self, Read, Write},
@@ -34,6 +37,14 @@ use windows::{
     core::w,
 };
 
+type Exercise = fn(
+    &BrowserHost,
+    &mut UnboundedReceiver<BrowserEvent>,
+    HWND,
+    &str,
+    Instant,
+) -> Result<(), String>;
+
 const DEADLINE: Duration = Duration::from_secs(45);
 const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Synthetic close fixture</title>\
     <link rel=icon href=data:,><p>Synthetic close fixture</p>\
@@ -45,7 +56,7 @@ fn main() -> ExitCode {
     let watchdog = match thread::Builder::new()
         .name("atlas-close-harness-deadline".into())
         .spawn(
-            move || match cancellation.recv_timeout(Duration::from_secs(60)) {
+            move || match cancellation.recv_timeout(Duration::from_secs(120)) {
                 Ok(()) => {}
                 Err(error) => {
                     eprintln!("Synthetic page-close harness deadline failed: {error}.");
@@ -69,7 +80,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => {
             println!(
-                "Synthetic native close, visibility, bounds, retry, 12 lifecycle cycles and multi-page shutdown passed; the reported WebView2 crash is not diagnosed."
+                "Synthetic native close, visibility, bounds, retry, 12 lifecycle cycles, popup opener/message/focus and multi-page shutdown passed; the reported WebView2 crash is not diagnosed."
             );
             ExitCode::SUCCESS
         }
@@ -83,8 +94,14 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let profile = reserve_profile()?;
     let server = Server::start()?;
-    let result = run_browser(profile, &server.url);
-    combine(result, server.stop())
+    let result = run_browser(profile, &server.url, exercise);
+    // Run both suites even if one fails; separate fresh profiles keep their evidence independent.
+    let popup_result =
+        reserve_profile().and_then(|profile| run_browser(profile, &server.url, popups::exercise));
+    if popup_result.is_ok() {
+        println!("Synthetic popup opener, message reply and native page focus passed.");
+    }
+    combine(combine(result, popup_result), server.stop())
 }
 
 fn reserve_profile() -> Result<PathBuf, String> {
@@ -101,7 +118,7 @@ fn reserve_profile() -> Result<PathBuf, String> {
     Ok(profile)
 }
 
-fn run_browser(profile: PathBuf, url: &str) -> Result<(), String> {
+fn run_browser(profile: PathBuf, url: &str, exercise: Exercise) -> Result<(), String> {
     let parent = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -195,7 +212,10 @@ fn create_close_fixture(
     let mut requested = false;
     while !(created && source_changed && navigated && requested) {
         match checked_event(events, deadline).map_err(|error| {
-            format!("Synthetic tab {expected}, fixture creation/navigation wait: {error}")
+            format!(
+                "Synthetic tab {expected}, fixture creation/navigation wait: {error} \
+                 (created={created}, source={source_changed}, navigated={navigated}, close={requested})"
+            )
         })? {
             BrowserEvent::Created { id } if id == expected => created = true,
             BrowserEvent::Url { id, url: actual } if id == expected && actual == url => {
@@ -432,9 +452,10 @@ fn respond(mut stream: TcpStream) -> Result<(), String> {
             Err(error) => return Err(io_error("read synthetic request", error)),
         }
     }
+    let page = popups::response(&request[..length]).unwrap_or(PAGE);
     let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{PAGE}",
-        PAGE.len()
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",
+        page.len()
     );
     stream
         .write_all(response.as_bytes())

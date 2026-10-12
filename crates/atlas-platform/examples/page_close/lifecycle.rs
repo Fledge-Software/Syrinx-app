@@ -61,8 +61,14 @@ fn exercise_repeated_lifecycle(
 ) -> Result<(), String> {
     // Fresh IDs keep delayed callbacks from an earlier cycle from satisfying a later wait.
     for id in 100..100 + STRESS_CYCLES {
+        let remaining = deadline.saturating_duration_since(Instant::now());
         let result = lifecycle_cycle(host, events, parent, survivor, id, url, deadline);
-        result.map_err(|error| format!("Synthetic lifecycle cycle {} failed: {error}", id - 99))?;
+        result.map_err(|error| {
+            format!(
+                "Synthetic lifecycle cycle {} failed ({remaining:?} left at start): {error}",
+                id - 99
+            )
+        })?;
     }
 
     // Leave three exact native children for Stopped/join to release before parent destruction.
@@ -261,7 +267,7 @@ fn close(
     wait_error(events, Some(id), BrowserError::UnknownTab, deadline)
 }
 
-fn barrier(
+pub(super) fn barrier(
     host: &BrowserHost,
     events: &mut UnboundedReceiver<BrowserEvent>,
     deadline: Instant,
@@ -328,7 +334,7 @@ fn window_rect(child: HWND) -> Result<RECT, String> {
     Ok(rect)
 }
 
-fn require_visible(child: HWND, expected: bool) -> Result<(), String> {
+pub(super) fn require_visible(child: HWND, expected: bool) -> Result<(), String> {
     require_window(child, true)?;
     unsafe { SetLastError(ERROR_SUCCESS) };
     let style = unsafe { GetWindowLongPtrW(child, GWL_STYLE) };
@@ -405,7 +411,7 @@ fn require_thread_ownership(parent: HWND, children: &[HWND]) -> Result<(), Strin
     Ok(())
 }
 
-fn only_child(parent: HWND) -> Result<HWND, String> {
+pub(super) fn only_child(parent: HWND) -> Result<HWND, String> {
     let children = children(parent)?;
     match children.as_slice() {
         [child] => Ok(*child),
@@ -413,7 +419,7 @@ fn only_child(parent: HWND) -> Result<HWND, String> {
     }
 }
 
-fn other_child(parent: HWND, existing: HWND) -> Result<HWND, String> {
+pub(super) fn other_child(parent: HWND, existing: HWND) -> Result<HWND, String> {
     let children = children(parent)?;
     if children.len() != 2 || !children.contains(&existing) {
         return Err("Synthetic retry did not retain exactly two page children.".into());
