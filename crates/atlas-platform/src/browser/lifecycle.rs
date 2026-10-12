@@ -25,10 +25,22 @@ pub(super) const GRACE: Duration = Duration::from_secs(5);
 pub(super) fn exit_fullscreen(view: &WebView) -> Result<(), BrowserError> {
     use windows::Win32::{
         Foundation::{LPARAM, WPARAM},
-        UI::WindowsAndMessaging::{
-            GUITHREADINFO, GetGUIThreadInfo, IsChild, PostMessageW, WM_KEYDOWN, WM_KEYUP,
+        UI::{
+            Input::KeyboardAndMouse::SetFocus,
+            WindowsAndMessaging::{
+                GUITHREADINFO, GetGUIThreadInfo, IsChild, PostMessageW, WM_KEYDOWN, WM_KEYUP,
+            },
         },
     };
+    // A late exit command must not send Escape to a page which already left fullscreen.
+    let mut fullscreen = BOOL::default();
+    unsafe { view.webview().ContainsFullScreenElement(&mut fullscreen) }
+        .map_err(|_| BrowserError::Metadata)?;
+    if !fullscreen.as_bool() {
+        return Ok(());
+    }
+    // Reestablish the host's native focus before MoveFocus, including after Alt+Tab.
+    unsafe { SetFocus(Some(view.hwnd())) }.map_err(|_| BrowserError::Focus)?;
     view.focus().map_err(|_| BrowserError::Focus)?;
     let mut info = GUITHREADINFO {
         cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
@@ -308,6 +320,43 @@ impl Drop for WakeTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queued_metadata_survives_suspension_but_not_controller_replacement() {
+        let life = CallbackLife::new();
+        let (sender, mut received) = futures::channel::mpsc::unbounded();
+        let events = EventSink(sender, Some(life.clone()));
+        events.emit(BrowserEvent::Title {
+            id: 7,
+            title: "Finished synthetic page".into(),
+        });
+        events.emit(BrowserEvent::Url {
+            id: 7,
+            url: "https://finished.example.test/".into(),
+        });
+        events.emit(BrowserEvent::Loading {
+            id: 7,
+            loading: false,
+        });
+        life.suspend();
+        assert!(
+            matches!(received.try_recv().unwrap().into_current(), Some(BrowserEvent::Title { title, .. }) if title == "Finished synthetic page")
+        );
+        assert!(
+            matches!(received.try_recv().unwrap().into_current(), Some(BrowserEvent::Url { url, .. }) if url == "https://finished.example.test/")
+        );
+        life.resume();
+        assert!(matches!(
+            received.try_recv().unwrap().into_current(),
+            Some(BrowserEvent::Loading { loading: false, .. })
+        ));
+        events.emit(BrowserEvent::Title {
+            id: 7,
+            title: "Retired synthetic page".into(),
+        });
+        life.retire();
+        assert!(received.try_recv().unwrap().into_current().is_none());
+    }
+
     #[test]
     fn suspension_completion_rejects_activation_rehide_duplicates_and_close() {
         let mut state = HiddenState {
