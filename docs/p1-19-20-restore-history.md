@@ -205,7 +205,7 @@ tier-1 catalogue (removing or recomputing every affected `Target::History`
 row, which this participant does not report today), clearing WebView2's own
 data, and replaying completed clears on the staged copy during recovery.
 Until then recovery keeps refusing backups with a nonzero deletion
-generation.
+generation. P1-27 has since done all of this; see `docs/p1-27-clear-data.md`.
 
 ## Tests
 

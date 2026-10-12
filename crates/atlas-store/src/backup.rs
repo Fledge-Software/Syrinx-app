@@ -123,7 +123,8 @@ fn write_snapshot(
         id: file.id(),
         created_at: now_utc_seconds,
         revision: snapshot.revision,
-        deletion_generation: 0,
+        // The copy carries the same generation, which recovery checks before replaying past it.
+        deletion_generation: crate::history::applied_generation(connection)?,
     };
     // Completion is the final write; an interrupted or failed validation never becomes eligible.
     file.publish(metadata)?;
@@ -133,9 +134,6 @@ fn write_snapshot(
 fn valid_candidates(archive: &dyn BackupArchive) -> Result<Vec<BackupEntry>, StoreError> {
     let mut valid = Vec::new();
     for entry in archive.candidates()? {
-        if entry.metadata.deletion_generation != 0 {
-            return Err(StoreError::UnsupportedDeletionGeneration);
-        }
         if entry.metadata.id != entry.file.id() {
             continue;
         }

@@ -9,7 +9,7 @@ use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x4154_4c53;
-pub(crate) const SCHEMA_VERSION: i64 = 4;
+pub(crate) const SCHEMA_VERSION: i64 = 5;
 
 /// The record layout of a recognized Atlas database, by `user_version`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,14 +22,26 @@ pub(crate) enum SchemaGeneration {
     Preferences,
     /// Version 4 (P1-20): adds browsing history beside the version 3 session and preferences.
     History,
+    /// Version 5 (P1-27): records which D47 history clears this database has applied.
+    Deletions,
 }
 
-pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::History;
+pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Deletions;
 
 impl SchemaGeneration {
     /// Whether this generation stores settings and tiles, which must then validate too.
     fn has_preferences(self) -> bool {
-        matches!(self, Self::Preferences | Self::History)
+        matches!(self, Self::Preferences | Self::History | Self::Deletions)
+    }
+
+    /// Whether this generation stores browsing history that a clear must reach.
+    pub(crate) fn has_history(self) -> bool {
+        matches!(self, Self::History | Self::Deletions)
+    }
+
+    /// Whether this generation records its applied clear generation.
+    pub(crate) fn has_deletion_state(self) -> bool {
+        matches!(self, Self::Deletions)
     }
 }
 
@@ -95,6 +107,12 @@ const HISTORY_VISITS_TABLE: &str = "CREATE TABLE history_visits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     url_id INTEGER NOT NULL REFERENCES history_urls(id),
     visited_at INTEGER NOT NULL CHECK(visited_at >= 0)
+) STRICT";
+
+// The newest D47 clear applied here; a restored copy replays the external journal past it.
+const DELETION_STATE_TABLE: &str = "CREATE TABLE history_deletion_state (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    applied_generation INTEGER NOT NULL CHECK(applied_generation >= 0)
 ) STRICT";
 
 const HISTORY_VISITS_INDEX: &str =
@@ -244,6 +262,15 @@ fn integrity_check(
     Ok(())
 }
 
+/// Identifies a staged copy's exact Atlas schema without migrating or restricting it.
+pub(crate) fn staged_generation(connection: &Connection) -> Result<SchemaGeneration, StoreError> {
+    let Identity::Atlas(generation) = inspect_identity(connection)? else {
+        return Err(StoreError::SchemaMismatch);
+    };
+    validate_schema(connection, generation)?;
+    Ok(generation)
+}
+
 pub(crate) fn prepare_reader(connection: &Connection) -> Result<SchemaGeneration, StoreError> {
     // Reader connections cannot change records even if a later query is written incorrectly.
     let Identity::Atlas(generation) = inspect_identity(connection)? else {
@@ -281,6 +308,7 @@ fn inspect_identity(connection: &Connection) -> Result<Identity, StoreError> {
         2 => Ok(Identity::Atlas(SchemaGeneration::Folders)),
         3 => Ok(Identity::Atlas(SchemaGeneration::Preferences)),
         4 => Ok(Identity::Atlas(SchemaGeneration::History)),
+        5 => Ok(Identity::Atlas(SchemaGeneration::Deletions)),
         version if version > SCHEMA_VERSION => Err(StoreError::FutureSchema { version }),
         _ => Err(StoreError::SchemaMismatch),
     }
@@ -317,12 +345,19 @@ pub(crate) fn history_migration() -> String {
     format!("{HISTORY_URLS_TABLE}; {HISTORY_VISITS_TABLE}; {HISTORY_VISITS_INDEX};")
 }
 
+/// Version 5: records that no clear has been applied yet. The startup reconcile replays the
+/// journal past this generation, so history kept from an older file is still cleared.
+pub(crate) fn deletions_migration() -> String {
+    format!("{DELETION_STATE_TABLE}; INSERT INTO history_deletion_state VALUES (1, 0);")
+}
+
 /// Owns the migration SQL that `rusqlite_migration` borrows, numbered by position.
 pub(crate) struct MigrationScripts {
     initial: String,
     folders: String,
     preferences: String,
     history: String,
+    deletions: String,
 }
 
 impl MigrationScripts {
@@ -332,6 +367,7 @@ impl MigrationScripts {
             folders: folders_migration(),
             preferences: preferences_migration(),
             history: history_migration(),
+            deletions: deletions_migration(),
         }
     }
 
@@ -341,6 +377,7 @@ impl MigrationScripts {
             M::up_with_hook(&self.folders, check_migrated_records).foreign_key_check(),
             M::up_with_hook(&self.preferences, check_migrated_preferences),
             M::up_with_hook(&self.history, check_migrated_records).foreign_key_check(),
+            M::up_with_hook(&self.deletions, check_migrated_deletions),
         ])
     }
 }
@@ -357,6 +394,15 @@ fn check_migrated_preferences(transaction: &Transaction<'_>) -> HookResult {
     crate::preferences::read(transaction)
         .map(drop)
         .map_err(|error| HookError::Hook(error.to_string()))
+}
+
+fn check_migrated_deletions(transaction: &Transaction<'_>) -> HookResult {
+    // The new state must read back as the initial generation before the commit.
+    match crate::history::applied_generation(transaction) {
+        Ok(0) => Ok(()),
+        Ok(_) => Err(HookError::Hook("unexpected deletion generation".to_owned())),
+        Err(error) => Err(HookError::Hook(error.to_string())),
+    }
 }
 
 pub(crate) fn apply_migrations(
@@ -425,6 +471,26 @@ const PREFERENCE_OBJECTS: &[SchemaObject] = &[
     table("settings", SETTINGS_TABLE),
 ];
 
+const DELETION_OBJECTS: &[SchemaObject] = &[
+    table("history_deletion_state", DELETION_STATE_TABLE),
+    table("history_urls", HISTORY_URLS_TABLE),
+    table("history_visits", HISTORY_VISITS_TABLE),
+    SchemaObject {
+        kind: "index",
+        name: "history_visits_by_url",
+        table: "history_visits",
+        sql: HISTORY_VISITS_INDEX,
+    },
+    table("live_tabs", LIVE_TABLE),
+    table("quick_destinations", DESTINATIONS_TABLE),
+    table("saved_folder_state", FOLDER_STATE_TABLE),
+    table("saved_folders", FOLDERS_TABLE),
+    table("saved_layout", LAYOUT_TABLE),
+    table("saved_pages", SAVED_TABLE),
+    table("session_state", STATE_TABLE),
+    table("settings", SETTINGS_TABLE),
+];
+
 const HISTORY_OBJECTS: &[SchemaObject] = &[
     table("history_urls", HISTORY_URLS_TABLE),
     table("history_visits", HISTORY_VISITS_TABLE),
@@ -451,6 +517,7 @@ fn expected_objects(generation: SchemaGeneration) -> &'static [SchemaObject] {
         SchemaGeneration::Folders => FOLDER_OBJECTS,
         SchemaGeneration::Preferences => PREFERENCE_OBJECTS,
         SchemaGeneration::History => HISTORY_OBJECTS,
+        SchemaGeneration::Deletions => DELETION_OBJECTS,
     }
 }
 

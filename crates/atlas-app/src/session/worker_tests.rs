@@ -65,6 +65,7 @@ impl Fixture {
             "atlas.db-shm",
             "atlas.db-journal",
             "atlas.lifecycle",
+            "atlas.deletions",
         ] {
             remove_if_present(&self.0.join(name), false);
         }
@@ -658,8 +659,9 @@ fn worker_idle_path_publishes_the_acknowledged_snapshot_without_waiting_for_a_ti
     let lease =
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
     let archive = lease.backup_archive().expect("native backup archive");
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let store = Store::open(lease.clone()).expect("open guarded synthetic store");
-    let mut worker = Worker::restore(&store).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -707,6 +709,8 @@ fn worker_idle_path_publishes_the_acknowledged_snapshot_without_waiting_for_a_ti
             fatal: false
         }
     ));
+    // The worker holds the deletion journal until it is dropped.
+    drop(worker);
     store.shutdown().expect("close synthetic backup store");
     drop(archive);
     drop(lease);
@@ -809,8 +813,9 @@ fn failed_close_save_reports_fatal_failure_without_acknowledging_native_cleanup(
     let lease = Arc::new(
         WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic failure store"),
     );
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let store = Store::open(lease).expect("open synthetic failure store");
-    let mut worker = Worker::restore(&store).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -847,6 +852,8 @@ fn failed_close_save_reports_fatal_failure_without_acknowledging_native_cleanup(
     let stored = store.load().expect("read rejected-close persistence");
     assert_eq!(stored.snapshot, acknowledged.model);
     assert_eq!(stored.revision, revision);
+    // The worker holds the deletion journal until it is dropped.
+    drop(worker);
     store.shutdown().expect("close synthetic failure store");
     fixture.cleanup();
 }

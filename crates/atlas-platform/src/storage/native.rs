@@ -271,14 +271,23 @@ pub(super) fn create_new_file(
 }
 
 pub(super) fn open_control(path: &Path) -> Result<File, LocationError> {
-    control_file(path, false)
+    control_file(path, false, LocationOperation::OpenControl)
 }
 
 pub(super) fn create_control(path: &Path) -> Result<File, LocationError> {
-    control_file(path, true)
+    control_file(path, true, LocationOperation::OpenControl)
 }
 
-fn control_file(path: &Path, create_new: bool) -> Result<File, LocationError> {
+/// Opens or creates the deletion journal with the same exclusive gate as the control file.
+pub(super) fn open_journal(path: &Path) -> Result<File, LocationError> {
+    control_file(path, false, LocationOperation::OpenDeletionJournal)
+}
+
+fn control_file(
+    path: &Path,
+    create_new: bool,
+    operation: LocationOperation,
+) -> Result<File, LocationError> {
     // No sharing excludes another reader, writer or deleter until this gate closes.
     let wide = wide_file_path(path);
     let opened = unsafe {
@@ -297,7 +306,7 @@ fn control_file(path: &Path, create_new: bool) -> Result<File, LocationError> {
         Err(error) if error.code() == HRESULT::from_win32(ERROR_SHARING_VIOLATION.0) => {
             Err(LocationError::StorageBusy)
         }
-        Err(error) => Err(os_error(LocationOperation::OpenControl, error)),
+        Err(error) => Err(os_error(operation, error)),
     }
 }
 

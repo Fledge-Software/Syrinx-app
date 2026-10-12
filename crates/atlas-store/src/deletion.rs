@@ -190,6 +190,24 @@ impl DeletionLog {
             .filter(|request| request.generation > self.completed_generation)
     }
 
+    /// The newest durable request's generation, whether completed or still pending.
+    pub fn last_generation(&self) -> u64 {
+        self.requests.last().map_or(0, |request| request.generation)
+    }
+
+    /// Lists every durable request a copy at `applied_generation` lacks, including a pending
+    /// one: a requested clear is the owner's intent, so applying it early never over-deletes.
+    pub fn unapplied(&self, applied_generation: u64) -> Result<&[DeletionRequest], DeletionError> {
+        if applied_generation > self.last_generation() {
+            return Err(DeletionError::MissingGeneration);
+        }
+        let applied =
+            usize::try_from(applied_generation).map_err(|_| DeletionError::MissingGeneration)?;
+        self.requests
+            .get(applied..)
+            .ok_or(DeletionError::MissingGeneration)
+    }
+
     /// Lists completed clears that a staged candidate has not yet applied.
     pub fn replay_after(
         &self,

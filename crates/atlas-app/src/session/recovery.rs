@@ -5,8 +5,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use atlas_platform::{RecoveryError, RecoveryOffer, StartupStorage, offer_recovery};
-use atlas_store::{StoreOperation, deletion::DeletionLog};
+use atlas_platform::{
+    RecoveryError, RecoveryOffer, StartupStorage, offer_recovery, read_deletion_log,
+};
+use atlas_store::StoreOperation;
 
 use super::*;
 
@@ -20,9 +22,9 @@ pub struct RecoveryPrompt {
 }
 
 pub(super) fn prepare_startup(directory: &Path) -> Result<StartupStorage, SessionError> {
-    // The preview has no history/deletions; nonzero backup generations still require refusal.
-    atlas_platform::prepare_startup(directory, &DeletionLog::default()).map_err(|error| match error
-    {
+    // A recovery offer replays this journal onto the restored copy (D47).
+    let deletions = read_deletion_log(directory).map_err(SessionError::Deletion)?;
+    atlas_platform::prepare_startup(directory, &deletions).map_err(|error| match error {
         RecoveryError::Location(error) => SessionError::Location(error),
         error => SessionError::Recovery(error.to_string()),
     })
@@ -37,13 +39,16 @@ pub(super) fn confirm_failed_start(
     if !can_probe(&startup) {
         return Err(startup);
     }
-    // This preview collects no history/deletions; the API still rejects nonzero backup generations.
-    let offer = offer_recovery(directory, &DeletionLog::default()).map_err(|error| {
-        SessionError::RecoveryFailed {
+    // The journal is read again here: the failed open may have followed a clear.
+    let offer = read_deletion_log(directory)
+        .map_err(|error| error.to_string())
+        .and_then(|deletions| {
+            offer_recovery(directory, &deletions).map_err(|error| error.to_string())
+        })
+        .map_err(|recovery| SessionError::RecoveryFailed {
             startup: Box::new(startup),
-            recovery: error.to_string(),
-        }
-    })?;
+            recovery,
+        })?;
     confirm_offer(offer, commands, events)
 }
 

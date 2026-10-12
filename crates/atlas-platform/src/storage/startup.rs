@@ -15,6 +15,7 @@ pub enum StartupStorage {
 }
 
 /// Initializes only a directory created by this call; missing established state needs recovery.
+/// `deletions` is the journal a recovery offer replays; a healthy primary ignores it.
 pub fn prepare_startup(
     directory: &Path,
     deletions: &DeletionLog,
@@ -27,14 +28,14 @@ fn prepare_with_probe(
     deletions: &DeletionLog,
     probe: Arc<dyn LocationProbe>,
 ) -> Result<StartupStorage, RecoveryError> {
-    recovery::require_zero_generation(deletions)?;
     let (prepared, created_final) = prepare_directory_with_creation(directory, probe, true)?;
-    acquire(prepared, created_final)
+    acquire(prepared, created_final, deletions)
 }
 
 fn acquire(
     prepared: PreparedDirectory,
     created_final: bool,
+    deletions: &DeletionLog,
 ) -> Result<StartupStorage, RecoveryError> {
     // Only an exclusively created final directory may initialize a primary.
     if created_final {
@@ -45,7 +46,7 @@ fn acquire(
     }
     // Interrupted recovery keeps its exact source, even if an installed primary is present.
     if recovery::has_intent(&prepared)? {
-        return recovery::offer_prepared(prepared).map(StartupStorage::Recovery);
+        return recovery::offer_prepared(prepared, deletions).map(StartupStorage::Recovery);
     }
     prepared.control.revalidate()?;
     let path = prepared.path.join(DATABASE_NAME);
@@ -56,7 +57,7 @@ fn acquire(
             .map_err(RecoveryError::from);
     }
 
-    recovery::offer_prepared(prepared).map(StartupStorage::Recovery)
+    recovery::offer_prepared(prepared, deletions).map(StartupStorage::Recovery)
 }
 
 fn create_fresh_primary(prepared: PreparedDirectory) -> Result<StartupStorage, RecoveryError> {
