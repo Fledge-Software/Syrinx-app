@@ -89,6 +89,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-right", Forward, None),
         KeyBinding::new("ctrl-r", Reload, None),
         KeyBinding::new("f11", Fullscreen, None),
+        KeyBinding::new(
+            "escape",
+            fullscreen::ExitPageFullscreen,
+            Some("AtlasFullscreen"),
+        ),
     ]);
     crate::palette::bind_keys(cx);
     essentials::bind_keys(cx);
@@ -102,6 +107,7 @@ struct PalettePopup {
 
 pub struct BrowserView {
     fullscreen: Option<(u64, bool)>,
+    fullscreen_pages: fullscreen::FullscreenPages,
     suspended_fixture: suspended_fixture::SuspendedFixture,
     connections: std::collections::HashMap<u64, atlas_platform::browser::ConnectionState>,
     find: Option<find::FindBar>,
@@ -149,6 +155,7 @@ impl BrowserView {
     ) -> Self {
         let mut view = Self {
             fullscreen: None,
+            fullscreen_pages: fullscreen::FullscreenPages::default(),
             suspended_fixture: suspended_fixture::SuspendedFixture::new(suspended_tabs),
             connections: std::collections::HashMap::new(),
             find: None,
@@ -1292,12 +1299,19 @@ impl Render for BrowserView {
         }
         if self.fullscreen.is_some() {
             return div()
+                .key_context("AtlasFullscreen")
                 .size_full()
                 .track_focus(&self.focus)
                 .on_action(cx.listener(|this, _: &Fullscreen, window, cx| {
                     this.fullscreen_shortcut(window);
                     cx.notify();
-                }));
+                }))
+                .on_action(
+                    cx.listener(|this, _: &fullscreen::ExitPageFullscreen, window, cx| {
+                        this.fullscreen_shortcut(window);
+                        cx.notify();
+                    }),
+                );
         }
         let mut page = div().flex_1().h_full();
         if self.shown.is_none() {

@@ -400,6 +400,10 @@ impl EventSink {
             let lifetime_only = matches!(
                 event,
                 BrowserEvent::ProcessFailed { .. }
+                    | BrowserEvent::Title { .. }
+                    | BrowserEvent::Url { .. }
+                    | BrowserEvent::Loading { .. }
+                    | BrowserEvent::Fullscreen { .. }
                     | BrowserEvent::Suspended { .. }
                     | BrowserEvent::PermissionFinished { .. }
                     | BrowserEvent::Error { .. }
@@ -601,9 +605,9 @@ impl BrowserState {
                 if active.is_some_and(|id| !self.pages.contains_key(&id)) {
                     return Err(BrowserError::UnknownTab);
                 }
-                for (id, page) in &self.pages {
-                    page.show(Some(*id) == active)?;
-                }
+                show_active(self.pages.keys().copied(), active, |id, visible| {
+                    self.pages[&id].show(visible)
+                })?;
             }
             BrowserCommand::Resize(next) => {
                 next.validate()?;
@@ -626,6 +630,49 @@ impl Drop for BrowserState {
     fn drop(&mut self) {
         // Complete pending requests while their openers and the COM apartment still exist.
         self.popups.clear();
+    }
+}
+
+// Resume the selected page before hiding anything, so a failed resume preserves the old view.
+fn show_active(
+    ids: impl Iterator<Item = u64>,
+    active: Option<u64>,
+    mut show: impl FnMut(u64, bool) -> Result<(), BrowserError>,
+) -> Result<(), BrowserError> {
+    if let Some(id) = active {
+        show(id, true)?;
+    }
+    let mut failure = None;
+    for id in ids.filter(|id| Some(*id) != active) {
+        if let Err(error) = show(id, false) {
+            failure.get_or_insert(error);
+        }
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+
+    #[test]
+    fn resume_failure_leaves_previous_page_visible_and_reports_failure() {
+        let mut visible = HashMap::from([(7, true), (8, false), (9, false)]);
+        let result = show_active([7, 8, 9].into_iter(), Some(8), |id, show| {
+            if id == 8 && show {
+                return Err(BrowserError::Suspension);
+            }
+            visible.insert(id, show);
+            Ok(())
+        });
+        assert_eq!(result, Err(BrowserError::Suspension));
+        assert_eq!(visible, HashMap::from([(7, true), (8, false), (9, false)]));
+        show_active([7, 8, 9].into_iter(), Some(8), |id, show| {
+            visible.insert(id, show);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(visible, HashMap::from([(7, false), (8, true), (9, false)]));
     }
 }
 
