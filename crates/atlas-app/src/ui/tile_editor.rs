@@ -296,7 +296,7 @@ fn target_chip(
     .child(label)
 }
 
-fn form_button(
+pub(super) fn form_button(
     id: &'static str,
     label: &'static str,
     palette: &Palette,
