@@ -2,9 +2,11 @@
 
 mod deletions;
 mod history;
+mod history_repair;
 mod preferences;
 mod recovery;
 
+pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
 pub use recovery::RecoveryPrompt;
 
 use std::{
@@ -40,6 +42,10 @@ pub enum HomeEntryAction {
 
 pub enum SessionCommand {
     ConfirmRecovery {
+        offer_id: u64,
+    },
+    /// The owner agreed to clear all history so an unusable deletion journal can be rebuilt.
+    ConfirmHistoryRepair {
         offer_id: u64,
     },
     HomeEntry {
@@ -129,6 +135,8 @@ pub struct SessionSnapshot {
 #[derive(Debug)]
 pub enum SessionEvent {
     RecoveryOffered(RecoveryPrompt),
+    /// The deletion journal cannot be trusted; continuing needs the owner to clear all history.
+    HistoryRepairOffered(HistoryRepairPrompt),
     /// The stored settings and tiles, sent once before the first state.
     Preferences {
         settings: BTreeMap<String, String>,
@@ -145,10 +153,10 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<Vec<HistoryVisit>, SessionError>,
     },
-    /// How many remembered addresses a `ClearHistory` request removed, or why it failed.
+    /// What a `ClearHistory` request removed, or why it failed.
     HistoryCleared {
         request_id: u64,
-        result: Result<usize, SessionError>,
+        result: Result<ClearedHistory, SessionError>,
     },
     Failure {
         error: SessionError,
@@ -156,6 +164,14 @@ pub enum SessionEvent {
     },
     /// Connections have closed before this event; joining the worker is now safe.
     Stopped,
+}
+
+/// Counts only, so the dialog can say how much went without naming any of it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ClearedHistory {
+    pub visits: usize,
+    /// Addresses left with no visit, now gone from history and search.
+    pub addresses: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -169,6 +185,8 @@ pub enum SessionError {
     /// The history-deletion journal refused or failed a record (D47).
     Deletion(JournalError),
     NoActiveTab,
+    /// The session worker could not take a request, or stopped before answering it.
+    StorageUnavailable,
     HistoryUnavailable,
     ClockUnavailable,
     WorkerStart {
@@ -200,6 +218,7 @@ impl fmt::Display for SessionError {
             Self::Destination(error) => write!(formatter, "Cannot change this tile: {error}"),
             Self::Deletion(error) => write!(formatter, "Cannot clear history safely: {error}"),
             Self::NoActiveTab => formatter.write_str("There is no active page to save"),
+            Self::StorageUnavailable => formatter.write_str("Local storage is unavailable"),
             Self::HistoryUnavailable => {
                 formatter.write_str("This history entry is no longer available")
             }
@@ -299,8 +318,11 @@ fn startup_session(
 ) -> Result<Option<(Store, Worker)>, SessionError> {
     // The guarded preflight retains either the existing primary or the exact recovery offer.
     let confirmed = match recovery::prepare_startup(data_dir)? {
-        StartupStorage::Ready(lease) => match open_session(lease) {
+        StartupStorage::Ready(lease) => match open_session(lease, false) {
             Ok(session) => return Ok(Some(session)),
+            Err(error) if history_repair::repairable(&error).is_some() => {
+                return open_with_repair(data_dir, error, commands, events);
+            }
             Err(error) => recovery::confirm_failed_start(data_dir, error, commands, events)?,
         },
         StartupStorage::Recovery(offer) => recovery::confirm_offer(offer, commands, events)?,
@@ -312,20 +334,65 @@ fn startup_session(
     let StartupStorage::Ready(lease) = recovery::prepare_startup(data_dir)? else {
         return Err(SessionError::RecoveryUnavailable);
     };
-    open_session(lease).map(Some)
+    match open_session(lease, false) {
+        Err(error) if history_repair::repairable(&error).is_some() => {
+            open_with_repair(data_dir, error, commands, events)
+        }
+        result => result.map(Some),
+    }
 }
 
-fn open_session(lease: WindowsDirectoryLease) -> Result<(Store, Worker), SessionError> {
-    // The journal lives beside the database and is held for the whole session (D47).
-    let journal = DeletionJournal::open(&lease).map_err(SessionError::Deletion)?;
-    let store = Store::open(Arc::new(lease)).map_err(SessionError::Store)?;
-    match Worker::restore(&store, journal) {
+/// Asks the owner to clear all history; on confirmation rebuilds the journal and opens.
+fn open_with_repair(
+    data_dir: &std::path::Path,
+    error: SessionError,
+    commands: &mpsc::Receiver<SessionCommand>,
+    events: &UnboundedSender<SessionEvent>,
+) -> Result<Option<(Store, Worker)>, SessionError> {
+    let Some(reason) = history_repair::repairable(&error) else {
+        return Err(error);
+    };
+    if !history_repair::confirm(reason, commands, events)? {
+        return Ok(None);
+    }
+    let StartupStorage::Ready(lease) = recovery::prepare_startup(data_dir)? else {
+        return Err(SessionError::RecoveryUnavailable);
+    };
+    open_session(lease, true).map(Some)
+}
+
+/// Opens the store and the deletion journal; `repair` rebuilds the journal and clears all
+/// history first, which the owner has confirmed.
+fn open_session(
+    lease: WindowsDirectoryLease,
+    repair: bool,
+) -> Result<(Store, Worker), SessionError> {
+    let lease = Arc::new(lease);
+    let store = Store::open(lease.clone()).map_err(SessionError::Store)?;
+    let opened = open_journal(&store, &lease, repair)
+        .and_then(|journal| Worker::restore(&store, journal, repair));
+    match opened {
         Ok(worker) => Ok((store, worker)),
         Err(error) => {
             // Recovery cannot overlap live connections or conceal a failed close.
             finish_store(Err(error), store.shutdown())
         }
     }
+}
+
+/// The journal lives beside the database and is held for the whole session (D47).
+fn open_journal(
+    store: &Store,
+    lease: &WindowsDirectoryLease,
+    repair: bool,
+) -> Result<DeletionJournal, SessionError> {
+    if !repair {
+        return DeletionJournal::open(lease).map_err(SessionError::Deletion);
+    }
+    let applied = store
+        .history_deletion_generation()
+        .map_err(SessionError::Store)?;
+    DeletionJournal::rebuild(lease, applied).map_err(SessionError::Deletion)
 }
 
 fn finish_store<T>(
@@ -356,9 +423,16 @@ struct Worker {
 }
 
 impl Worker {
-    fn restore(store: &Store, mut deletions: DeletionJournal) -> Result<Self, SessionError> {
+    fn restore(
+        store: &Store,
+        mut deletions: DeletionJournal,
+        clear_all: bool,
+    ) -> Result<Self, SessionError> {
         // Cleared history must be gone before the catalogue or any list can read it.
         deletions::reconcile(store, &mut deletions)?;
+        if clear_all {
+            deletions::clear_all(store, &mut deletions)?;
+        }
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
         let snapshot = model.snapshot();
@@ -452,7 +526,10 @@ impl Worker {
         // Titles that settled before this command name the page they were reported on.
         self.settle_titles(store, false, events)?;
         let command = match command {
-            SessionCommand::ConfirmRecovery { .. } => return recovery::reject_command(events),
+            SessionCommand::ConfirmRecovery { .. }
+            | SessionCommand::ConfirmHistoryRepair { .. } => {
+                return recovery::reject_command(events);
+            }
             SessionCommand::ObserveNavigation { id, success } => {
                 let result = self.history.navigation(
                     store,
@@ -737,7 +814,9 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         SessionCommand::ReopenClosed => {
             model.reopen_closed().map_err(SessionError::Model)?;
         }
-        SessionCommand::ConfirmRecovery { .. } => return Err(SessionError::RecoveryUnavailable),
+        SessionCommand::ConfirmRecovery { .. } | SessionCommand::ConfirmHistoryRepair { .. } => {
+            return Err(SessionError::RecoveryUnavailable);
+        }
         // Reads, history lookups and preferences are answered before the model is consulted.
         SessionCommand::Query { .. }
         | SessionCommand::RecentHistory { .. }

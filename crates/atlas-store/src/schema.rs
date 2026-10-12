@@ -12,7 +12,8 @@ pub(crate) const APPLICATION_ID: i64 = 0x4154_4c53;
 pub(crate) const SCHEMA_VERSION: i64 = 5;
 
 /// The record layout of a recognized Atlas database, by `user_version`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Declared in version order, so later generations compare greater.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum SchemaGeneration {
     /// Version 1 (P1-03): saved pages form one flat, ordered list.
     FlatSaved,
@@ -29,19 +30,19 @@ pub(crate) enum SchemaGeneration {
 pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Deletions;
 
 impl SchemaGeneration {
-    /// Whether this generation stores settings and tiles, which must then validate too.
+    /// Whether this generation (version 3 or later) stores settings and tiles.
     fn has_preferences(self) -> bool {
-        matches!(self, Self::Preferences | Self::History | Self::Deletions)
+        self >= Self::Preferences
     }
 
-    /// Whether this generation stores browsing history that a clear must reach.
+    /// Whether this generation (version 4 or later) stores history that a clear must reach.
     pub(crate) fn has_history(self) -> bool {
-        matches!(self, Self::History | Self::Deletions)
+        self >= Self::History
     }
 
-    /// Whether this generation records its applied clear generation.
+    /// Whether this generation (version 5 or later) records its applied clear generation.
     pub(crate) fn has_deletion_state(self) -> bool {
-        matches!(self, Self::Deletions)
+        self >= Self::Deletions
     }
 }
 
@@ -471,26 +472,6 @@ const PREFERENCE_OBJECTS: &[SchemaObject] = &[
     table("settings", SETTINGS_TABLE),
 ];
 
-const DELETION_OBJECTS: &[SchemaObject] = &[
-    table("history_deletion_state", DELETION_STATE_TABLE),
-    table("history_urls", HISTORY_URLS_TABLE),
-    table("history_visits", HISTORY_VISITS_TABLE),
-    SchemaObject {
-        kind: "index",
-        name: "history_visits_by_url",
-        table: "history_visits",
-        sql: HISTORY_VISITS_INDEX,
-    },
-    table("live_tabs", LIVE_TABLE),
-    table("quick_destinations", DESTINATIONS_TABLE),
-    table("saved_folder_state", FOLDER_STATE_TABLE),
-    table("saved_folders", FOLDERS_TABLE),
-    table("saved_layout", LAYOUT_TABLE),
-    table("saved_pages", SAVED_TABLE),
-    table("session_state", STATE_TABLE),
-    table("settings", SETTINGS_TABLE),
-];
-
 const HISTORY_OBJECTS: &[SchemaObject] = &[
     table("history_urls", HISTORY_URLS_TABLE),
     table("history_visits", HISTORY_VISITS_TABLE),
@@ -510,15 +491,19 @@ const HISTORY_OBJECTS: &[SchemaObject] = &[
     table("settings", SETTINGS_TABLE),
 ];
 
+/// Version 5 adds only this table, which sorts before every version 4 object.
+static DELETION_STATE_OBJECT: SchemaObject = table("history_deletion_state", DELETION_STATE_TABLE);
+
 /// Objects of each generation, sorted by name as `sqlite_schema` lists them.
-fn expected_objects(generation: SchemaGeneration) -> &'static [SchemaObject] {
-    match generation {
-        SchemaGeneration::FlatSaved => FLAT_OBJECTS,
-        SchemaGeneration::Folders => FOLDER_OBJECTS,
-        SchemaGeneration::Preferences => PREFERENCE_OBJECTS,
-        SchemaGeneration::History => HISTORY_OBJECTS,
-        SchemaGeneration::Deletions => DELETION_OBJECTS,
-    }
+fn expected_objects(generation: SchemaGeneration) -> impl Iterator<Item = &'static SchemaObject> {
+    let (added, base) = match generation {
+        SchemaGeneration::FlatSaved => (None, FLAT_OBJECTS),
+        SchemaGeneration::Folders => (None, FOLDER_OBJECTS),
+        SchemaGeneration::Preferences => (None, PREFERENCE_OBJECTS),
+        SchemaGeneration::History => (None, HISTORY_OBJECTS),
+        SchemaGeneration::Deletions => (Some(&DELETION_STATE_OBJECT), HISTORY_OBJECTS),
+    };
+    added.into_iter().chain(base)
 }
 
 fn validate_schema(

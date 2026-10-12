@@ -661,7 +661,7 @@ fn worker_idle_path_publishes_the_acknowledged_snapshot_without_waiting_for_a_ti
     let archive = lease.backup_archive().expect("native backup archive");
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let store = Store::open(lease.clone()).expect("open guarded synthetic store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, false).expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -815,7 +815,7 @@ fn failed_close_save_reports_fatal_failure_without_acknowledging_native_cleanup(
     );
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let store = Store::open(lease).expect("open synthetic failure store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, false).expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(

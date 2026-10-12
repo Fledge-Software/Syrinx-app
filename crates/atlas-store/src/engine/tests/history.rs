@@ -378,6 +378,7 @@ fn a_clear_reports_removed_and_changed_addresses_and_records_its_generation() {
         .expect("clear applies");
 
     // The second address lost its only visit; the first keeps its older one.
+    assert_eq!(deletion.visits, 2);
     assert_eq!(deletion.removed, [second.id]);
     assert_eq!(deletion.changed.len(), 1);
     let changed = &deletion.changed[0];

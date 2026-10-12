@@ -12,7 +12,7 @@ use webview2_com::{
     },
 };
 use windows::{
-    Win32::Foundation::{E_UNEXPECTED, HWND},
+    Win32::Foundation::{E_POINTER, E_UNEXPECTED, HWND},
     core::Interface,
 };
 
@@ -56,6 +56,13 @@ pub struct ClearSpan {
     pub end: i64,
 }
 
+/// Whether the data was cleared, and separately whether the hidden view closed afterwards.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClearOutcome {
+    pub cleared: Result<(), BrowserError>,
+    pub closed: Result<(), BrowserError>,
+}
+
 /// Clears the chosen kinds within `span`, or from all time.
 ///
 /// A hidden controller on the shared environment reaches the profile every page uses; it
@@ -65,15 +72,43 @@ pub(super) fn clear(
     parent: isize,
     kinds: BrowsingDataKinds,
     span: Option<ClearSpan>,
-) -> Result<(), BrowserError> {
+) -> ClearOutcome {
     if kinds.is_empty() {
-        return Ok(());
+        return ClearOutcome {
+            cleared: Ok(()),
+            closed: Ok(()),
+        };
     }
-    let controller = hidden_controller(environment, parent)?;
-    let result = clear_profile(&controller, kinds, span);
+    let controller = match hidden_controller(environment, parent) {
+        Ok(controller) => controller,
+        Err(error) => {
+            return ClearOutcome {
+                cleared: Err(error),
+                closed: Ok(()),
+            };
+        }
+    };
+    let cleared = clear_profile(&controller, kinds, span);
     // Closing releases the hidden view whether or not clearing succeeded.
-    let closed = unsafe { controller.Close() }.map_err(|_| BrowserError::ClearData);
-    result.and(closed)
+    let closed = unsafe { controller.Close() }.map_err(clear_error);
+    ClearOutcome { cleared, closed }
+}
+
+/// Keeps WebView2's HRESULT so a failure can be named; it carries no page content.
+fn clear_error(error: windows::core::Error) -> BrowserError {
+    BrowserError::ClearData {
+        code: error.code().0,
+    }
+}
+
+/// A wait that ends without WebView2's answer keeps its code, or reports an unexpected stop.
+fn pump_error(error: webview2_com::Error) -> BrowserError {
+    match error {
+        webview2_com::Error::WindowsError(error) => clear_error(error),
+        _ => BrowserError::ClearData {
+            code: E_UNEXPECTED.0,
+        },
+    }
 }
 
 fn hidden_controller(
@@ -84,17 +119,16 @@ fn hidden_controller(
     let completion = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
         move |status, controller| {
             let result = status
-                .map_err(|_| BrowserError::ClearData)
-                .and_then(|()| controller.ok_or(BrowserError::ClearData));
+                .map_err(clear_error)
+                .and_then(|()| controller.ok_or(BrowserError::ClearData { code: E_POINTER.0 }));
             send.send(result)
                 .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
         },
     ));
     unsafe { environment.CreateCoreWebView2Controller(HWND(parent as *mut _), &completion) }
-        .map_err(|_| BrowserError::ClearData)?;
-    let controller =
-        webview2_com::wait_with_pump(receive).map_err(|_| BrowserError::ClearData)??;
-    unsafe { controller.SetIsVisible(false) }.map_err(|_| BrowserError::ClearData)?;
+        .map_err(clear_error)?;
+    let controller = webview2_com::wait_with_pump(receive).map_err(pump_error)??;
+    unsafe { controller.SetIsVisible(false) }.map_err(clear_error)?;
     Ok(controller)
 }
 
@@ -110,10 +144,10 @@ fn clear_profile(
             .and_then(|webview| webview.Profile())
             .and_then(|profile| profile.cast())
     }
-    .map_err(|_| BrowserError::ClearData)?;
+    .map_err(clear_error)?;
     let (send, receive) = mpsc::channel();
     let completion = ClearBrowsingDataCompletedHandler::create(Box::new(move |status| {
-        send.send(status.map_err(|_| BrowserError::ClearData))
+        send.send(status.map_err(clear_error))
             .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
     }));
     let started = match span {
@@ -128,8 +162,8 @@ fn clear_profile(
         },
         None => unsafe { profile.ClearBrowsingData(kinds.webview2(), &completion) },
     };
-    started.map_err(|_| BrowserError::ClearData)?;
-    webview2_com::wait_with_pump(receive).map_err(|_| BrowserError::ClearData)?
+    started.map_err(clear_error)?;
+    webview2_com::wait_with_pump(receive).map_err(pump_error)?
 }
 
 #[cfg(test)]

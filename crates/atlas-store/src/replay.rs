@@ -71,7 +71,7 @@ fn replay_open(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| database_error(StoreOperation::BeginWrite, error))?;
-    let result = history::delete_ranges(&transaction, requests).and_then(|()| {
+    let result = history::delete_ranges(&transaction, requests).and_then(|_visits| {
         if !generation.has_deletion_state() {
             return Ok(());
         }
