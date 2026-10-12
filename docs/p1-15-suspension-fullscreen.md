@@ -29,13 +29,17 @@ live in `browser/hidden_timer.rs`, a pure function of time with its own tests:
 - A completion is matched by its `NavigationId`, so a superseded navigation's
   late completion cannot settle the current one.
 - A load that never finishes is suspended 60 seconds after it began, so a hung
-  page cannot stay awake forever. Redirects keep their navigation's ID and so
-  its first start time. A navigation with a new ID, or one Atlas requested,
-  is dated from its own start (Atlas's request, or `NavigationStarting`), even
-  if a superseded load has not yet reported its cancelled completion. A tab
-  whose load hung past the limit is therefore not suspended at once when it
-  is navigated elsewhere and hidden. The cost: a page that keeps starting new
-  navigations that never finish restarts the bound each time.
+  page cannot stay awake forever. A load keeps its first start time through:
+  - redirects, which keep their navigation's ID;
+  - while the page is hidden, new navigations the page starts itself, so a
+    hidden loop of script or meta-refresh navigations is still suspended
+    within 60 seconds of its first start.
+
+  An Atlas-requested navigation is dated from the request, and a navigation
+  the page starts while shown is dated from its own `NavigationStarting`.
+  This holds even if a superseded load has not yet reported its cancelled
+  completion. So a tab whose load hung past the limit is not suspended at once
+  when the owner navigates it elsewhere and then hides it.
 - Atlas's own request is tracked apart from the navigation WebView2 confirms.
   A confirmed start takes its own time, a request WebView2 never starts (a
   same-document jump, for example) expires at the 60-second bound, and a

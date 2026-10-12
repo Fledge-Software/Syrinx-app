@@ -74,7 +74,9 @@ impl HiddenTimer {
             (Some(requested), _) => requested,
             // A redirect keeps its navigation id, and its first start, so the limit still applies.
             (None, Some(loading)) if loading.id == id => loading.started,
-            // Anything else is a new navigation, even if a superseded load has not reported back.
+            // A hidden page's own navigation loop stays bounded by the first start.
+            (None, Some(loading)) if !self.visible => loading.started,
+            // Otherwise it is a new navigation, even if a superseded load has not reported back.
             _ => now,
         };
         self.loading = Some(Loading { id, started });
@@ -186,10 +188,8 @@ mod tests {
         let mut timer = hidden_loading(start, 1);
         timer.navigation_started(2, start + Duration::from_secs(1));
         timer.navigation_completed(1, start + Duration::from_secs(2));
-        assert_eq!(
-            timer.due(),
-            Some(start + Duration::from_secs(1) + LOADING_LIMIT)
-        );
+        // A hidden page's own new navigation keeps the first start.
+        assert_eq!(timer.due(), Some(start + LOADING_LIMIT));
         timer.navigation_completed(2, start + Duration::from_secs(3));
         assert_eq!(timer.due(), Some(start + Duration::from_secs(3) + GRACE));
     }
@@ -228,13 +228,49 @@ mod tests {
         requested.shown(false, hung + Duration::from_millis(500));
         assert_eq!(requested.due(), Some(hung + LOADING_LIMIT));
 
-        // A page-initiated navigation with a new id is new too, not a redirect.
+        // A page-initiated navigation while shown is new too, and keeps its start once hidden.
         let mut clicked = HiddenTimer::new(start);
         clicked.shown(true, start);
         clicked.navigation_started(1, start);
         clicked.navigation_started(2, hung);
         clicked.shown(false, hung + Duration::from_millis(500));
         assert_eq!(clicked.due(), Some(hung + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn a_hidden_navigation_loop_is_suspended_within_the_limit_of_its_first_start() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.navigation_started(1, start);
+        // Script or meta-refresh keeps starting new navigations that never finish.
+        for (step, id) in (2..20).enumerate() {
+            let now = start + Duration::from_secs(3 * (step as u64 + 1));
+            timer.navigation_started(id, now);
+            assert_eq!(timer.due(), Some(start + LOADING_LIMIT));
+        }
+        assert!(timer.suspension_due(start + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn a_redirect_after_a_request_keeps_the_request_time() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.navigation_requested(start);
+        timer.navigation_started(3, start + Duration::from_secs(2));
+        timer.navigation_started(3, start + Duration::from_secs(40));
+        assert_eq!(timer.due(), Some(start + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn an_expired_request_does_not_date_a_later_start() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.shown(true, start);
+        timer.navigation_requested(start);
+        let later = start + LOADING_LIMIT + Duration::from_secs(5);
+        timer.navigation_started(8, later);
+        timer.shown(false, later);
+        assert_eq!(timer.due(), Some(later + LOADING_LIMIT));
     }
 
     #[test]
