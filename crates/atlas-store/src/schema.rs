@@ -9,7 +9,7 @@ use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x4154_4c53;
-pub(crate) const SCHEMA_VERSION: i64 = 2;
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 
 /// The record layout of a recognized Atlas database, by `user_version`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,9 +18,11 @@ pub(crate) enum SchemaGeneration {
     FlatSaved,
     /// Version 2 (P1-21): saved pages and folders form an ordered tree.
     Folders,
+    /// Version 3 (P1-20): adds browsing history beside the version 2 session.
+    History,
 }
 
-pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Folders;
+pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::History;
 
 /// What a database file holds before Atlas writes to it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,6 +71,25 @@ const FOLDER_STATE_TABLE: &str = "CREATE TABLE saved_folder_state (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     last_saved_folder_id BLOB NOT NULL CHECK(length(last_saved_folder_id) = 8)
 ) STRICT";
+
+// One row per visited address; AUTOINCREMENT keeps cleared identities from being reused.
+const HISTORY_URLS_TABLE: &str = "CREATE TABLE history_urls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    address TEXT NOT NULL UNIQUE CHECK(length(address) > 0),
+    title TEXT NOT NULL,
+    visit_count INTEGER NOT NULL CHECK(visit_count > 0),
+    last_visited INTEGER NOT NULL CHECK(last_visited >= 0)
+) STRICT";
+
+// One row per visit, timed in Unix seconds to match D47's deletion ranges.
+const HISTORY_VISITS_TABLE: &str = "CREATE TABLE history_visits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url_id INTEGER NOT NULL REFERENCES history_urls(id),
+    visited_at INTEGER NOT NULL CHECK(visited_at >= 0)
+) STRICT";
+
+const HISTORY_VISITS_INDEX: &str =
+    "CREATE INDEX history_visits_by_url ON history_visits(url_id, visited_at)";
 
 const STATE_TABLE: &str = "CREATE TABLE session_state (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -226,6 +247,7 @@ fn inspect_identity(connection: &Connection) -> Result<Identity, StoreError> {
     match version {
         1 => Ok(Identity::Atlas(SchemaGeneration::FlatSaved)),
         2 => Ok(Identity::Atlas(SchemaGeneration::Folders)),
+        3 => Ok(Identity::Atlas(SchemaGeneration::History)),
         version if version > SCHEMA_VERSION => Err(StoreError::FutureSchema { version }),
         _ => Err(StoreError::SchemaMismatch),
     }
@@ -251,10 +273,17 @@ pub(crate) fn folders_migration() -> String {
     )
 }
 
+/// Version 3: adds empty history tables. It alters no earlier table, and history starts
+/// empty because nothing is imported (D10).
+pub(crate) fn history_migration() -> String {
+    format!("{HISTORY_URLS_TABLE}; {HISTORY_VISITS_TABLE}; {HISTORY_VISITS_INDEX};")
+}
+
 /// Owns the migration SQL that `rusqlite_migration` borrows, numbered by position.
 pub(crate) struct MigrationScripts {
     initial: String,
     folders: String,
+    history: String,
 }
 
 impl MigrationScripts {
@@ -262,6 +291,7 @@ impl MigrationScripts {
         Self {
             initial: initial_schema(),
             folders: folders_migration(),
+            history: history_migration(),
         }
     }
 
@@ -269,6 +299,7 @@ impl MigrationScripts {
         Migrations::new(vec![
             M::up(&self.initial).foreign_key_check(),
             M::up_with_hook(&self.folders, check_migrated_records).foreign_key_check(),
+            M::up_with_hook(&self.history, check_migrated_records).foreign_key_check(),
         ])
     }
 }
@@ -303,22 +334,61 @@ pub(crate) fn apply_migrations(
     Err(with_cleanup(error, rollback))
 }
 
-/// Tables of each generation, sorted by name as `sqlite_schema` lists them.
-fn expected_tables(generation: SchemaGeneration) -> &'static [(&'static str, &'static str)] {
+/// One table or index that a generation owns, as `sqlite_schema` records it.
+struct SchemaObject {
+    kind: &'static str,
+    name: &'static str,
+    table: &'static str,
+    sql: &'static str,
+}
+
+const fn table(name: &'static str, sql: &'static str) -> SchemaObject {
+    SchemaObject {
+        kind: "table",
+        name,
+        table: name,
+        sql,
+    }
+}
+
+const FLAT_OBJECTS: &[SchemaObject] = &[
+    table("live_tabs", LIVE_TABLE),
+    table("saved_pages", SAVED_TABLE),
+    table("session_state", STATE_TABLE),
+];
+
+const FOLDER_OBJECTS: &[SchemaObject] = &[
+    table("live_tabs", LIVE_TABLE),
+    table("saved_folder_state", FOLDER_STATE_TABLE),
+    table("saved_folders", FOLDERS_TABLE),
+    table("saved_layout", LAYOUT_TABLE),
+    table("saved_pages", SAVED_TABLE),
+    table("session_state", STATE_TABLE),
+];
+
+const HISTORY_OBJECTS: &[SchemaObject] = &[
+    table("history_urls", HISTORY_URLS_TABLE),
+    table("history_visits", HISTORY_VISITS_TABLE),
+    SchemaObject {
+        kind: "index",
+        name: "history_visits_by_url",
+        table: "history_visits",
+        sql: HISTORY_VISITS_INDEX,
+    },
+    table("live_tabs", LIVE_TABLE),
+    table("saved_folder_state", FOLDER_STATE_TABLE),
+    table("saved_folders", FOLDERS_TABLE),
+    table("saved_layout", LAYOUT_TABLE),
+    table("saved_pages", SAVED_TABLE),
+    table("session_state", STATE_TABLE),
+];
+
+/// Objects of each generation, sorted by name as `sqlite_schema` lists them.
+fn expected_objects(generation: SchemaGeneration) -> &'static [SchemaObject] {
     match generation {
-        SchemaGeneration::FlatSaved => &[
-            ("live_tabs", LIVE_TABLE),
-            ("saved_pages", SAVED_TABLE),
-            ("session_state", STATE_TABLE),
-        ],
-        SchemaGeneration::Folders => &[
-            ("live_tabs", LIVE_TABLE),
-            ("saved_folder_state", FOLDER_STATE_TABLE),
-            ("saved_folders", FOLDERS_TABLE),
-            ("saved_layout", LAYOUT_TABLE),
-            ("saved_pages", SAVED_TABLE),
-            ("session_state", STATE_TABLE),
-        ],
+        SchemaGeneration::FlatSaved => FLAT_OBJECTS,
+        SchemaGeneration::Folders => FOLDER_OBJECTS,
+        SchemaGeneration::History => HISTORY_OBJECTS,
     }
 }
 
@@ -327,14 +397,13 @@ fn validate_schema(
     generation: SchemaGeneration,
 ) -> Result<(), StoreError> {
     // Match the owned schema exactly; a copied marker alone does not identify an Atlas database.
-    let expected = expected_tables(generation);
     let mut statement = connection
         .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name")
         .map_err(|error| database_error(StoreOperation::InspectSchema, error))?;
     let mut rows = statement
         .query([])
         .map_err(|error| database_error(StoreOperation::InspectSchema, error))?;
-    for &(name, sql) in expected {
+    for expected in expected_objects(generation) {
         let row = rows
             .next()
             .map_err(|error| database_error(StoreOperation::InspectSchema, error))?
@@ -345,10 +414,14 @@ fn validate_schema(
             row.get::<_, String>(2),
             row.get::<_, String>(3),
         );
-        let (Ok(kind), Ok(actual_name), Ok(table), Ok(actual_sql)) = values else {
+        let (Ok(kind), Ok(name), Ok(table), Ok(sql)) = values else {
             return Err(StoreError::SchemaMismatch);
         };
-        if kind != "table" || actual_name != name || table != name || actual_sql != sql {
+        if kind != expected.kind
+            || name != expected.name
+            || table != expected.table
+            || sql != expected.sql
+        {
             return Err(StoreError::SchemaMismatch);
         }
     }

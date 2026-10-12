@@ -1,5 +1,6 @@
 //! Connects the shared session to browser chrome without running storage or search on the UI thread.
 
+mod history_list;
 mod home_palette;
 mod navigation_intents;
 mod navigation_status;
@@ -64,7 +65,8 @@ actions!(
         SavePage,
         Back,
         Forward,
-        Reload
+        Reload,
+        ShowHistory
     ]
 );
 
@@ -81,6 +83,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-left", Back, None),
         KeyBinding::new("alt-right", Forward, None),
         KeyBinding::new("ctrl-r", Reload, None),
+        KeyBinding::new("ctrl-h", ShowHistory, None),
     ]);
     crate::palette::bind_keys(cx);
 }
@@ -104,6 +107,7 @@ pub struct BrowserView {
     pending_pages: HashSet<TabId>,
     navigation_intents: NavigationIntents,
     navigation_status: NavigationStatus,
+    history: history_list::HistoryList,
     shown: Option<TabId>,
     bounds: Option<(i32, i32, u32, u32)>,
     message: String,
@@ -142,6 +146,7 @@ impl BrowserView {
             pending_pages: HashSet::new(),
             navigation_intents: NavigationIntents::default(),
             navigation_status: NavigationStatus::default(),
+            history: history_list::HistoryList::default(),
             shown: None,
             bounds: None,
             message: "Opening your workspace…".to_owned(),
@@ -267,6 +272,10 @@ impl BrowserView {
                     &snapshot.created,
                     snapshot.home_entry,
                 );
+                // Switching or opening a page leaves the history list for that page.
+                if snapshot.model.active_id != self.model.active_id {
+                    self.history.close();
+                }
                 self.model = snapshot.model;
                 self.navigation_status.retain(&self.model);
                 if !self.closing {
@@ -315,6 +324,9 @@ impl BrowserView {
                         self.outcome.store(2, Ordering::Release);
                     }
                 }
+            }
+            SessionEvent::History { request_id, result } => {
+                self.history.receive(request_id, result);
             }
             SessionEvent::Failure { error, fatal } => {
                 if self.smoke {
@@ -543,9 +555,10 @@ impl BrowserView {
             }
             self.navigation_intents.creation_queued(*id, queued);
         }
+        // The history list occupies the page card, so no page is shown beneath it.
         let next = desired
             .map(|(id, _)| id)
-            .filter(|id| self.loaded.contains(id));
+            .filter(|id| self.loaded.contains(id) && !self.history.is_open());
         if next != self.shown && self.page_command(BrowserCommand::ShowActive(next.map(TabId::get)))
         {
             self.shown = next;
@@ -589,6 +602,17 @@ impl BrowserView {
 
     fn close_tab(&mut self) {
         self.command(SessionCommand::CloseActive);
+    }
+
+    /// Shows recent history in the page card, or returns to the active page.
+    fn toggle_history(&mut self) {
+        if self.history.is_open() {
+            self.history.close();
+        } else if !self.closing && self.session_revision.is_some() {
+            let read = self.history.open();
+            self.command(read);
+        }
+        self.sync_pages();
     }
 
     fn shortcut(&mut self, shortcut: BrowserShortcut, window: &mut Window, cx: &mut Context<Self>) {
@@ -791,7 +815,8 @@ impl BrowserView {
                 match target {
                     Target::Tab(id) => self.command(SessionCommand::FocusTab(id)),
                     Target::Saved(id) => self.command(SessionCommand::OpenSaved(id)),
-                    _ => {
+                    Target::History(id) => self.command(SessionCommand::OpenHistory(id)),
+                    Target::Command(_) => {
                         self.message =
                             "This destination is not available in the preview.".to_owned()
                     }
@@ -1000,6 +1025,12 @@ impl BrowserView {
                     cx.notify();
                 })),
             )
+            .child(
+                button("history", "History").on_click(cx.listener(|this, _, _, cx| {
+                    this.toggle_history();
+                    cx.notify();
+                })),
+            )
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> Div {
@@ -1181,7 +1212,9 @@ impl Render for BrowserView {
             self.resize_pages(window);
         }
         let mut page = div().flex_1().h_full();
-        if self.shown.is_none() {
+        if self.history.is_open() {
+            page = page.child(history_list::render(&self.history, cx));
+        } else if self.shown.is_none() {
             page = page
                 .bg(theme::ground())
                 .flex()
@@ -1253,6 +1286,10 @@ impl Render for BrowserView {
                 if let Some(id) = this.shown {
                     this.page_command(BrowserCommand::Reload { id: id.get() });
                 }
+            }))
+            .on_action(cx.listener(|this, _: &ShowHistory, _, cx| {
+                this.toggle_history();
+                cx.notify();
             }))
             .child(self.toolbar(cx))
             .child(

@@ -1,5 +1,6 @@
 //! Keeps model, persistence and catalogue work off the browser's event thread.
 
+mod history;
 mod recovery;
 
 pub use recovery::RecoveryPrompt;
@@ -7,6 +8,7 @@ pub use recovery::RecoveryPrompt;
 use std::{
     collections::HashSet,
     fmt,
+    num::NonZeroU64,
     path::PathBuf,
     sync::{Arc, mpsc},
     thread::{self, JoinHandle},
@@ -21,8 +23,9 @@ use atlas_platform::{StartupStorage, WindowsDirectoryLease};
 use atlas_search::{
     Catalogue, Entry, Scope, SearchError, SearchPolicy, SearchResults, Target, Usage,
 };
-use atlas_store::{LocationError, ShutdownState, Store, StoreError};
+use atlas_store::{HistoryVisit, LocationError, ShutdownState, Store, StoreError};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use history::{HistoryRecorder, Observation};
 
 const IDLE_DELAY: Duration = Duration::from_secs(5);
 const BACKUP_CHECK_INTERVAL: Duration = Duration::from_secs(60);
@@ -73,6 +76,13 @@ pub enum SessionCommand {
         scope: Scope,
         policy: SearchPolicy,
     },
+    /// Opens a remembered history address in a new tab (P1-20).
+    OpenHistory(NonZeroU64),
+    /// Reads at most `limit` recent visits for the history list.
+    RecentHistory {
+        request_id: u64,
+        limit: usize,
+    },
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -104,6 +114,10 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<SearchResults, SessionError>,
     },
+    History {
+        request_id: u64,
+        result: Result<Vec<HistoryVisit>, SessionError>,
+    },
     Failure {
         error: SessionError,
         fatal: bool,
@@ -120,6 +134,7 @@ pub enum SessionError {
     Snapshot(SnapshotError),
     Search(SearchError),
     NoActiveTab,
+    HistoryUnavailable,
     ClockUnavailable,
     WorkerStart {
         code: Option<i32>,
@@ -148,6 +163,9 @@ impl fmt::Display for SessionError {
             Self::Snapshot(error) => write!(formatter, "Cannot restore the session: {error}"),
             Self::Search(error) => write!(formatter, "Local search failed: {error}"),
             Self::NoActiveTab => formatter.write_str("There is no active page to save"),
+            Self::HistoryUnavailable => {
+                formatter.write_str("This history entry is no longer available")
+            }
             Self::ClockUnavailable => formatter.write_str("The system clock is unavailable"),
             Self::WorkerStart { code } => {
                 write!(formatter, "Cannot start the session worker ({code:?})")
@@ -289,6 +307,7 @@ fn finish_store<T>(
 struct Worker {
     model: TabModel,
     catalogue: Catalogue,
+    history: HistoryRecorder,
     revision: u64,
     previous_shutdown: ShutdownState,
 }
@@ -297,15 +316,19 @@ impl Worker {
     fn restore(store: &Store) -> Result<Self, SessionError> {
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
+        let snapshot = model.snapshot();
         let mut catalogue = Catalogue::new();
-        sync_catalogue(
-            &mut catalogue,
-            &TabModelSnapshot::default(),
-            &model.snapshot(),
-        )?;
+        sync_catalogue(&mut catalogue, &TabModelSnapshot::default(), &snapshot)?;
+        // Durable history joins the catalogue once; later visits update it row by row.
+        for entry in store.history_entries().map_err(SessionError::Store)? {
+            catalogue
+                .upsert(history::history_entry(&entry))
+                .map_err(SessionError::Search)?;
+        }
         Ok(Self {
             model,
             catalogue,
+            history: HistoryRecorder::restored(&snapshot),
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
         })
@@ -343,24 +366,24 @@ impl Worker {
         command: SessionCommand,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        if matches!(command, SessionCommand::ConfirmRecovery { .. }) {
-            return recovery::reject_command(events);
-        }
-        if let SessionCommand::Query {
-            request_id,
-            text,
-            scope,
-            policy,
-        } = command
-        {
-            let result = utc_seconds().and_then(|now| {
-                self.catalogue
-                    .query(&text, scope, now, policy)
-                    .map_err(SessionError::Search)
-            });
-            // Failures carry the same identity as successful replies, so stale queries stay silent.
-            return emit(events, SessionEvent::Search { request_id, result });
-        }
+        let command = match command {
+            SessionCommand::ConfirmRecovery { .. } => return recovery::reject_command(events),
+            SessionCommand::Query {
+                request_id,
+                text,
+                scope,
+                policy,
+            } => return self.answer_query(request_id, &text, scope, policy, events),
+            SessionCommand::RecentHistory { request_id, limit } => {
+                let result = store.recent_visits(limit).map_err(SessionError::Store);
+                return emit(events, SessionEvent::History { request_id, result });
+            }
+            SessionCommand::OpenHistory(id) => match self.history_destination(id) {
+                Ok(command) => command,
+                Err(error) => return emit_recoverable(events, error),
+            },
+            command => command,
+        };
 
         // Invalid or stale commands do not mutate the model and remain recoverable UI errors.
         let navigating = matches!(&command, SessionCommand::NavigateActive { .. });
@@ -368,15 +391,17 @@ impl Worker {
             SessionCommand::HomeEntry { request_id, .. } => Some(*request_id),
             _ => None,
         };
+        let observation = match &command {
+            SessionCommand::ObserveMetadata { id, title, address } => Some(Observation {
+                id: *id,
+                title: title.clone(),
+                address: address.clone(),
+            }),
+            _ => None,
+        };
         let before = self.model.snapshot();
         if let Err(error) = apply_model(&mut self.model, command) {
-            return emit(
-                events,
-                SessionEvent::Failure {
-                    error,
-                    fatal: false,
-                },
-            );
+            return emit_recoverable(events, error);
         }
         let after = self.model.snapshot();
         if before != after {
@@ -384,6 +409,10 @@ impl Worker {
                 .save(self.revision, after.clone())
                 .map_err(SessionError::Store)?;
             sync_catalogue(&mut self.catalogue, &before, &after)?;
+        }
+        self.history.retain(&after);
+        if let Some(observation) = observation {
+            self.record_history(store, &after, observation, events)?;
         }
         let created = after
             .tabs
@@ -393,6 +422,52 @@ impl Worker {
             .collect();
         let navigate = if navigating { after.active_id } else { None };
         self.publish(events, created, navigate, home_entry)
+    }
+
+    fn answer_query(
+        &mut self,
+        request_id: u64,
+        text: &str,
+        scope: Scope,
+        policy: SearchPolicy,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let result = utc_seconds().and_then(|now| {
+            self.catalogue
+                .query(text, scope, now, policy)
+                .map_err(SessionError::Search)
+        });
+        // Failures carry the same identity as successful replies, so stale queries stay silent.
+        emit(events, SessionEvent::Search { request_id, result })
+    }
+
+    fn history_destination(&self, id: NonZeroU64) -> Result<SessionCommand, SessionError> {
+        // The catalogue mirrors durable history, so it already holds the address to open.
+        let entry = self
+            .catalogue
+            .get(Target::History(id))
+            .ok_or(SessionError::HistoryUnavailable)?;
+        Ok(SessionCommand::NewTab {
+            address: entry.address.clone(),
+        })
+    }
+
+    fn record_history(
+        &mut self,
+        store: &Store,
+        model: &TabModelSnapshot,
+        observation: Observation,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let result =
+            self.history
+                .observe(store, &mut self.catalogue, model, observation, utc_seconds);
+        // Storage failures stop the session as saves do; an unindexable row or clock does not.
+        match result {
+            Err(SessionError::Store(error)) => Err(SessionError::Store(error)),
+            Err(error) => emit_recoverable(events, error),
+            Ok(()) => Ok(()),
+        }
     }
 
     fn publish(
@@ -533,7 +608,11 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
             model.reopen_closed().map_err(SessionError::Model)?;
         }
         SessionCommand::ConfirmRecovery { .. } => return Err(SessionError::RecoveryUnavailable),
-        SessionCommand::Query { .. } | SessionCommand::Shutdown => {}
+        // Reads and history lookups are answered before the model is consulted.
+        SessionCommand::Query { .. }
+        | SessionCommand::RecentHistory { .. }
+        | SessionCommand::OpenHistory(_)
+        | SessionCommand::Shutdown => {}
     }
     Ok(())
 }
@@ -615,6 +694,20 @@ fn entry(target: Target, metadata: &TabMetadata, open: bool) -> Entry {
         },
         open,
     }
+}
+
+/// Reports a failure that leaves the session running.
+fn emit_recoverable(
+    events: &UnboundedSender<SessionEvent>,
+    error: SessionError,
+) -> Result<(), SessionError> {
+    emit(
+        events,
+        SessionEvent::Failure {
+            error,
+            fatal: false,
+        },
+    )
 }
 
 fn emit(events: &UnboundedSender<SessionEvent>, event: SessionEvent) -> Result<(), SessionError> {

@@ -109,6 +109,23 @@ fn unclean_exit_restores_committed_order_associations_and_unloaded_rows() {
     );
     assert_restored_layout(&restored.model);
 
+    // The acknowledged visit (P1-20) survives too, with the title it was reported with.
+    send(
+        &handle,
+        SessionCommand::RecentHistory {
+            request_id: 5,
+            limit: 10,
+        },
+    );
+    let SessionEvent::History { request_id, result } = next_event(&mut events) else {
+        panic!("expected synthetic history after the unclean exit");
+    };
+    assert_eq!(request_id, 5);
+    let visits = result.expect("history reads after the unclean exit");
+    assert_eq!(visits.len(), 1);
+    assert_eq!(visits[0].address, LIVE_B);
+    assert_eq!(visits[0].title, "Synthetic crash page after navigation");
+
     // Closed-tab history is in-session only (D42); the unloaded saved row opens its fixed target.
     let unchanged = change(&handle, &mut events, SessionCommand::ReopenClosed);
     assert_eq!(unchanged.revision, restored.revision);
