@@ -416,8 +416,8 @@ struct Worker {
     catalogue: Catalogue,
     history: HistoryRecorder,
     deletions: DeletionJournal,
-    /// Unix seconds when history retention next expires old visits (DW-4).
-    next_expiry: i64,
+    /// When history retention next expires old visits, and how far it last reached (DW-4).
+    retention: retention::Schedule,
     revision: u64,
     previous_shutdown: ShutdownState,
     destinations: QuickDestinations,
@@ -431,14 +431,12 @@ impl Worker {
         deletions::reconcile(store, &mut deletions)?;
         let mut stored_preferences = preferences::restore(store)?;
         // Expired visits go before the catalogue loads; a large backlog continues while idle.
-        let saved_due = stored_preferences
-            .settings
-            .remove(retention::EXPIRY_DUE_KEY);
-        let next_expiry = retention::expire_at_startup(
+        let mut schedule = retention::Schedule::take_saved(&mut stored_preferences.settings);
+        retention::expire_at_startup(
             store,
             &mut deletions,
             utc_seconds()?,
-            saved_due.as_deref(),
+            &mut schedule,
             retention::EXPIRY_BATCH,
         )?;
         let stored = store.load().map_err(SessionError::Store)?;
@@ -458,7 +456,7 @@ impl Worker {
             catalogue,
             history: HistoryRecorder::restored(&snapshot),
             deletions,
-            next_expiry,
+            retention: schedule,
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
@@ -669,7 +667,7 @@ impl Worker {
         limit: usize,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        if now < self.next_expiry {
+        if self.retention.waiting(now) {
             return Ok(());
         }
         let expired = retention::expire_live(
@@ -678,18 +676,16 @@ impl Worker {
             &mut self.catalogue,
             &mut self.history,
             now,
+            &mut self.retention,
             limit,
         );
         match expired {
-            Ok(next) => {
-                self.next_expiry = next;
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             // Storage failures stop the session, as they do for an owner's clear.
             Err(error @ SessionError::Store(_)) => Err(error),
             Err(error) => {
                 // A journal refusal is shown once a day rather than at every idle check.
-                self.next_expiry = now.saturating_add(retention::DAY_SECS);
+                self.retention.due = now.saturating_add(retention::DAY_SECS);
                 emit_recoverable(events, error)
             }
         }

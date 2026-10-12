@@ -528,24 +528,88 @@ fn start_up_expires_visits_older_than_ninety_days_at_most_once_a_day() {
     fixture.cleanup();
 }
 
-#[test]
-fn a_clock_far_ahead_never_expires_the_latest_ninety_days_of_visits() {
-    let fixture = Fixture::new();
-    let now = utc_seconds().expect("synthetic clock");
-    seed_visits(&fixture, &[(FIRST, now - 10 * DAY), (SECOND, now - DAY)]);
+/// Restores a worker straight on the fixture's store, for driving idle expiry by hand.
+fn direct_worker(fixture: &Fixture) -> (Arc<WindowsDirectoryLease>, Store, Worker) {
     let lease =
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let store = Store::open(lease.clone()).expect("open guarded synthetic store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
-    let (sender, _events) = unbounded();
+    let worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    (lease, store, worker)
+}
 
-    // A clock a year ahead finds nothing older than the newest visit's own 90 days.
+fn oldest_visit(store: &Store) -> Option<i64> {
+    store
+        .recent_visits(1_000)
+        .expect("read synthetic visits")
+        .iter()
+        .map(|visit| visit.visited_at)
+        .min()
+}
+
+#[test]
+fn a_clock_a_year_ahead_and_a_visit_under_it_expire_nothing_meaningful() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    seed_visits(&fixture, &[(FIRST, now - 89 * DAY), (SECOND, now - DAY)]);
+    let (lease, store, mut worker) = direct_worker(&fixture);
+    let (sender, _events) = unbounded();
+    assert_eq!(worker.retention.cutoff, Some(now - DAY - 90 * DAY));
+
+    // The clock jumps a year and the owner visits one page under it; the next idle run
+    // moves the cutoff by two days at most, which reaches no stored visit.
+    let wrong = now + 365 * DAY;
+    store
+        .record_visit(LATER.to_owned(), String::new(), wrong)
+        .expect("record a synthetic visit under the wrong clock");
     worker
-        .expire_while_idle(&store, now + 365 * DAY, 10, &sender)
-        .expect("check with a synthetic future clock");
-    assert_eq!(store.recent_visits(10).expect("read").len(), 2);
+        .expire_while_idle(&store, wrong, 10, &sender)
+        .expect("expire under a synthetic future clock");
+    assert_eq!(store.recent_visits(10).expect("read").len(), 3);
+    assert_eq!(
+        worker.retention.cutoff,
+        Some(now - DAY - 90 * DAY + retention::MAX_CUTOFF_STEP)
+    );
     assert_eq!(worker.deletions.log().completed_generation(), 0);
+
+    // A clock moved back runs again at once and keeps the cutoff where it was.
+    worker
+        .expire_while_idle(&store, now + DAY, 10, &sender)
+        .expect("expire after the clock moved back");
+    assert_eq!(store.recent_visits(10).expect("read").len(), 3);
+    assert_eq!(worker.retention.cutoff, Some(now - 89 * DAY));
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn daily_use_keeps_exactly_ninety_days() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let visits: Vec<_> = (0..=100).map(|days| (FIRST, now - days * DAY)).collect();
+    seed_visits(&fixture, &visits);
+    let (lease, store, mut worker) = direct_worker(&fixture);
+    let (sender, _events) = unbounded();
+    assert_eq!(oldest_visit(&store), Some(now - 90 * DAY));
+
+    // Each day the owner browses and the idle check runs once: the cutoff follows the clock.
+    // A minute past each day, so the restore's own run is always a day old.
+    for day in 1..=5 {
+        let today = now + day * DAY + 60;
+        store
+            .record_visit(SECOND.to_owned(), String::new(), today)
+            .expect("record a synthetic daily visit");
+        worker
+            .expire_while_idle(&store, today, retention::EXPIRY_BATCH, &sender)
+            .expect("run the synthetic daily expiry");
+        // The visits are a day apart, so the oldest kept one is within a day of the cutoff.
+        let cutoff = today - 90 * DAY;
+        assert_eq!(worker.retention.cutoff, Some(cutoff));
+        let oldest = oldest_visit(&store).expect("recent visits remain");
+        assert!(oldest >= cutoff && oldest < cutoff + DAY);
+    }
     drop(worker);
     store.shutdown().expect("close synthetic store");
     drop(lease);
@@ -566,8 +630,10 @@ fn idle_expiry_runs_in_bounded_batches_then_waits_a_day() {
     assert_eq!(worker.catalogue.len(), 2);
 
     // Ninety-one days of browsing later, both visits have expired; a batch of one removes
-    // the older first, and the catalogue follows.
+    // the older first, and the catalogue follows. Daily runs would have moved the cutoff
+    // along; forgetting it tests batching apart from the step limit.
     let later = now + 91 * DAY;
+    worker.retention.cutoff = None;
     store
         .record_visit(LATER.to_owned(), String::new(), later)
         .expect("record a synthetic later visit");
@@ -579,7 +645,7 @@ fn idle_expiry_runs_in_bounded_batches_then_waits_a_day() {
         [(LATER, ""), (SECOND, "")]
     );
     assert_eq!(worker.catalogue.len(), 1);
-    assert_eq!(worker.next_expiry, later);
+    assert_eq!(worker.retention.due, later);
     worker
         .expire_while_idle(&store, later, 1, &sender)
         .expect("expire the synthetic backlog");
@@ -588,7 +654,7 @@ fn idle_expiry_runs_in_bounded_batches_then_waits_a_day() {
         [(LATER, "")]
     );
     assert_eq!(worker.catalogue.len(), 0);
-    assert_eq!(worker.next_expiry, later + DAY);
+    assert_eq!(worker.retention.due, later + DAY);
 
     // Before the next day nothing runs, so the journal does not grow on every idle check.
     worker
