@@ -848,6 +848,17 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
   CPU-specific diagnostic also missed D48 in 25 of 26 cases with identical
   result checksums, so changing CPU flags is not the performance fix. The
   slice cannot be presented as complete or merged with either gate unresolved.
+- **Suspending a hidden page that is still loading (P1-15), raised
+  2026-10-12:** the native lifecycle-timeout diagnosis in
+  `docs/p1-11-popups.md` showed that `TrySuspend` succeeds five seconds
+  after a hidden page navigates even when its load is still in flight, and
+  the frozen page then reports nothing until it is shown. The fixture now
+  shows its pages, so this is no longer a test failure; it is a product
+  question. A slow page opened in the background, or a restored hidden tab,
+  would sit half-loaded with no title until activated. Recommendation:
+  start the grace period when a hidden page's navigation completes, not when
+  it starts, so a loading page is never frozen. This changes P1-15's
+  behaviour and needs the owner's answer before anyone implements it.
 - **Sidebar UI details (D44):** the wide/compact/hidden progression,
   reversible drag, hover peek and Ctrl Alt S are approved. Review exact
   widths, transition thresholds and compact-folder controls with the owner
