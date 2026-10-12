@@ -93,6 +93,7 @@ impl Page {
             settings.cast().map_err(|_| BrowserError::Settings)?;
         unsafe { settings.SetIsPasswordAutosaveEnabled(false) }
             .map_err(|_| BrowserError::Settings)?;
+        super::security::register(&view, id, events.clone())?;
         popups.register(&view, id, events.clone())?;
         register_source(&view, id, events.clone())?;
         register_navigation(&view, id, events.clone())?;

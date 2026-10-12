@@ -76,7 +76,7 @@ claimed. To inspect the actual bar without personal data:
    not an injected script.
 2. Run `cargo atlas -- --test-data-dir <new-absolute-directory-under-target>`.
    The directory must not already exist. Open the loopback fixture with Ctrl L.
-3. Verify the exact loopback origin and ?show notifications? text are visible
+3. Verify the exact loopback origin and “show notifications” text are visible
    above the page. Deny without Remember; open the fixture in a new tab and
    verify that the prompt returns.
 4. Allow with Remember. Verify a synthetic Windows notification appears. Quit

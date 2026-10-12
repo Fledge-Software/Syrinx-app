@@ -12,6 +12,9 @@ mod permissions;
 #[path = "page_close/essentials.rs"]
 mod essentials;
 
+#[path = "page_close/security.rs"]
+mod security;
+
 use std::{
     fs,
     io::{self, Read, Write},
@@ -62,7 +65,7 @@ fn main() -> ExitCode {
     let watchdog = match thread::Builder::new()
         .name("atlas-close-harness-deadline".into())
         .spawn(
-            move || match cancellation.recv_timeout(Duration::from_secs(240)) {
+            move || match cancellation.recv_timeout(Duration::from_secs(300)) {
                 Ok(()) => {}
                 Err(error) => {
                     eprintln!("Synthetic page-close harness deadline failed: {error}.");
@@ -119,10 +122,19 @@ fn run() -> Result<(), String> {
     if essentials_result.is_ok() {
         println!("Synthetic native find, download list, zoom and print-preview command passed.");
     }
+    let security_result = security::run(&server.url);
+    if security_result.is_ok() {
+        println!(
+            "Synthetic certificate cancellation, repeat rejection and safe navigation recovery passed."
+        );
+    }
     combine(
         combine(
-            combine(combine(result, popup_result), permission_result),
-            essentials_result,
+            combine(
+                combine(combine(result, popup_result), permission_result),
+                essentials_result,
+            ),
+            security_result,
         ),
         server.stop(),
     )
@@ -479,6 +491,7 @@ fn respond(mut stream: TcpStream) -> Result<(), String> {
     let page = popups::response(&request[..length])
         .or_else(|| permissions::response(&request[..length]))
         .or_else(|| essentials::response(&request[..length]))
+        .or_else(|| security::response(&request[..length]))
         .unwrap_or(PAGE);
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",
