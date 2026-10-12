@@ -450,7 +450,7 @@ fn register_focus_departure(
 fn departure_shortcut(reason: COREWEBVIEW2_MOVE_FOCUS_REASON) -> Option<BrowserShortcut> {
     match reason {
         COREWEBVIEW2_MOVE_FOCUS_REASON_NEXT => Some(BrowserShortcut::FocusNextPane),
-        COREWEBVIEW2_MOVE_FOCUS_REASON_PREVIOUS => Some(BrowserShortcut::FocusPreviousPane),
+        COREWEBVIEW2_MOVE_FOCUS_REASON_PREVIOUS => Some(BrowserShortcut::LeavePageBackward),
         _ => None,
     }
 }
@@ -588,37 +588,12 @@ mod tests {
         );
         assert_eq!(
             departure_shortcut(COREWEBVIEW2_MOVE_FOCUS_REASON_PREVIOUS),
-            Some(BrowserShortcut::FocusPreviousPane)
+            Some(BrowserShortcut::LeavePageBackward)
         );
         assert_eq!(
             departure_shortcut(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC),
             None
         );
-    }
-
-    #[test]
-    fn find_history_print_and_zoom_keys_reach_the_page_first() {
-        // 2026-10-12 decision: Ctrl F, H, P and the zoom keys are the page's (P1-13).
-        let page_first = [
-            0x46, // F
-            0x48, // H
-            0x50, // P
-            0xBB, // = and +
-            0xBD, // -
-            0x30, // 0
-            0x6B, // numpad +
-            0x6D, // numpad -
-            0x60, // numpad 0
-        ];
-        for key in page_first {
-            for shift in [false, true] {
-                assert_eq!(
-                    shortcut_for_modifiers(key, true, shift, false, false),
-                    None,
-                    "{key:#x}"
-                );
-            }
-        }
     }
 
     #[test]

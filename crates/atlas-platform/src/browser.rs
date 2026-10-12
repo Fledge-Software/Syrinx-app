@@ -76,10 +76,12 @@ pub enum BrowserShortcut {
     Reload,
     ToggleSidebar,
     DismissPeek(u64),
-    /// F6 from a focused page: move to Atlas's next pane (P1-36).
+    /// F6, or Tab past a page's last element: move to Atlas's next pane (P1-36).
     FocusNextPane,
-    /// Shift F6 from a focused page: move to Atlas's previous pane.
+    /// Shift F6 from a focused page: move to Atlas's previous pane, at its first control.
     FocusPreviousPane,
+    /// Shift Tab past a page's first element: the previous pane, at its last control.
+    LeavePageBackward,
 }
 
 pub enum BrowserCommand {

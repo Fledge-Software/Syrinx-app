@@ -2,7 +2,9 @@
 //!
 //! The order itself is `atlas_ui::focus`; this file finds the focused pane and lands on one.
 
-use atlas_ui::focus::{Direction, OpenPanes, Pane, next_pane};
+use atlas_ui::focus::{
+    Direction, Entry, Landing, OpenPanes, Pane, Settle, landing, next_pane, settle,
+};
 use gpui::Role;
 
 use super::*;
@@ -64,6 +66,42 @@ impl PaneFocus {
     }
 }
 
+/// An upper bound on the Tab steps taken to find a pane's last control, so a Tab order that
+/// never leaves the pane cannot loop forever.
+const MAX_PANE_CONTROLS: usize = 4096;
+
+/// Steps from the region to its first Tab stop, or stays on the region when it has none.
+fn focus_first_control(region: &FocusHandle, window: &mut Window, cx: &mut App) {
+    window.focus(region, cx);
+    window.focus_next(cx);
+    if settle(focus_inside(region, window, cx)) == Settle::Region {
+        window.focus(region, cx);
+    }
+}
+
+/// Walks the region's Tab stops to its last one, or stays on the region when it has none.
+fn focus_last_control(region: &FocusHandle, window: &mut Window, cx: &mut App) {
+    focus_first_control(region, window, cx);
+    for _ in 0..MAX_PANE_CONTROLS {
+        let Some(current) = window.focused(cx) else {
+            return;
+        };
+        if region.is_focused(window) {
+            return;
+        }
+        window.focus_next(cx);
+        if settle(focus_inside(region, window, cx)) == Settle::Region {
+            window.focus(&current, cx);
+            return;
+        }
+    }
+}
+
+/// Whether focus is on a control inside the region, not on the region itself.
+fn focus_inside(region: &FocusHandle, window: &Window, cx: &App) -> bool {
+    region.contains_focused(window, cx) && !region.is_focused(window)
+}
+
 impl BrowserView {
     /// The panes this frame draws.
     pub(super) fn open_panes(&self) -> OpenPanes {
@@ -93,7 +131,18 @@ impl BrowserView {
             self.focused_pane(window, cx)
         };
         let target = next_pane(current, self.open_panes(), direction);
-        self.land_on(target, window, cx);
+        self.land_on(target, Entry::First, window, cx);
+        cx.notify();
+    }
+
+    /// Shift Tab past a page's first element: the previous pane, entered at its last control,
+    /// as Tab order would have it.
+    pub(super) fn leave_page_backward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || self.fullscreen.is_some() {
+            return;
+        }
+        let target = next_pane(Some(Pane::Page), self.open_panes(), Direction::Backward);
+        self.land_on(target, Entry::Last, window, cx);
         cx.notify();
     }
 
@@ -105,9 +154,10 @@ impl BrowserView {
     }
 
     /// Focuses the pane: a web page natively, the address field directly, anything else at
-    /// its first control.
-    fn land_on(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
-        if pane == Pane::Page && self.page_card_shows_web_page() {
+    /// the control `entry` names, or at the region itself when it has no controls.
+    fn land_on(&mut self, pane: Pane, entry: Entry, window: &mut Window, cx: &mut Context<Self>) {
+        let landing = landing(pane, entry, self.page_card_shows_web_page());
+        if landing == Landing::WebPage {
             self.focus_page(window, cx);
             return;
         }
@@ -116,14 +166,16 @@ impl BrowserView {
             return;
         }
         window.activate_window();
-        if pane == Pane::Address {
+        let Landing::Control(entry) = landing else {
             let field = self.panes.address_field.clone();
             window.focus(&field, cx);
             return;
-        }
+        };
         let region = self.panes.handle(pane).clone();
-        window.focus(&region, cx);
-        window.focus_next(cx);
+        match entry {
+            Entry::First => focus_first_control(&region, window, cx),
+            Entry::Last => focus_last_control(&region, window, cx),
+        }
     }
 
     /// Whether the page card shows the native web page rather than Atlas's own content.

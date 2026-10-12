@@ -997,6 +997,7 @@ impl BrowserView {
             BrowserShortcut::FocusPreviousPane => {
                 self.cycle_pane(Direction::Backward, true, window, cx)
             }
+            BrowserShortcut::LeavePageBackward => self.leave_page_backward(window, cx),
             BrowserShortcut::Fullscreen => self.fullscreen_shortcut(window),
             BrowserShortcut::Find => self.open_find(window, cx),
             BrowserShortcut::Downloads
