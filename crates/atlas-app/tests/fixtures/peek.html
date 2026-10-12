@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Peek synthetic fixture</title>
+<style>
+  body { font: 20px sans-serif; background: #eef2f7; color: #182333; padding: 24px; }
+  main { margin-left: 280px; }
+  input { font: inherit; width: 300px; }
+  #motion { width: 40px; height: 40px; background: #355fb5; animation: slide 2s infinite alternate; }
+  @keyframes slide { to { transform: translateX(200px); } }
+</style>
+<main>
+  <h1>Peek synthetic fixture</h1>
+  <p id="viewport"></p>
+  <p id="ticks"></p>
+  <label>Focus return: <input placeholder="Synthetic text only"></label>
+  <p><a href="peek.html?second">Second synthetic destination</a></p>
+  <div id="motion"></div>
+</main>
+<script>
+  // Keep the visible evidence live without contacting any service.
+  setInterval(() => {
+    document.getElementById('viewport').textContent = `Viewport ${innerWidth} x ${innerHeight}`;
+    document.getElementById('ticks').textContent = `Live tick ${Math.floor(performance.now() / 100)}`;
+  }, 100);
+</script>
+</html>

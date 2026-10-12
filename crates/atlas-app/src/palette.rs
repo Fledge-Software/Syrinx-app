@@ -344,6 +344,9 @@ impl Render for PaletteView {
             .on_action(cx.listener(|this, _: &ui::Forward, _, _| {
                 this.emit(PaletteEvent::Shortcut(BrowserShortcut::Forward));
             }))
+            .on_action(cx.listener(|this, _: &ui::ToggleSidebar, _, _| {
+                this.emit(PaletteEvent::Shortcut(BrowserShortcut::ToggleSidebar));
+            }))
             .on_action(cx.listener(|this, _: &ui::Reload, _, _| {
                 this.emit(PaletteEvent::Shortcut(BrowserShortcut::Reload));
             }))

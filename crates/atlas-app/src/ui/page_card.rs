@@ -3,7 +3,7 @@
 use atlas_platform::browser::PageBounds;
 use atlas_ui::metrics::chrome::CARD_INSET;
 
-use super::{FOOTER_HEIGHT, TOOLBAR_HEIGHT};
+use super::{FOOTER_HEIGHT, TITLE_BAR_HEIGHT, TOOLBAR_HEIGHT};
 
 /// The window's logical size and scale, and the width the sidebar reserves right now.
 #[derive(Clone, Copy, Debug)]
@@ -23,6 +23,22 @@ pub(super) fn edge_strip(sidebar_width: f32) -> (f32, f32) {
     (start, start + CARD_INSET)
 }
 
+/// The title bar holds navigation while hidden; visible states keep the existing toolbar below it.
+pub(super) fn chrome_height(sidebar_width: f32) -> f32 {
+    TITLE_BAR_HEIGHT
+        + if sidebar_width > 0. {
+            TOOLBAR_HEIGHT
+        } else {
+            0.
+        }
+}
+
+/// The title bar pads left by 12 px and has three square Windows controls.
+/// Leave another 64 px empty so the title bar can still be dragged when navigation fills it.
+pub(super) fn titlebar_navigation_width(viewport_width: f32) -> f32 {
+    (finite_or_zero(viewport_width) - 12. - 64. - 3. * TITLE_BAR_HEIGHT).max(0.)
+}
+
 /// The page card's physical bounds. The child web view does not follow the window on its own
 /// (`docs/trapstoknow.md`), so this runs on every drag step, resize and DPI change.
 pub(super) fn page_card_bounds(frame: CardFrame) -> PageBounds {
@@ -30,7 +46,9 @@ pub(super) fn page_card_bounds(frame: CardFrame) -> PageBounds {
 
     // Inset the card from the sidebar's strip, the toolbar and notice, the footer and the right.
     let (_, left) = edge_strip(frame.sidebar_width);
-    let top = TOOLBAR_HEIGHT + finite_or_zero(frame.notice_height).max(0.) + CARD_INSET;
+    let top = chrome_height(frame.sidebar_width)
+        + finite_or_zero(frame.notice_height).max(0.)
+        + CARD_INSET;
     let right = finite_or_zero(frame.viewport_width) - CARD_INSET;
     let bottom = finite_or_zero(frame.viewport_height) - FOOTER_HEIGHT - CARD_INSET;
 
@@ -104,10 +122,14 @@ mod tests {
             let left = state.reserved_width() + CARD_INSET;
             assert_eq!(bounds.x, left as i32, "{}", state.name());
             assert_eq!(bounds.width, (1280. - CARD_INSET - left) as u32);
-            assert_eq!(bounds.y, (TOOLBAR_HEIGHT + CARD_INSET) as i32);
+            assert_eq!(
+                bounds.y,
+                (chrome_height(state.reserved_width()) + CARD_INSET) as i32
+            );
             assert_eq!(
                 bounds.height,
-                (800. - TOOLBAR_HEIGHT - FOOTER_HEIGHT - 2. * CARD_INSET) as u32
+                (800. - chrome_height(state.reserved_width()) - FOOTER_HEIGHT - 2. * CARD_INSET)
+                    as u32
             );
         }
     }
@@ -125,11 +147,45 @@ mod tests {
     }
 
     #[test]
+    fn title_bar_controls_and_page_card_have_disjoint_bounds() {
+        for scale in [1., 1.25, 1.5, 1.75, 2.] {
+            for state in SidebarWidthState::ALL {
+                let frame = frame(state.reserved_width(), scale);
+                let card = page_card_bounds(frame);
+                let controls_bottom = (chrome_height(frame.sidebar_width) * scale).round() as i32;
+                assert!(card.y >= controls_bottom + (CARD_INSET * scale).round() as i32);
+            }
+            let hidden = page_card_bounds(frame(0., scale));
+            assert_eq!(
+                hidden.y,
+                ((TITLE_BAR_HEIGHT + CARD_INSET) * scale).round() as i32
+            );
+        }
+    }
+
+    #[test]
+    fn title_bar_navigation_reserves_drag_and_caption_buttons_at_every_window_width() {
+        for (name, viewport, expected) in [
+            ("narrow", 800., 616.),
+            ("small desktop", 1024., 840.),
+            ("default", 1280., 1096.),
+            ("full HD", 1920., 1736.),
+            ("controls fill the width", 184., 0.),
+            ("controls exceed the width", 100., 0.),
+        ] {
+            assert_eq!(titlebar_navigation_width(viewport), expected, "{name}");
+        }
+        for viewport in [0., -1., f32::NAN] {
+            assert_eq!(titlebar_navigation_width(viewport), 0.);
+        }
+    }
+
+    #[test]
     fn bounds_scale_to_physical_pixels() {
         let logical = page_card_bounds(frame(52., 1.));
         let scaled = page_card_bounds(frame(52., 1.5));
         assert_eq!(scaled.x, 90);
-        assert_eq!(scaled.y, 84);
+        assert_eq!(scaled.y, 138);
         assert_eq!(scaled.width, (logical.width as f32 * 1.5).round() as u32);
         assert_eq!(scaled.height, (logical.height as f32 * 1.5).round() as u32);
     }

@@ -141,17 +141,30 @@ struct EdgeDrag {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SidebarSizing {
     state: SidebarWidthState,
+    last_visible: SidebarWidthState,
     drag: Option<EdgeDrag>,
 }
 
 impl SidebarSizing {
     pub const fn new(state: SidebarWidthState) -> Self {
-        Self { state, drag: None }
+        let last_visible = match state {
+            SidebarWidthState::Hidden => SidebarWidthState::Wide,
+            visible => visible,
+        };
+        Self {
+            state,
+            last_visible,
+            drag: None,
+        }
     }
 
     /// The state the sidebar settles in when no drag is in progress.
     pub const fn state(&self) -> SidebarWidthState {
         self.state
+    }
+
+    pub const fn last_visible(&self) -> SidebarWidthState {
+        self.last_visible
     }
 
     pub const fn is_dragging(&self) -> bool {
@@ -202,7 +215,7 @@ impl SidebarSizing {
     /// when no drag was in progress.
     pub fn release(&mut self) -> Option<SidebarWidthState> {
         let drag = self.drag.take()?;
-        self.state = snap_on_release(drag.width);
+        self.set_state(snap_on_release(drag.width));
         Some(self.state)
     }
 
@@ -217,6 +230,18 @@ impl SidebarSizing {
     pub fn set_state(&mut self, state: SidebarWidthState) {
         self.drag = None;
         self.state = state;
+        if state != SidebarWidthState::Hidden {
+            self.last_visible = state;
+        }
+    }
+
+    /// Pins the last visible width, or hides it without losing that width.
+    pub fn toggle_hidden(&mut self) {
+        self.set_state(if self.state.can_peek() {
+            self.last_visible
+        } else {
+            SidebarWidthState::Hidden
+        });
     }
 }
 
@@ -229,6 +254,24 @@ impl Default for SidebarSizing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pin_restores_the_last_visible_width_after_toggle_or_drag() {
+        for state in [SidebarWidthState::Wide, SidebarWidthState::Compact] {
+            let mut sizing = SidebarSizing::new(state);
+            sizing.toggle_hidden();
+            assert_eq!(sizing.state(), SidebarWidthState::Hidden);
+            sizing.toggle_hidden();
+            assert_eq!(sizing.state(), state);
+            sizing.begin_drag(sizing.width());
+            sizing.release_at(0.);
+            sizing.toggle_hidden();
+            assert_eq!(sizing.state(), state);
+        }
+        let mut restored_hidden = SidebarSizing::new(SidebarWidthState::Hidden);
+        restored_hidden.toggle_hidden();
+        assert_eq!(restored_hidden.state(), SidebarWidthState::Wide);
+    }
 
     /// Drags from the edge of `sizing` to `pointer_x` and releases there.
     fn drag_and_release(sizing: &mut SidebarSizing, pointer_x: f32) -> Option<SidebarWidthState> {

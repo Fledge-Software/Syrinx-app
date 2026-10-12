@@ -91,8 +91,9 @@ impl BrowserView {
                         this.start_tile_editor(surface, Some(index), window, cx);
                     }))
             } else {
-                cell.on_click(cx.listener(move |this, _, _, cx| {
+                cell.on_click(cx.listener(move |this, _, window, cx| {
                     this.open_tile(&opened);
+                    this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
                     cx.notify();
                 }))
             };
@@ -134,8 +135,9 @@ impl BrowserView {
                         COMPACT_RADIUS,
                         COMPACT_LETTER_SIZE,
                     ))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_tile(&opened);
+                        this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
                         cx.notify();
                     })),
             );
