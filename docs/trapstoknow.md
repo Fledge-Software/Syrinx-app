@@ -154,6 +154,39 @@ you found it in the commit message, not here.
 
 ## The interface: GPUI on Windows
 
+- **The page loses the keys right after Atlas focuses it.** GPUI's
+  `Window::activate_window` does its Win32 work later, from a spawned task:
+  `SetActiveWindow`, then `SetFocus` on the GPUI window, a synthetic Alt press
+  and `SetForegroundWindow`. A page `Focus` sent in the same update reaches
+  WebView2 first, so that `SetFocus` takes the keys back. Esc in the palette
+  returned focus to the page 0 of 20 times; the harness found keyboard focus on
+  the main window itself every time. With Atlas already in front, activate
+  natively and synchronously (`activate_if_foreground`) before sending the page
+  `Focus`; otherwise focus the page only after GPUI's task has run. Source:
+  `gpui-pre-windows-0.3.8/src/window.rs`, `activate`, and P1-33's runs
+  `1791858770` (0/20) and `1791859013` (20/20 with only this change), recorded
+  in `docs/p1-33-palette-acceptance.md` (code-confirmed and measured).
+- **A native resize or show inside a GPUI update loses the window's new size
+  and first frame.** `SetWindowPos` and `ShowWindow` deliver `WM_SIZE` and
+  `WM_SHOWWINDOW` synchronously; GPUI's callbacks then find the app borrowed,
+  log the failure and drop the bounds change or the draw, consuming the frame
+  demand. Move or show a kept GPUI window from a spawned task, outside any
+  `update` closure, as DW-90's `show_palette` does. Hiding inside an update is
+  safe: it only loses one modifier-state refresh. Source:
+  `gpui-pre-0.3.8/src/window.rs` (`on_resize`, `on_request_frame` use
+  `AsyncApp::update`, which is `try_borrow_mut`) and
+  `gpui-pre-windows-0.3.8/src/events.rs` (code-confirmed).
+- **Opening a GPUI window from inside a `BrowserView` update panics if its
+  first render reads `BrowserView`.** `App::open_window` draws the new window
+  before returning, and the peek's `render` calls `browser.update`, which hits
+  GPUI's double-lease panic ("cannot update … while it is already being
+  updated"). DW-90's harness hit this calling `open_peek` from a view update.
+  The hover path (`sample_peek`) also calls `open_peek` inside one, so it is
+  expected to panic the same way; that is read from the code, not reproduced
+  with a real pointer. Build such a window from
+  outside the view's update, or render it from a snapshot instead of updating
+  the owner. Source: the panic's backtrace on 2026-10-12 (observed).
+
 - **A popup's input form can survive after its Enter handler loses its window.**
   `InputState` and `subscribe_in` are tied to the creating window. Do not render
   a retained Favorites form in a replacement peek or the main sidebar after
@@ -276,7 +309,9 @@ you found it in the commit message, not here.
   yourself. Blur is optional under D7. Source: note 08, section 3.2 (high).
 - **Keys go to the page while GPUI still shows a caret.** Nothing in GPUI
   hands focus back to WebView2. After the palette closes, activate the main
-  window, then call wry's `WebView::focus()`. Source: note 08, sections 2.3
+  window, then call wry's `WebView::focus()`. The activation must have
+  finished first; GPUI's own `activate_window` has not (see the first trap in
+  this section). Source: note 08, sections 2.3
   and 3.3 (medium, code-read only).
 - **A caret version requirement on GPUI breaks the build.** Snapshot releases
   come weekly and may change the API; a `^` requirement has already moved apps
