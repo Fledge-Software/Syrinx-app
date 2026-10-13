@@ -20,6 +20,7 @@ mod navigation_status;
 mod page_card;
 mod page_lifecycle;
 mod palette_acceptance;
+mod palette_popup;
 mod panes;
 mod peek;
 mod peek_state;
@@ -229,11 +230,6 @@ pub struct LaunchChecks {
     pub acceptance: Option<crate::acceptance::AcceptancePlan>,
 }
 
-struct PalettePopup {
-    window: WindowHandle<Root>,
-    view: Entity<PaletteView>,
-}
-
 pub struct BrowserView {
     fullscreen: Option<(u64, bool)>,
     crashes: process_recovery::CrashState,
@@ -275,7 +271,13 @@ pub struct BrowserView {
     message: String,
     failure: Option<String>,
     focus: FocusHandle,
-    palette: Option<PalettePopup>,
+    /// The open palette entry; `None` while the kept popup is hidden.
+    palette: Option<palette_popup::PalettePopup>,
+    /// The palette popup, created once and kept hidden between entries (DW-90).
+    kept_palette: Option<palette_popup::KeptPalette>,
+    palette_entries: u64,
+    /// The page is to take the keys once the owner brings Atlas back to the front.
+    page_focus_on_activation: bool,
     commands: Rc<CommandRegistry>,
     main_window: gpui::AnyWindowHandle,
     peek: Option<peek::PeekPopup>,
@@ -358,12 +360,16 @@ impl BrowserView {
                         this.peek_state.rearm();
                     }
                     this.watch_peek(window, cx);
+                    this.focus_page_after_activation(window, cx);
                 }
             }),
             message: "Opening your workspace…".to_owned(),
             failure: None,
             focus: cx.focus_handle(),
             palette: None,
+            kept_palette: None,
+            palette_entries: 0,
+            page_focus_on_activation: false,
             commands: Rc::new(CommandRegistry::browser()),
             main_window: Window::window_handle(window),
             peek: None,
@@ -569,6 +575,13 @@ impl BrowserView {
                 self.restore_fullscreen_if_hidden(window, cx);
                 if initial {
                     self.seed_suspended_fixture();
+                    // After this frame, so the window shows its tabs before the popup is built.
+                    cx.spawn(async move |view, cx| {
+                        if view.update(cx, Self::prepare_palette).is_err() {
+                            eprintln!("The browser closed before the palette was prepared.");
+                        }
+                    })
+                    .detach();
                 }
                 // Only committed model changes invalidate an open palette's catalogue snapshot.
                 if changed
@@ -816,6 +829,7 @@ impl BrowserView {
                 }
             }
             BrowserEvent::Url { id, url } => {
+                self.acceptance_observed(&url);
                 self.forget_find(id, true);
                 self.metadata(id, None, Some(url));
             }
@@ -1096,160 +1110,6 @@ impl BrowserView {
         }
     }
 
-    fn open_palette(&mut self, address: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if Window::window_handle(window) != self.main_window {
-            self.queue_peek_action(peek::PeekAction::Palette(address), window, cx);
-            return;
-        }
-        self.retire_peek(cx);
-        if self.closing || self.session_revision.is_none() {
-            return;
-        }
-        if let Some(palette) = &self.palette {
-            let view = palette.view.clone();
-            if palette
-                .window
-                .update(cx, |_, popup, cx| {
-                    popup.activate_window();
-                    view.update(cx, |palette, cx| palette.focus_input(popup, cx));
-                })
-                .is_err()
-            {
-                self.palette = None;
-                self.pending_query = None;
-                self.home_palette.finish_entry();
-                self.message =
-                    "The palette window is no longer available. Open it again.".to_owned();
-                cx.notify();
-            }
-            return;
-        }
-        // A new popup restarts its local request IDs; results from its predecessor are obsolete.
-        self.pending_query = None;
-        let initial = if address {
-            self.active_address()
-        } else {
-            String::new()
-        };
-        let (events, mut receiver) = unbounded();
-        let parent = self.parent_hwnd;
-        let retained = Rc::new(RefCell::new(None));
-        let popup_retained = retained.clone();
-        let ownership_error = Rc::new(RefCell::new(None));
-        let popup_error = ownership_error.clone();
-        let registry = self.commands.clone();
-        let context = self.command_context();
-        let probe = self.acceptance_probe();
-        let main_bounds = window.bounds();
-        let main_width = f32::from(main_bounds.size.width);
-        // The design's palette is 880 wide; narrower windows drop the preview pane.
-        let width = (main_width - 48.).clamp(320., 880.).min(main_width);
-        let popup_bounds = Bounds::new(
-            point(
-                main_bounds.origin.x + px((main_width - width) / 2.),
-                main_bounds.origin.y + px(72.),
-            ),
-            size(px(width), px(560.)),
-        );
-        if let Some(probe) = &probe {
-            probe.window_requested(std::time::Instant::now());
-        }
-        let popup = cx.open_window(
-            WindowOptions {
-                kind: WindowKind::PopUp,
-                titlebar: None,
-                window_bounds: Some(WindowBounds::Windowed(popup_bounds)),
-                focus: true,
-                ..Default::default()
-            },
-            move |popup, cx| {
-                if let Some(probe) = &probe {
-                    probe.window_created(std::time::Instant::now());
-                }
-                popup.set_window_title("Atlas command palette");
-                let ownership = native_handle(popup)
-                    .map_err(str::to_owned)
-                    .and_then(|handle| {
-                        set_overlay_owner(handle, parent).map_err(|error| error.to_string())
-                    });
-                if let Err(error) = ownership {
-                    *popup_error.borrow_mut() = Some(error);
-                }
-                let close_events = events.clone();
-                popup.on_window_should_close(cx, move |_, _| {
-                    if close_events.unbounded_send(PaletteEvent::Closed).is_err() {
-                        eprintln!("Palette closed after its browser receiver stopped.");
-                    }
-                    true
-                });
-                let palette = cx.new(|cx| {
-                    PaletteView::new(initial, events, registry, context, probe, popup, cx)
-                });
-                *popup_retained.borrow_mut() = Some(palette.clone());
-                let root = cx.new(|cx| Root::new(palette.clone(), popup, cx));
-                popup.defer(cx, move |popup, cx| {
-                    popup.activate_window();
-                    palette.update(cx, |palette, cx| palette.focus_input(popup, cx));
-                });
-                root
-            },
-        );
-        match popup {
-            Ok(handle) => {
-                if let Some(error) = ownership_error.borrow_mut().take() {
-                    self.message = error;
-                    if handle
-                        .update(cx, |_, window, _| window.remove_window())
-                        .is_err()
-                    {
-                        self.message = "Cannot close the failed palette window.".to_owned();
-                    }
-                    return;
-                }
-                self.palette = Some(PalettePopup {
-                    window: handle,
-                    view: retained.borrow_mut().take().expect("opened palette view"),
-                });
-                self.message = "Palette open".to_owned();
-                self.arm_open_probe(cx);
-            }
-            Err(_) => {
-                self.message = "Cannot open the command palette.".to_owned();
-                return;
-            }
-        }
-        let palette_id = self
-            .palette
-            .as_ref()
-            .expect("opened palette")
-            .view
-            .entity_id();
-        cx.spawn_in(window, async move |view, cx| {
-            while let Some(event) = receiver.next().await {
-                let closed = event.finishes_entry();
-                // A late event from a closed popup must not act on a replacement popup.
-                let delivered = view.update_in(cx, |view, window, cx| {
-                    if view
-                        .palette
-                        .as_ref()
-                        .is_none_or(|palette| palette.view.entity_id() != palette_id)
-                    {
-                        return false;
-                    }
-                    view.palette_event(event, window, cx);
-                    true
-                });
-                if !matches!(delivered, Ok(true)) {
-                    break;
-                }
-                if closed {
-                    break;
-                }
-            }
-        })
-        .detach();
-    }
-
     fn palette_event(&mut self, event: PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
             return;
@@ -1309,10 +1169,7 @@ impl BrowserView {
                 self.run_command(action, window, cx);
             }
             PaletteEvent::Shortcut(shortcut) => {
-                let popup_live = self.palette.as_ref().is_some_and(|palette| {
-                    let handle: gpui::AnyWindowHandle = palette.window.into();
-                    cx.windows().contains(&handle)
-                });
+                let popup_live = self.palette_entry_live(cx);
                 dispatch_palette_shortcut(shortcut, popup_live, |shortcut| {
                     self.shortcut(shortcut, window, cx);
                 });
@@ -1344,9 +1201,10 @@ impl BrowserView {
             self.focus_page(window, cx);
             return;
         };
-        // Find keeps focus in its Atlas input; a queued page Focus would take it back.
+        // Find keeps focus in its Atlas input; activating natively now means no later
+        // activation takes the keys back, and Atlas never takes the foreground (2026-10-12).
         if action == BrowserAction::FindInPage {
-            window.activate_window();
+            self.activate_main_now();
         }
         match browser_shortcut(action) {
             Some(shortcut) => self.shortcut(shortcut, window, cx),
@@ -1371,16 +1229,55 @@ impl BrowserView {
         }
     }
 
-    fn focus_page(&mut self, window: &mut Window, cx: &mut App) {
+    fn focus_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
             return;
         }
-        window.activate_window();
+        let main = Window::window_handle(window) == self.main_window;
         // Clear chrome focus so no control keeps its ring once keys go to the page.
-        if Window::window_handle(window) == self.main_window {
+        if main {
             window.focus(&self.focus, cx);
         }
+        // GPUI's `activate_window` focuses the window later, from a task, which takes the keys
+        // back from a page focused now; it also forces the foreground. With Atlas in front,
+        // activate natively at once instead.
+        if self.activate_main_now() {
+            self.acceptance_mark("focus_page: activated at once");
+            self.page_focus_on_activation = false;
+            self.focus_shown_page();
+            return;
+        }
+        // Atlas never takes the foreground from another application (owner, 2026-10-12): the
+        // page takes the keys when the owner returns to Atlas.
+        self.acceptance_mark("focus_page: deferred until Atlas is activated");
+        self.page_focus_on_activation = true;
+    }
+
+    fn activate_main_now(&mut self) -> bool {
+        match atlas_platform::browser::activate_if_foreground(self.parent_hwnd) {
+            Ok(activated) => activated,
+            Err(error) => {
+                self.message = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Completes a `focus_page` that waited for the owner to bring Atlas back, unless the
+    /// owner has since put the keys in a chrome control.
+    fn focus_page_after_activation(&mut self, window: &Window, cx: &App) {
+        let deferred = std::mem::take(&mut self.page_focus_on_activation);
+        let root_focused = window.focused(cx).map(|focused| focused == self.focus);
+        if !deferred_focus_applies(deferred, root_focused) {
+            return;
+        }
+        self.acceptance_mark("activation observed");
+        self.focus_shown_page();
+    }
+
+    fn focus_shown_page(&mut self) {
         if let Some(id) = self.shown {
+            self.acceptance_mark("page focus sent");
             self.page_command(BrowserCommand::Focus { id: id.get() });
         }
     }
@@ -1406,7 +1303,7 @@ impl BrowserView {
         self.closing = true;
         self.stop_link_feed();
         self.retire_peek(cx);
-        self.retire_palette(cx);
+        self.remove_palette(cx);
         self.close_import_preview(cx);
         self.message = "Saving and closing…".to_owned();
         if self.browser_stopped && !self.session_stopped {
@@ -1417,26 +1314,6 @@ impl BrowserView {
         }
         self.finish_close(cx);
         cx.notify();
-    }
-
-    fn retire_palette(&mut self, cx: &mut Context<Self>) {
-        // Invalidate queued popup events before removing a still-open native window.
-        self.pending_query = None;
-        self.home_palette.finish_entry();
-        let Some(palette) = self.palette.take() else {
-            return;
-        };
-        let handle: gpui::AnyWindowHandle = palette.window.into();
-        // Enter can already have removed the window while its Submit event is queued.
-        if !cx.windows().contains(&handle) {
-            return;
-        }
-        if handle
-            .update(cx, |_, window, _| window.remove_window())
-            .is_err()
-        {
-            self.fail("Cannot close the command palette during shutdown.");
-        }
     }
 
     pub fn smoke_timeout(&mut self, cx: &mut Context<Self>) {
@@ -1661,6 +1538,10 @@ impl Render for BrowserView {
             .track_focus(&self.focus)
             .flex()
             .flex_col()
+            // A click in Atlas's chrome decides focus itself, so a deferred page focus lapses.
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+                this.page_focus_on_activation = false;
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.sidebar_drag_moved(event, window, cx);
             }))
@@ -1884,6 +1765,12 @@ fn button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> 
     crate::controls::push_button(frame, label)
 }
 
+/// Whether a deferred page focus still applies on activation: only while GPUI focus is on
+/// the window root (`Some(true)`) or nowhere (`None`), not on a control the owner chose.
+fn deferred_focus_applies(deferred: bool, root_focused: Option<bool>) -> bool {
+    deferred && root_focused != Some(false)
+}
+
 fn native_handle(window: &Window) -> Result<isize, &'static str> {
     let handle =
         HasWindowHandle::window_handle(window).map_err(|_| "The native window is unavailable.")?;
@@ -1915,6 +1802,24 @@ mod palette_shortcut_tests {
     use futures::FutureExt;
 
     use super::*;
+
+    #[test]
+    fn a_deferred_page_focus_yields_to_a_control_the_owner_chose() {
+        assert!(
+            deferred_focus_applies(true, Some(true)),
+            "the root still has focus"
+        );
+        assert!(deferred_focus_applies(true, None), "nothing has focus");
+        assert!(
+            !deferred_focus_applies(true, Some(false)),
+            "a clicked chrome control keeps the keys"
+        );
+        assert!(
+            !deferred_focus_applies(false, Some(true)),
+            "nothing was deferred"
+        );
+        assert!(!deferred_focus_applies(false, None));
+    }
 
     #[test]
     fn saved_activation_reaches_the_worker_even_from_a_stale_snapshot() {

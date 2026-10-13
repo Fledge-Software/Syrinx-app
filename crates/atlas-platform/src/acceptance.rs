@@ -3,17 +3,18 @@
 use std::time::Duration;
 
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, WPARAM},
+    Foundation::{FILETIME, HWND, LPARAM, WPARAM},
     Graphics::Gdi::{
         DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW,
         MONITOR_DEFAULTTONEAREST, MONITORINFO, MONITORINFOEXW, MonitorFromWindow,
     },
+    System::Threading::{GetCurrentProcess, GetProcessTimes},
     UI::{
         Input::KeyboardAndMouse::{MAPVK_VK_TO_VSC, MapVirtualKeyW, VK_BACK, VK_ESCAPE, VK_RETURN},
         WindowsAndMessaging::{
-            GW_HWNDPREV, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongPtrW,
-            GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, WM_CHAR, WM_KEYDOWN,
-            WM_KEYUP, WS_EX_TOPMOST,
+            GUITHREADINFO, GW_HWNDPREV, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow,
+            GetGUIThreadInfo, GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId, IsChild,
+            IsWindow, IsWindowVisible, PostMessageW, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WS_EX_TOPMOST,
         },
     },
 };
@@ -41,6 +42,10 @@ pub enum ProbeError {
     DisplayUnreadable,
     /// Windows reported a refresh rate outside 24 to 1000 Hz.
     ImplausibleRefresh(u32),
+    /// Windows did not report the interface thread's focus window.
+    FocusUnreadable,
+    /// Windows did not report this process's CPU time.
+    CpuTimeUnreadable,
 }
 
 impl std::fmt::Display for ProbeError {
@@ -52,6 +57,12 @@ impl std::fmt::Display for ProbeError {
             Self::PostFailed => formatter.write_str("Windows refused the posted input message."),
             Self::DisplayUnreadable => {
                 formatter.write_str("Windows did not report the display's current mode.")
+            }
+            Self::CpuTimeUnreadable => {
+                formatter.write_str("Windows did not report Atlas's CPU time.")
+            }
+            Self::FocusUnreadable => {
+                formatter.write_str("Windows did not report which window has keyboard focus.")
             }
             Self::ImplausibleRefresh(hertz) => {
                 write!(
@@ -86,6 +97,74 @@ pub fn overlay_stacking(popup: isize, main: isize) -> Result<OverlayStacking, Pr
         visible: unsafe { IsWindowVisible(handle) }.as_bool(),
         above_main: is_above(popup, main),
     })
+}
+
+/// Which window holds Windows keyboard focus for Atlas's interface thread.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum KeyboardFocus {
+    /// No window on the thread's input queue has focus.
+    Nobody,
+    /// The main window itself, so keys go to GPUI rather than the page.
+    MainWindow,
+    /// A descendant of the main window: the page host or a WebView2 child.
+    InsideMainWindow,
+    /// The overlay popup passed to the query.
+    Popup,
+    Elsewhere,
+}
+
+impl KeyboardFocus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Nobody => "nobody",
+            Self::MainWindow => "main window",
+            Self::InsideMainWindow => "inside main window",
+            Self::Popup => "popup",
+            Self::Elsewhere => "elsewhere",
+        }
+    }
+}
+
+/// Reads the focus window of the main window's input queue and says where it is.
+pub fn keyboard_focus(main: isize, popup: Option<isize>) -> Result<KeyboardFocus, ProbeError> {
+    own_window(main)?;
+    let thread = unsafe { GetWindowThreadProcessId(hwnd(main), None) };
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe { GetGUIThreadInfo(thread, &mut info) }.map_err(|_| ProbeError::FocusUnreadable)?;
+    let focus = info.hwndFocus;
+    Ok(match focus.0 as isize {
+        0 => KeyboardFocus::Nobody,
+        handle if handle == main => KeyboardFocus::MainWindow,
+        handle if Some(handle) == popup => KeyboardFocus::Popup,
+        _ if unsafe { IsChild(hwnd(main), focus) }.as_bool() => KeyboardFocus::InsideMainWindow,
+        _ => KeyboardFocus::Elsewhere,
+    })
+}
+
+/// The CPU time Atlas's own process has used so far, user and kernel together; page
+/// processes belong to WebView2 and are not included.
+pub fn process_cpu_time() -> Result<Duration, ProbeError> {
+    let mut created = FILETIME::default();
+    let mut exited = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    }
+    .map_err(|_| ProbeError::CpuTimeUnreadable)?;
+    let ticks =
+        |time: FILETIME| u64::from(time.dwHighDateTime) << 32 | u64::from(time.dwLowDateTime);
+    // FILETIME counts 100-nanosecond intervals.
+    Ok(Duration::from_nanos((ticks(kernel) + ticks(user)) * 100))
 }
 
 /// Whether `upper` appears before `lower` when walking up the z-order from `lower`.
@@ -201,5 +280,6 @@ mod tests {
         assert_eq!(post_key(0, Key::Enter), Err(ProbeError::NotAtlasWindow));
         assert_eq!(overlay_stacking(0, 0), Err(ProbeError::NotAtlasWindow));
         assert_eq!(refresh_interval(0), Err(ProbeError::NotAtlasWindow));
+        assert_eq!(keyboard_focus(0, None), Err(ProbeError::NotAtlasWindow));
     }
 }

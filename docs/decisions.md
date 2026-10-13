@@ -25,6 +25,26 @@ recorded separately, in `design/README.md`.
   merge. The owner directed all finished work to main on 2026-10-12. The
   repository stays local, with no remote and no pushes. Commits still
   happen only within this approved slice workflow.
+- **Atlas never takes the foreground from another application.** When the
+  owner has moved to another program, Atlas does not bring itself to the
+  front: no `SetForegroundWindow`, no synthetic Alt press and no GPUI
+  `activate_window`. A page that should take the keys while Atlas is behind
+  waits, and takes them when the owner returns to Atlas; Ctrl K while
+  Atlas is not in front leaves the palette closed rather than float a popup
+  over the other program. The review of DW-90 found that the palette's Esc
+  fallback called GPUI's `activate_window`, which forces the foreground with
+  a synthetic Alt key. Keeping that fallback was rejected: focus returning a
+  little sooner does not justify Atlas stealing the screen from whatever the
+  owner is doing.
+
+  There are two exceptions, both following the owner's own action. Launching
+  Atlas brings it to the front (`cx.activate(true)` in
+  `crates/atlas-app/src/main.rs`). A link the owner clicks in another program
+  while Atlas is their browser also brings it forward
+  (`ui/incoming_links.rs`): the forwarding instance grants the foreground
+  through `AllowSetForegroundWindow` (`crates/atlas-platform/src/instance/pipe.rs`). Every
+  other activation, including Find in page, F6 pane cycling and the bookmark
+  import preview, activates natively only while Atlas is already in front.
 
 - **Palette ranking is judged from key press to rows on screen (P1-33).**
   A keystroke's ranked rows must be presented within two display refresh

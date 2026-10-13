@@ -18,11 +18,11 @@ const COMPOSED_BUDGET: &str = "p95 within two refresh intervals (owner decision 
 pub struct OpenSample {
     /// From the open action to the first presented frame.
     pub presented: Duration,
-    /// From the open action to the call into GPUI's `open_window`.
+    /// From the open action to the kept popup being reset and its show queued (DW-90).
     pub requested: Duration,
-    /// From the open action to the native window existing, before the view is built.
-    pub created: Duration,
-    /// From the open action to the first render inside window creation.
+    /// From the open action to the show task starting to move and show the popup.
+    pub started: Duration,
+    /// From the open action to the popup's first render.
     pub rendered: Duration,
 }
 
@@ -227,12 +227,12 @@ impl Report {
             ("passed", self.open_passed().to_string()),
             ("presented", stats_json(self.open_stats())),
             (
-                "open_window_called",
+                "show_requested",
                 stats_json(Stats::of(self.opens.iter().map(|open| open.requested))),
             ),
             (
-                "window_created",
-                stats_json(Stats::of(self.opens.iter().map(|open| open.created))),
+                "show_started",
+                stats_json(Stats::of(self.opens.iter().map(|open| open.started))),
             ),
             (
                 "first_render",
@@ -447,7 +447,7 @@ mod tests {
             opens: vec![OpenSample {
                 presented: ms(10),
                 requested: ms(1),
-                created: ms(3),
+                started: ms(3),
                 rendered: ms(4),
             }],
             sizes: vec![SizeResult {
@@ -482,7 +482,7 @@ mod tests {
         report.opens.push(OpenSample {
             presented: ms(30),
             requested: ms(1),
-            created: ms(3),
+            started: ms(3),
             rendered: ms(4),
         });
         assert!(!report.passed(), "a slow opening at p95 fails");
