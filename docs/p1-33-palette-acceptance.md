@@ -235,7 +235,8 @@ popup fixture does. The checks:
 | `escape_returns_page_focus` | after each of the 20 Esc presses the palette closes and the page reports focus again |
 | `openings_reuse_one_popup` | all 20 openings used the same native popup (DW-90) |
 | `no_stale_refocus_after_escape` | one second later: no open entry, the kept popup hidden, two windows (main and kept popup), page still focused, same tab |
-| `hidden_popup_renders_nothing` | for one second with the palette hidden, the palette view does not render (D37's idle budget) |
+| `hidden_popup_renders_nothing` | for 30 seconds with the palette hidden, after a five-second settle, the palette view does not render and its input does not notify, so no caret blink wakes Atlas (D37's idle budget) |
+| `idle_cpu_with_hidden_popup` | over those 30 seconds Atlas's own process uses under 0.5% of one core (D37); WebView2's processes are not counted |
 | `rapid_open_then_escape` | Esc posted in the same turn as Ctrl K, before the popup is shown, still ends the entry, keeps the popup hidden and returns focus |
 | `no_stale_refocus_after_rapid_escape` | as above, after the rapid case |
 | `second_ctrl_k_reuses_popup` | Ctrl K while open keeps the same popup and entry, and two windows in total |
@@ -454,7 +455,9 @@ per-opening window could meet (`docs/decisions.md`, 2026-10-12).
 | `1791860064` | yes | 4.5 / 6.5 / 7.4 | 20 of 20 |
 | `1791860299`, final | yes | 4.3 / 5.9 / 6.9 | 20 of 20 |
 | `1791860396`, final, with a UI Automation client attached | yes | 4.2 / 6.8 / 8.1 | 20 of 20 |
-| `1791861452`, final code after a refactor | no | 3.7 / 10.6 / 394.1 | 20 of 20 |
+| `1791861452`, code later withdrawn (see below) | no | 3.7 / 10.6 / 394.1 | 20 of 20 |
+| `1791862999`, after review, 5 s idle window | yes | 3.9 / 5.4 / 10.8 | 20 of 20 |
+| `1791863160`, after review, final | yes | 5.3 / 13.0 / 27.5 | 20 of 20 |
 
 In the final run the stages were: show requested at p95 0.16 ms, show started
 at 0.26 ms, first render at 2.0 ms and presented at 5.9 ms, so the opening
@@ -469,14 +472,47 @@ composed budget still fail and stay with P1-05.
 started (its baseline check failed too) and was by the end. With Atlas behind
 another application, `focus_page` asked GPUI to activate the window and
 waited for an activation event to focus the page; when Windows reported no
-activation change, no event came and the page was never focused. `focus_page`
-now also focuses the page from a task queued right after GPUI's activation
-task. This explanation is inferred from the code and the run's checks: that
-run had no focus trace yet. The last run, `1791861452`, had Atlas behind
-another window throughout and passed 20 of 20; its first trace shows the
-background path: at 29 ms after Esc `focus_page` waits for GPUI, at 101 ms
-the activation is observed and the page's focus sent, and at 118 ms keyboard
-focus is in the page.
+activation change, no event came and the page was never focused. This
+explanation is inferred from the code and the run's checks: that run had no
+focus trace yet. A follow-up that focused the page right after GPUI's
+activation task made run `1791861452` pass 20 of 20 with Atlas behind another
+window, but only because GPUI's activation forced Atlas to the front.
+
+**Atlas no longer takes the foreground (review, 2026-10-12).** The owner
+decided that Atlas must never take the foreground from another application
+(`docs/decisions.md`), so that path is gone: `focus_page` no longer calls
+`activate_window`. With Atlas behind, the page's focus is deferred, and the
+main window's activation observer completes it when the owner returns to
+Atlas. Ctrl K while Atlas is behind leaves the palette closed with a message,
+instead of showing a popup over the other program. The harness therefore
+waits up to 20 seconds for Atlas to be in front, stops with an explanation if
+the palette cannot open, and counts an Esc whose focus is deferred, with
+Atlas behind, as the expected outcome rather than a failure.
+
+**The hidden popup woke Atlas twice a second (review, 2026-10-12).** Hiding
+the popup did not blur its input, so the input's caret blink kept re-arming a
+500 ms timer: GPUI delivers blur only during a draw, which a hidden window
+never has. The earlier `hidden_popup_renders_nothing` check could not see
+this, because a blink notifies the input without rendering the hidden window.
+Each close now drops the used input, which cancels its blink, and creates a
+fresh unfocused one; the harness counts the input's notifications over 30
+hidden seconds and measures Atlas's own CPU time across them.
+
+**After the review.** Both runs had Atlas in the foreground throughout, and
+every focus, stacking and idle check passed in both; the overall verdict
+still fails only on D48 and the 100,000-row composed budget, which stay with
+P1-05. In `1791863160` the palette rendered 0 times and its input notified 0
+times over 30 hidden seconds, and Atlas's own process used 109.4 ms of CPU in
+those 30 s, 0.365% of one core against D37's 0.5%. WebView2's processes are
+not included, and the machine was busy, so this is not D37's five-minute
+quiet-machine measurement, which stays with P1-06. The first run used a
+five-second window and read 62.5 ms, 1.25% of a core: four of Windows' 15.6 ms
+accounting ticks, starting right after the openings, which is why the window
+is now 30 s after a five-second settle. Esc returned focus 20 of 20 times in
+both runs, all through the "activated at once" path, since Atlas was in
+front; the deferred path was not exercised by these runs. One Esc in
+`1791863160` took 272 ms to reach the page, and three of its twenty closes
+found keys on the main window for a moment before the page took them.
 
 **One slow opening.** The first opening of `1791861452` took 394 ms: its show
 task started 79 ms after Ctrl K and its first render came at 391 ms. The other
@@ -511,8 +547,8 @@ works with the old destroy-per-opening popup.
 **Fix.** With Atlas already in front, `focus_page` now activates the main
 window natively and synchronously (`atlas_platform::browser::
 activate_if_foreground`) and then sends the page `Focus`. With another
-application in front, it still asks GPUI to bring Atlas forward and focuses
-the page only after GPUI's task has run. Run `1791859013` changed only this,
+application in front, it does not bring Atlas forward; the page takes the
+keys when the owner returns to Atlas (see the review section above). Run `1791859013` changed only this,
 keeping the old popup, and passed 20 of 20 Esc presses and the rapid Esc.
 With the kept popup, the focus trace of the final run shows the order: at
 17.3 ms after Esc the main window is activated and the page's focus sent, and
