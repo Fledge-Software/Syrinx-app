@@ -415,14 +415,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "atlas-app"
+name = "syrinx-app"
 version = "0.1.0"
 dependencies = [
- "atlas-core",
- "atlas-platform",
- "atlas-search",
- "atlas-store",
- "atlas-ui",
+ "syrinx-core",
+ "syrinx-platform",
+ "syrinx-search",
+ "syrinx-store",
+ "syrinx-ui",
  "futures",
  "gpui-component",
  "gpui-pre",
@@ -432,18 +432,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "atlas-core"
+name = "syrinx-core"
 version = "0.1.0"
 dependencies = [
  "url",
 ]
 
 [[package]]
-name = "atlas-platform"
+name = "syrinx-platform"
 version = "0.1.0"
 dependencies = [
- "atlas-core",
- "atlas-store",
+ "syrinx-core",
+ "syrinx-store",
  "futures",
  "raw-window-handle",
  "rusqlite",
@@ -454,28 +454,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "atlas-search"
+name = "syrinx-search"
 version = "0.1.0"
 dependencies = [
- "atlas-core",
+ "syrinx-core",
  "frizbee",
 ]
 
 [[package]]
-name = "atlas-store"
+name = "syrinx-store"
 version = "0.1.0"
 dependencies = [
- "atlas-core",
+ "syrinx-core",
  "rusqlite",
  "rusqlite_migration",
 ]
 
 [[package]]
-name = "atlas-ui"
+name = "syrinx-ui"
 version = "0.1.0"
 
 [[package]]
-name = "atlas-update"
+name = "syrinx-update"
 version = "0.1.0"
 dependencies = [
  "windows 0.62.2",
@@ -8805,8 +8805,8 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
- "atlas-core",
- "atlas-search",
+ "syrinx-core",
+ "syrinx-search",
  "serde_json",
 ]
 

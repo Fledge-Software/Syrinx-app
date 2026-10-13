@@ -1,4 +1,4 @@
-//! Builds Atlas's portable package and checks the owner-run scripts; it never installs or registers.
+//! Builds Syrinx's portable package and checks the owner-run scripts; it never installs or registers.
 
 mod manifest;
 mod registration;
@@ -29,7 +29,7 @@ pub fn package(root: &Path) -> Result<(), String> {
         &[
             "build",
             "--package",
-            "atlas-app",
+            "syrinx-app",
             "--features",
             "installed",
             "--profile",
@@ -198,7 +198,7 @@ fn parse_powershell(scripts: &[PathBuf]) -> Result<(), String> {
 }
 
 fn build_identity(root: &Path) -> Result<BuildIdentity, String> {
-    // atlas-app and xtask share the workspace version.
+    // syrinx-app and xtask share the workspace version.
     let commit = git(root, &["rev-parse", "--short=12", "HEAD"])?;
     let status = git(root, &["status", "--porcelain"])?;
     Ok(BuildIdentity {
@@ -231,7 +231,7 @@ fn fresh_package_folder(folder: &Path) -> Result<PathBuf, String> {
     if folder.exists() {
         if !folder.join(MANIFEST).is_file() {
             return Err(format!(
-                "{} exists but is not an Atlas package; move it aside first.",
+                "{} exists but is not a Syrinx package; move it aside first.",
                 folder.display()
             ));
         }
@@ -329,17 +329,18 @@ mod tests {
     fn entry_scripts_normalize_folders_before_using_them() {
         // The scripts cannot run in tests; check they route folders through the shared guard.
         for script in [
-            "install-atlas.ps1",
-            "register-atlas.ps1",
-            "unregister-atlas.ps1",
+            "install-syrinx.ps1",
+            "register-syrinx.ps1",
+            "unregister-syrinx.ps1",
         ] {
             let text = read_text(&repository().join(SCRIPT_FOLDER).join(script)).unwrap();
             assert!(
-                text.contains("= Resolve-AtlasFolder $InstallDirectory"),
+                text.contains("= Resolve-SyrinxFolder $InstallDirectory"),
                 "{script} must normalize its install folder"
             );
         }
-        let common = read_text(&repository().join(SCRIPT_FOLDER).join("atlas-common.ps1")).unwrap();
+        let common =
+            read_text(&repository().join(SCRIPT_FOLDER).join("syrinx-common.ps1")).unwrap();
         assert!(common.contains("TrimEnd('\\')") && common.contains("GetPathRoot"));
         // Relative paths must follow PowerShell's location, not the process folder.
         assert!(common.contains("GetUnresolvedProviderPathFromPSPath($Folder)"));
@@ -367,11 +368,11 @@ mod tests {
 
     #[test]
     fn executable_comes_from_the_separate_package_build() {
-        // Development builds' executable folder (`cargo atlas`, the gate and launch checks).
+        // Development builds' executable folder (`cargo syrinx`, the gate and launch checks).
         const DEVELOPMENT_EXE_FOLDER: &str = r"target\local";
         assert_eq!(
             package_source(Path::new(r"C:\repo"), EXECUTABLE),
-            Path::new(r"C:\repo\target\package-build\local\atlas-app.exe")
+            Path::new(r"C:\repo\target\package-build\local\syrinx.exe")
         );
         // The installed-profile exe must never land where development launches from.
         let development = Path::new(r"C:\repo").join(DEVELOPMENT_EXE_FOLDER);
@@ -380,8 +381,8 @@ mod tests {
         assert!(!development.starts_with(Path::new(r"C:\repo").join(PACKAGE_TARGET_DIR)));
         assert_ne!(PACKAGE_TARGET_DIR, "target");
         assert_eq!(
-            package_source(Path::new(r"C:\repo"), "register-atlas.ps1"),
-            Path::new(r"C:\repo\packaging\register-atlas.ps1")
+            package_source(Path::new(r"C:\repo"), "register-syrinx.ps1"),
+            Path::new(r"C:\repo\packaging\register-syrinx.ps1")
         );
     }
 }

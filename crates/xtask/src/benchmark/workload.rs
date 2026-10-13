@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU64;
 
-use atlas_core::{SavedPageId, TabId};
+use syrinx_core::{SavedPageId, TabId};
 
 use super::{BlankQuery, BoostWeights, Catalogue, Entry, Scope, SearchPolicy, Target, Usage};
 

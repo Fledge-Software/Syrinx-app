@@ -1,11 +1,11 @@
-//! Keeps every deferred-work marker in Atlas's own code tied to a tracked plan entry.
+//! Keeps every deferred-work marker in Syrinx's own code tied to a tracked plan entry.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Plan file holding the deferred-work register, relative to the workspace root.
-pub const REGISTER_PLAN: &str = "docs/plans/Atlas v1 — Plan.md";
+pub const REGISTER_PLAN: &str = "docs/plans/Syrinx v1 — Plan.md";
 
 /// Heading that starts the register inside the plan.
 const REGISTER_HEADING: &str = "## Deferred work";
@@ -20,10 +20,10 @@ const MARKERS: [&str; 3] = [
     concat!("HA", "CK"),
 ];
 
-/// Directories under the workspace root that hold Atlas-authored source.
+/// Directories under the workspace root that hold Syrinx-authored source.
 const SOURCE_ROOTS: [&str; 1] = ["crates"];
 
-/// Check every Atlas-authored Rust file against the plan's deferred-work register.
+/// Check every Syrinx-authored Rust file against the plan's deferred-work register.
 pub fn check(root: &Path) -> Result<Vec<String>, String> {
     let plan = fs::read_to_string(root.join(REGISTER_PLAN))
         .map_err(|error| format!("Could not read {REGISTER_PLAN}: {error}"))?;

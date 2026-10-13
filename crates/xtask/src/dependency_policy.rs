@@ -156,14 +156,14 @@ fn check_direct_dependencies(
 ) {
     // All declarations count, including optional, target, dev and build dependencies.
     for dependency in &package.dependencies {
-        if is_gpui(dependency) && !matches!(name, "atlas-app" | "atlas-ui") {
+        if is_gpui(dependency) && !matches!(name, "syrinx-app" | "syrinx-ui") {
             violations.insert(format!(
-                "{name} -> {dependency}: only atlas-app and atlas-ui may directly depend on GPUI"
+                "{name} -> {dependency}: only syrinx-app and syrinx-ui may directly depend on GPUI"
             ));
         }
         if is_platform_library(dependency) && !may_use_platform_library(name, dependency) {
             violations.insert(format!(
-                "{name} -> {dependency}: only atlas-platform may directly depend on WebView2 or raw Win32"
+                "{name} -> {dependency}: only syrinx-platform may directly depend on WebView2 or raw Win32"
             ));
         }
         if dependency == UPDATE_VERIFIER {
@@ -181,19 +181,19 @@ fn check_plugin_dependency(
     workspace: &Workspace,
     violations: &mut BTreeSet<String>,
 ) {
-    // Plugins reach application services through their API, not another Atlas crate.
-    if !is_atlas_dependency(dependency, workspace) {
+    // Plugins reach application services through their API, not another Syrinx crate.
+    if !is_syrinx_dependency(dependency, workspace) {
         return;
     }
-    if name == "atlas-plugin-api" {
+    if name == "syrinx-plugin-api" {
         violations.insert(format!(
-            "{name} -> {dependency}: atlas-plugin-api must not depend on another Atlas crate"
+            "{name} -> {dependency}: syrinx-plugin-api must not depend on another Syrinx crate"
         ));
         return;
     }
-    if name.starts_with("plugin-") && dependency != "atlas-plugin-api" {
+    if name.starts_with("plugin-") && dependency != "syrinx-plugin-api" {
         violations.insert(format!(
-            "{name} -> {dependency}: a plugin's only Atlas dependency may be atlas-plugin-api"
+            "{name} -> {dependency}: a plugin's only Syrinx dependency may be syrinx-plugin-api"
         ));
     }
 }
@@ -210,7 +210,7 @@ fn is_platform_library(name: &str) -> bool {
 }
 
 /// The P1-38 update verifier, which no crate may use until P1-39's delivery is approved.
-const UPDATE_VERIFIER: &str = "atlas-update";
+const UPDATE_VERIFIER: &str = "syrinx-update";
 
 /// The only `windows` features the update verifier may request: CNG and its NTSTATUS types.
 const UPDATE_VERIFIER_WINDOWS_FEATURES: [&str; 2] =
@@ -247,12 +247,12 @@ fn check_update_verifier_features(
 
 /// The platform crate owns Win32; the update verifier may also call CNG through `windows`.
 fn may_use_platform_library(name: &str, dependency: &str) -> bool {
-    name == "atlas-platform" || (name == UPDATE_VERIFIER && dependency == "windows")
+    name == "syrinx-platform" || (name == UPDATE_VERIFIER && dependency == "windows")
 }
 
-fn is_atlas_dependency(name: &str, workspace: &Workspace) -> bool {
+fn is_syrinx_dependency(name: &str, workspace: &Workspace) -> bool {
     workspace.contains_key(name)
-        || name.starts_with("atlas-")
+        || name.starts_with("syrinx-")
         || name.starts_with("plugin-")
         || name == "fledge-client"
 }
@@ -260,7 +260,7 @@ fn is_atlas_dependency(name: &str, workspace: &Workspace) -> bool {
 fn needs_shell_isolation(name: &str) -> bool {
     matches!(
         name,
-        "atlas-core" | "atlas-store" | "atlas-search" | "atlas-plugin-api" | "atlas-update"
+        "syrinx-core" | "syrinx-store" | "syrinx-search" | "syrinx-plugin-api" | "syrinx-update"
     ) || name.starts_with("plugin-")
 }
 
@@ -277,7 +277,7 @@ fn check_shell_paths(name: &str, workspace: &Workspace, violations: &mut BTreeSe
         }
         if matches!(
             current.as_str(),
-            "atlas-app" | "atlas-ui" | "atlas-platform"
+            "syrinx-app" | "syrinx-ui" | "syrinx-platform"
         ) {
             violations.insert(format!(
                 "{}: core and plugin crates must not reach the shell through workspace dependencies",
@@ -309,8 +309,8 @@ fn append_workspace_dependencies(
     }
 }
 
-/// Crates that open network connections. Typing must stay on the machine (D9) and Atlas makes no
-/// network call of its own, so Atlas's crates never depend on them; WebView2 loads every page.
+/// Crates that open network connections. Typing must stay on the machine (D9) and Syrinx makes no
+/// network call of its own, so Syrinx's crates never depend on them; WebView2 loads every page.
 const NETWORK_CRATES: [&str; 22] = [
     "reqwest",
     "gpui-pre-reqwest",
@@ -346,11 +346,11 @@ const NETWORK_WINDOWS_FEATURES: [&str; 5] = [
 ];
 
 fn check_network_declarations(name: &str, package: &Package, violations: &mut BTreeSet<String>) {
-    // Neither a network crate nor a Windows networking namespace may be declared by Atlas.
+    // Neither a network crate nor a Windows networking namespace may be declared by Syrinx.
     for declaration in &package.declarations {
         if NETWORK_CRATES.contains(&declaration.name.as_str()) {
             violations.insert(format!(
-                "{name} -> {}: Atlas's crates may not use a network client (D9)",
+                "{name} -> {}: Syrinx's crates may not use a network client (D9)",
                 declaration.name
             ));
         }
@@ -499,11 +499,11 @@ mod tests {
 
     #[test]
     fn rejects_network_clients_and_windows_networking() -> Result<(), String> {
-        // D9: no Atlas crate may declare a network client or a Windows networking namespace.
+        // D9: no Syrinx crate may declare a network client or a Windows networking namespace.
         let input = metadata(vec![
-            package("atlas-app", json!([{"name": "reqwest", "kind": "dev"}])),
+            package("syrinx-app", json!([{"name": "reqwest", "kind": "dev"}])),
             package(
-                "atlas-platform",
+                "syrinx-platform",
                 json!([{
                     "name": "windows",
                     "features": [
@@ -521,7 +521,7 @@ mod tests {
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("atlas-app -> reqwest"))
+                .any(|message| message.contains("syrinx-app -> reqwest"))
         );
         assert!(
             violations
@@ -540,8 +540,8 @@ mod tests {
     fn headless_crates_cannot_reach_a_network_client_transitively() -> Result<(), String> {
         // The shell may inherit GPUI's client; the crates that rank typed text may not.
         let mut input = metadata(vec![
-            package("atlas-search", json!([{"name": "helper"}])),
-            package("atlas-app", json!([{"name": "gpui-pre"}])),
+            package("syrinx-search", json!([{"name": "helper"}])),
+            package("syrinx-app", json!([{"name": "gpui-pre"}])),
         ]);
         input["packages"]
             .as_array_mut()
@@ -552,15 +552,15 @@ mod tests {
                 package("hyper", json!([])),
             ]);
         input["resolve"]["nodes"] = json!([
-            node("atlas-search", &["helper"]),
+            node("syrinx-search", &["helper"]),
             node("helper", &["hyper"]),
-            node("atlas-app", &["gpui-pre"]),
+            node("syrinx-app", &["gpui-pre"]),
             node("gpui-pre", &["hyper"]),
             node("hyper", &[]),
         ]);
         let violations = check_metadata(&input)?;
         assert_eq!(violations.len(), 1, "{violations:?}");
-        assert!(violations[0].contains("atlas-search -> helper -> hyper"));
+        assert!(violations[0].contains("syrinx-search -> helper -> hyper"));
 
         input
             .as_object_mut()
@@ -575,28 +575,28 @@ mod tests {
         // The app can reach platform libraries through the designated workspace boundary.
         let input = metadata(vec![
             package(
-                "atlas-app",
-                json!([{"name": "atlas-ui"}, {"name": "atlas-platform"}]),
+                "syrinx-app",
+                json!([{"name": "syrinx-ui"}, {"name": "syrinx-platform"}]),
             ),
             package(
-                "atlas-ui",
+                "syrinx-ui",
                 json!([{"name": "gpui-pre"}, {"name": "gpui-component"}]),
             ),
             package(
-                "atlas-platform",
+                "syrinx-platform",
                 json!([{"name": "wry"}, {"name": "windows"}]),
             ),
             package(
-                "atlas-core",
-                json!([{"name": "atlas-store"}, {"name": "atlas-search"}]),
+                "syrinx-core",
+                json!([{"name": "syrinx-store"}, {"name": "syrinx-search"}]),
             ),
-            package("atlas-store", json!([{"name": "rusqlite"}])),
-            package("atlas-search", json!([{"name": "frizbee"}])),
+            package("syrinx-store", json!([{"name": "rusqlite"}])),
+            package("syrinx-search", json!([{"name": "frizbee"}])),
             package(
                 "plugin-notes",
-                json!([{"name": "atlas-plugin-api"}, {"name": "serde"}]),
+                json!([{"name": "syrinx-plugin-api"}, {"name": "serde"}]),
             ),
-            package("atlas-plugin-api", json!([{"name": "serde"}])),
+            package("syrinx-plugin-api", json!([{"name": "serde"}])),
         ]);
         assert!(check_metadata(&input)?.is_empty());
         Ok(())
@@ -606,7 +606,7 @@ mod tests {
     fn confines_the_update_verifier() -> Result<(), String> {
         // The verifier may call CNG through `windows`, but not WebView2, and nothing may use it yet.
         let permitted = metadata(vec![package(
-            "atlas-update",
+            "syrinx-update",
             json!([{
                 "name": "windows",
                 "uses_default_features": false,
@@ -617,35 +617,35 @@ mod tests {
 
         let input = metadata(vec![
             package(
-                "atlas-update",
+                "syrinx-update",
                 json!([
                     {"name": "windows", "uses_default_features": false},
                     {"name": "wry"},
-                    {"name": "atlas-platform"}
+                    {"name": "syrinx-platform"}
                 ]),
             ),
             package(
-                "atlas-app",
-                json!([{"name": "atlas-update", "kind": "dev"}]),
+                "syrinx-app",
+                json!([{"name": "syrinx-update", "kind": "dev"}]),
             ),
-            package("atlas-platform", json!([])),
+            package("syrinx-platform", json!([])),
         ]);
         let violations = check_metadata(&input)?;
         assert_eq!(violations.len(), 3);
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("atlas-update -> wry"))
+                .any(|message| message.contains("syrinx-update -> wry"))
         );
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("atlas-app -> atlas-update"))
+                .any(|message| message.contains("syrinx-app -> syrinx-update"))
         );
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("atlas-update -> atlas-platform"))
+                .any(|message| message.contains("syrinx-update -> syrinx-platform"))
         );
         Ok(())
     }
@@ -654,7 +654,7 @@ mod tests {
     fn restricts_the_update_verifier_to_cryptography_features() -> Result<(), String> {
         // A networking namespace or the default features must fail the dependency check.
         let input = metadata(vec![package(
-            "atlas-update",
+            "syrinx-update",
             json!([
                 {
                     "name": "windows",
@@ -685,7 +685,7 @@ mod tests {
     fn rejects_renamed_optional_dev_build_and_target_dependencies() -> Result<(), String> {
         // Renaming and non-default dependency declarations cannot hide forbidden imports.
         let input = metadata(vec![package(
-            "atlas-core",
+            "syrinx-core",
             json!([
                 {"name": "gpui_pre", "rename": "widgets", "kind": "dev"},
                 {"name": "webview2-com-sys", "rename": "engine", "kind": "build"},
@@ -697,17 +697,17 @@ mod tests {
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("atlas-core -> gpui-pre"))
+                .any(|message| message.contains("syrinx-core -> gpui-pre"))
         );
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("atlas-core -> webview2-com-sys"))
+                .any(|message| message.contains("syrinx-core -> webview2-com-sys"))
         );
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("atlas-core -> windows-sys"))
+                .any(|message| message.contains("syrinx-core -> windows-sys"))
         );
         Ok(())
     }
@@ -716,16 +716,16 @@ mod tests {
     fn rejects_workspace_facades_and_terminates_on_cycles() -> Result<(), String> {
         // A helper cannot smuggle shell dependencies into a headless crate.
         let input = metadata(vec![
-            package("atlas-search", json!([{"name": "helper"}])),
+            package("syrinx-search", json!([{"name": "helper"}])),
             package(
                 "helper",
-                json!([{"name": "atlas-search"}, {"name": "atlas-ui"}]),
+                json!([{"name": "syrinx-search"}, {"name": "syrinx-ui"}]),
             ),
-            package("atlas-ui", json!([{"name": "gpui-pre"}])),
+            package("syrinx-ui", json!([{"name": "gpui-pre"}])),
         ]);
         let violations = check_metadata(&input)?;
         assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("atlas-search -> helper -> atlas-ui"));
+        assert!(violations[0].contains("syrinx-search -> helper -> syrinx-ui"));
         Ok(())
     }
 
@@ -738,8 +738,8 @@ mod tests {
                 json!([{"name": "fledge-client"}, {"name": "serde"}]),
             ),
             package("fledge-client", json!([])),
-            package("atlas-plugin-api", json!([{"name": "atlas-store"}])),
-            package("atlas-store", json!([])),
+            package("syrinx-plugin-api", json!([{"name": "syrinx-store"}])),
+            package("syrinx-store", json!([])),
         ]);
         let violations = check_metadata(&input)?;
         assert_eq!(violations.len(), 2);
@@ -751,7 +751,7 @@ mod tests {
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("atlas-plugin-api -> atlas-store"))
+                .any(|message| message.contains("syrinx-plugin-api -> syrinx-store"))
         );
         Ok(())
     }
@@ -759,9 +759,9 @@ mod tests {
     #[test]
     fn ignores_packages_outside_workspace_members() -> Result<(), String> {
         // External GPUI dependencies on Win32 do not make the application invalid.
-        let mut input = metadata(vec![package("atlas-app", json!([{"name": "gpui-pre"}]))]);
+        let mut input = metadata(vec![package("syrinx-app", json!([{"name": "gpui-pre"}]))]);
         input["packages"] = json!([
-            package("atlas-app", json!([{"name": "gpui-pre"}])),
+            package("syrinx-app", json!([{"name": "gpui-pre"}])),
             package("gpui-pre", json!([{"name": "windows"}]))
         ]);
         assert!(check_metadata(&input)?.is_empty());
@@ -776,9 +776,9 @@ mod tests {
             json!([]),
             json!([7]),
             json!(["missing"]),
-            json!(["workspace:atlas-core", "workspace:atlas-core"]),
+            json!(["workspace:syrinx-core", "workspace:syrinx-core"]),
         ] {
-            let mut input = metadata(vec![package("atlas-core", json!([]))]);
+            let mut input = metadata(vec![package("syrinx-core", json!([]))]);
             input["workspace_members"] = members;
             assert!(check_metadata(&input).is_err());
         }
@@ -788,15 +788,15 @@ mod tests {
     fn rejects_malformed_packages_and_dependencies() {
         // A renamed import still requires its real package name in Cargo metadata.
         for packages in [
-            json!([{"id": "workspace:atlas-core", "dependencies": []}]),
-            json!([package("atlas-core", json!(null))]),
-            json!([package("atlas-core", json!([{"rename": "widgets"}]))]),
+            json!([{"id": "workspace:syrinx-core", "dependencies": []}]),
+            json!([package("syrinx-core", json!(null))]),
+            json!([package("syrinx-core", json!([{"rename": "widgets"}]))]),
             json!([
-                package("atlas-core", json!([])),
-                package("atlas-core", json!([]))
+                package("syrinx-core", json!([])),
+                package("syrinx-core", json!([]))
             ]),
         ] {
-            let mut input = metadata(vec![package("atlas-core", json!([]))]);
+            let mut input = metadata(vec![package("syrinx-core", json!([]))]);
             input["packages"] = packages;
             assert!(check_metadata(&input).is_err());
         }
