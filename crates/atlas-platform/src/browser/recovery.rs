@@ -10,6 +10,31 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
 };
 
+/// A crashed tab waiting to be rebuilt: the address Atlas last asked for, and whether its
+/// document carried an excluded site's page-text taint (P1-25).
+pub(super) struct Unavailable {
+    pub(super) destination: String,
+    pub(super) tainted: bool,
+}
+
+impl Unavailable {
+    fn of(page: &Page) -> Self {
+        Self {
+            destination: page.destination(),
+            tainted: page.tainted(),
+        }
+    }
+
+    /// An address the owner chose for the crashed tab: it restores without taint, with the
+    /// same effect as an Atlas navigation from a blank page.
+    pub(super) fn chosen(destination: String) -> Self {
+        Self {
+            destination,
+            tainted: false,
+        }
+    }
+}
+
 const ATTEMPT_LIMIT: usize = 3;
 const ATTEMPT_WINDOW: Duration = Duration::from_secs(60);
 
@@ -102,7 +127,7 @@ impl BrowserState {
         let Some(page) = self.pages.remove(&id) else {
             return;
         };
-        self.unavailable.insert(id, page.destination());
+        self.unavailable.insert(id, Unavailable::of(&page));
         self.popups.cancel_opener(id);
         // Retiring this controller invalidates repeated failure events already queued for it.
         drop(page);
@@ -126,13 +151,11 @@ impl BrowserState {
     }
 
     pub(super) fn restore_page(&mut self, id: u64) -> Result<(), BrowserError> {
-        let url = self
-            .unavailable
-            .get(&id)
-            .ok_or(BrowserError::UnknownTab)?
-            .clone();
-        let page = self.build_page(id)?;
-        page.navigate(&url)?;
+        let crashed = self.unavailable.get(&id).ok_or(BrowserError::UnknownTab)?;
+        let url = crashed.destination.clone();
+        // The rebuilt page keeps the taint; its reload is not Atlas's own navigation.
+        let page = self.build_page(id, crashed.tainted)?;
+        page.restore(&url)?;
         page.show(self.active == Some(id), self.bounds)?;
         self.pages.insert(id, page);
         self.unavailable.remove(&id);
@@ -182,11 +205,11 @@ impl BrowserState {
 
     /// Forgets a closed crashed tab; a stopped engine with nothing left to restore starts afresh.
     pub(super) fn forget_unavailable(&mut self, id: u64) -> Option<String> {
-        let destination = self.unavailable.remove(&id)?;
+        let crashed = self.unavailable.remove(&id)?;
         if self.recovery.stopped && self.unavailable.is_empty() {
             self.recovery.reset();
         }
-        Some(destination)
+        Some(crashed.destination)
     }
 
     fn begin_recovery(&mut self) -> bool {
@@ -199,7 +222,7 @@ impl BrowserState {
         };
         self.recovery_sequence = sequence;
         for (id, page) in &self.pages {
-            self.unavailable.insert(*id, page.destination());
+            self.unavailable.insert(*id, Unavailable::of(page));
         }
         self.events.emit(BrowserEvent::RecoveryStarted {
             sequence,
