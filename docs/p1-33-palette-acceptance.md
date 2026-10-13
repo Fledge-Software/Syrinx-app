@@ -11,10 +11,18 @@ running application and re-checks the live-overlay focus and stacking
 behaviour that earlier slices (P1-10, P1-11, P1-17, P1-30/31, P1-36) built.
 
 **Short version.** All figures here come from a busy development machine,
-with Atlas launched by an agent and never allowed into the foreground. The
-owner's quiet foreground runs are the acceptance numbers. On that basis:
+with Atlas launched by an agent. Only the latest run had Atlas in the
+foreground. The owner's quiet foreground runs are the acceptance numbers. On
+that basis:
 
-- The harness works and has run four times.
+- The harness works and has run five times.
+- **The harness found a product bug, and it caused real traffic.** Enter
+  pressed before the current query's local reply fell back to a Google
+  search. In two agent runs this sent the synthetic text "enter-target" to
+  www.google.com, before any loopback guard existed. No personal data was
+  involved: the profile and the text were synthetic. The palette now waits for
+  the reply. The run now aborts on any destination outside its loopback pages.
+  See "Product bug found by the harness" below.
 - **Opening fails:** about half a second, roughly 30 frames against one.
   Nearly all of it falls between the call into GPUI's `open_window` and the
   moment the new window exists, which points at GPUI's window creation. That
@@ -26,9 +34,12 @@ owner's quiet foreground runs are the acceptance numbers. On that basis:
 - **D48 fails in the running app** at 10,000 and 100,000 rows; that work
   stays with P1-05.
 - **Overlay ownership, not-topmost, z-order and popup reuse pass.**
-- **Not decided here:** focus return after Esc, because Windows kept the
-  agent-launched Atlas out of the foreground. Enter activation also failed in
-  two of three complete runs and remains unexplained.
+- **Enter activation passes** since the fix (run `1791856583`).
+- **Focus return after Esc fails, now with Atlas in the foreground:** 0 of 20
+  in run `1791856583`, where Windows reported Atlas as the foreground window.
+  Foreground denial therefore no longer explains it on its own. Whether this
+  is a product defect or how the page reports focus is not diagnosed; it
+  needs its own investigation.
 
 Nothing slow has been hidden or excluded.
 
@@ -335,22 +346,85 @@ not tried.
 | `enter_activates_selected_tab` | **FAIL** | passed in `1791845563`; failed in `1791845322` |
 | `no_stale_refocus_after_enter` | **FAIL** | as above |
 
-**Focus return is not established either way.** Windows denied Atlas
-foreground activation throughout: `foreground_window()` never returned Atlas's
+**In the earlier runs, focus return was not established either way.**
+Windows denied Atlas foreground activation throughout those runs: `foreground_window()` never returned Atlas's
 main window or popup. When the active popup is destroyed in a background
 process, Windows activates some other application's window. The page's
 `document.hasFocus()` is then false even though Atlas moved WebView2 focus
 back (`focus_page`). That is consistent with the traps on foreground rules.
 
-**Enter activation is an open failure.** In the latest run the target's row
-was selected, Enter was posted and the palette closed, but the focus page
-stayed active. The status line read "The page could not be loaded. Try
-reloading." The catalogue held one more real row than in earlier runs (1,005
-rather than 1,004). This run followed the merge of P1-15's hidden-tab
-suspension follow-up, and the target tab sits in the background. A connection
-between the two is not established. Both P1-30's model and this slice expect
-Enter on a tab row to focus that tab (`activation_command`). The owner's
-foreground runs, and a diagnosis if it recurs, decide it.
+**Enter activation: diagnosed, fixed, and passing.** The earlier failures
+(`1791845322` and `1791855053`) were the palette bug described in the next
+section. The harness posted Enter as soon as a reply to a *partial* query had
+selected the target; the last characters then started a new request, and
+Enter reached it before its reply. Enter then searched the web for
+"enter-target". That explains every symptom:
+- the active tab stayed put and showed "The page could not be loaded";
+- the catalogue held one extra history row (1,005 rather than 1,004);
+- the synthetic profiles contain `https://www.google.com/search?q=enter-target`.
+
+After the fix, run `1791856583` passed `enter_activates_selected_tab` and
+`no_stale_refocus_after_enter`. The active address was the loopback
+`enter-target` page, and the catalogue was back to 1,004 rows.
+
+### Run after the fix (`1791856583`, Atlas in the foreground)
+
+For the first time, Windows let the agent-launched Atlas into the foreground
+(`page_focus_baseline` reports "Atlas in foreground: true").
+
+| measure | result |
+|---|---|
+| opening presented | p50 417 ms, p95 446 ms, max 448 ms; `open_window` called at 0.01 ms, window created at p95 402 ms |
+| worker p95 / max at 1k, 10k, 100k | 0.93 / 1.5 ms, 8.1 / 14.2 ms, 41.8 / 92.4 ms |
+| composed p95 / max at 1k, 10k, 100k | 27.9 / 32.1 ms (pass), 28.7 / 37.1 ms (pass), 60.3 / 116.3 ms (**fail**) |
+| burst last-key p95 at 1k, 10k, 100k | 29.9, 28.7, 61.6 ms; nothing superseded |
+| checks passing | page focus baseline, ownership, not topmost, above page, palette takes focus, popup reuse, Enter activation, no stale refocus after Enter |
+| checks failing | `escape_returns_page_focus` 0/20, both Esc stale-refocus checks (page focus false), `rapid_open_then_escape` |
+
+**Esc focus return is now a finding, not just an environment limit.** With
+Atlas in the foreground, the palette closed every time and no window
+leaked, but the page never reported focus afterwards. One candidate is in
+the traps: when the active popup is destroyed, Windows activates its owner
+and may take keyboard focus back from the WebView2 child after `focus_page`
+ran. This is not diagnosed. It belongs in its own slice before P1-33 can
+pass.
+
+## Product bug found by the harness
+
+**Enter before the local reply searched the web.** Each keystroke starts a
+new local request: `PaletteChoices::begin_query` clears the rows and
+`query_scoped` selects row 0. If Enter arrived before that request's reply,
+`submission` (`crates/atlas-app/src/palette/choices.rs`) found no row and no
+address, and fell through to `Submit { text }`, a Google search for the typed
+text. A fast typist would hit this window on many queries.
+
+The fix makes Enter wait whenever neither a visible row nor Go to is
+selected:
+- the palette shows "Waiting for local results…";
+- when the current request's reply arrives, the normal rules apply, so its
+  top row opens;
+- the web is searched only if the reply has no rows and the text is not an
+  address;
+- new text cancels the waiting Enter;
+- Alt Enter, Go to and an already visible row act at once.
+
+Acting on the last shown rows was rejected: those belong to an older,
+shorter query, so Enter could open a row the owner never meant. Unit tests
+in `choices.rs` cover Enter between the query and a reply with rows, and
+between the query and an empty reply.
+
+**What it caused.** Two agent runs sent
+the synthetic query "enter-target" to www.google.com. Their synthetic
+profiles under `%TEMP%` (`atlas-window-smoke-33716-1791855054…`, from run
+`1791855053`, and `…42036-…`, most likely `1791845322`, whose Enter check also
+failed) record that address. No personal data was involved. The profiles
+are kept for the owner to review. The harness now also refuses any
+destination outside its loopback pages, at two points: before the session
+worker records an address (`BrowserView::navigate`), and before WebView2
+creates or navigates a page (`page_command`). A refusal fails the run and
+aborts it with the reason. `AcceptancePlan::refusal` is unit-tested. Before
+pressing Enter, the harness also waits until the input holds the full target
+text and the palette has the reply to its newest request.
 
 The checks that do not depend on activation pass in every run: ownership, no
 topmost, z-order above the page, palette reuse on a second Ctrl K, and no
@@ -368,7 +442,8 @@ reopened palette or leaked window after Esc, rapid Esc or Enter.
   queueing beyond the bursts' last-key latency and superseded count.
 - **Compositor latency** after `Present` (up to one refresh) and display
   latency.
-- **Focus return with Atlas in the foreground.** This needs the owner's run.
+- **Why focus does not return after Esc.** The foreground run `1791856583`
+  failed it too; the cause is not diagnosed.
 - **Liveness under the palette (D7: no freeze frame).** A playing video should
   keep moving under the open palette. This is visual, so it is an owner check.
 - **The owner's real catalogue shape.** Synthetic titles are deliberately
@@ -385,8 +460,9 @@ reopened palette or leaked window after Esc, rapid Esc or Enter.
    machine, without touching the keyboard or mouse, and keep the three reports
    in `target\p1-33\`. Report the opening p95 and its stages, the 100,000-row
    worker and composed p95s, the burst figures and every failed check.
-2. In particular: does `escape_returns_page_focus` pass 20/20 when Atlas is in
-   the foreground? Does `enter_activates_selected_tab` pass every time? Does the
+2. In particular: does `escape_returns_page_focus` still fail when you run it
+   (it failed 0/20 in the agent's foreground run)? Does
+   `enter_activates_selected_tab` pass every time? Does the
    opening still spend its time between `open_window called` and
    `window created`?
 3. By hand: open a synthetic local video page, press Ctrl K and type. The video
@@ -424,7 +500,7 @@ cover:
 - the input refusal for other processes' windows and the page server's
   allowlist.
 
-The run passed 937 tests.
+With the Enter fix and the loopback guard, the run passed 940 tests.
 
 ## Files
 
