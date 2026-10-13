@@ -23,14 +23,21 @@ you found it in the commit message, not here.
   page allows storing, and do not work around it. A report to Microsoft goes
   only with the owner's approval; none has been sent. Source:
   `docs/p1-25-page-text.md`, F2 (observed on this runtime).
-- **A sign-in hop is not a redirect.** A bank or Google page that sends the
-  tab on by script or an auto-submitting form raises a fresh
-  `NavigationStarting` with `IsRedirected` false, so a redirect-chain check
-  misses it. Read `IsUserInitiated` there and the request's `Method()` in
-  `WebResourceResponseReceived`, and remember the last committed document
-  across navigations that commit nothing (a 204 or a download). A posted
-  Enter key on a focused link counts as user-initiated. Source:
-  `docs/p1-25-page-text.md`, F21–F24 (observed).
+- **A sign-in hop is not a redirect, and `IsUserInitiated` is not the
+  owner's intent.** A bank or Google page that sends the tab on by script, a
+  form or a link raises a fresh `NavigationStarting` with `IsRedirected`
+  false, so a redirect-chain check misses it. `IsUserInitiated` follows
+  Chromium's short-lived user activation: a click (or a posted Enter) on the
+  bank page makes the next navigation "user-initiated". Recognise Atlas's own
+  navigations by the address it asked for, read `Source()` at the start as
+  the document being left, carry the taint forward, and match a redirect's
+  response to any hop of the navigation, since it can arrive after the next
+  hop starts. Source: `docs/p1-25-page-text.md`, F21–F26 (observed).
+- **An adopted popup's first document has no matching response event.** On
+  this runtime the popup's page was judged `NoResponse`, so popups fail
+  closed and are never read (F27). Do not "fix" this by assuming headers;
+  find an observable response first. Source: `docs/p1-25-page-text.md`, F27
+  (observed).
 - **A reload or same-address visit raises no `SourceChanged`.** Only
   `NavigationStarting` and `NavigationCompleted` arrive, so code that learns the
   document address from `SourceChanged` sees no document after a reload. P1-25
