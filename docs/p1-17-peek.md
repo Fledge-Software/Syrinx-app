@@ -152,6 +152,97 @@ row and traps document. The workspace root manifest, lockfile and platform `lib.
 The review adds only Windows API feature declarations to the platform manifest. New files are the peek, timing and title-bar modules,
 the platform pointer helper, the synthetic HTML fixture and this note.
 
+## Fix: opening the peek panicked (2026-10-12)
+
+An independent review found that the first real hover crashed Atlas with
+"cannot update BrowserView while it is already being updated". The hover
+sampler runs inside a `BrowserView` update and called `cx.open_window`
+directly. GPUI's `open_window` draws the new window once before returning
+(`gpui-pre-0.3.8/src/app.rs`, lines 1431–1455), and `PeekView::render` updates
+`BrowserView` to draw the shared sidebar, so the first draw leased the browser
+a second time. The regression came from `a79fbc7`, before any native hover had
+been tried.
+
+The sampler now only *requests* a peek. `request_peek` computes the placement,
+allocates the popup's generation, records it in `BrowserView::peek_opening` and
+defers `open_requested_peek` with `cx.defer`. GPUI runs deferred callbacks
+after the outermost update finishes, when no entity is leased, so the popup's
+synchronous first draw and every later frame draw read the browser freely.
+Before opening, the callback checks that its generation is still awaited; after
+opening, `install_peek` checks again and closes a popup that hover, Escape,
+shutdown or a newer request superseded meanwhile. Retiring the peek also
+withdraws a pending request, and a sample that sees the hover end before the
+window exists simply withdraws it. While a request is pending the sampler keeps
+watching and never issues a second request.
+
+The rejected alternative was a read-only render. `sidebar_view::sidebar_at`
+needs a `Context<BrowserView>` because its rows build `cx.listener` handlers
+and Favorites/folder input state on the browser, so a render that does not
+lease the browser would mean rewriting the shared sidebar's listeners. Deferral
+keeps every render outside browser updates with a change confined to the peek.
+
+Generation and stale-action guards, the queued-dismissal Alt Tab check,
+Favorites form dismissal, Escape routing and the shared hover zone are
+unchanged. `peek_step` and `accepts_opened_peek` are pure and unit-tested:
+one request while opening, withdrawal before appearance, and rejection of
+withdrawn, replaced, dismissed and shutting-down requests.
+
+**Native evidence** (synthetic profiles under `target/peek-fix/`, not
+committed). A script touching only the synthetic Atlas process moved its main
+window so the left edge lay under the stationary cursor, then posted mouse
+messages only to that window: a press on the wide sidebar's edge strip, a drag
+to the left edge and release there (owner check 9's path), then `WM_MOUSEMOVE`
+at the edge every 25 ms. Atlas was already the foreground window; nothing set
+the foreground, moved the cursor or used SendInput. The pre-fix binary built
+from `e292033` opened the popup and panicked
+(`target/peek-fix/before-hover.err`, reproduced twice). The fixed binary showed
+the full peek (`target/peek-fix/after-shot-0.png`), retired it when its window
+moved, and exited with code 0 and an empty stderr after `WM_CLOSE`, in four
+consecutive cycles. A real pointer hover, Alt Tab and click-through remain the
+owner's checks below.
+
+After merging `main` (`841d29a`) into the branch, `cargo xtask check` passed on
+2026-10-13 with exit code 0: dependency boundaries, deferred markers,
+packaging, formatting, Clippy with warnings denied, **995 tests** (none failed
+or ignored) and the application smoke run. The log is
+`target/peek-fix/gate.log`.
+
+## Fix: activation changes closed the peek (2026-10-13)
+
+While proving the crash fix, a second, older defect showed up. GPUI calls a
+window's bounds observers on every activation change, not only when it moves
+(`gpui-pre-0.3.8/src/window.rs`, line 1953, inside the activation callback).
+The peek's bounds watch retired and dismissed on each call. So clicking into
+the peek, which deactivates the main window, closed it at once, breaking the
+peek's main use. After Alt Tab back, the activation observer rearmed the edge
+but the bounds call that followed dismissed it again, so a resting pointer
+could not reopen the peek (check 9).
+
+`BrowserView::owner_bounds_observed` now compares the main window's
+`OwnerGeometry` (GPUI bounds, viewport size and scale) with the last value it
+saw, and retires only when one of them changed. A real move, resize, maximize
+or DPI change still closes the peek, and refocuses the page only when Atlas is
+active, as before. Minimizing and Alt Tab away still close it through the
+sampler, which finds Atlas inactive and never refocuses, so the queued-dismissal
+Alt Tab rule is unchanged. Ignoring activation-caused calls by tracking the
+activation callback was rejected: GPUI gives the observer no cause, and
+comparing placement is what the watch is for. `owner_moved` is unit-tested with
+an activation repeat and a move, resize and rescale.
+
+**Native evidence** (`target/peek-fix/peek_activation.py`). With the peek open
+by the hover script, it posts `WM_ACTIVATE` to Atlas's own windows as Windows
+does when the peek is clicked (main inactive, popup active), then a click on
+the peek's Favorites Edit, then main-window reactivation as after Alt Tab back.
+The crash-fix binary lost the peek at the first activation; the fixed binary
+kept it through all three steps, and a real window move still closed it in two
+further cycles. All runs exited with code 0 and empty stderr. Posted activation
+cannot change the real foreground window, so reopening from a resting pointer
+after a real Alt Tab remains owner check 9.
+
+With this fix and `main` at `54314c5` (DW-90) merged, `cargo xtask check`
+passed on 2026-10-13: **1005 tests**, none failed or ignored, and the
+application smoke run (`target/peek-fix/gate-2.log`).
+
 ## Owner's manual checks
 
 Use a fresh synthetic profile, not your everyday Atlas directory:

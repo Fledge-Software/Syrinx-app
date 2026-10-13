@@ -32,6 +32,7 @@ struct PeekView {
 
 impl Render for PeekView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Never drawn inside a browser update: the popup opens from `open_requested_peek`.
         let content = match self
             .browser
             .update(cx, |browser, cx| browser.sidebar_at(PEEK_WIDTH, true, cx))
@@ -140,29 +141,34 @@ impl BrowserView {
             pressed: pointer.pressed,
         };
         self.peek_state.sample(elapsed, sample);
-        if self.peek_state == PeekState::Open && self.peek.is_none() {
-            self.open_peek(window, cx);
-        } else if self.peek_state != PeekState::Open && self.peek.is_some() {
-            self.retire_peek(cx);
-            self.peek_state.sample(elapsed, sample);
-            if pointer.active && !pointer.pressed && self.palette.is_none() {
-                self.focus_page(window, cx);
+        let step = peek_step(
+            self.peek_state == PeekState::Open,
+            self.peek.is_some(),
+            self.peek_opening.is_some(),
+        );
+        match step {
+            PeekStep::Request => self.request_peek(window, cx),
+            // Nothing is on screen yet; the deferred opening finds no request and stops.
+            PeekStep::Cancel => self.peek_opening = None,
+            PeekStep::Retire => {
+                self.retire_peek(cx);
+                self.peek_state.sample(elapsed, sample);
+                if pointer.active && !pointer.pressed && self.palette.is_none() {
+                    self.focus_page(window, cx);
+                }
             }
+            PeekStep::Keep => {}
         }
-        let watching = (eligible && (edge || self.peek.is_some()))
+        let shown = self.peek.is_some() || self.peek_opening.is_some();
+        let watching = (eligible && (edge || shown))
             || (self.peek_state == PeekState::Suppressed && pointer.pressed);
         self.peek_monitoring = watching;
         watching
     }
 
-    fn open_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Places the popup now and opens it after this update ends (see `open_requested_peek`).
+    fn request_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_peek_editor();
-        let parent = self.parent_hwnd;
-        let browser = cx.entity();
-        let native = Rc::new(RefCell::new(Err(
-            "Sidebar popup was not created.".to_owned()
-        )));
-        let created_native = native.clone();
         let main_bounds = window.bounds();
         let scale = window.scale_factor();
         let anchor = peek_anchor(main_bounds, scale);
@@ -174,87 +180,71 @@ impl BrowserView {
                 return;
             }
         };
-        let bounds = peek_bounds(
-            main_bounds,
-            f32::from(window.viewport_size().height),
-            scale,
-            &monitor,
-        );
-        let display_id = Some(gpui::DisplayId::new(monitor.id));
-        let opened = cx.open_window(
-            WindowOptions {
-                kind: WindowKind::PopUp,
-                titlebar: None,
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                display_id,
-                focus: false,
-                is_resizable: false,
-                is_minimizable: false,
-                ..Default::default()
-            },
-            move |popup, cx| {
-                popup.set_window_title("Atlas sidebar peek");
-                let closing_browser = browser.downgrade();
-                popup.on_window_should_close(cx, move |window, cx| {
-                    if closing_browser
-                        .update(cx, |browser, cx| {
-                            browser.queue_peek_action(PeekAction::Dismiss, window, cx);
-                        })
-                        .is_err()
-                    {
-                        return true; // With no owner entity, there is no shutdown work left here.
-                    }
-                    false
-                });
-                *created_native.borrow_mut() = native_handle(popup)
-                    .map_err(str::to_owned)
-                    .and_then(|hwnd| {
-                        set_overlay_owner(hwnd, parent).map_err(|error| error.to_string())?;
-                        Ok(hwnd)
-                    });
-                let view = cx.new(|cx: &mut Context<PeekView>| PeekView {
-                    browser: browser.downgrade(),
-                    focus: cx.focus_handle(),
-                    _changes: cx.observe(&browser, |_, _, cx| cx.notify()),
-                    _activation: cx.observe_window_activation(popup, |this, popup, cx| {
-                        if popup.is_window_active() {
-                            popup.focus(&this.focus, cx);
-                        }
-                    }),
-                });
-                cx.new(|cx| Root::new(view, popup, cx))
-            },
-        );
+        self.peek_generation = self
+            .peek_generation
+            .checked_add(1)
+            .expect("sidebar popup generations exhausted");
+        self.peek_opening = Some(self.peek_generation);
+        let request = PeekRequest {
+            generation: self.peek_generation,
+            parent: self.parent_hwnd,
+            bounds: peek_bounds(
+                main_bounds,
+                f32::from(window.viewport_size().height),
+                scale,
+                &monitor,
+            ),
+            display_id: gpui::DisplayId::new(monitor.id),
+        };
+        let browser = cx.weak_entity();
+        cx.defer(move |cx| open_requested_peek(browser, request, cx));
+    }
+
+    /// Whether a popup opened for `generation` is still wanted.
+    fn awaits_peek(&self, generation: u64) -> bool {
+        accepts_opened_peek(
+            self.closing,
+            self.peek_state == PeekState::Open,
+            self.peek_opening,
+            generation,
+        )
+    }
+
+    /// Adopts the opened popup, or closes it when hover moved on while it was opening.
+    fn install_peek(
+        &mut self,
+        generation: u64,
+        opened: Result<PeekPopup, PeekOpenError>,
+        cx: &mut Context<Self>,
+    ) {
+        let wanted = self.awaits_peek(generation);
+        if wanted {
+            self.peek_opening = None;
+        }
         match opened {
-            Ok(handle) => match native.borrow().as_ref() {
-                Ok(hwnd) => {
-                    self.peek_generation = self
-                        .peek_generation
-                        .checked_add(1)
-                        .expect("sidebar popup generations exhausted");
-                    self.peek = Some(PeekPopup {
-                        window: handle,
-                        hwnd: *hwnd,
-                        generation: self.peek_generation,
-                    });
-                    if let Some(browser) = &self.browser {
-                        browser.set_peek_generation(self.peek_generation);
-                    }
+            Ok(peek) if wanted => {
+                if let Some(browser) = &self.browser {
+                    browser.set_peek_generation(generation);
                 }
-                Err(error) => {
-                    self.message = error.clone();
+                self.peek = Some(peek);
+            }
+            Ok(stale) => {
+                let handle: gpui::AnyWindowHandle = stale.window.into();
+                if handle
+                    .update(cx, |_, popup, _| popup.remove_window())
+                    .is_err()
+                {
+                    self.fail("Cannot close a superseded sidebar popup.");
+                }
+            }
+            Err(error) => {
+                if wanted {
                     self.peek_state.dismiss();
-                    if handle
-                        .update(cx, |_, popup, _| popup.remove_window())
-                        .is_err()
-                    {
-                        self.fail("Cannot close the failed sidebar popup.");
-                    }
                 }
-            },
-            Err(_) => {
-                self.message = "Cannot open the sidebar popup.".to_owned();
-                self.peek_state.dismiss();
+                match error {
+                    PeekOpenError::Notice(message) => self.message = message,
+                    PeekOpenError::Orphaned => self.fail("Cannot close the failed sidebar popup."),
+                }
             }
         }
         cx.notify();
@@ -333,6 +323,7 @@ impl BrowserView {
 
     pub(super) fn retire_peek(&mut self, cx: &mut Context<Self>) {
         self.peek_state.dismiss();
+        self.peek_opening = None;
         if let Some(browser) = &self.browser {
             browser.set_peek_generation(0);
         }
@@ -347,6 +338,22 @@ impl BrowserView {
                 .is_err()
         {
             self.fail("Cannot close the sidebar popup.");
+        }
+    }
+
+    /// A real move, resize or rescale retires the peek, which would otherwise sit at stale
+    /// screen coordinates. GPUI also reports bounds on every activation change; those leave
+    /// it alone, so clicking into the peek keeps it and Alt Tab back can rearm the edge.
+    pub(super) fn owner_bounds_observed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = OwnerGeometry::of(window);
+        if !owner_moved(self.peek_owner_geometry, current) {
+            return;
+        }
+        self.peek_owner_geometry = current;
+        let was_open = self.peek.is_some();
+        self.retire_peek(cx);
+        if was_open && window.is_window_active() {
+            self.focus_page(window, cx);
         }
     }
 
@@ -387,6 +394,162 @@ impl BrowserView {
         self.sidebar_state_settled(previous, window, cx);
         self.focus_page(window, cx);
     }
+}
+
+/// Where the main window sits and at what scale; the peek is placed from these.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct OwnerGeometry {
+    bounds: Bounds<Pixels>,
+    viewport: gpui::Size<Pixels>,
+    scale: f32,
+}
+
+impl OwnerGeometry {
+    pub(super) fn of(window: &Window) -> Self {
+        Self {
+            bounds: window.bounds(),
+            viewport: window.viewport_size(),
+            scale: window.scale_factor(),
+        }
+    }
+}
+
+/// Only a changed placement invalidates the peek; a repeated report is not a move.
+fn owner_moved(previous: OwnerGeometry, current: OwnerGeometry) -> bool {
+    previous != current
+}
+
+/// Where a requested peek opens, and the generation that must still be awaited when it does.
+struct PeekRequest {
+    generation: u64,
+    parent: isize,
+    bounds: Bounds<Pixels>,
+    display_id: gpui::DisplayId,
+}
+
+enum PeekOpenError {
+    /// Shown to the owner; a later hover can try again.
+    Notice(String),
+    /// A popup without a usable native handle could not be closed.
+    Orphaned,
+}
+
+/// Opens a requested peek outside every entity update. GPUI draws a new window before
+/// `open_window` returns, and that draw updates the browser to render its sidebar.
+fn open_requested_peek(browser: WeakEntity<BrowserView>, request: PeekRequest, cx: &mut App) {
+    let Some(browser) = browser.upgrade() else {
+        return; // The owner has gone, so nothing awaits this popup.
+    };
+    if !browser.read(cx).awaits_peek(request.generation) {
+        return;
+    }
+    let generation = request.generation;
+    let opened = open_peek_window(&browser, request, cx);
+    browser.update(cx, |browser, cx| {
+        browser.install_peek(generation, opened, cx);
+    });
+}
+
+/// Creates the owned, non-activating popup that renders the shared sidebar.
+fn open_peek_window(
+    browser: &Entity<BrowserView>,
+    request: PeekRequest,
+    cx: &mut App,
+) -> Result<PeekPopup, PeekOpenError> {
+    let native = Rc::new(RefCell::new(Err(
+        "Sidebar popup was not created.".to_owned()
+    )));
+    let created_native = native.clone();
+    let parent = request.parent;
+    let browser = browser.clone();
+    let opened = cx.open_window(
+        WindowOptions {
+            kind: WindowKind::PopUp,
+            titlebar: None,
+            window_bounds: Some(WindowBounds::Windowed(request.bounds)),
+            display_id: Some(request.display_id),
+            focus: false,
+            is_resizable: false,
+            is_minimizable: false,
+            ..Default::default()
+        },
+        move |popup, cx| {
+            popup.set_window_title("Atlas sidebar peek");
+            let closing_browser = browser.downgrade();
+            popup.on_window_should_close(cx, move |window, cx| {
+                if closing_browser
+                    .update(cx, |browser, cx| {
+                        browser.queue_peek_action(PeekAction::Dismiss, window, cx);
+                    })
+                    .is_err()
+                {
+                    return true; // With no owner entity, there is no shutdown work left here.
+                }
+                false
+            });
+            *created_native.borrow_mut() =
+                native_handle(popup)
+                    .map_err(str::to_owned)
+                    .and_then(|hwnd| {
+                        set_overlay_owner(hwnd, parent).map_err(|error| error.to_string())?;
+                        Ok(hwnd)
+                    });
+            let view = cx.new(|cx: &mut Context<PeekView>| PeekView {
+                browser: browser.downgrade(),
+                focus: cx.focus_handle(),
+                _changes: cx.observe(&browser, |_, _, cx| cx.notify()),
+                _activation: cx.observe_window_activation(popup, |this, popup, cx| {
+                    if popup.is_window_active() {
+                        popup.focus(&this.focus, cx);
+                    }
+                }),
+            });
+            cx.new(|cx| Root::new(view, popup, cx))
+        },
+    );
+    let Ok(handle) = opened else {
+        return Err(PeekOpenError::Notice(
+            "Cannot open the sidebar popup.".to_owned(),
+        ));
+    };
+    let native = native.borrow().clone();
+    match native {
+        Ok(hwnd) => Ok(PeekPopup {
+            window: handle,
+            hwnd,
+            generation: request.generation,
+        }),
+        Err(error) => match handle.update(cx, |_, popup, _| popup.remove_window()) {
+            Ok(()) => Err(PeekOpenError::Notice(error)),
+            Err(_) => Err(PeekOpenError::Orphaned),
+        },
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PeekStep {
+    /// Ask for a popup; it opens after the current update.
+    Request,
+    /// Withdraw a request whose popup has not opened yet.
+    Cancel,
+    /// Close the popup on screen.
+    Retire,
+    Keep,
+}
+
+/// What a hover sample does to the popup, given whether one is shown or opening.
+fn peek_step(open: bool, shown: bool, opening: bool) -> PeekStep {
+    match (open, shown, opening) {
+        (true, false, false) => PeekStep::Request,
+        (false, false, true) => PeekStep::Cancel,
+        (false, true, _) => PeekStep::Retire,
+        _ => PeekStep::Keep,
+    }
+}
+
+/// A deferred popup is adopted only while its request is still the one awaited.
+fn accepts_opened_peek(closing: bool, open: bool, awaited: Option<u64>, opened: u64) -> bool {
+    !closing && open && awaited == Some(opened)
 }
 
 /// The physical edge anchor uses GPUI's window origin, not a client point at another DPI.
@@ -526,6 +689,65 @@ mod tests {
         for state in [Compact, Wide] {
             assert!(!peek_eligible(true, false, false, state, false));
         }
+    }
+
+    #[test]
+    fn only_a_real_move_resize_or_rescale_retires_the_peek() {
+        let placed = OwnerGeometry {
+            bounds: main_bounds(100., 100.),
+            viewport: size(px(1280.), px(764.)),
+            scale: 1.5,
+        };
+        // Activation changes (Alt Tab, clicking into the peek) repeat the same placement.
+        assert!(!owner_moved(placed, placed));
+        let moved = OwnerGeometry {
+            bounds: main_bounds(300., 100.),
+            ..placed
+        };
+        let resized = OwnerGeometry {
+            viewport: size(px(1000.), px(764.)),
+            ..placed
+        };
+        let rescaled = OwnerGeometry {
+            scale: 2.,
+            ..placed
+        };
+        for changed in [moved, resized, rescaled] {
+            assert!(owner_moved(placed, changed), "{changed:?}");
+        }
+    }
+
+    #[test]
+    fn an_opening_peek_is_requested_once_and_withdrawn_before_it_appears() {
+        // The window opens after the sampling update, so later samples see it as opening.
+        assert_eq!(peek_step(true, false, false), PeekStep::Request);
+        assert_eq!(peek_step(true, false, true), PeekStep::Keep);
+        assert_eq!(peek_step(true, true, false), PeekStep::Keep);
+        // Leaving before it opens withdraws the request; nothing on screen needs closing.
+        assert_eq!(peek_step(false, false, true), PeekStep::Cancel);
+        assert_eq!(peek_step(false, true, false), PeekStep::Retire);
+        assert_eq!(peek_step(false, false, false), PeekStep::Keep);
+    }
+
+    #[test]
+    fn a_deferred_popup_is_adopted_only_for_the_request_still_awaited() {
+        assert!(accepts_opened_peek(false, true, Some(4), 4));
+        assert!(
+            !accepts_opened_peek(false, true, None, 4),
+            "withdrawn or retired before opening"
+        );
+        assert!(
+            !accepts_opened_peek(false, true, Some(5), 4),
+            "a newer request replaced it"
+        );
+        assert!(
+            !accepts_opened_peek(false, false, Some(4), 4),
+            "hover dismissed while it opened"
+        );
+        assert!(
+            !accepts_opened_peek(true, true, Some(4), 4),
+            "shutdown owns teardown"
+        );
     }
 
     #[test]
