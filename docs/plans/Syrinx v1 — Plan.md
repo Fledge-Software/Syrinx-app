@@ -31,7 +31,7 @@ The spec's phased plan (`docs/spec.md`, "Phased plan") and the research in
 decision reopened on 2026-10-09 is settled. P1-01's scaffold, P1-02's tab
 model and P1-03's storage are merged. P1-04's SQLite maintenance prerequisite
 and complete backup/recovery slice passed the 138-test local gate and
-independent source reviews. P1-04 is committed and locally merged as `7710c06`.
+independent source reviews. P1-04 is committed and locally merged as `6fbfc97`.
 D49's integrated browser preview now has a window, native pages and a palette,
 but interactive acceptance, the reported WebView2 crash and the remaining
 browser requirements are unresolved; see `docs/implementation-status.md`.
@@ -43,7 +43,7 @@ releases, the WebView2 Evergreen runtime).
 ## The idea, as first described
 
 The braindump is the "Brief" section of `docs/next-session-prompt.md` as
-committed in `e5ecfaf` (2026-10-09). It is kept there rather than copied here,
+committed in `265b880` (2026-10-09). It is kept there rather than copied here,
 because it is long; that commit is the unchanged original. In short:
 
 - **Syrinx** is a browser-first workspace: a desktop browser with a
@@ -281,17 +281,17 @@ Decisions made in this plan:
 
 ## What exists today
 
-The owner-requested documentation baseline is committed as `d79fc29` on
+The owner-requested documentation baseline is committed as `2c80273` on
 `claude/plan-atlas-v1`. P1-01 passed its gate and independent review, then
-was committed and merged with the owner's approval as `ed19d6d`: a minimal
+was committed and merged with the owner's approval as `c30e4e7`: a minimal
 Cargo workspace, runnable console entry point and dependency-boundary gate.
 The scaffold branch remains at that commit. P1-02 passed its gate and
 independent review on `codex/p1-02-tab-model`, then was committed and merged
-into `claude/plan-atlas-v1` as `892d3bc` with the owner's approval.
+into `claude/plan-atlas-v1` as `0641826` with the owner's approval.
 There is no browser UI yet. P1-03 storage is implemented on
-`codex/p1-03-storage`, based on the P1-02 completion record `9a6ae35`.
+`codex/p1-03-storage`, based on the P1-02 completion record `eb32545`.
 Its 77-test local gate and independent reviews passed, and the owner then
-requested its commit and approved its local merge, completed as `c4a6631`
+requested its commit and approved its local merge, completed as `a30ef72`
 in `claude/plan-atlas-v1`. For P1-04, the owner approved confirmed restoration
 (D46), a local history-deletion record (D47), and the pinned SQLite 3.53.4
 maintenance patch. The patch passed the full 78-test gate; its source audit
@@ -299,7 +299,7 @@ and hashes are recorded in `docs/p1-04-sqlite-maintenance-review.md` and
 the vendor provenance. The complete P1-04 backup/recovery implementation
 subsequently passed the 138-test gate and independent source reviews;
 `docs/p1-04-recovery-preflight.md` records the design and result. With the owner's
-explicit approval, `7710c06` was committed and fast-forward merged locally.
+explicit approval, `6fbfc97` was committed and fast-forward merged locally.
 The throwaway Phase 0 spikes remain on `spike/gpui` and `spike/tauri`; their
 code has not been copied into the product. The current branch also holds
 the spec, owner decisions, design snapshot (`design/canvas/project/`, with
@@ -948,11 +948,11 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
   - **Current local workflow, owner, 2026-10-10:** D41 explicitly approves
     the plans, 40-slice map and local branch/review/owner-merge workflow.
     Readiness does not need another approval. The owner requested the
-    documentation-baseline commit, now `d79fc29`, then explicitly approved
+    documentation-baseline commit, now `2c80273`, then explicitly approved
     committing P1-01 and merging it into `claude/plan-atlas-v1` after its gate
-    and independent review passed. That merge is complete at `ed19d6d`.
+    and independent review passed. That merge is complete at `c30e4e7`.
     P1-02 also passed its gate and independent review; the owner requested
-    its commit and approved its local merge, completed as `892d3bc`.
+    its commit and approved its local merge, completed as `0641826`.
     Later commits and merges require their own approval; no remote or push
     is authorized.
 
@@ -991,7 +991,7 @@ Approved by the owner on 2026-10-10 (D41). The following table is copied from
 identify local slices, not published GitHub issues. Each phase is a future
 milestone, with one branch, independent review and owner-approved merge per
 slice. Q1–Q4 are resolved by D39–D41; the planning baseline is preserved in
-`d79fc29`. Analytics additions are proposed separately, outside this approved
+`2c80273`. Analytics additions are proposed separately, outside this approved
 map, and do not change the foundation order.
 
 The owner also approved the D43–D45 amendment on 2026-10-10: flat saved-page
@@ -1079,37 +1079,37 @@ started: 2026-10-09   code repo: local Atlas-app (D41; no remote)   plan branch:
 |---|---|---|---|---|---|---|---|
 | Phase 0 | GPUI candidate spike | spike (worktree) | opus | partial: built, 50/50 automated checks; idle CPU 3.75% fails 0.5% bar; owner tests pending | spike/gpui @ bfac1c5 | n/a | never (throwaway) |
 | Phase 0 | Tauri + Svelte control spike | spike (worktree) | opus | done: 25/25 in both overlay modes; idle CPU 0.54% | spike/tauri @ 2579d86 | n/a | never (throwaway) |
-| Phase 1 | P1-01: scaffold and architecture gate | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 7 tests and console app launch; optimized executable was blocked once, then passed unchanged | codex/p1-01-scaffold @ ed19d6d; base d79fc29 | independent review passed after restoring default Cargo test selection so future doctests run | merged into claude/plan-atlas-v1 as ed19d6d with owner approval on 2026-10-10 |
-| Phase 1 | P1-02: generic tab and flat saved-page model | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 24 model tests, 7 architecture tests and console app launch; D42/D43 lifecycle implemented without UI or storage | codex/p1-02-tab-model @ 892d3bc; base ed19d6d | independent source/test review and documentation/map audit passed with no findings | merged into claude/plan-atlas-v1 as 892d3bc with owner approval on 2026-10-10 |
-| Phase 1 | P1-03: durable saved pages and session records | local slice | Codex | Implemented: 77-test local gate passed; guarded Windows location, atomic saved/live snapshots and migrations; narrow licence allowances approved | codex/p1-03-storage @ c4a6631; base 9a6ae35 | independent core/store, native and documentation reviews passed; long-path regression fixed and retested | merged into claude/plan-atlas-v1 as c4a6631 with owner approval on 2026-10-10 |
-| Phase 1 | P1-04: Backups and confirmed recovery | local slice, complete | Codex | Approved SQLite patch, lifecycle ownership, idle daily snapshots, seven-copy rotation, confirmed/resumable recovery and deletion contract; full 138-test gate passed | codex/p1-04-backups; 7710c06 | independent SQLite, store, native backup/recovery, deletion-contract and documentation reviews passed | owner-approved commit and fast-forward merge into claude/plan-atlas-v1 |
-| Phase 1 | P1-05: Local search catalogue | local slice, in progress | Codex | Approved frizbee padding correction applied and independently reviewed; the latest full desktop gate passes 347 workspace tests, including 153 search and five public matcher regressions. Test-only phase and restore diagnostics identify candidate filtering costs and verify one-build restore correctness. All eight available matcher backend variants pass. The unchanged production benchmark preserves 1,040 exact results but only 9/26 cases meet D48. Earlier restricted-context smoke failure remains recorded. The range index remains test-only. | codex/integrated-browser-preview; based on 33dade0, preserving P1-05 work | normal-desktop full gate passes; retain restricted failed-smoke evidence, then complete performance acceptance and production-loading review; see docs/p1-05-search.md | not complete, committed or merged; D48 acceptance remains open |
+| Phase 1 | P1-01: scaffold and architecture gate | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 7 tests and console app launch; optimized executable was blocked once, then passed unchanged | codex/p1-01-scaffold @ c30e4e7; base 2c80273 | independent review passed after restoring default Cargo test selection so future doctests run | merged into claude/plan-atlas-v1 as c30e4e7 with owner approval on 2026-10-10 |
+| Phase 1 | P1-02: generic tab and flat saved-page model | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 24 model tests, 7 architecture tests and console app launch; D42/D43 lifecycle implemented without UI or storage | codex/p1-02-tab-model @ 0641826; base c30e4e7 | independent source/test review and documentation/map audit passed with no findings | merged into claude/plan-atlas-v1 as 0641826 with owner approval on 2026-10-10 |
+| Phase 1 | P1-03: durable saved pages and session records | local slice | Codex | Implemented: 77-test local gate passed; guarded Windows location, atomic saved/live snapshots and migrations; narrow licence allowances approved | codex/p1-03-storage @ a30ef72; base eb32545 | independent core/store, native and documentation reviews passed; long-path regression fixed and retested | merged into claude/plan-atlas-v1 as a30ef72 with owner approval on 2026-10-10 |
+| Phase 1 | P1-04: Backups and confirmed recovery | local slice, complete | Codex | Approved SQLite patch, lifecycle ownership, idle daily snapshots, seven-copy rotation, confirmed/resumable recovery and deletion contract; full 138-test gate passed | codex/p1-04-backups; 6fbfc97 | independent SQLite, store, native backup/recovery, deletion-contract and documentation reviews passed | owner-approved commit and fast-forward merge into claude/plan-atlas-v1 |
+| Phase 1 | P1-05: Local search catalogue | local slice, in progress | Codex | Approved frizbee padding correction applied and independently reviewed; the latest full desktop gate passes 347 workspace tests, including 153 search and five public matcher regressions. Test-only phase and restore diagnostics identify candidate filtering costs and verify one-build restore correctness. All eight available matcher backend variants pass. The unchanged production benchmark preserves 1,040 exact results but only 9/26 cases meet D48. Earlier restricted-context smoke failure remains recorded. The range index remains test-only. | codex/integrated-browser-preview; based on c55b2de, preserving P1-05 work | normal-desktop full gate passes; retain restricted failed-smoke evidence, then complete performance acceptance and production-loading review; see docs/p1-05-search.md | not complete, committed or merged; D48 acceptance remains open |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
 gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
 gates: 2026-10-10 owner requested detailed local plans 2–4 and deferred repository publication; implementation remains in plan order
 gates: 2026-10-10 owner approved four plans, the 40-slice map and local branch/review/owner-approved merge workflow (D41); retained WebView2, approved local counters with explicit export and reviewed suggestions (D39), and excluded page text from backups (D40)
-gates: 2026-10-10 owner requested the eight-file documentation-baseline commit; preserved as d79fc29 before branching for P1-01
+gates: 2026-10-10 owner requested the eight-file documentation-baseline commit; preserved as 2c80273 before branching for P1-01
 gates: 2026-10-10 owner explicitly requested the P1-01 commit and approved its local merge into claude/plan-atlas-v1; this authorization covers P1-01 only
-gates: 2026-10-10 P1-01 merged as ed19d6d; P1-02 started on codex/p1-02-tab-model with owner-approved D42 transition rules
+gates: 2026-10-10 P1-01 merged as c30e4e7; P1-02 started on codex/p1-02-tab-model with owner-approved D42 transition rules
 gates: 2026-10-10 owner approved D43–D45 and the revised 40-slice map; P1-02 includes flat saved entries, while folders, sidebar UI and Favorites remain in their approved later slices
 gates: 2026-10-10 P1-02 passed the full local gate (31 tests and console launch), independent code review and documentation/map audit
 gates: 2026-10-10 owner explicitly requested the P1-02 commit and approved its local merge into claude/plan-atlas-v1; this authorization covers P1-02 and its documentation only
-gates: 2026-10-10 P1-02 committed as 892d3bc and fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
+gates: 2026-10-10 P1-02 committed as 0641826 and fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
 gates: 2026-10-10 P1-03 core snapshots passed the full local gate with 37 tests before platform dependencies were introduced; owner approved Unicode-3.0 for unicode-ident 1.0.26 and Zlib for foldhash 0.2.0; these allowances do not select Syrinx's own licence
 gates: 2026-10-10 final P1-03 cargo xtask check passed all 77 tests, formatting, Clippy, dependency boundaries and console launch; independent reviews passed; no production database or Windows setting was changed
-gates: 2026-10-10 owner requested the P1-03 commit and approved its local merge; c4a6631 was fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
+gates: 2026-10-10 owner requested the P1-03 commit and approved its local merge; a30ef72 was fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
 gates: 2026-10-10 owner chose confirmation before restoring a damaged database (D46) and a local deletion record that prevents restored backups from resurrecting cleared history (D47)
 gates: 2026-10-10 owner approved the pinned SQLite 3.53.4 source patch and vendor-comment exception; source identities and unchanged dependency graph verified; full cargo xtask check passed 78 tests and console launch
-gates: 2026-10-10 owner explicitly requested the P1-04 commit and approved its local merge; 7710c06 was fast-forward merged into claude/plan-atlas-v1 after the 138-test gate and independent reviews; upstream vendor whitespace preserved with all 17 source hashes verified
+gates: 2026-10-10 owner explicitly requested the P1-04 commit and approved its local merge; 6fbfc97 was fast-forward merged into claude/plan-atlas-v1 after the 138-test gate and independent reviews; upstream vendor whitespace preserved with all 17 source hashes verified
 gates: 2026-10-10 owner approved the page-close API and pinned wry vendor exception; its implementation passed independent review, 99 app/platform tests, dependency checks, workspace Clippy, scoped formatting, an actual synthetic native close fixture and the rebuilt standard app's desktop smoke check. The final workspace formatting recheck found unrelated search-profiler edits; see docs/page-close-event-review.md. No commit, merge or upstream publication is authorized by this patch approval.
 current: D49 integrated browser preview remains in progress with uncommitted work preserved. The current atlas-app.exe and preserved atlas-app-parallel-preview.exe share SHA-256 3ca0bf045fc0826e7300a647307845733fb5249b085f52feeadbebf0abd4c276. Two owner-requested parallel sessions used subagents for navigation reliability and WebView2 construction ownership. Reviewed navigation/popup fixes, saved-row lifecycle regressions and narrowed ASCII projection are integrated. The owner separately approved the exact wry construction patch; its source and provenance reviews pass. The latest full gate passes dependency checks, formatting, Clippy and 301 tests (including 41 app and 160 search unit tests), then Windows blocks the public matcher-test executable with error 4551 before execution. The full gate remains failed. Separate rebuilt app smoke and patched native lifecycle runs pass. Fault-injection validation is being prepared in disposable copies and has not run. The latest benchmark preserves all 1,040 exact results but passes only 10/26 D48 cases; the range index remains test-only. The owner stopped Computer Use during first inspection of the new synthetic preview, which was left open; no further UI automation followed. Popup typing/navigation and the original WebView2 crash remain unresolved. Plans 2–4 retain their approved 12/16/21 slice boundaries and predecessor exits. No commit, merge, push or security change occurred. See docs/handoff-integrated-preview-2026-10-10.md for current evidence, parallel-session ownership and required checks.
 
 ## Iteration log
 
 - **2026-10-10** — With the owner's explicit commit and merge approval,
-  committed P1-04 as `7710c06` and fast-forward merged it into
-  `claude/plan-atlas-v1`. This also preserves the existing `8cc0e50`
+  committed P1-04 as `6fbfc97` and fast-forward merged it into
+  `claude/plan-atlas-v1`. This also preserves the existing `59054b2`
   mobile-sync outline without starting that later work. No product source
   changed after the passing 138-test gate. P1-05 tier 1 search is next;
   its eventual commit and merge need separate owner approval.
@@ -1140,7 +1140,7 @@ current: D49 integrated browser preview remains in progress with uncommitted wor
   the SQLite source patch review. No P1-04 code or production data was changed.
 
 - **2026-10-10** — With the owner's explicit approval, committed P1-03 as
-  `c4a6631` and fast-forward merged it into `claude/plan-atlas-v1`. Recorded
+  `a30ef72` and fast-forward merged it into `claude/plan-atlas-v1`. Recorded
   the result in the plan, local-development notes and next-session handoff.
   No product source changed after the passing 77-test gate. P1-04 backups and
   recovery is next; no remote or push was added.
@@ -1167,7 +1167,7 @@ current: D49 integrated browser preview remains in progress with uncommitted wor
   Windows path validation is a filesystem-only prerequisite within P1-03,
   documented in `docs/storage-path-preflight.md`, not early browser work.
 - **2026-10-10** — With the owner's explicit commit and merge approval,
-  committed P1-02 as `892d3bc` and fast-forward merged it into
+  committed P1-02 as `0641826` and fast-forward merged it into
   `claude/plan-atlas-v1`. Updated the development record and next-session
   handoff to start P1-03 storage. No product source changed after the passing
   gate and review; the repository remains local.
@@ -1190,9 +1190,9 @@ current: D49 integrated browser preview remains in progress with uncommitted wor
   with normal closure, new web tabs appended and activated, and 20 recent
   web-tab closures with metadata-only reopen. Documented the fresh-identity
   and position-clamping safeguards separately from the owner's choices.
-  Verified P1-01's merge at `ed19d6d` and started P1-02 on
+  Verified P1-01's merge at `c30e4e7` and started P1-02 on
   `codex/p1-02-tab-model`; its gate and review are pending.
-- **2026-10-10** — Preserved the approved documentation in `d79fc29` at the
+- **2026-10-10** — Preserved the approved documentation in `2c80273` at the
   owner's request, then implemented P1-01 on `codex/p1-01-scaffold`. Added
   the minimal workspace, dependency-boundary check and seven synthetic tests,
   audited the development-only JSON dependency graph and documented D38's
@@ -1203,7 +1203,7 @@ current: D49 integrated browser preview remains in progress with uncommitted wor
   command that would skip future documentation tests; restored Cargo's
   default test selection, reran the full gate and obtained a clean review.
   The owner then explicitly approved committing this slice and merging it
-  locally into `claude/plan-atlas-v1`; that integration is `ed19d6d`.
+  locally into `claude/plan-atlas-v1`; that integration is `c30e4e7`.
 - **2026-10-10** — Recorded the owner's readiness and local-workflow approval
   (D41), seven-day retention including backup exclusion (D40), and revised
   analytics direction (D39). The owner chose local counters and explicit
@@ -1331,7 +1331,7 @@ current: D49 integrated browser preview remains in progress with uncommitted wor
 
 ## Provenance
 
-- `docs/next-session-prompt.md` at `e5ecfaf` (the braindump)
+- `docs/next-session-prompt.md` at `265b880` (the braindump)
 - `docs/spec.md`, `docs/decisions.md`, `design/README.md`
 - `docs/research/01-shell-and-engine.md` … `06-engine-and-ui-performance.md`
 - The planning conversation of 2026-10-09 (`/suprpas`)

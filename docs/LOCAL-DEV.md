@@ -3,8 +3,8 @@
 Syrinx's first scaffold supplies the build and architecture checks (P1-01);
 P1-02 adds the tab and saved-page model without a window. Work on this machine,
 in the local repository, one approved slice at a time. The planning baseline
-is `d79fc29`; P1-01 was merged into `claude/plan-atlas-v1` as `ed19d6d`, and
-P1-02 as `892d3bc` from `codex/p1-02-tab-model`. D41 permits local branches and
+is `2c80273`; P1-01 was merged into `claude/plan-atlas-v1` as `c30e4e7`, and
+P1-02 as `0641826` from `codex/p1-02-tab-model`. D41 permits local branches and
 independent review, with the owner's approval before each merge. Product
 commits still require the owner's request. There is no remote or push.
 
@@ -263,7 +263,7 @@ repeated Windows discovery on ordinary reads/saves, startup validation order
 and long-path compatibility. The latter tests include both native and SQLite
 buffer limits and the journal-suffix boundary. No GUI or production data was
 opened. The owner then requested the commit and approved the local merge;
-P1-03 is committed and merged into `claude/plan-atlas-v1` as `c4a6631`.
+P1-03 is committed and merged into `claude/plan-atlas-v1` as `a30ef72`.
 
 ## P1-04 SQLite prerequisite
 

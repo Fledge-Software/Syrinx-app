@@ -103,7 +103,7 @@ stopped. No Cargo/native process remains active at this checkpoint.
 
 The owner now prioritizes a usable browser and explicitly defers plugins,
 Fledge, Notes and Forge. The preceding work was committed at their request
-as `8239511`; later changes remain uncommitted. No merge, push or security
+as `a94500a`; later changes remain uncommitted. No merge, push or security
 change is authorized. Three existing chats and their subagents continue
 crash investigation, navigation/search reliability and browser recovery;
 the integration chat alone executes Cargo and native checks.
@@ -891,7 +891,7 @@ reduce the corpus or change counts/ranking to meet the target.
 ## Repository and authorization
 
 Work in `C:\Users\<user>\Documents\GitHub\Atlas-app` on
-`codex/integrated-browser-preview`, based on `33dade0`. Preserve all uncommitted
+`codex/integrated-browser-preview`, based on `c55b2de`. Preserve all uncommitted
 P1-05 search and integration work. P1-01 through P1-04 have approved merges;
 The owner authorized committing all current work after completion and the full
 gate on October 11; P1-05 and this preview still lack merge approval. No remote, push,

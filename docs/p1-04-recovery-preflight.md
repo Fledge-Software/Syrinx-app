@@ -6,8 +6,8 @@ a valid one, and a failed restore must never make Syrinx initialize an empty
 database. This review records those boundaries and their verified implementation.
 
 Status on 2026-10-10: implementation verified on `codex/p1-04-backups`, branched from
-`2e3d261`. The separate mobile-sync outline was subsequently committed as
-`8cc0e50`; preserve that work. P1-03's product commit is `c4a6631`, already
+`d228ade`. The separate mobile-sync outline was subsequently committed as
+`59054b2`; preserve that work. P1-03's product commit is `a30ef72`, already
 merged with the owner's approval. The owner approved the SQLite maintenance
 patch and scoped upstream-comment exception described in
 `docs/p1-04-sqlite-maintenance-review.md`. That prerequisite is applied and

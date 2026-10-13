@@ -294,7 +294,7 @@ prototype does not contain the product libraries and is not the requested
 deliverable. Product code is written to the repository rules, not copied
 from that throwaway spike.
 
-Work is on `codex/integrated-browser-preview`, based on `33dade0`, preserving
+Work is on `codex/integrated-browser-preview`, based on `c55b2de`, preserving
 the uncommitted P1-05 search work. No commit, merge, remote or push is approved.
 
 | Integration | Existing foundation | Reviewable behavior |

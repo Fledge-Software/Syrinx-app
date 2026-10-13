@@ -157,7 +157,7 @@ All required sources are now cached and this command succeeds offline.
 The product workspace was then resolved offline and its active graph checked
 with the same target and feature-edge options for `syrinx-store` and
 `syrinx-platform`. Its lockfile adds 28 registry packages and two workspace
-crates; every pre-existing package/version pair from `9a6ae35` remains.
+crates; every pre-existing package/version pair from `eb32545` remains.
 `cargo xtask check-deps` passes. These are dependency-resolution and boundary
 checks, not a passing implementation gate.
 

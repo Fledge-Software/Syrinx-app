@@ -22,10 +22,10 @@ The approval retains the plans' explicit evidence gates. A gate means
 the relevant feature cannot be built on an unproved assumption; it does not
 mean every later feature must be prototyped before the scaffold. The first
 implementation was plan 1's scaffold. The owner-requested documentation
-baseline is `d79fc29`. P1-01 passed its gate and independent review and was
-merged with owner approval as `ed19d6d` into `claude/plan-atlas-v1`.
+baseline is `2c80273`. P1-01 passed its gate and independent review and was
+merged with owner approval as `c30e4e7` into `claude/plan-atlas-v1`.
 P1-02 and P1-03 passed their gates and independent reviews and were merged
-with owner approval as `892d3bc` and `c4a6631`. For P1-04, the owner chose
+with owner approval as `0641826` and `a30ef72`. For P1-04, the owner chose
 confirmed restoration (D46), a local deletion record (D47), and the pinned
 SQLite 3.53.4 patch. The patch is applied and passed the full 78-test gate;
 the complete lifecycle, backup, rotation, confirmed/resumable recovery and
@@ -50,7 +50,7 @@ Phase 0 numbers below are reported evidence, not new measurements.
 The machine currently reports Windows `10.0.26300.0`, Rust `1.97.1`,
 Cargo `1.97.1`, Node `24.15.0`, pnpm `10.34.4` and Git for Windows
 `2.55.0.windows.2`. P1-01 now provides the product `Cargo.toml` and
-`docs/LOCAL-DEV.md`; P1-04 is merged as `7710c06`. P1-05 continues on
+`docs/LOCAL-DEV.md`; P1-04 is merged as `6fbfc97`. P1-05 continues on
 `codex/p1-05-search`, with no remote.
 
 “Verified” below means the cited source supports that particular API or
@@ -139,7 +139,7 @@ branch per approved row, a diff small enough to review in
 one sitting, an independent review, then the owner's approval before merge.
 Commits still require the owner to ask; approving this workflow alone does
 not authorize automatic commits. The owner requested the documentation
-baseline, preserved as `d79fc29` before creating `codex/p1-01-scaffold`.
+baseline, preserved as `2c80273` before creating `codex/p1-01-scaffold`.
 After the gate and independent review passed, the owner explicitly approved
 P1-01's commit and local merge into `claude/plan-atlas-v1`. That approval does
 not authorize later commits or merges. No remote, push, hosted issue or PR is
@@ -312,7 +312,7 @@ The original readiness pass validated Markdown tables, frontmatter, code
 fences, document references and the 40-row dependency chain. Independent
 review resolved the early shortcut dependency and split two research-heavy
 slices. P1-01 subsequently supplied `docs/LOCAL-DEV.md`, passed the product
-gate and independent review, and merged as `ed19d6d`.
+gate and independent review, and merged as `c30e4e7`.
 
 The D43–D45 documentation amendment records the owner's approved revised
 scope and keeps both 40-row maps identical. An independent documentation
@@ -320,12 +320,12 @@ audit confirmed their identity/order and agreement with D42–D45. Separately,
 P1-02's headless implementation passed the full local gate (24 model tests,
 seven architecture tests and console launch) and independent code review.
 The owner then requested its commit and approved its local merge, completed
-as `892d3bc` in `claude/plan-atlas-v1`. That P1-02 amendment added no
+as `0641826` in `claude/plan-atlas-v1`. That P1-02 amendment added no
 third-party dependency, registry setting, browser profile or Windows policy.
 P1-03 storage is implemented on `codex/p1-03-storage`, based on the completion
-record `9a6ae35`. Its 77-test local gate and independent reviews passed; the
+record `eb32545`. Its 77-test local gate and independent reviews passed; the
 owner requested its commit and approved its local merge, completed as
-`c4a6631` in `claude/plan-atlas-v1`. Its dependency review and
+`a30ef72` in `claude/plan-atlas-v1`. Its dependency review and
 narrow licence allowances are recorded in `docs/dependency-audit.md`;
 implementation and verification status are tracked in plan 1's Super-Pass
 ledger. No later

@@ -60,7 +60,7 @@ above, and `docs/spec.md` below. Before picking up work, also read:
   Build each slice on its own branch in a local worktree. Once an
   independent review approves it and `cargo xtask check` passes, merge it to
   `main` (see `docs/decisions.md`). GitHub is not a prerequisite. The owner-requested planning baseline is
-  committed as `d79fc29`; the scaffold records the exact development commands
+  committed as `2c80273`; the scaffold records the exact development commands
   in `docs/LOCAL-DEV.md`.
 - **Commit only when the owner asks.** (The v1 plan may be committed as it
   is written, to its local branch.)

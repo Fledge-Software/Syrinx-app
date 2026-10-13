@@ -8,7 +8,7 @@ chrome control, a visible focus ring from the `syrinx-ui` tokens, accessible
 names and roles for Syrinx's own controls, and the NVDA checks the owner runs.
 
 Branch `claude/p1-36-accessibility`, from `codex/integrated-browser-preview`
-at `94b3cb1`.
+at `bfe5bf5`.
 
 ## What GPUI exposes to Windows UI Automation
 

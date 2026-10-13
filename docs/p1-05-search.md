@@ -2,9 +2,9 @@
 
 P1-05 gives the future palette a tested in-memory catalogue without reading
 the owner's browsing data or building its interface early. D9 keeps typed
-queries local. The approved slice follows P1-04's owner-approved `7710c06`
+queries local. The approved slice follows P1-04's owner-approved `6fbfc97`
 merge and uses branch `codex/p1-05-search`, based on completion record
-`33dade0`. Commits and merges for P1-05 need separate approval.
+`c55b2de`. Commits and merges for P1-05 need separate approval.
 
 ## Scope and boundaries
 
@@ -2456,7 +2456,7 @@ change was added. The first queued gate was stopped before executing checks to
 restart with two Cargo build jobs in this process only. Its cancelled log,
 `target/d48-gate-20261012.log`, is preserved. No other session was stopped.
 
-The unchanged baseline from `7dbf579` was built before the production edits and
+The unchanged baseline from `b0e84b3` was built before the production edits and
 preserved as `target/d48-baseline-20261012/xtask.exe`, SHA-256
 `13b28a7f627eb2c9e2c54d0508f32a8352a15d8397f3c8b412f150411d8666d4`.
 Its dependency check executes successfully. The corrected production benchmark

@@ -114,7 +114,7 @@ The final working-tree source/executable SHA-256 identities are below. Git line-
 
 ## Earlier evidence: 2026-10-11 FTS5-only baseline
 
-Everything below this heading records the previous committed harness at `c7c09e0`, including its then-pending approval and historical recommendation. It is retained as baseline evidence, not a current statement that Tantivy approval is missing. Its three processes ran with possible build contention and cannot substitute for the requested new paired measurements. The continuation changed shared orchestration and added a corpus and query checks; its results must be reported separately.
+Everything below this heading records the previous committed harness at `1226474`, including its then-pending approval and historical recommendation. It is retained as baseline evidence, not a current statement that Tantivy approval is missing. Its three processes ran with possible build contention and cannot substitute for the requested new paired measurements. The continuation changed shared orchestration and added a corpus and query checks; its results must be reported separately.
 
 
 ## Method and scope

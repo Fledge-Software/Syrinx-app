@@ -1,6 +1,6 @@
 # Browser usability source review — 2026-10-10
 
-## Current assessment — 2026-10-11, baseline 8239511
+## Current assessment — 2026-10-11, baseline a94500a
 
 Build a usable, good browser first. The owner's latest instruction defers
 Plugin/Fledge, Notes and Forge work; it does not remove browser requirements
@@ -23,7 +23,7 @@ diagnostic prototype as a browser fix.
 
 ### What is implemented, validated and merged
 
-Read-only Git inspection confirms `8239511` on
+Read-only Git inspection confirms `a94500a` on
 `codex/integrated-browser-preview`. The working tree was clean at the beginning
 of this assessment. This is a committed preview checkpoint, not an approved
 merge or completion of the slices whose code it contains. P1-01–P1-04 retain

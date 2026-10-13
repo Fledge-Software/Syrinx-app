@@ -47,8 +47,8 @@ they return.
   that arrives while the controller is suspended is denied and never reported
   (`browser/permissions.rs:107-109`).
 - **The timer changed after the failing runs.** The 15 runs were recorded in
-  commit `92006d8` (17:27, 2026-10-12), when `TrySuspend` fired five seconds
-  after a hidden page's last navigation *began*. Commit `4858d25` (17:44) moved
+  commit `bbe59d3` (17:27, 2026-10-12), when `TrySuspend` fired five seconds
+  after a hidden page's last navigation *began*. Commit `82c8111` (17:44) moved
   the countdown to navigation *completion*, with a 60 s cap on a load that
   never finishes (`browser/hidden_timer.rs:6-8`, `rearm` at `:125-136`). No
   multi-run series of the full fixture has been recorded since.
@@ -63,7 +63,7 @@ Run the unmodified fixture 20 times, untraced, on current `main`, with
 `TEMP`/`TMP` set as in `docs/p1-14-security-display.md`, nothing else building,
 and each run's output kept under `target/`. Record exit code, wall time and
 which pass lines printed. This costs nothing and answers the first question:
-did `4858d25` already remove the cause? Note that the six traced passes in the
+did `82c8111` already remove the cause? Note that the six traced passes in the
 P1-11 record are weak evidence that `--trace` hides the failure: at a one-in-
 three failure rate, six passes in a row happen about 9% of the time by chance.
 
@@ -100,7 +100,7 @@ and the harness waited at `permissions.rs:152-159` until the deadline. Tab 4000 
 same way whenever one navigation (for example the HTTPS attempt queued behind
 the Python server's 3 s socket wait) took over five seconds.
 
-**Evidence.** The failures predate `4858d25`; only these two suites still had
+**Evidence.** The failures predate `82c8111`; only these two suites still had
 hidden pages; the failure shape (bare deadline, missing pass line) matches the
 lifecycle failure; and the dropped-request path is explicit in source.
 
@@ -108,7 +108,7 @@ lifecycle failure; and the dropped-request path is explicit in source.
 `--stall-first-close`: hold the fourth `/permissions` response (tab 2003's)
 for 6 s with `send_stalled` (`page_close.rs:615-628`), and in a disposable copy
 of `certificate_server.py` sleep 6 s after `accept` before `wrap_socket`, once.
-Run it 3 times on `92006d8` and 3 times on current `main`. Expected if
+Run it 3 times on `bbe59d3` and 3 times on current `main`. Expected if
 confirmed: the old timer fails both suites at the labelled waits with a
 `Suspended { suspended: true }` in the ring; the new timer passes. If Step 0
 then shows no timeouts in 20 runs, record this as the diagnosis.

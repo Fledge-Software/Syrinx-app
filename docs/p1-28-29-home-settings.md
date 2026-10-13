@@ -80,7 +80,7 @@ window, because an agent cannot see it.
 The migration adds two tables in one transaction
 (`crates/syrinx-store/src/schema.rs`, `preferences_migration`). It only
 creates its own tables, so it composes with other slices' migrations.
-**Schema number: 3 on base `9c90d91`.** Whoever merges second renumbers.
+**Schema number: 3 on base `25a4fc7`.** Whoever merges second renumbers.
 Two `syrinx-platform` recovery tests name schema numbers directly
 (`crates/syrinx-platform/src/storage/recovery/tests.rs`: the "newer" marker
 is now 4 and the flat downgrade also drops the two new tables); a renumber

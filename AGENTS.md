@@ -159,7 +159,7 @@ time:
   worktree and reviewed independently. Since 2026-10-12, a slice merges to
   `main` once the review approves it and the gate passes; see
   `docs/decisions.md`. Commits still need the owner's
-  request. The owner-requested planning baseline is committed as `d79fc29`.
+  request. The owner-requested planning baseline is committed as `2c80273`.
   Since 2026-10-13 the repository is on GitHub at `Fledge-Software/Syrinx-app`:
   push only the branch your session was assigned, never `main` unless the
   owner asks (`docs/decisions.md`).

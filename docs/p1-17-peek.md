@@ -160,7 +160,7 @@ sampler runs inside a `BrowserView` update and called `cx.open_window`
 directly. GPUI's `open_window` draws the new window once before returning
 (`gpui-pre-0.3.8/src/app.rs`, lines 1431–1455), and `PeekView::render` updates
 `BrowserView` to draw the shared sidebar, so the first draw leased the browser
-a second time. The regression came from `a79fbc7`, before any native hover had
+a second time. The regression came from `9232c5e`, before any native hover had
 been tried.
 
 The sampler now only *requests* a peek. `request_peek` computes the placement,
@@ -194,14 +194,14 @@ messages only to that window: a press on the wide sidebar's edge strip, a drag
 to the left edge and release there (owner check 9's path), then `WM_MOUSEMOVE`
 at the edge every 25 ms. Syrinx was already the foreground window; nothing set
 the foreground, moved the cursor or used SendInput. The pre-fix binary built
-from `e292033` opened the popup and panicked
+from `594415f` opened the popup and panicked
 (`target/peek-fix/before-hover.err`, reproduced twice). The fixed binary showed
 the full peek (`target/peek-fix/after-shot-0.png`), retired it when its window
 moved, and exited with code 0 and an empty stderr after `WM_CLOSE`, in four
 consecutive cycles. A real pointer hover, Alt Tab and click-through remain the
 owner's checks below.
 
-After merging `main` (`841d29a`) into the branch, `cargo xtask check` passed on
+After merging `main` (`21f80e1`) into the branch, `cargo xtask check` passed on
 2026-10-13 with exit code 0: dependency boundaries, deferred markers,
 packaging, formatting, Clippy with warnings denied, **995 tests** (none failed
 or ignored) and the application smoke run. The log is
@@ -243,7 +243,7 @@ further cycles. All runs exited with code 0 and empty stderr. Posted activation
 cannot change the real foreground window, so reopening from a resting pointer
 after a real Alt Tab remains owner check 9.
 
-With this fix and `main` at `54314c5` (DW-90) merged, `cargo xtask check`
+With this fix and `main` at `a184730` (DW-90) merged, `cargo xtask check`
 passed on 2026-10-13: **1005 tests**, none failed or ignored, and the
 application smoke run (`target/peek-fix/gate-2.log`).
 

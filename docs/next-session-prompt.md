@@ -39,10 +39,10 @@ changing anything I see; `docs/LOCAL-DEV.md`; and the "Current checkpoint —
 ### 2. Sync `main`
 
 `git fetch origin` and fast-forward local `main` to `origin/main`. On
-2026-10-13 it was at `53af11f`. Then check whether the P1-39 approval branch
-has merged: `git merge-base --is-ancestor b41c3bd origin/main`. Its two
-commits, `3d14dd7` (the owner's approval recorded in `decisions.md`, the
-plan and the ledger) and `b41c3bd` (P1-40 now waits on P1-39d; both
+2026-10-13 it was at `7c10ada`. Then check whether the P1-39 approval branch
+has merged: `git merge-base --is-ancestor a5d3ef4 origin/main`. Its two
+commits, `e7997fb` (the owner's approval recorded in `decisions.md`, the
+plan and the ledger) and `a5d3ef4` (P1-40 now waits on P1-39d; both
 issue-map copies agree), are on `ccr-99a24605-ajkyhv`. If they are not on
 `main`, tell me and ask whether to merge that branch through the normal
 review and gate before P1-39a starts; without it, `main`'s ledger still
@@ -52,11 +52,11 @@ reads as though P1-39 waits on my decision.
 
 Run `cargo xtask check` on `main` before any new work, and record the test
 count in the checkpoint of `docs/implementation-status.md`. This matters
-because the cloud session merged `53af11f` at my request **without the
+because the cloud session merged `7c10ada` at my request **without the
 gate** (it runs only on Windows), and DW-7's three Store-level tests in
 `crates/syrinx-store/src/engine/tests/permissions.rs` have never run
 anywhere. The last recorded gate passed 1,014 tests, before the P1-05,
-P1-23 and `53af11f` merges. If it fails, fix the cause on its own branch;
+P1-23 and `7c10ada` merges. If it fails, fix the cause on its own branch;
 never weaken a test.
 
 ### 4. Agent work, in work order

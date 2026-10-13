@@ -2,7 +2,7 @@
 
 Status: **implemented on branch `claude/p1-09-21-folder-ui`, awaiting independent
 review and the owner's look at the running window.** The branch starts from
-`codex/integrated-browser-preview` at `94b3cb1`. It finishes the sidebar half
+`codex/integrated-browser-preview` at `bfe5bf5`. It finishes the sidebar half
 of P1-21 (the headless model and store were done earlier, see
 `docs/p1-21-folders-core.md`) and closes P1-09's "folder expansion is not
 persisted" gap. Search treatment of folders is still open (see "What remains").

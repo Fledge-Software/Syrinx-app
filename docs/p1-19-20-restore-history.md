@@ -3,7 +3,7 @@
 Status: **implemented on branch `claude/p1-19-20-restore-history`, awaiting
 independent review and the owner's merge approval.** The owner approved
 running Plan 1 slices in parallel on 2026-10-11; this branch was cut from the
-integration tip `9c90d91`. Gate evidence is at the end of this note.
+integration tip `25a4fc7`. Gate evidence is at the end of this note.
 
 ## Why
 

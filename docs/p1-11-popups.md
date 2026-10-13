@@ -158,7 +158,7 @@ The intermittent failure, tab 1 created with its source changed but no
 navigation completion or close within 45 seconds, was the product's own
 hidden-page suspension (P1-15) freezing the fixture's page mid-load. The
 diagnosis ran on `claude/diagnose-lifecycle-timeout`, branched from the
-integrated preview at `94b3cb1`; its logs are under that worktree's
+integrated preview at `bfe5bf5`; its logs are under that worktree's
 `target/diag-runs/`.
 
 **How it happens.** The close fixture created its page hidden and never
@@ -191,9 +191,9 @@ keeps the same 6 s hold as a regression check: the old fixture failed under
 the temporary diagnostic version of that hold, and the fixed one passes. `--trace` prints timestamped commands, events and
 loopback requests. No deadline was changed.
 
-**A second, deterministic failure.** At `94b3cb1` every run first stopped at
+**A second, deterministic failure.** At `bfe5bf5` every run first stopped at
 lifecycle cycle 1 with "Repeated resize did not preserve matching survivor
-bounds". P1-08's placement change (`browser/placement.rs`, `7c6f2db`)
+bounds". P1-08's placement change (`browser/placement.rs`, `cd80999`)
 deliberately leaves a hidden page's bounds alone until it is shown, and the
 fixture still expected the hidden survivor to move. The cycle now asserts the
 new contract instead: the hidden survivor keeps its bounds through the

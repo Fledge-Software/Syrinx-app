@@ -2,7 +2,7 @@
 
 The initial review below is historical. The integration chat subsequently
 validated the integrated preview with its 376-test gate and committed baseline
-`8239511`. The 2026-10-11 fixture continuation at the end records new work whose
+`a94500a`. The 2026-10-11 fixture continuation at the end records new work whose
 execution remains assigned exclusively to that chat.
 
 This bounded D49 review checks address interpretation and native-page ownership
