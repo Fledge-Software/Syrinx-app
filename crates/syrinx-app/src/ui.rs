@@ -281,9 +281,13 @@ pub struct BrowserView {
     commands: Rc<CommandRegistry>,
     main_window: gpui::AnyWindowHandle,
     peek: Option<peek::PeekPopup>,
+    /// The generation of a peek whose window opens once the current update ends.
+    peek_opening: Option<u64>,
     peek_state: peek_state::PeekState,
     peek_monitoring: bool,
     peek_generation: u64,
+    /// The main window's placement when the peek last checked it.
+    peek_owner_geometry: peek::OwnerGeometry,
     _peek_bounds_watch: Subscription,
     home_palette: HomePaletteIntent,
     importer: import::BookmarkImporter,
@@ -373,15 +377,13 @@ impl BrowserView {
             commands: Rc::new(CommandRegistry::browser()),
             main_window: Window::window_handle(window),
             peek: None,
+            peek_opening: None,
             peek_state: peek_state::PeekState::default(),
             peek_monitoring: false,
             peek_generation: 0,
+            peek_owner_geometry: peek::OwnerGeometry::of(window),
             _peek_bounds_watch: cx.observe_window_bounds(window, |this, window, cx| {
-                let was_open = this.peek.is_some();
-                this.retire_peek(cx);
-                if was_open && window.is_window_active() {
-                    this.focus_page(window, cx);
-                }
+                this.owner_bounds_observed(window, cx);
             }),
             home_palette: HomePaletteIntent::default(),
             importer: import::BookmarkImporter::default(),

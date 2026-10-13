@@ -229,16 +229,22 @@ you found it in the commit message, not here.
   notifications while hidden. Source: gpui-base's `BlinkCursor` and GPUI's
   `on_blur` dispatch in `gpui-pre-0.3.8/src/window.rs` (code-confirmed;
   found in DW-90's review).
-- **Opening a GPUI window from inside a `BrowserView` update panics if its
-  first render reads `BrowserView`.** `App::open_window` draws the new window
-  before returning, and the peek's `render` calls `browser.update`, which hits
-  GPUI's double-lease panic ("cannot update … while it is already being
-  updated"). DW-90's harness hit this calling `open_peek` from a view update.
-  The hover path (`sample_peek`) also calls `open_peek` inside one, so it is
-  expected to panic the same way; that is read from the code, not reproduced
-  with a real pointer. Build such a window from
-  outside the view's update, or render it from a snapshot instead of updating
-  the owner. Source: the panic's backtrace on 2026-10-12 (observed).
+- **Opening a window from inside an entity's update panics if the new window's
+  render updates that entity.** GPUI's `open_window` draws the window once before
+  it returns, so the render runs synchronously inside the caller's lease and
+  fails with "cannot update BrowserView while it is already being updated". The
+  sidebar peek did this from its hover sampler; DW-90's harness hit it too, and a
+  synthetic hover reproduced it before the fix. Open such a window from
+  `cx.defer` (or a task) outside every update, and recheck that the request is
+  still wanted when it runs. Source: `gpui-pre-0.3.8/src/app.rs`, lines
+  1431–1455, and the fix in `ui/peek.rs` (`docs/p1-17-peek.md`).
+- **A bounds observer fires on every activation change, not only on a move.**
+  GPUI's activation callback calls `bounds_changed`, which runs every
+  `observe_window_bounds` observer. The peek's watch closed the peek when it was
+  clicked and undid the rearm after Alt Tab. Compare the window's actual
+  bounds, viewport and scale with the last seen values before acting. Source:
+  `gpui-pre-0.3.8/src/window.rs`, line 1953, and `docs/p1-17-peek.md`
+  (code-confirmed and observed with posted activation).
 
 - **A popup's input form can survive after its Enter handler loses its window.**
   `InputState` and `subscribe_in` are tied to the creating window. Do not render
