@@ -33,6 +33,25 @@ and pnpm 10.34.4 are available, but this slice does not use them. It adds no
 toolchain downloader, system installation, registry setting or CI service.
 The product licence is still undecided; Cargo publishing is disabled.
 
+### The Windows SDK resource compiler
+
+`crates/syrinx-app/build.rs` compiles the hawk icon
+(`design/brand/icon/syrinx.ico`) and the version details into `syrinx.exe`
+with the Windows SDK's resource compiler, `rc.exe` (owner decision,
+2026-10-13). The build fails with an explanation if it cannot find one,
+rather than producing an executable without an icon. It looks, in order, at:
+
+1. the `RC` environment variable, which must hold `rc.exe`'s full path;
+2. `%WindowsSdkVerBinPath%\x64\rc.exe`, set by a Developer Command Prompt;
+3. `rc.exe` on `PATH`;
+4. the newest `C:\Program Files (x86)\Windows Kits\10\bin\<version>\x64\rc.exe`.
+
+The Windows SDK comes with Visual Studio's "Desktop development with C++"
+workload, which the MSVC Rust toolchain already needs for its linker. On this
+machine the fourth route finds SDK `10.0.26100.0`. The resource script uses
+no SDK headers, so no include path is needed. The icon and brand rasters
+are committed; building never runs Edge or Python (`design/brand/README.md`).
+
 ## Run and check
 
 Run these from the repository in PowerShell:
@@ -376,7 +395,10 @@ from `packaging/`. It installs and registers nothing. The gate's
 `cargo xtask check-packaging` step refuses a `packaging/syrinx-registration.ps1`
 that differs from the Rust registry table (regenerate it with
 `cargo xtask write-registration`) and parses every script without running
-it. Agents never run the packaging scripts; installation, registration and
+it. Every icon the registration and Start menu shortcut name is
+`syrinx.exe,0`: index 0 is the executable's first icon, which is the hawk
+compiled in as resource 1 (its only icon).
+Agents never run the packaging scripts; installation, registration and
 choosing the default browser are the owner's. See
 `docs/p1-37-installer-design.md`.
 

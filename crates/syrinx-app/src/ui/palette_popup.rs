@@ -174,6 +174,7 @@ impl BrowserView {
                     .map_err(str::to_owned)
                     .and_then(|hwnd| {
                         set_overlay_owner(hwnd, owner).map_err(|error| error.to_string())?;
+                        show_app_icon(hwnd);
                         Ok(hwnd)
                     });
                 let native = PaletteNative {

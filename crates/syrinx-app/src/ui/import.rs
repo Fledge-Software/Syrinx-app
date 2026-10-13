@@ -152,7 +152,9 @@ impl BrowserView {
             popup.set_window_title("Import bookmarks");
             if let Err(error) = native_handle(popup).and_then(|handle| {
                 set_overlay_owner(handle, parent)
-                    .map_err(|_| "Cannot keep the preview above Syrinx.")
+                    .map_err(|_| "Cannot keep the preview above Syrinx.")?;
+                show_app_icon(handle);
+                Ok(())
             }) {
                 eprintln!("{error}");
             }

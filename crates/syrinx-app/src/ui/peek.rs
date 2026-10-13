@@ -502,6 +502,7 @@ fn open_peek_window(
                     .map_err(str::to_owned)
                     .and_then(|hwnd| {
                         set_overlay_owner(hwnd, parent).map_err(|error| error.to_string())?;
+                        show_app_icon(hwnd);
                         Ok(hwnd)
                     });
             let view = cx.new(|cx: &mut Context<PeekView>| PeekView {
