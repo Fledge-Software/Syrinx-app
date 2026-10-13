@@ -126,7 +126,8 @@ Some work needs the owner, not an agent:
   device checks (the plan's "Open threads");
 - creating the GitHub repository and choosing the account or organisation it
   lives under (D16);
-- choosing the licence, which blocks going public;
+- making the repository public (the licence, MPL-2.0, was chosen on
+  2026-10-13);
 - anything on Fledge's side. The Fledge-side gaps are a list for the owner,
   not issues or pull requests in Fledge's repositories;
 - installing software system-wide on the owner's machine, and registering
@@ -272,7 +273,7 @@ style problem.
 
 **Dependencies and licence:**
 
-- **No GPL code until the licence is chosen.** Outside code comes in only
+- **Syrinx is MPL-2.0 (owner, 2026-10-13); no GPL code.** Outside code comes in only
   under permissive licences (MIT, Apache-2.0, BSD) or as whole MPL-2.0 files
   kept under MPL (the plan's "Open threads"). Zed's editor and `languages`
   crate are GPL-3.0 and stay out.

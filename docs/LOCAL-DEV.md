@@ -31,7 +31,7 @@ Use the installed Windows MSVC Rust toolchain. This scaffold was developed
 with Rust/Cargo 1.97.1 and the `x86_64-pc-windows-msvc` target. Node 24.15.0
 and pnpm 10.34.4 are available, but this slice does not use them. It adds no
 toolchain downloader, system installation, registry setting or CI service.
-The product licence is still undecided; Cargo publishing is disabled.
+The product is licensed under MPL-2.0 (`LICENSE`); Cargo publishing stays disabled.
 
 ### The Windows SDK resource compiler
 
