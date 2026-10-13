@@ -50,9 +50,10 @@ above, and `docs/spec.md` below. Before picking up work, also read:
 ## Working agreements
 
 - **This repository is local only for now: no git remote and no pushes.**
-- **Local implementation is approved (D41).** Use one branch per approved
-  slice, independent review and the owner's approval before each merge.
-  GitHub is not a prerequisite. The owner-requested planning baseline is
+- **Local implementation is approved (D41; workflow updated 2026-10-12).**
+  Build each slice on its own branch in a local worktree. Once an
+  independent review approves it and `cargo xtask check` passes, merge it to
+  `main` (see `docs/decisions.md`). GitHub is not a prerequisite. The owner-requested planning baseline is
   committed as `d79fc29`; the scaffold records the exact development commands
   in `docs/LOCAL-DEV.md`.
 - **Commit only when the owner asks.** (The v1 plan may be committed as it

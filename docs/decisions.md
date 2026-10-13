@@ -7,6 +7,25 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
+- **The product is named Syrinx.** "Atlas" was a working name. It collides
+  with OpenAI's ChatGPT Atlas, a browser in the same category, and the name
+  is crowded across developer tools. The syrinx is a bird's vocal organ,
+  which fits beside Fledge. The owner holds the domain `syrinxapp.dev`.
+  Code, crates, the data folder and Windows registration names still say
+  Atlas until a dedicated rename slice changes them together. That slice
+  must also handle the data folder (`%LOCALAPPDATA%\Atlas\data`) before the
+  owner's first real install (P1-37). New work should not spread the old
+  name further than it must.
+- **Finished work merges to main; slices are built in local worktrees.**
+  This replaces D41's routing through the integration branch
+  `codex/integrated-browser-preview`, which left main at P1-04 while
+  reviewed work piled up elsewhere. Each slice is built on its own branch
+  in a local worktree. It merges to `main` with `--no-ff` once an
+  independent review approves it and `cargo xtask check` passes after the
+  merge. The owner directed all finished work to main on 2026-10-12. The
+  repository stays local, with no remote and no pushes. Commits still
+  happen only within this approved slice workflow.
+
 - **Palette ranking is judged from key press to rows on screen (P1-33).**
   A keystroke's ranked rows must be presented within two display refresh
   intervals at the 95th percentile (33.3 ms at 60 Hz), with the maximum
