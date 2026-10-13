@@ -599,7 +599,7 @@ fn has_entries(summary: &ImportSummary) -> bool {
 
 fn preview_button(id: &'static str, label: &'static str, primary: bool) -> Stateful<Div> {
     let (background, foreground) = if primary {
-        (theme::accent(), theme::rgba(syrinx_ui::accent::BADGE_TEXT))
+        (theme::accent_fill(), theme::on_accent_fill())
     } else {
         (theme::line(), theme::text())
     };
