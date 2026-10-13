@@ -1,5 +1,5 @@
 ---
-status: proposed, awaiting the owner's approval
+status: approved by the owner, 2026-10-13
 slice: P1-39 (plan 1, Phase 5), split into P1-39a to P1-39d below
 decisions: D38, D39, D9, D13; the 2026-10-12 foreground rule; DW-30
 date: 2026-10-13
