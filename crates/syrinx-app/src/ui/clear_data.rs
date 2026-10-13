@@ -501,9 +501,14 @@ fn period_chip(
     .rounded_md()
     .cursor_pointer()
     .bg(if chosen {
-        theme::accent()
+        theme::accent_fill()
     } else {
         theme::line()
+    })
+    .text_color(if chosen {
+        theme::on_accent_fill()
+    } else {
+        theme::text()
     })
     .on_click(cx.listener(move |this, _, _, cx| {
         this.clear_data.period = period;

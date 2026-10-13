@@ -29,7 +29,8 @@ keeps the token tests fast and nothing in the tokens needs a GPUI type.
   Haze and Glass describe their ground as an OS material (Mica, Acrylic) with
   Syrinx's translucent tint over it, plus the canvas's stand-in wallpaper
   colours, which are used only for contrast checks and samples.
-- `accent.rs`: the default accent `#FF8A65`, the four Customize presets from
+- `accent.rs`: the default accent (`#FF8A65` at P1-07; the logo's `#FF612E`
+  since the 2026-10-13 branding decision), the four Customize presets from
   the canvas, and the derived states (`soft`, `soft_line`, `ring`, the badge
   text, and Paper's darker `ink`).
 - `PaletteId::resolve(reduce_transparency)`: Reduce transparency turns Haze
@@ -107,7 +108,7 @@ one per palette, accent and pair.
 | Glass | secondary text on the selected row | 4.16 | 4.5 |
 | Glass | secondary text on the search pill | 4.28 | 4.5 |
 | Glass | bright secondary text on the selected row | 4.39 | 4.5 |
-| Glass | accent ink on the page card (blue preset `#6EA8FF` only) | 2.94 | 3.0 |
+| Glass | accent ink on the page card (blue preset `#6EA8FF` only); resolved 2026-10-13, when Haze and Glass began lifting a failing ink (`design/README.md`) | 2.94 | 3.0 |
 | Tint | muted text on the selected row (green and gold presets only) | 4.33–4.36 | 4.5 |
 | Paper | accent ink as matched text on the palette panel (green `#6FD3A8` and gold `#E8C16A` only) | 4.17, 4.21 | 4.5 |
 | Paper | accent ink as matched text on the selected palette row (green and gold only) | 3.85, 3.91 | 4.5 |

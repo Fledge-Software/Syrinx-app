@@ -266,7 +266,7 @@ impl BrowserView {
         };
         let text = custom.input.read(cx).value().to_string();
         let Some(accent) = parse_accent(&text) else {
-            custom.error = Some("Enter a colour as # and six hex digits, such as #FF8A65.");
+            custom.error = Some("Enter a colour as # and six hex digits, such as #FF612E.");
             cx.notify();
             return;
         };
