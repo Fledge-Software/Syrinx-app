@@ -171,7 +171,28 @@ fn check_direct_dependencies(
                 "{name} -> {dependency}: nothing may use the update verifier before P1-39 is approved"
             ));
         }
+        check_fulltext_quarantine(name, dependency, violations);
         check_plugin_dependency(name, dependency, workspace, violations);
+    }
+}
+
+/// The P1-23 bake-off harness, which no product crate may use.
+const FULLTEXT_BENCH: &str = "fulltext-bench";
+
+/// Approved only for the bake-off until P1-24 chooses an engine and RUSTSEC-2026-0253 is resolved.
+const TANTIVY: &str = "tantivy";
+
+fn check_fulltext_quarantine(name: &str, dependency: &str, violations: &mut BTreeSet<String>) {
+    // Keep the benchmark and its Tantivy graph out of everything Syrinx ships.
+    if dependency == FULLTEXT_BENCH {
+        violations.insert(format!(
+            "{name} -> {dependency}: nothing may depend on the P1-23 full-text bake-off harness"
+        ));
+    }
+    if dependency == TANTIVY && name != FULLTEXT_BENCH {
+        violations.insert(format!(
+            "{name} -> {dependency}: only fulltext-bench may depend on Tantivy before P1-24 chooses it"
+        ));
     }
 }
 
@@ -708,6 +729,50 @@ mod tests {
             violations
                 .iter()
                 .any(|message| message.contains("syrinx-core -> windows-sys"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn quarantines_the_fulltext_bench_and_tantivy() -> Result<(), String> {
+        // The bake-off may use Tantivy; nothing else may use either, in any dependency kind.
+        let permitted = metadata(vec![package(
+            "fulltext-bench",
+            json!([{"name": "tantivy"}, {"name": "rusqlite"}]),
+        )]);
+        assert!(check_metadata(&permitted)?.is_empty());
+
+        let input = metadata(vec![
+            package("fulltext-bench", json!([{"name": "tantivy"}])),
+            package(
+                "syrinx-search",
+                json!([{"name": "tantivy", "rename": "fulltext", "optional": true}]),
+            ),
+            package(
+                "syrinx-app",
+                json!([{"name": "fulltext_bench", "kind": "dev"}]),
+            ),
+            package(
+                "xtask",
+                json!([{"name": "fulltext-bench", "kind": "build"}]),
+            ),
+        ]);
+        let violations = check_metadata(&input)?;
+        assert_eq!(violations.len(), 3);
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("syrinx-search -> tantivy"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("syrinx-app -> fulltext-bench"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("xtask -> fulltext-bench"))
         );
         Ok(())
     }
