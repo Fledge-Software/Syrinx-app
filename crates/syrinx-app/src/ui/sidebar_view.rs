@@ -523,7 +523,8 @@ fn release_on_drag(view: &WeakEntity<BrowserView>, window: &mut Window, cx: &mut
 /// Every row is a tree item at its nesting level, keeping its title as the accessible name,
 /// and its own Tab stop with P1-36's focus ring: Enter or Space uses it (a keyboard click).
 // TODO(DW-61): one Tab stop for the tree with arrow keys between rows, Left and Right for
-// folders, and F6 landing on the active row.
+// folders, and F6 landing on the active row, driven by `syrinx_ui::tree_focus` (see its
+// wiring cautions: build its rows in `rows()`'s loop and reset focus after row changes).
 fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<Div> {
     let row = without_mouse_focus(control(div().id(id), Role::TreeItem, look.title.clone()))
         .aria_level(look.depth + 1)
