@@ -154,6 +154,15 @@ you found it in the commit message, not here.
 
 ## The interface: GPUI on Windows
 
+- **Opening a window from inside an entity's update panics if the new window's
+  render updates that entity.** GPUI's `open_window` draws the window once before
+  it returns, so the render runs synchronously inside the caller's lease and
+  fails with "cannot update BrowserView while it is already being updated". The
+  sidebar peek did this from its hover sampler. Open such a window from
+  `cx.defer` (or a task) outside every update, and recheck that the request is
+  still wanted when it runs. Source: `gpui-pre-0.3.8/src/app.rs`, lines
+  1431–1455, and the fix in `ui/peek.rs` (`docs/p1-17-peek.md`).
+
 - **A popup's input form can survive after its Enter handler loses its window.**
   `InputState` and `subscribe_in` are tied to the creating window. Do not render
   a retained Favorites form in a replacement peek or the main sidebar after
