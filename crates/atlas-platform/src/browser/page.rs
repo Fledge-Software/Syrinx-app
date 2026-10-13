@@ -124,6 +124,7 @@ impl Page {
         super::lifecycle::register_fullscreen(&view, id, events.clone())?;
         register_source(&view, id, events.clone(), destination.clone())?;
         register_navigation(&view, id, events.clone())?;
+        lifecycle.register_navigation(&view)?;
         register_process_failure(&view, id, events.clone(), shortcuts.clone())?;
         let permissions = super::permissions::Permissions::register(&view, id, events.clone())?;
         let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
@@ -168,9 +169,12 @@ impl Page {
     pub(super) fn navigate(&self, url: &str) -> Result<(), BrowserError> {
         validate_url(url)?;
         self.lifecycle.resume(&self.view)?;
-        self.view
-            .load_url(url)
-            .map_err(|_| BrowserError::Navigation)?;
+        // Mark the load first, so a hidden page cannot be suspended before WebView2 starts it.
+        self.lifecycle.navigation_requested();
+        if self.view.load_url(url).is_err() {
+            self.lifecycle.navigation_refused();
+            return Err(BrowserError::Navigation);
+        }
         *self.destination.borrow_mut() = url.to_owned();
         Ok(())
     }

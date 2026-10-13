@@ -72,13 +72,13 @@ you found it in the commit message, not here.
   Source: P1-12 independent review, stale-action regression and native fixture
   in `docs/p1-12-permissions.md`.
 
-- **The original lifecycle fixture sometimes times out during navigation.**
-  Its fixture-navigation wait has failed before popups and during repeated
-  cycles. P1-12's run passed, which does not establish a fix. Preserve its
-  assertions and deadlines, record the individual suite result, and keep the
-  original timeout separate from new slice failures. The owner explicitly
-  authorized P1-12 through P1-14 despite this pre-existing intermittent failure.
-  Sources: `docs/fixture-transport-timing-review.md` and `docs/p1-11-popups.md`.
+- **The original lifecycle fixture sometimes timed out during navigation.**
+  Diagnosed on 2026-10-12: its hidden close page was suspended mid-load (see
+  the `TrySuspend` trap below). A passing run never established a fix; a
+  deliberately held response did. Preserve the suite's assertions and
+  deadlines, and keep any new timeout separate from this one until it is
+  diagnosed the same way. Sources: `docs/p1-11-popups.md` and
+  `docs/fixture-transport-timing-review.md`.
 
 - **A native fixture rejects popup focus before trying it.** Windows may
   deny `SetForegroundWindow` for a background process even though WebView2's
@@ -151,6 +151,18 @@ you found it in the commit message, not here.
   Create one environment once and pass it to every tab. A popup that becomes
   a tab must use the opener's environment and profile and must not have
   navigated, or `window.opener` breaks. Source: note 08, section 5 (high).
+- **`TrySuspend` succeeds on a page that is still loading, and the frozen
+  page then reports nothing.** No `NavigationCompleted` or close request
+  arrives until the page is resumed, and no error says why. Atlas therefore
+  starts a hidden page's suspension countdown only when its navigation
+  completes (`browser/hidden_timer.rs`, owner decision 2026-10-12); keep it
+  that way, and never time suspension from when a load starts. Separately, a
+  hidden page's script timers run late: the close fixture's 100 ms timer
+  fired 0.3–4.3 s late while hidden, against about 0.1 s once shown, so a
+  native fixture that waits on page script should show the page once
+  `Created` arrives. Source: the lifecycle-timeout diagnosis in
+  `docs/p1-11-popups.md`; a 6 s held response reproduced the recorded
+  failure 2/2 under the old timer (observed; high).
 - **`TrySuspend` fails with `ERROR_INVALID_STATE`** if the web view is still
   visible. Call `set_visible(false)` first. Use either suspend and resume or
   the memory-usage level on a tab, not both. Source: note 08, section 5

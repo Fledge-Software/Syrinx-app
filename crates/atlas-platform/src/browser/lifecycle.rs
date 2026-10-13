@@ -1,6 +1,6 @@
 //! Suspends hidden controllers and rejects callbacks after their native lifetime or suspension changes.
 
-use super::{BrowserError, BrowserEvent, EventSink};
+use super::{BrowserError, BrowserEvent, EventSink, hidden_timer::HiddenTimer};
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -8,22 +8,20 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 use webview2_com::{
     ContainsFullScreenElementChangedEventHandler, Microsoft::Web::WebView2::Win32::ICoreWebView2_3,
-    TrySuspendCompletedHandler,
+    NavigationCompletedEventHandler, NavigationStartingEventHandler, TrySuspendCompletedHandler,
 };
 use windows::{
     Win32::{
-        Foundation::{ERROR_SUCCESS, HWND, WIN32_ERROR},
+        Foundation::{E_POINTER, ERROR_SUCCESS, HWND, WIN32_ERROR},
         UI::WindowsAndMessaging::{KillTimer, SetTimer},
     },
     core::{BOOL, Interface},
 };
 use wry::{WebView, WebViewExtWindows};
-
-pub(super) const GRACE: Duration = Duration::from_secs(5);
 
 pub(super) fn exit_fullscreen(view: &WebView) -> Result<(), BrowserError> {
     use windows::Win32::{
@@ -136,8 +134,7 @@ impl CallbackLife {
 }
 
 struct HiddenState {
-    visible: bool,
-    due: Option<Instant>,
+    timer: HiddenTimer,
     request: u64,
     pending: bool,
     alive: bool,
@@ -145,7 +142,7 @@ struct HiddenState {
 
 impl HiddenState {
     fn accepts_completion(&self, request: u64) -> bool {
-        self.alive && !self.visible && self.pending && self.request == request
+        self.alive && !self.timer.visible() && self.pending && self.request == request
     }
 }
 
@@ -161,8 +158,7 @@ impl Lifecycle {
         Self {
             id,
             state: Rc::new(RefCell::new(HiddenState {
-                visible: false,
-                due: Some(Instant::now() + GRACE),
+                timer: HiddenTimer::new(Instant::now()),
                 request: 0,
                 pending: false,
                 alive: true,
@@ -180,7 +176,7 @@ impl Lifecycle {
         visible: bool,
         place: impl FnOnce() -> Result<(), BrowserError>,
     ) -> Result<(), BrowserError> {
-        if self.state.borrow().visible == visible {
+        if self.state.borrow().timer.visible() == visible {
             return place();
         }
         if visible {
@@ -190,10 +186,46 @@ impl Lifecycle {
         // IsVisible must be false before TrySuspend is ever issued.
         view.set_visible(visible)
             .map_err(|_| BrowserError::Visibility)?;
-        let mut state = self.state.borrow_mut();
-        state.visible = visible;
-        state.due = (!visible).then(|| Instant::now() + GRACE);
+        self.state.borrow_mut().timer.shown(visible, Instant::now());
         Ok(())
+    }
+
+    /// Records Atlas's own navigation request before WebView2 reports that it started.
+    pub(super) fn navigation_requested(&self) {
+        let now = Instant::now();
+        self.state.borrow_mut().timer.navigation_requested(now);
+    }
+
+    /// Releases a navigation request that WebView2 refused before starting it.
+    pub(super) fn navigation_refused(&self) {
+        let now = Instant::now();
+        self.state.borrow_mut().timer.navigation_refused(now);
+    }
+
+    /// Follows every main-frame navigation, so a hidden page settles only once it finishes.
+    pub(super) fn register_navigation(&self, view: &WebView) -> Result<(), BrowserError> {
+        let starts = self.state.clone();
+        let started = NavigationStartingEventHandler::create(Box::new(move |_, args| {
+            let id = navigation_id(args, |args, id| unsafe { args.NavigationId(id) })?;
+            let now = Instant::now();
+            starts.borrow_mut().timer.navigation_started(id, now);
+            Ok(())
+        }));
+        let completions = self.state.clone();
+        let completed = NavigationCompletedEventHandler::create(Box::new(move |_, args| {
+            let id = navigation_id(args, |args, id| unsafe { args.NavigationId(id) })?;
+            let now = Instant::now();
+            completions.borrow_mut().timer.navigation_completed(id, now);
+            Ok(())
+        }));
+        // The handlers live as long as the controller, so their tokens are never removed.
+        let core = view.webview();
+        let mut starting_token = 0;
+        unsafe { core.add_NavigationStarting(&started, &mut starting_token) }
+            .map_err(|_| BrowserError::EventRegistration)?;
+        let mut completed_token = 0;
+        unsafe { core.add_NavigationCompleted(&completed, &mut completed_token) }
+            .map_err(|_| BrowserError::EventRegistration)
     }
 
     pub(super) fn resume(&self, view: &WebView) -> Result<(), BrowserError> {
@@ -206,7 +238,7 @@ impl Lifecycle {
             let mut state = self.state.borrow_mut();
             state.request += 1;
             state.pending = false;
-            state.due = (!state.visible).then(|| Instant::now() + GRACE);
+            state.timer.restart(Instant::now());
         }
         unsafe { core.Resume() }.map_err(|_| BrowserError::Suspension)?;
         let mut suspended = BOOL::default();
@@ -223,19 +255,18 @@ impl Lifecycle {
     }
 
     pub(super) fn due(&self) -> Option<Instant> {
-        self.state.borrow().due
+        self.state.borrow().timer.due()
     }
 
     pub(super) fn tick(&self, view: &WebView) -> Result<(), BrowserError> {
         let request = {
             let mut state = self.state.borrow_mut();
-            if state.visible || state.pending || !state.due.is_some_and(|due| due <= Instant::now())
-            {
+            if state.pending || !state.timer.suspension_due(Instant::now()) {
                 return Ok(());
             }
             state.request += 1;
             state.pending = true;
-            state.due = None;
+            state.timer.suspension_requested();
             state.request
         };
         let core: ICoreWebView2_3 = view
@@ -268,14 +299,14 @@ impl Lifecycle {
                     suspended: true,
                 });
             } else {
-                state.due = Some(Instant::now() + GRACE);
+                state.timer.restart(Instant::now());
             }
             Ok(())
         }));
         if unsafe { core.TrySuspend(&completion) }.is_err() {
             let mut state = self.state.borrow_mut();
             state.pending = false;
-            state.due = Some(Instant::now() + GRACE);
+            state.timer.restart(Instant::now());
             return Err(BrowserError::Suspension);
         }
         Ok(())
@@ -287,6 +318,17 @@ impl Drop for Lifecycle {
         self.state.borrow_mut().alive = false;
         self.life.retire();
     }
+}
+
+/// Reads the `NavigationId` both navigation event argument types carry.
+fn navigation_id<Args>(
+    args: Option<Args>,
+    read: impl FnOnce(&Args, &mut u64) -> windows::core::Result<()>,
+) -> windows::core::Result<u64> {
+    let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+    let mut id = 0;
+    read(&args, &mut id)?;
+    Ok(id)
 }
 
 pub(super) fn register_fullscreen(
@@ -410,18 +452,18 @@ mod tests {
 
     #[test]
     fn suspension_completion_rejects_activation_rehide_duplicates_and_close() {
+        let now = Instant::now();
         let mut state = HiddenState {
-            visible: false,
-            due: None,
+            timer: HiddenTimer::new(now),
             request: 7,
             pending: true,
             alive: true,
         };
         assert!(state.accepts_completion(7));
-        state.visible = true;
+        state.timer.shown(true, now);
         assert!(!state.accepts_completion(7));
         state.request += 1;
-        state.visible = false;
+        state.timer.shown(false, now);
         assert!(!state.accepts_completion(7));
         assert!(state.accepts_completion(8));
         state.pending = false;

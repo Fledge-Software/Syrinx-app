@@ -1,4 +1,8 @@
 //! Verifies a synthetic page close stays deferred until the host releases its native view.
+//!
+//! Options: `--suspension-only` runs only the suspension suite; `--stall-first-close` holds
+//! the first close page's body past the hidden-page suspension grace; `--trace` prints
+//! timestamped harness commands, page events and loopback requests to stderr.
 
 #[path = "page_close/lifecycle.rs"]
 mod lifecycle;
@@ -57,6 +61,9 @@ type Exercise = fn(
 ) -> Result<(), String>;
 
 const DEADLINE: Duration = Duration::from_secs(45);
+/// Longer than the platform's five-second grace before an idle hidden page is suspended.
+const STALL_PAST_SUSPENSION_GRACE: Duration = Duration::from_secs(6);
+static TRACE: AtomicBool = AtomicBool::new(false);
 const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Synthetic close fixture</title>\
     <link rel=icon href=data:,><p>Synthetic close fixture</p>\
     <script>addEventListener('load',()=>setTimeout(()=>window.close(),100));</script>";
@@ -102,16 +109,25 @@ fn main() -> ExitCode {
     }
 }
 
+fn option(name: &str) -> bool {
+    std::env::args().any(|argument| argument == name)
+}
+
 fn run() -> Result<(), String> {
+    TRACE.store(option("--trace"), Ordering::Release);
     let profile = reserve_profile()?;
-    let server = Server::start()?;
-    if std::env::args().any(|argument| argument == "--suspension-only") {
+    let stall = option("--stall-first-close").then_some(STALL_PAST_SUSPENSION_GRACE);
+    let server = Server::start(stall)?;
+    if option("--suspension-only") {
         return combine(
             run_browser(profile, &server.url, suspension::exercise),
             server.stop(),
         );
     }
     let result = run_browser(profile, &server.url, exercise);
+    if result.is_ok() {
+        println!("Synthetic deferred page close and repeated lifecycle passed.");
+    }
     // Run every suite even if one fails; fresh profiles keep their evidence independent.
     let popup_result =
         reserve_profile().and_then(|profile| run_browser(profile, &server.url, popups::exercise));
@@ -214,7 +230,7 @@ fn exercise(
             height: 480,
         }),
     )?;
-    create_close_fixture(host, events, 1, url, deadline)?;
+    create_close_fixture(host, events, parent, &[], 1, url, deadline)?;
     let child = unsafe { GetWindow(parent, GW_CHILD) }
         .map_err(|error| format!("Deferred native child is missing ({}).", error.code().0))?;
     require_window(child, true)?;
@@ -237,9 +253,14 @@ fn exercise(
     lifecycle::exercise(host, events, parent, url, deadline)
 }
 
+/// Creates a page that closes itself after loading, and waits for its load and close request.
+/// The page is shown once created, so hidden-page suspension and the throttled timers of a
+/// hidden page cannot delay its close request past the deadline.
 fn create_close_fixture(
     host: &BrowserHost,
     events: &mut UnboundedReceiver<BrowserEvent>,
+    parent: HWND,
+    existing: &[HWND],
     expected: u64,
     url: &str,
     deadline: Instant,
@@ -263,7 +284,13 @@ fn create_close_fixture(
                  (created={created}, source={source_changed}, navigated={navigated}, close={requested})"
             )
         })? {
-            BrowserEvent::Created { id } if id == expected => created = true,
+            BrowserEvent::Created { id } if id == expected => {
+                // A new page starts hidden; showing it keeps suspension out of this wait.
+                let child = lifecycle::new_child(parent, existing)?;
+                lifecycle::require_visible(child, false)?;
+                send(host, BrowserCommand::ShowActive(Some(expected)))?;
+                created = true;
+            }
             BrowserEvent::Url { id, url: actual } if id == expected && actual == url => {
                 source_changed = true;
             }
@@ -278,7 +305,46 @@ fn create_close_fixture(
 }
 
 fn send(host: &BrowserHost, command: BrowserCommand) -> Result<(), String> {
+    trace(|| format!("send {}", describe_command(&command)));
     host.send(command).map_err(|error| error.to_string())
+}
+
+/// Prints one line under `--trace`, stamped in milliseconds since the first traced line.
+fn trace(message: impl FnOnce() -> String) {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    if !TRACE.load(Ordering::Acquire) {
+        return;
+    }
+    let millis = START.get_or_init(Instant::now).elapsed().as_millis();
+    eprintln!("[trace {millis:>7}] {}", message());
+}
+
+fn describe_command(command: &BrowserCommand) -> String {
+    match command {
+        BrowserCommand::Create { id, url } => format!("Create {id} {url}"),
+        BrowserCommand::Navigate { id, url } => format!("Navigate {id} {url}"),
+        BrowserCommand::Close { id } => format!("Close {id}"),
+        BrowserCommand::Reload { id } => format!("Reload {id}"),
+        BrowserCommand::ShowActive(active) => format!("ShowActive {active:?}"),
+        BrowserCommand::Resize(bounds) => format!("Resize {bounds:?}"),
+        other => format!("{other:?}"),
+    }
+}
+
+fn describe_event(event: &BrowserEvent) -> String {
+    match event {
+        BrowserEvent::Callback { event, .. } => format!("callback {}", describe_event(event)),
+        BrowserEvent::Ready => "Ready".into(),
+        BrowserEvent::Created { id } => format!("Created {id}"),
+        BrowserEvent::CloseRequested { id } => format!("CloseRequested {id}"),
+        BrowserEvent::Url { id, url } => format!("Url {id} {url}"),
+        BrowserEvent::Loading { id, loading } => format!("Loading {id} {loading}"),
+        BrowserEvent::NavigationCompleted { id, success } => {
+            format!("NavigationCompleted {id} {success}")
+        }
+        BrowserEvent::Suspended { id, suspended } => format!("Suspended {id} {suspended}"),
+        other => format!("{other:?}"),
+    }
 }
 
 fn wait_navigation(
@@ -396,7 +462,15 @@ fn next_event(
         }
         match events.try_recv() {
             Ok(event) => {
-                if let Some(event) = event.into_current() {
+                let description = TRACE
+                    .load(Ordering::Acquire)
+                    .then(|| describe_event(&event));
+                let current = event.into_current();
+                if let Some(description) = description {
+                    let state = if current.is_some() { "event" } else { "stale" };
+                    trace(|| format!("{state} {description}"));
+                }
+                if let Some(event) = current {
                     return Ok(event);
                 }
             }
@@ -428,7 +502,7 @@ struct Server {
 }
 
 impl Server {
-    fn start() -> Result<Self, String> {
+    fn start(stall: Option<Duration>) -> Result<Self, String> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|error| io_error("bind synthetic loopback server", error))?;
         let port = listener
@@ -442,7 +516,7 @@ impl Server {
         let observed = stopping.clone();
         let worker = thread::Builder::new()
             .name("atlas-close-loopback".into())
-            .spawn(move || serve(listener, observed))
+            .spawn(move || serve(listener, observed, stall))
             .map_err(|error| io_error("start synthetic loopback server", error))?;
         Ok(Self {
             url: format!("http://127.0.0.1:{port}/close"),
@@ -459,10 +533,19 @@ impl Server {
     }
 }
 
-fn serve(listener: TcpListener, stopping: Arc<AtomicBool>) -> Result<(), String> {
+fn serve(
+    listener: TcpListener,
+    stopping: Arc<AtomicBool>,
+    mut stall: Option<Duration>,
+) -> Result<(), String> {
     while !stopping.load(Ordering::Acquire) {
         match listener.accept() {
-            Ok((stream, _)) => respond(stream)?,
+            Ok((stream, peer)) => {
+                trace(|| format!("server accepted {peer}"));
+                let outcome = respond(stream, &mut stall);
+                trace(|| format!("server finished {peer}: {outcome:?}"));
+                outcome?
+            }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(2))
             }
@@ -472,7 +555,7 @@ fn serve(listener: TcpListener, stopping: Arc<AtomicBool>) -> Result<(), String>
     Ok(())
 }
 
-fn respond(mut stream: TcpStream) -> Result<(), String> {
+fn respond(mut stream: TcpStream, stall: &mut Option<Duration>) -> Result<(), String> {
     configure_stream(&stream)?;
     let mut request = [0u8; 4_096];
     let mut length = 0;
@@ -502,19 +585,46 @@ fn respond(mut stream: TcpStream) -> Result<(), String> {
             Err(error) => return Err(io_error("read synthetic request", error)),
         }
     }
-    let page = popups::response(&request[..length])
+    let suite_page = popups::response(&request[..length])
         .or_else(|| permissions::response(&request[..length]))
         .or_else(|| essentials::response(&request[..length]))
         .or_else(|| security::response(&request[..length]))
-        .or_else(|| suspension::response(&request[..length]))
-        .unwrap_or(PAGE);
+        .or_else(|| suspension::response(&request[..length]));
+    let page = suite_page.unwrap_or(PAGE);
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",
         page.len()
     );
+    // Hold the slow suspension page, and the first close page only when asked to.
+    let held = if suspension::is_slow(&request[..length]) {
+        Some(STALL_PAST_SUSPENSION_GRACE)
+    } else if suite_page.is_none() {
+        stall.take()
+    } else {
+        None
+    };
+    match held {
+        Some(delay) => send_stalled(&mut stream, &response, delay),
+        None => stream
+            .write_all(response.as_bytes())
+            .map_err(|error| io_error("send synthetic response", error)),
+    }
+}
+
+/// Sends the headers and the page's title, then holds the rest so the load stays in flight.
+fn send_stalled(stream: &mut TcpStream, response: &str, delay: Duration) -> Result<(), String> {
+    let split = response
+        .find("<p>")
+        .ok_or("Synthetic close page lost its stall point.")?;
+    let (head, tail) = response.as_bytes().split_at(split);
     stream
-        .write_all(response.as_bytes())
-        .map_err(|error| io_error("send synthetic response", error))
+        .write_all(head)
+        .map_err(|error| io_error("send stalled synthetic head", error))?;
+    trace(|| format!("server holding the close page for {delay:?}"));
+    thread::sleep(delay);
+    stream
+        .write_all(tail)
+        .map_err(|error| io_error("send stalled synthetic tail", error))
 }
 
 fn configure_stream(stream: &TcpStream) -> Result<(), String> {
