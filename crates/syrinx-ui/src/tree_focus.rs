@@ -1,6 +1,10 @@
 //! The sidebar tree's roving focus: one Tab stop, and where each arrow key moves it (DW-61).
 //!
 //! Window-independent so the docked sidebar and the peek popup share one tested rule set.
+//!
+//! Wiring cautions: build the `TreeRow`s in the same loop that draws the rows (`rows()` in
+//! `syrinx-app`'s `ui/sidebar_view.rs` skips a row whose lookup fails), and after every row
+//! change reset the focused id to `tab_stop(...)` (or `focus_after_collapse` for a collapse).
 
 /// What kind of row a tree row is. Only folders react to Left and Right.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +90,24 @@ pub fn tree_key<Id: Copy + Eq>(
         focus: Some(rows[target].id),
         folder,
     }
+}
+
+/// Where focus goes when `folder` collapses while `focused` may lie inside it: the folder
+/// itself when `focused` is in its subtree in the rows before the collapse, as Windows
+/// TreeView does. `None` means focus was elsewhere; the caller then uses `tab_stop`.
+pub fn focus_after_collapse<Id: Copy + Eq>(
+    rows_before: &[TreeRow<Id>],
+    focused: Option<Id>,
+    folder: Id,
+) -> Option<Id> {
+    let focused = focused?;
+    let start = rows_before.iter().position(|row| row.id == folder)?;
+    let depth = rows_before[start].depth;
+    rows_before[start + 1..]
+        .iter()
+        .take_while(|row| row.depth > depth)
+        .any(|row| row.id == focused)
+        .then_some(folder)
 }
 
 /// The index of the Tab stop row, following `tab_stop`'s fallback order.
@@ -356,6 +378,33 @@ mod tests {
             tree_key(&rows, None, Some(10), TreeKey::Left),
             requested(10, FolderRequest::Collapse(10))
         );
+    }
+
+    #[test]
+    fn collapsing_a_folder_brings_focus_from_its_child_or_grandchild_to_it() {
+        let rows = tree();
+        assert_eq!(focus_after_collapse(&rows, Some(2), 10), Some(10));
+        assert_eq!(focus_after_collapse(&rows, Some(3), 10), Some(10));
+        assert_eq!(focus_after_collapse(&rows, Some(30), 10), Some(10));
+        assert_eq!(focus_after_collapse(&rows, Some(3), 20), Some(20));
+    }
+
+    #[test]
+    fn collapsing_a_folder_leaves_focus_outside_it_to_the_tab_stop() {
+        let rows = tree();
+        // A later sibling, an earlier row, the folder itself and an open tab.
+        for focused in [4, 1, 10, 100] {
+            assert_eq!(focus_after_collapse(&rows, Some(focused), 10), None);
+        }
+        // A sibling of the collapsing folder is not inside it.
+        assert_eq!(focus_after_collapse(&rows, Some(2), 20), None);
+        assert_eq!(focus_after_collapse(&rows, None, 10), None);
+    }
+
+    #[test]
+    fn collapsing_an_unknown_folder_changes_nothing() {
+        assert_eq!(focus_after_collapse(&tree(), Some(2), 999), None);
+        assert_eq!(focus_after_collapse(&[], Some(2), 10), None);
     }
 
     #[test]
