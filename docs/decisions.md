@@ -7,6 +7,31 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
+- **Palette ranking is judged from key press to rows on screen (P1-33).**
+  A keystroke's ranked rows must be presented within two display refresh
+  intervals at the 95th percentile (33.3 ms at 60 Hz), with the maximum
+  always reported. D48's 5 ms limit still applies to the search itself and
+  stays with P1-05. Two intervals is the smallest budget that allows for the
+  frame wait: a reply that lands just after a frame must wait for the next.
+  Judging only the search core was rejected because it hides the frame wait
+  and the reply's trip back to the window.
+
+- **"Opens within one frame" is judged at the 95th percentile (P1-33).**
+  The palette's first presented frame must follow Ctrl K within one refresh
+  interval at p95, with every sample and the maximum reported. This follows
+  D48: a single Windows scheduling stall should not decide the verdict, and
+  hiding the slow samples would conceal real responsiveness. Requiring every
+  opening within one frame was rejected for that reason.
+
+- **The palette popup is created once and then shown and hidden (DW-90).**
+  P1-33 measured about half a second from Ctrl K to the palette's first
+  frame. The cause is provisionally attributed to creating a new native
+  window for every opening; the owner's foreground runs will confirm it. The
+  owner approved keeping one owned, non-topmost popup hidden between uses.
+  It is a separate slice after P1-33 merges, rerun through P1-33's harness.
+  Keeping a new window per opening was rejected, because it cannot meet the
+  one-frame target.
+
 - **A background tab finishes loading before it is put to sleep (P1-15).**
   The five-second countdown before a hidden page is suspended now starts
   when its navigation completes, not when it starts, so a slow page opened in
