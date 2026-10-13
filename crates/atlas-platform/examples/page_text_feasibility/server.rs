@@ -215,7 +215,7 @@ fn respond(
     hits: &Mutex<HashMap<String, u32>>,
 ) -> Result<(), String> {
     configure_stream(&stream)?;
-    let Some(path) = read_request_path(&mut stream)? else {
+    let Some(path) = read_request(&mut stream)? else {
         return Ok(());
     };
     *hits
@@ -227,8 +227,9 @@ fn respond(
     write_reply(&mut stream, reply)
 }
 
-/// Reads one request's headers and returns its path, or `None` for an idle connection.
-fn read_request_path(stream: &mut TcpStream) -> Result<Option<String>, String> {
+/// Reads one request, including any form body, and returns its path, or `None` for an idle
+/// connection.
+fn read_request(stream: &mut TcpStream) -> Result<Option<String>, String> {
     let mut request = [0u8; 8_192];
     let mut length = 0;
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -254,13 +255,45 @@ fn read_request_path(stream: &mut TcpStream) -> Result<Option<String>, String> {
             Err(error) => return Err(io_error("read synthetic request", error)),
         }
     }
-    let line = String::from_utf8_lossy(&request[..length]);
-    let path = line
+    let head = String::from_utf8_lossy(&request[..length]).into_owned();
+    let path = head
         .lines()
         .next()
         .and_then(|first| first.split(' ').nth(1))
         .ok_or("Synthetic request line is malformed.")?;
+    drain_body(stream, &head)?;
     Ok(Some(path.to_owned()))
+}
+
+/// Reads and discards a POST body, so closing the connection does not reset it before the
+/// browser reads the reply.
+fn drain_body(stream: &mut TcpStream, head: &str) -> Result<(), String> {
+    let Some((headers, received)) = head.split_once("\r\n\r\n") else {
+        return Ok(());
+    };
+    let declared = headers
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .map(|(_, value)| value.trim().parse::<usize>())
+        .transpose()
+        .map_err(|_| "Synthetic request body length is malformed.".to_owned())?
+        .unwrap_or(0);
+    if declared > 65_536 {
+        return Err("Synthetic request body exceeded its bound.".into());
+    }
+    let mut remaining = declared.saturating_sub(received.len());
+    let mut buffer = [0u8; 4_096];
+    while remaining > 0 {
+        let read = stream
+            .read(&mut buffer[..remaining.min(4_096)])
+            .map_err(|error| io_error("read synthetic request body", error))?;
+        if read == 0 {
+            return Err("Synthetic request body ended early.".into());
+        }
+        remaining -= read;
+    }
+    Ok(())
 }
 
 fn write_reply(stream: &mut TcpStream, reply: Reply) -> Result<(), String> {

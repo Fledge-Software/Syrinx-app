@@ -1,9 +1,16 @@
 //! The built-in site lists whose pages Atlas never reads (D35, P1-25 steps 3 and 4).
 
-/// Google-owned domains, each with all of its subdomains. The owner cannot remove these.
+/// Google-owned domains, each with all of its subdomains. The owner cannot remove these, but
+/// reviews the list before P1-26 (proposal question 4).
 /// Google's country domains (`google.de`, `google.co.uk`) are matched by `is_google_country`.
 const GOOGLE_DOMAINS: &[&str] = &[
     "google",
+    "goog",
+    "android.com",
+    "chrome.com",
+    "gvt1.com",
+    "gvt2.com",
+    "googleblog.com",
     "youtube.com",
     "youtu.be",
     "youtube-nocookie.com",

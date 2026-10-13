@@ -48,6 +48,10 @@ impl HiddenTimer {
         self.due
     }
 
+    pub(super) fn suspending(&self) -> bool {
+        self.suspending
+    }
+
     /// The page was shown or hidden.
     pub(super) fn shown(&mut self, visible: bool, now: Instant) {
         self.visible = visible;

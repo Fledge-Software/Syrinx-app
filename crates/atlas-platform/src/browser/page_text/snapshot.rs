@@ -6,8 +6,9 @@ use serde_json::{Map, Value};
 
 use super::super::DiscardReason;
 
-/// The largest snapshot response parsed at all; larger pages are skipped (F16).
-pub(super) const RESPONSE_LIMIT_BYTES: usize = 32 * 1024 * 1024;
+/// The largest snapshot response parsed; larger pages are skipped. F16's 100,000-node page
+/// returned 8.1 MB (7.7 MiB), so this keeps it while bounding the parsed tree's memory.
+pub(super) const RESPONSE_LIMIT_BYTES: usize = 8 * 1024 * 1024;
 
 /// Parameters for the one approved call: only the `visibility` style (F1 found hidden text
 /// otherwise kept), no DOM rectangles, no paint order, no colours.

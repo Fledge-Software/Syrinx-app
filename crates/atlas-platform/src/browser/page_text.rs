@@ -1,168 +1,51 @@
 //! Reads an eligible page's rendered text with one DevTools snapshot, never a script (P1-25);
 //! the facts eligibility needs are observed from navigation and response events only.
 
+mod headers;
+mod reader;
 mod snapshot;
+mod state;
 
 use std::{cell::RefCell, rc::Rc, time::Instant};
 
-use atlas_core::{
-    DocumentFacts, EligibleDocument, Ineligible, ObservedResponse, PageTextPolicy, judge,
-    same_document_due,
-};
+use atlas_core::{EligibleDocument, Ineligible, PageTextPolicy};
 use webview2_com::{
-    CallDevToolsProtocolMethodCompletedHandler,
-    Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2, ICoreWebView2_2, ICoreWebView2_3,
-        ICoreWebView2CallDevToolsProtocolMethodCompletedHandler, ICoreWebView2HttpRequestHeaders,
-        ICoreWebView2HttpResponseHeaders, ICoreWebView2WebResourceResponseReceivedEventArgs,
-    },
+    Microsoft::Web::WebView2::Win32::{ICoreWebView2, ICoreWebView2_2, ICoreWebView2_3},
     NavigationCompletedEventHandler, NavigationStartingEventHandler, ProcessFailedEventHandler,
     SourceChangedEventHandler, WebResourceResponseReceivedEventHandler, take_pwstr,
 };
 use windows::{
-    Win32::Foundation::{E_POINTER, E_UNEXPECTED},
+    Win32::Foundation::E_POINTER,
     core::{BOOL, HSTRING, Interface, PWSTR, w},
 };
 use wry::{WebView, WebViewExtWindows};
 
-use super::{BrowserError, BrowserEvent, CapturedText, EventSink, NativeSink, PageTextOutcome};
+use super::{BrowserError, BrowserEvent, DiscardReason, EventSink, NativeSink, PageTextOutcome};
+use reader::{Arrival, Job, Reader};
+use state::{Start, TextState, without_fragment};
 
-/// The capture policy every page on the worker reads; `None` means capture is off.
-pub(super) type SharedPolicy = Rc<RefCell<Option<Rc<PageTextPolicy>>>>;
-
-/// The most top-level responses remembered for one navigation.
-const RESPONSE_RECORDS: usize = 32;
-/// The most values read for one header; more makes the response unreadable (fails closed).
-const HEADER_VALUES: usize = 64;
-
-/// What one tab has observed about its current document, all on the page thread.
-#[derive(Default)]
-struct TextState {
-    /// Rises on every navigation start, address change and process failure (step 8).
-    generation: u64,
-    navigation: Option<u64>,
-    /// The address the navigation requested most recently.
-    requested: Option<String>,
-    /// Addresses requested before `requested` in this navigation.
-    redirects: Vec<String>,
-    responses: Vec<ObservedResponse>,
-    /// The address whose response produced the document.
-    document: Option<String>,
-    /// The address shown now; differs from `document` after a History API change.
-    address: Option<String>,
-    loaded: bool,
-    due: Option<Instant>,
-    /// A capture that fell due while the page was suspended waits for it to resume.
-    deferred: bool,
-    last_capture: Option<Instant>,
-    in_flight: bool,
+/// What every page on the worker shares: the capture policy (`None` means off) and the one
+/// parse worker.
+#[derive(Clone, Default)]
+pub(super) struct TextContext {
+    policy: Rc<RefCell<Option<Rc<PageTextPolicy>>>>,
+    reader: Reader,
 }
 
-impl TextState {
-    /// Invalidates anything judged so far; reports whether a scheduled capture was cancelled.
-    fn advance(&mut self) -> bool {
-        self.generation += 1;
-        self.deferred = false;
-        self.due.take().is_some()
+impl TextContext {
+    pub(super) fn set_policy(&self, policy: Option<PageTextPolicy>) {
+        *self.policy.borrow_mut() = policy.map(Rc::new);
     }
 
-    fn navigation_started(&mut self, address: String, redirected: bool, navigation: u64) -> bool {
-        let cancelled = self.advance();
-        if redirected && self.navigation == Some(navigation) {
-            self.redirects.extend(self.requested.take());
-        } else {
-            self.navigation = Some(navigation);
-            self.redirects.clear();
-            self.responses.clear();
-        }
-        self.requested = Some(address);
-        self.document = None;
-        self.address = None;
-        self.loaded = false;
-        cancelled
-    }
-
-    /// Whether a response is the one the current navigation is waiting for.
-    fn wants_response(&self, address: &str) -> bool {
-        self.responses.len() < RESPONSE_RECORDS
-            && self
-                .requested
-                .as_deref()
-                .is_some_and(|requested| without_fragment(requested) == without_fragment(address))
-    }
-
-    fn source_changed(
-        &mut self,
-        source: String,
-        new_document: bool,
-        policy: &PageTextPolicy,
-    ) -> bool {
-        let cancelled = self.advance();
-        if new_document {
-            self.document = Some(source.clone());
-            self.address = Some(source);
-            self.loaded = false;
-            return cancelled;
-        }
-        self.address = Some(source);
-        if self.loaded && self.document.is_some() {
-            let due = same_document_due(self.last_capture, Instant::now(), policy.settle_delay());
-            self.due = Some(due);
-        }
-        cancelled
-    }
-
-    fn navigation_completed(&mut self, navigation: u64, success: bool, policy: &PageTextPolicy) {
-        if self.navigation != Some(navigation) {
-            return;
-        }
-        // A reload or a visit to the same address raises no SourceChanged (F14 found this);
-        // the document is then the last requested address, still judged against its response.
-        if success && self.document.is_none() {
-            self.document = self.requested.clone();
-            self.address = self.requested.clone();
-        }
-        self.loaded = success && self.document.is_some();
-        if self.loaded {
-            self.due = Some(Instant::now() + policy.settle_delay());
-        }
-    }
-
-    fn take_due(&mut self, now: Instant) -> bool {
-        if self.in_flight || !self.due.is_some_and(|due| due <= now) {
-            return false;
-        }
-        self.due = None;
-        true
-    }
-
-    /// Steps 1 to 8, from what this tab observed.
-    fn judge(&self, policy: Option<&PageTextPolicy>) -> Result<EligibleDocument, Ineligible> {
-        let (Some(address), Some(document)) = (&self.address, &self.document) else {
-            return Err(Ineligible::NoResponse);
-        };
-        // The final requested hop is checked with the earlier ones.
-        let redirects: Vec<String> = self
-            .redirects
-            .iter()
-            .chain(self.requested.as_ref())
-            .cloned()
-            .collect();
-        let facts = DocumentFacts {
-            address,
-            document_address: document,
-            redirects: &redirects,
-            responses: &self.responses,
-            generation: self.generation,
-        };
-        judge(policy, facts, self.generation)
+    fn policy(&self) -> Option<Rc<PageTextPolicy>> {
+        self.policy.borrow().clone()
     }
 }
 
 /// One page's capture: its observed state and the channels its results leave by.
 pub(super) struct PageText {
     id: u64,
-    policy: SharedPolicy,
+    context: TextContext,
     state: Rc<RefCell<TextState>>,
     events: EventSink,
     native: NativeSink,
@@ -174,16 +57,16 @@ impl PageText {
     pub(super) fn register(
         view: &WebView,
         id: u64,
-        policy: SharedPolicy,
+        context: TextContext,
         events: EventSink,
         native: NativeSink,
     ) -> Result<Option<Self>, BrowserError> {
-        if policy.borrow().is_none() {
+        if context.policy().is_none() {
             return Ok(None);
         }
         let text = Self {
             id,
-            policy,
+            context,
             state: Rc::new(RefCell::new(TextState::default())),
             events,
             native,
@@ -198,34 +81,33 @@ impl PageText {
     }
 
     pub(super) fn due(&self) -> Option<Instant> {
-        self.state.borrow().due
+        self.state.borrow().due()
     }
 
-    /// A capture deferred while suspended runs once the page is shown again.
+    /// A capture deferred while suspending runs once the page is shown again.
     pub(super) fn resumed(&self) {
-        let mut state = self.state.borrow_mut();
-        if std::mem::take(&mut state.deferred) {
-            state.due = Some(Instant::now());
-        }
+        self.state.borrow_mut().resumed(Instant::now());
     }
 
-    /// Judges and captures a document whose settle delay has passed.
-    pub(super) fn tick(&self, view: &WebView) -> Result<(), BrowserError> {
-        if !self.state.borrow_mut().take_due(Instant::now()) {
+    /// Judges and captures a document whose settle delay has passed. `suspending` is true
+    /// while a `TrySuspend` is requested, when `IsSuspended` still reads false.
+    pub(super) fn tick(&self, view: &WebView, suspending: bool) -> Result<(), BrowserError> {
+        let Some(scheduled) = self.state.borrow_mut().take_due(Instant::now()) else {
+            return Ok(());
+        };
+        let core = view.webview();
+        if suspending || is_suspended(&core)? {
+            self.state.borrow_mut().defer();
             return Ok(());
         }
-        if is_suspended(&view.webview())? {
-            self.state.borrow_mut().deferred = true;
-            return Ok(());
-        }
-        let policy = self.policy.borrow().clone();
-        let verdict = self.state.borrow().judge(policy.as_deref());
+        let policy = self.context.policy();
+        let verdict = self.state.borrow().judge(policy.as_deref(), scheduled);
         match verdict {
             Err(reason) => {
                 self.emit(PageTextOutcome::Ineligible(reason));
                 Ok(())
             }
-            Ok(document) => self.capture(&view.webview(), document),
+            Ok(document) => self.capture(&core, document),
         }
     }
 
@@ -236,11 +118,22 @@ impl PageText {
         core: &ICoreWebView2,
         document: EligibleDocument,
     ) -> Result<(), BrowserError> {
+        // Step 8 again, at the moment of the call.
+        if !document.is_current(self.state.borrow().generation()) {
+            self.emit(PageTextOutcome::Ineligible(Ineligible::Stale));
+            return Ok(());
+        }
+        // A navigation that never committed (a 204, a download) leaves the previous,
+        // possibly excluded, document on screen; only the judged one may be read.
+        if !shows(core, document.address())? {
+            self.emit(PageTextOutcome::NotCommitted);
+            return Ok(());
+        }
         self.emit(PageTextOutcome::Requested {
             address: document.address().to_owned(),
         });
-        self.state.borrow_mut().in_flight = true;
-        let handler = self.completion(document);
+        self.state.borrow_mut().call_started();
+        let handler = reader::handler(self.arrival(document));
         let parameters = HSTRING::from(snapshot::CAPTURE_PARAMETERS);
         let call = unsafe {
             core.CallDevToolsProtocolMethod(
@@ -250,40 +143,42 @@ impl PageText {
             )
         };
         if call.is_err() {
-            self.state.borrow_mut().in_flight = false;
+            self.state.borrow_mut().call_finished(Instant::now());
             return Err(BrowserError::PageText);
         }
         Ok(())
     }
 
-    /// Drops the response unread if the tab changed, otherwise parses it off this thread.
-    fn completion(
-        &self,
-        document: EligibleDocument,
-    ) -> ICoreWebView2CallDevToolsProtocolMethodCompletedHandler {
+    /// Drops the response unread if the tab changed or capture was switched off; otherwise
+    /// queues it for the parse worker.
+    fn arrival(&self, document: EligibleDocument) -> impl FnOnce(Arrival) + 'static {
         let (id, state, events, native) = self.channels();
+        let context = self.context.clone();
         let started = Instant::now();
-        CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
-            let generation = {
-                let mut state = state.borrow_mut();
-                state.in_flight = false;
-                state.last_capture = Some(Instant::now());
-                state.generation
+        move |arrival| {
+            let generation = state.borrow_mut().call_finished(Instant::now());
+            let current = context.policy().is_some() && document.is_current(generation);
+            let outcome = match arrival {
+                Arrival::Failed => PageTextOutcome::Failed,
+                _ if !current => PageTextOutcome::Superseded,
+                Arrival::TooLarge => PageTextOutcome::Discarded(DiscardReason::TooLarge),
+                Arrival::Json(json) => {
+                    let job = Job {
+                        id,
+                        json,
+                        document,
+                        call_time: started.elapsed(),
+                        events: events.clone(),
+                        native,
+                    };
+                    match context.reader.read(job) {
+                        Ok(()) => return,
+                        Err(refused) => reader::refused_outcome(refused),
+                    }
+                }
             };
-            let call_time = started.elapsed();
-            let outcome = if result.is_err() {
-                Some(PageTextOutcome::Failed)
-            } else if !document.is_current(generation) {
-                Some(PageTextOutcome::Superseded)
-            } else {
-                None
-            };
-            match outcome {
-                Some(outcome) => events.emit(BrowserEvent::PageText { id, outcome }),
-                None => read_off_thread(id, json, document, call_time, events, native),
-            }
-            Ok(())
-        }))
+            events.emit(BrowserEvent::PageText { id, outcome });
+        }
     }
 
     fn channels(&self) -> (u64, Rc<RefCell<TextState>>, EventSink, NativeSink) {
@@ -302,32 +197,35 @@ impl PageText {
         });
     }
 
-    /// Records each requested address, including every redirect hop (step 6).
+    /// Records each requested address, including every redirect hop, and whether the owner
+    /// started the navigation (step 6).
     fn register_navigation_starting(&self, core: &ICoreWebView2) -> Result<(), BrowserError> {
         let (id, state, events, _) = self.channels();
         let handler = NavigationStartingEventHandler::create(Box::new(move |_core, args| {
             let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
             let mut raw = PWSTR::null();
             let mut redirected = BOOL::default();
+            let mut user_initiated = BOOL::default();
             let mut navigation = 0;
             let read = unsafe {
                 args.Uri(&mut raw)
                     .and_then(|()| args.IsRedirected(&mut redirected))
+                    .and_then(|()| args.IsUserInitiated(&mut user_initiated))
                     .and_then(|()| args.NavigationId(&mut navigation))
             };
             let address = take_pwstr(raw);
             if let Err(error) = read {
                 // Without the hop, the chain is unknown: forget the document so it fails closed.
-                state
-                    .borrow_mut()
-                    .navigation_started(String::new(), false, u64::MAX);
+                state.borrow_mut().forget_navigation();
                 report(&events, id);
                 return Err(error);
             }
-            let cancelled =
-                state
-                    .borrow_mut()
-                    .navigation_started(address, redirected.as_bool(), navigation);
+            let cancelled = state.borrow_mut().navigation_started(Start {
+                address,
+                redirected: redirected.as_bool(),
+                user_initiated: user_initiated.as_bool(),
+                navigation,
+            });
             cancelled_notice(&events, id, cancelled);
             Ok(())
         }));
@@ -336,15 +234,15 @@ impl PageText {
             .map_err(|_| BrowserError::EventRegistration)
     }
 
-    /// Reads status and three named headers of the current navigation's responses; no
-    /// request filter, no body, and no other header is read.
+    /// Reads status and three named headers of the current navigation's responses.
     fn register_responses(&self, core: &ICoreWebView2) -> Result<(), BrowserError> {
         let (id, state, events, _) = self.channels();
         let handler =
             WebResourceResponseReceivedEventHandler::create(Box::new(move |_core, args| {
                 let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
-                match observed_response(&args, |address| state.borrow().wants_response(address)) {
-                    Ok(Some(response)) => state.borrow_mut().responses.push(response),
+                let wanted = |address: &str| state.borrow().wants_response(address);
+                match headers::observed_response(&args, wanted) {
+                    Ok(Some(response)) => state.borrow_mut().record_response(response),
                     Ok(None) => {}
                     Err(error) => {
                         report(&events, id);
@@ -362,7 +260,7 @@ impl PageText {
     /// A new document or a History API change; the latter may schedule a rate-limited capture.
     fn register_source(&self, core: &ICoreWebView2) -> Result<(), BrowserError> {
         let (id, state, events, _) = self.channels();
-        let policy = self.policy.clone();
+        let context = self.context.clone();
         let handler = SourceChangedEventHandler::create(Box::new(move |core, args| {
             let core = core.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
             let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
@@ -373,21 +271,21 @@ impl PageText {
                     .and_then(|()| args.IsNewDocument(&mut new_document))
             };
             let source = take_pwstr(raw);
-            let Some(policy) = policy.borrow().clone() else {
+            let Some(policy) = context.policy() else {
                 state.borrow_mut().advance();
                 return read;
             };
             if let Err(error) = read {
-                state
-                    .borrow_mut()
-                    .navigation_started(String::new(), false, u64::MAX);
+                state.borrow_mut().forget_navigation();
                 report(&events, id);
                 return Err(error);
             }
-            let cancelled =
-                state
-                    .borrow_mut()
-                    .source_changed(source, new_document.as_bool(), &policy);
+            let cancelled = state.borrow_mut().source_changed(
+                source,
+                new_document.as_bool(),
+                &policy,
+                Instant::now(),
+            );
             cancelled_notice(&events, id, cancelled);
             Ok(())
         }));
@@ -399,7 +297,7 @@ impl PageText {
     /// Schedules the capture a settle delay after the document finishes loading.
     fn register_completion(&self, core: &ICoreWebView2) -> Result<(), BrowserError> {
         let (id, state, events, _) = self.channels();
-        let policy = self.policy.clone();
+        let context = self.context.clone();
         let handler = NavigationCompletedEventHandler::create(Box::new(move |_core, args| {
             let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
             let mut success = BOOL::default();
@@ -412,12 +310,15 @@ impl PageText {
                 report(&events, id);
                 return Err(error);
             }
-            let Some(policy) = policy.borrow().clone() else {
+            let Some(policy) = context.policy() else {
                 return Ok(());
             };
-            state
-                .borrow_mut()
-                .navigation_completed(navigation, success.as_bool(), &policy);
+            state.borrow_mut().navigation_completed(
+                navigation,
+                success.as_bool(),
+                &policy,
+                Instant::now(),
+            );
             Ok(())
         }));
         let mut token = 0;
@@ -428,9 +329,7 @@ impl PageText {
     fn register_process_failure(&self, core: &ICoreWebView2) -> Result<(), BrowserError> {
         let state = self.state.clone();
         let handler = ProcessFailedEventHandler::create(Box::new(move |_core, _args| {
-            let mut state = state.borrow_mut();
-            state.advance();
-            state.loaded = false;
+            state.borrow_mut().process_failed();
             Ok(())
         }));
         let mut token = 0;
@@ -439,133 +338,13 @@ impl PageText {
     }
 }
 
-/// Parses on a short-lived thread and posts the outcome back to the page thread.
-fn read_off_thread(
-    id: u64,
-    json: String,
-    document: EligibleDocument,
-    call_time: std::time::Duration,
-    events: EventSink,
-    native: NativeSink,
-) {
-    let response_bytes = json.len();
-    let reader_events = events.clone();
-    let spawned = std::thread::Builder::new()
-        .name("atlas-page-text".into())
-        .spawn(move || {
-            let started = Instant::now();
-            let outcome = match snapshot::read(&json, &document) {
-                Ok(read) => PageTextOutcome::Captured(CapturedText {
-                    address: document.address().to_owned(),
-                    text: read.text,
-                    documents: read.documents,
-                    truncated: read.truncated,
-                    response_bytes,
-                    call_time,
-                    parse_time: started.elapsed(),
-                }),
-                Err(reason) => PageTextOutcome::Discarded(reason),
-            };
-            drop(json);
-            if let Err(error) = native.post(BrowserEvent::PageText { id, outcome }, &reader_events)
-            {
-                // The page thread has stopped, so nothing remains to receive this result.
-                eprintln!("{error}");
-            }
-        });
-    if spawned.is_err() {
-        events.emit(BrowserEvent::PageText {
-            id,
-            outcome: PageTextOutcome::Failed,
-        });
-    }
-}
-
-/// Reads one response if `wanted` accepts its address; otherwise reads nothing more.
-fn observed_response(
-    args: &ICoreWebView2WebResourceResponseReceivedEventArgs,
-    wanted: impl Fn(&str) -> bool,
-) -> windows::core::Result<Option<ObservedResponse>> {
-    let request = unsafe { args.Request() }?;
+/// Whether the web view shows `address` now, ignoring any fragment.
+fn shows(core: &ICoreWebView2, address: &str) -> Result<bool, BrowserError> {
     let mut raw = PWSTR::null();
-    let read = unsafe { request.Uri(&mut raw) };
-    let address = take_pwstr(raw);
-    read?;
-    if !wanted(&address) {
-        return Ok(None);
-    }
-    let destination = request_header(&unsafe { request.Headers() }?, w!("Sec-Fetch-Dest"))?;
-    let response = unsafe { args.Response() }?;
-    let mut status = 0;
-    unsafe { response.StatusCode(&mut status) }?;
-    let headers = unsafe { response.Headers() }?;
-    let status = u16::try_from(status).map_err(|_| windows::core::Error::from(E_UNEXPECTED))?;
-    Ok(Some(ObservedResponse {
-        address,
-        status,
-        content_type: response_header(&headers, w!("Content-Type"))?,
-        // WebView2 splits one line's directives but drops a repeated header's later lines
-        // (F2); see `docs/p1-25-page-text.md`.
-        cache_control: response_headers(&headers, w!("Cache-Control"))?,
-        destination,
-    }))
-}
-
-fn request_header(
-    headers: &ICoreWebView2HttpRequestHeaders,
-    name: windows::core::PCWSTR,
-) -> windows::core::Result<Option<String>> {
-    let mut present = BOOL::default();
-    unsafe { headers.Contains(name, &mut present) }?;
-    if !present.as_bool() {
-        return Ok(None);
-    }
-    let mut raw = PWSTR::null();
-    let read = unsafe { headers.GetHeader(name, &mut raw) };
-    let value = take_pwstr(raw);
-    read.map(|()| Some(value))
-}
-
-fn response_header(
-    headers: &ICoreWebView2HttpResponseHeaders,
-    name: windows::core::PCWSTR,
-) -> windows::core::Result<Option<String>> {
-    let mut present = BOOL::default();
-    unsafe { headers.Contains(name, &mut present) }?;
-    if !present.as_bool() {
-        return Ok(None);
-    }
-    let mut raw = PWSTR::null();
-    let read = unsafe { headers.GetHeader(name, &mut raw) };
-    let value = take_pwstr(raw);
-    read.map(|()| Some(value))
-}
-
-/// Every value WebView2 reports for a response header, in order.
-fn response_headers(
-    headers: &ICoreWebView2HttpResponseHeaders,
-    name: windows::core::PCWSTR,
-) -> windows::core::Result<Vec<String>> {
-    let iterator = unsafe { headers.GetHeaders(name) }?;
-    let mut values = Vec::new();
-    loop {
-        let mut current = BOOL::default();
-        unsafe { iterator.HasCurrentHeader(&mut current) }?;
-        if !current.as_bool() {
-            return Ok(values);
-        }
-        let (mut raw_name, mut raw_value) = (PWSTR::null(), PWSTR::null());
-        let read = unsafe { iterator.GetCurrentHeader(&mut raw_name, &mut raw_value) };
-        let (_name, value) = (take_pwstr(raw_name), take_pwstr(raw_value));
-        read?;
-        values.push(value);
-        if values.len() > HEADER_VALUES {
-            return Err(windows::core::Error::from(E_UNEXPECTED));
-        }
-        // As in Microsoft's sample, HasCurrentHeader alone decides when the values end.
-        let mut _has_next = BOOL::default();
-        unsafe { iterator.MoveNext(&mut _has_next) }?;
-    }
+    let read = unsafe { core.Source(&mut raw) };
+    let source = take_pwstr(raw);
+    read.map_err(|_| BrowserError::PageText)?;
+    Ok(without_fragment(&source) == without_fragment(address))
 }
 
 fn is_suspended(core: &ICoreWebView2) -> Result<bool, BrowserError> {
@@ -589,8 +368,4 @@ fn report(events: &EventSink, id: u64) {
         tab: Some(id),
         error: BrowserError::PageText,
     });
-}
-
-fn without_fragment(address: &str) -> &str {
-    address.split('#').next().unwrap_or(address)
 }

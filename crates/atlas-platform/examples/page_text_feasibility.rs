@@ -77,6 +77,7 @@ pub enum Seen {
     Cancelled,
     Requested(String),
     Superseded,
+    NotCommitted,
     Discarded(DiscardReason),
     Captured(Capture),
     Failed,
@@ -99,6 +100,7 @@ impl Seen {
             PageTextOutcome::Cancelled => Self::Cancelled,
             PageTextOutcome::Requested { address } => Self::Requested(address),
             PageTextOutcome::Superseded => Self::Superseded,
+            PageTextOutcome::NotCommitted => Self::NotCommitted,
             PageTextOutcome::Discarded(reason) => Self::Discarded(reason),
             PageTextOutcome::Captured(captured) => Self::Captured(Capture {
                 address: captured.address,
