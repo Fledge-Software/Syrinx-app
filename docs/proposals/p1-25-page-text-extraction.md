@@ -5,7 +5,7 @@ decisions: D18, D35, D40; D39 is not involved
 date: 2026-10-12
 ---
 
-# P1-25: how Atlas reads page text
+# P1-25: how Syrinx reads page text
 
 ## Why this proposal exists
 
@@ -16,10 +16,10 @@ never taken from Google's sites, banking and payment sites, pages sent with
 reads the text "must inject nothing on excluded sites". D40 adds that the
 text lives in an expiring cache outside the daily backups.
 
-Plan 1's P1-25 row says the concrete way Atlas reaches into a page must be
+Plan 1's P1-25 row says the concrete way Syrinx reaches into a page must be
 approved by the owner **before** any guarded page API is used, even in a
 prototype. This document is that request. It compares five methods, sets
-out the order in which Atlas decides whether it may look at a page at all,
+out the order in which Syrinx decides whether it may look at a page at all,
 recommends one method and writes down the synthetic test P1-25 would run
 once approved. It changes no code and no decision.
 
@@ -31,21 +31,21 @@ that Google's sign-in rules and this repository's own rules forbid (see
 ## Terms used here
 
 - **Page web view**: a WebView2 control showing an ordinary website in a
-  tab, as opposed to Atlas's own local web views (the future editors).
-- **Injection**: anything that places Atlas-authored code or objects inside
+  tab, as opposed to Syrinx's own local web views (the future editors).
+- **Injection**: anything that places Syrinx-authored code or objects inside
   the page's own JavaScript world, where the page's scripts can see it or
   run into it. Examples: `ExecuteScript`, `AddScriptToExecuteOnDocumentCreated`,
   wry's `with_initialization_script`, and the `window.ipc` global that wry
   adds with an IPC handler. A request filter or header rewrite is not
   injection, but `AGENTS.md` forbids it on Google's sites for the same
-  reason: it makes Atlas a middleman.
+  reason: it makes Syrinx a middleman.
 - **DevTools protocol (CDP)**: Chromium's internal inspection protocol. WebView2
   lets the host application call it directly with `CallDevToolsProtocolMethod`
   over an in-process channel. This is **not** a remote debugging port: no TCP
   socket is opened and no `--remote-debugging-port` argument is passed. The
   remote port is the documented sign-in tripwire (note 07, section 1.5); the
   in-process call is a different mechanism.
-- **Eligibility**: Atlas's decision, made from facts it already observes
+- **Eligibility**: Syrinx's decision, made from facts it already observes
   (address, redirect chain, response headers, settings), that a document may
   be read. Access happens only after a document is eligible.
 
@@ -58,26 +58,26 @@ feasibility test below must establish it before anything is built on it.
 
 | Requirement | Source | What it means in practice |
 |---|---|---|
-| Inject nothing on excluded sites | D35 | No Atlas code in the page's JavaScript world on an excluded document, including by a race where the page navigated after Atlas decided. |
+| Inject nothing on excluded sites | D35 | No Syrinx code in the page's JavaScript world on an excluded document, including by a race where the page navigated after Syrinx decided. |
 | No script injection on any page web view | `CLAUDE.md`, "Hands off Google's pages"; `AGENTS.md` | The standing rule is wider than D35: never inject scripts on a page web view at all. |
 | No request filters, header rewrites or remote debugging port on Google | `AGENTS.md`; note 07, 1.9 and "What this means", item 3 | Observing a response header is allowed; installing `AddWebResourceRequestedFilter` is not. |
-| Decide before access | Plan 1, Search, tier 2 ⚠️ | Eligibility, including redirects and frame boundaries, is settled before Atlas reads anything. |
+| Decide before access | Plan 1, Search, tier 2 ⚠️ | Eligibility, including redirects and frame boundaries, is settled before Syrinx reads anything. |
 | Detect `no-store` | D35 | From the headers of the response that produced the document. |
 | No form contents | D42; D35's spirit | Text the owner typed into inputs, text areas or editable regions is never stored. |
-| Cheap enough | S6 (performance is the deciding goal), D37's idle bar | No measurable idle cost; capture must not freeze the page or Atlas's interface. |
+| Cheap enough | S6 (performance is the deciding goal), D37's idle bar | No measurable idle cost; capture must not freeze the page or Syrinx's interface. |
 
 ## The five candidates
 
 ### Candidate 1: DevTools protocol through `CallDevToolsProtocolMethod`
 
-**How it works.** Atlas calls `ICoreWebView2::CallDevToolsProtocolMethod`
+**How it works.** Syrinx calls `ICoreWebView2::CallDevToolsProtocolMethod`
 with one method name and JSON parameters and receives JSON back
 asynchronously (high). Two methods are relevant:
 
 - `DOMSnapshot.captureSnapshot` returns the document tree with its layout
   tree in one flattened response. The layout part lists, for every rendered
   text node, the text as laid out, so text hidden with `display: none` or
-  never laid out is absent. Parameters let Atlas ask for no computed styles,
+  never laid out is absent. Parameters let Syrinx ask for no computed styles,
   no rectangles and no paint order, which keeps the response smaller (high
   for the protocol's shape; response size on real pages unverified).
 - `Accessibility.getFullAXTree` returns the accessibility tree: roles and
@@ -111,13 +111,13 @@ candidate falls back to candidate 4's body reading (see "Fallback").
 
 **Frames and redirects.** The call is addressed to the web view's top-level
 page target. Same-process child frames are serialised into the same response
-as separate documents; Atlas keeps only the root document and discards the
-rest before anything leaves `atlas-platform`. Cross-origin frames run in
+as separate documents; Syrinx keeps only the root document and discards the
+rest before anything leaves `syrinx-platform`. Cross-origin frames run in
 other processes under site isolation and, as far as the documentation shows,
 are not reached by the top-level call at all (medium; test F9). Redirects do
 not affect the call itself, because it only runs after the final document
 is committed and judged eligible. The response names the root document's
-address, so Atlas can check that it is still the document it judged.
+address, so Syrinx can check that it is still the document it judged.
 
 **`no-store`.** The snapshot does not carry response headers, so this method
 cannot detect `no-store` by itself. It must be paired with candidate 4's
@@ -129,7 +129,7 @@ megabytes and must be parsed off the interface thread. The text is what the
 page actually rendered, after its scripts ran, which matters for the many
 sites that build their content in the browser. Shadow DOM text is included
 (medium). Two catches: the snapshot also carries input values
-(`inputValue`, `textValue`), which Atlas must never read; and the rendered
+(`inputValue`, `textValue`), which Syrinx must never read; and the rendered
 text of an editable region is the owner's own typing, so editable subtrees
 are dropped (test F10).
 
@@ -144,7 +144,7 @@ excellent text.
 
 **Does it inject?** Yes, unambiguously. The script runs in the page's own
 JavaScript world. The page can see it, intercept it (a page may redefine the
-`innerText` getter) and break it, and Atlas's result can be poisoned.
+`innerText` getter) and break it, and Syrinx's result can be poisoned.
 
 **Is it acceptable on non-excluded sites?** D35 alone would allow it there,
 since it only forbids injection on excluded sites. It is still rejected, for
@@ -156,10 +156,10 @@ three reasons:
    proposal recommends against asking for it.
 2. **The race lands the script on the wrong page.** `ExecuteScript` runs on
    whatever document is current when it arrives. If the tab navigates after
-   Atlas decides eligibility (a redirect by script, a sign-in button), the
+   Syrinx decides eligibility (a redirect by script, a sign-in button), the
    script runs on the new document, which may be accounts.google.com or a
-   bank. Atlas would learn this only afterwards. With candidate 1 the same
-   race yields a read-only snapshot that Atlas discards unread; with this
+   bank. Syrinx would learn this only afterwards. With candidate 1 the same
+   race yields a read-only snapshot that Syrinx discards unread; with this
    candidate it yields script execution on an excluded site, a D35 violation
    that cannot be undone.
 3. **Forced layout on the page's main thread.** `innerText` forces a style
@@ -176,22 +176,22 @@ otherwise it is exactly the "injecting scripts" behaviour Google blocks for.
 ### Candidate 3: UI Automation from outside the page
 
 **How it works.** Windows UI Automation (UIA) is the accessibility interface
-screen readers use. Atlas would walk the WebView2 control's UIA tree from
+screen readers use. Syrinx would walk the WebView2 control's UIA tree from
 outside, through COM, and collect text (high for the mechanism).
 
 **Does it inject?** No script. But the first UIA client to ask switches on
 Chromium's accessibility mode for the renderer, with the same lasting cost
 as `getFullAXTree`, and possibly for every page in the shared browser
 process (medium; Chromium enables it when an assistive client is detected).
-It would also make Atlas look like a screen reader to every site it reads,
+It would also make Syrinx look like a screen reader to every site it reads,
 which some sites change their behaviour for.
 
 **Google risk.** Low for injection, but the accessibility switch would
 apply to Google tabs sharing the process, which D35's spirit forbids:
-Atlas's capture would change how an excluded page runs.
+Syrinx's capture would change how an excluded page runs.
 
 **Frames and redirects.** The UIA tree mixes frames together with no
-reliable document address per node, so Atlas cannot prove the text came
+reliable document address per node, so Syrinx cannot prove the text came
 from the eligible document. Hidden tabs expose little or nothing.
 
 **`no-store`.** No access to headers.
@@ -212,7 +212,7 @@ observes, it does not intercept (high). Nothing is changed in flight.
 
 **Does it inject?** No. It never touches the renderer.
 
-**Google risk.** Very low. Atlas would receive events for Google's
+**Google risk.** Very low. Syrinx would receive events for Google's
 responses as for any others; the handler ignores them by address before
 reading anything. It is not a request filter and rewrites nothing, so it
 stays inside `AGENTS.md`. Note 07's test used a filter to read headers; this
@@ -221,7 +221,7 @@ runtime (for example, enabling network instrumentation that changes caching)
 is **unverified** (test F14 compares cache behaviour with and without it).
 
 **Frames and redirects.** Each redirect hop and each frame's document
-response arrives as its own event. Atlas has to match the top-level
+response arrives as its own event. Syrinx has to match the top-level
 document's response to the navigation it belongs to, using the request
 address and the navigation's final address; there is no navigation
 identifier on this event (medium). That matching is the riskiest part, and
@@ -233,10 +233,10 @@ response that produced the document. It is the only candidate that sees it.
 **Cost and reliability of the body.** `GetContent` returns the HTML as
 sent, before scripts run. Static pages index well; sites that build their
 content in the browser (most web applications) yield little more than a
-shell. Atlas would also need an HTML parser and boilerplate removal; the
+shell. Syrinx would also need an HTML parser and boilerplate removal; the
 workspace already resolves `html5ever` (through a dependency), but using it
 in a product crate would need its own audit. Bodies cost memory for every
-response unless Atlas only asks for the top-level document's body.
+response unless Syrinx only asks for the top-level document's body.
 
 **Verdict: adopt for header observation only** (the `no-store` check and the
 redirect chain's statuses). Keep body reading as the **fallback extraction
@@ -245,7 +245,7 @@ method** if test F15 shows a CDP session is observable.
 ### Candidate 5: do not extract, index titles and addresses only
 
 **How it works.** Tier 1 search already indexes titles and addresses from
-history (P1-20). Atlas would add nothing.
+history (P1-20). Syrinx would add nothing.
 
 **Does it inject? Google risk?** No, and none.
 
@@ -254,7 +254,7 @@ owner wanting ("Dropping it for v1: the owner wants recall by content").
 Choosing it would reverse that decision, so it is not a choice this
 proposal can make.
 
-**Verdict: the floor.** It is what Atlas does today, and what it keeps doing
+**Verdict: the floor.** It is what Syrinx does today, and what it keeps doing
 for every ineligible page and whenever capture is off. It becomes the whole
 answer only if the owner rejects both candidate 1 and candidate 4's body
 reading.
@@ -272,19 +272,19 @@ reading.
 
 ## The eligibility check, in order
 
-Eligibility is a pure function in `atlas-core`, so it can be tested without a
-window (S3). `atlas-platform` only reports facts to it and receives back an
+Eligibility is a pure function in `syrinx-core`, so it can be tested without a
+window (S3). `syrinx-platform` only reports facts to it and receives back an
 `EligibleDocument` token. The function that performs the CDP call accepts
 only that token, so the type system makes "access without eligibility"
 impossible to write.
 
-For every top-level navigation, Atlas evaluates these steps in order and
+For every top-level navigation, Syrinx evaluates these steps in order and
 stops at the first that fails. A failure means the document is ineligible
 and nothing is read; only its title and address reach tier 1 as today.
 
 1. **Capture is switched on.** The P1-26 setting. Off means no CDP call is
    ever made in that session.
-2. **Scheme is `https` or `http`.** Atlas's own pages, `file:`, `data:`,
+2. **Scheme is `https` or `http`.** Syrinx's own pages, `file:`, `data:`,
    `blob:`, `about:` and error pages are never read.
 3. **Not one of Google's sites.** A fixed, built-in list that the owner cannot
    remove entries from: `google.com` and Google's country domains
@@ -300,7 +300,7 @@ and nothing is read; only its title and address reach tier 1 as today.
 5. **Not on the owner's exclusion list** (settings, D35).
 6. **Every redirect hop passed steps 2 to 5.** WebView2 raises
    `NavigationStarting` for each redirect with `IsRedirected` set and the same
-   navigation identifier (high), so Atlas records the chain as it happens.
+   navigation identifier (high), so Syrinx records the chain as it happens.
    If any hop is excluded, the final document is ineligible, even when the
    final site is ordinary. A sign-in or payment flow that returns to an
    ordinary site often carries account details or tokens in that return
@@ -312,24 +312,24 @@ and nothing is read; only its title and address reach tier 1 as today.
    sign-in flow often leaves the excluded site by its own script, a form or
    a "Continue" link rather than a redirect, and WebView2 reports that as a
    new navigation, not a redirect hop. So a document is also ineligible when
-   (a) Atlas did not start its navigation (the address bar, palette,
+   (a) Syrinx did not start its navigation (the address bar, palette,
    bookmark, saved page, tile or Home) and the document it left was on an
    excluded site or was itself tainted, or (b) any response of its
    navigation was requested with a method other than `GET` (a form `POST`,
    read from the request in `WebResourceResponseReceived`), on any site.
    A document reached under (a), or through an excluded redirect hop, is
-   tainted and passes the taint to every page it leads to until Atlas
+   tainted and passes the taint to every page it leads to until Syrinx
    navigates the tab; a popup opened from an excluded or tainted page starts
    tainted. `IsUserInitiated` is not used: it follows Chromium's short-lived
    user activation, so a click on the bank page counted. Every fact comes
-   from events Atlas already observes; no filter and no injection.
-7. **The final response was observed and allows storing.** Atlas must have
+   from events Syrinx already observes; no filter and no injection.
+7. **The final response was observed and allows storing.** Syrinx must have
    matched a `WebResourceResponseReceived` event to this document's final
    address with a 2xx status, a `text/html` or `application/xhtml+xml` type,
    and no `no-store` directive in any `Cache-Control` header (parsed as
    comma-separated directives, case-insensitively, across repeated headers).
    **If no matching response was observed** (a service-worker response, the
-   back/forward cache, a missed event), the document is ineligible: Atlas
+   back/forward cache, a missed event), the document is ineligible: Syrinx
    fails closed rather than assuming the header was absent. Only the final
    document's headers count; a `no-store` on an intermediate redirect hop
    does not make the final page ineligible, and a final `no-store` page is
@@ -339,8 +339,8 @@ and nothing is read; only its title and address reach tier 1 as today.
    failure. A capture is scheduled after `NavigationCompleted` plus a short
    settle delay (proposed two seconds, so the page's scripts can render), and
    is cancelled if the generation changes. Immediately before the call,
-   Atlas checks the generation again, on the same interface thread that
-   receives navigation events, so no Atlas-side event can slip in between.
+   Syrinx checks the generation again, on the same interface thread that
+   receives navigation events, so no Syrinx-side event can slip in between.
 
 Only then is the CDP call made. After it returns:
 
@@ -389,7 +389,7 @@ headers only**, under the eleven-step check above. In detail:
 - The page web view keeps `with_devtools(false)` (which hides the DevTools
   window from users; whether it also blocks host calls is test F18).
 - JSON parsing runs on a worker thread. `serde_json` is already in the
-  workspace for `xtask`; adding it to `atlas-platform` still needs the
+  workspace for `xtask`; adding it to `syrinx-platform` still needs the
   pre-add audit `AGENTS.md` requires.
 
 **Fallback.** If test F15 shows a page can tell that a tab previously ran a
@@ -407,7 +407,7 @@ content of modern web applications; candidate 5 reverses D18.
 ## The feasibility test P1-25 runs after approval
 
 **Where.** A disposable example program,
-`crates/atlas-platform/examples/page_text_feasibility.rs`, modelled on the
+`crates/syrinx-platform/examples/page_text_feasibility.rs`, modelled on the
 existing `examples/page_close` harness, with a freshly generated WebView2
 user-data folder under `target/` for each run. It never uses the owner's
 profile, makes no request outside the machine and signs in to nothing.
@@ -423,17 +423,17 @@ if not, distinct loopback addresses `127.0.0.2` and up are used, and the
 lists below name those addresses instead). The harness puts `bank.test`
 into the banking list and `owner.test` into the owner list through test-only
 configuration, so the same code path runs. Google's real domains are tested
-only in the pure `atlas-core` unit tests; no automated test navigates to
+only in the pure `syrinx-core` unit tests; no automated test navigates to
 Google.
 
-**Observation without injection.** The fixture pages are Atlas's own
+**Observation without injection.** The fixture pages are Syrinx's own
 synthetic content, so their own scripts may report measurements; they do so
-by setting `document.title`, which Atlas already receives through its title
-event. Atlas adds no IPC handler and no script to the page web view, even in
+by setting `document.title`, which Syrinx already receives through its title
+event. Syrinx adds no IPC handler and no script to the page web view, even in
 the harness. Every CDP call goes through one counting wrapper that records
 the target address, so a test can assert that **zero** calls were made.
 
-**Pure unit tests (`atlas-core`, run in the normal gate):**
+**Pure unit tests (`syrinx-core`, run in the normal gate):**
 
 - U1. Google list: `google.com`, `www.google.co.uk`, `mail.google.com`,
   `GOOGLE.COM.`, `youtube.com`, punycode forms are excluded;
@@ -468,7 +468,7 @@ the target address, so a test can assert that **zero** calls were made.
 | F13 | Same-document address change by History API, repeated quickly | At most one capture per change, and at most one every 30 s per tab; each new address is rechecked against steps 2 to 5 |
 | F14 | Page served by a service worker; back/forward cache restore; reload from HTTP cache, each with and without the response subscription | Fail closed whenever no matching response was seen; report whether the subscription changes cache hits |
 | F15 | Detection probes on `probe.test`: `navigator.webdriver`, the `console` getter trick for `Runtime.enable`, `debugger`-statement timing, enumerable globals; in a tab that captured `plain.test` first versus a fresh tab | Identical results; any difference stops P1-25 and triggers the fallback proposal |
-| F16 | Pages of 1,000, 10,000 and 100,000 nodes | Report call latency, response bytes, parse time off-thread and the page's own long-task measurement. Proposed budget: on 10,000 nodes no added task over 50 ms in the page and no interface frame over 16 ms in Atlas; above a measured size, skip and report |
+| F16 | Pages of 1,000, 10,000 and 100,000 nodes | Report call latency, response bytes, parse time off-thread and the page's own long-task measurement. Proposed budget: on 10,000 nodes no added task over 50 ms in the page and no interface frame over 16 ms in Syrinx; above a measured size, skip and report |
 | F17 | Suspended (`TrySuspend`) and hidden tabs | No capture while suspended; deferred until visible or resumed |
 | F18 | With `with_devtools(false)` | The host call still works; F12 still opens nothing; no TCP listening port appears for the WebView2 processes before or after capture |
 | F19 | Capture switched off | Zero CDP calls over the whole run |
@@ -478,9 +478,9 @@ the target address, so a test can assert that **zero** calls were made.
 | F23 | The owner follows a link out of `bank.test` to an ordinary page | Ineligible, zero calls *(changed by "skip all exits")* |
 | F24 | An ordinary page auto-submits a form `POST` to itself | Ineligible, zero calls *(same)* |
 | F25 | A form `POST` answered by 302, 303 and 307, same site and cross-site | Ineligible, zero calls *(re-review)* |
-| F26 | A bank page's script leads to a relay page whose script moves on | The page after the relay ineligible; an Atlas navigation afterwards read *(re-review)* |
+| F26 | A bank page's script leads to a relay page whose script moves on | The page after the relay ineligible; a Syrinx navigation afterwards read *(re-review)* |
 | F27 | A popup opened from a bank page | Ineligible, zero calls *(re-review)* |
-| F28 | Back into a tainted page after an Atlas navigation cleared the tab | Ineligible, zero calls *(third review)* |
+| F28 | Back into a tainted page after a Syrinx navigation cleared the tab | Ineligible, zero calls *(third review)* |
 
 **Evidence.** P1-25 delivers `docs/p1-25-page-text-feasibility.md` with each
 case's result, the measurements, every failure kept rather than retried away,
@@ -493,25 +493,25 @@ P1-26 and its review.
 Each is a yes or no. The recommendation is in brackets.
 
 1. Do you approve the DevTools-protocol call `DOMSnapshot.captureSnapshot`,
-   and only that call, as the way Atlas reads page text on eligible pages,
+   and only that call, as the way Syrinx reads page text on eligible pages,
    with `WebResourceResponseReceived` used only to read response headers?
    *(Recommended: yes.)*
-2. Do you agree that Atlas should never run a script inside a web page to
+2. Do you agree that Syrinx should never run a script inside a web page to
    read its text, keeping the rule in `CLAUDE.md` as it is, on every site?
    *(Recommended: yes.)*
 3. Should a page reached through a redirect chain that passed through an
    excluded site (for example, returning from a bank's or Google's sign-in to
    an ordinary site) be left unread? *(Recommended: yes.)* *The owner
-   answered yes, and on 2026-10-12 extended it to every exit Atlas did not
+   answered yes, and on 2026-10-12 extended it to every exit Syrinx did not
    start and every form `POST` (step 6).*
 4. Should "Google's sites" include YouTube and Google's other own domains
    (such as `gmail.com` and `googleusercontent.com`), not only `google.com`
    and its country domains? *(Recommended: yes.)*
-5. Should Atlas ship a built-in list of major banks and payment processors,
+5. Should Syrinx ship a built-in list of major banks and payment processors,
    plus the password-field and card-field guard, rather than relying on your
    own exclusion list alone? *(Recommended: yes; you would review the list
    before P1-26.)*
-6. Should Atlas skip any page it cannot prove was sent without `no-store`
+6. Should Syrinx skip any page it cannot prove was sent without `no-store`
    (for example, one served from a cache or a service worker)?
    *(Recommended: yes; fail closed.)*
 7. If test F15 shows a page can tell that a tab previously captured text,

@@ -15,13 +15,13 @@ open or close them, but could not create, rename, remove or rearrange
 anything, and every folder came back collapsed after a restart. Without this
 slice, an imported bookmark tree can never be tidied, and a newly saved page
 cannot be filed anywhere. The plan's rule still holds: the sidebar and the
-palette read the one tab model in `atlas-core`, so every edit here is a model
+palette read the one tab model in `syrinx-core`, so every edit here is a model
 command on the session worker, saved in the same store transaction as any
 other tab change.
 
 ## What changed
 
-### The model refuses unnamed folders (`crates/atlas-core`)
+### The model refuses unnamed folders (`crates/syrinx-core`)
 
 The owner decided on 2026-10-12 that empty folder names are refused, and that
 the model must refuse them too, not only the form. `TabError::EmptyFolderTitle`
@@ -38,7 +38,7 @@ created one), and refusing it at start-up would lock the owner out of the
 whole store. The sidebar draws such a folder with no title; renaming it is
 the fix.
 
-### One session command for folder edits (`crates/atlas-app/src/session/folders.rs`)
+### One session command for folder edits (`crates/syrinx-app/src/session/folders.rs`)
 
 `SessionCommand::Folder(FolderCommand)` carries five edits:
 `Create { title, parent }`, `Rename { id, title }`, `Remove { id }` (contents
@@ -51,7 +51,7 @@ out) is still noticed. The model's
 `TabError::FolderContentsChanged` if the folder holds anything else by the
 time the command arrives, for example after a drag-in or a queued move. Both
 the card and the model count with one function,
-`atlas_core::saved_folder_contents`. All edits go through the existing
+`syrinx_core::saved_folder_contents`. All edits go through the existing
 `apply_model` path, so a refused edit is a recoverable error that changes
 nothing, and an accepted one is saved in one transaction and published as the
 next state, exactly like opening or closing a tab. `Debug` output shows only
@@ -59,13 +59,13 @@ the kind of edit, never a folder name. Folder edits do not cancel a pending
 Home palette action (`ui/home_palette.rs`), because they do not change which
 page is shown.
 
-### The sidebar's controls (`crates/atlas-app/src/ui/folder_editor.rs`, `sidebar_view.rs`)
+### The sidebar's controls (`crates/syrinx-app/src/ui/folder_editor.rs`, `sidebar_view.rs`)
 
 In the **wide** sidebar:
 
 - **New folder.** A "New folder" button sits on the "SAVED & OPEN TABS" header,
   beside the existing "+" (new tab). It opens a small naming form under the
-  header, in the tile editor's card style (`atlas-ui` surface, line, radius and
+  header, in the tile editor's card style (`syrinx-ui` surface, line, radius and
   type tokens; the tile editor's `form_button` is now shared rather than
   copied). Enter or Save creates the folder at the end of the saved group;
   Cancel closes the form. A blank name shows "Give the folder a name." and
@@ -112,7 +112,7 @@ Keyboard, in every width where rows show:
 | Delete | Removes a folder (asks as above when it is not empty). On a saved page that is open it removes the saved row at once (D43 keeps the tab); on one that is not open it asks first, because nothing else keeps it. The "−" button does the same. |
 | Shift Delete | Goes straight to the delete-with-contents confirmation for a folder. |
 
-These keys are bound only in the focused row's key context (`AtlasSavedRow`),
+These keys are bound only in the focused row's key context (`SyrinxSavedRow`),
 which GPUI ranks above the window-wide bindings, so Alt Left keeps meaning
 Back everywhere else. An Alt arrow that would move nothing (the edge of a
 list, or a top-level row's Alt Left) is passed on rather than consumed. The
@@ -177,7 +177,7 @@ rows, controls and form. A form or card is closed when the peek opens or
 closes, as the Favorites editor already is, because a text field belongs to
 the window it was created in.
 
-### Remembered expansion (`crates/atlas-app/src/ui/folder_expansion.rs`)
+### Remembered expansion (`crates/syrinx-app/src/ui/folder_expansion.rs`)
 
 P1-21's `saved_folder_state` table holds only the folder ID watermark, so
 expansion does not belong there; it is presentation, and it now uses P1-29's
@@ -236,7 +236,7 @@ the row stays in view.
 
 ## Owner's manual checks
 
-Run `cargo run --package atlas-app --profile local --offline --locked`
+Run `cargo run --package syrinx-app --profile local --offline --locked`
 against a fresh synthetic profile (for example
 `-- --test-data-dir target\folder-ui-check`), open two or three pages (for
 example `https://example.com`) and save them with Ctrl D or the palette.
@@ -268,7 +268,7 @@ example `https://example.com`) and save them with Ctrl D or the palette.
    release the mouse elsewhere, then press Alt Left: nothing in the sidebar
    moves (on a page, it goes Back).
 7. **Expansion survives restart.** Leave one folder open and one closed,
-   quit Atlas, start it again with the same `--test-data-dir`: the same folder
+   quit Syrinx, start it again with the same `--test-data-dir`: the same folder
    is open and the other closed. Import a bookmarks file with folders
    (P1-22): its folders stay closed after a restart until opened.
 8. **Peek and compact width.** Hide the sidebar (Ctrl Alt S) and hover the left
@@ -282,34 +282,34 @@ example `https://example.com`) and save them with Ctrl D or the palette.
 All test data is synthetic (`example.test` addresses, made-up titles) and each
 worker test uses a disposable directory.
 
-- `crates/atlas-core/tests/saved_folders.rs`: blank names refused by create,
+- `crates/syrinx-core/tests/saved_folders.rs`: blank names refused by create,
   rename and subtree append without changing the model; spaced names kept; a
   confirmed delete refused unchanged after the folder gained a page, and
   accepted with the current counts.
-- `crates/atlas-app/src/session/folders.rs`: each edit reaches the model,
+- `crates/syrinx-app/src/session/folders.rs`: each edit reaches the model,
   a stale delete is refused unchanged, deleting contents leaves open pages as ordinary tabs, refused edits change
   nothing, and diagnostics redact names.
-- `crates/atlas-app/src/session/folder_tests.rs`: a real worker creates,
+- `crates/syrinx-app/src/session/folder_tests.rs`: a real worker creates,
   moves, renames, refuses an unnamed folder as a non-fatal error, stores the
   expansion setting, and after a restart restores the tree, the live tab's
   association and the setting; both removal modes survive another restart,
   and a delete with stale counts is a non-fatal refusal.
-- `crates/atlas-app/src/ui/saved_moves.rs`: keyboard steps and drops,
+- `crates/syrinx-app/src/ui/saved_moves.rs`: keyboard steps and drops,
   including edges (which plan nothing, so the key is passed on), cycles,
   same-place drops and a 200-move replay against the model that requires at
   least 60 applied moves, validates the whole tree through
   `TabModel::from_snapshot` after each, and checks that every drop of a
   folder into its own contents is both unplanned and refused by the model as
   `FolderCycle` without change.
-- `crates/atlas-app/src/ui/folder_expansion.rs`: the setting's format and
+- `crates/syrinx-app/src/ui/folder_expansion.rs`: the setting's format and
   round trip, refusal of unreadable values, only stored folders reopening,
   new folders counting as open, and a missing setting collapsing everything.
-- `crates/atlas-app/src/ui/folder_editor.rs`: name trimming and refusal, the
+- `crates/syrinx-app/src/ui/folder_editor.rs`: name trimming and refusal, the
   removal card's wording ("1 folder", not "0 saved pages and 1 folder"), focus
   going to the page after a docked row is used, only unopened saved pages
   asking before removal, Enter never confirming a delete, and a delete card
   closing when its folder changes. The cards are drawn by
-  `ui/folder_cards.rs` with `atlas-ui` space, radius and type tokens.
+  `ui/folder_cards.rs` with `syrinx-ui` space, radius and type tokens.
 
 On 2026-10-12 the full `cargo xtask check` passed on this branch: dependency
 boundaries, deferred-work markers (none added), packaging, formatting, Clippy
@@ -332,7 +332,7 @@ An independent review approved the first commit with fixes:
   `DeleteWithContents` carries them for the model to check.
 - **M2:** Enter no longer confirms a delete; only the focused or clicked
   Delete button does.
-- **L1–L3:** the cards and drag label use `atlas-ui` tokens, the move replay
+- **L1–L3:** the cards and drag label use `syrinx-ui` tokens, the move replay
   checks counts, the tree and refusals, and the card names only what the
   folder holds.
 

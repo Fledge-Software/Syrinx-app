@@ -16,9 +16,9 @@ built the flat foundation; P1-21 adds the folders. Without them the owner
 cannot organise saved destinations, and P1-22's HTML bookmark import has
 nowhere to put the hierarchy it must preserve (D14/D43). The plan's rule is
 that there is one model: the sidebar and palette are projections of the
-records in `atlas-core`, never a second bookmark store.
+records in `syrinx-core`, never a second bookmark store.
 
-## The model (`crates/atlas-core`)
+## The model (`crates/syrinx-core`)
 
 The saved tree is one ordered list, `TabModel::saved_layout()`, of
 `SavedPlacement { entry, parent }` values in visible depth-first order. An
@@ -70,7 +70,7 @@ makes cycles, self-parenting, unknown parents and subtrees split apart
 unrepresentable. Folder titles are redacted from every `Debug` output, like
 page metadata.
 
-## Storage (`crates/atlas-store`)
+## Storage (`crates/syrinx-store`)
 
 **Migration number: schema version 2** (`user_version = 2`), added as the
 second entry of `schema::MigrationScripts::migrations()`. It is
@@ -109,8 +109,8 @@ lets the next writer upgrade it, so D46 recovery is not broken by the new
 schema. Reader connections still require the current schema.
 
 Backups written by a newer schema are now skipped rather than fatal. Daily
-rotation (`atlas-store/src/backup.rs`) skips them like invalid candidates and
-never prunes them; recovery (`atlas-platform`) offers the newest backup it can
+rotation (`syrinx-store/src/backup.rs`) skips them like invalid candidates and
+never prunes them; recovery (`syrinx-platform`) offers the newest backup it can
 use and, if every candidate is newer, reports
 `RecoveryError::OnlyNewerSchemaBackups { skipped }` instead of
 `NoValidBackup`. This keeps a future version 2 → 3 downgrade from locking the
@@ -119,7 +119,7 @@ owner out of older backups.
 ### Known limitation: downgrading below this branch
 
 Builds that predate this branch cannot use this fix. Their backup listing
-(`atlas-store/src/backup.rs`, the `valid_candidates` loop) returns the first
+(`syrinx-store/src/backup.rs`, the `valid_candidates` loop) returns the first
 error that is not an "invalid candidate", and their recovery listing does the
 same, so `FutureSchema` from a single version 2 daily snapshot stops the whole
 scan. Once this build has written one version 2 snapshot, running an older
@@ -128,7 +128,7 @@ database itself also refuses to open in the older build (`FutureSchema`), as
 intended. Downgrading is therefore unsupported; recovering in that situation
 means running this build or a later one.
 
-One small `atlas-platform` change follows from the larger snapshot: the
+One small `syrinx-platform` change follows from the larger snapshot: the
 private `RecoveryOffer::expected` field is now boxed, because the two new
 vectors pushed `StartupStorage` over Clippy's `large_enum_variant` limit.
 Behaviour and public API are unchanged.
@@ -144,7 +144,7 @@ block occurred.
 All data is synthetic (`example.test` addresses, made-up titles) and every
 database is disposable.
 
-- `crates/atlas-core/tests/saved_folders.rs`: creation, rename and listing;
+- `crates/syrinx-core/tests/saved_folders.rs`: creation, rename and listing;
   moving an open saved page keeps its instance and selection; folders move
   with their subtrees and cycles are refused without change; final-position
   reordering and bad destinations; both removal modes, including open pages
@@ -157,14 +157,14 @@ database is disposable.
   exist, and a dedicated test checks that moving a folder holding open tabs,
   and dissolving it with `MoveContentsUp`, leaves live tab IDs, associations
   and the active tab unchanged.
-- `crates/atlas-store/src/backup/tests.rs`: a newer-schema backup is skipped
+- `crates/syrinx-store/src/backup/tests.rs`: a newer-schema backup is skipped
   by a fresh rotation scan and never pruned.
-- `crates/atlas-platform/src/storage/recovery/tests.rs`: a newer-schema
+- `crates/syrinx-platform/src/storage/recovery/tests.rs`: a newer-schema
   newest backup is skipped (left byte-identical) in favour of an older one,
   only-newer candidates are reported as such, and a version 1 backup restores
   and is migrated by the next store open. `rusqlite` became a dev-dependency
-  of `atlas-platform` for that downgrade fixture (no new package).
-- `crates/atlas-store/src/engine/tests/folders.rs`: upgrade from version 1
+  of `syrinx-platform` for that downgrade fixture (no new package).
+- `crates/syrinx-store/src/engine/tests/folders.rs`: upgrade from version 1
   with existing flat rows (order, revision, association preserved) followed by
   folder edits and restarts; damaged version 1 rows refused with the file
   unchanged; migration rollback for both a hook failure and a foreign key
@@ -197,12 +197,12 @@ were built on `claude/p1-09-21-folder-ui`; see `docs/p1-09-21-folder-ui.md`.
 Inferred decision 5 above is superseded by the owner's 2026-10-12 decision: empty
 names are refused. The list below is kept as the original hand-off.
 
-- **UI (`atlas-ui`/`atlas-app`)**: render folder rows with indentation and
+- **UI (`syrinx-ui`/`syrinx-app`)**: render folder rows with indentation and
   expand/collapse, create/rename/remove/move commands, drag-and-drop with the
   final-position semantics above, the removal confirmation, and the D44
   compact-folder controls, which the owner reviews. The session worker must
   route the new operations and persist them.
-- **Search (`atlas-search`, untouched here)**: see below.
+- **Search (`syrinx-search`, untouched here)**: see below.
 - **Restart consistency in the running app**: the store round trips are
   proved headlessly; P1-19-style acceptance with the real app remains.
 

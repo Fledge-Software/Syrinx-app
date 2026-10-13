@@ -8,10 +8,10 @@ use std::io::{self, Write};
 use std::ops::Range;
 use std::time::Instant;
 
-use atlas_search::{
+use serde_json::{Value, json};
+use syrinx_search::{
     BlankQuery, BoostWeights, Catalogue, Entry, Scope, SearchPolicy, SearchResults, Target, Usage,
 };
-use serde_json::{Value, json};
 
 mod workload;
 use workload::*;
@@ -322,7 +322,7 @@ fn report(cases: &[Case], samples: &[Vec<Sample>], build_ns: u64) -> Result<(Val
     }
     Ok((
         json!({
-            "protocol": "atlas-tier-one-v1",
+            "protocol": "syrinx-tier-one-v1",
             "required_profile": "local",
             "architecture": std::env::consts::ARCH,
             "operating_system": std::env::consts::OS,
@@ -522,7 +522,7 @@ mod tests {
     fn no_typo_unicode_counts_match_the_independently_inspected_corpus() -> Result<(), String> {
         let mut catalogue = build_catalogue()?;
         for query in ["東京", "🧭"] {
-            let mut expected = atlas_search::ScopeCounts::default();
+            let mut expected = syrinx_search::ScopeCounts::default();
             for index in 0..ROWS {
                 let row = entry(index)?;
                 if !row.title.contains(query) {

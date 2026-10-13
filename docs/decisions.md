@@ -5,6 +5,11 @@ Each entry says what changed and why. The spec's "Decisions already made"
 still stand unless an entry here says otherwise. Design decisions are
 recorded separately, in `design/README.md`.
 
+Entries keep the wording of their date: until the product was named Syrinx
+on 2026-10-12, it was called Atlas, so older entries say Atlas.
+Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
+`docs/plans/Atlas … .md` is now `docs/plans/Syrinx … .md`.
+
 ## 2026-10-13
 
 - **The Syrinx logo is the hawk emblem in `design/brand/syrinx-logo.svg`.**
@@ -45,6 +50,7 @@ recorded separately, in `design/README.md`.
   merge. The owner directed all finished work to main on 2026-10-12. The
   repository stays local, with no remote and no pushes. Commits still
   happen only within this approved slice workflow.
+
 - **Atlas never takes the foreground from another application.** When the
   owner has moved to another program, Atlas does not bring itself to the
   front: no `SetForegroundWindow`, no synthetic Alt press and no GPUI
@@ -59,10 +65,10 @@ recorded separately, in `design/README.md`.
 
   There are two exceptions, both following the owner's own action. Launching
   Atlas brings it to the front (`cx.activate(true)` in
-  `crates/atlas-app/src/main.rs`). A link the owner clicks in another program
+  `crates/syrinx-app/src/main.rs`). A link the owner clicks in another program
   while Atlas is their browser also brings it forward
   (`ui/incoming_links.rs`): the forwarding instance grants the foreground
-  through `AllowSetForegroundWindow` (`crates/atlas-platform/src/instance/pipe.rs`). Every
+  through `AllowSetForegroundWindow` (`crates/syrinx-platform/src/instance/pipe.rs`). Every
   other activation, including Find in page, F6 pane cycling and the bookmark
   import preview, activates natively only while Atlas is already in front.
 
@@ -330,7 +336,7 @@ recorded separately, in `design/README.md`.
 ## 2026-10-09
 
 These entries depart from `docs/spec.md`. Each is argued in
-`docs/plans/Atlas v1 — Plan.md`, decision number in brackets.
+`docs/plans/Syrinx v1 — Plan.md`, decision number in brackets.
 
 - **v1 runs on Windows 11 only** (D2). No macOS or Linux work or testing in
   v1, so the Phase 0 verdict is for Windows, not per OS.
@@ -349,7 +355,7 @@ These entries depart from `docs/spec.md`. Each is argued in
   Firefox export bookmarks only as the standard HTML bookmarks file, so
   Atlas imports that file. v1 imports no history and no passwords; password
   import arrives with a password manager after v1. This replaces "Import is a
-  CSV file only" below. Recorded in `docs/plans/Atlas v1 — Plan.md` (D10,
+  CSV file only" below. Recorded in `docs/plans/Syrinx v1 — Plan.md` (D10,
   D14, D15).
 - **Performance is the deciding goal for the engine and UI.** The owner wants
   Atlas to be as efficient as possible: low memory per tab, fast start, low

@@ -7,14 +7,14 @@ filters, identity changes, dependency changes or another vendor patch.
 
 ## What the display means
 
-`crates/atlas-platform/src/browser/security.rs` observes native navigation
+`crates/syrinx-platform/src/browser/security.rs` observes native navigation
 starts and completions. It records the attempted scheme and the native
 navigation ID, so an earlier completion cannot mark a later attempt loaded.
 Redirects update the destination scheme. Failed observations remain unknown;
 certificate rejection survives later completion. The UI reads this state per
 live tab, rather than inferring security from saved address metadata.
 
-`crates/atlas-app/src/ui/security.rs` draws a two-line label beside the address:
+`crates/syrinx-app/src/ui/security.rs` draws a two-line label beside the address:
 
 - HTTP is labelled unencrypted and has no TLS certificate. Pending or failed
   HTTP navigation is explicitly labelled an attempt too.
@@ -31,13 +31,13 @@ On `ServerCertificateErrorDetected`, the native handler sets `CANCEL` before
 reporting anything, then reads the action back. A callback failure stops the
 navigation and reports unavailable state. The event also covers subresources,
 so the label says a certificate request was blocked, without claiming that the
-main document's certificate was necessarily responsible. Atlas never selects
+main document's certificate was necessarily responsible. Syrinx never selects
 `ALWAYS_ALLOW` and never caches a certificate exception.
 
 Microsoft documents [certificate errors and their ordering](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_14?view=webview2-1.0.3856.49)
 and [the event's default action](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2servercertificateerrordetectedeventargs?view=webview2-1.0.3537.50).
 The runtime's unhandled default is an interstitial, not explicit cancellation;
-Atlas installs the cancellation handler before first navigation. No development
+Syrinx installs the cancellation handler before first navigation. No development
 protocol, remote debugging port or certificate-store change is used.
 
 ## Validation and fixture design
@@ -72,7 +72,7 @@ override is required to reproduce the same confinement:
 ```powershell
 $env:TEMP = Join-Path (Get-Location) 'target/session-temp'
 $env:TMP = $env:TEMP
-cargo run --offline --locked --profile local --package atlas-platform --example page_close
+cargo run --offline --locked --profile local --package syrinx-platform --example page_close
 ```
 
 Create `target/session-temp` first if it is absent. Retain only synthetic files
@@ -107,15 +107,15 @@ not claim to fix it. The owner explicitly permits these slices to continue.
 The gate runs the app, but desktop inspection is unavailable in this session.
 Visual acceptance remains open:
 
-1. Launch `cargo atlas -- --test-data-dir <new-absolute-directory-under-target>`.
+1. Launch `cargo syrinx -- --test-data-dir <new-absolute-directory-under-target>`.
    Use a disposable profile only. Open the P1-13 local HTTP page and verify
    “HTTP · unencrypted.” If checking ordinary HTTPS manually, `https://example.com`
    should say “No certificate error reported” after loading, never “secure.”
 2. In another PowerShell terminal in this worktree, create a new directory under
-   `target/`. Set `ATLAS_SYNTHETIC_CERT_DIRECTORY` to its absolute path and
-   `ATLAS_SYNTHETIC_CERT_GENERATOR` to the absolute path of
-   `crates/atlas-platform/examples/page_close/certificate_server.ps1`. Run
-   `python crates/atlas-platform/examples/page_close/certificate_server.py`.
+   `target/`. Set `SYRINX_SYNTHETIC_CERT_DIRECTORY` to its absolute path and
+   `SYRINX_SYNTHETIC_CERT_GENERATOR` to the absolute path of
+   `crates/syrinx-platform/examples/page_close/certificate_server.ps1`. Run
+   `python crates/syrinx-platform/examples/page_close/certificate_server.py`.
    Read the published port from that directory's `port` file in a second terminal.
    The server lasts 75 seconds; prepare the app first, or repeat with a fresh directory.
 3. Open `https://127.0.0.1:<port>/invalid`. Verify “HTTPS attempt” and
@@ -130,7 +130,7 @@ Visual acceptance remains open:
 
 P1-14's ledger row records delivery. P1-11 retains its historical partial status;
 its stale “not started” continuation sentence now points to the later evidence.
-The shared `atlas-app/src/ui.rs`
+The shared `syrinx-app/src/ui.rs`
 change is limited to module/state/event/display wiring and cleanup. The workspace
 manifest, lockfile and platform `lib.rs` are unchanged. No deferred-work marker
 was introduced. P1-12's schema-2 permission migration still needs renumbering at

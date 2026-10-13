@@ -1,6 +1,6 @@
 # Dependency audit
 
-Dependencies enter Atlas only after their maintenance, security record and
+Dependencies enter Syrinx only after their maintenance, security record and
 licence have been checked (`AGENTS.md`). Record the exact package graph and
 features: a permissive top-level crate does not establish its dependencies'
 licences, and a lockfile can contain packages that this configuration never
@@ -12,7 +12,7 @@ The architecture check needs Cargo's structured metadata so dependency
 aliases and target/build/development declarations cannot hide a forbidden
 dependency. Use `serde_json::Value` in `xtask` to read that JSON, rather than
 writing a JSON parser or adding a larger Cargo-specific library. This is a
-development-tool dependency; `atlas-app` has no third-party dependency yet.
+development-tool dependency; `syrinx-app` has no third-party dependency yet.
 
 The selected direct pin is `serde_json =1.0.151`, default features disabled,
 with only `std` enabled. A read-only audit inspected the cached manifests,
@@ -60,8 +60,8 @@ before entering the product workspace.
 
 Storage must reject registered sync roots and unsuitable filesystem paths
 before opening SQLite (D13). The Windows discovery code belongs in
-`atlas-platform`, composed with the store by the application; it must not
-make `atlas-store` depend on a shell crate. The design and its limits are
+`syrinx-platform`, composed with the store by the application; it must not
+make `syrinx-store` depend on a shell crate. The design and its limits are
 in `docs/storage-path-preflight.md`. This record establishes the dependency
 graph, not successful compilation or runtime verification of that guard.
 
@@ -71,13 +71,13 @@ The owner explicitly approved the additional Unicode-3.0 terms for
 `(MIT OR Apache-2.0) AND Unicode-3.0`; it is not merely dual-licensed MIT or
 Apache. This narrow allowance and the completed audit below permit this
 exact closure. P1-01's account of its then-inactive dependencies remains
-historical. The allowance does not choose Atlas's product licence or permit
+historical. The allowance does not choose Syrinx's product licence or permit
 unrelated licences.
 
 **Zlib is approved for `foldhash 0.2.0`.** The owner explicitly approved
 this additional licence for the statement-cache dependency chain on
 2026-10-10. The allowance is limited to that package and version; it does
-not choose Atlas's product licence or permit unrelated licences. SQLite's
+not choose Syrinx's product licence or permit unrelated licences. SQLite's
 bundled C source is [public domain](https://www.sqlite.org/copyright.html)
 under the already-approved bundled choice, not covered by the Rust binding's
 MIT licence.
@@ -155,8 +155,8 @@ cargo tree --manifest-path target/p1-03-audit-20261010/Cargo.toml --target x86_6
 
 All required sources are now cached and this command succeeds offline.
 The product workspace was then resolved offline and its active graph checked
-with the same target and feature-edge options for `atlas-store` and
-`atlas-platform`. Its lockfile adds 28 registry packages and two workspace
+with the same target and feature-edge options for `syrinx-store` and
+`syrinx-platform`. Its lockfile adds 28 registry packages and two workspace
 crates; every pre-existing package/version pair from `9a6ae35` remains.
 `cargo xtask check-deps` passes. These are dependency-resolution and boundary
 checks, not a passing implementation gate.
@@ -227,7 +227,7 @@ SQLite release. Later 3.53 patches improve handling of damaged database,
 WAL and journal inputs. A June 23 change also corrects classification of
 extended DOS-device paths as UNC paths when choosing shared-memory locks;
 Mozilla's linked report describes the Windows performance regression.
-These are bounded upstream findings, not evidence that Atlas has exercised
+These are bounded upstream findings, not evidence that Syrinx has exercised
 or fixed every affected case.
 [SQLite patch timeline](https://sqlite.org/src/timeline?from=version-3.53.0&to=version-3.53.4&to2=branch-3.53&y=ci),
 [Windows locking performance report](https://bugzilla.mozilla.org/show_bug.cgi?id=2016438).
@@ -258,7 +258,7 @@ or coverage of every later SQLite damaged-input fix.
 
 Recovery deliberately handles damaged input, so the owner approved a narrow
 SQLite 3.53.4 source patch on 2026-10-10 before that work proceeds. The
-earlier 3.53.2 discussion above records P1-03's historical build. Atlas now
+earlier 3.53.2 discussion above records P1-03's historical build. Syrinx now
 uses `vendor/libsqlite3-sys-0.38.2` through Cargo's path patch: the same
 audited Rust wrapper and build script, with four full files from exact
 upstream revision `901f9946efdaaa289e6b1c5bd56dc67f4b651e51`. It includes
@@ -291,9 +291,9 @@ to an appropriate published dependency.
 
 The palette must search locally on each keystroke (D9), without rebuilding
 its catalogue or sending the query elsewhere. Frizbee supplies the fuzzy
-matching score; `atlas-search` remains responsible for catalogue updates,
+matching score; `syrinx-search` remains responsible for catalogue updates,
 frecency, the open-tab boost, scope counts and the final result limit.
-Upstream's matcher benchmarks do not establish Atlas's complete 5 ms budget
+Upstream's matcher benchmarks do not establish Syrinx's complete 5 ms budget
 at 100,000 rows.
 
 The selected pin makes the memory-read policy explicit:
@@ -321,18 +321,18 @@ The published [manifest](https://docs.rs/crate/frizbee/0.13.0/source/Cargo.toml)
 declares no build script. Its only normal dependency is optional serde,
 which stays disabled; `std` forwards to serde only when serde is already
 enabled. The package's dev dependencies are for its own tests and
-benchmarks and do not enter Atlas by depending on the library. The archive's
+benchmarks and do not enter Syrinx by depending on the library. The archive's
 MIT licence grants use with its copyright and licence notice retained. No
 new licence exception is required for the selected configuration.
 
 **Product resolution is verified.** The product fetch and lockfile review
-add `atlas-search` and frizbee 0.13.0 with the audited checksum; every
+add `syrinx-search` and frizbee 0.13.0 with the audited checksum; every
 pre-existing package version remains unchanged. The active Windows graph
-contains only `atlas-core` and frizbee with `std` and `safe_read` beneath
-`atlas-search`. This was checked offline after fetching:
+contains only `syrinx-core` and frizbee with `std` and `safe_read` beneath
+`syrinx-search`. This was checked offline after fetching:
 
 ```powershell
-cargo tree -p atlas-search --target x86_64-pc-windows-msvc --edges normal,build,features --offline --locked
+cargo tree -p syrinx-search --target x86_64-pc-windows-msvc --edges normal,build,features --offline --locked
 ```
 
 Cargo.lock also records frizbee's optional serde edge and serde's derive
@@ -364,7 +364,7 @@ describes intentional reads beyond a haystack's allocation when a SIMD
 load stays within a memory page. `safe_read` disables that optimization;
 the published `src/prefilter/algo/load.rs` returns false from
 `can_overread` with this feature. Other unsafe SIMD code remains. Upstream
-reports a performance cost without AVX-512, so Atlas's measurements must
+reports a performance cost without AVX-512, so Syrinx's measurements must
 include this feature rather than quoting the faster default configuration.
 
 ### API behavior the implementation must preserve
@@ -372,17 +372,17 @@ include this feature rather than quoting the faster default configuration.
 The published [matcher source](https://docs.rs/crate/frizbee/0.13.0/source/src/matcher/mod.rs)
 accepts borrowed lists and returns every match; it is not a persistent
 catalogue and has no Rust top-K parameter. `SortStrategy::IndexAsc` avoids
-sorting by the unmodified fuzzy score before Atlas applies its own ranking.
+sorting by the unmodified fuzzy score before Syrinx applies its own ranking.
 Count all matching records before limiting results, then calculate match
 positions only for the finalists. Query changes rebuild the compiled
-matcher when needed; incremental record updates belong to Atlas. Scores
+matcher when needed; incremental record updates belong to Syrinx. Scores
 are `u16`, and input-row indexes are `u32`; excessively large input lists
 panic rather than returning a structured error.
 
 The [Unicode API tests](https://docs.rs/crate/frizbee/0.13.0/source/tests/api_properties.rs)
 confirm that match positions are reverse-ordered UTF-8 byte indexes,
 including continuation bytes. For example, `éx` against `é😀x` returns
-`[6, 1, 0]`. Atlas must produce valid byte ranges in the original displayed
+`[6, 1, 0]`. Syrinx must produce valid byte ranges in the original displayed
 field rather than treating those values as character or UTF-16 indexes.
 They do not identify complete grapheme clusters.
 
@@ -406,7 +406,7 @@ highlights with synthetic data before calling P1-05 complete.
 
 ## Approved wry close-event patch — 2026-10-10
 
-Page-requested closure must save Atlas's logical tab state before releasing
+Page-requested closure must save Syrinx's logical tab state before releasing
 the native window. The owner approved the two-file wry 0.57.0 correction in
 `docs/page-close-event-review.md` and the scoped exception for unchanged
 upstream comments and lint annotations. `vendor/wry-0.57.0.provenance.md`
@@ -448,7 +448,7 @@ is preserved; do not mistake its diff from HEAD for changes from this patch.
 
 Five public regressions and all eight available scalar/SIMD backend variants
 pass. The private backend harness uses a separately hashed ignored overlay
-and adds no test dependency; it does not modify vendor or disable Atlas tests.
+and adds no test dependency; it does not modify vendor or disable Syrinx tests.
 All 1,040 unchanged benchmark samples preserve their exact checksums and
 counts, but only 9/26 timing cases pass D48. The initial full gate exposed one
 fixture that expected the corrected bug; its test-only replacement preserves
@@ -493,22 +493,22 @@ adding a Rust cryptography library. The rejected alternative, RustCrypto's
 assembly and a build script) for functions the operating system already
 provides and Microsoft maintains.
 
-The new crate `crates/atlas-update` declares:
+The new crate `crates/syrinx-update` declares:
 
 ```toml
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 ```
 
 `Win32_Security_Cryptography` enables `Win32_Security`, `Win32` and
-`Win32_Foundation`; `atlas-platform` already enables the last three. Cargo
+`Win32_Foundation`; `syrinx-platform` already enables the last three. Cargo
 features are not recorded in `Cargo.lock`, and these namespace features gate
 only generated bindings inside the `windows` package; they activate no
 optional dependency. The lockfile diff is exactly the new workspace member's
-own seven-line entry (`atlas-update 0.1.0`, depending on `windows 0.62.2`).
+own seven-line entry (`syrinx-update 0.1.0`, depending on `windows 0.62.2`).
 No package was added, removed or moved. Verify with:
 
 ```powershell
-cargo tree -p atlas-update --target x86_64-pc-windows-msvc --edges normal,build,features --offline --locked
+cargo tree -p syrinx-update --target x86_64-pc-windows-msvc --edges normal,build,features --offline --locked
 ```
 
 Its output lists only packages already in the P1-03 table above, at the same
@@ -518,42 +518,42 @@ versions: `windows`, `windows-collections`, `windows-core`, `windows-future`,
 `quote`, `syn` and `unicode-ident 1.0.26` (under its approved Unicode-3.0
 exception). The licences, maintenance and advisory findings recorded there
 are unchanged by enabling a namespace feature. Because Cargo unifies
-features, `atlas-platform` now also compiles the cryptography bindings; it
+features, `syrinx-platform` now also compiles the cryptography bindings; it
 does not call them.
 
 The dependency check (`crates/xtask/src/dependency_policy.rs`) still allows
-only `atlas-platform` to use WebView2, wry and `windows-sys`; `atlas-update`
+only `syrinx-platform` to use WebView2, wry and `windows-sys`; `syrinx-update`
 is the single other crate allowed `windows`, and every workspace crate is
-refused a dependency on `atlas-update` until P1-39 is approved.
-`atlas-update` may request only the `windows` features `Win32_Foundation`
+refused a dependency on `syrinx-update` until P1-39 is approved.
+`syrinx-update` may request only the `windows` features `Win32_Foundation`
 and `Win32_Security_Cryptography`, with default features disabled; any other
 feature, including a networking namespace, fails the check. The
 staging-directory payload uses only `std::fs` with Windows open flags, so it
 needs no further feature.
 
-This limits what `atlas-update` declares, not what it can call. Cargo
+This limits what `syrinx-update` declares, not what it can call. Cargo
 merges the features every workspace crate requests for the same package,
-so `atlas-update` is compiled against a `windows` build that also has
-`atlas-platform`'s namespaces enabled, and code in it could call those APIs
+so `syrinx-update` is compiled against a `windows` build that also has
+`syrinx-platform`'s namespaces enabled, and code in it could call those APIs
 without the check noticing. The check stops the verifier from asking for a
 networking or other namespace itself; review of its source is what keeps it
 to CNG.
 
-## P1-25: `serde_json` in `atlas-platform`, 2026-10-12
+## P1-25: `serde_json` in `syrinx-platform`, 2026-10-12
 
 P1-25 parses the JSON that WebView2 returns for the one approved DevTools
 call, `DOMSnapshot.captureSnapshot`. Writing a JSON parser for an
 attacker-influenced, multi-megabyte response would be riskier than reusing
-the parser the workspace already audited, so `atlas-platform` now declares
+the parser the workspace already audited, so `syrinx-platform` now declares
 `serde_json.workspace = true`: the P1-01 pin `=1.0.151`, default features
 off, `std` only. The approval proposal names this route
 (`docs/proposals/p1-25-page-text-extraction.md`, "Recommendation").
 
 No package enters the build. `serde_json 1.0.151` was already compiled into
-`atlas-app` through GPUI (`schemars` requests its `alloc` feature), as
-`cargo tree -p atlas-app -i serde_json` showed before the change, and its
+`syrinx-app` through GPUI (`schemars` requests its `alloc` feature), as
+`cargo tree -p syrinx-app -i serde_json` showed before the change, and its
 five-package closure is the one audited in the P1-01 section above. The only
-`Cargo.lock` change is the new `serde_json` line in `atlas-platform`'s own
+`Cargo.lock` change is the new `serde_json` line in `syrinx-platform`'s own
 dependency list. `serde` derive is not enabled; the parser reads
 `serde_json::Value`, so the inactive derive closure and its Unicode-3.0
 licence remain out of the build.

@@ -2,17 +2,17 @@
 
 Status: implemented on `claude/p1-27-clear-data` (2026-10-12), awaiting
 independent review and the owner's merge approval. The full-text slices
-P1-23 to P1-26 are not done, so this slice clears what exists today: Atlas's
+P1-23 to P1-26 are not done, so this slice clears what exists today: Syrinx's
 history database, the tier-1 search catalogue and WebView2's own profile data.
 
 ## Why
 
-Before this slice, "clear history" could not be offered honestly. Atlas keeps
+Before this slice, "clear history" could not be offered honestly. Syrinx keeps
 its own copy of every visit (P1-20) beside WebView2's copy, the running search
 catalogue holds a row for each remembered address, and the daily backups
 (D13) hold older copies of the database. Clearing only WebView2 would leave
-Atlas's history searchable; clearing only the database would let a restored
-backup bring the history back. D47 settled the last point: Atlas keeps a
+Syrinx's history searchable; clearing only the database would let a restored
+backup bring the history back. D47 settled the last point: Syrinx keeps a
 local deletion record of cleared date ranges, never addresses or page text,
 and restoration must honour it instead of discarding older backups.
 
@@ -29,7 +29,7 @@ place, the way the history list does, so no page sits under GPUI drawing.
   weeks, all time.
 - **Clear data** runs the clear. The dialog says "Clearing…" and then names
   exactly what was cleared and, separately, every part that failed and why,
-  for example: "Cleared Atlas's browsing history (14 visits; 12 sites no
+  for example: "Cleared Syrinx's browsing history (14 visits; 12 sites no
   longer listed) from the last hour. The page engine's visited-page records,
   cookies and site data were not cleared: WebView2 refused (error
   0x80070005)." The visit count covers partial removals too: a site visited
@@ -51,7 +51,7 @@ belongs to the palette slices once their registry exists.
 
 Two parts run in parallel and report separately:
 
-1. **Atlas's history** (session worker, `crates/atlas-app/src/session/deletions.rs`):
+1. **Syrinx's history** (session worker, `crates/syrinx-app/src/session/deletions.rs`):
    1. append a *requested* record to the journal and flush it;
    2. `Store::apply_history_deletions` removes the visits in the range and
       addresses left without visits, and records the clear's generation in
@@ -62,9 +62,9 @@ Two parts run in parallel and report separately:
       cannot retract a visit that is already gone;
    4. append a *completed* record and flush it.
 
-   If Atlas stops between steps 1 and 4, the next start finishes the clear
+   If Syrinx stops between steps 1 and 4, the next start finishes the clear
    before anything reads history.
-2. **WebView2's data** (`crates/atlas-platform/src/browser/clear_data.rs`):
+2. **WebView2's data** (`crates/syrinx-platform/src/browser/clear_data.rs`):
    a hidden controller on the shared environment reaches the profile every
    page uses and calls `ICoreWebView2Profile2::ClearBrowsingDataInTimeRange`
    (or `ClearBrowsingData` for all time). Browsing history maps to
@@ -72,14 +72,14 @@ Two parts run in parallel and report separately:
    kind of site storage) and cached files to `DISK_CACHE`. The controller
    never navigates; no script, IPC handler or user agent touches any page.
 
-WebView2's data is not part of the journal: it is not in Atlas's backups, so
+WebView2's data is not part of the journal: it is not in Syrinx's backups, so
 a restore cannot bring it back. A failure there is reported and can be retried.
 
 ## The journal and the generation barrier
 
-`atlas.deletions`, beside `atlas.db` and `atlas.lifecycle` in the data
+`syrinx.deletions`, beside `syrinx.db` and `syrinx.lifecycle` in the data
 directory, holds P1-04's fixed-size, checksummed records
-(`crates/atlas-platform/src/storage/deletions.rs`). The running session holds
+(`crates/syrinx-platform/src/storage/deletions.rs`). The running session holds
 it with an exclusive handle; appends are flushed before the caller acts, and
 the folder itself is flushed after the file is first created, so the new
 directory entry survives a power cut.
@@ -110,22 +110,22 @@ from the copy's own database, instead of the old fixed zero.
 
 ## When the journal cannot be trusted
 
-Two start-up states would otherwise lock the owner out of Atlas for good:
+Two start-up states would otherwise lock the owner out of Syrinx for good:
 a damaged complete record, and a database ahead of its journal (the journal
-was deleted, or replaced by an older copy). Atlas cannot reconstruct the
+was deleted, or replaced by an older copy). Syrinx cannot reconstruct the
 lost ranges, and guessing could let a backup restore history the owner
-cleared. Instead, the start-up card says, in plain words, that Atlas's record
+cleared. Instead, the start-up card says, in plain words, that Syrinx's record
 of cleared history is damaged (or missing or older than the data) and that
 continuing requires clearing **all** browsing history; saved pages, open
 tabs and settings are kept. Nothing is changed unless the owner presses
-**Clear all history and continue**; closing Atlas instead leaves every file
+**Clear all history and continue**; closing Syrinx instead leaves every file
 as it was.
 
 On confirmation (`DeletionJournal::rebuild`, `session/history_repair.rs`):
 
 1. the damaged journal's bytes are preserved beside it as
-   `atlas.deletions.damaged-<time>`, the way D46 keeps damaged databases;
-2. the new journal is written to `atlas.deletions.rebuild` and flushed. It
+   `syrinx.deletions.damaged-<time>`, the way D46 keeps damaged databases;
+2. the new journal is written to `syrinx.deletions.rebuild` and flushed. It
    holds one completed **all-time** clear for every generation up to the
    database's, then one more all-time clear as a *requested* record;
 3. the old journal is released, the new file is renamed over it in one
@@ -147,11 +147,11 @@ cleared history back. Each rebuilt generation claims all time, a superset of
 whatever the lost record cleared, so replaying it onto any backup removes at
 least what the owner originally removed. Older backups stay usable as
 recovery points for everything else, as D47 intended, rather than being
-discarded. D46 requires the owner's confirmation before Atlas destroys
+discarded. D46 requires the owner's confirmation before Syrinx destroys
 state to recover from damage, and keeps damaged files; the repair asks
 first, explains what is lost and keeps the damaged journal. The rejected
 alternatives were refusing to start until someone repaired the file by hand
-(the original behaviour, which leaves the owner no way back into Atlas) and
+(the original behaviour, which leaves the owner no way back into Syrinx) and
 silently resetting the journal (which breaks D47).
 
 ## Recovery replay
@@ -162,7 +162,7 @@ a backup's generation, and on confirmation:
 
 1. copies the backup into a fresh staging bundle and validates it;
 2. replays every journal clear after the backup's generation onto the staged
-   copy (`atlas_store::replay_history_deletions`, in rollback-journal mode so
+   copy (`syrinx_store::replay_history_deletions`, in rollback-journal mode so
    the bundle keeps only its database file), checking first that the copy's
    own generation matches its completion record;
 3. rebinds the same file, checks no SQLite side file was left, validates it
@@ -257,7 +257,7 @@ a second at D48's scale.
   left far ahead for months would, at two days per daily run, eventually
   expire real history; the step limit turns a one-minute loss into a slow
   one the owner can notice and stop by fixing the clock.
-- After Atlas has not run for a while, the cutoff catches up two days per
+- After Syrinx has not run for a while, the cutoff catches up two days per
   daily run, so history slightly older than 90 days can stay for about as
   many extra days as the break lasted.
 - The first expiry on a profile has no saved cutoff, so it is not limited.
@@ -302,13 +302,13 @@ All on disposable synthetic data with reserved domains:
 
 ## Owner checks
 
-Use a disposable Atlas data folder if you prefer not to clear your own.
+Use a disposable Syrinx data folder if you prefer not to clear your own.
 
 1. Visit a few sites, open History (toolbar or Ctrl H), choose **Clear
    browsing data…**, keep "Browsing history" and "Last hour", and clear. The
    summary names the number of visits and sites; the history list and the palette's
    History results no longer show them.
-2. Restart Atlas. The cleared sites stay gone from History and the palette.
+2. Restart Syrinx. The cleared sites stay gone from History and the palette.
 3. Tick only "Cached files" and clear: the summary says cached files were
    cleared and you stay signed in to your sites.
 4. Tick "Cookies and site data" and clear "Last hour": you are signed out of
@@ -316,7 +316,7 @@ Use a disposable Atlas data folder if you prefer not to clear your own.
    again yourself afterwards.)
 5. Close the dialog while a clear runs: the outcome still appears in the
    footer.
-6. Only with a disposable data folder: close Atlas, delete `atlas.deletions`
-   from it after clearing at least once, and start Atlas. The start-up card
-   asks to clear all browsing history; closing Atlas there changes nothing,
-   and confirming opens Atlas with an empty history.
+6. Only with a disposable data folder: close Syrinx, delete `syrinx.deletions`
+   from it after clearing at least once, and start Syrinx. The start-up card
+   asks to clear all browsing history; closing Syrinx there changes nothing,
+   and confirming opens Syrinx with an empty history.
