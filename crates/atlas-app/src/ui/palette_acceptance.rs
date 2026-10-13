@@ -51,6 +51,8 @@ pub(super) struct Acceptance {
     /// The latest title each synthetic page reported; its script writes its focus there.
     titles: HashMap<u64, String>,
     synthetic: Option<Result<SyntheticCatalogue, SessionError>>,
+    /// Set when a page was about to leave the loopback server; the run then aborts.
+    refused: Option<String>,
 }
 
 impl Acceptance {
@@ -60,6 +62,7 @@ impl Acceptance {
             probe: PresentProbe::default(),
             titles: HashMap::new(),
             synthetic: None,
+            refused: None,
         }
     }
 }
@@ -102,6 +105,22 @@ impl BrowserView {
         if let Some(acceptance) = self.acceptance.as_mut() {
             acceptance.synthetic = Some(result);
         }
+    }
+
+    /// In an acceptance run, refuses any destination other than the loopback pages, marks the
+    /// run failed and makes it abort. Ordinary runs always pass.
+    pub(super) fn acceptance_permits(&mut self, url: &str) -> bool {
+        let Some(acceptance) = self.acceptance.as_mut() else {
+            return true;
+        };
+        let Some(reason) = acceptance.plan.refusal(url) else {
+            return true;
+        };
+        eprintln!("{reason}");
+        self.message = reason.clone();
+        acceptance.refused.get_or_insert(reason);
+        self.outcome.store(2, Ordering::Release);
+        false
     }
 
     /// Arms the probe at the start of the new popup's first frame, the one that presents it.
@@ -236,9 +255,21 @@ impl Run {
         &mut self,
         update: impl FnOnce(&mut BrowserView, &mut Window, &mut Context<BrowserView>) -> R,
     ) -> Result<R, String> {
-        self.view
-            .update_in(&mut self.cx, update)
-            .map_err(|_| CLOSED.to_owned())
+        let (result, refused) = self
+            .view
+            .update_in(&mut self.cx, |view, window, cx| {
+                let refused = view
+                    .acceptance
+                    .as_ref()
+                    .and_then(|acceptance| acceptance.refused.clone());
+                (update(view, window, cx), refused)
+            })
+            .map_err(|_| CLOSED.to_owned())?;
+        // A refused destination ends the run at its next step.
+        match refused {
+            Some(reason) => Err(reason),
+            None => Ok(result),
+        }
     }
 
     async fn sleep(&self, duration: Duration) {

@@ -919,6 +919,11 @@ impl BrowserView {
         if !page_command_allowed(self.closing, &command) {
             return false;
         }
+        if let BrowserCommand::Create { url, .. } | BrowserCommand::Navigate { url, .. } = &command
+            && !self.acceptance_permits(url)
+        {
+            return false;
+        }
         let Some(browser) = &self.browser else {
             self.message = "The page host is unavailable.".to_owned();
             return false;
@@ -998,6 +1003,10 @@ impl BrowserView {
                 return;
             }
         };
+        // An acceptance run never records or loads anything beyond its loopback pages.
+        if !self.acceptance_permits(&url) {
+            return;
+        }
         self.command(SessionCommand::NavigateActive { address: url });
     }
 

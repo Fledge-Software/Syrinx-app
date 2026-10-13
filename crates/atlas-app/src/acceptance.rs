@@ -42,11 +42,48 @@ impl AcceptancePlan {
     pub fn page(&self, label: &str) -> String {
         format!("{}/page/{label}", self.page_base)
     }
+
+    /// Why a page may not go to `url` during the run: only the loopback pages are allowed.
+    pub fn refusal(&self, url: &str) -> Option<String> {
+        let loopback = url
+            .strip_prefix(self.page_base.as_str())
+            .is_some_and(|path| path.starts_with('/'));
+        if loopback || url == "about:blank" {
+            return None;
+        }
+        Some(format!(
+            "The acceptance run refused to leave its loopback pages for {url}."
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pages_may_only_go_to_the_loopback_server() {
+        let plan = AcceptancePlan::new(PathBuf::from("report.json"), "http://127.0.0.1:50123")
+            .expect("loopback base");
+        for allowed in [
+            "http://127.0.0.1:50123/page/enter-target",
+            "http://127.0.0.1:50123/",
+            "about:blank",
+        ] {
+            assert_eq!(plan.refusal(allowed), None, "{allowed}");
+        }
+        for refused in [
+            "https://www.google.com/search?q=enter-target",
+            "https://www.example.com/",
+            "http://127.0.0.1:501234/page/focus-page",
+            "http://127.0.0.1:50123@example.com/",
+            "http://127.0.0.1:50124/page/focus-page",
+            "http://127.0.0.1:50123",
+            "",
+        ] {
+            assert!(plan.refusal(refused).is_some(), "{refused} must be refused");
+        }
+    }
 
     #[test]
     fn only_a_loopback_page_server_is_accepted() {
