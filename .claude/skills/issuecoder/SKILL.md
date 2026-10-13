@@ -2,7 +2,7 @@
 name: issuecoder
 description: Pick open GitHub issues in the repository open in this session and ship them — claim, build on a branch with tests, verify, and open a PR per issue. Use when the user runs /issuecoder or asks to work through, close out or implement open issues. Optional argument names specific issue numbers, a label or a milestone.
 argument-hint: "[#issue ... | label:<name> | milestone:<name>]"
-disable-model-invocation: true
+user-invocable: true
 ---
 
 # /issuecoder — ship open issues as small, verified PRs
