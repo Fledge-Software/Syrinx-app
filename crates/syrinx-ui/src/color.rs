@@ -102,6 +102,13 @@ impl Color {
         0.2126 * linear(self.red) + 0.7152 * linear(self.green) + 0.0722 * linear(self.blue)
     }
 
+    /// HSL lightness in percent, unrounded: the mean of the largest and smallest channel.
+    pub fn lightness_percent(self) -> f64 {
+        let largest = self.red.max(self.green).max(self.blue);
+        let smallest = self.red.min(self.green).min(self.blue);
+        (f64::from(largest) + f64::from(smallest)) / 2. / 255. * 100.
+    }
+
     /// The (hue degrees, saturation percent) pair the canvas derives from an accent.
     ///
     /// Both are rounded to whole numbers, matching the canvas's `tokens()` method.
@@ -190,7 +197,7 @@ mod tests {
 
     #[test]
     fn default_accent_hue_and_saturation_match_the_canvas_formula() {
-        assert_eq!(Color::hex(0xFF8A65).hue_and_saturation(), (14., 100.));
+        assert_eq!(Color::hex(0xFF612E).hue_and_saturation(), (15., 100.));
         assert_eq!(Color::hex(0x808080).hue_and_saturation(), (0., 0.));
     }
 

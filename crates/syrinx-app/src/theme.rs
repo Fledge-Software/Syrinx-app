@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(icon_dim(), gpui::rgb(0xa3a6ae));
         assert_eq!(line(), gpui::rgb(0x24262c));
         assert_eq!(panel(), gpui::rgb(0x1b1c21));
-        assert_eq!(accent(), gpui::rgb(0xff8a65));
+        assert_eq!(accent(), gpui::rgb(0xff612e));
     }
 
     #[test]

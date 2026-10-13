@@ -290,27 +290,27 @@ mod tests {
         "glass/e8c16a/text_secondary/pill",
         "glass/e8c16a/text_secondary/row_selected",
         "glass/e8c16a/text_secondary_bright/row_selected",
-        "glass/ff8a65/text_muted/card",
-        "glass/ff8a65/text_muted/field",
-        "glass/ff8a65/text_muted/ground",
-        "glass/ff8a65/text_muted/pill",
-        "glass/ff8a65/text_muted/row_selected",
-        "glass/ff8a65/text_muted/surface",
-        "glass/ff8a65/text_secondary/pill",
-        "glass/ff8a65/text_secondary/row_selected",
-        "glass/ff8a65/text_secondary_bright/row_selected",
+        "glass/ff612e/text_muted/card",
+        "glass/ff612e/text_muted/field",
+        "glass/ff612e/text_muted/ground",
+        "glass/ff612e/text_muted/pill",
+        "glass/ff612e/text_muted/row_selected",
+        "glass/ff612e/text_muted/surface",
+        "glass/ff612e/text_secondary/pill",
+        "glass/ff612e/text_secondary/row_selected",
+        "glass/ff612e/text_secondary_bright/row_selected",
         "graphite/6ea8ff/text_muted/row_selected",
         "graphite/6fd3a8/text_muted/row_selected",
         "graphite/e8c16a/text_muted/row_selected",
-        "graphite/ff8a65/text_muted/row_selected",
+        "graphite/ff612e/text_muted/row_selected",
         "haze/6ea8ff/text_muted/field",
         "haze/6ea8ff/text_muted/row_selected",
         "haze/6fd3a8/text_muted/field",
         "haze/6fd3a8/text_muted/row_selected",
         "haze/e8c16a/text_muted/field",
         "haze/e8c16a/text_muted/row_selected",
-        "haze/ff8a65/text_muted/field",
-        "haze/ff8a65/text_muted/row_selected",
+        "haze/ff612e/text_muted/field",
+        "haze/ff612e/text_muted/row_selected",
         "paper/6fd3a8/accent_ink_text/panel",
         "paper/6fd3a8/accent_ink_text/panel_row_selected",
         "paper/e8c16a/accent_ink_text/panel",
@@ -384,8 +384,24 @@ mod tests {
             PaletteId::Paper,
             Accent::new(Color::hex(0x6FD3A8)),
         ));
-        assert_eq!(default[0].label(), "paper/ff8a65/text/ground");
+        assert_eq!(default[0].label(), "paper/ff612e/text/ground");
         assert_ne!(default[0].label(), green[0].label());
+    }
+
+    #[test]
+    fn default_accent_text_clears_the_text_minimum_in_every_palette() {
+        // 2026-10-13: the logo orange must stay at 4.5:1 as text and under badge text.
+        for id in PaletteId::ALL {
+            let text_checks: Vec<_> = audit(&palette(id, Accent::default()))
+                .into_iter()
+                .filter(|check| check.foreground.starts_with("accent"))
+                .filter(|check| check.minimum == TEXT_MINIMUM)
+                .collect();
+            assert_eq!(text_checks.len(), 3, "{}", id.id());
+            for check in text_checks {
+                assert!(check.passes(), "{}: {:.2}", check.label(), check.ratio);
+            }
+        }
     }
 
     #[test]

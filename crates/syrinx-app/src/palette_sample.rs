@@ -65,7 +65,7 @@ fn sample_content(frame: &Palette) -> Div {
         .flex()
         .flex_col()
         .gap(px(space::XXL))
-        .child(heading("Base palettes with the default accent (#FF8A65)"))
+        .child(heading("Base palettes with the default accent (#FF612E)"))
         .child(
             div()
                 .flex()

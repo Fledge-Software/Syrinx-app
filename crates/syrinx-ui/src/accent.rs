@@ -2,8 +2,8 @@
 
 use crate::color::Color;
 
-/// The spec's default accent, `#FF8A65`.
-pub const DEFAULT_ACCENT: Color = Color::hex(0xFF8A65);
+/// The default accent, the logo's orange `#FF612E` (2026-10-13; the spec's `#FF8A65` before).
+pub const DEFAULT_ACCENT: Color = Color::hex(0xFF612E);
 
 /// The accent swatches the canvas's Customize panel offers.
 pub const ACCENT_PRESETS: [Color; 4] = [
@@ -12,6 +12,9 @@ pub const ACCENT_PRESETS: [Color; 4] = [
     Color::hex(0x6FD3A8),
     Color::hex(0xE8C16A),
 ];
+
+/// The lowest accent-ink lightness, in percent, on the see-through Haze and Glass palettes.
+const SEE_THROUGH_INK_LIGHTNESS: f64 = 70.;
 
 /// Dark text on accent-filled badges (the canvas's `badgeText`).
 pub const BADGE_TEXT: Color = Color::hex(0x1F120D);
@@ -84,6 +87,25 @@ impl AccentColors {
         }
     }
 
+    /// Haze and Glass: as dark, but ink is lifted to at least 70% lightness in the accent's hue.
+    ///
+    /// Their see-through grounds are lighter than Graphite's, and the logo orange `#FF612E`
+    /// (59% lightness) fell below 4.5:1 as text on Haze and Glass's selected palette rows and
+    /// below 3:1 as a mark on Glass. 70% rounds the former default `#FF8A65`'s 69.8%, which
+    /// passed; accents at least that light keep their own colour (2026-10-13 decision).
+    pub fn see_through(accent: Accent) -> Self {
+        let fill = accent.fill();
+        let ink = if fill.lightness_percent() >= SEE_THROUGH_INK_LIGHTNESS {
+            fill
+        } else {
+            accent.tone(100., SEE_THROUGH_INK_LIGHTNESS)
+        };
+        Self {
+            ink,
+            ..Self::dark(accent)
+        }
+    }
+
     /// Paper's derivation: ink becomes `hsl(h, min(85, s)%, 36%)` and the wash `hex + 24`.
     pub fn light(accent: Accent) -> Self {
         Self {
@@ -108,16 +130,32 @@ mod tests {
     #[test]
     fn dark_states_use_the_canvas_alpha_suffixes() {
         let colors = AccentColors::dark(Accent::default());
-        assert_eq!(colors.soft.to_rgba_u32(), 0xFF8A6526);
-        assert_eq!(colors.soft_line.to_rgba_u32(), 0xFF8A658C);
-        assert_eq!(colors.ring.to_rgba_u32(), 0xFF8A6533);
+        assert_eq!(colors.soft.to_rgba_u32(), 0xFF612E26);
+        assert_eq!(colors.soft_line.to_rgba_u32(), 0xFF612E8C);
+        assert_eq!(colors.ring.to_rgba_u32(), 0xFF612E33);
         assert_eq!(colors.ink, DEFAULT_ACCENT);
+    }
+
+    #[test]
+    fn see_through_ink_lifts_only_dark_accents() {
+        let lifted = AccentColors::see_through(Accent::default());
+        assert_eq!(lifted.ink, Color::hsl(15., 100., 70.));
+        assert_eq!(lifted.fill, DEFAULT_ACCENT);
+        assert_eq!(
+            lifted,
+            AccentColors {
+                ink: lifted.ink,
+                ..AccentColors::dark(Accent::default())
+            }
+        );
+        let blue = Accent::new(Color::hex(0x6EA8FF));
+        assert_eq!(AccentColors::see_through(blue), AccentColors::dark(blue));
     }
 
     #[test]
     fn paper_ink_is_a_darker_tone_of_the_same_hue() {
         let colors = AccentColors::light(Accent::default());
-        assert_eq!(colors.ink, Color::hsl(14., 85., 36.));
+        assert_eq!(colors.ink, Color::hsl(15., 85., 36.));
         assert_eq!(colors.soft.alpha, 0x24);
         assert!(colors.ink.relative_luminance() < DEFAULT_ACCENT.relative_luminance());
     }

@@ -29,7 +29,8 @@ keeps the token tests fast and nothing in the tokens needs a GPUI type.
   Haze and Glass describe their ground as an OS material (Mica, Acrylic) with
   Syrinx's translucent tint over it, plus the canvas's stand-in wallpaper
   colours, which are used only for contrast checks and samples.
-- `accent.rs`: the default accent `#FF8A65`, the four Customize presets from
+- `accent.rs`: the default accent (`#FF8A65` at P1-07; the logo's `#FF612E`
+  since the 2026-10-13 branding decision), the four Customize presets from
   the canvas, and the derived states (`soft`, `soft_line`, `ring`, the badge
   text, and Paper's darker `ink`).
 - `PaletteId::resolve(reduce_transparency)`: Reduce transparency turns Haze
