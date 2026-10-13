@@ -108,7 +108,9 @@ authority:
 - **Older records say Atlas.** Atlas was the working name until the owner
   named the product Syrinx on 2026-10-12. Research notes, dated decisions,
   handoffs, prompts, review records and Phase 0 evidence keep the wording
-  of their time; read Atlas there as Syrinx.
+  of their time; read Atlas there as Syrinx. To follow an old path,
+  `crates/atlas-*` is now `crates/syrinx-*` and `docs/plans/Atlas … .md`
+  is now `docs/plans/Syrinx … .md`.
 - **Anything marked ⚠️ or "unverified" is checked before anything is built on
   it.** The plan's "Still unproven" section lists them.
 
