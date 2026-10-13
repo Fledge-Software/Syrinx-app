@@ -49,7 +49,13 @@ rather than producing an executable without an icon. It looks, in order, at:
 The Windows SDK comes with Visual Studio's "Desktop development with C++"
 workload, which the MSVC Rust toolchain already needs for its linker. On this
 machine the fourth route finds SDK `10.0.26100.0`. The resource script uses
-no SDK headers, so no include path is needed. The icon and brand rasters
+no SDK headers, so no include path is needed. It is written as UTF-16 with
+a byte-order mark: rc.exe reads a plain UTF-8 script in the ANSI code page,
+and a checkout path with characters outside it then fails with RC2135. A
+probe on 2026-10-13 compiled the icon from a folder named with accented and
+CJK characters as UTF-16 and failed as UTF-8. If the SDK folder exists but
+cannot be read, the build reports that error rather than treating it as a
+missing SDK. The icon and brand rasters
 are committed; building never runs Edge or Python (`design/brand/README.md`).
 
 ## Run and check

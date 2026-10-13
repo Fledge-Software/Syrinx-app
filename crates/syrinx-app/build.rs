@@ -2,6 +2,7 @@
 
 use std::env;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -49,14 +50,12 @@ fn compile_resources() -> Result<(), String> {
 
     let script = out_dir.join("syrinx.rc");
     let compiled = out_dir.join("syrinx.res");
-    fs::write(
-        &script,
-        resource_script(&icon, &required_env("CARGO_PKG_VERSION")?)?,
-    )
-    .map_err(|error| format!("could not write {}: {error}", script.display()))?;
+    let text = resource_script(&icon, &required_env("CARGO_PKG_VERSION")?)?;
+    fs::write(&script, utf16_with_bom(&text))
+        .map_err(|error| format!("could not write {}: {error}", script.display()))?;
     run_rc(&find_rc()?, &script, &compiled)?;
 
-    // Only the executable takes the resource; tests and examples keep their own.
+    // Binaries only: syrinx.exe and its own unit-test executable. Examples are not affected.
     println!("cargo:rustc-link-arg-bins={}", compiled.display());
     Ok(())
 }
@@ -65,18 +64,33 @@ fn required_env(name: &str) -> Result<String, String> {
     env::var(name).map_err(|_| format!("Cargo did not set {name}."))
 }
 
+/// rc.exe reads a script with a byte-order mark as UTF-16, so a checkout path outside the
+/// ANSI code page still names the icon correctly; plain UTF-8 failed with RC2135.
+fn utf16_with_bom(text: &str) -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
+}
+
+/// Quotes text as a resource-script string, where a `"` is written `""`.
+fn rc_string(text: &str) -> String {
+    format!("\"{}\"", text.replace('"', "\"\""))
+}
+
 /// The resource script: icon 1, which GPUI and the registry's `syrinx.exe,0` load, and VERSIONINFO.
 fn resource_script(icon: &Path, version: &str) -> Result<String, String> {
     let numbers = version_numbers(version)?;
     let [major, minor, patch] = numbers;
-    let icon_path = icon.display().to_string().replace('\\', "\\\\");
+    let icon_path = rc_string(&icon.display().to_string().replace('\\', "\\\\"));
     let company = match COMPANY_NAME {
-        Some(name) => format!("VALUE \"CompanyName\", \"{name}\"\n            "),
+        Some(name) => format!("VALUE \"CompanyName\", {}\n            ", rc_string(name)),
         None => String::new(),
     };
     // Numeric constants stand in for winver.h's names, so rc.exe needs no include path.
     Ok(format!(
-        r#"1 ICON "{icon_path}"
+        r#"1 ICON {icon_path}
 
 1 VERSIONINFO
 FILEVERSION {major},{minor},{patch},0
@@ -133,16 +147,13 @@ fn find_rc() -> Result<PathBuf, String> {
             explicit.display()
         ));
     }
-    let candidates = msvc_environment_rc()
-        .into_iter()
-        .chain(path_rc())
-        .chain(newest_sdk_rc());
-    for candidate in candidates {
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
+    if let Some(candidate) = msvc_environment_rc().filter(|candidate| candidate.is_file()) {
+        return Ok(candidate);
     }
-    Err(missing_rc_message())
+    if let Some(candidate) = path_rc() {
+        return Ok(candidate);
+    }
+    newest_sdk_rc()?.ok_or_else(missing_rc_message)
 }
 
 fn msvc_environment_rc() -> Option<PathBuf> {
@@ -158,22 +169,31 @@ fn path_rc() -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn newest_sdk_rc() -> Option<PathBuf> {
-    // Version folders such as 10.0.26100.0; pick the highest that has an x64 rc.exe.
+/// The highest version folder (such as 10.0.26100.0) with an x64 rc.exe. A missing SDK
+/// folder means none is installed; any other I/O error is reported.
+fn newest_sdk_rc() -> Result<Option<PathBuf>, String> {
     let kits_bin = match env::var_os("ProgramFiles(x86)") {
         Some(program_files) => PathBuf::from(program_files).join(r"Windows Kits\10\bin"),
         None => PathBuf::from(DEFAULT_KITS_BIN),
     };
-    let entries = fs::read_dir(kits_bin).ok()?;
-    entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let version = sdk_version(&entry.file_name().to_string_lossy())?;
-            let rc = entry.path().join("x64").join("rc.exe");
-            rc.is_file().then_some((version, rc))
-        })
-        .max()
-        .map(|(_, rc)| rc)
+    let unreadable = |error: io::Error| format!("could not read {}: {error}", kits_bin.display());
+    let entries = match fs::read_dir(&kits_bin) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(unreadable(error)),
+    };
+    let mut newest: Option<(Vec<u32>, PathBuf)> = None;
+    for entry in entries {
+        let entry = entry.map_err(unreadable)?;
+        let Some(version) = sdk_version(&entry.file_name().to_string_lossy()) else {
+            continue;
+        };
+        let rc = entry.path().join("x64").join("rc.exe");
+        if rc.is_file() && newest.as_ref().is_none_or(|(best, _)| version > *best) {
+            newest = Some((version, rc));
+        }
+    }
+    Ok(newest.map(|(_, rc)| rc))
 }
 
 fn sdk_version(name: &str) -> Option<Vec<u32>> {
