@@ -342,38 +342,48 @@ fn corruption_during_publication_cannot_prune_previous_backups_or_advance_schedu
 }
 
 #[test]
-fn discovery_surfaces_io_and_unsupported_deletion_state_without_creating_output() {
+fn discovery_surfaces_io_without_creating_output() {
     let mut fixture = Fixture::new();
     fixture.archive.fault.store(5, Ordering::SeqCst);
     assert_eq!(
         fixture.attempt(&mut BackupSchedule::default(), 0),
         Err(StoreError::Location(LocationError::IdentityChanged))
     );
-    fixture.archive.fault.store(0, Ordering::SeqCst);
-    fixture
-        .attempt(&mut BackupSchedule::default(), 0)
-        .expect("first backup succeeds");
-    fixture
-        .archive
-        .entries
-        .lock()
-        .expect("fixture entries accessible")[0]
-        .as_mut()
-        .expect("published metadata")
-        .deletion_generation = 1;
-    assert_eq!(
-        fixture.attempt(&mut BackupSchedule::default(), 86_400),
-        Err(StoreError::UnsupportedDeletionGeneration)
-    );
-    assert_eq!(
+    assert!(
         fixture
             .archive
             .entries
             .lock()
             .expect("fixture entries accessible")
-            .len(),
-        1
+            .is_empty()
     );
+    fixture.finish();
+}
+
+#[test]
+fn backups_record_the_applied_deletion_generation_and_keep_older_ones_eligible() {
+    let mut fixture = Fixture::new();
+    let mut schedule = BackupSchedule::default();
+    let Ok(BackupOutcome::Created(first)) = fixture.attempt(&mut schedule, 0) else {
+        panic!("first backup succeeds");
+    };
+    assert_eq!(first.deletion_generation, 0);
+
+    // A later clear raises the live generation; the next copy records it, the older stays valid.
+    crate::history::record_generation(&fixture.connection, 3).expect("synthetic clear recorded");
+    let Ok(BackupOutcome::Created(second)) = fixture.attempt(&mut schedule, 86_400) else {
+        panic!("second backup succeeds");
+    };
+    assert_eq!(second.deletion_generation, 3);
+    let copy = File::new(Arc::clone(&fixture.archive), second.id);
+    let connection =
+        Connection::open(copy.database_path()).unwrap_or_else(|_| panic!("open synthetic copy"));
+    assert_eq!(crate::history::applied_generation(&connection), Ok(3));
+    assert!(connection.close().is_ok(), "close synthetic copy");
+    assert!(matches!(
+        fixture.attempt(&mut BackupSchedule::default(), 2 * 86_400),
+        Ok(BackupOutcome::Created(_))
+    ));
     fixture.finish();
 }
 
@@ -387,17 +397,64 @@ fn future_schema_refusal_does_not_rewrite_the_backup() {
     let connection =
         Connection::open(file.database_path()).unwrap_or_else(|_| panic!("open synthetic backup"));
     connection
-        .execute_batch("PRAGMA user_version = 2")
+        .execute_batch(&format!(
+            "PRAGMA user_version = {}",
+            schema::SCHEMA_VERSION + 1
+        ))
         .expect("create future schema marker");
     assert!(connection.close().is_ok(), "close synthetic connection");
     let original = fs::read(file.database_path()).expect("read synthetic bytes");
     assert_eq!(
         validate_backup(&file),
-        Err(StoreError::FutureSchema { version: 2 })
+        Err(StoreError::FutureSchema {
+            version: schema::SCHEMA_VERSION + 1
+        })
     );
     assert_eq!(
         fs::read(file.database_path()).expect("read unchanged synthetic bytes"),
         original
+    );
+    fixture.finish();
+}
+
+#[test]
+fn newer_schema_backups_are_skipped_by_scheduling_and_never_pruned() {
+    let mut fixture = Fixture::new();
+    let mut schedule = BackupSchedule::default();
+    for day in 0..7 {
+        fixture
+            .attempt(&mut schedule, day * 86_400)
+            .expect("backup succeeds");
+    }
+    let oldest = File::new(Arc::clone(&fixture.archive), BackupId(1));
+    let connection = Connection::open(oldest.database_path())
+        .unwrap_or_else(|_| panic!("open synthetic backup"));
+    connection
+        .execute_batch(&format!(
+            "PRAGMA user_version = {}",
+            schema::SCHEMA_VERSION + 1
+        ))
+        .expect("mark synthetic backup as newer");
+    assert!(connection.close().is_ok(), "close synthetic connection");
+    let original = fs::read(oldest.database_path()).expect("read synthetic bytes");
+
+    // A fresh scan skips the newer backup instead of failing, and rotation never removes it.
+    let mut restarted = BackupSchedule::default();
+    assert!(matches!(
+        fixture.attempt(&mut restarted, 7 * 86_400),
+        Ok(BackupOutcome::Created(_))
+    ));
+    assert_eq!(
+        fs::read(oldest.database_path()).expect("reread synthetic bytes"),
+        original
+    );
+    assert_eq!(
+        fixture
+            .archive
+            .candidates()
+            .expect("candidates remain")
+            .len(),
+        8
     );
     fixture.finish();
 }

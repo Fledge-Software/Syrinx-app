@@ -13,7 +13,8 @@ branch: claude/plan-atlas-v1
 > **Status: active, approved by the owner on 2026-10-10.** Implementation is
 > queued behind plan 1's exit criteria. Work uses plan 1's D41 local branch,
 > independent-review and owner-approved-merge workflow; commits still need
-> an owner request. This plan's later slice breakdown requires approval.
+> an owner request. The owner also approved this plan's 12-slice breakdown
+> on 2026-10-10; its predecessor and acceptance gates remain in force.
 
 ## Why this exists
 
@@ -212,8 +213,8 @@ draft, so closing and reopening the palette cannot resubmit an old request.
 ## Sequencing
 
 Each phase must finish before the next starts. These are implementation
-phases, not published issues. An approved issue breakdown later divides
-each into changes reviewable in one sitting with explicit blocking edges.
+phases, not published issues. The approved issue map below divides each
+into reviewable slices with explicit blocking edges.
 
 ### Phase 1 — Contract and a test plugin
 
@@ -318,14 +319,58 @@ or permission to start later phases early.
 
 ## Issue map and approval
 
-Readiness is approved. Prepare this plan's reviewable local slices with
-blocking dependencies and obtain the owner's breakdown approval before
-implementing them. Plan 1's approved 40-slice map does not stand in for this
-later breakdown. D41 permits local implementation without creating a remote:
-each slice uses its own branch and independent review, and the owner approves
-every merge. Commit only on request. Outstanding work and the future slice
-map stay here; publishing issues, adding a remote and pushing require separate
-owner authorization.
+The owner approved these 12 local slices on 2026-10-10, exactly as
+recorded in [the approved Plans 2–4 breakdown](<Atlas v1 — Plans 2–4 slice proposals.md>).
+The boundaries, deliverables and explicit blockers below are unchanged from
+that approval. Every slice also depends on the preceding slice in this plan;
+finish each phase exit before its next phase. The breakdown's common gates
+apply to every row. All rows are queued, not implemented.
+
+**Entry gate:** Plan 1 must deliver its generic model, command registry,
+palette, storage, both search tiers, themes, shell and local gate, and pass its
+GPUI idle and browser exits. This slice map is approved; the three preview
+placeholder rows do not satisfy the predecessor entry gate.
+
+D41 supplies one local branch and independent review per slice, with owner
+approval before every merge. Commit only on request. No remote, push, public
+issue or upstream message is authorized. Concrete dependency and public-API
+approvals remain separate; the map does not waive predecessor or operator gates.
+
+### Phase 1 — contract and a test plugin
+
+| Approved ID | Why and deliverable | Done evidence and explicit blockers |
+| --- | --- | --- |
+| P2-01 | A reviewed boundary prevents later plugins from depending on private application objects. Define the versioned manifest, owned serializable commands/results, errors, tab/view references, forms/lists, Host requests and bounded index batches in `atlas-plugin-api`; review the object-safe asynchronous contract before consumers depend on it. | Serialization and compatibility tests reject unsupported versions and malformed identities. No GPUI, WebView2, SQLite or borrowed core state crosses the boundary. Blocked by the Plan 2 entry gate and any required concrete API approval. |
+| P2-02 | Registration mistakes must fail before commands become visible. Add explicit built-in registration, duplicate-ID rejection, command/view ownership checks and dependency-boundary checks in `atlas-core` and `xtask`. | A synthetic plugin uses the same contract as future built-ins. Duplicate plugins/commands, foreign command ownership and unknown views fail deterministically; no early activation occurs during manifest discovery. |
+| P2-03 | A slow or failed plugin must leave browsing usable. Implement lazy activation, bounded request queues, request identity, cancellation, observed completion, timeout/uncertain-outcome states and lifecycle cleanup. | Synthetic lifecycle tests cover late completion, close/reopen, unavailable service and uncertain writes without automatic resubmission. Fix workload and queue/timeout bounds before judging behavior. No blanket panic swallowing or native-crash-isolation claim is introduced. |
+| P2-04 | Plugin settings must use the shared store without exposing another plugin's namespace. Add Host-scoped settings/storage services and a synthetic service adapter through application wiring. | Tests reject cross-plugin access, prove persistence and error propagation, and exercise the test plugin through activation, commands, view requests and close/reopen. The complete Phase 1 gate passes; this trusted-native boundary is not described as a security sandbox. |
+
+### Phase 2 — a plugin command through the real palette
+
+| Approved ID | Why and deliverable | Done evidence and explicit blockers |
+| --- | --- | --- |
+| P2-05 | The shared palette must render commands without plugin-specific UI paths. Add Plugin actions scope and declarative form/list rendering, Rust-owned field state, validation, pending/error presentation and generic outcomes, using the test plugin. | Invalid fields retain input and focus the failing field. Repeated Enter cannot duplicate a pending submission; cancellation and late responses cannot update another command/view. Blocked by the complete Phase 1 exit. |
+| P2-06 | Opening or closing a plugin must preserve one tab identity and the live page's focus. Wire permanent plugin rows, owned view activation, close/reopen and palette focus routing through the generic model. | Over a synthetic live page, Enter, Ctrl Enter, Tab, Shift Tab and Esc work; focus returns correctly. No duplicate Open tabs row or retained closed-view subscription exists. Inspect keyboard focus and readability in all five palettes. Phase 2 closes only with native interactive evidence. |
+
+### Phase 3 — the Fledge demonstration end to end
+
+| Approved ID | Why and deliverable | Done evidence and explicit blockers |
+| --- | --- | --- |
+| P2-07 | A deterministic stand-in proves service behavior without a real account. Add the `fledge-client` trait and session-only implementation with create/list/detail operations, opaque IDs, explicit amount/currency and submission idempotency. | Contract tests cover duplicate submission IDs, missing records, invalid input, cancellation and simulated service/write failures. Only Name is required; optional Company, Source and value follow the approved demo rules and values are labelled demo USD. Blocked by Phase 2; no REST/OAuth client is added. |
+| P2-08 | Fledge must use the same Host boundary as every plugin. Add the application adapter and `plugin-fledge` command/list/detail contribution, with clear "New demo lead" and demonstration labels. | The path is plugin → Host → application adapter → `FledgeClient` → stand-in. The plugin imports no `fledge-client`, core, store or UI crate. Enter creates once; Ctrl Enter also opens the created record through the normal lifecycle. |
+| P2-09 | Closing a palette must not lose unfinished typing or resubmit completed work. Complete session-only draft and submission-state behavior across Esc, reopen, success, explicit discard and restart. | Tests prove retained editable drafts, distinct pending/completed outcomes, failures that preserve input, and no duplicate write after reopen. Restart clears drafts and demo records. The owner can exercise the labelled demonstration in the normal app; Phase 3 has no production-service prerequisite. |
+
+### Phase 4 — search, lifecycle and acceptance
+
+| Approved ID | Why and deliverable | Done evidence and explicit blockers |
+| --- | --- | --- |
+| P2-10 | Both search tiers must receive plugin changes without lost updates. Connect registered commands and bounded revisioned index feeds, stable targets and per-consumer completion/cursor tracking to Plan 1's chosen stores. | Interrupt delivery, index commit and cursor checkpoint independently; replay remains idempotent with no missing or duplicate synthetic records. Tier 1 completion cannot masquerade as a durable tier 2 commit. Stale query responses remain rejected. Blocked by Phase 3. |
+| P2-11 | Session-only demo data must not survive in a durable index after its source disappears. Finish demo namespace teardown, deletion/replay and view/subscription cleanup across close and restart. | A fresh session has no earlier demo records in either search tier, even after interruption/replay. Repeated open/close leaves no active subscriptions or leaked work. Do not depend on the empty new stand-in enumerating old records. |
+| P2-12 | Functional success does not establish responsive daily use. Measure activation, composed palette ranking and idle cost, then complete keyboard, lifecycle and owner acceptance. | The gate and prior exits pass; D48 still passes with plugin contributions and idle work does not busy-poll. The report separates application cost from simulated service latency. Owner acceptance closes Plan 2 before Notes implementation starts. |
+
+Real Fledge integration remains outside this map until Stage C, an authorized
+current client contract and separate real-client approval. The map adds no
+mail/calendar/document integration, marketplace or third-party sandbox.
 
 ## Sources checked for this expansion
 
@@ -372,3 +417,6 @@ The owner-authorized readiness review on 2026-10-10 also checked:
   breakdown still needs approval, and commits still require a request.
   D39 limits analytics to local aggregates and explicit report export;
   suggestions require owner review and personal/business content stays out.
+- **2026-10-10:** The owner subsequently approved the exact 12-slice map
+  and dependencies now recorded above. Predecessor exits, operator acceptance
+  and separate public-API/dependency/commit/merge permissions remain in force.

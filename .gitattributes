@@ -2,3 +2,13 @@
 * text=auto
 # Preserve the approved SQLite vendor source byte for byte for provenance checks.
 /vendor/libsqlite3-sys-0.38.2/** -text
+# Preserve the approved wry baseline and its narrow source patch byte for byte.
+/vendor/wry-0.57.0/** -text
+/vendor/wry-0.57.0.window-close-requested.patch -text
+/vendor/wry-0.57.0.failed-construction.patch -text
+# Preserve the approved frizbee baseline and padding correction byte for byte.
+/vendor/frizbee-0.13.0/** -text
+/vendor/frizbee-0.13.0.padding.patch -text
+# Preserve the approved GPUI Windows baseline and idle-repaint patch byte for byte.
+/vendor/gpui-pre-windows-0.3.8/** -text
+/vendor/gpui-pre-windows-0.3.8.idle.patch -text

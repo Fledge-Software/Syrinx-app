@@ -13,6 +13,7 @@ branch: claude/plan-atlas-v1
 > **Status: active.** The owner approved all four plans, this plan's 40-slice
 > breakdown and the local implementation/review workflow on 2026-10-10 (D41).
 > The same day's D43–D45 amendment preserves all 40 slice IDs and their order.
+> Plans 2–4 now also have approved 12/16/21 slice maps; predecessor exits remain.
 > Where it disagrees with `docs/decisions.md`, `docs/spec.md` or
 > `design/README.md`, those win, and the disagreement belongs under Open
 > threads.
@@ -30,8 +31,10 @@ The spec's phased plan (`docs/spec.md`, "Phased plan") and the research in
 decision reopened on 2026-10-09 is settled. P1-01's scaffold, P1-02's tab
 model and P1-03's storage are merged. P1-04's SQLite maintenance prerequisite
 and complete backup/recovery slice passed the 138-test local gate and
-independent source reviews. P1-04 is committed and locally merged as `7710c06`. There is
-no browser UI yet.
+independent source reviews. P1-04 is committed and locally merged as `7710c06`.
+D49's integrated browser preview now has a window, native pages and a palette,
+but interactive acceptance, the reported WebView2 crash and the remaining
+browser requirements are unresolved; see `docs/implementation-status.md`.
 
 If nothing is done, the research goes stale. It is dated 2026-10-09 and
 tracks fast-moving projects (Tauri's unstable multi-webview, GPUI snapshot
@@ -227,6 +230,8 @@ Decisions made in this plan:
 
 | # | Decision | Chosen | Rejected, and why | Date |
 |---|---|---|---|---|
+| D49 | What should be runnable next? | Bring the integrated product browser forward: existing tabs, saved-page storage, backups and search connected to a GPUI window, vertical tabs, WebView2 navigation and Ctrl K. Keep remaining features and performance requirements tracked; commit/merge approvals still apply. | Continuing strict order before exposing any morning work in a window: the owner explicitly chose a usable integrated preview after rejecting the old spike. Calling the preview full v1: its unfinished requirements remain visible. | 2026-10-10 |
+| D48 | How is the 5 ms tier 1 search target measured? | Require 95% of repeated complete 100,000-row searches to finish within 5 ms; report the worst sample too. Measure ranking, scope counts and returned highlights together. | Requiring every measured sample below 5 ms: occasional Windows scheduling interruptions can dominate a maximum. Hiding maxima or measuring the matcher alone: conceals the actual responsiveness. | 2026-10-10 |
 | D47 | How does explicit history clearing survive restoring an older backup? | Keep a local deletion record containing only cleared date ranges and data categories, never URLs or page contents. Restoration honors it, preserving older recovery points without reintroducing cleared history. | Discarding all older backups whenever history is cleared: loses their recovery depth. Restoring deleted history: undoes the owner's clearing request. | 2026-10-10 |
 | D46 | May Atlas restore a damaged database automatically? | Offer the newest verified backup with its date and ask the owner before replacing the current database. Preserve damaged files locally. | Automatic restoration: the owner wants to confirm a replacement that may lose newer state. | 2026-10-10 |
 | D45 | What are the top square sidebar tiles? | Favorites, separate from inline saved pages/folders. They may target websites, plugin pages and other supported Atlas destinations. Plugin targets use the normal plugin lifecycle; until implemented, show the existing unavailable indication. | Website-only tiles exclude the owner's plugin destinations. Treating tiles as saved-page records conflates two navigation surfaces. An early plugin host or fake successful opening skips plan 2. | 2026-10-10 |
@@ -236,7 +241,7 @@ Decisions made in this plan:
 | D41 | May implementation proceed while the repository stays local? | Yes. The four plans and plan 1's 40-slice breakdown are approved. One local branch per slice, independent review, and the owner's approval before every merge replace D16's GitHub prerequisite. Commits still require the owner's request; first preserve the planning baseline with an explicitly requested documentation commit. No remote or pushes. | Waiting for GitHub: the owner wants to continue locally. Treating workflow approval as permission for commits or merges: those remain separate owner controls. | 2026-10-10 |
 | D40 | Does the seven-day page-text limit include Atlas backups? | Yes. Keep page text and its index in an expiring cache outside D13's seven daily durable-state snapshots. Expiry applies to active storage and must survive restart, replay and restore. This is an Atlas-managed retention policy, not forensic erasure. | Only hiding older text from search while keeping it in snapshots: exceeds the retention the owner chose. | 2026-10-10 |
 | D39 | Keep WebView2 despite its diagnostics, and may Atlas have analytics? | Keep WebView2 and SmartScreen and disclose the runtime's collection; crash dumps stay local. Replace the blanket no-analytics rule with local aggregate feature/command counts, timings and error categories, explicitly exported by the owner. No account/device IDs, URLs, searches, paths, document text or detailed event timeline; no automatic uploads. A model may suggest changes from a report the owner chooses to share, and the owner reviews changes. Review the concrete schema, retention/control behavior and added implementation slices before collection. | No analytics: the owner wants evidence to improve Atlas. Automatic uploads and an automatically adapting interface: the owner selected local counters, explicit export and reviewed suggestions. Removing IDs as an absolute anonymity guarantee: one person's report can remain identifiable by context. | 2026-10-10 |
-| D38 | How do development builds run, given Smart App Control blocks unsigned debug builds? | A release-style profile with debug info for the gate and dev runs; no change to Windows settings | The owner adjusting Smart App Control: changes a security setting for convenience (`docs/research/09-phase-0-verdict.md`) | 2026-10-10 |
+| D38 | How do development builds run, given Smart App Control blocks unsigned debug builds? | A release-style profile with debug info for the gate and dev runs; no change to Windows settings. The owner requires local Atlas to run unsigned for now; no certificate prerequisite. Verify each app build because this profile grants no policy exemption. | The owner adjusting Smart App Control: changes a security setting for convenience (`docs/research/09-phase-0-verdict.md`). Making a certificate mandatory: the owner has none and signing remains deferred. | 2026-10-10 |
 | D37 | May Atlas carry a patched GPUI? | Yes, on D12's rules: small, `=`-pinned, offered upstream, dropped once merged. First use: GPUI's Windows idle loop, which repaints every window each frame (idle CPU 3.75% of a core against the 0.5% bar). If the patch can't reach 0.5%, GPUI against Tauri returns to the owner | Switching to Tauri now: gives up about 0.9 s of start-up and 60–150 MB. Accepting high idle CPU: battery and heat for a browser left open all day | 2026-10-10 |
 | D36 | Does Atlas watch for Google sign-in breaking? | It shows a one-line notice when the WebView2 runtime version changes, so the owner watches for sign-in trouble, and offers to open the current Google page in Edge in one click if sign-in breaks. No automatic sign-in test | An automatic canary that signs in: credentials in a test. Nothing: a silent break would surprise the owner mid-work | 2026-10-09 |
 | D35 | How is page text indexed (D18) without breaking Google? | Indexed locally for 7 days, but never on Google's sites, banking and payment sites, or pages sent with `Cache-Control: no-store`; the owner can add sites to the exclusion list in settings. The extraction method is chosen in plan 1 and must inject nothing on excluded sites | Dropping it for v1: the owner wants recall by content. Indexing everything: breaks the rules that keep Google working (`docs/research/07-google-sign-in-and-drm.md`) and keeps a 7-day record of banking pages in the database and its snapshots | 2026-10-09 |
@@ -523,7 +528,8 @@ since its signed integer range cannot represent all valid model IDs.
 - **Tier 1, in memory:** one row per titled thing (open tabs, bookmarks,
   recent history, commands), ranked by `frizbee` with frecency and an
   open-tab boost on every keystroke, with the scope chips counted in the
-  same pass. Budget: under 5 ms at 100,000 rows.
+  same pass. Budget: under 5 ms at the 95th percentile for 100,000 rows,
+  with the worst sample also reported (D48).
 - **Tier 2, full text:** page text for 7 days (D18, D35), excluding Google's
   sites, banking and payment sites and `no-store` pages. The store (tantivy
   or SQLite FTS5) is chosen by a one-day bake-off, here in plan 1 because
@@ -675,7 +681,8 @@ amendment before implementation, without moving ahead of the foundations.
   `cargo clippy --all-targets -- -D warnings` and `cargo test` pass using
   D38's profile as documented by the scaffold, with assertions and overflow
   checks retained; idle CPU under 0.5% with 8 tabs suspended; the tab model, migrations and ranking are covered by
-  tests; tier 1 meets 5 ms at 100,000 rows in `xtask bench`; the five
+  tests; tier 1 meets D48's 5 ms at the 95th percentile for 100,000 rows in
+  `xtask bench`, with the maximum reported; the five
   palettes render a sample screen matching the canvas.
 
 ### Phase 2 — The browser shell
@@ -729,7 +736,8 @@ amendment before implementation, without moving ahead of the foundations.
 - **Delivers:** the palette over any tab, scope chips, highlighted matches,
   preview, Search the web.
 - **Exit criteria:** opening the palette paints within one frame of Ctrl K;
-  each keystroke ranks within 5 ms at 100,000 rows; the overlay tests from
+  keystroke ranking meets D48's 5 ms at the 95th percentile for 100,000 rows,
+  with the maximum reported; the overlay tests from
   Phase 0 pass in the real app.
 
 ### Phase 5 — Daily driver
@@ -798,10 +806,13 @@ not be described as eliminating all server infrastructure.
   Phase 5; do not mark this passed from the toolkit's stated support.
 - ⚠️ A way to read page text that injects nothing on excluded sites (D35).
   Chosen in Phase 3.
-- ⚠️ Numerical targets are acceptance criteria, not benchmark results:
-  5 ms for the complete 100,000-row rank/count/highlight path, one-frame
-  palette paint, and the real product's D6 memory/startup comparisons remain
-  to be measured. Upstream matcher microbenchmarks do not establish them.
+- ⚠️ **Tier 1 search has not met D48.** P1-05's first complete synthetic
+  100,000-row benchmark passed correctness checks but missed the 5 ms p95
+  limit in 25 of 26 cases; its worst sample was 383.737 ms. The measurements
+  and ongoing profiling are in `docs/p1-05-search.md`. Upstream matcher
+  microbenchmarks do not establish Atlas's complete-path responsiveness.
+  One-frame palette paint and the real product's D6 memory/startup comparisons
+  remain unmeasured.
 - ⚠️ The private live design canvas has not been compared with the local
   snapshot in this review. Resolve that at the design-token gate using
   owner-authorized access; no integration app is authorized by this review.
@@ -822,6 +833,40 @@ this plan, in order:
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
 
+- **P1-25 repeated `Cache-Control` lines (2026-10-12), decided:** the
+  synthetic harness found that WebView2 reports only the first line of a
+  repeated response header, so a page sending `no-store` only on a later
+  `Cache-Control` line is read (F2 in `docs/p1-25-page-text.md`). The owner
+  accepted this as a known limit of D35 the same day (`docs/decisions.md`).
+  A report to Microsoft is possible but is sent only with the owner's
+  approval; nothing has been sent.
+
+- **Owner's target date:** on 2026-10-10 the owner requested the full planned
+  browser, including the built-in plugins, usable for their daily workflow
+  before Monday, 2026-10-12. This is the delivery target, not evidence of
+  completion. D49 subsequently approves bringing the integrated browser
+  forward; checks and commit/merge approvals still apply. Report tested
+  progress and concrete blockers against that target.
+- **P1-05 acceptance:** retain D48 while profiling the failed search benchmark.
+  Windows Application Control also blocks the rebuilt gate runner and store
+  test executable (error 4551), including unchanged retries. Build helpers
+  now use D38's optimized local route; no Windows setting was changed. The
+  actual unsigned console app still launches. The owner requires unsigned
+  development and has no certificate; signing is not a prerequisite. The
+  CPU-specific diagnostic also missed D48 in 25 of 26 cases with identical
+  result checksums, so changing CPU flags is not the performance fix. The
+  slice cannot be presented as complete or merged with either gate unresolved.
+- **Suspending a hidden page that is still loading (P1-15), resolved by the
+  owner 2026-10-12:** the native lifecycle-timeout diagnosis in
+  `docs/p1-11-popups.md` showed that `TrySuspend` succeeded five seconds
+  after a hidden page started navigating even with its load still in
+  flight, leaving the page frozen half-loaded until shown. The owner decided
+  that the five-second countdown starts when the navigation finishes
+  (success or failure). It is implemented on
+  `claude/diagnose-lifecycle-timeout` in `browser/hidden_timer.rs`, with a
+  60-second limit for loads that never finish; see
+  `docs/p1-15-suspension-fullscreen.md`. The decision record itself is in
+  `docs/decisions.md`.
 - **Sidebar UI details (D44):** the wide/compact/hidden progression,
   reversible drag, hover peek and Ctrl Alt S are approved. Review exact
   widths, transition thresholds and compact-folder controls with the owner
@@ -835,6 +880,22 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
   retention, export preview and performance budget still need a proposal
   before collector implementation. No automatic upload or model integration
   is authorized, and actual usage stays out of development artifacts.
+- **Analytics proposal approved (AN-01/AN-02), 2026-10-12:**
+  the owner answered yes to all seven questions in
+  `docs/proposals/an-01-02-local-analytics.md`: the fixed version 1 schema,
+  off until enabled, turning it off deletes the counts, 30-day periods with
+  two kept, kept out of backups, owner-initiated JSON export only, and AN-01
+  after P1-39 with AN-02 before P1-40. Real usage still stays out of
+  development artifacts.
+- **Page-text extraction method approved (P1-25), 2026-10-12:** the owner
+  answered yes to all seven questions in
+  `docs/proposals/p1-25-page-text-extraction.md`: one DevTools-protocol
+  `DOMSnapshot.captureSnapshot` call on eligible pages, response headers
+  read only through `WebResourceResponseReceived`, no script run inside any
+  page, Google's own domains (YouTube included) excluded, redirect chains
+  through an excluded site skipped, a built-in bank and payment list with a
+  password/card-field guard, fail closed on unproven `no-store`, and a stop
+  and return to the owner if test F15 shows the capture is detectable.
 - **Retention implementation (D40):** the owner chose seven days with page
   text excluded from daily backups. Prove expiry across cache/index and
   restart/replay/restore; do not treat search invisibility as deletion.
@@ -872,6 +933,34 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
     Later commits and merges require their own approval; no remote or push
     is authorized.
 
+## Deferred work
+
+Atlas-authored code may carry a deferred-work marker (`TODO`, `FIXME` or
+`HACK`) only when it is tagged with a row from this register, written as
+`TODO(DW-1): what is left`. The owner allowed this on 2026-10-11 so that
+known gaps can stay next to the code they concern, as long as each one is
+tracked here and comes back as a fix. `cargo xtask check` refuses an
+untagged marker or a tag missing from this table. Once Atlas is on GitHub,
+each row gets an issue and the issue number goes in the last column. When
+the work is done, delete the marker and move the row's status to Done.
+
+Add a row before writing the marker. Say why the work is deferred and which
+slice it belongs to, so whoever comes back to it knows when it is due.
+
+| ID | Deferred work and why | Owning slice | Status | Issue |
+| --- | --- | --- | --- | --- |
+| DW-1 | Unify the bookmark parser's address check with navigation's `web_address` (`crates/atlas-app/src/navigation.rs`) through one shared function in `atlas-core`; the owner approved `atlas-core` using `url` for this on 2026-10-12. Until then the parser uses a stricter syntactic copy, and the import commit step must re-check every address with navigation's rule and report failures as skipped. P1-22 is not complete until this is done. **Done 2026-10-12** on `claude/p1-22-import-commit`: `atlas_core::web_address` is the one rule; navigation and the parser call it, the parser's copy is deleted, and the commit step re-checks with it. | P1-22 | Done | |
+| DW-2 | Persist the sidebar's settled width state (wide, favicon-only or hidden) across restart. P1-08's drag works, but `atlas-store` has no settings table, so the state lives in `BrowserView` memory and resets to wide on restart; adding a settings table is a schema migration that belongs with P1-29's appearance settings. The marker is where the sidebar settles in `crates/atlas-app/src/ui/sidebar_view.rs`; see `docs/p1-08-sidebar-states.md`. Done at the 2026-10-12 integration merge: a drag release or key step that changes the state saves `sidebar.width_state` through P1-29's settings table, and start-up restores it, keeping wide when the value is missing or unreadable. | P1-29 | Done | |
+| DW-3 | Ctrl Alt S now toggles hidden and the last visible sidebar width through both GPUI and the page-focused WebView2 accelerator path. P1-17 coordinates it with the owned peek popup and persists the last visible width; see `docs/p1-17-peek.md`. | P1-17 | Done | |
+| DW-4 | Bound browsing history before D48's 100,000-row scale. P1-20 keeps every visit and loads every remembered address into the tier-1 catalogue at start-up (`Worker::restore` in `crates/atlas-app/src/session.rs`), so both the database and start-up cost grow without limit. Add a retention policy (an owner decision on age or count) and pruning that removes visits, then addresses left without visits, and keeps the catalogue in step, using the same participant as D47 clearing (`Store::apply_history_deletions`). Deferred because P1-20 only had to make history durable and searchable, and pruning shares its machinery with clearing. P1-27 (2026-10-12) built that machinery but left the policy open: the choice of maximum age or row count, and its value, is the owner's (recommended: 90 days). Once chosen, pruning is a range clear through `Store::apply_history_deletions` at start-up and daily, with the catalogue following as `crates/atlas-app/src/session/deletions.rs` does. Done on `claude/p1-27-clear-data` (2026-10-12) after the owner chose 90 days: start-up expires visits older than 90 days before the catalogue loads, and the idle check repeats it at most once a day. Each expiry is a journaled D47 range clear `[0, end)`, so a restored backup loses the expired visits too, and it removes at most 2,000 visits, continuing a larger backlog on later idle checks. The cutoff never passes 90 days before the newest stored visit and moves at most two days past the last applied cutoff per run, so a wrong clock, even with visits recorded under it, cannot expire recent browsing in one step; a start within a day of the last expiry skips it. See `docs/p1-27-clear-data.md`, "History retention". | P1-27 follow-up | Done | |
+| DW-5 | Bound the palette's command ranking before plugins can register commands. P1-30 ranks registry commands on the UI thread (`crates/atlas-app/src/palette/commands.rs`), because enablement depends on what the window shows; with ten built-in commands each keystroke ranks a handful of rows, but nothing limits how many a plugin may add. Either cap the registry's size or move command ranking off the UI thread with enablement passed in, before Plan 2's host accepts plugin commands. | Plan 2, phase 1 | Open | |
+| DW-7 | Let the owner remove a remembered site permission. P1-12 stores explicit allow/deny choices per origin and kind (`crates/atlas-store/src/permissions.rs`, schema version 6) but has no control to forget one, so a remembered choice can only change when the site asks again and the owner picks differently. Add a settings action that removes a saved origin/kind choice so the next request asks again, with storage and UI regression coverage. Deferred because the natural home is P1-29's settings surface, which the permissions slice did not own; the owner requested the `TODO(DW-7)` marker on 2026-10-12. Moved here from a duplicate register at the P1-11–P1-16 integration. | P1-29 settings, or a P1-12 follow-up | Open | |
+| DW-30 | Pin the owner's release public key in `PRODUCTION_KEYS` (`crates/atlas-update/src/keys.rs`). P1-38 built and tested the update verifier with keys generated in-process, but the production key must be created by the owner outside the repository and outside any agent session, and its identifier recorded separately so the pinned copy can be checked independently (`docs/p1-38-update-format.md`, "Keys"). Until then the set is empty and every package is refused as signed by an unknown key, so the verifier fails closed. Deferred because only the owner can create the key and P1-39 is the first slice that uses it. | P1-39 | Open | |
+| DW-60 | Announce the palette's moving selection to screen readers. P1-36 names every result row (`crates/atlas-app/src/palette/render.rs`, `row_frame`) and marks the selected one, but the arrow keys move the selection while keyboard focus stays in the query field. GPUI 0.3.8 honours `aria_active_descendant` only when the focused node is an ancestor of the claiming row (`gpui-pre-0.3.8/src/window/a11y.rs`, `set_active_descendant`, around line 258), and the query field is the rows' sibling, so NVDA reads the field but not the row. Fix by moving focus to a list container that owns the query input, or by an input-side active-descendant API in GPUI (a vendored GPUI change needs its own owner approval). Deferred because both routes change either the palette's focus model or the pinned toolkit. See `docs/p1-36-accessibility.md`. | P1-36 follow-up, before P1-40 | Open | |
+| DW-61 | Give the sidebar tree one Tab stop with arrow-key movement. P1-36 makes every saved, open and folder row its own Tab stop (`crates/atlas-app/src/ui/sidebar_view.rs`, `row_frame`), which works but means many Tab presses through a long sidebar, and F6 lands on the sidebar's first control (Search) rather than the active row. The ARIA tree pattern expects one stop, Up and Down between rows, Left and Right to collapse and expand folders, and focus returning to the active row. Deferred because it needs a roving-focus model shared with the peek popup, which renders the same rows in another window. | P1-36 follow-up | Open | |
+| DW-62 | Show the focus ring only after keyboard input. P1-36 draws the ring on any focus (`crates/atlas-app/src/controls.rs`, `focus_ring`), so a mouse click on a chrome button leaves a ring until focus moves on. GPUI's `focus_visible` would hide it after a click, but GPUI decides keyboard use from its own key events and never sees the F6 or Tab that arrives through WebView2's accelerator path, so a ring would be missing exactly when F6 leaves a page. Needs a public way to mark keyboard modality (a vendored GPUI change, owner approval) or the owner's acceptance of the current behaviour. | P1-36 follow-up | Open | |
+| DW-90 | Open the palette within one frame. P1-33's acceptance runs (`docs/p1-33-palette-acceptance.md`) measured about 0.5 s from the Ctrl K action to the palette's first presented frame (p95 525 ms at 60 Hz in run `1791855053`). On that busy machine, with Atlas never in the foreground, almost all of it fell between the call into GPUI's `open_window` and the window's creation. That attribution is provisional until the owner's foreground run. `BrowserView::open_palette` (`crates/atlas-app/src/ui.rs`) creates a new owned popup window for every Ctrl K and `PaletteView::finish` removes it. Create the owned, non-topmost popup once, keep it hidden, and show, refocus and reset it on Ctrl K, keeping P1-10's stale-popup guards and the Home palette intent correct; then rerun `cargo xtask palette-acceptance`. The owner approved this approach on 2026-10-12 (`docs/decisions.md`) as its own slice with its own review, after P1-33 merges. | P1-33 follow-up, before P1-40 | Open (approved 2026-10-12) | |
+
 ## Issue map
 
 Approved by the owner on 2026-10-10 (D41). The following table is copied from
@@ -900,7 +989,7 @@ approved rows until the owner approves the added slice boundaries.
 | P1-02 | One model prevents sidebar/palette disagreement and replacing temporary pins later. Implement live tab identity/kinds, a flat saved-page lifecycle with independent saved identity and live association, selection/order, save/unpin, unload/open-or-focus and a 20-entry closure stack for ordinary and saved web instances. Test D42/D43 without a window; folders and plugin registration remain later work. | `crates/atlas-core`; S3, D42/D43. | P1-01. |
 | P1-03 | Saved destinations must survive independently of live pages. Open a local unsynced store, migrate it and persist/reload flat saved entries plus live-tab snapshots and their associations through a serialized writer. Prove rollback, unloaded-entry preservation and errors on disposable databases. | `crates/atlas-store`, core persistence boundary, filesystem-only `atlas-platform` directory guard; D13/D43. | P1-02; Q2 for durable/cache separation. |
 | P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and an owner-confirmed recovery path; interruption leaves the last valid copy usable. Define and test the local deletion-journal contract so later history clearing survives restoring older snapshots. | `crates/atlas-store`, filesystem lifecycle in `atlas-platform`; D13/D46/D47. | P1-03; approved SQLite maintenance prerequisite, now verified. |
-| P1-05 | The palette needs fast local ranking before UI work. Add the tier 1 catalogue, boosts, counts and match positions with incremental updates and a reproducible 100,000-row benchmark. | `crates/atlas-search`, `crates/xtask`; D9. | P1-04. |
+| P1-05 | The palette needs fast local ranking before UI work. Add the tier 1 catalogue, boosts, counts and match positions with incremental updates and a reproducible 100,000-row benchmark. | `crates/atlas-search`, `crates/xtask`; D9/D48. | P1-04. |
 | P1-06 | Continuous repainting defeats the performance goal. Implement the small pinned GPUI idle patch, add focused regression evidence and remeasure eight suspended tabs and equivalent first-page startup in both throwaway candidates using fresh synthetic profiles. Prepare a reviewable upstream patch. | Pinned GPUI patch and measurement report; D37/D12. | P1-05; passing measurements. Public offer requires separate owner approval. |
 | P1-07 | Shared tokens and width states keep the shell consistent. Render the five palettes, accent and transparency fallback with wide, favicon-only, hidden and peek sidebar samples. Review D44 drag thresholds with the owner and inspect contrast against the authorized design direction. | `crates/atlas-ui`; S10/D44, `design/README.md`. | P1-06; live-canvas comparison or owner-approved snapshot, with D43–D45 amendments. |
 
@@ -968,6 +1057,7 @@ started: 2026-10-09   code repo: local Atlas-app (D41; no remote)   plan branch:
 | Phase 1 | P1-02: generic tab and flat saved-page model | local slice | Codex | Full gate passed: dependency check, fmt, Clippy, 24 model tests, 7 architecture tests and console app launch; D42/D43 lifecycle implemented without UI or storage | codex/p1-02-tab-model @ 892d3bc; base ed19d6d | independent source/test review and documentation/map audit passed with no findings | merged into claude/plan-atlas-v1 as 892d3bc with owner approval on 2026-10-10 |
 | Phase 1 | P1-03: durable saved pages and session records | local slice | Codex | Implemented: 77-test local gate passed; guarded Windows location, atomic saved/live snapshots and migrations; narrow licence allowances approved | codex/p1-03-storage @ c4a6631; base 9a6ae35 | independent core/store, native and documentation reviews passed; long-path regression fixed and retested | merged into claude/plan-atlas-v1 as c4a6631 with owner approval on 2026-10-10 |
 | Phase 1 | P1-04: Backups and confirmed recovery | local slice, complete | Codex | Approved SQLite patch, lifecycle ownership, idle daily snapshots, seven-copy rotation, confirmed/resumable recovery and deletion contract; full 138-test gate passed | codex/p1-04-backups; 7710c06 | independent SQLite, store, native backup/recovery, deletion-contract and documentation reviews passed | owner-approved commit and fast-forward merge into claude/plan-atlas-v1 |
+| Phase 1 | P1-05: Local search catalogue | local slice, in progress | Codex | Approved frizbee padding correction applied and independently reviewed; the latest full desktop gate passes 347 workspace tests, including 153 search and five public matcher regressions. Test-only phase and restore diagnostics identify candidate filtering costs and verify one-build restore correctness. All eight available matcher backend variants pass. The unchanged production benchmark preserves 1,040 exact results but only 9/26 cases meet D48. Earlier restricted-context smoke failure remains recorded. The range index remains test-only. | codex/integrated-browser-preview; based on 33dade0, preserving P1-05 work | normal-desktop full gate passes; retain restricted failed-smoke evidence, then complete performance acceptance and production-loading review; see docs/p1-05-search.md | not complete, committed or merged; D48 acceptance remains open |
 gates: 2026-10-09 owner approved starting Phase 0 locally
 gates: 2026-10-10 Phase 0 verdict written: go with GPUI on two conditions (docs/research/09-phase-0-verdict.md)
 gates: 2026-10-10 owner approved proceeding into plan 1; readiness and the issue breakdown still require separate approval
@@ -986,7 +1076,8 @@ gates: 2026-10-10 owner requested the P1-03 commit and approved its local merge;
 gates: 2026-10-10 owner chose confirmation before restoring a damaged database (D46) and a local deletion record that prevents restored backups from resurrecting cleared history (D47)
 gates: 2026-10-10 owner approved the pinned SQLite 3.53.4 source patch and vendor-comment exception; source identities and unchanged dependency graph verified; full cargo xtask check passed 78 tests and console launch
 gates: 2026-10-10 owner explicitly requested the P1-04 commit and approved its local merge; 7710c06 was fast-forward merged into claude/plan-atlas-v1 after the 138-test gate and independent reviews; upstream vendor whitespace preserved with all 17 source hashes verified
-current: P1-04 committed and merged; no Git remote configured   next: P1-05 tier 1 search; preserve strict slice order
+gates: 2026-10-10 owner approved the page-close API and pinned wry vendor exception; its implementation passed independent review, 99 app/platform tests, dependency checks, workspace Clippy, scoped formatting, an actual synthetic native close fixture and the rebuilt standard app's desktop smoke check. The final workspace formatting recheck found unrelated search-profiler edits; see docs/page-close-event-review.md. No commit, merge or upstream publication is authorized by this patch approval.
+current: D49 integrated browser preview remains in progress with uncommitted work preserved. The current atlas-app.exe and preserved atlas-app-parallel-preview.exe share SHA-256 3ca0bf045fc0826e7300a647307845733fb5249b085f52feeadbebf0abd4c276. Two owner-requested parallel sessions used subagents for navigation reliability and WebView2 construction ownership. Reviewed navigation/popup fixes, saved-row lifecycle regressions and narrowed ASCII projection are integrated. The owner separately approved the exact wry construction patch; its source and provenance reviews pass. The latest full gate passes dependency checks, formatting, Clippy and 301 tests (including 41 app and 160 search unit tests), then Windows blocks the public matcher-test executable with error 4551 before execution. The full gate remains failed. Separate rebuilt app smoke and patched native lifecycle runs pass. Fault-injection validation is being prepared in disposable copies and has not run. The latest benchmark preserves all 1,040 exact results but passes only 10/26 D48 cases; the range index remains test-only. The owner stopped Computer Use during first inspection of the new synthetic preview, which was left open; no further UI automation followed. Popup typing/navigation and the original WebView2 crash remain unresolved. Plans 2–4 retain their approved 12/16/21 slice boundaries and predecessor exits. No commit, merge, push or security change occurred. See docs/handoff-integrated-preview-2026-10-10.md for current evidence, parallel-session ownership and required checks.
 
 ## Iteration log
 

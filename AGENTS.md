@@ -281,6 +281,56 @@ style problem.
   `TODO`/`FIXME` comments are permitted only inside
   `vendor/libsqlite3-sys-0.38.2`; Atlas-authored work remains subject to the
   ordinary rule. This approval covers neither commits nor merges.
+- **Approved narrow source patch, 2026-10-10:** wry remains exactly 0.57.0
+  with the Windows close callback proposed in `docs/page-close-event-review.md`.
+  The owner approved that two-file dependency patch and its Atlas close-event
+  API so page-requested closure follows the durable tab lifecycle. Unchanged
+  upstream `TODO`/`FIXME` comments and existing lint annotations are permitted
+  only inside `vendor/wry-0.57.0`; no new Atlas-authored suppression is allowed.
+  Preserve all other archive files, dependency versions and features. This
+  approval does not cover another dependency patch, commits, merges,
+  publication or sending an upstream message; prepare the upstream diff locally.
+- **Approved additional narrow source patch, 2026-10-10:** the owner explicitly
+  approved applying the frozen wry failed-construction patch in the parallel
+  investigation chat, including its documented limitations. The exact patch
+  SHA-256 is `a87ca514149545576a25a39a390a444234d6db9159bcde751e7806aafc959042`;
+  it changes `vendor/wry-0.57.0/src/webview2/mod.rs` and adds its private
+  `construction.rs`. Preserve pins, features and all other vendor files.
+  `docs/wry-failed-construction-patch-review.md` records temporary native
+  ownership, delayed parent attachment and limited structural cleanup
+  diagnostics. Validation is serialized through the integration chat, with
+  independent subagent review. Fault hooks stay in disposable test copies,
+  never the release patch. This grants no additional dependency patch, COM
+  teardown change, security change, commit, merge or publication.
+- **Approved narrow source patch, 2026-10-10:** P1-05 may vendor the audited
+  `frizbee 0.13.0` package with exactly the three-file padding correction in
+  `docs/p1-05-frizbee-maintenance-review.md`. Preserve the pin, features
+  (`default-features=false`, `std` and `safe_read`), licence and other package
+  files. Unchanged upstream `TODO`/`FIXME` comments and existing lint
+  annotations are permitted only inside `vendor/frizbee-0.13.0`; no new
+  Atlas-authored suppression or deferred-work marker is allowed. Record the
+  archive inventory, exact diff and modified hashes, and validate the unchanged
+  dependency graph. This approval covers neither another dependency patch nor
+  commits, merges, pushes, publication or an upstream message.
+- **Approved narrow source patch, 2026-10-11:** P1-06 may vendor the pinned
+  `gpui-pre-windows 0.3.8` package (Zed snapshot
+  `279fe070bb389b79652e52065b2f001edcc0b11b`, Apache-2.0) with the D37 idle
+  repaint patch described in `docs/gpui-idle-patch-review.md`. Unchanged
+  upstream `TODO`/`FIXME` comments, including those at
+  `src/shaders.hlsl:490` and `:704`, and existing lint annotations are
+  permitted only inside `vendor/gpui-pre-windows-0.3.8`; no new
+  Atlas-authored suppression or deferred-work marker is allowed. Preserve the
+  exact pin, features, licence and all other package files; record the
+  archive inventory, exact diff and modified hashes, and validate the
+  unchanged dependency graph. This approval covers neither another dependency
+  patch nor commits, merges, pushes, publication or an upstream message.
+- **Approved dependency, 2026-10-11:** the owner approved adding Tantivy
+  for P1-23's full-text bake-off, and for P1-24 if the bake-off chooses it.
+  Pin the exact audited version and record its audit, including every
+  transitive package's licence, in `docs/p1-23-fulltext-audit.md`. This
+  approval accepts the lockfile growth Tantivy brings. It does not accept any
+  transitive package outside the permissive licences listed above; stop and
+  ask if one appears.
 - **Pin GPUI exactly with `=`.** Snapshot releases change its API weekly, and
   a caret requirement has already broken builds (note 08, 1.2). A patched
   fork of wry or tao is allowed only if small, pinned and offered upstream
@@ -320,8 +370,13 @@ breakdowns before implementation; creating GitHub is no longer a prerequisite.
 else. Each plan entry gets an issue under its milestone, and the plan's
 "Issue map" records them.
 
-Either way, keep the codebase free of `TODO` and `FIXME` markers: if you
-defer something, write it down where it will be found.
+Either way, a deferred-work marker (`TODO`, `FIXME`, `HACK`) in Atlas-authored
+code is allowed only when it carries a tag from the plan's "Deferred work"
+register, as in `TODO(DW-3): restore zoom per site`. Add the register row
+first. Once Atlas is on GitHub, each row becomes an issue, and the marker
+stays until that issue is fixed. `cargo xtask check` rejects untagged or
+unregistered markers. The owner set this rule on 2026-10-11. A marker never
+excuses a failing test, a silenced lint or a swallowed error.
 
 ## Writing voice for commits, plans and anything published
 

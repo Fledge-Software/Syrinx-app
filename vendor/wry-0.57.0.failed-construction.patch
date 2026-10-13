@@ -1,0 +1,435 @@
+diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
+index 920d830..7bb5649 100644
+--- a/src/webview2/mod.rs
++++ b/src/webview2/mod.rs
+@@ -2,6 +2,7 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // SPDX-License-Identifier: MIT
+ 
++mod construction;
+ mod drag_drop;
+ mod util;
+ 
+@@ -26,7 +27,10 @@ use windows::{
+   },
+ };
+ 
+-use self::drag_drop::DragDropController;
++use self::{
++  construction::{PendingContainer, PendingController},
++  drag_drop::DragDropController,
++};
+ use super::Theme;
+ use crate::{
+   custom_protocol_workaround, proxy::ProxyConfig, Error, MemoryUsageLevel, NewWindowFeatures,
+@@ -114,7 +118,8 @@ impl InnerWebView {
+   ) -> Result<Self> {
+     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+ 
+-    let hwnd = Self::create_container_hwnd(parent, &attributes, is_child)?;
++    let container = Self::create_container_hwnd(parent, &attributes, is_child)?;
++    let hwnd = container.hwnd;
+ 
+     let drop_handler = attributes.drag_drop_handler.take();
+     let bounds = attributes.bounds;
+@@ -135,6 +140,7 @@ impl InnerWebView {
+     } else {
+       Self::create_environment(&attributes, pl_attrs.clone())?
+     };
++    container.ensure_alive()?;
+     let controller = Self::create_controller(
+       hwnd,
+       &env,
+@@ -142,45 +148,57 @@ impl InnerWebView {
+       background_color,
+       pl_attrs.profile_name.as_deref(),
+     )?;
++    container.ensure_alive()?;
+     let webview = Self::init_webview(
+-      parent,
+       hwnd,
+       id.clone(),
+       attributes,
+       &env,
+-      &controller,
++      &controller.controller,
+       pl_attrs,
+-      is_child,
+     )?;
+ 
++    container.ensure_alive()?;
++
+     let drag_drop_controller = drop_handler.map(|handler| {
+       // Disable file drops, so our handler can capture it
+       unsafe {
+         let _ = controller
++          .controller
+           .cast::<ICoreWebView2Controller4>()
+           .and_then(|c| c.SetAllowExternalDrop(false));
+       }
+       DragDropController::new(hwnd, handler)
+     });
+ 
+-    let w = Self {
++    // Keep temporary ownership through initial sizing and all its error paths.
++    if is_child {
++      Self::set_bounds_for(&controller.controller, hwnd, bounds.unwrap_or_default())?;
++    } else {
++      Self::set_bounds_inner_for(
++        &controller.controller,
++        hwnd,
++        Self::parent_bounds(parent)?,
++        (0, 0).into(),
++      )?;
++    }
++    container.ensure_alive()?;
++
++    // Attach only once construction can no longer fail or detach another owner.
++    if !is_child {
++      unsafe { Self::attach_parent_subclass(parent, &controller.controller) };
++    }
++
++    Ok(Self {
+       id,
+       parent: RefCell::new(parent),
+-      hwnd,
+-      controller,
++      hwnd: container.release(),
++      controller: controller.release(),
+       is_child,
+       webview,
+       env,
+       drag_drop_controller,
+-    };
+-
+-    if is_child {
+-      w.set_bounds(bounds.unwrap_or_default())?;
+-    } else {
+-      w.resize_to_parent()?;
+-    }
+-
+-    Ok(w)
++    })
+   }
+ 
+   #[inline]
+@@ -188,7 +206,7 @@ impl InnerWebView {
+     parent: HWND,
+     attributes: &WebViewAttributes,
+     is_child: bool,
+-  ) -> Result<HWND> {
++  ) -> Result<PendingContainer> {
+     unsafe extern "system" fn default_window_proc(
+       hwnd: HWND,
+       msg: u32,
+@@ -270,6 +288,8 @@ impl InnerWebView {
+       )?
+     };
+ 
++    let container = PendingContainer::new(hwnd)?;
++
+     unsafe {
+       SetWindowPos(
+         hwnd,
+@@ -282,7 +302,7 @@ impl InnerWebView {
+       )
+     }?;
+ 
+-    Ok(hwnd)
++    Ok(container)
+   }
+ 
+   #[inline]
+@@ -376,7 +396,7 @@ impl InnerWebView {
+     incognito: bool,
+     background_color: Option<(u8, u8, u8, u8)>,
+     profile_name: Option<&str>,
+-  ) -> Result<ICoreWebView2Controller> {
++  ) -> Result<PendingController> {
+     let (tx, rx) = mpsc::channel();
+ 
+     // we don't use CreateCoreWebView2ControllerCompletedHandler::wait_for_async
+@@ -384,11 +404,9 @@ impl InnerWebView {
+     // by manually creating the callback handler and use webview2_com::with_with_bump
+     let handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
+       move |error_code, controller| {
+-        let result = (|| {
+-          error_code?;
+-          controller.ok_or_else(|| windows::core::Error::from(E_POINTER).into())
+-        })();
+-        tx.send(result)
++        // Own even a non-null result accompanied by a failing HRESULT.
++        let controller = controller.map(PendingController::new);
++        tx.send((error_code, controller))
+           .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
+       },
+     ));
+@@ -423,20 +441,20 @@ impl InnerWebView {
+       }
+     }
+ 
+-    webview2_com::wait_with_pump(rx)?
++    // Handle ordinary completion failures outside the native callback.
++    let (error_code, controller) = webview2_com::wait_with_pump(rx)?;
++    error_code?;
++    controller.ok_or_else(|| windows::core::Error::from(E_POINTER).into())
+   }
+ 
+-  #[allow(clippy::too_many_arguments)]
+   #[inline]
+   fn init_webview(
+-    parent: HWND,
+     hwnd: HWND,
+     webview_id: String,
+     mut attributes: WebViewAttributes,
+     env: &ICoreWebView2Environment,
+     controller: &ICoreWebView2Controller,
+     pl_attrs: super::PlatformSpecificWebViewAttributes,
+-    is_child: bool,
+   ) -> Result<ICoreWebView2> {
+     let webview = unsafe { controller.CoreWebView2()? };
+ 
+@@ -610,11 +628,6 @@ impl InnerWebView {
+       unsafe { webview.NavigateToString(&html)? };
+     }
+ 
+-    // Subclass parent for resizing and focus
+-    if !is_child {
+-      unsafe { Self::attach_parent_subclass(parent, controller) };
+-    }
+-
+     unsafe {
+       controller.SetIsVisible(attributes.visible)?;
+ 
+@@ -1544,9 +1557,19 @@ impl InnerWebView {
+     &self,
+     size: PhysicalSize<i32>,
+     position: PhysicalPosition<i32>,
++  ) -> Result<()> {
++    Self::set_bounds_inner_for(&self.controller, self.hwnd, size, position)
++  }
++
++  // Share sizing with construction before InnerWebView takes resource ownership.
++  fn set_bounds_inner_for(
++    controller: &ICoreWebView2Controller,
++    hwnd: HWND,
++    size: PhysicalSize<i32>,
++    position: PhysicalPosition<i32>,
+   ) -> Result<()> {
+     unsafe {
+-      self.controller.SetBounds(RECT {
++      controller.SetBounds(RECT {
+         top: 0,
+         left: 0,
+         right: size.width,
+@@ -1554,7 +1577,7 @@ impl InnerWebView {
+       })?;
+ 
+       SetWindowPos(
+-        self.hwnd,
++        hwnd,
+         None,
+         position.x,
+         position.y,
+@@ -1568,19 +1591,18 @@ impl InnerWebView {
+   }
+ 
+   pub fn set_bounds(&self, bounds: Rect) -> Result<()> {
+-    let dpi = unsafe { util::hwnd_dpi(self.hwnd) };
++    Self::set_bounds_for(&self.controller, self.hwnd, bounds)
++  }
++
++  fn set_bounds_for(controller: &ICoreWebView2Controller, hwnd: HWND, bounds: Rect) -> Result<()> {
++    let dpi = unsafe { util::hwnd_dpi(hwnd) };
+     let scale_factor = util::dpi_to_scale_factor(dpi);
+     let size = bounds.size.to_physical::<i32>(scale_factor);
+     let position = bounds.position.to_physical(scale_factor);
+-    self.set_bounds_inner(size, position)?;
++    Self::set_bounds_inner_for(controller, hwnd, size, position)?;
+     Ok(())
+   }
+ 
+-  fn resize_to_parent(&self) -> crate::Result<()> {
+-    let parent_bounds = Self::parent_bounds(*self.parent.borrow())?;
+-    self.set_bounds_inner(parent_bounds, (0, 0).into())
+-  }
+-
+   pub fn set_visible(&self, visible: bool) -> Result<()> {
+     unsafe {
+       let _ = ShowWindow(
+diff --git a/src/webview2/construction.rs b/src/webview2/construction.rs
+new file mode 100644
+--- /dev/null
++++ b/src/webview2/construction.rs
+@@ -0,0 +1,171 @@
++//! Retain native resources until a complete web view can own them.
++
++use std::{
++  cell::Cell,
++  io::Write,
++  rc::Rc,
++  sync::atomic::{AtomicU32, Ordering},
++};
++
++use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller;
++use windows::Win32::{
++  Foundation::*,
++  UI::{Shell::*, WindowsAndMessaging::*},
++};
++
++use crate::Result;
++
++const CONSTRUCTION_SUBCLASS_ID: usize = (WM_USER + 0x67) as usize;
++
++// Preserve structural failures even if the process has no usable stderr.
++static CLEANUP_FAILURES: AtomicU32 = AtomicU32::new(0);
++const CONTROLLER_CLOSE_FAILED: u32 = 1;
++const CONTAINER_DESTROY_FAILED: u32 = 2;
++const OBSERVER_REMOVE_FAILED: u32 = 4;
++const DIAGNOSTIC_WRITE_FAILED: u32 = 8;
++
++fn report_cleanup_failure(bit: u32, operation: &'static str) {
++  CLEANUP_FAILURES.fetch_or(bit, Ordering::Relaxed);
++  if writeln!(
++    std::io::stderr().lock(),
++    "wry construction cleanup failed: {operation}"
++  )
++  .is_err()
++  {
++    CLEANUP_FAILURES.fetch_or(DIAGNOSTIC_WRITE_FAILED, Ordering::Relaxed);
++  }
++}
++
++pub(super) struct PendingController {
++  pub(super) controller: ICoreWebView2Controller,
++  close_on_drop: bool,
++}
++
++impl PendingController {
++  pub(super) fn new(controller: ICoreWebView2Controller) -> Self {
++    Self {
++      controller,
++      close_on_drop: true,
++    }
++  }
++
++  // Move cleanup authority to the completed InnerWebView.
++  pub(super) fn release(mut self) -> ICoreWebView2Controller {
++    self.close_on_drop = false;
++    self.controller.clone()
++  }
++}
++
++impl Drop for PendingController {
++  fn drop(&mut self) {
++    if self.close_on_drop && unsafe { self.controller.Close() }.is_err() {
++      report_cleanup_failure(CONTROLLER_CLOSE_FAILED, "controller Close");
++    }
++  }
++}
++
++pub(super) struct PendingContainer {
++  pub(super) hwnd: HWND,
++  alive: Rc<Cell<bool>>,
++  observer: Option<*mut Rc<Cell<bool>>>,
++  destroy_on_drop: bool,
++}
++
++impl PendingContainer {
++  // Begin ownership before the first fallible operation after CreateWindowExW.
++  pub(super) fn new(hwnd: HWND) -> Result<Self> {
++    let mut owner = Self {
++      hwnd,
++      alive: Rc::new(Cell::new(true)),
++      observer: None,
++      destroy_on_drop: true,
++    };
++    let observer = Box::into_raw(Box::new(owner.alive.clone()));
++    let installed = unsafe {
++      SetWindowSubclass(
++        hwnd,
++        Some(construction_subclass_proc),
++        CONSTRUCTION_SUBCLASS_ID,
++        observer as usize,
++      )
++    };
++    if !installed.as_bool() {
++      // The failed registration never takes ownership of its reference data.
++      unsafe { drop(Box::from_raw(observer)) };
++      return Err(windows::core::Error::from(E_FAIL).into());
++    }
++    owner.observer = Some(observer);
++    Ok(owner)
++  }
++
++  // Native callbacks may destroy the container while creation pumps messages.
++  pub(super) fn ensure_alive(&self) -> Result<()> {
++    if !self.alive.get() {
++      return Err(windows::core::Error::from(E_HANDLE).into());
++    }
++    Ok(())
++  }
++
++  // Stop observing only when no further fallible construction remains.
++  pub(super) fn release(mut self) -> HWND {
++    self.destroy_on_drop = false;
++    self.detach_observer();
++    self.hwnd
++  }
++
++  fn detach_observer(&mut self) {
++    let Some(observer) = self.observer.take() else {
++      return;
++    };
++    if !self.alive.get() {
++      return;
++    }
++    let removed = unsafe {
++      RemoveWindowSubclass(
++        self.hwnd,
++        Some(construction_subclass_proc),
++        CONSTRUCTION_SUBCLASS_ID,
++      )
++    };
++    if removed.as_bool() {
++      unsafe { drop(Box::from_raw(observer)) };
++    } else {
++      // Keep callback data alive; WM_NCDESTROY can still release it.
++      report_cleanup_failure(OBSERVER_REMOVE_FAILED, "construction observer removal");
++    }
++  }
++}
++
++impl Drop for PendingContainer {
++  fn drop(&mut self) {
++    if self.destroy_on_drop && self.alive.get() && unsafe { DestroyWindow(self.hwnd) }.is_err() {
++      // Do not retry a raw handle: another callback might have destroyed it.
++      report_cleanup_failure(CONTAINER_DESTROY_FAILED, "container DestroyWindow");
++    }
++  }
++}
++
++// Clear the exact attempt's ownership before destruction can recycle its HWND.
++unsafe extern "system" fn construction_subclass_proc(
++  hwnd: HWND,
++  message: u32,
++  wparam: WPARAM,
++  lparam: LPARAM,
++  subclass_id: usize,
++  reference_data: usize,
++) -> LRESULT {
++  if message == WM_NCDESTROY {
++    let observer = reference_data as *mut Rc<Cell<bool>>;
++    (*observer).set(false);
++    if RemoveWindowSubclass(hwnd, Some(construction_subclass_proc), subclass_id).as_bool() {
++      drop(Box::from_raw(observer));
++    } else {
++      // A failed removal cannot justify freeing data a callback may still use.
++      report_cleanup_failure(
++        OBSERVER_REMOVE_FAILED,
++        "destroyed container observer removal",
++      );
++    }
++  }
++  DefSubclassProc(hwnd, message, wparam, lparam)
++}

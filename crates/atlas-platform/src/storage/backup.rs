@@ -69,7 +69,7 @@ impl WindowsBackupArchive {
             Some(file) => file,
             None if create => {
                 super::create_directory(&path)?;
-                native::open_directory(&path, false)?
+                native::open_retained_directory(&path)?
             }
             None => return Ok(None),
         };
@@ -280,7 +280,7 @@ impl BackupFile for WindowsBackupFile {
     }
 
     fn publish(&self, metadata: BackupMetadata) -> Result<(), LocationError> {
-        if metadata.id != self.id || metadata.deletion_generation != 0 {
+        if metadata.id != self.id {
             return Err(LocationError::InvalidBackup);
         }
         self.revalidate()?;

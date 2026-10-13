@@ -208,3 +208,26 @@ fn diagnostics_do_not_disclose_clear_intervals() {
     assert!(!diagnostics.contains("478932850"));
     assert!(!diagnostics.contains("478933210"));
 }
+
+#[test]
+fn unapplied_includes_a_pending_clear_but_never_a_generation_the_log_lacks() {
+    let mut log = DeletionLog::default();
+    let mut bytes = EMPTY_DELETION_LOG.to_vec();
+    assert_eq!(log.last_generation(), 0);
+    assert!(log.unapplied(0).expect("empty log").is_empty());
+    clear(&mut log, &mut bytes, range(10, 20));
+    let pending = log
+        .request(DeletionCategory::History, range(30, 40))
+        .expect("prepare pending synthetic clear");
+    append(&mut log, &mut bytes, pending);
+
+    // Recovery may apply the interrupted request; completed-only replay still refuses it.
+    assert_eq!(log.last_generation(), 2);
+    let all = log.unapplied(0).expect("copy without clears");
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[1].range(), range(30, 40));
+    assert_eq!(log.unapplied(1).expect("copy after first").len(), 1);
+    assert!(log.unapplied(2).expect("copy with both").is_empty());
+    assert_eq!(log.unapplied(3), Err(DeletionError::MissingGeneration));
+    assert_eq!(log.replay_after(0), Err(DeletionError::PendingClear));
+}

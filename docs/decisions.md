@@ -5,8 +5,190 @@ Each entry says what changed and why. The spec's "Decisions already made"
 still stand unless an entry here says otherwise. Design decisions are
 recorded separately, in `design/README.md`.
 
+## 2026-10-12
+
+- **Palette ranking is judged from key press to rows on screen (P1-33).**
+  A keystroke's ranked rows must be presented within two display refresh
+  intervals at the 95th percentile (33.3 ms at 60 Hz), with the maximum
+  always reported. D48's 5 ms limit still applies to the search itself and
+  stays with P1-05. Two intervals is the smallest budget that allows for the
+  frame wait: a reply that lands just after a frame must wait for the next.
+  Judging only the search core was rejected because it hides the frame wait
+  and the reply's trip back to the window.
+
+- **"Opens within one frame" is judged at the 95th percentile (P1-33).**
+  The palette's first presented frame must follow Ctrl K within one refresh
+  interval at p95, with every sample and the maximum reported. This follows
+  D48: a single Windows scheduling stall should not decide the verdict, and
+  hiding the slow samples would conceal real responsiveness. Requiring every
+  opening within one frame was rejected for that reason.
+
+- **The palette popup is created once and then shown and hidden (DW-90).**
+  P1-33 measured about half a second from Ctrl K to the palette's first
+  frame. The cause is provisionally attributed to creating a new native
+  window for every opening; the owner's foreground runs will confirm it. The
+  owner approved keeping one owned, non-topmost popup hidden between uses.
+  It is a separate slice after P1-33 merges, rerun through P1-33's harness.
+  Keeping a new window per opening was rejected, because it cannot meet the
+  one-frame target.
+
+- **Page text skips every exit from an excluded site unless Atlas started it
+  (P1-25, "skip all exits").** A page reached by leaving an excluded document
+  (Google, a bank or payment site, or a site the owner excluded) is never
+  read, unless Atlas itself started that navigation from the address bar,
+  the palette, a bookmark, a saved page, a tile or Home. Links, page
+  scripts, auto-submitting forms, popups, back, forward and reload all count
+  as leaving. The taint carries on: a page reached that way passes it to the
+  next page it leads to, until Atlas navigates the tab, so a sign-in
+  callback that moves on by script is not read either. A popup opened from
+  an excluded or tainted page starts tainted. This replaces the
+  user-initiated test in the entry below: WebView2's `IsUserInitiated`
+  follows Chromium's short-lived user activation, so a "Continue" click on a
+  bank page counted as the owner's own navigation and its next page was
+  read. Keeping the user-initiated test was rejected for that reason. The
+  form-`POST` rule below stands.
+
+- **Page text skips sign-in hops (P1-25).** *(Its user-initiated test was
+  replaced the same day by "skip all exits" above; the `POST` rule stands.)* A page reached by a navigation
+  that an excluded site (Google, a bank or payment site, or a site the owner
+  excluded) started by itself, through its own script or an auto-submitting
+  form, is not read. Neither is any page produced by a form submission (a
+  `POST`) on any site, including one that redirects to an ordinary page
+  afterwards. A link the owner follows out of an excluded site still leads to
+  a readable page if that page is otherwise eligible. Sign-in flows carry
+  tokens and personal details from the excluded site to the next page this
+  way, which the redirect rule alone did not catch. Atlas tells these apart
+  from WebView2's own `IsUserInitiated` flag and the request method it
+  reports, with no request filter and no injected script. Reading such pages
+  and relying only on the exclusion lists was rejected.
+
+- **A split `no-store` header is an accepted limit (P1-25, F2).** When a site
+  sends `Cache-Control` as several separate header lines, WebView2 shows
+  Atlas only the first, so a `no-store` on a later line is missed and the
+  page can be read. The owner accepted this as a known limit rather than
+  adding a request filter, which the Google guardrails forbid. A report to
+  Microsoft is possible but is sent only with the owner's approval; nothing
+  has been sent.
+
+- **Page text uses the browser's `visibility` style (P1-25).** The snapshot
+  asks WebView2 for each node's computed `visibility`, so text a page hides
+  with `visibility: hidden` is left out, as it is for `display: none`. This
+  departs from the proposal's empty style list; the owner approved it after
+  the F1 test showed hidden text being kept.
+
+- **A background tab finishes loading before it is put to sleep (P1-15).**
+  The five-second countdown before a hidden page is suspended now starts
+  when its navigation completes, not when it starts, so a slow page opened in
+  the background is fully loaded when the owner switches to it. Suspending
+  mid-load froze such pages half-loaded and was found as the cause of an
+  intermittent native-test timeout. Keeping the earlier timing, which saves
+  a little more memory, was rejected. A page that never finishes still
+  sleeps after a bounded wait.
+
+- **History is kept for 90 days (DW-4).** Older visits are deleted
+  automatically through the same path as Clear browsing data, so they stay
+  deleted after a backup is restored (D47). Ninety days matches Chrome: long
+  enough for the palette to recall a page, short enough to keep the database
+  small. The owner rejected keeping history forever, a year and 30 days.
+
+- **The installed Atlas keeps its data in `%LOCALAPPDATA%\Atlas\data` (P1-37).**
+  Development and preview builds keep using `AtlasProductPreview`, so test
+  runs never mix with the owner's real browsing data. Nothing is moved or
+  deleted between them; the installed app starts empty and bookmarks are
+  imported again. Keeping the preview folder was rejected for that reason.
+
+- **Page text is read with one DevTools snapshot, never a script (P1-25).**
+  The owner approved `docs/proposals/p1-25-page-text-extraction.md` as
+  recommended. Atlas captures an eligible page's visible text with a single
+  `DOMSnapshot.captureSnapshot` call and reads only response headers, so
+  nothing runs inside any page. Google's own sites (YouTube included), banks
+  and payment sites, pages with password or card fields, pages not proven
+  cacheable and redirect chains through an excluded site are never read. If
+  testing shows a site can detect the capture, the work stops and returns to
+  the owner. This keeps D35's no-injection rule absolute.
+
+- **Local usage counting is approved, off until switched on (AN-01/02).**
+  The owner approved `docs/proposals/an-01-02-local-analytics.md` as
+  recommended: the fixed version 1 schema, turning it off deletes the counts,
+  30-day periods with two kept, never backed up or restored, and export only
+  as a JSON file the owner saves or copies. AN-01 follows P1-39 and AN-02
+  precedes P1-40. This implements D39 without uploads or identifiers.
+
+- **Pages get find, history, print and zoom keys first (P1-13).** When a web
+  page has focus, Ctrl F, Ctrl H, Ctrl P and the zoom keys go to the page
+  first, as in Chrome. If the page doesn't use them, the engine's own find,
+  print and zoom apply. Atlas's own find and history stay reachable from
+  Ctrl K and the toolbar. Grabbing them first broke Google Docs' in-document
+  find and its Ctrl H find and replace. Ctrl T, W, L, K and Tab stay Atlas's.
+
+- **Smart App Control is off for development.** Windows Application Control
+  repeatedly blocked locally built, unsigned executables (os error 4551),
+  breaking gate runs at random. The owner turned Smart App Control off on
+  their machine. This was the owner's own action; agents still never change
+  Windows security settings. Atlas stays unsigned for now (D38), and a fresh
+  Windows install may still block it.
+
+- **The five palettes are approved (P1-07).** The owner reviewed the
+  `--palette-sample` window against the design and approved it. The D44
+  drag thresholds stay proposed until they can be tried in a draggable
+  sidebar, because a static sample can't show how a drag feels.
+
+- **Folder removal keeps saved pages by default (P1-21).** Removing a folder
+  moves its contents up one level unless the owner explicitly chooses to
+  delete them, and deleting contents asks for confirmation first. That way,
+  tidying folders can never silently lose saved pages. Empty folder names
+  are refused.
+- **Bookmark import defaults (P1-22).** Exported toolbar folders import as
+  ordinary folders, not as Favorites (D45 Favorites stay a deliberate
+  choice). Only UTF-8 files are accepted; anything else is refused with a
+  request to re-export, rather than guessing the encoding. The parser's
+  default limits (32 MiB, 50,000 entries, 32 levels of nesting) stand.
+- **`atlas-core` may depend on `url` (DW-1).** So that import and navigation
+  share one address rule instead of two copies, the core crate may take the
+  `url` crate as its first outside dependency when the import step is built.
+- **The recorded contrast shortfalls are accepted for now (P1-07).** Sixteen
+  colour pairs in the canvas palettes miss WCAG minimums, mostly muted text
+  and worst in Glass. The owner accepted them for now rather than changing
+  the canvas. `atlas-ui`'s test keeps the list fixed, so any new shortfall
+  fails the gate.
+
+## 2026-10-11
+
+- **Plan 1 slices may run in parallel.** To speed up delivery, the owner
+  approved working independent Plan 1 slices at the same time, each on its
+  own branch with independent review. Plans 2–4 still wait for Plan 1's
+  acceptance.
+- **Deferred-work markers are allowed when tracked.** `TODO`, `FIXME` and
+  `HACK` may appear in Atlas code if they carry a `DW-n` tag listed in the
+  plan's "Deferred work" register; each becomes an issue once on GitHub.
+  `cargo xtask check` enforces this.
+- **Two dependency approvals.** Vendoring `gpui-pre-windows 0.3.8` for the
+  D37 idle patch, with its unchanged upstream TODO comments, and adding
+  Tantivy for the full-text bake-off. `AGENTS.md` records both, with their
+  limits.
+
 ## 2026-10-10
 
+- **Build the integrated browser next (D49).** After finding that the
+  morning's product libraries had no browser window, the owner explicitly
+  approved bringing integration forward: connect the existing tab model,
+  saved-page storage, backups and search to GPUI vertical tabs, WebView2
+  navigation and Ctrl K. This replaces strict slice order for this preview,
+  without dropping remaining features or performance requirements. The
+  owner still approves commits and merges. The target is daily use of the
+  full planned browser before Monday, 2026-10-12; that date is a goal, not a
+  claim that incomplete or untested features are ready.
+- **Local Atlas must run unsigned for now (D38 clarification).** The owner
+  has no signing certificate and explicitly requires development to continue
+  without one. Signing remains deferred; it is not an application prerequisite.
+  Keep Windows security settings unchanged and verify the actual application
+  executable. A successful unsigned launch does not guarantee that Windows
+  accepts every rebuilt application or development tool.
+- **Search's 5 ms target uses the 95th percentile (D48).** The owner chose
+  requiring 95% of repeated searches to finish within 5 ms, with the worst
+  sample also reported. This accounts for occasional Windows scheduling
+  interruptions without hiding them. Measure the complete 100,000-row
+  ranking, scope-count and highlight path, not only the underlying matcher.
 - **History clearing survives backup restoration (D47).** To keep deleted
   history from returning while preserving older recovery points, the owner
   chose a local deletion record containing only cleared date ranges and data

@@ -1,6 +1,11 @@
 //! Runs the local development gate and checks the workspace's dependency boundaries.
 
+mod benchmark;
+mod deferred_work;
 mod dependency_policy;
+mod network_sources;
+mod packaging;
+mod palette_acceptance;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -9,7 +14,7 @@ use std::process::{Command, ExitCode, Stdio};
 #[cfg(not(target_os = "windows"))]
 compile_error!("Atlas's development gate supports Windows 11 only.");
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps>";
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.
@@ -36,6 +41,12 @@ fn run() -> Result<(), String> {
     match command.to_str() {
         Some("check") => check_workspace(&root),
         Some("check-deps") => check_dependencies(&root),
+        Some("check-deferred") => check_deferred_work(&root),
+        Some("check-packaging") => packaging::check(&root),
+        Some("write-registration") => packaging::write_registration(&root),
+        Some("package") => packaging::package(&root),
+        Some("bench") => benchmark::run(),
+        Some("palette-acceptance") => palette_acceptance::run(&root),
         Some("--help" | "-h") => {
             println!("{USAGE}");
             Ok(())
@@ -65,13 +76,13 @@ fn cargo_command(root: &Path) -> Command {
 }
 
 fn check_dependencies(root: &Path) -> Result<(), String> {
-    // Read declared dependencies, including inactive optional and target-specific ones.
+    // Read declared dependencies, including inactive optional and target-specific ones, and the
+    // resolved graph that the D9 network check follows from each headless crate.
     let output = cargo_command(root)
         .args([
             "metadata",
             "--format-version",
             "1",
-            "--no-deps",
             "--all-features",
             "--offline",
             "--locked",
@@ -86,7 +97,9 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
     // Report policy violations without dumping metadata or accepting a partial document.
     let metadata = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("Cargo metadata could not be decoded: {error}"))?;
-    let violations = dependency_policy::check_metadata(&metadata)?;
+    let mut violations = dependency_policy::check_metadata(&metadata)?;
+    // Standard-library sockets need no dependency, so the typing path's source is read too.
+    violations.extend(network_sources::check(root)?);
     if !violations.is_empty() {
         return Err(violations.join("\n"));
     }
@@ -95,9 +108,25 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn check_deferred_work(root: &Path) -> Result<(), String> {
+    // Allow deferred-work markers only when the plan's register tracks them.
+    let violations = deferred_work::check(root)?;
+    if !violations.is_empty() {
+        return Err(violations.join(
+            "
+",
+        ));
+    }
+
+    println!("Deferred-work markers are all registered.");
+    Ok(())
+}
+
 fn check_workspace(root: &Path) -> Result<(), String> {
     // Stop at the first failed check, then prove the application itself can start.
     check_dependencies(root)?;
+    check_deferred_work(root)?;
+    packaging::check(root)?;
     run_cargo(root, &["fmt", "--all", "--", "--check"])?;
     run_cargo(
         root,
@@ -135,6 +164,8 @@ fn check_workspace(root: &Path) -> Result<(), String> {
             "local",
             "--offline",
             "--locked",
+            "--",
+            "--smoke",
         ],
     )?;
 
