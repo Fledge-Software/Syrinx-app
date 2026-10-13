@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette, PaletteId, palette};
+use syrinx_ui::{
+    ACCENT_PRESETS, Accent, Color, FORMER_DEFAULT_ACCENT, Palette, PaletteId, palette,
+};
 
 /// The settings keys this slice owns. Other slices add their own keys to the same table.
 pub const PALETTE_KEY: &str = "appearance.palette";
@@ -45,7 +47,7 @@ impl Appearance {
         }
         if let Some(value) = settings.get(ACCENT_KEY) {
             match parse_accent(value) {
-                Some(accent) => appearance.accent = accent,
+                Some(accent) => appearance.accent = migrate_former_default(accent),
                 None => unreadable.0.push(ACCENT_KEY),
             }
         }
@@ -87,6 +89,15 @@ pub fn palette_from_id(id: &str) -> Option<PaletteId> {
     PaletteId::ALL
         .into_iter()
         .find(|palette| palette.id() == id)
+}
+
+/// A stored `#FF8A65`, the default and first swatch until 2026-10-13, now means the default:
+/// the owner decided a saved former default follows the new one. Other colours stay as chosen.
+fn migrate_former_default(accent: Accent) -> Accent {
+    if accent.fill() == FORMER_DEFAULT_ACCENT {
+        return Accent::default();
+    }
+    accent
 }
 
 /// Accepts exactly `#RRGGBB`, the form the Customize panel shows.
@@ -155,14 +166,25 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_former_default_accent_is_kept_after_the_default_changed() {
-        // #FF8A65 was the default and a preset until 2026-10-13; whoever saved it keeps it.
-        let (appearance, unreadable) =
-            Appearance::from_settings(&stored(&[(ACCENT_KEY, "#FF8A65")]));
-        assert_eq!(unreadable, Unreadable::default());
-        assert_eq!(appearance.accent.fill(), Color::hex(0xFF8A65));
-        assert!(!appearance.uses_preset_accent());
-        assert_eq!(Appearance::default().accent.fill(), Color::hex(0xFF612E));
+    fn a_saved_former_default_accent_loads_as_the_new_default() {
+        // #FF8A65 was the default and a preset until 2026-10-13; the owner decided it follows.
+        for spelling in ["#FF8A65", "#ff8a65"] {
+            let (appearance, unreadable) =
+                Appearance::from_settings(&stored(&[(ACCENT_KEY, spelling)]));
+            assert_eq!(unreadable, Unreadable::default());
+            assert_eq!(appearance.accent, Accent::default());
+            assert_eq!(appearance.accent.fill(), Color::hex(0xFF612E));
+            assert!(appearance.uses_preset_accent());
+        }
+    }
+
+    #[test]
+    fn a_saved_custom_accent_is_unchanged_by_the_default_migration() {
+        for (stored_text, color) in [("#FF8A66", 0xFF8A66), ("#12AB9C", 0x12AB9C)] {
+            let (appearance, _) = Appearance::from_settings(&stored(&[(ACCENT_KEY, stored_text)]));
+            assert_eq!(appearance.accent.fill(), Color::hex(color));
+            assert!(!appearance.uses_preset_accent());
+        }
     }
 
     #[test]

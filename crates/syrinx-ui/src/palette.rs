@@ -6,6 +6,7 @@
 
 use crate::accent::{Accent, AccentColors};
 use crate::color::Color;
+use crate::contrast;
 
 /// The palette ids the canvas and Customize panel use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -221,11 +222,27 @@ pub struct Palette {
 pub fn palette(id: PaletteId, accent: Accent) -> Palette {
     match id {
         PaletteId::Graphite => graphite(accent),
-        PaletteId::Haze => haze(accent),
-        PaletteId::Glass => glass(accent),
+        PaletteId::Haze => with_legible_ink(haze(accent)),
+        PaletteId::Glass => with_legible_ink(glass(accent)),
         PaletteId::Tint => tint(accent),
         PaletteId::Paper => paper(accent),
     }
+}
+
+/// Haze and Glass keep the accent's own ink unless it fails the contrast audit on their
+/// lighter see-through grounds; then they take the first lighter tone that passes, or the
+/// lightest offered (owner decision B, 2026-10-13). Fills, washes and badges are untouched.
+fn with_legible_ink(mut palette: Palette) -> Palette {
+    if contrast::accent_ink_passes(&palette) {
+        return palette;
+    }
+    for ink in AccentColors::lifted_inks(Accent::new(palette.accent.fill)) {
+        palette.accent.ink = ink;
+        if contrast::accent_ink_passes(&palette) {
+            break;
+        }
+    }
+    palette
 }
 
 const fn tile(background: u32, foreground: u32) -> TileColors {
@@ -375,7 +392,6 @@ fn haze(accent: Accent) -> Palette {
         input: Color::rgba(0, 0, 0, 0.28),
         input_line: white(0.12),
         scrim: Color::rgba(6, 7, 10, 0.5),
-        accent: AccentColors::see_through(accent),
         ..graphite(accent)
     }
 }
@@ -422,7 +438,6 @@ fn glass(accent: Accent) -> Palette {
             background: tile.background.with_alpha_byte(0xC7),
             ..tile
         }),
-        accent: AccentColors::see_through(accent),
         ..graphite(accent)
     }
 }
@@ -520,6 +535,50 @@ fn paper(accent: Accent) -> Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SEE_THROUGH: [PaletteId; 2] = [PaletteId::Haze, PaletteId::Glass];
+
+    #[test]
+    fn see_through_palettes_keep_passing_green_and_gold_accents() {
+        for color in [0x6FD3A8, 0xE8C16A] {
+            let accent = Accent::new(Color::hex(color));
+            for id in SEE_THROUGH {
+                assert_eq!(
+                    palette(id, accent).accent,
+                    AccentColors::dark(accent),
+                    "{color:06x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn see_through_palettes_lift_only_the_failing_default_inks() {
+        for id in SEE_THROUGH {
+            let drawn = palette(id, Accent::default());
+            assert_eq!(drawn.accent.ink, Color::hsl(15., 100., 70.));
+            assert_eq!(
+                drawn.accent,
+                AccentColors {
+                    ink: drawn.accent.ink,
+                    ..AccentColors::dark(Accent::default())
+                }
+            );
+            assert!(contrast::accent_ink_passes(&drawn));
+        }
+        // The blue preset failed only as a mark on Glass's card (2.94:1), so only Glass lifts it.
+        let blue = Accent::new(Color::hex(0x6EA8FF));
+        assert_eq!(
+            palette(PaletteId::Haze, blue).accent,
+            AccentColors::dark(blue)
+        );
+        let glass_blue = palette(PaletteId::Glass, blue).accent;
+        assert!(glass_blue.ink.lightness_percent() > blue.fill().lightness_percent());
+        assert_eq!(glass_blue.fill, blue.fill());
+        // Graphite passes with the accent's own colour, so it is never lifted.
+        let graphite = palette(PaletteId::Graphite, Accent::default());
+        assert_eq!(graphite.accent, AccentColors::dark(Accent::default()));
+    }
 
     #[test]
     fn reduce_transparency_turns_see_through_palettes_into_graphite() {

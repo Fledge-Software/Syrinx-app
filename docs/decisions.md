@@ -24,6 +24,15 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
     #FF8A65. It stays customisable, and must still meet the 4.5:1 text
     contrast rule in all five palettes, with a per-palette adjustment only
     where needed.
+  - **A saved #FF8A65 now means the default.** When settings load, a stored
+    accent equal to the former default #FF8A65 is treated as the default,
+    now #FF612E, so people who kept the old default follow the logo. Any
+    other stored colour stays exactly as chosen.
+  - **Haze and Glass lighten an accent only when it actually fails.** On
+    those see-through palettes the accent's text-and-mark colour is lifted
+    to a lighter tone of its own hue only if it fails 4.5:1 as text or 3:1
+    as a mark there. An accent that already passes, such as the green
+    (#6FD3A8) and gold (#E8C16A) presets, keeps its own colour.
   - **The executable's icon is compiled by the Windows SDK's `rc.exe`** from
     a small build script, with no new dependency. The `embed-resource`
     crate was the rejected alternative. The rasters and `.ico` are
