@@ -1,0 +1,293 @@
+   Compiling zmij v1.0.23
+   Compiling serde_core v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling memchr v2.8.3
+   Compiling itoa v1.0.18
+   Compiling xtask v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\xtask)
+    Finished `local` profile [optimized + debuginfo] target(s) in 12.96s
+     Running `target\local\xtask.exe check`
+Dependency boundaries passed.
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling find-msvc-tools v0.1.14
+   Compiling shlex v2.0.1
+    Checking windows-link v0.2.1
+   Compiling vcpkg v0.2.15
+   Compiling pkg-config v0.3.34
+    Checking foldhash v0.2.0
+   Compiling rusqlite_migration v2.6.0
+    Checking fallible-streaming-iterator v0.1.9
+    Checking fallible-iterator v0.3.0
+    Checking smallvec v1.16.3
+    Checking bitflags v2.13.2
+    Checking atlas-core v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\atlas-core)
+    Checking log v0.4.34
+    Checking memchr v2.8.3
+    Checking itoa v1.0.18
+    Checking atlas-app v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\atlas-app)
+    Checking serde_core v1.0.229
+    Checking zmij v1.0.23
+    Checking windows-result v0.4.1
+    Checking windows-strings v0.5.1
+    Checking windows-threading v0.2.1
+    Checking hashbrown v0.17.1
+   Compiling cc v1.7.0
+    Checking hashlink v0.12.2
+    Checking serde_json v1.0.151
+   Compiling syn v2.0.119
+    Checking xtask v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\xtask)
+   Compiling libsqlite3-sys v0.38.2 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\vendor\libsqlite3-sys-0.38.2)
+   Compiling windows-implement v0.60.2
+   Compiling windows-interface v0.59.3
+    Checking windows-core v0.62.2
+    Checking windows-future v0.3.2
+    Checking windows-collections v0.3.2
+    Checking windows-numerics v0.3.1
+    Checking windows v0.62.2
+    Checking rusqlite v0.40.2
+    Checking atlas-store v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\atlas-store)
+    Checking atlas-platform v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\atlas-platform)
+    Finished `local` profile [optimized + debuginfo] target(s) in 1m 15s
+   Compiling foldhash v0.2.0
+   Compiling windows-link v0.2.1
+   Compiling bitflags v2.13.2
+   Compiling fallible-iterator v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling smallvec v1.16.3
+   Compiling atlas-core v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\atlas-core)
+   Compiling log v0.4.34
+   Compiling atlas-app v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\atlas-app)
+   Compiling libsqlite3-sys v0.38.2 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\vendor\libsqlite3-sys-0.38.2)
+   Compiling xtask v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\xtask)
+   Compiling windows-result v0.4.1
+   Compiling windows-strings v0.5.1
+   Compiling windows-threading v0.2.1
+   Compiling hashbrown v0.17.1
+   Compiling windows-core v0.62.2
+   Compiling windows-collections v0.3.2
+   Compiling windows-future v0.3.2
+   Compiling windows-numerics v0.3.1
+   Compiling hashlink v0.12.2
+   Compiling windows v0.62.2
+   Compiling rusqlite v0.40.2
+   Compiling rusqlite_migration v2.6.0
+   Compiling atlas-store v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\atlas-store)
+   Compiling atlas-platform v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\atlas-platform)
+    Finished `local` profile [optimized + debuginfo] target(s) in 38.55s
+     Running unittests src\main.rs (target\local\deps\atlas_app-a839b5c7b0b97488.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\local\deps\atlas_core-0c728356580e82e1.exe)
+
+running 10 tests
+test tabs::snapshot::tests::full_u64_watermarks_restore_without_wrapping_or_reusing_ids ... ok
+test tabs::snapshot::tests::invalid_identities_and_watermarks_are_rejected_without_repair ... ok
+test tabs::snapshot::tests::restores_all_records_selection_and_order_without_closed_history ... ok
+test tabs::snapshot::tests::invalid_selection_associations_and_saved_order_are_rejected ... ok
+test tabs::snapshot::tests::snapshot_and_record_diagnostics_do_not_include_metadata ... ok
+test tabs::tests::failed_ordinary_reopen_preserves_history_and_selection ... ok
+test tabs::tests::failed_saved_reopen_preserves_history_and_can_reuse_a_live_instance ... ok
+test tabs::tests::live_id_exhaustion_preserves_open_state ... ok
+test tabs::snapshot::tests::restored_watermarks_retire_closed_and_removed_identities ... ok
+test tabs::tests::saved_id_exhaustion_preserves_order_and_associations ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\tab_model.rs (target\local\deps\tab_model-9c578eae681912e3.exe)
+
+running 20 tests
+test active_close_uses_right_then_left_and_last_close_leaves_home ... ok
+test all_kinds_are_supported_but_only_web_closures_enter_history ... ok
+test closing_a_saved_page_leaves_an_unloaded_row_and_home ... ok
+test closing_an_inactive_tab_preserves_selection ... ok
+test diagnostic_formatting_omits_synthetic_browsing_metadata ... ok
+test empty_and_background_open_preserve_a_valid_selection ... ok
+test numeric_ids_reject_zero_without_restricting_valid_nonzero_values ... ok
+test invalid_group_positions_and_kinds_leave_every_projection_unchanged ... ok
+test open_saved_reuses_live_instances_but_reloads_closed_ones_from_saved_target ... ok
+test removing_a_closed_saved_page_cannot_be_undone_by_tab_history ... ok
+test removing_a_saved_page_keeps_its_live_instance_at_the_ordinary_start ... ok
+test reopen_is_lifo_restores_metadata_and_never_reuses_a_live_id ... ok
+test reopening_clamps_a_vanished_ordinary_position ... ok
+test reorder_uses_final_group_positions_without_changing_selection ... ok
+test saved_reordering_includes_unloaded_rows_and_controls_reopen_position ... ok
+test saving_is_idempotent_and_navigation_cannot_change_the_saved_target ... ok
+test the_twenty_first_web_closure_evicts_only_the_oldest ... ok
+test unknown_and_retired_identities_reject_every_mutation_atomically ... ok
+test saved_history_reuses_an_existing_instance_without_resetting_navigation ... ok
+test long_operation_sequences_preserve_identity_order_and_projection_invariants ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src\lib.rs (target\local\deps\atlas_platform-30fe8fcf2c467d56.exe)
+
+running 40 tests
+test storage::backup::tests::bundle_names_accept_only_the_fixed_opaque_format ... ok
+test storage::recovery::resume::tests::intent_roundtrip_refuses_every_truncation_byte_flip_and_extra_byte ... ok
+test storage::backup::tests::marker_preserves_full_integer_ranges_and_privacy_generations ... ok
+test storage::backup::tests::every_single_byte_marker_change_is_ineligible_and_identity_must_match ... ok
+test storage::tests::accepts_dos_spelling_and_removes_only_the_extended_dos_prefix ... ok
+test storage::session::tests::failed_completion_flush_surfaces_the_error_and_poisoned_control ... ok
+test storage::session::tests::control_read_errors_are_not_malformed_record_successes ... ok
+test storage::recovery::tests::native_moves_do_not_replace_destinations_or_delete_nonempty_directories ... ok
+test storage::session::tests::failed_dirty_writes_never_return_a_session_or_retain_its_claim ... ok
+test storage::tests::an_unresolvable_registered_root_fails_closed ... ok
+test storage::tests::a_registered_ancestor_refuses_creation ... ok
+test storage::tests::metadata_checks_refuse_reparse_pending_and_multiple_link_entries ... ok
+test storage::tests::refuses_every_nonfixed_drive_before_creating_the_destination ... ok
+test storage::tests::rejects_relative_network_device_stream_and_ambiguous_names ... ok
+test storage::tests::enumeration_failure_is_not_treated_as_an_empty_list ... ok
+test storage::tests::sqlite_path_limit_counts_utf16_units_instead_of_utf8_bytes ... ok
+test storage::tests::sqlite_path_reserves_space_for_the_longest_sidecar_and_terminator ... ok
+test storage::tests::a_similarly_named_registered_sibling_is_not_an_ancestor ... ok
+test storage::tests::a_refused_begin_releases_the_session_claim_without_marking_clean ... ok
+test storage::tests::directory_and_database_names_remain_locked_until_the_lease_drops ... ok
+test storage::tests::a_refused_completion_releases_the_claim_and_preserves_dirty_state ... ok
+test storage::tests::creates_missing_children_and_keeps_existing_database_bytes ... ok
+test storage::tests::new_sync_registration_is_detected_on_revalidation ... ok
+test storage::tests::lease_diagnostics_redact_location_and_lease_is_send_and_sync ... ok
+test storage::tests::retained_identity_mismatch_is_an_explicit_error ... ok
+test storage::tests::ordinary_sidecars_can_be_deleted_while_the_lease_is_alive ... ok
+test storage::tests::native_checks_support_a_disposable_path_beyond_the_legacy_length ... ok
+test storage::tests::directories_cannot_stand_in_for_database_or_sidecar_files ... ok
+test storage::backup::tests::sync_roots_are_checked_once_per_boundary_and_new_bundle_registration_is_refused ... ok
+test storage::recovery::tests::damaged_intent_never_creates_a_missing_primary ... ok
+test storage::backup::tests::unexpected_sidecars_prevent_cleanup_without_deleting_known_files ... ok
+test storage::backup::tests::publication_freezes_files_and_removal_requires_only_this_owned_bundle ... ok
+test storage::backup::tests::archive_is_lazy_and_a_reserved_incomplete_output_is_not_a_candidate ... ok
+test storage::backup::tests::malformed_and_incomplete_markers_stay_on_disk_without_becoming_candidates ... ok
+test storage::recovery::tests::healthy_header_with_a_hot_journal_is_not_misclassified_as_corrupt ... ok
+test storage::recovery::tests::healthy_primary_and_nonzero_or_pending_deletions_are_refused ... ok
+test storage::recovery::tests::interrupted_recovery_refuses_changed_identity_without_replacing_it ... ok
+test storage::recovery::tests::newest_valid_offer_preserves_primary_and_sidecars_until_confirmation ... ok
+test storage::recovery::tests::corrupt_newest_candidate_falls_back_but_foreign_primary_never_does ... ok
+test storage::recovery::tests::every_interrupted_stage_requires_a_new_offer_and_can_finish_the_same_source ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.44s
+
+     Running tests\backups.rs (target\local\deps\backups-7b50f5f2bd7d49e6.exe)
+
+running 4 tests
+test backup_bundles_support_the_extended_windows_path_used_by_sqlite ... ok
+test a_corrupt_newest_snapshot_does_not_hide_an_older_valid_copy ... ok
+test interrupted_unpublished_output_never_counts_as_a_backup_or_gets_pruned ... ok
+test eight_idle_daily_snapshots_keep_seven_valid_copies_and_restart_preserves_schedule ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+     Running tests\storage.rs (target\local\deps\storage-aff2cd3873d5b257.exe)
+
+running 18 tests
+test pending_recovery_intent_refuses_startup_before_creating_a_missing_database ... ok
+test one_lease_refuses_overlapping_sessions_but_allows_a_later_session ... ok
+test native_guard_refuses_hardlinked_control_files_without_modifying_their_targets ... ok
+test native_guard_refuses_directories_in_place_of_control_files ... ok
+test native_guard_refuses_hardlinked_database_and_each_sidecar_without_changes ... ok
+test native_guard_refuses_a_junction_at_the_destination_and_in_its_ancestors ... ok
+test native_session_excludes_an_alias_and_retains_ownership_after_lease_drop ... ok
+test refused_foreign_database_keeps_its_bytes_and_leaves_unclean_lifecycle_evidence ... ok
+test a_second_store_on_the_same_lease_cannot_change_the_first_stores_records ... ok
+test saved_destinations_and_navigated_live_metadata_survive_native_store_reopen ... ok
+test wal_cleanup_and_directory_release_follow_store_shutdown ... ok
+test sqlite_roundtrip_extends_a_path_when_only_its_sidecar_exceeds_the_limit ... ok
+test stale_revision_rejection_preserves_committed_records_and_watermarks ... ok
+test removed_identities_remain_retired_after_an_empty_session_is_persisted ... ok
+test sqlite_roundtrip_supports_paths_beyond_the_native_legacy_length ... ok
+test sqlite_roundtrip_supports_paths_beyond_the_default_vfs_capacity ... ok
+test native_guard_refuses_junctions_in_place_of_control_files ... ok
+test restart_distinguishes_explicit_shutdown_drop_and_malformed_lifecycle_evidence ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s
+
+     Running unittests src\lib.rs (target\local\deps\atlas_store-770ba89536e473e1.exe)
+
+running 38 tests
+test deletion::tests::interrupted_clear_blocks_restore_and_new_requests_until_completion ... ok
+test deletion::tests::checksum_matches_the_standard_crc32_check_value ... ok
+test deletion::tests::generations_and_completion_pairs_cannot_be_skipped_or_reordered ... ok
+test deletion::tests::invalid_ranges_limits_and_exhausted_generations_are_explicit ... ok
+test deletion::tests::missing_truncated_and_bit_damaged_records_fail_closed ... ok
+test deletion::tests::diagnostics_do_not_disclose_clear_intervals ... ok
+test deletion::tests::unknown_kinds_and_versions_are_not_ignored_even_with_valid_checksums ... ok
+test deletion::tests::an_older_complete_log_cannot_replace_the_external_generation_barrier ... ok
+test deletion::tests::older_backup_replays_every_later_completed_clear ... ok
+test engine::tests::lifecycle::failed_session_begin_prevents_any_sqlite_open ... ok
+test engine::tests::lifecycle::refused_writer_startup_releases_the_claim_without_marking_clean ... ok
+test engine::tests::malformed_current_snapshot_is_refused_before_changing_journal_mode ... ok
+test engine::tests::lifecycle::failed_second_reader_startup_closes_first_reader_and_writer_before_releasing_claim ... ok
+test engine::tests::lifecycle::explicit_shutdown_completes_after_connections_close_and_keeps_the_lease_alive ... ok
+test engine::tests::lifecycle::abandoned_writer_reply_prevents_clean_completion ... ok
+test engine::tests::failed_migration_rolls_back_application_marker_schema_and_version ... ok
+test engine::tests::lifecycle::failed_clean_completion_is_reported_after_database_connections_close ... ok
+test engine::tests::lease_revalidation_checks_connection_lifecycle_without_repeating_for_snapshots ... ok
+test engine::tests::competing_writers_cannot_both_commit_the_same_expected_revision ... ok
+test backup::tests::discovery_surfaces_io_and_unsupported_deletion_state_without_creating_output ... ok
+test engine::tests::lifecycle::failed_writer_shutdown_does_not_complete_the_session ... ok
+test engine::tests::lifecycle::worker_panic_keeps_the_session_claimed_until_join_and_reader_cleanup ... ok
+test engine::tests::abandoned_write_reply_is_reported_at_shutdown_and_committed_revision_is_recoverable ... ok
+test backup::tests::future_schema_refusal_does_not_rewrite_the_backup ... ok
+test engine::tests::failed_insert_rolls_back_rows_selection_and_revision_without_leaking_sqlite_text ... ok
+test engine::tests::lifecycle::fallback_drop_releases_ownership_without_a_clean_completion ... ok
+test engine::tests::lifecycle::missing_session_capability_is_unclean_and_detects_corruption_outside_model_rows ... ok
+test backup::tests::scheduling_is_idle_daily_clock_safe_and_cheap_until_restart ... ok
+test engine::tests::stale_revisions_and_counter_regression_leave_the_database_unchanged ... ok
+test engine::tests::store_and_snapshot_debug_redact_paths_and_all_metadata_fields ... ok
+test engine::tests::full_u64_identities_and_exhausted_revision_roundtrip_exactly ... ok
+test engine::tests::concurrent_readers_observe_complete_revisions_during_writes ... ok
+test engine::tests::roundtrip_preserves_unloaded_rows_kinds_order_selection_and_metadata ... ok
+test engine::tests::foreign_future_and_altered_schemas_are_refused_without_rewriting_the_file ... ok
+test backup::tests::failed_validation_flush_and_uncertain_publication_preserve_output_and_retry ... ok
+test backup::tests::corruption_during_publication_cannot_prune_previous_backups_or_advance_schedule ... ok
+test backup::tests::pruning_failure_keeps_new_snapshot_and_reports_the_failure ... ok
+test engine::tests::malformed_encodings_and_missing_state_are_rejected_without_repair ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests\sqlite_engine.rs (target\local\deps\sqlite_engine-ef309fa2739b04c0.exe)
+
+running 1 test
+test linked_engine_matches_the_reviewed_maintenance_source ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\local\deps\xtask-b5a21276a3f04153.exe)
+
+running 7 tests
+test dependency_policy::tests::rejects_missing_unknown_and_duplicate_members ... ok
+test dependency_policy::tests::rejects_plugin_service_imports_and_api_back_edges ... ok
+test dependency_policy::tests::rejects_malformed_packages_and_dependencies ... ok
+test dependency_policy::tests::rejects_renamed_optional_dev_build_and_target_dependencies ... ok
+test dependency_policy::tests::ignores_packages_outside_workspace_members ... ok
+test dependency_policy::tests::rejects_workspace_facades_and_terminates_on_cycles ... ok
+test dependency_policy::tests::permits_shell_composition_and_headless_plugins ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests atlas_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests atlas_platform
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests atlas_store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling atlas-app v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\main-verify\crates\atlas-app)
+    Finished `local` profile [optimized + debuginfo] target(s) in 0.45s
+     Running `target\local\atlas-app.exe`
+Atlas 0.1.0
+Local gate passed.
+exit=0

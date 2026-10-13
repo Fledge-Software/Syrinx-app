@@ -1,0 +1,1450 @@
+   Compiling zmij v1.0.23
+   Compiling serde_core v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling memchr v2.8.3
+   Compiling frizbee v0.13.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\vendor\frizbee-0.13.0)
+   Compiling atlas-core v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-core)
+   Compiling itoa v1.0.18
+   Compiling atlas-search v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-search)
+   Compiling xtask v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\xtask)
+    Finished `local` profile [optimized + debuginfo] target(s) in 17m 36s
+     Running `target\local\xtask.exe check`
+Dependency boundaries passed.
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling typeid v1.0.3
+   Compiling erased-serde v0.4.10
+    Checking windows-link v0.2.1
+    Checking cfg-if v1.0.5
+    Checking smallvec v1.16.3
+   Compiling autocfg v1.5.1
+    Checking pin-project-lite v0.2.17
+    Checking memchr v2.8.3
+    Checking foldhash v0.2.0
+   Compiling libm v0.2.16
+    Checking bitflags v2.13.2
+    Checking futures-core v0.3.34
+   Compiling version_check v0.9.5
+    Checking futures-io v0.3.34
+   Compiling find-msvc-tools v0.1.14
+   Compiling crossbeam-utils v0.8.23
+   Compiling serde v1.0.229
+   Compiling shlex v2.0.1
+    Checking stable_deref_trait v1.2.1
+    Checking simd-adler32 v0.3.10
+   Compiling windows-sys v0.61.2
+   Compiling crossbeam-epoch v0.9.21
+    Checking itoa v1.0.18
+    Checking slab v0.4.12
+    Checking adler2 v2.0.1
+    Checking hashbrown v0.17.1
+    Checking arrayvec v0.7.8
+    Checking windows-result v0.4.1
+    Checking windows-strings v0.5.1
+   Compiling crc32fast v1.5.2
+    Checking siphasher v1.0.4
+   Compiling cc v1.7.0
+   Compiling crossbeam-deque v0.8.8
+   Compiling equivalent v1.0.2
+    Checking miniz_oxide v0.9.1
+    Checking futures-sink v0.3.34
+   Compiling anyhow v1.0.104
+    Checking scopeguard v1.2.0
+    Checking bytemuck v1.25.2
+   Compiling thiserror v2.0.21
+    Checking parking v2.2.1
+    Checking once_cell v1.21.4
+   Compiling num-traits v0.2.19
+    Checking fastrand v2.5.0
+    Checking windows-threading v0.2.1
+    Checking lock_api v0.4.14
+    Checking futures-channel v0.3.34
+    Checking futures-task v0.3.34
+   Compiling parking_lot_core v0.9.12
+   Compiling rustversion v1.0.23
+   Compiling zerocopy v0.8.62
+   Compiling aho-corasick v1.1.5
+   Compiling winnow v1.0.4
+   Compiling regex-syntax v0.8.11
+    Checking bytes v1.12.1
+   Compiling libc v0.2.190
+    Checking futures-lite v2.6.1
+    Checking event-listener v5.4.2
+   Compiling winapi-util v0.1.11
+    Checking flate2 v1.1.10
+   Compiling slotmap v1.1.1
+    Checking writeable v0.6.4
+    Checking concurrent-queue v2.5.0
+    Checking http v1.5.0
+   Compiling serde_json v1.0.151
+   Compiling syn v3.0.6
+   Compiling syn v2.0.119
+    Checking atlas-core v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-core)
+    Checking litemap v0.8.3
+   Compiling same-file v1.0.6
+    Checking serde_fmt v1.1.0
+    Checking indexmap v2.14.2
+   Compiling toml_parser v1.1.5+spec-1.1.0
+    Checking core_maths v0.1.1
+   Compiling regex-automata v0.4.18
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+    Checking event-listener-strategy v0.5.4
+   Compiling bstr v1.13.1
+    Checking miniz_oxide v0.8.9
+    Checking zmij v1.0.23
+    Checking value-bag-serde1 v1.14.1
+   Compiling icu_normalizer_data v2.3.0
+    Checking parking_lot v0.12.5
+   Compiling vcpkg v0.2.15
+    Checking async-task v4.7.1
+   Compiling icu_properties_data v2.3.0
+    Checking value-bag v1.14.1
+   Compiling pkg-config v0.3.34
+    Checking utf8_iter v1.0.4
+    Checking float-cmp v0.9.0
+    Checking ttf-parser v0.25.1
+   Compiling walkdir v2.5.0
+    Checking strict-num v0.1.1
+    Checking euclid v0.22.14
+    Checking log v0.4.34
+    Checking fdeflate v0.3.7
+    Checking arrayref v0.3.9
+    Checking bitflags v1.3.2
+   Compiling rayon-core v1.13.0
+   Compiling getrandom v0.3.4
+    Checking weezl v0.1.12
+   Compiling getrandom v0.4.3
+    Checking raw-window-handle v0.6.2
+   Compiling rand_core v0.6.4
+    Checking tiny-skia-path v0.11.4
+    Checking async-channel v2.5.0
+   Compiling rand v0.8.8
+   Compiling phf_shared v0.11.3
+    Checking tracing-core v0.1.36
+    Checking which v8.0.6
+    Checking unicode-script v0.5.8
+    Checking color_quant v1.1.0
+   Compiling paste v1.0.15
+   Compiling synstructure v0.14.0
+   Compiling globset v0.4.20
+    Checking either v1.19.0
+    Checking unicode-bidi-mirroring v0.4.0
+    Checking quick-error v2.0.1
+    Checking unicode-properties v0.1.4
+    Checking memmap2 v0.9.11
+    Checking unicode-ccc v0.4.0
+    Checking tinyvec v1.13.3
+   Compiling phf_generator v0.11.3
+    Checking gpui-pre-util v0.3.8
+    Checking lyon_geom v1.0.19
+    Checking simplecss v0.2.2
+   Compiling serde_spanned v1.1.2
+    Checking rustybuzz v0.20.1
+   Compiling vswhom-sys v0.1.3
+    Checking fontdb v0.23.0
+   Compiling pulp v0.22.3
+    Checking hashlink v0.12.2
+    Checking polycool v0.4.0
+   Compiling semver v1.0.28
+    Checking data-url v0.3.2
+   Compiling unicode-segmentation v1.13.3
+    Checking sha1_smol v1.0.1
+    Checking zune-core v0.5.3
+    Checking unicode-vo v0.1.0
+    Checking pico-args v0.5.0
+    Checking fallible-iterator v0.3.0
+    Checking libbz2-rs-sys v0.2.5
+    Checking fallible-streaming-iterator v0.1.9
+   Compiling ref-cast v1.0.27
+    Checking byteorder-lite v0.1.0
+    Checking xmlwriter v0.1.0
+    Checking base64 v0.22.1
+    Checking lazy_static v1.5.1
+   Compiling toml_writer v1.1.3+spec-1.1.0
+    Checking rustc-hash v2.1.3
+   Compiling typenum v1.20.1
+    Checking percent-encoding v2.3.2
+    Checking unicode-bidi v0.3.18
+   Compiling rusqlite_migration v2.6.0
+    Checking bzip2 v0.6.1
+    Checking sharded-slab v0.1.7
+    Checking image-webp v0.2.4
+    Checking gpui-pre-collections v0.3.8
+    Checking form_urlencoded v1.2.2
+   Compiling toml v1.1.8+spec-1.1.0
+   Compiling convert_case v0.10.0
+    Checking zune-jpeg v0.5.15
+   Compiling libsqlite3-sys v0.38.2 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\vendor\libsqlite3-sys-0.38.2)
+    Checking uuid v1.28.0
+    Checking kurbo v0.13.1
+   Compiling hybrid-array v0.4.15
+   Compiling rustc_version v0.4.1
+    Checking lyon_path v1.0.19
+    Checking rand_core v0.9.5
+    Checking tracing-log v0.2.0
+   Compiling vswhom v0.1.0
+   Compiling serde_derive_internals v0.30.0
+    Checking png v0.17.16
+   Compiling toml_edit v0.25.17+spec-1.1.0
+    Checking num-complex v0.4.6
+   Compiling winreg v0.56.0
+    Checking nu-ansi-term v0.50.3
+    Checking raw-cpuid v11.6.0
+    Checking thread_local v1.1.10
+    Checking compression-core v0.4.33
+   Compiling num-conv v0.2.2
+   Compiling heck v0.5.0
+   Compiling unicode-xid v0.2.6
+    Checking byteorder v1.5.0
+   Compiling heapless v0.9.3
+   Compiling thiserror v1.0.69
+   Compiling gpui-pre-ztracing v0.3.8
+    Checking new_debug_unreachable v1.0.6
+    Checking pulp-wasm-simd-flag v0.1.1
+    Checking reborrow v0.5.5
+   Compiling time-core v0.1.9
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling proc-macro-crate v3.5.0
+    Checking hash32 v0.3.1
+    Checking svgtypes v0.16.1
+   Compiling time-macros v0.2.32
+    Checking compression-codecs v0.4.45
+    Checking tracing-subscriber v0.3.23
+    Checking tiny-skia v0.11.4
+   Compiling embed-resource v3.0.12
+    Checking rayon v1.12.0
+   Compiling phf_codegen v0.11.3
+   Compiling string_cache_codegen v0.5.4
+    Checking gif v0.14.2
+   Compiling encoding_rs v0.8.42
+    Checking spin v0.9.9
+    Checking rgb v0.8.53
+   Compiling cookie v0.18.2
+    Checking roxmltree v0.21.1
+    Checking zune-inflate v0.2.54
+    Checking powerfmt v0.2.1
+    Checking mac v0.1.1
+    Checking float_next_after v1.0.0
+    Checking pxfm v0.1.30
+   Compiling gpui-pre-ztracing-macro v0.3.8
+    Checking fax v0.2.7
+    Checking rustc-demangle v0.1.28
+    Checking static_assertions v1.1.0
+   Compiling rustix v1.1.5
+    Checking bit_field v0.10.3
+    Checking imagesize v0.14.0
+    Checking ryu v1.0.23
+    Checking dyn-clone v1.0.20
+    Checking dunce v1.0.5
+    Checking lebe v0.5.3
+    Checking deranged v0.5.8
+    Checking atomic-waker v1.1.2
+    Checking backtrace v0.3.76
+    Checking piper v0.2.5
+    Checking usvg v0.46.0
+    Checking lyon_tessellation v1.0.22
+    Checking futf v0.1.5
+    Checking flume v0.12.0
+   Compiling ignore v0.4.33
+    Checking async-compression v0.4.50
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+    Checking lyon_algorithms v1.0.21
+    Checking png v0.18.1
+    Checking http-body v1.1.0
+    Checking smol_str v0.3.6
+    Checking crossbeam-queue v0.3.14
+    Checking qoi v0.4.1
+    Checking errno v0.3.14
+   Compiling async-io v2.6.0
+   Compiling markup5ever v0.12.1
+    Checking precomputed-hash v0.1.1
+   Compiling unicase v2.10.0
+    Checking utf-8 v0.7.6
+   Compiling simdutf8 v0.1.5
+    Checking svg_fmt v0.4.5
+   Compiling option-ext v0.2.0
+   Compiling wry v0.57.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\vendor\wry-0.57.0)
+   Compiling core_detect v1.0.0
+    Checking pollster v0.2.5
+   Compiling linktime-proc-macro v0.2.3
+    Checking web-time v1.1.0
+    Checking link-section v0.19.3
+    Checking fixedbitset v0.5.7
+   Compiling const-oid v0.10.2
+    Checking atomic v0.5.3
+   Compiling multiversion_no_op v1.0.0
+   Compiling mime_guess v2.0.5
+   Compiling digest v0.11.3
+   Compiling globwalk v0.8.1
+    Checking etagere v0.2.15
+    Checking tendril v0.4.3
+    Checking moxcms v0.8.1
+   Compiling dirs-sys v0.5.0
+   Compiling gpui-pre v0.3.8
+    Checking lyon v1.0.19
+    Checking resvg v0.46.0
+    Checking windows-targets v0.52.6
+    Checking blocking v1.7.0
+    Checking phf v0.11.3
+    Checking regex v1.13.1
+    Checking itertools v0.14.0
+    Checking taffy v0.13.0
+    Checking polling v3.11.0
+    Checking spin v0.10.1
+    Checking windows-version v0.1.7
+   Compiling anstyle v1.0.14
+   Compiling unicode-width v0.2.2
+   Compiling arraydeque v0.5.1
+    Checking pollster v0.4.0
+   Compiling winnow v0.7.15
+   Compiling windows_x86_64_msvc v0.53.1
+    Checking waker-fn v1.2.0
+    Checking dpi v0.1.2
+    Checking num_cpus v1.17.0
+   Compiling toml_write v0.1.2
+   Compiling cpufeatures v0.3.1
+    Checking inventory v0.3.25
+    Checking seahash v4.1.0
+   Compiling sha2 v0.11.0
+   Compiling annotate-snippets v0.12.16
+   Compiling encoding_rs_io v0.1.8
+   Compiling granit-parser v1.3.0
+    Checking windows-result v0.2.0
+   Compiling dirs v6.0.0
+   Compiling arc-swap v1.9.2
+    Checking time v0.3.55
+   Compiling nohash-hasher v0.2.0
+   Compiling mime v0.3.17
+   Compiling base64 v0.23.1
+    Checking frizbee v0.13.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\vendor\frizbee-0.13.0)
+   Compiling itertools v0.11.0
+   Compiling windows-registry v0.6.1
+   Compiling shellexpand v3.1.2
+    Checking ctor v1.0.13
+   Compiling serde-saphyr v1.3.0
+    Checking windows-strings v0.1.0
+   Compiling rust-embed-utils v8.13.0
+    Checking async-lock v3.4.2
+   Compiling normpath v1.5.2
+    Checking kurbo v0.11.3
+    Checking hashbrown v0.16.1
+   Compiling gpui-kit-assets v0.7.1
+   Compiling base62 v2.2.6
+   Compiling gpui-pre-windows v0.3.8
+    Checking atlas-search v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-search)
+    Checking async-fs v2.2.0
+    Checking windows-targets v0.53.5
+    Checking async-net v2.0.0
+    Checking async-process v2.5.0
+    Checking fluent-uri v0.1.4
+    Checking async-executor v1.14.0
+    Checking roxmltree v0.20.0
+    Checking str_indices v0.4.4
+   Compiling glob v0.3.4
+    Checking zune-core v0.4.12
+    Checking unicode-id v0.3.7
+    Checking imagesize v0.13.0
+    Checking ropey v2.0.0-beta.1
+    Checking windows-sys v0.60.2
+    Checking smol v2.0.2
+    Checking itertools v0.13.0
+    Checking gif v0.13.3
+    Checking zune-jpeg v0.4.21
+    Checking svgtypes v0.15.3
+    Checking notify-types v2.1.0
+    Checking instant v0.1.13
+    Checking unicode-linebreak v0.1.5
+   Compiling gpui-component v0.7.1
+    Checking atlas-ui v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-ui)
+    Checking xtask v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\xtask)
+    Checking usvg v0.45.1
+    Checking notify v8.2.0
+    Checking resvg v0.45.1
+   Compiling rust-i18n v4.2.4
+   Compiling serde_derive v1.0.229
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling thiserror-impl v2.0.21
+   Compiling zerovec-derive v0.11.6
+   Compiling futures-macro v0.3.34
+   Compiling displaydoc v0.2.7
+   Compiling ref-cast-impl v1.0.27
+   Compiling schemars_derive v1.2.2
+   Compiling serde_repr v0.1.21
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling zerocopy-derive v0.8.62
+   Compiling pin-project-internal v1.1.13
+   Compiling enumn v0.1.14
+   Compiling tracing-attributes v0.1.31
+   Compiling thiserror-impl v1.0.69
+   Compiling derive_more-impl v2.1.1
+   Compiling webview2-com-macros v0.8.1
+   Compiling profiling-procmacros v1.0.18
+   Compiling gpui-pre-derive-refineable v0.3.8
+   Compiling strum_macros v0.28.0
+   Compiling gpui-pre-macros v0.3.8
+    Checking profiling v1.0.18
+   Compiling html5ever v0.27.0
+   Compiling windows-implement v0.58.0
+   Compiling windows-interface v0.58.0
+   Compiling rust-embed-impl v8.13.0
+    Checking accesskit v0.24.1
+    Checking accesskit_consumer v0.38.0
+   Compiling enum-iterator-derive v1.5.0
+    Checking gpui-pre-refineable v0.3.8
+   Compiling gpui-component-macros v0.7.1
+    Checking rust-embed v8.13.0
+    Checking windows-core v0.62.2
+    Checking windows-numerics v0.3.1
+    Checking windows-future v0.3.2
+    Checking windows-collections v0.3.2
+    Checking futures-util v0.3.34
+    Checking windows-core v0.58.0
+    Checking windows v0.62.2
+    Checking pin-project v1.1.13
+   Compiling webview2-com-sys v0.39.1
+    Checking windows v0.58.0
+    Checking futures-concurrency v7.7.1
+    Checking futures-executor v0.3.34
+    Checking tracing v0.1.44
+    Checking futures v0.3.34
+    Checking rusqlite v0.40.2
+    Checking postage v0.5.0
+    Checking atlas-store v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-store)
+    Checking zerofrom v0.1.8
+    Checking strum v0.28.0
+    Checking enum-iterator v2.3.0
+    Checking yoke v0.8.3
+    Checking chrono v0.4.45
+    Checking schemars v1.2.2
+    Checking serde_urlencoded v0.7.1
+    Checking string_cache v0.8.9
+    Checking triomphe v0.1.16
+    Checking markdown v1.0.0
+    Checking lsp-types v0.97.0
+   Compiling gpui-pre-perf v0.3.8
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+    Checking zerovec v0.11.8
+    Checking zerotrie v0.2.5
+    Checking rust-i18n-support v4.2.4
+   Compiling toml_edit v0.22.27
+    Checking derive_more v2.1.1
+   Compiling gpui-pre-util-macros v0.3.8
+    Checking xml5ever v0.18.1
+    Checking gpui-pre-zlog v0.3.8
+    Checking tinystr v0.8.4
+    Checking potential_utf v0.1.6
+    Checking gpui-pre-shared-string v0.3.8
+    Checking icu_collections v2.3.0
+    Checking icu_locale_core v2.3.0
+    Checking markup5ever_rcdom v0.3.0
+    Checking gpui-pre-sum-tree v0.3.8
+    Checking icu_provider v2.3.1
+   Compiling toml v0.8.23
+    Checking icu_normalizer v2.3.0
+    Checking icu_properties v2.3.0
+    Checking idna_adapter v1.2.2
+    Checking idna v1.1.0
+    Checking url v2.5.8
+    Checking ppv-lite86 v0.2.21
+    Checking half v2.7.1
+    Checking rand_chacha v0.9.0
+    Checking gpui-pre-http-client v0.3.8
+    Checking exr v1.74.2
+    Checking tiff v0.11.3
+    Checking rand v0.9.5
+    Checking gpui-pre-scheduler v0.3.8
+   Compiling rust-i18n-macro v4.2.4
+    Checking image v0.25.10
+    Checking accesskit_windows v0.34.0
+    Checking webview2-com v0.39.1
+warning: function `platform_webview_version` is never used
+    --> vendor\wry-0.57.0\src\webview2\mod.rs:1966:8
+     |
+1966 | pub fn platform_webview_version() -> Result<String> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `wry` (lib) generated 1 warning
+    Checking atlas-platform v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-platform)
+    Checking gpui-base v0.7.1
+    Checking gpui-pre-platform v0.3.8
+    Checking atlas-app v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-app)
+    Finished `local` profile [optimized + debuginfo] target(s) in 6m 04s
+   Compiling windows-link v0.2.1
+   Compiling cfg-if v1.0.5
+   Compiling smallvec v1.16.3
+   Compiling memchr v2.8.3
+   Compiling foldhash v0.2.0
+   Compiling pin-project-lite v0.2.17
+   Compiling bitflags v2.13.2
+   Compiling equivalent v1.0.2
+   Compiling futures-core v0.3.34
+   Compiling futures-io v0.3.34
+   Compiling siphasher v1.0.4
+   Compiling stable_deref_trait v1.2.1
+   Compiling scopeguard v1.2.0
+   Compiling simd-adler32 v0.3.10
+   Compiling serde_core v1.0.229
+   Compiling typeid v1.0.3
+   Compiling libm v0.2.16
+   Compiling slab v0.4.12
+   Compiling adler2 v2.0.1
+   Compiling crossbeam-utils v0.8.23
+   Compiling serde_fmt v1.1.0
+   Compiling arrayvec v0.7.8
+   Compiling regex-syntax v0.8.11
+   Compiling zerofrom v0.1.8
+   Compiling windows-sys v0.61.2
+   Compiling windows-result v0.4.1
+   Compiling windows-strings v0.5.1
+   Compiling hashbrown v0.17.1
+   Compiling erased-serde v0.4.10
+   Compiling futures-sink v0.3.34
+   Compiling indexmap v2.14.2
+   Compiling crc32fast v1.5.2
+   Compiling miniz_oxide v0.9.1
+   Compiling yoke v0.8.3
+   Compiling once_cell v1.21.4
+   Compiling parking v2.2.1
+   Compiling bytemuck v1.25.2
+   Compiling lock_api v0.4.14
+   Compiling windows-threading v0.2.1
+   Compiling futures-channel v0.3.34
+   Compiling aho-corasick v1.1.5
+   Compiling fastrand v2.5.0
+   Compiling windows-core v0.62.2
+   Compiling bitflags v1.3.2
+   Compiling futures-task v0.3.34
+   Compiling zerovec v0.11.8
+   Compiling thiserror v2.0.21
+   Compiling anyhow v1.0.104
+   Compiling bytes v1.12.1
+   Compiling parking_lot_core v0.9.12
+   Compiling flate2 v1.1.10
+   Compiling concurrent-queue v2.5.0
+   Compiling bstr v1.13.1
+   Compiling which v8.0.6
+   Compiling either v1.19.0
+   Compiling value-bag-serde1 v1.14.1
+   Compiling windows-numerics v0.3.1
+   Compiling windows-future v0.3.2
+   Compiling value-bag v1.14.1
+   Compiling windows-collections v0.3.2
+   Compiling futures-util v0.3.34
+   Compiling parking_lot v0.12.5
+   Compiling zerocopy v0.8.62
+   Compiling futures-lite v2.6.1
+   Compiling http v1.5.0
+   Compiling tinystr v0.8.4
+   Compiling event-listener v5.4.2
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling potential_utf v0.1.6
+   Compiling num-traits v0.2.19
+   Compiling log v0.4.34
+   Compiling windows v0.62.2
+   Compiling core_maths v0.1.1
+   Compiling zerotrie v0.2.5
+   Compiling icu_locale_core v2.3.0
+   Compiling event-listener-strategy v0.5.4
+   Compiling phf_shared v0.11.3
+   Compiling miniz_oxide v0.8.9
+   Compiling async-task v4.7.1
+   Compiling float-cmp v0.9.0
+   Compiling raw-window-handle v0.6.2
+   Compiling utf8_iter v1.0.4
+   Compiling rustc-hash v2.1.3
+   Compiling strict-num v0.1.1
+   Compiling ttf-parser v0.25.1
+   Compiling libsqlite3-sys v0.38.2 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\vendor\libsqlite3-sys-0.38.2)
+   Compiling slotmap v1.1.1
+   Compiling libc v0.2.190
+   Compiling hashlink v0.12.2
+   Compiling icu_collections v2.3.0
+   Compiling euclid v0.22.14
+   Compiling crossbeam-epoch v0.9.21
+   Compiling fdeflate v0.3.7
+   Compiling fallible-iterator v0.3.0
+   Compiling arrayref v0.3.9
+   Compiling weezl v0.1.12
+   Compiling regex-automata v0.4.18
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling tiny-skia-path v0.11.4
+   Compiling crossbeam-deque v0.8.8
+   Compiling icu_provider v2.3.1
+   Compiling rusqlite v0.40.2
+   Compiling icu_normalizer_data v2.3.0
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+   Compiling icu_properties_data v2.3.0
+   Compiling async-channel v2.5.0
+   Compiling tracing-core v0.1.36
+   Compiling quick-error v2.0.1
+   Compiling unicode-script v0.5.8
+   Compiling memmap2 v0.9.11
+   Compiling typenum v1.20.1
+   Compiling color_quant v1.1.0
+   Compiling unicode-properties v0.1.4
+   Compiling unicode-bidi-mirroring v0.4.0
+   Compiling tinyvec v1.13.3
+   Compiling unicode-ccc v0.4.0
+   Compiling futures-executor v0.3.34
+   Compiling chrono v0.4.45
+   Compiling icu_properties v2.3.0
+   Compiling icu_normalizer v2.3.0
+   Compiling futures v0.3.34
+   Compiling rayon-core v1.13.0
+   Compiling lyon_geom v1.0.19
+   Compiling hybrid-array v0.4.15
+   Compiling vswhom-sys v0.1.3
+   Compiling phf_generator v0.11.3
+   Compiling getrandom v0.4.3
+   Compiling winapi-util v0.1.11
+   Compiling gpui-pre-util v0.3.8
+   Compiling rusqlite_migration v2.6.0
+   Compiling same-file v1.0.6
+   Compiling fontdb v0.23.0
+   Compiling simplecss v0.2.2
+   Compiling rustybuzz v0.20.1
+   Compiling getrandom v0.3.4
+   Compiling walkdir v2.5.0
+   Compiling webview2-com-sys v0.39.1
+   Compiling globset v0.4.20
+   Compiling polycool v0.4.0
+   Compiling base64 v0.22.1
+   Compiling byteorder-lite v0.1.0
+   Compiling pico-args v0.5.0
+   Compiling num-conv v0.2.2
+   Compiling unicode-bidi v0.3.18
+   Compiling percent-encoding v2.3.2
+   Compiling zune-core v0.5.3
+   Compiling libbz2-rs-sys v0.2.5
+   Compiling data-url v0.3.2
+   Compiling sha1_smol v1.0.1
+   Compiling lazy_static v1.5.1
+   Compiling xmlwriter v0.1.0
+   Compiling time-core v0.1.9
+   Compiling unicode-segmentation v1.13.3
+   Compiling unicode-vo v0.1.0
+   Compiling uuid v1.28.0
+   Compiling time-macros v0.2.32
+   Compiling convert_case v0.10.0
+   Compiling bzip2 v0.6.1
+   Compiling sharded-slab v0.1.7
+   Compiling zune-jpeg v0.5.15
+   Compiling form_urlencoded v1.2.2
+   Compiling image-webp v0.2.4
+   Compiling kurbo v0.13.1
+   Compiling rand_core v0.9.5
+   Compiling regex v1.13.1
+   Compiling idna_adapter v1.2.2
+   Compiling half v2.7.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling gpui-pre-collections v0.3.8
+   Compiling lyon_path v1.0.19
+   Compiling winreg v0.56.0
+   Compiling tracing-log v0.2.0
+   Compiling vswhom v0.1.0
+   Compiling png v0.17.16
+   Compiling nu-ansi-term v0.50.3
+   Compiling num-complex v0.4.6
+   Compiling toml_edit v0.25.17+spec-1.1.0
+   Compiling raw-cpuid v11.6.0
+   Compiling thread_local v1.1.10
+   Compiling new_debug_unreachable v1.0.6
+   Compiling pulp-wasm-simd-flag v0.1.1
+   Compiling dunce v1.0.5
+   Compiling compression-core v0.4.33
+   Compiling deranged v0.5.8
+   Compiling powerfmt v0.2.1
+   Compiling byteorder v1.5.0
+   Compiling reborrow v0.5.5
+   Compiling tiny-skia v0.11.4
+   Compiling compression-codecs v0.4.45
+   Compiling hash32 v0.3.1
+   Compiling proc-macro-crate v3.5.0
+   Compiling derive_more-impl v2.1.1
+   Compiling ref-cast v1.0.27
+   Compiling accesskit v0.24.1
+   Compiling tracing v0.1.44
+   Compiling pin-project v1.1.13
+   Compiling tracing-subscriber v0.3.23
+   Compiling svgtypes v0.16.1
+   Compiling embed-resource v3.0.12
+   Compiling pulp v0.22.3
+   Compiling rand_chacha v0.9.0
+   Compiling gpui-pre-zlog v0.3.8
+   Compiling idna v1.1.0
+   Compiling atlas-store v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-store)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling string_cache_codegen v0.5.4
+   Compiling phf_codegen v0.11.3
+   Compiling rayon v1.12.0
+   Compiling gif v0.14.2
+   Compiling spin v0.9.9
+   Compiling rgb v0.8.53
+   Compiling roxmltree v0.21.1
+   Compiling zune-inflate v0.2.54
+   Compiling atomic-waker v1.1.2
+   Compiling float_next_after v1.0.0
+   Compiling dyn-clone v1.0.20
+   Compiling static_assertions v1.1.0
+   Compiling fax v0.2.7
+   Compiling imagesize v0.14.0
+   Compiling lebe v0.5.3
+   Compiling const-oid v0.10.2
+   Compiling pxfm v0.1.30
+   Compiling ryu v1.0.23
+   Compiling rustc-demangle v0.1.28
+   Compiling bit_field v0.10.3
+   Compiling mac v0.1.1
+   Compiling futf v0.1.5
+   Compiling serde_urlencoded v0.7.1
+   Compiling time v0.3.55
+   Compiling backtrace v0.3.76
+   Compiling exr v1.74.2
+   Compiling gpui-pre-ztracing v0.3.8
+   Compiling usvg v0.46.0
+   Compiling tiff v0.11.3
+   Compiling markup5ever v0.12.1
+   Compiling digest v0.11.3
+   Compiling schemars v1.2.2
+   Compiling lyon_tessellation v1.0.22
+   Compiling piper v0.2.5
+   Compiling thiserror v1.0.69
+   Compiling flume v0.12.0
+   Compiling gpui-pre v0.3.8
+   Compiling url v2.5.8
+   Compiling rand v0.9.5
+   Compiling ignore v0.4.33
+   Compiling gpui-pre-perf v0.3.8
+   Compiling async-compression v0.4.50
+   Compiling heapless v0.9.3
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling lyon_algorithms v1.0.21
+   Compiling smol_str v0.3.6
+   Compiling png v0.18.1
+   Compiling errno v0.3.14
+   Compiling http-body v1.1.0
+   Compiling arc-swap v1.9.2
+   Compiling qoi v0.4.1
+   Compiling crossbeam-queue v0.3.14
+   Compiling windows-version v0.1.7
+   Compiling cookie v0.18.2
+   Compiling moxcms v0.8.1
+   Compiling utf-8 v0.7.6
+   Compiling link-section v0.19.3
+   Compiling dpi v0.1.2
+   Compiling fixedbitset v0.5.7
+   Compiling cpufeatures v0.3.1
+   Compiling svg_fmt v0.4.5
+   Compiling atomic v0.5.3
+   Compiling web-time v1.1.0
+   Compiling precomputed-hash v0.1.1
+   Compiling pollster v0.2.5
+   Compiling encoding_rs v0.8.42
+   Compiling gpui-pre-macros v0.3.8
+   Compiling string_cache v0.8.9
+   Compiling postage v0.5.0
+   Compiling gpui-pre-scheduler v0.3.8
+   Compiling etagere v0.2.15
+   Compiling futures-concurrency v7.7.1
+   Compiling ctor v1.0.13
+   Compiling sha2 v0.11.0
+   Compiling dirs-sys v0.5.0
+   Compiling gpui-pre-util-macros v0.3.8
+   Compiling tendril v0.4.3
+   Compiling profiling v1.0.18
+   Compiling gpui-pre-refineable v0.3.8
+   Compiling lyon v1.0.19
+   Compiling resvg v0.46.0
+   Compiling rustix v1.1.5
+   Compiling gpui-pre-shared-string v0.3.8
+   Compiling gpui-pre-sum-tree v0.3.8
+   Compiling globwalk v0.8.1
+   Compiling windows-targets v0.52.6
+   Compiling strum v0.28.0
+   Compiling blocking v1.7.0
+   Compiling image v0.25.10
+   Compiling taffy v0.13.0
+   Compiling polling v3.11.0
+   Compiling phf v0.11.3
+   Compiling itertools v0.14.0
+   Compiling spin v0.10.1
+   Compiling waker-fn v1.2.0
+   Compiling inventory v0.3.25
+   Compiling pollster v0.4.0
+   Compiling seahash v4.1.0
+   Compiling num_cpus v1.17.0
+   Compiling toml_edit v0.22.27
+   Compiling async-io v2.6.0
+   Compiling windows-result v0.2.0
+   Compiling encoding_rs_io v0.1.8
+   Compiling dirs v6.0.0
+   Compiling base62 v2.2.6
+   Compiling serde-saphyr v1.3.0
+   Compiling shellexpand v3.1.2
+   Compiling windows-strings v0.1.0
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling rust-embed-utils v8.13.0
+   Compiling triomphe v0.1.16
+   Compiling normpath v1.5.2
+   Compiling toml v0.8.23
+   Compiling async-lock v3.4.2
+   Compiling itertools v0.11.0
+   Compiling windows-registry v0.6.1
+   Compiling kurbo v0.11.3
+   Compiling hashbrown v0.16.1
+   Compiling windows-core v0.58.0
+   Compiling async-fs v2.2.0
+   Compiling gpui-pre-windows v0.3.8
+   Compiling rust-embed-impl v8.13.0
+   Compiling svgtypes v0.15.3
+   Compiling accesskit_consumer v0.38.0
+   Compiling rust-i18n-support v4.2.4
+   Compiling windows-targets v0.53.5
+   Compiling html5ever v0.27.0
+   Compiling xml5ever v0.18.1
+   Compiling async-process v2.5.0
+   Compiling rust-i18n v4.2.4
+   Compiling async-net v2.0.0
+   Compiling async-executor v1.14.0
+   Compiling fluent-uri v0.1.4
+   Compiling imagesize v0.13.0
+   Compiling zune-core v0.4.12
+   Compiling str_indices v0.4.4
+   Compiling unicode-id v0.3.7
+   Compiling roxmltree v0.20.0
+   Compiling zune-jpeg v0.4.21
+   Compiling lsp-types v0.97.0
+   Compiling ropey v2.0.0-beta.1
+   Compiling markdown v1.0.0
+   Compiling smol v2.0.2
+   Compiling usvg v0.45.1
+   Compiling markup5ever_rcdom v0.3.0
+   Compiling windows-sys v0.60.2
+   Compiling windows v0.58.0
+   Compiling gif v0.13.3
+   Compiling itertools v0.13.0
+   Compiling notify-types v2.1.0
+   Compiling instant v0.1.13
+   Compiling unicode-linebreak v0.1.5
+   Compiling enum-iterator v2.3.0
+   Compiling notify v8.2.0
+   Compiling gpui-component-macros v0.7.1
+   Compiling atlas-ui v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-ui)
+   Compiling atlas-search v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-search)
+   Compiling xtask v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\xtask)
+   Compiling resvg v0.45.1
+   Compiling rust-embed v8.13.0
+   Compiling atlas-core v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-core)
+   Compiling rust-i18n-macro v4.2.4
+   Compiling derive_more v2.1.1
+   Compiling gpui-pre-http-client v0.3.8
+   Compiling accesskit_windows v0.34.0
+   Compiling webview2-com v0.39.1
+   Compiling wry v0.57.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\vendor\wry-0.57.0)
+warning: function `platform_webview_version` is never used
+    --> vendor\wry-0.57.0\src\webview2\mod.rs:1966:8
+     |
+1966 | pub fn platform_webview_version() -> Result<String> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling atlas-platform v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-platform)
+warning: `wry` (lib) generated 1 warning
+   Compiling gpui-kit-assets v0.7.1
+   Compiling gpui-base v0.7.1
+   Compiling gpui-pre-platform v0.3.8
+   Compiling gpui-component v0.7.1
+   Compiling atlas-app v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-app)
+    Finished `local` profile [optimized + debuginfo] target(s) in 23m 46s
+     Running unittests src\main.rs (target\local\deps\atlas_app-092d58fcba49fe17.exe)
+
+running 84 tests
+test navigation::tests::explicit_navigation_and_search_remain_distinct ... ok
+test palette::tests::deliberate_local_selection_tracks_target_and_arrows_return_to_go_to ... ok
+test navigation::tests::scheme_case_does_not_change_navigation_or_address_validation ... ok
+test navigation::tests::ordinary_search_and_refused_addresses_have_no_literal_destination ... ok
+test navigation::tests::refused_scheme_case_does_not_turn_an_address_into_a_search ... ok
+test navigation::tests::explicit_web_search_preserves_scheme_and_query_case ... ok
+test palette::tests::refresh_failure_and_input_change_keep_submission_intent_distinct ... ok
+test navigation::tests::literal_address_classification_matches_navigation ... ok
+test palette::tests::go_to_selection_survives_refresh_and_supersedes_pending_local_intent ... ok
+test palette::tests::go_to_uses_canonical_address_but_forced_search_preserves_input ... ok
+test palette::tests::input_changes_reject_stale_replies_and_reopening_resets_selection ... ok
+test palette::tests::literal_enter_stays_on_go_to_across_local_results_empty_and_failure ... ok
+test palette::tests::model_refresh_replaces_counts_and_rows_without_an_input_change ... ok
+test palette::tests::ordinary_and_refused_input_keep_existing_submission_behavior ... ok
+test navigation::tests::unsafe_schemes_and_empty_input_are_refused ... ok
+test palette::tests::refresh_updates_saved_counts_and_metadata_from_current_results ... ok
+test palette::tests::removed_local_selection_never_activates_its_replacement_row ... ok
+test palette::tests::repeated_refreshes_preserve_target_identity_and_reject_earlier_replies ... ok
+test palette::tests::shortcut_stream_keeps_queries_until_submit_activation_or_close ... ok
+test session::tests::adjacent_metadata_callbacks_preserve_both_fields ... ok
+test session::tests::command_and_snapshot_diagnostics_redact_user_content ... ok
+test session::tests::catalogue_updates_remove_closed_instances_but_keep_unloaded_saved_rows ... ok
+test session::tests::observed_close_ignores_absent_and_plugin_ids_and_remembers_each_web_instance_once ... ok
+test session::tests::saved_rows_keep_their_destination_after_navigation_and_close ... ok
+test session::tests::empty_reopen_and_invalid_commands_preserve_the_model ... ok
+test smoke_watchdog::tests::cancellation_joins_without_invoking_the_failure_action ... ok
+test smoke_watchdog::tests::dropped_control_is_a_failure_not_successful_cancellation ... ok
+test smoke_watchdog::tests::expiry_runs_without_gui_or_cancellation_activity ... ok
+test smoke_watchdog::tests::terminal_failure_exits_while_stderr_is_locked ... ok
+test tests::smoke_reservation_refuses_existing_directory_without_changing_contents ... ok
+test theme::tests::graphite_tokens_reproduce_the_preview_hex_values ... ok
+test ui::home_palette::tests::accepted_focus_cycle_close_and_navigation_supersede_pending_home_entry ... ok
+test ui::home_palette::tests::metadata_and_search_traffic_do_not_cancel_or_acknowledge_pending_entry ... ok
+test ui::home_palette::tests::only_latest_home_request_can_open_and_completion_cancels_delayed_acknowledgments ... ok
+test ui::home_palette::tests::rejected_enqueue_preserves_only_the_previously_accepted_intent ... ok
+test ui::home_palette::tests::reopened_and_saved_home_require_their_own_acknowledged_creation ... ok
+test ui::home_palette::tests::saved_or_reopened_real_page_cannot_rearm_an_earlier_home_acknowledgment ... ok
+test ui::navigation_intents::tests::closing_an_uncreated_tab_prunes_its_intent_before_browser_ready ... ok
+test ui::navigation_intents::tests::delayed_browser_and_inactive_tab_keep_the_latest_destination ... ok
+test ui::navigation_intents::tests::explicit_home_supersedes_a_pending_page_without_changing_smoke_home ... ok
+test ui::navigation_intents::tests::failed_enqueue_preserves_intent_until_a_successful_creation ... ok
+test ui::navigation_intents::tests::newest_submission_wins_before_blank_and_earlier_save_snapshots ... ok
+test ui::navigation_status::tests::closed_uncreated_and_unknown_pages_cannot_supply_feedback ... ok
+test ui::navigation_status::tests::completion_is_truthful_in_both_native_callback_orders ... ok
+test ui::navigation_status::tests::inactive_events_wait_for_selection_and_snapshots_retain_feedback ... ok
+test ui::navigation_status::tests::new_navigation_and_failed_creation_discard_previous_feedback ... ok
+test ui::navigation_status::tests::page_errors_discard_only_their_own_success_and_late_finished_is_silent ... ok
+test ui::navigation_status::tests::shutdown_ignores_navigation_feedback ... ok
+test ui::page_lifecycle::tests::close_request_only_enqueues_and_shutdown_rejects_late_requests ... ok
+test ui::page_lifecycle::tests::committed_close_before_created_cannot_resurrect_the_pending_page ... ok
+test ui::page_lifecycle::tests::created_before_commit_retains_ownership_until_the_saved_close ... ok
+test ui::page_lifecycle::tests::late_created_for_closed_saved_page_cannot_claim_its_replacement ... ok
+test ui::palette_shortcut_tests::popup_liveness_only_suppresses_obsolete_refocus_actions ... ok
+test ui::palette_shortcut_tests::removed_popup_refocus_does_not_invalidate_queued_completion ... ok
+test ui::recovery::tests::backup_dates_use_utc_across_epoch_and_leap_boundaries ... ok
+test ui::recovery::tests::recovery_card_confirms_only_its_current_offer_once ... ok
+test ui::shutdown_tests::closing_page_host_accepts_teardown_but_no_late_focus_or_navigation ... ok
+test ui::shutdown_tests::closing_rejects_late_user_actions_but_keeps_final_metadata_before_shutdown ... ok
+test ui::shutdown_tests::disconnected_worker_errors_are_preserved_without_cancelling_accepted_home ... ok
+test ui::shutdown_tests::rejected_close_preserves_home_identity_and_open_actions_still_supersede_it ... ok
+test ui::shutdown_tests::startup_admits_confirmation_but_closing_startup_admits_only_shutdown ... ok
+test session::worker_tests::existing_empty_state_is_refused_without_blank_initialization ... ok
+test session::worker_tests::failed_close_save_reports_fatal_failure_without_acknowledging_native_cleanup ... ok
+test session::worker_tests::queued_new_tab_and_home_navigation_acknowledge_the_created_instance ... ok
+test session::worker_tests::queued_relative_shortcuts_advance_and_close_the_authoritative_active_tab ... ok
+test session::worker_tests::worker_idle_path_publishes_the_acknowledged_snapshot_without_waiting_for_a_timer ... ok
+test session::worker_tests::damaged_startup_without_a_backup_preserves_both_failure_and_primary ... ok
+test session::worker_tests::uncertain_cleanup_and_rollback_errors_refuse_even_a_recoverable_primary ... ok
+test session::worker_tests::ordinary_read_failure_on_healthy_primary_never_authorizes_recovery ... ok
+test session::worker_tests::busy_startup_remains_the_original_fatal_error_without_a_recovery_offer ... ok
+test session::worker_tests::home_entry_acknowledgments_follow_their_command_and_do_not_survive_restart ... ok
+test session::worker_tests::queued_navigation_uses_worker_selection_and_preserves_saved_destination ... ok
+test session::worker_tests::failed_query_keeps_its_identity_and_does_not_stop_later_queries_or_mutate_storage ... ok
+test session::worker_tests::removed_saved_row_stays_removed_after_live_reopen_stale_callbacks_and_restart ... ok
+test session::worker_tests::worker_restart_preserves_saved_destination_and_latest_live_navigation ... ok
+test session::worker_tests::queued_page_closes_preserve_saved_rows_and_ignore_replaced_instances_across_restart ... ok
+test session::worker_tests::worker_shutdown_drains_queued_changes_and_ignores_stale_page_callbacks ... ok
+test session::worker_tests::missing_primary_with_invalid_backup_markers_never_falls_through_to_empty_state ... ok
+test session::worker_tests::healthy_existing_primary_starts_directly_with_its_saved_state ... ok
+test session::worker_tests::dropping_recovery_event_receiver_releases_offer_without_confirmation ... ok
+test session::worker_tests::recovery_offer_waits_for_confirmation_and_shutdown_cancels_without_replacement ... ok
+test session::worker_tests::missing_primary_offer_cancels_and_disconnects_without_creating_a_database ... ok
+test session::worker_tests::matching_recovery_confirmation_restores_once_and_survives_restart ... ok
+test session::worker_tests::missing_primary_confirmation_restores_the_offered_snapshot_once ... ok
+
+test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
+
+     Running unittests src\lib.rs (target\local\deps\atlas_core-0c728356580e82e1.exe)
+
+running 10 tests
+test tabs::snapshot::tests::full_u64_watermarks_restore_without_wrapping_or_reusing_ids ... ok
+test tabs::snapshot::tests::restored_watermarks_retire_closed_and_removed_identities ... ok
+test tabs::snapshot::tests::invalid_selection_associations_and_saved_order_are_rejected ... ok
+test tabs::snapshot::tests::invalid_identities_and_watermarks_are_rejected_without_repair ... ok
+test tabs::snapshot::tests::restores_all_records_selection_and_order_without_closed_history ... ok
+test tabs::snapshot::tests::snapshot_and_record_diagnostics_do_not_include_metadata ... ok
+test tabs::tests::failed_ordinary_reopen_preserves_history_and_selection ... ok
+test tabs::tests::failed_saved_reopen_preserves_history_and_can_reuse_a_live_instance ... ok
+test tabs::tests::live_id_exhaustion_preserves_open_state ... ok
+test tabs::tests::saved_id_exhaustion_preserves_order_and_associations ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\tab_model.rs (target\local\deps\tab_model-9c578eae681912e3.exe)
+
+running 20 tests
+test active_close_uses_right_then_left_and_last_close_leaves_home ... ok
+test all_kinds_are_supported_but_only_web_closures_enter_history ... ok
+test invalid_group_positions_and_kinds_leave_every_projection_unchanged ... ok
+test closing_an_inactive_tab_preserves_selection ... ok
+test removing_a_saved_page_keeps_its_live_instance_at_the_ordinary_start ... ok
+test reorder_uses_final_group_positions_without_changing_selection ... ok
+test closing_a_saved_page_leaves_an_unloaded_row_and_home ... ok
+test numeric_ids_reject_zero_without_restricting_valid_nonzero_values ... ok
+test open_saved_reuses_live_instances_but_reloads_closed_ones_from_saved_target ... ok
+test removing_a_closed_saved_page_cannot_be_undone_by_tab_history ... ok
+test diagnostic_formatting_omits_synthetic_browsing_metadata ... ok
+test reopen_is_lifo_restores_metadata_and_never_reuses_a_live_id ... ok
+test reopening_clamps_a_vanished_ordinary_position ... ok
+test saved_history_reuses_an_existing_instance_without_resetting_navigation ... ok
+test saved_reordering_includes_unloaded_rows_and_controls_reopen_position ... ok
+test saving_is_idempotent_and_navigation_cannot_change_the_saved_target ... ok
+test unknown_and_retired_identities_reject_every_mutation_atomically ... ok
+test empty_and_background_open_preserve_a_valid_selection ... ok
+test the_twenty_first_web_closure_evicts_only_the_oldest ... ok
+test long_operation_sequences_preserve_identity_order_and_projection_invariants ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src\lib.rs (target\local\deps\atlas_platform-31fed79edf2f5da8.exe)
+
+running 68 tests
+test browser::page::tests::page_navigation_refuses_non_web_schemes_and_embedded_nul ... ok
+test browser::page::tests::page_shortcuts_distinguish_browser_actions_from_shifted_variants ... ok
+test browser::tests::browser_diagnostics_do_not_include_page_content ... ok
+test browser::page::tests::unrelated_and_extra_modified_keys_stay_with_the_page ... ok
+test browser::tests::creation_acknowledgment_follows_apply_and_navigation_stays_in_order ... ok
+test browser::tests::disconnect_drains_existing_commands_then_ends_the_host_loop ... ok
+test browser::tests::failed_creation_is_not_acknowledged_and_later_commands_still_run ... ok
+test storage::backup::tests::bundle_names_accept_only_the_fixed_opaque_format ... ok
+test storage::backup::tests::every_single_byte_marker_change_is_ineligible_and_identity_must_match ... ok
+test storage::backup::tests::marker_preserves_full_integer_ranges_and_privacy_generations ... ok
+test storage::recovery::resume::tests::intent_roundtrip_refuses_every_truncation_byte_flip_and_extra_byte ... ok
+test browser::tests::physical_bounds_reject_coordinate_overflow_without_clipping ... ok
+test storage::session::tests::failed_dirty_writes_never_return_a_session_or_retain_its_claim ... ok
+test storage::session::tests::failed_completion_flush_surfaces_the_error_and_poisoned_control ... ok
+test storage::recovery::tests::native_moves_do_not_replace_destinations_or_delete_nonempty_directories ... ok
+test storage::session::tests::control_read_errors_are_not_malformed_record_successes ... ok
+test storage::startup::tests::atomic_directory_creation_rejects_invalid_components_and_wrong_parent ... ok
+test storage::startup::tests::atomic_creation_retains_the_created_directory_until_release ... ok
+test storage::startup::tests::existing_empty_directory_acquisitions_retain_the_name_without_child_locks ... ok
+test storage::startup::tests::legacy_database_creation_collision_retains_the_existing_file ... ok
+test storage::backup::tests::sync_roots_are_checked_once_per_boundary_and_new_bundle_registration_is_refused ... ok
+test storage::startup::tests::racing_final_directory_is_not_adopted_as_fresh ... ok
+test storage::startup::tests::racing_lifecycle_control_is_not_adopted_or_overwritten ... ok
+test storage::startup::tests::existing_junction_is_refused_without_following_or_initializing_its_target ... ok
+test storage::startup::tests::unsupported_deletion_state_refuses_before_creating_storage ... ok
+test storage::tests::a_refused_begin_releases_the_session_claim_without_marking_clean ... ok
+test storage::tests::a_refused_completion_releases_the_claim_and_preserves_dirty_state ... ok
+test storage::tests::a_registered_ancestor_refuses_creation ... ok
+test storage::tests::a_similarly_named_registered_sibling_is_not_an_ancestor ... ok
+test storage::tests::accepts_dos_spelling_and_removes_only_the_extended_dos_prefix ... ok
+test storage::tests::an_unresolvable_registered_root_fails_closed ... ok
+test storage::tests::creates_missing_children_and_keeps_existing_database_bytes ... ok
+test storage::recovery::tests::damaged_intent_never_creates_a_missing_primary ... ok
+test storage::tests::directories_cannot_stand_in_for_database_or_sidecar_files ... ok
+test storage::tests::enumeration_failure_is_not_treated_as_an_empty_list ... ok
+test storage::startup::tests::archive_directory_in_new_state_prevents_fresh_initialization ... ok
+test storage::tests::metadata_checks_refuse_reparse_pending_and_multiple_link_entries ... ok
+test storage::tests::directory_and_database_names_remain_locked_until_the_lease_drops ... ok
+test storage::backup::tests::unexpected_sidecars_prevent_cleanup_without_deleting_known_files ... ok
+test storage::tests::lease_diagnostics_redact_location_and_lease_is_send_and_sync ... ok
+test storage::tests::refuses_every_nonfixed_drive_before_creating_the_destination ... ok
+test storage::tests::rejects_relative_network_device_stream_and_ambiguous_names ... ok
+test storage::startup::tests::primary_creation_race_refuses_after_the_empty_inventory_check ... ok
+test storage::tests::sqlite_path_limit_counts_utf16_units_instead_of_utf8_bytes ... ok
+test storage::tests::new_sync_registration_is_detected_on_revalidation ... ok
+test storage::tests::sqlite_path_reserves_space_for_the_longest_sidecar_and_terminator ... ok
+test storage::tests::retained_identity_mismatch_is_an_explicit_error ... ok
+test storage::tests::ordinary_sidecars_can_be_deleted_while_the_lease_is_alive ... ok
+test storage::tests::native_checks_support_a_disposable_path_beyond_the_legacy_length ... ok
+test storage::startup::tests::legacy_existing_primary_lease_retains_name_until_drop ... ok
+test storage::startup::tests::missing_primary_with_incomplete_archive_and_malformed_intent_fails_closed ... ok
+test storage::backup::tests::publication_freezes_files_and_removal_requires_only_this_owned_bundle ... ok
+test storage::backup::tests::archive_is_lazy_and_a_reserved_incomplete_output_is_not_a_candidate ... ok
+test storage::startup::tests::existing_unsafe_primary_and_busy_control_preserve_refusals ... ok
+test storage::backup::tests::malformed_and_incomplete_markers_stay_on_disk_without_becoming_candidates ... ok
+test storage::startup::tests::existing_empty_or_interrupted_initialization_never_creates_a_primary ... ok
+test storage::startup::tests::unexpected_entries_in_new_state_prevent_fresh_initialization ... ok
+test storage::recovery::tests::healthy_header_with_a_hot_journal_is_not_misclassified_as_corrupt ... ok
+test storage::recovery::tests::healthy_primary_and_nonzero_or_pending_deletions_are_refused ... ok
+test storage::startup::tests::missing_primary_with_invalid_backup_or_sidecar_is_not_fresh ... ok
+test storage::startup::tests::fresh_final_directory_initializes_and_reopens_normally ... ok
+test storage::recovery::tests::interrupted_recovery_refuses_changed_identity_without_replacing_it ... ok
+test storage::startup::tests::existing_primary_with_journal_follows_normal_store_open ... ok
+test storage::startup::tests::missing_primary_offer_retains_ownership_and_cancellation_preserves_absence ... ok
+test storage::recovery::tests::newest_valid_offer_preserves_primary_and_sidecars_until_confirmation ... ok
+test storage::recovery::tests::corrupt_newest_candidate_falls_back_but_foreign_primary_never_does ... ok
+test storage::recovery::tests::guarded_startup_resumes_the_exact_pending_source_before_normal_open ... ok
+test storage::recovery::tests::every_interrupted_stage_requires_a_new_offer_and_can_finish_the_same_source ... ok
+
+test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.62s
+
+     Running tests\backups.rs (target\local\deps\backups-9a790b6e7a51c8fc.exe)
+
+running 4 tests
+test backup_bundles_support_the_extended_windows_path_used_by_sqlite ... ok
+test a_corrupt_newest_snapshot_does_not_hide_an_older_valid_copy ... ok
+test interrupted_unpublished_output_never_counts_as_a_backup_or_gets_pruned ... ok
+test eight_idle_daily_snapshots_keep_seven_valid_copies_and_restart_preserves_schedule ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+
+     Running tests\storage.rs (target\local\deps\storage-84681830dd4602a0.exe)
+
+running 18 tests
+test pending_recovery_intent_refuses_startup_before_creating_a_missing_database ... ok
+test one_lease_refuses_overlapping_sessions_but_allows_a_later_session ... ok
+test native_guard_refuses_directories_in_place_of_control_files ... ok
+test native_guard_refuses_hardlinked_control_files_without_modifying_their_targets ... ok
+test native_guard_refuses_hardlinked_database_and_each_sidecar_without_changes ... ok
+test native_guard_refuses_a_junction_at_the_destination_and_in_its_ancestors ... ok
+test refused_foreign_database_keeps_its_bytes_and_leaves_unclean_lifecycle_evidence ... ok
+test native_session_excludes_an_alias_and_retains_ownership_after_lease_drop ... ok
+test a_second_store_on_the_same_lease_cannot_change_the_first_stores_records ... ok
+test removed_identities_remain_retired_after_an_empty_session_is_persisted ... ok
+test wal_cleanup_and_directory_release_follow_store_shutdown ... ok
+test stale_revision_rejection_preserves_committed_records_and_watermarks ... ok
+test saved_destinations_and_navigated_live_metadata_survive_native_store_reopen ... ok
+test sqlite_roundtrip_supports_paths_beyond_the_native_legacy_length ... ok
+test sqlite_roundtrip_extends_a_path_when_only_its_sidecar_exceeds_the_limit ... ok
+test sqlite_roundtrip_supports_paths_beyond_the_default_vfs_capacity ... ok
+test native_guard_refuses_junctions_in_place_of_control_files ... ok
+test restart_distinguishes_explicit_shutdown_drop_and_malformed_lifecycle_evidence ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.45s
+
+     Running unittests src\lib.rs (target\local\deps\atlas_search-b1ee3862afdb890c.exe)
+
+running 175 tests
+test candidate::tests::ascii_case_folding_never_excludes_smart_case_candidates ... ok
+test candidate::tests::large_typo_budgets_do_not_wrap_or_reject_absent_bytes ... ok
+test candidate::tests::empty_strings_respect_the_query_deletion_budget ... ok
+test candidate::tests::distinct_missing_characters_supply_only_a_lower_bound ... ok
+test candidate::tests::every_ascii_byte_including_controls_has_a_presence_bit ... ok
+test candidate::tests::unicode_in_either_string_bypasses_the_filter ... ok
+test catalogue::membership::cached_first_tests::invalid_ids_preserve_mask_rejection_and_checked_errors ... ok
+test catalogue::highlight_cache::tests::entry_ranges_preserve_rejection_order_original_text_checks_and_fresh_slots ... ok
+test catalogue::membership::cached_first_tests::cached_title_results_preserve_address_error_order ... ok
+test catalogue::membership::cached_first_tests::disabled_memo_keeps_original_digits_and_budget_fallbacks ... ok
+test catalogue::membership::cached_first_tests::cached_true_and_false_preserve_title_address_union ... ok
+test catalogue::membership::cached_first_tests::reused_group_id_starts_with_a_fresh_query_memo ... ok
+test catalogue::highlight_cache::tests::complete_queries_preserve_original_rows_through_mutations_and_group_reuse ... ok
+test catalogue::membership::tests::matching_and_rejected_groups_are_reused_only_within_the_current_query ... ok
+test catalogue::membership::projection_tests::projected_presence_is_conservative_for_repeats_case_and_literal_nul ... ok
+test catalogue::membership::tests::missing_or_out_of_bounds_group_ids_report_an_inconsistent_match ... ok
+test catalogue::membership::tests::uncached_fields_and_title_address_union_keep_unicode_and_smart_case_semantics ... ok
+test catalogue::membership::projection_tests::projection_leaves_other_budgets_unchanged ... ok
+test catalogue::membership::projection_tests::projection_keeps_active_group_errors_and_prunes_only_uncached_fields ... ok
+test catalogue::membership::tests::digit_queries_use_original_fields_and_never_allocate_group_results ... ok
+test catalogue::range_index::tests::bound_reuse::bound_cache_is_query_local_and_checks_supplied_group_slots ... ok
+test catalogue::hybrid::tests::work_caps_shared_fields_fallback_and_mutations_remain_exact ... ok
+test catalogue::membership::cached_first_tests::cold_and_warm_grouped_and_uncached_fields_match_public_membership ... ok
+test catalogue::highlight_cache::tests::accepted_empty_rejected_and_recovered_traces_remain_distinct ... ok
+test catalogue::range_index::tests::bound_reuse::reused_bounds_preserve_exact_field_values_and_digit_fallback ... ok
+test catalogue::range_index::tests::bounds::bounds_toggle_preserves_unavailable_cap_recovery_and_digit_fallback ... ok
+test catalogue::range_index::tests::bounds::stages::phase_timing_discards_completed_candidates_after_frontier_restart ... ok
+test catalogue::range_index::tests::bounds::stages::stage_recorder_preserves_range_and_ordinary_results ... ok
+test catalogue::range_index::tests::bounds::stages::phase_timing_is_opt_in_and_clears_on_bypass_and_error ... ok
+test catalogue::membership::projection_tests::projection_preserves_field_union_group_reuse_and_exhausted_pool_fallback ... ok
+test catalogue::range_index::tests::in_place::a_different_target_is_rejected_before_any_member_update ... ok
+test catalogue::range_index::tests::expansion_overflow_restarts_without_duplicate_observer_stages ... ok
+test catalogue::range_index::tests::in_place::accepted_updates_change_live_recency_scores_without_rebuilding_target_minima ... ok
+test catalogue::range_index::tests::fallback_positions_follow_every_swap_and_replacement_direction ... ok
+test catalogue::range_index::tests::bounds::retained_bounds_follow_in_place_reordering_text_and_class_mutations ... ok
+test catalogue::range_index::tests::in_place::disabled_unavailable_noop_and_failed_generation_do_not_take_the_fast_path ... ok
+test catalogue::highlight_cache::tests::grouped_raw_indices_ranges_and_errors_match_original_case_and_tie_paths ... ok
+test catalogue::range_index::tests::in_place::text_changes_never_use_recycled_or_equivalent_group_ids_as_proof ... ok
+test catalogue::membership::projection_tests::projection_keeps_scalar_counts_and_long_retained_ascii_boundaries ... ok
+test catalogue::range_index::tests::in_place::absent_and_extreme_timestamps_obey_neighbors_and_singleton_bounds ... ok
+test catalogue::range_index::tests::in_place::frequency_classes_open_state_and_fallback_use_the_guarded_routes ... ok
+test catalogue::range_index::tests::in_place::first_middle_last_and_tied_timestamp_neighbors_keep_full_key_order ... ok
+test catalogue::range_index::tests::pair_cap_retries_ignore_timestamp_only_edits_and_recover ... ok
+test catalogue::range_index::tests::mutations_representatives_reused_ids_and_failed_generation_remain_atomic ... ok
+test catalogue::range_index::tests::removing_fallback_relocates_a_different_fallback_into_its_slot ... ok
+test catalogue::highlight_cache::tests::original_length_boundaries_and_overlength_fallback_preserve_traces ... ok
+test catalogue::highlight_cache::tests::index_payload_cap_keeps_original_scoring_and_invalid_ids_return_errors ... ok
+test catalogue::range_index::tests::resource_failure_restarts_queries_and_recovers_after_mutations ... ok
+test catalogue::range_index::tests::membership_order::membership_order_preserves_complete_queries_scopes_and_mutations ... ok
+test catalogue::range_index::tests::bound_reuse::bound_reuse_preserves_scopes_limits_extreme_boosts_and_mutations ... ok
+test catalogue::range_index::tests::route_reports_reset_before_blank_validation_and_error_paths ... ok
+test catalogue::range_index::tests::restore::restore_build_refusal_keeps_rows_and_recovers_after_cap_crossings ... ok
+test catalogue::range_index::tests::membership_order::unicode_selected_preserves_complete_queries_scopes_and_mutations ... ok
+test catalogue::range_index::tests::unavailable_index_rebuilds_fallback_positions_after_swap_removal ... ok
+test catalogue::range_index::tests::timestamp_bounds_keep_target_ties_across_every_recency_plateau ... ok
+test catalogue::tests::accepted_near_match_recovers_real_highlights_without_changing_score_or_membership ... ok
+test catalogue::hybrid::tests::direct_pending_and_mixed_paths_preserve_all_result_fields ... ok
+test catalogue::range_index::tests::bounds::every_populated_node_matches_literal_entry_bounds_at_numeric_boundaries ... ok
+test catalogue::range_index::tests::released_pair_slots_and_retained_ungrouped_fields_follow_the_live_catalogue ... ok
+test catalogue::tests::diagnostics_redact_text_and_usage_metadata ... ok
+test catalogue::tests::boosts_cannot_introduce_a_nonmatching_row ... ok
+test catalogue::tests::blank_behavior_is_explicit_and_whitespace_stays_literal ... ok
+test catalogue::tests::boosts_are_bounded_monotonic_and_handle_timestamp_extremes ... ok
+test catalogue::tests::catalogue_and_owned_results_can_move_to_a_worker ... ok
+test catalogue::tests::equivalent_field_scores_keep_distinct_targets_counts_boosts_ties_and_highlights ... ok
+test catalogue::range_index::tests::ranges_preserve_scopes_limits_unicode_digits_and_errors ... ok
+test catalogue::tests::exhausted_generation_rejects_mutations_atomically_but_allows_no_ops ... ok
+test catalogue::tests::equivalent_scores_do_not_survive_changed_queries_metadata_or_replaced_rows ... ok
+test catalogue::tests::fields_do_not_create_a_cross_field_match_or_duplicate_identity ... ok
+test catalogue::tests::field_bounds_preserve_original_exact_bonus_and_adjacent_boundaries ... ok
+test catalogue::tests::independently_filtered_fields_remap_to_original_rows_before_union ... ok
+test catalogue::tests::ascii_filter_covers_every_ascii_bit_without_changing_matches ... ok
+test catalogue::tests::limited_selection_matches_the_prefix_of_complete_ranking ... ok
+test catalogue::tests::filter_metadata_tracks_updates_swap_removal_and_reinsertions_atomically ... ok
+test catalogue::tests::ascii_filter_matches_exhaustive_scoring_counts_ranking_and_highlights ... ok
+test catalogue::membership::projection_tests::projection_preserves_public_membership_for_exhaustive_short_ascii_fields ... ok
+test catalogue::tests::full_group_pool_and_overlength_fields_keep_fallback_rows_searchable ... ok
+test catalogue::tests::matcher_limits_are_checked_without_allocating_huge_strings ... ok
+test catalogue::tests::matching_both_fields_counts_one_target_and_uses_best_score ... ok
+test catalogue::tests::digit_metadata_preserves_union_scopes_errors_and_mutation_atomicity ... ok
+test catalogue::tests::literal_operators_are_not_interpreted_as_query_syntax ... ok
+test catalogue::tests::mutations_change_generation_only_when_metadata_changes ... ok
+test catalogue::tests::shared_field_groups_retain_each_title_and_address_lease_until_removed ... ok
+test catalogue::tests::membership_pruning_preserves_unicode_empty_fields_and_greedy_zero_scores ... ok
+test catalogue::tests::scope_counts_include_every_match_before_filter_and_limit ... ok
+test catalogue::tests::query_limit_refuses_without_mutating_catalogue_or_truncating_text ... ok
+test catalogue::tests::ties_follow_target_order_after_removal_and_reinsertion ... ok
+test catalogue::tests::smart_case_and_absence_of_normalization_are_visible_in_results ... ok
+test catalogue::tests::typo_policy_is_explicit_and_extreme_values_do_not_overflow ... ok
+test catalogue::tests::swap_removal_keeps_other_targets_addressable ... ok
+test catalogue::tests::unicode_highlights_preserve_original_utf8_and_scalar_boundaries ... ok
+test catalogue::tests::zero_score_greedy_match_is_not_removed_when_no_trace_can_be_recovered ... ok
+test digit_counts::tests::query_scalar_limit_and_unsupported_modes_preserve_fallback ... ok
+test catalogue::tests::zero_score_matches_remain_eligible ... ok
+test digit_counts::tests::field_count_boundaries_never_reject_available_query_digits ... ok
+test digit_counts::tests::rejection_is_necessary_under_independent_scalar_deletion_enumeration ... ok
+test digit_counts::tests::original_ascii_counts_saturate_without_counting_unicode_digits_or_nul ... ok
+test catalogue::tests::long_fields_and_queries_preserve_membership_and_original_highlight_offsets ... ok
+test catalogue::tests::score_pruning_preserves_boosted_rank_target_ties_and_all_scope_counts ... ok
+test catalogue::tests::saturated_greedy_scores_keep_exact_target_ties_at_the_pruning_bound ... ok
+test digit_counts::tests::repeated_and_combined_deficits_use_one_shared_deletion_budget ... ok
+test catalogue::tests::score_bound_covers_adjacent_delimiter_and_capitalization_bonuses ... ok
+test field_groups::membership_tests::digit_query_guard_prevents_a_demonstrably_incorrect_group_reuse ... ok
+test field_groups::tests::byte_length_limit_and_empty_fields_preserve_fallback_state ... ok
+test field_groups::tests::equivalent_fields_share_one_allocation_until_the_final_release ... ok
+test field_groups::tests::canonical_membership_matches_original_for_digit_free_ascii_and_unicode_queries ... ok
+test digit_counts::tests::pinned_matcher_membership_survives_unicode_case_nul_and_count_boundaries ... ok
+test field_groups::tests::reference_overflow_refuses_an_extra_lease_without_changing_the_group ... ok
+test field_groups::tests::unicode_bytes_and_non_ascii_digits_are_preserved ... ok
+test highlights::tests::combining_scalars_remain_valid_without_normalizing_text ... ok
+test highlights::tests::continuation_bytes_merge_into_original_scalar_ranges ... ok
+test field_groups::tests::repeated_unique_replacements_do_not_grow_the_slot_table ... ok
+test highlights::tests::malformed_match_positions_are_errors ... ok
+test catalogue::tests::field_bounds_cover_unicode_scoring_on_both_sides_of_the_greedy_cutoff ... ok
+test membership::indexed::tests::index_layout_counts_retained_payload_and_preserves_fallback_budgets ... ok
+test membership::indexed::tests::case_pairs_unicode_width_and_nul_match_the_pinned_public_matcher ... ok
+test field_groups::membership_tests::canonical_fields_preserve_membership_paths_and_deletion_boundaries ... ok
+test membership::indexed::tests::sixty_four_positions_never_shift_by_word_width_or_reuse_a_character ... ok
+test membership::numeric::tests::length_rejection_is_cached_before_compilation_and_validates_original_length ... ok
+test membership::numeric::tests::maximum_group_length_compiles_and_longer_fields_fall_back ... ok
+test membership::numeric::digits::tests::every_endpoint_and_digit_agrees_with_scalar_transitions ... ok
+test membership::numeric::tests::compile_limits_fallback_before_work_and_do_not_retry ... ok
+test field_groups::tests::full_capacity_still_interns_existing_keys_and_reclaims_storage ... ok
+test membership::numeric::tests::missing_groups_and_inconsistent_lengths_are_errors ... ok
+test membership::numeric::tests::numeric_only_queries_skip_fixed_spans_with_public_matcher_parity ... ok
+test membership::indexed::tests::indexed_endpoints_match_existing_membership_exhaustively ... ok
+test membership::numeric::tests::original_digits_change_results_within_the_same_group ... ok
+test membership::numeric::tests::packed_query_boundary_and_scalar_fallback_preserve_public_results ... ok
+test catalogue::occupancy::pool_boundary_and_empty_long_fields_are_counted_separately ... ok
+test membership::numeric::tests::query_boundaries_and_terminal_deletion_match_public_matcher ... ok
+test membership::numeric::tests::unsupported_queries_allocate_no_cache_and_preserve_fallback ... ok
+test membership::tests::ascii_fields_force_unicode_deletions_without_recomputing_smart_case ... ok
+test membership::tests::ascii_length_rejection_respects_deletion_boundaries_and_unicode_fields ... ok
+test membership::numeric::tests::smartcase_nul_unicode_and_deletion_positions_match_public_matcher ... ok
+test membership::tests::bitsets_never_consume_a_field_byte_twice_or_spend_two_deletions ... ok
+test membership::tests::bitset_boundaries_keep_all_prefix_bits_and_the_long_query_fallback ... ok
+test membership::tests::literal_and_nonliteral_matches_preserve_case_unicode_and_deletions ... ok
+test membership::tests::unsupported_budgets_require_an_explicit_fallback ... ok
+test score_cache::tests::boundary_case_prefix_exact_and_padding_paths_match_the_original ... ok
+test membership::tests::every_ascii_byte_is_literal_and_not_padding ... ok
+test membership::tests::long_fields_and_byte_chunk_boundaries_preserve_membership ... ok
+test score_cache::tests::cache_limits_fall_back_to_original_scoring ... ok
+test membership::tests::unicode_case_rules_do_not_expand_normalize_or_change_utf8_width ... ok
+test score_cache::tests::equivalent_digits_reuse_the_original_score ... ok
+test membership::tests::ordered_membership_matches_public_api_exhaustively_for_short_ascii ... ok
+test score_cache::tests::grouped_rejections_and_zero_scores_are_reused ... ok
+test membership::tests::unicode_membership_matches_public_api_across_mixed_scalar_widths ... ok
+test score_cache::tests::grouped_scores_reset_for_new_queries_and_reused_slots ... ok
+test score_cache::tests::field_length_and_simd_edges_match_without_changing_fallbacks ... ok
+test score_cache::tests::long_fields_unicode_and_new_queries_do_not_reuse_other_state ... ok
+test score_cache::tests::query_digits_are_not_merged_with_nonmatching_digits ... ok
+test score_cache::tests::rejected_fields_and_accepted_zero_scores_are_cached_distinctly ... ok
+test score_cache::tests::missing_groups_fall_back_and_invalid_group_invariants_return_errors ... ok
+test score_cache::tests::grouped_boundaries_and_long_queries_preserve_original_scores ... ok
+test score_cache::tests::long_near_matches_and_query_length_edges_preserve_original_scores ... ok
+test score_cache::tests::grouped_scores_match_original_ascii_unicode_case_and_padding_paths ... ok
+test score_cache::tests::score_and_membership_match_exhaustively_for_short_ascii_fields ... ok
+test membership::tests::short_bitsets_match_the_previous_scalar_algorithm_exhaustively ... ok
+test membership::numeric::tests::shared_spans_match_scalar_and_bitset_across_short_digit_queries ... ok
+test catalogue::profiling::synthetic_stage_profile_preserves_exhaustive_results ... ok
+test catalogue::hybrid::tests::hybrid_workload_diagnostic_preserves_complete_results ... ok
+test membership::grouped::grouped_workload_diagnostic_preserves_every_row_membership ... ok
+test catalogue::range_index::tests::restore::restore_feed_builds_once_then_preserves_complete_results_and_mutations ... ok
+test membership::indexed::diagnostic::positional_index_workload_diagnostic_preserves_all_membership ... ok
+test membership::numeric::diagnostic::numeric_workload_diagnostic_preserves_every_row_membership ... ok
+test catalogue::range_index::tests::projection::projection_membership_workload_diagnostic_preserves_all_rows ... ok
+test catalogue::occupancy::occupancy_diagnostic_preserves_complete_results ... ok
+test catalogue::range_index::tests::bounds::stages::range_stage_workload_diagnostic_preserves_complete_results ... ok
+test catalogue::range_index::tests::bounds::metadata_bound_workload_diagnostic_preserves_complete_results ... ok
+test catalogue::range_index::tests::range_workload_diagnostic_preserves_complete_results ... ok
+test catalogue::range_index::tests::membership_order::membership_order_workload_diagnostic_preserves_complete_results ... ok
+test catalogue::range_index::tests::bound_reuse::bound_reuse_workload_diagnostic_preserves_complete_results ... ok
+test catalogue::range_index::tests::membership_order::unicode_selected_workload_diagnostic_preserves_complete_results ... ok
+test catalogue::acceptance_comparison::unicode_selected_unchanged_acceptance_workload_comparison ... ok
+test catalogue::range_index::tests::mutation_costs::large_bucket_mutations_preserve_results_and_report_costs ... ok
+
+test result: ok. 175 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.99s
+
+     Running tests\frizbee_padding.rs (target\local\deps\frizbee_padding-42be448c0cf9ca7a.exe)
+
+running 5 tests
+test untrimmed_greedy_boundary_keeps_real_nul_and_absence_distinct ... ok
+test unicode_queries_and_zero_scores_preserve_real_byte_boundaries ... ok
+test repeated_and_mixed_nul_queries_score_only_genuine_characters ... ok
+test absent_nul_retains_zero_score_typo_membership_without_padding_indices ... ok
+test genuine_nul_beginning_middle_and_end_keep_exact_scores_and_real_indices ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\local\deps\atlas_store-d881ae85358d7894.exe)
+
+running 38 tests
+test deletion::tests::an_older_complete_log_cannot_replace_the_external_generation_barrier ... ok
+test deletion::tests::checksum_matches_the_standard_crc32_check_value ... ok
+test deletion::tests::diagnostics_do_not_disclose_clear_intervals ... ok
+test deletion::tests::generations_and_completion_pairs_cannot_be_skipped_or_reordered ... ok
+test deletion::tests::invalid_ranges_limits_and_exhausted_generations_are_explicit ... ok
+test deletion::tests::missing_truncated_and_bit_damaged_records_fail_closed ... ok
+test deletion::tests::unknown_kinds_and_versions_are_not_ignored_even_with_valid_checksums ... ok
+test deletion::tests::older_backup_replays_every_later_completed_clear ... ok
+test backup::tests::discovery_surfaces_io_and_unsupported_deletion_state_without_creating_output ... ok
+test backup::tests::future_schema_refusal_does_not_rewrite_the_backup ... ok
+test deletion::tests::interrupted_clear_blocks_restore_and_new_requests_until_completion ... ok
+test engine::tests::lifecycle::failed_session_begin_prevents_any_sqlite_open ... ok
+test backup::tests::scheduling_is_idle_daily_clock_safe_and_cheap_until_restart ... ok
+test engine::tests::lifecycle::abandoned_writer_reply_prevents_clean_completion ... ok
+test engine::tests::competing_writers_cannot_both_commit_the_same_expected_revision ... ok
+test engine::tests::failed_migration_rolls_back_application_marker_schema_and_version ... ok
+test engine::tests::lifecycle::refused_writer_startup_releases_the_claim_without_marking_clean ... ok
+test engine::tests::lifecycle::failed_writer_shutdown_does_not_complete_the_session ... ok
+test engine::tests::lifecycle::explicit_shutdown_completes_after_connections_close_and_keeps_the_lease_alive ... ok
+test engine::tests::malformed_current_snapshot_is_refused_before_changing_journal_mode ... ok
+test engine::tests::lease_revalidation_checks_connection_lifecycle_without_repeating_for_snapshots ... ok
+test engine::tests::abandoned_write_reply_is_reported_at_shutdown_and_committed_revision_is_recoverable ... ok
+test engine::tests::lifecycle::failed_clean_completion_is_reported_after_database_connections_close ... ok
+test engine::tests::lifecycle::failed_second_reader_startup_closes_first_reader_and_writer_before_releasing_claim ... ok
+test engine::tests::lifecycle::worker_panic_keeps_the_session_claimed_until_join_and_reader_cleanup ... ok
+test engine::tests::failed_insert_rolls_back_rows_selection_and_revision_without_leaking_sqlite_text ... ok
+test engine::tests::lifecycle::missing_session_capability_is_unclean_and_detects_corruption_outside_model_rows ... ok
+test engine::tests::stale_revisions_and_counter_regression_leave_the_database_unchanged ... ok
+test engine::tests::concurrent_readers_observe_complete_revisions_during_writes ... ok
+test engine::tests::roundtrip_preserves_unloaded_rows_kinds_order_selection_and_metadata ... ok
+test engine::tests::lifecycle::fallback_drop_releases_ownership_without_a_clean_completion ... ok
+test engine::tests::full_u64_identities_and_exhausted_revision_roundtrip_exactly ... ok
+test engine::tests::store_and_snapshot_debug_redact_paths_and_all_metadata_fields ... ok
+test engine::tests::foreign_future_and_altered_schemas_are_refused_without_rewriting_the_file ... ok
+test backup::tests::failed_validation_flush_and_uncertain_publication_preserve_output_and_retry ... ok
+test backup::tests::corruption_during_publication_cannot_prune_previous_backups_or_advance_schedule ... ok
+test backup::tests::pruning_failure_keeps_new_snapshot_and_reports_the_failure ... ok
+test engine::tests::malformed_encodings_and_missing_state_are_rejected_without_repair ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+     Running tests\sqlite_engine.rs (target\local\deps\sqlite_engine-c5cabd80bcded2c1.exe)
+
+running 1 test
+test linked_engine_matches_the_reviewed_maintenance_source ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\local\deps\atlas_ui-b7d291947327b963.exe)
+
+running 27 tests
+test accent::tests::dark_states_use_the_canvas_alpha_suffixes ... ok
+test color::tests::css_alpha_rounds_like_a_browser ... ok
+test color::tests::hex_and_packing_round_trip ... ok
+test color::tests::blending_over_an_opaque_ground_is_opaque ... ok
+test color::tests::contrast_ratio_spans_one_to_twenty_one ... ok
+test accent::tests::paper_ink_is_a_darker_tone_of_the_same_hue ... ok
+test palette::tests::glass_tiles_are_translucent_versions_of_the_dark_tiles ... ok
+test accent::tests::translucent_accent_falls_back_to_default ... ok
+test color::tests::hsl_matches_known_css_values ... ok
+test sidebar::tests::dragging_narrower_never_widens_the_settled_state ... ok
+test sidebar::tests::out_of_range_pointers_are_clamped ... ok
+test contrast::tests::graphite_body_text_clears_the_text_minimum ... ok
+test contrast::tests::labels_tell_accents_apart ... ok
+test palette::tests::every_palette_reports_its_own_id ... ok
+test contrast::tests::translucent_glass_tiles_are_measured_over_every_wallpaper ... ok
+test color::tests::default_accent_hue_and_saturation_match_the_canvas_formula ... ok
+test palette::tests::graphite_keeps_the_preview_dark_values ... ok
+test palette::tests::material_grounds_present_opaque_colours ... ok
+test palette::tests::reduce_transparency_turns_see_through_palettes_into_graphite ... ok
+test palette::tests::tint_follows_the_accent_hue ... ok
+test sidebar::tests::labels_hide_before_the_sidebar_reaches_compact ... ok
+test sidebar::tests::only_a_hidden_sidebar_peeks ... ok
+test sidebar::tests::releasing_at_each_state_width_keeps_that_state ... ok
+test sidebar::tests::reverse_drag_restores_every_state ... ok
+test sidebar::tests::widths_shrink_through_the_d44_progression ... ok
+test contrast::tests::every_palette_is_audited_with_every_accent ... ok
+test contrast::tests::contrast_failures_match_the_recorded_owner_review_list ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src\main.rs (target\local\deps\xtask-c11c6a21e2e757ab.exe)
+
+running 14 tests
+test benchmark::tests::highlight_validation_rejects_split_unicode_and_overlapping_ranges ... ok
+test benchmark::tests::p95_retains_slow_tail_without_replacing_it_with_the_mean ... ok
+test dependency_policy::tests::ignores_packages_outside_workspace_members ... ok
+test benchmark::tests::validation_rejects_unknown_ids_stale_content_and_impossible_counts ... ok
+test benchmark::tests::checksum_observes_highlights_scores_counts_and_returned_content ... ok
+test dependency_policy::tests::permits_shell_composition_and_headless_plugins ... ok
+test dependency_policy::tests::rejects_plugin_service_imports_and_api_back_edges ... ok
+test benchmark::tests::acceptance_checks_each_case_p95_and_keeps_worst_samples ... ok
+test dependency_policy::tests::rejects_malformed_packages_and_dependencies ... ok
+test dependency_policy::tests::rejects_renamed_optional_dev_build_and_target_dependencies ... ok
+test dependency_policy::tests::rejects_workspace_facades_and_terminates_on_cycles ... ok
+test dependency_policy::tests::rejects_missing_unknown_and_duplicate_members ... ok
+test benchmark::tests::corpus_has_exact_distinct_mixed_rows_and_reserved_addresses ... ok
+test benchmark::tests::no_typo_unicode_counts_match_the_independently_inspected_corpus ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+   Doc-tests atlas_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests atlas_platform
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests atlas_search
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests atlas_store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests atlas_ui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+warning: function `platform_webview_version` is never used
+    --> vendor\wry-0.57.0\src\webview2\mod.rs:1966:8
+     |
+1966 | pub fn platform_webview_version() -> Result<String> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `wry` (lib) generated 1 warning
+   Compiling atlas-app v0.1.0 (C:\Users\imthe\Documents\GitHub\Atlas-app\.claude\worktrees\verify-p1-07\crates\atlas-app)
+    Finished `local` profile [optimized + debuginfo] target(s) in 20.86s
+     Running `target\local\atlas-app.exe --smoke`
+Local gate passed.
+exit=0
