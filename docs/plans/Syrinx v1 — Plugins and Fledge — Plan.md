@@ -1,14 +1,14 @@
 ---
-title: "Atlas v1 — Plugins and Fledge — Plan (plan 2)"
+title: "Syrinx v1 — Plugins and Fledge — Plan (plan 2)"
 status: active
 created: 2026-10-09
-subject: Atlas v1 plan 2 — the plugin runtime and the Fledge plugin on a stand-in client (spec phase 3)
-relates_to: "docs/plans/Atlas v1 — Plan.md (plan 1 and the v1-wide decisions); docs/research/03-core-architecture.md; docs/research/05-fledge-api.md"
+subject: Syrinx v1 plan 2 — the plugin runtime and the Fledge plugin on a stand-in client (spec phase 3)
+relates_to: "docs/plans/Syrinx v1 — Plan.md (plan 1 and the v1-wide decisions); docs/research/03-core-architecture.md; docs/research/05-fledge-api.md"
 issues_repo: not yet created
 branch: claude/plan-atlas-v1
 ---
 
-# Atlas v1 — Plugins and Fledge
+# Syrinx v1 — Plugins and Fledge
 
 > **Status: active, approved by the owner on 2026-10-10.** Implementation is
 > queued behind plan 1's exit criteria. Work uses plan 1's D41 local branch,
@@ -18,7 +18,7 @@ branch: claude/plan-atlas-v1
 
 ## Why this exists
 
-Atlas's reason to exist is that code, notes and Fledge live inside the
+Syrinx's reason to exist is that code, notes and Fledge live inside the
 browser and share one palette and one search (`docs/spec.md`, "What this
 is"). That needs a plugin runtime first; Fledge is the first plugin because
 its inline palette action ("New lead") proves the runtime end to end without
@@ -26,13 +26,13 @@ an editor.
 
 ## Scope (D34: thin)
 
-- **The plugin runtime:** `atlas-plugin-api` with the `Plugin` trait,
+- **The plugin runtime:** `syrinx-plugin-api` with the `Plugin` trait,
   manifest, `ViewSpec` (component, form, list), `Outcome` and `IndexFeed`
   contracts; built-ins registered explicitly, activated on first use, with
   namespaced settings and observable command failures. A plugin stays in
   the Plugins list when closed (`design/README.md`).
 - **Palette integration:** plugin commands as a scope chip; `FormSpec`
-  rendered in the preview pane by `atlas-ui`; Tab between fields, Enter
+  rendered in the preview pane by `syrinx-ui`; Tab between fields, Enter
   creates, Ctrl Enter creates and opens (`design/README.md`).
 - **The Fledge plugin on a stand-in:** a `FledgeClient` trait in a
   `fledge-client` crate with a stub implementation; "New lead" with Name,
@@ -65,8 +65,8 @@ This plan adds no separate analytics integration.
 | D17 and D34 | Built-in Rust plugins and one small Fledge action prove the boundary needed by Notes and Forge. | A third-party plugin installer, WebAssembly runtime and full Fledge UI would expand the first plugin delivery. |
 | D23–D26 | The real client later uses ordinary OAuth consent and a structured REST API, after Stage C. Company remains part of the lead model. | Browser cookies, Fledge's internal routes and its MCP tools are not this client's interface. |
 | P2-1, owner, 2026-10-10 | Ship the stand-in in the normal app, clearly labelled as a demo. It uses synthetic records and sends nothing to Fledge. | Development builds only would hide the working plugin from the owner. |
-| P2-2, owner, 2026-10-10 | Demo leads last until Atlas restarts. Only Name is required; Company, Source and Est. value are optional, and estimates are labelled demo USD. | Durable demonstration business data and real-service field validation would add a store and assumptions before the client contract exists. |
-| P2-3, owner, 2026-10-10 | Keep an unsubmitted form while Atlas is running, including across Esc, and clear it after submission, explicit discard or restart. | Discarding it whenever the palette closes would lose unfinished typing. Persistent form drafts are unnecessary for the session-only demo. |
+| P2-2, owner, 2026-10-10 | Demo leads last until Syrinx restarts. Only Name is required; Company, Source and Est. value are optional, and estimates are labelled demo USD. | Durable demonstration business data and real-service field validation would add a store and assumptions before the client contract exists. |
+| P2-3, owner, 2026-10-10 | Keep an unsubmitted form while Syrinx is running, including across Esc, and clear it after submission, explicit discard or restart. | Discarding it whenever the palette closes would lose unfinished typing. Persistent form drafts are unnecessary for the session-only demo. |
 
 The research in `docs/research/05-fledge-api.md` describes a dated source
 inspection. Its endpoint status, field constraints and authentication
@@ -78,9 +78,9 @@ depends on their current deployment state.
 
 ### One plugin boundary
 
-`atlas-plugin-api` defines the versioned manifest, command identifiers,
+`syrinx-plugin-api` defines the versioned manifest, command identifiers,
 owned request and result values, forms, lists, tab references, errors and
-index change batches. It depends on no Atlas crate. A plugin's only Atlas
+index change batches. It depends on no Syrinx crate. A plugin's only Syrinx
 dependency is this API crate; it reaches application services through `Host`.
 Serialisable values cross the boundary, never GPUI entities, WebView2
 handles, SQLite connections or references into the core's state.
@@ -89,7 +89,7 @@ The application registers built-ins in an explicit list and validates
 duplicate identifiers, API versions, command ownership and view identifiers
 before making a command available. This is easier to trace than implicit
 registration. A test plugin must exercise the same API as Fledge; no
-Fledge-only shortcut through `atlas-core` is allowed.
+Fledge-only shortcut through `syrinx-core` is allowed.
 
 The research trait is illustrative, not an API to copy unchanged. For
 example, its borrowed `&dyn IndexFeed` contradicts the owned-value boundary.
@@ -123,9 +123,9 @@ repeated request without creating a second record.
 
 ### Rendering and state
 
-The shell is plan 1's existing split: `atlas-ui` renders forms, lists and
-registered rich-view components; `atlas-app` wires views to the core;
-`atlas-platform` alone manages WebView2 and Win32. A component identifier
+The shell is plan 1's existing split: `syrinx-ui` renders forms, lists and
+registered rich-view components; `syrinx-app` wires views to the core;
+`syrinx-platform` alone manages WebView2 and Win32. A component identifier
 selects an application renderer, never arbitrary plugin code or markup.
 No additional GPUI-dependent `plugin-*-ui` crates are introduced.
 
@@ -157,7 +157,7 @@ swallow errors or log a panic payload containing owner data.
 ### Storage and search
 
 The host scopes settings and stored values to a plugin identifier and rejects
-requests for another plugin's namespace. Built-ins must not open Atlas's
+requests for another plugin's namespace. Built-ins must not open Syrinx's
 database directly; dependency checks and review enforce that architecture.
 This is not a security sandbox: trusted native Rust code can still call
 ordinary filesystem APIs. Third-party isolation remains later work (D17).
@@ -291,7 +291,7 @@ numbers do not demonstrate this application's performance.
 ## Later, with the real client (after Stage C, D24)
 
 OAuth 2.1 as an ordinary client (D23); the structured REST API (D25); the
-per-kind keep-local switches (D19); Atlas as Fledge's full desktop app
+per-kind keep-local switches (D19); Syrinx as Fledge's full desktop app
 (D20). The Fledge-side work in `docs/research/05-fledge-api.md` ("Work
 needed on the Fledge side") is a list for the owner, not issues here.
 
@@ -320,7 +320,7 @@ or permission to start later phases early.
 ## Issue map and approval
 
 The owner approved these 12 local slices on 2026-10-10, exactly as
-recorded in [the approved Plans 2–4 breakdown](<Atlas v1 — Plans 2–4 slice proposals.md>).
+recorded in [the approved Plans 2–4 breakdown](<Syrinx v1 — Plans 2–4 slice proposals.md>).
 The boundaries, deliverables and explicit blockers below are unchanged from
 that approval. Every slice also depends on the preceding slice in this plan;
 finish each phase exit before its next phase. The breakdown's common gates
@@ -340,8 +340,8 @@ approvals remain separate; the map does not waive predecessor or operator gates.
 
 | Approved ID | Why and deliverable | Done evidence and explicit blockers |
 | --- | --- | --- |
-| P2-01 | A reviewed boundary prevents later plugins from depending on private application objects. Define the versioned manifest, owned serializable commands/results, errors, tab/view references, forms/lists, Host requests and bounded index batches in `atlas-plugin-api`; review the object-safe asynchronous contract before consumers depend on it. | Serialization and compatibility tests reject unsupported versions and malformed identities. No GPUI, WebView2, SQLite or borrowed core state crosses the boundary. Blocked by the Plan 2 entry gate and any required concrete API approval. |
-| P2-02 | Registration mistakes must fail before commands become visible. Add explicit built-in registration, duplicate-ID rejection, command/view ownership checks and dependency-boundary checks in `atlas-core` and `xtask`. | A synthetic plugin uses the same contract as future built-ins. Duplicate plugins/commands, foreign command ownership and unknown views fail deterministically; no early activation occurs during manifest discovery. |
+| P2-01 | A reviewed boundary prevents later plugins from depending on private application objects. Define the versioned manifest, owned serializable commands/results, errors, tab/view references, forms/lists, Host requests and bounded index batches in `syrinx-plugin-api`; review the object-safe asynchronous contract before consumers depend on it. | Serialization and compatibility tests reject unsupported versions and malformed identities. No GPUI, WebView2, SQLite or borrowed core state crosses the boundary. Blocked by the Plan 2 entry gate and any required concrete API approval. |
+| P2-02 | Registration mistakes must fail before commands become visible. Add explicit built-in registration, duplicate-ID rejection, command/view ownership checks and dependency-boundary checks in `syrinx-core` and `xtask`. | A synthetic plugin uses the same contract as future built-ins. Duplicate plugins/commands, foreign command ownership and unknown views fail deterministically; no early activation occurs during manifest discovery. |
 | P2-03 | A slow or failed plugin must leave browsing usable. Implement lazy activation, bounded request queues, request identity, cancellation, observed completion, timeout/uncertain-outcome states and lifecycle cleanup. | Synthetic lifecycle tests cover late completion, close/reopen, unavailable service and uncertain writes without automatic resubmission. Fix workload and queue/timeout bounds before judging behavior. No blanket panic swallowing or native-crash-isolation claim is introduced. |
 | P2-04 | Plugin settings must use the shared store without exposing another plugin's namespace. Add Host-scoped settings/storage services and a synthetic service adapter through application wiring. | Tests reject cross-plugin access, prove persistence and error propagation, and exercise the test plugin through activation, commands, view requests and close/reopen. The complete Phase 1 gate passes; this trusted-native boundary is not described as a security sandbox. |
 
@@ -391,7 +391,7 @@ The owner-authorized readiness review on 2026-10-10 also checked:
 | Claim | Result and implementation gate |
 |---|---|
 | Host namespaces constrain application service access. | This is a tested host rule, not native-code confinement; Rust's [file API](https://doc.rust-lang.org/std/fs/struct.File.html) remains available to an in-process built-in. Phase 1 checks request scoping and dependency rules. |
-| Feed acknowledgements can be tied to durable indexing. | [SQLite FTS5](https://www.sqlite.org/fts5.html) documents external-content maintenance and initial-population requirements. [Tantivy's prepared-commit source](https://docs.rs/tantivy/latest/src/tantivy/indexer/prepared_commit.rs.html) supports a commit payload. Phase 4 must prove the selected protocol's replay, deletion and checkpoint ordering; neither source proves Atlas's implementation. |
+| Feed acknowledgements can be tied to durable indexing. | [SQLite FTS5](https://www.sqlite.org/fts5.html) documents external-content maintenance and initial-population requirements. [Tantivy's prepared-commit source](https://docs.rs/tantivy/latest/src/tantivy/indexer/prepared_commit.rs.html) supports a commit payload. Phase 4 must prove the selected protocol's replay, deletion and checkpoint ordering; neither source proves Syrinx's implementation. |
 | Async dispatch, panic handling and timeout caveats remain accurate. | The Rust and Tokio references above support the stated limits. Phase 1 still needs executable contract and cancellation tests with the selected runtime; this review selects no new dependency. |
 
 ## Iteration log

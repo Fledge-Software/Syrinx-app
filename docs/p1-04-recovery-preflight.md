@@ -2,7 +2,7 @@
 
 P1-04 protects the saved destinations and session records introduced in
 P1-03. Copying a file is not enough: an incomplete backup must never displace
-a valid one, and a failed restore must never make Atlas initialize an empty
+a valid one, and a failed restore must never make Syrinx initialize an empty
 database. This review records those boundaries and their verified implementation.
 
 Status on 2026-10-10: implementation verified on `codex/p1-04-backups`, branched from
@@ -20,7 +20,7 @@ Plan 1's ledger records the resulting commit and merge completion.
 
 ## Approved behavior and scope
 
-The owner chose confirmation before restoration. Atlas offers the newest
+The owner chose confirmation before restoration. Syrinx offers the newest
 verified eligible backup with its date, and preserves damaged files locally.
 Opening a store or discovering corruption does not authorize replacement.
 P1-04 supplies the headless result and explicit restore operation; the later
@@ -43,19 +43,19 @@ seven-day page-text limit or authorize access to the owner's daily data.
 
 ## Existing code that constrains the implementation
 
-`crates/atlas-store/src/engine.rs` owns one serialized writer and two read
+`crates/syrinx-store/src/engine.rs` owns one serialized writer and two read
 connections. `Store::open` consumes a shared `DirectoryLease`; every SQLite
 connection retains that lease through close. `schema.rs` refuses foreign,
 future and altered schemas before persistent configuration, and `records.rs`
 checks core snapshot invariants. Preserve these boundaries and redacted errors.
 
-`crates/atlas-platform/src/storage.rs` retains ancestor and main-database
+`crates/syrinx-platform/src/storage.rs` retains ancestor and main-database
 handles without delete sharing. That prevents a checked path being replaced
 while SQLite uses it. Sidecar inspection handles are released so SQLite can
 perform its normal WAL cleanup. A recovery operation cannot rename the main
 file while its ordinary lease or any SQLite connection remains alive.
 
-The current `WindowsDirectoryLease::prepare` creates `atlas.db` if absent.
+The current `WindowsDirectoryLease::prepare` creates `syrinx.db` if absent.
 Before adding replacement, every normal open must detect unfinished recovery
 before reaching that creation path. Otherwise a crash between preserving
 the damaged file and installing its replacement could silently create a
@@ -76,7 +76,7 @@ exclusive ownership of this storage lifecycle is a P1-04 prerequisite.
    exposed, must wait for SQLite to finish before disposing of output and
    must not interrupt an unrelated write.
 4. Open the candidate read-only and require full `integrity_check`,
-   `foreign_key_check`, the supported Atlas schema and core record validation.
+   `foreign_key_check`, the supported Syrinx schema and core record validation.
    Reject unexpected sidecars. Do not treat `query_only` as read-only access
    or use `immutable=1` to avoid proper locking. Close validation connections
    before publishing the candidate.
@@ -92,7 +92,7 @@ exclusive ownership of this storage lifecycle is a P1-04 prerequisite.
 
 SQLite documents that successful `VACUUM INTO` flushes output when the source
 uses `synchronous=NORMAL` or `FULL`; P1-03 uses NORMAL. Interrupted output can
-still be unusable. That flush does not establish durability of later Atlas
+still be unusable. That flush does not establish durability of later Syrinx
 metadata writes or filesystem operations. Publication needs its own ordered
 writes and failure tests. See [SQLite's VACUUM contract](https://www.sqlite.org/lang_vacuum.html).
 
@@ -109,7 +109,7 @@ validate an existing database conservatively. Failed startup and fallback drop
 must not mark the session clean merely because connections eventually close.
 
 After an unclean exit, run `quick_check` before admitting writes, together
-with the existing Atlas schema and record checks. A foreign or future schema
+with the existing Syrinx schema and record checks. A foreign or future schema
 is a refusal, not a reason to replace data with an older backup. Operational
 failures such as permissions, a busy database or disk exhaustion must also
 remain distinct from corruption. `quick_check` does not cover every integrity
@@ -121,7 +121,7 @@ successful orderly close may leave clean-shutdown state. One exclusive
 directory gate excludes independently prepared leases, including aliases;
 the three connections share the same lease. A separate session claim must
 also reject two stores opened through the same shared lease. Review that
-additive capability in `atlas-store/src/location.rs`; retaining path identities
+additive capability in `syrinx-store/src/location.rs`; retaining path identities
 alone does not establish exclusive session ownership.
 
 ### Session capability
@@ -232,7 +232,7 @@ and [SQLite's WAL lifecycle](https://www.sqlite.org/wal.html#the_wal_file).
 ## Deletion-record boundary
 
 The deletion journal and its generation must never be rolled backward by
-restoring `atlas.db`. Durably record a requested clear, apply it to every
+restoring `syrinx.db`. Durably record a requested clear, apply it to every
 required storage participant, durably record completion, and only then
 acknowledge success. An interrupted clear remains pending; startup and
 recovery must finish the required work before exposing affected records.
@@ -248,7 +248,7 @@ test this contract with structural synthetic records and rejection paths;
 P1-27 must add end-to-end tests using synthetic history, the full-text index
 and the WebView2 clearing result before history clearing ships. Page text is
 excluded from these snapshots regardless of the journal. P1-04 implements
-the pure codec and replay contract in `atlas-store/src/deletion.rs` and
+the pure codec and replay contract in `syrinx-store/src/deletion.rs` and
 refuses recovery with any pending or nonzero deletion state. It does not
 persist the journal or claim to clear history. P1-27 must connect the durable
 external journal/generation barrier and actual clearing/replay participants

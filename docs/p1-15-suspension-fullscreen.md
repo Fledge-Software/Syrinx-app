@@ -8,7 +8,7 @@ request filters, dependency changes or database migration.
 
 ## Behavior and ownership
 
-`crates/atlas-platform/src/browser/lifecycle.rs` calls `TrySuspend` on a
+`crates/syrinx-platform/src/browser/lifecycle.rs` calls `TrySuspend` on a
 hidden page once it has been settled for five seconds, and requires both
 successful completion and a true `IsSuspended` readback. Five seconds is an
 implementation grace period; the plan specifies a delay without fixing its
@@ -24,7 +24,7 @@ live in `browser/hidden_timer.rs`, a pure function of time with its own tests:
   hidden, or after its last navigation completed, successfully or not.
 - A main-frame navigation that starts while the page is hidden replaces the
   five-second countdown with the 60-second bound below, until it completes.
-  Atlas's own `Navigate` marks the load before calling WebView2, so the page
+  Syrinx's own `Navigate` marks the load before calling WebView2, so the page
   cannot be suspended in the gap before `NavigationStarting` arrives.
 - A completion is matched by its `NavigationId`, so a superseded navigation's
   late completion cannot settle the current one.
@@ -35,12 +35,12 @@ live in `browser/hidden_timer.rs`, a pure function of time with its own tests:
     hidden loop of script or meta-refresh navigations is still suspended
     within 60 seconds of its first start.
 
-  An Atlas-requested navigation is dated from the request, and a navigation
+  A Syrinx-requested navigation is dated from the request, and a navigation
   the page starts while shown is dated from its own `NavigationStarting`.
   This holds even if a superseded load has not yet reported its cancelled
   completion. So a tab whose load hung past the limit is not suspended at once
   when the owner navigates it elsewhere and then hides it.
-- Atlas's own request is tracked apart from the navigation WebView2 confirms.
+- Syrinx's own request is tracked apart from the navigation WebView2 confirms.
   A confirmed start takes its own time, a request WebView2 never starts (a
   same-document jump, for example) expires at the 60-second bound, and a
   refused `load_url` leaves a load already in flight tracked.
@@ -65,7 +65,7 @@ in `examples/page_close/suspension.rs` creates a hidden page whose body the
 fixture server holds for six seconds; it must report its completion before it
 is suspended. Against the previous timer it failed with "Slow hidden page was
 suspended before it finished loading." Activation calls `Resume`, verifies the
-native state, then makes the view visible. Atlas does not also set a memory
+native state, then makes the view visible. Syrinx does not also set a memory
 usage target. The worker's timer disappears when no grace periods remain.
 
 Each controller owns a callback lifetime. Native events carry a ticket through
@@ -82,18 +82,18 @@ Process-failure notifications and permission cleanup remain deliverable while
 suspended, but not after controller retirement. Native popup and permission
 callbacks refuse new pending work on a retired or suspended controller.
 
-`crates/atlas-app/src/ui/fullscreen.rs` observes native
+`crates/syrinx-app/src/ui/fullscreen.rs` observes native
 `ContainsFullScreenElementChanged`, remembers the original window fullscreen
-state, hides Atlas chrome, and sizes the page to the entire viewport. Page
+state, hides Syrinx chrome, and sizes the page to the entire viewport. Page
 exit restores the original window state and computes the ordinary page bounds
 again. Switching tabs restores chrome and retains element-fullscreen state per
 tab; returning to that tab restores the fullscreen presentation. Closing the tab
 discards that state. This avoids sending synthetic input to a hidden controller.
-F11 and Atlas's own Escape action restore chrome before requesting native exit,
+F11 and Syrinx's own Escape action restore chrome before requesting native exit,
 even on an error. A failed exit retains a retry target for F11.
 
 The pinned native interface exposes fullscreen observation, not an exit method.
-Atlas checks that an element is still fullscreen, sets focus to the controller's
+Syrinx checks that an element is still fullscreen, sets focus to the controller's
 host window, calls `MoveFocus`, and posts Escape only to its verified descendant.
 This works when focus started on chrome; an already-exited page receives no key.
 There is still an unavoidable asynchronous race between the readback and posted
@@ -123,7 +123,7 @@ Run from this worktree in PowerShell, after building the local application:
 New-Item -ItemType Directory -Force target/session-temp | Out-Null
 $env:TEMP = Join-Path (Get-Location) 'target/session-temp'
 $env:TMP = $env:TEMP
-cargo atlas --test-suspended-tabs 8
+cargo syrinx --test-suspended-tabs 8
 ```
 
 This mode exclusively reserves a fresh synthetic profile, creates eight
@@ -182,8 +182,8 @@ or close while fullscreen. Verify ordinary background playback behavior and
 resume with synthetic pages first. Real streaming and account tests remain
 owner-only. Independent review and the final D37 measurement remain open.
 
-Shared integration files touched are `crates/atlas-app/src/ui.rs`,
-`crates/atlas-app/src/main.rs`, `crates/atlas-platform/src/browser.rs`, the native
+Shared integration files touched are `crates/syrinx-app/src/ui.rs`,
+`crates/syrinx-app/src/main.rs`, `crates/syrinx-platform/src/browser.rs`, the native
 fixture dispatcher, and the P1-15 row of `docs/implementation-status.md`.
 The workspace manifest, lockfile, platform crate root and vendor files are
 unchanged. There are no deferred-work markers or schema changes.
@@ -191,7 +191,7 @@ unchanged. There are no deferred-work markers or schema changes.
 ## Integration, 2026-10-12
 
 On `claude/integrate-p1-11-16`, fullscreen bounds come from the shared
-`page_card_bounds` in `crates/atlas-app/src/ui/page_card.rs`: with a page in
+`page_card_bounds` in `crates/syrinx-app/src/ui/page_card.rs`: with a page in
 fullscreen the card covers the whole viewport whatever the sidebar's width
 state (wide, favicon-only or hidden), and the window draws no P1-17 title bar,
 toolbar, sidebar, bars or footer. The hidden-sidebar peek is not offered while

@@ -1,6 +1,6 @@
 # P1-33 palette acceptance: method, results and what the owner checks
 
-The command palette is the centre of Atlas (S5), so its speed has to be judged
+The command palette is the centre of Syrinx (S5), so its speed has to be judged
 the way the owner feels it: from the key press to pixels on the screen, not
 only inside the search engine. Plan 1's phase 4 exit criteria say "opening the
 palette paints within one frame of Ctrl K; keystroke ranking meets D48's 5 ms
@@ -11,7 +11,7 @@ running application and re-checks the live-overlay focus and stacking
 behaviour that earlier slices (P1-10, P1-11, P1-17, P1-30/31, P1-36) built.
 
 **Short version.** All figures here come from a busy development machine,
-with Atlas launched by an agent. Only the latest run had Atlas in the
+with Syrinx launched by an agent. Only the latest run had Syrinx in the
 foreground. The owner's quiet foreground runs are the acceptance numbers. On
 that basis:
 
@@ -36,7 +36,7 @@ that basis:
 - **Enter activation passes** since the fix (run `1791856583`).
 - **Focus return after Esc was a product defect; it is diagnosed and fixed.**
   GPUI's `activate_window` set Win32 focus to the main window from a task that
-  ran after Atlas had already sent the page its focus. Esc now passes 20 of 20,
+  ran after Syrinx had already sent the page its focus. Esc now passes 20 of 20,
   and so does Esc pressed before the palette's first frame. See "Why Esc did
   not return focus to the page" below.
 
@@ -44,7 +44,7 @@ Nothing slow has been hidden or excluded.
 
 ## How to run it
 
-From the repository in PowerShell, with no other Atlas build running:
+From the repository in PowerShell, with no other Syrinx build running:
 
 ```powershell
 cargo xtask palette-acceptance
@@ -52,12 +52,12 @@ cargo xtask palette-acceptance
 
 The command:
 
-1. builds `atlas-app` with D38's `local` profile first, so the run never races
+1. builds `syrinx-app` with D38's `local` profile first, so the run never races
    a build of the same executable (see the trap about LNK1104);
 2. starts a loopback-only page server on `127.0.0.1` with an ephemeral port,
    inside the xtask process. It answers exactly two synthetic pages,
    `/page/focus-page` and `/page/enter-target`, and a 404 for everything else;
-3. launches `target\local\atlas-app.exe --test-palette-acceptance <report.json>
+3. launches `target\local\syrinx.exe --test-palette-acceptance <report.json>
    http://127.0.0.1:<port>` **visibly**. A hidden launch can block on an
    invisible message box and cannot test focus (see the traps);
 4. writes `target\p1-33\palette-acceptance-<unix time>.json` (all raw samples
@@ -66,7 +66,7 @@ The command:
 
 The app flag is not part of the default gate. Like `--smoke` and
 `--test-suspended-tabs`, it always uses a freshly reserved synthetic profile
-under `%TEMP%`, never `%LOCALAPPDATA%\AtlasProductPreview`. Startup problems go
+under `%TEMP%`, never `%LOCALAPPDATA%\SyrinxProductPreview`. Startup problems go
 to stderr only, never to a message box. It refuses any page base other than
 `http://127.0.0.1:<port>`, and it cannot be combined with `--smoke`,
 `--test-data-dir`, the suspended-tab mode or a link. Once running, the run
@@ -86,8 +86,8 @@ three reports; the variation between runs is part of the result.
 ### What drives the window
 
 The run is scripted inside the real `BrowserView`
-(`crates/atlas-app/src/ui/palette_acceptance.rs`). It waits on what the window
-shows rather than on fixed delays. Input goes only to Atlas's own windows:
+(`crates/syrinx-app/src/ui/palette_acceptance.rs`). It waits on what the window
+shows rather than on fixed delays. Input goes only to Syrinx's own windows:
 
 - **Ctrl K** is the `Palette` action. The run calls `BrowserView::shortcut`
   with `BrowserShortcut::Palette`, the same function the WebView2 accelerator
@@ -95,11 +95,11 @@ shows rather than on fixed delays. Input goes only to Atlas's own windows:
   measured; see "Not measured".
 - **Typing, Backspace, Enter and Esc** are posted to the palette popup's own
   window handle as `WM_CHAR`, `WM_KEYDOWN` and `WM_KEYUP` messages
-  (`crates/atlas-platform/src/acceptance.rs`). GPUI handles them through its
+  (`crates/syrinx-platform/src/acceptance.rs`). GPUI handles them through its
   normal message loop: `WM_KEYDOWN` goes through `translate_accelerator` to its
   key handler, and `WM_CHAR` goes to the focused input. Before posting,
   `post_text` and `post_key` check that the handle is a live window owned by
-  this Atlas process, and refuse otherwise. A unit test proves the refusal for
+  this Syrinx process, and refuse otherwise. A unit test proves the refusal for
   the current foreground window. Nothing uses `SendInput`/SendKeys, so no key
   can reach another application.
 - **Posted keys prove the palette's key handling, not Windows' routing of real
@@ -109,7 +109,7 @@ shows rather than on fixed delays. Input goes only to Atlas's own windows:
 
 ### How a frame is judged "presented"
 
-`crates/atlas-app/src/acceptance/probe.rs` is a small shared timing record that
+`crates/syrinx-app/src/acceptance/probe.rs` is a small shared timing record that
 exists only in an acceptance run. The palette's `render` asks the probe
 whether any measurement is waiting for a frame. If so, it schedules a
 `cx.defer` callback. GPUI runs deferred callbacks when the update that drew
@@ -157,15 +157,15 @@ use those names.
 
 **Budget (owner decision, 2026-10-12):** within one refresh interval at the
 95th percentile, with every sample and the maximum reported. The interval comes
-from Windows (`EnumDisplaySettingsW` on the monitor showing Atlas). If Windows
-cannot report it, or the window is not Atlas's own, the report records why
+from Windows (`EnumDisplaySettingsW` on the monitor showing Syrinx). If Windows
+cannot report it, or the window is not Syrinx's own, the report records why
 (`display.problem`), sets `measured: false` and assumes 60 Hz.
 
 ### Ranking
 
 Only a worker started with `spawn_acceptance` (see above) accepts the
 `GrowSyntheticCatalogue { total }` command
-(`crates/atlas-app/src/session/synthetic.rs`). It adds deterministic synthetic
+(`crates/syrinx-app/src/session/synthetic.rs`). It adds deterministic synthetic
 history rows to the **in-memory** tier-1 catalogue:
 
 - titles like `harbor project guide row-004200`; some also carry `café`,
@@ -220,7 +220,7 @@ Bursts have no budget of their own and do not decide the verdict.
 ### Focus and stacking
 
 The synthetic pages' own script writes `document.hasFocus()` into
-`document.title` as `atlas-p133-<label> focus:yes|no`. Atlas injects nothing,
+`document.title` as `syrinx-p133-<label> focus:yes|no`. Syrinx injects nothing,
 attaches no IPC handler and sets no user agent. It reads the title from the
 ordinary `BrowserEvent::Title` it already receives for every page, as P1-11's
 popup fixture does. The checks:
@@ -235,8 +235,8 @@ popup fixture does. The checks:
 | `escape_returns_page_focus` | after each of the 20 Esc presses the palette closes and the page reports focus again |
 | `openings_reuse_one_popup` | all 20 openings used the same native popup (DW-90) |
 | `no_stale_refocus_after_escape` | one second later: no open entry, the kept popup hidden, two windows (main and kept popup), page still focused, same tab |
-| `hidden_popup_renders_nothing` | for 30 seconds with the palette hidden, after a five-second settle, the palette view does not render and its input does not notify, so no caret blink wakes Atlas (D37's idle budget) |
-| `idle_cpu_with_hidden_popup` | over those 30 seconds Atlas's own process uses under 0.5% of one core (D37); WebView2's processes are not counted |
+| `hidden_popup_renders_nothing` | for 30 seconds with the palette hidden, after a five-second settle, the palette view does not render and its input does not notify, so no caret blink wakes Syrinx (D37's idle budget) |
+| `idle_cpu_with_hidden_popup` | over those 30 seconds Syrinx's own process uses under 0.5% of one core (D37); WebView2's processes are not counted |
 | `rapid_open_then_escape` | Esc posted in the same turn as Ctrl K, before the popup is shown, still ends the entry, keeps the popup hidden and returns focus |
 | `no_stale_refocus_after_rapid_escape` | as above, after the rapid case |
 | `second_ctrl_k_reuses_popup` | Ctrl K while open keeps the same popup and entry, and two windows in total |
@@ -252,9 +252,9 @@ focus changes and the browser view's focus steps, in milliseconds after Esc.
 ## Results on this machine
 
 **These numbers were taken on a busy development machine:** other agent
-sessions were compiling in parallel, and Atlas was launched by an agent from
+sessions were compiling in parallel, and Syrinx was launched by an agent from
 a background shell, so Windows never let it into the foreground. **Because
-Atlas was inactive, GPUI capped its frames at about 30 per second** (GPUI's
+Syrinx was inactive, GPUI capped its frames at about 30 per second** (GPUI's
 default `inactive_frame_interval` of 33.3 ms). The cap applies to frames with
 pending `on_next_frame` callbacks, which the opening measurement uses, so each
 opening's present could be delayed by up to 33 ms. The keystroke frames are
@@ -361,10 +361,10 @@ not tried.
 | `no_stale_refocus_after_enter` | **FAIL** | as above |
 
 **In the earlier runs, focus return was not established either way.**
-Windows denied Atlas foreground activation throughout those runs: `foreground_window()` never returned Atlas's
+Windows denied Syrinx foreground activation throughout those runs: `foreground_window()` never returned Syrinx's
 main window or popup. When the active popup is destroyed in a background
 process, Windows activates some other application's window. The page's
-`document.hasFocus()` is then false even though Atlas moved WebView2 focus
+`document.hasFocus()` is then false even though Syrinx moved WebView2 focus
 back (`focus_page`). That is consistent with the traps on foreground rules.
 
 **Enter activation: diagnosed, fixed, and passing.** The earlier failures
@@ -381,10 +381,10 @@ After the fix, run `1791856583` passed `enter_activates_selected_tab` and
 `no_stale_refocus_after_enter`. The active address was the loopback
 `enter-target` page, and the catalogue was back to 1,004 rows.
 
-### Run after the fix (`1791856583`, Atlas in the foreground)
+### Run after the fix (`1791856583`, Syrinx in the foreground)
 
-For the first time, Windows let the agent-launched Atlas into the foreground
-(`page_focus_baseline` reports "Atlas in foreground: true").
+For the first time, Windows let the agent-launched Syrinx into the foreground
+(`page_focus_baseline` reports "Syrinx in foreground: true").
 
 | measure | result |
 |---|---|
@@ -396,7 +396,7 @@ For the first time, Windows let the agent-launched Atlas into the foreground
 | checks failing | `escape_returns_page_focus` 0/20, both Esc stale-refocus checks (page focus false), `rapid_open_then_escape` |
 
 **Esc focus return is now a finding, not just an environment limit.** With
-Atlas in the foreground, the palette closed every time and no window
+Syrinx in the foreground, the palette closed every time and no window
 leaked, but the page never reported focus afterwards. One candidate is in
 the traps: when the active popup is destroyed, Windows activates its owner
 and may take keyboard focus back from the WebView2 child after `focus_page`
@@ -410,9 +410,9 @@ DirectComposition swap chain, which took about half a second inside GPUI's
 `open_window`. The owner's budget is one refresh interval at p95, which no
 per-opening window could meet (`docs/decisions.md`, 2026-10-12).
 
-**What changed** (`crates/atlas-app/src/ui/palette_popup.rs`,
-`crates/atlas-app/src/palette.rs` and
-`crates/atlas-platform/src/browser/overlay.rs`):
+**What changed** (`crates/syrinx-app/src/ui/palette_popup.rs`,
+`crates/syrinx-app/src/palette.rs` and
+`crates/syrinx-platform/src/browser/overlay.rs`):
 
 - The popup is created once, hidden (`WindowOptions { show: false }`), owned
   by the main window and not topmost, right after the first session state
@@ -427,9 +427,9 @@ per-opening window could meet (`docs/decisions.md`, 2026-10-12).
   and shows it. Windows' resize and show messages must reach GPUI while its app
   state is free; inside an update GPUI drops them (see the traps). When the
   popup crosses to a monitor with another scale, Windows resizes it, so it is
-  placed a second time. With Atlas in front, the popup is then activated
+  placed a second time. With Syrinx in front, the popup is then activated
   synchronously; if another application has taken the foreground, the popup
-  is shown without activation and Atlas does not steal the foreground back.
+  is shown without activation and Syrinx does not steal the foreground back.
 - Esc, Enter, a run command and Windows' close request end the entry and hide
   the popup. Hiding activates the main window first when the popup is active,
   so Windows never picks the next window itself. The entry's channel is
@@ -446,7 +446,7 @@ per-opening window could meet (`docs/decisions.md`, 2026-10-12).
 
 **Results.** All runs are on the same busy machine as above.
 
-| run | Atlas in front | opening presented p50 / p95 / max (ms) | Esc returns focus |
+| run | Syrinx in front | opening presented p50 / p95 / max (ms) | Esc returns focus |
 |---|---|---|---|
 | `1791858770`, before (diagnostics only) | no | 501.7 / 556.5 / 566.4 | 0 of 20 |
 | `1791859013`, focus fix only | no | 493.9 / 528.8 / 558.6 | 20 of 20 |
@@ -468,59 +468,59 @@ is unchanged by DW-90: worker p95 1.0, 7.6 and 37.3 ms and composed p95 28.3,
 29.3 and 58.3 ms at 1k, 10k and 100k rows, so D48 and the 100,000-row
 composed budget still fail and stay with P1-05.
 
-**The 3-of-20 run.** In `1791859688` Atlas was not in front when the run
-started (its baseline check failed too) and was by the end. With Atlas behind
+**The 3-of-20 run.** In `1791859688` Syrinx was not in front when the run
+started (its baseline check failed too) and was by the end. With Syrinx behind
 another application, `focus_page` asked GPUI to activate the window and
 waited for an activation event to focus the page; when Windows reported no
 activation change, no event came and the page was never focused. This
 explanation is inferred from the code and the run's checks: that run had no
 focus trace yet. A follow-up that focused the page right after GPUI's
-activation task made run `1791861452` pass 20 of 20 with Atlas behind another
-window, but only because GPUI's activation forced Atlas to the front.
+activation task made run `1791861452` pass 20 of 20 with Syrinx behind another
+window, but only because GPUI's activation forced Syrinx to the front.
 
-**Atlas no longer takes the foreground (review, 2026-10-12).** The owner
-decided that Atlas must never take the foreground from another application
+**Syrinx no longer takes the foreground (review, 2026-10-12).** The owner
+decided that Syrinx must never take the foreground from another application
 (`docs/decisions.md`), so that path is gone: `focus_page` no longer calls
-`activate_window`. With Atlas behind, the page's focus is deferred, and the
+`activate_window`. With Syrinx behind, the page's focus is deferred, and the
 main window's activation observer completes it when the owner returns to
-Atlas. Ctrl K while Atlas is behind leaves the palette closed with a message,
+Syrinx. Ctrl K while Syrinx is behind leaves the palette closed with a message,
 instead of showing a popup over the other program. The harness therefore
-waits up to 20 seconds for Atlas to be in front, stops with an explanation if
+waits up to 20 seconds for Syrinx to be in front, stops with an explanation if
 the palette cannot open, and counts an Esc whose focus is deferred, with
-Atlas behind, as the expected outcome rather than a failure.
+Syrinx behind, as the expected outcome rather than a failure.
 
-**The hidden popup woke Atlas twice a second (review, 2026-10-12).** Hiding
+**The hidden popup woke Syrinx twice a second (review, 2026-10-12).** Hiding
 the popup did not blur its input, so the input's caret blink kept re-arming a
 500 ms timer: GPUI delivers blur only during a draw, which a hidden window
 never has. The earlier `hidden_popup_renders_nothing` check could not see
 this, because a blink notifies the input without rendering the hidden window.
 Each close now drops the used input, which cancels its blink, and creates a
 fresh unfocused one; the harness counts the input's notifications over 30
-hidden seconds and measures Atlas's own CPU time across them.
+hidden seconds and measures Syrinx's own CPU time across them.
 
-**After the review.** Both runs had Atlas in the foreground throughout, and
+**After the review.** Both runs had Syrinx in the foreground throughout, and
 every focus, stacking and idle check passed in both; the overall verdict
 still fails only on D48 and the 100,000-row composed budget, which stay with
 P1-05. In `1791863160` the palette rendered 0 times and its input notified 0
-times over 30 hidden seconds, and Atlas's own process used 109.4 ms of CPU in
+times over 30 hidden seconds, and Syrinx's own process used 109.4 ms of CPU in
 those 30 s, 0.365% of one core against D37's 0.5%. WebView2's processes are
 not included, and the machine was busy, so this is not D37's five-minute
 quiet-machine measurement, which stays with P1-06. The first run used a
 five-second window and read 62.5 ms, 1.25% of a core: four of Windows' 15.6 ms
 accounting ticks, starting right after the openings, which is why the window
 is now 30 s after a five-second settle. Esc returned focus 20 of 20 times in
-both runs, all through the "activated at once" path, since Atlas was in
+both runs, all through the "activated at once" path, since Syrinx was in
 front; the deferred path was not exercised by these runs.
 
 **The deferral is an owner hand check.** The harness cannot complete a
-deferred focus itself: that needs the owner to bring Atlas back, and the
+deferred focus itself: that needs the owner to bring Syrinx back, and the
 harness must not take the foreground either. `escape_returns_page_focus`
-therefore fails if any Esc deferred in a run that began with Atlas in front,
+therefore fails if any Esc deferred in a run that began with Syrinx in front,
 and counts deferrals as expected only in a run that began behind. To check
 the path by hand: open the palette, switch to another program, let Esc be
-delivered, then click Atlas's window frame and confirm the page has the keys.
+delivered, then click Syrinx's window frame and confirm the page has the keys.
 Then repeat, returning by clicking the sidebar address field: the field must
-keep the keys, because a click in Atlas's chrome cancels the deferral and
+keep the keys, because a click in Syrinx's chrome cancels the deferral and
 the activation observer completes it only while GPUI focus is still on the
 window root or nowhere. One Esc in
 `1791863160` took 272 ms to reach the page, and three of its twenty closes
@@ -528,7 +528,7 @@ found keys on the main window for a moment before the page took them.
 
 **One slow opening.** The first opening of `1791861452` took 394 ms: its show
 task started 79 ms after Ctrl K and its first render came at 391 ms. The other
-19 took 2 to 11 ms, and no earlier run's first opening exceeded 10 ms. Atlas
+19 took 2 to 11 ms, and no earlier run's first opening exceeded 10 ms. Syrinx
 was behind another window, so the popup was shown without activation; why
 that first frame was late is not established. It does not change the p95.
 
@@ -536,7 +536,7 @@ that first frame was late is not established. It does not change the p95.
 
 **Symptom.** After Esc closed the palette, the page never reported
 `document.hasFocus()` again: 0 of 20 in every earlier run, including run
-`1791856583` with Atlas in front. Enter, which also returns focus to a page,
+`1791856583` with Syrinx in front. Enter, which also returns focus to a page,
 passed.
 
 **Evidence.** The harness now reads which window has Windows keyboard focus
@@ -556,11 +556,11 @@ time GPUI's task had run. The hypothesis in the earlier draft, that Windows reac
 owner of a destroyed popup took the keys, was not the cause: the fix below
 works with the old destroy-per-opening popup.
 
-**Fix.** With Atlas already in front, `focus_page` now activates the main
-window natively and synchronously (`atlas_platform::browser::
+**Fix.** With Syrinx already in front, `focus_page` now activates the main
+window natively and synchronously (`syrinx_platform::browser::
 activate_if_foreground`) and then sends the page `Focus`. With another
-application in front, it does not bring Atlas forward; the page takes the
-keys when the owner returns to Atlas (see the review section above). Run `1791859013` changed only this,
+application in front, it does not bring Syrinx forward; the page takes the
+keys when the owner returns to Syrinx (see the review section above). Run `1791859013` changed only this,
 keeping the old popup, and passed 20 of 20 Esc presses and the rapid Esc.
 With the kept popup, the focus trace of the final run shows the order: at
 17.3 ms after Esc the main window is activated and the page's focus sent, and
@@ -571,7 +571,7 @@ by 17.4 ms keyboard focus is inside the main window, in the page.
 **Enter before the local reply searched the web.** Each keystroke starts a
 new local request: `PaletteChoices::begin_query` clears the rows and
 `query_scoped` selects row 0. If Enter arrived before that request's reply,
-`submission` (`crates/atlas-app/src/palette/choices.rs`) found no row and no
+`submission` (`crates/syrinx-app/src/palette/choices.rs`) found no row and no
 address, and fell through to `Submit { text }`, a Google search for the typed
 text. A fast typist would hit this window on many queries.
 
@@ -592,7 +592,7 @@ between the query and an empty reply.
 
 **What it caused.** Two agent runs sent
 the synthetic query "enter-target" to www.google.com. Their synthetic
-profiles under `%TEMP%` (`atlas-window-smoke-33716-1791855054…`, from run
+profiles under `%TEMP%` (`syrinx-window-smoke-33716-1791855054…`, from run
 `1791855053`, and `…42036-…`, most likely `1791845322`, whose Enter check also
 failed) recorded that address. No personal data was involved. The owner had
 both profiles deleted on 2026-10-12. Before pressing Enter, the harness now
@@ -601,14 +601,14 @@ reply to its newest request.
 
 ### What the loopback guard covers
 
-In an acceptance run, Atlas refuses any destination other than the run's
+In an acceptance run, Syrinx refuses any destination other than the run's
 loopback pages and `about:blank` (`AcceptancePlan::refusal`, unit-tested). A
 refusal fails the run and aborts it at its next step. The guard acts at three
 points:
 
-- before the session worker records an address Atlas navigates to
+- before the session worker records an address Syrinx navigates to
   (`BrowserView::navigate`);
-- before WebView2 creates a page or navigates one on Atlas's command
+- before WebView2 creates a page or navigates one on Syrinx's command
   (`page_command`);
 - when a page reports a new address on its own (`BrowserEvent::Url`, through
   `acceptance_observed`): a redirect, the page's own script or a link.
@@ -628,7 +628,7 @@ reopened palette or leaked window after Esc, rapid Esc or Enter.
 ## Not measured, and what remains unverified
 
 - **The accelerator leg.** With a page focused, Ctrl K travels through
-  WebView2's `AcceleratorKeyPressed`, which posts to Atlas's event loop. That
+  WebView2's `AcceleratorKeyPressed`, which posts to Syrinx's event loop. That
   delivery is not timed. GPUI's own Ctrl K binding (chrome focused) is not
   timed either. Both precede the measured action.
 - **Real keyboard routing.** Posted keys skip Windows' keyboard focus; whether a
@@ -651,10 +651,10 @@ reopened palette or leaked window after Esc, rapid Esc or Enter.
   with the preview pane).
 - **UIA rerun (DW-90).** DW-90 changes no role, element id or focus handle,
   but it keeps the palette's handles alive across entries, so P1-36's probe
-  was repeated: a read-only UI Automation client walked every Atlas window's
+  was repeated: a read-only UI Automation client walked every Syrinx window's
   tree every 100 ms through a whole acceptance run (`1791860396`, 267 sweeps,
   largest window tree 77 nodes). The palette appeared as "Command palette"
-  with its "Search or command" field in 204 sweeps. Atlas did not panic and
+  with its "Search or command" field in 204 sweeps. Syrinx did not panic and
   every focus check passed. The probe script was not committed; it sends no
   input.
 
@@ -713,28 +713,28 @@ With DW-90 and the focus fix, `cargo xtask check` passed on 2026-10-12 with
 position and scale (`ui/palette_popup.rs`), a new entry forgetting the last
 one while request IDs keep counting, Enter waiting through a model refresh
 between its submission and the reply (`palette/choices.rs`), and the refusal
-of non-window handles by the popup and focus helpers in `atlas-platform`.
+of non-window handles by the popup and focus helpers in `syrinx-platform`.
 
 ## Files
 
-- `crates/atlas-app/src/acceptance.rs` and `acceptance/{probe,report}.rs`: the
+- `crates/syrinx-app/src/acceptance.rs` and `acceptance/{probe,report}.rs`: the
   plan, the present-time probe and the JSON report with p50/p95/max and
   verdicts (unit-tested).
-- `crates/atlas-app/src/ui/palette_acceptance.rs`: the scripted run, with
+- `crates/syrinx-app/src/ui/palette_acceptance.rs`: the scripted run, with
   the keyboard-focus traces and the DW-90 checks.
-- `crates/atlas-app/src/ui/palette_popup.rs`: DW-90's kept popup.
-- `crates/atlas-app/src/session/synthetic.rs`: in-memory synthetic rows. In
+- `crates/syrinx-app/src/ui/palette_popup.rs`: DW-90's kept popup.
+- `crates/syrinx-app/src/session/synthetic.rs`: in-memory synthetic rows. In
   `session.rs`: `spawn_acceptance`, the `GrowSyntheticCatalogue` command and
   the `QueryTimed`/`SyntheticCatalogue` events; the worker test is in
   `worker_tests.rs`.
-- `crates/atlas-app/src/palette.rs`: probe hooks in `query`, `refresh`,
+- `crates/syrinx-app/src/palette.rs`: probe hooks in `query`, `refresh`,
   `receive` and `render`, plus the read-only accessors the run uses.
-- `crates/atlas-app/src/ui.rs`: plumbing (`LaunchChecks`, the open-window
+- `crates/syrinx-app/src/ui.rs`: plumbing (`LaunchChecks`, the open-window
   stamp, title and query hooks).
-- `crates/atlas-platform/src/acceptance.rs`: owner/topmost/z-order/foreground
+- `crates/syrinx-platform/src/acceptance.rs`: owner/topmost/z-order/foreground
   and keyboard-focus queries, the refresh interval with explicit errors, and
-  input posted to Atlas's own windows only.
-- `crates/atlas-platform/src/browser/overlay.rs`: showing, hiding and
+  input posted to Syrinx's own windows only.
+- `crates/syrinx-platform/src/browser/overlay.rs`: showing, hiding and
   activating the kept popup.
 - `crates/xtask/src/palette_acceptance.rs`: build, loopback synthetic pages,
   launch and summary.

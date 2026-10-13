@@ -8,7 +8,7 @@ existing tab identities throughout recovery.
 
 ## Native ownership and recovery
 
-`crates/atlas-platform/src/browser/recovery.rs` classifies the native
+`crates/syrinx-platform/src/browser/recovery.rs` classifies the native
 `ProcessFailed` kind. Main-frame renderer exit retires only that controller,
 retains its live ID and last valid destination, and emits `PageCrashed`. The UI
 shows a page-local card with Reload. Reload recreates only that controller;
@@ -69,16 +69,16 @@ diagnostics. No process is terminated to test this implementation.
 
 ## UI and delayed replies
 
-`crates/atlas-app/src/ui/process_recovery.rs` keeps transient crash presentation
+`crates/syrinx-app/src/ui/process_recovery.rs` keeps transient crash presentation
 apart from the durable model. Failures retire the affected find/permission and
 connection presentation and exit page fullscreen. Duplicate recovery-start and
 completion notices do not reset the current UI generation. A failed tab keeps
 its sidebar row and can still be selected, closed or reloaded.
 
 After crash/recovery notifications, GPUI's `Window::is_window_active()` gates
-page focus. A healthy selected page receives native focus only while the Atlas
+page focus. A healthy selected page receives native focus only while the Syrinx
 window is active and no find/palette input owns focus. A crashed selected page
-returns focus to GPUI's crash card. While Atlas is inactive, only GPUI's logical
+returns focus to GPUI's crash card. While Syrinx is inactive, only GPUI's logical
 focus is updated; no Windows activation call is made. Recovery of background
 tabs targets the selected page, never the reconstructed hidden controller.
 
@@ -134,7 +134,7 @@ and captured before inspection. This confirms ordinary app layout and the
 synthetic suspension setup, not manual crash-card, Alt+Tab or DPI acceptance.
 
 Fault injection exists only under `cfg(test)` in
-`crates/atlas-platform/src/browser/recovery_tests.rs` and the page's private
+`crates/syrinx-platform/src/browser/recovery_tests.rs` and the page's private
 test helper. It creates actual WebView2 controllers in fresh synthetic
 profiles, then feeds guarded failure events into the production worker's
 recovery path. A separate test supplies an environment-construction error.
@@ -146,7 +146,7 @@ The focused command, with temporary files confined to this worktree, is:
 ```powershell
 $env:TEMP = Join-Path (Get-Location) 'target/session-temp'
 $env:TMP = $env:TEMP
-cargo test --package atlas-platform --profile local --offline --locked browser::recovery::tests -- --nocapture
+cargo test --package syrinx-platform --profile local --offline --locked browser::recovery::tests -- --nocapture
 ```
 
 `target/p1-16-faults-1.log` records passing focused fault tests. They prove:
@@ -192,8 +192,8 @@ P1-15's eight-tab measurement command remains unchanged in
 `docs/p1-15-suspension-fullscreen.md`. P1-06 still owns its final D37 idle/startup
 measurements. The known original lifecycle-fixture timeout remains undiagnosed.
 
-Shared integration files touched are `crates/atlas-app/src/ui.rs`,
-`crates/atlas-platform/src/browser.rs`, `docs/trapstoknow.md` and the P1-16
+Shared integration files touched are `crates/syrinx-app/src/ui.rs`,
+`crates/syrinx-platform/src/browser.rs`, `docs/trapstoknow.md` and the P1-16
 ledger row. Supporting edits stay in the page/permission/fullscreen modules;
 the workspace manifest, lockfile, platform crate root and vendor files are
 unchanged. There are no schema changes or deferred-work markers.

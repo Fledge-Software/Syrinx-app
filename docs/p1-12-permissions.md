@@ -1,7 +1,7 @@
 # P1-12: keep site consent explicit and durable
 
 Sites need camera, microphone and other permissions without acquiring them merely
-by asking. This slice on `codex/p1-12-permissions` adds an Atlas permission bar
+by asking. This slice on `codex/p1-12-permissions` adds a Syrinx permission bar
 above the native page, with Allow, Deny and an initially unchecked Remember for
 this site control. The requesting origin and permission are displayed. A request
 from a background tab waits until that tab is shown. Unknown permission kinds
@@ -15,12 +15,12 @@ Buttons retain the displayed request identity and have request-specific element
 IDs, so a stale click cannot authorize the next prompt. Clipboard auto-grant is
 explicitly disabled. No page identity, scripts, IPC or request filters changed.
 
-Atlas sets `SavesInProfile` false and stores remembered choices in `atlas-store`.
+Syrinx sets `SavesInProfile` false and stores remembered choices in `syrinx-store`.
 The main alternative, allowing WebView2 to keep a second permission store, would
 make one-shot decisions unexpectedly persistent. The session worker queries and
 writes SQLite away from the UI thread; a remembered grant is applied only after
 the write succeeds. Read/write failures deny the request and show a structural
-error. Keys contain the canonical requesting HTTP(S) origin and a stable Atlas
+error. Keys contain the canonical requesting HTTP(S) origin and a stable Syrinx
 permission identifier; paths, query strings and page contents are not stored.
 Scheme, port and subdomain remain distinct. Invalid stored decision values never
 become grants.
@@ -31,7 +31,7 @@ migration. **Renumbering is expected at integration**: the integration branch
 already uses schema 2 for folders, while parallel history/home work uses 3 and
 may use 4. No lockfile, dependency pin or vendor source changed.
 
-Notifications use the same Atlas consent flow and retain WebView2's default
+Notifications use the same Syrinx consent flow and retain WebView2's default
 notification UI. Native delivery was proved by the synthetic document receiving
 its `show` event, after which it closes the notification. This is not a visual
 review of the Windows notification or GPUI permission bar.
@@ -71,10 +71,10 @@ application with a disposable synthetic profile, but visual acceptance is not
 claimed. To inspect the actual bar without personal data:
 
 1. Serve the HTML constant in
-   `crates/atlas-platform/examples/page_close/permissions.rs` from a local HTTP
+   `crates/syrinx-platform/examples/page_close/permissions.rs` from a local HTTP
    server, using a fixed loopback port. Its script is ordinary fixture content,
    not an injected script.
-2. Run `cargo atlas -- --test-data-dir <new-absolute-directory-under-target>`.
+2. Run `cargo syrinx -- --test-data-dir <new-absolute-directory-under-target>`.
    The directory must not already exist. Open the loopback fixture with Ctrl L.
 3. Verify the exact loopback origin and “show notifications” text are visible
    above the page. Deny without Remember; open the fixture in a new tab and
@@ -91,7 +91,7 @@ claimed. To inspect the actual bar without personal data:
 
 Update the P1-12 ledger row only. P1-11's historical partial result remains
 accurate; this newer successful run is additional evidence, not a rewrite of it.
-The shared `crates/atlas-app/src/ui.rs` changes wire permission events, state,
+The shared `crates/syrinx-app/src/ui.rs` changes wire permission events, state,
 bar placement and native bounds, and allow request-specific button identities.
 The other shared files named in the task (`Cargo.toml`, `Cargo.lock`, platform
 `lib.rs`) are unchanged. The 2026-10-12 review adds DW-7 to the plan and its
@@ -116,14 +116,14 @@ On `claude/integrate-p1-11-16` the permission table is no longer this branch's
 inline version 2. The integration branch had already used versions 2 to 5
 (folders, preferences, history and P1-27's clear-data state), so
 `site_permissions` is added by a new **version 6** migration appended after
-version 5 in `crates/atlas-store/src/schema.rs` (`SchemaGeneration::Permissions`,
+version 5 in `crates/syrinx-store/src/schema.rs` (`SchemaGeneration::Permissions`,
 `permissions_migration`, an empty-table hook and its expected-object list). A
 version 5 database upgrades with its session, history and applied clear
 generation intact, and a failed version 6 migration rolls back to an intact
-version 5 file (`crates/atlas-store/src/engine/tests/permissions.rs`). A
+version 5 file (`crates/syrinx-store/src/engine/tests/permissions.rs`). A
 database created by this branch alone (version 2 with `site_permissions`) is
 not recognised by the integrated schema; only synthetic test profiles ever
 held one. The prompt's height now feeds `page_card_bounds` in
-`crates/atlas-app/src/ui/page_card.rs`, so the page card starts below it.
+`crates/syrinx-app/src/ui/page_card.rs`, so the page card starts below it.
 Clearing browsing data (P1-27) does not touch remembered permissions; DW-7
 still owns their removal.

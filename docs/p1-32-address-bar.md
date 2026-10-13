@@ -6,18 +6,18 @@ and they merged with P1-30/31, but the parser had three gaps: it treated any
 text starting with `localhost` (such as `localhosting`) as an address, it
 turned `1.5` or `e.g.` into a web address because they contain a dot, and it
 opened local development servers over `https`, which they rarely speak. It
-lived in `atlas-app`, so its tests could not sit beside the shared address
-rule in `atlas-core`. The address field also showed the raw percent-encoded
+lived in `syrinx-app`, so its tests could not sit beside the shared address
+rule in `syrinx-core`. The address field also showed the raw percent-encoded
 address. Finally, D9 ("no live suggestions; keystrokes stay on the machine")
 was a promise in prose with nothing in the gate to keep it true.
 
 ## What the address bar does now
 
-The rule is `atlas_core::entry_destination` and `atlas_core::recognized_address`
-in `crates/atlas-core/src/address_entry.rs`. Both end in DW-1's one
-`atlas_core::web_address` check, so the address bar, the bookmark importer
+The rule is `syrinx_core::entry_destination` and `syrinx_core::recognized_address`
+in `crates/syrinx-core/src/address_entry.rs`. Both end in DW-1's one
+`syrinx_core::web_address` check, so the address bar, the bookmark importer
 and P1-34's forwarded links still agree on what a web address is.
-`crates/atlas-app/src/navigation.rs` is now a two-function adapter that turns
+`crates/syrinx-app/src/navigation.rs` is now a two-function adapter that turns
 the typed error into the owner-facing sentence.
 
 | Typed text | Result |
@@ -51,7 +51,7 @@ credentials in addresses and an e-mail address is far more likely than a
 
 The hand-written classification above only decides address versus search.
 The scheme is chosen afterwards from the host that the `url` parser actually
-found: Atlas builds `https://` plus the text, validates it with
+found: Syrinx builds `https://` plus the text, validates it with
 `web_address`, and switches to `http` only if the parsed host is `localhost`,
 a `.localhost` name or a loopback IP. This matters because `url` reads `\` as
 `/` in web addresses: `evil.test\x.localhost` ends in `.localhost` as text
@@ -61,7 +61,7 @@ newline (which `url` would silently strip) is a search.
 
 ## What the address field shows
 
-`atlas_core::readable_address` (`crates/atlas-core/src/address_display.rs`)
+`syrinx_core::readable_address` (`crates/syrinx-core/src/address_display.rs`)
 is what the field above the page card displays. It shows the scheme, host
 and port and never a user name or password, so a page that navigates to
 `https://accounts.example.com@evil.test/` is shown as `https://evil.test/`.
@@ -95,21 +95,21 @@ never change it by accident.
 
 Typing in the palette runs `PaletteView::query`, which ranks commands on the
 UI thread and sends `SessionCommand::Query` to the session worker, which
-ranks the in-memory `atlas-search` catalogue. Only Enter, a click or Alt
+ranks the in-memory `syrinx-search` catalogue. Only Enter, a click or Alt
 Enter reaches `navigate`, and only `navigate` asks a page to load anything.
 `cargo xtask check-deps` (part of `cargo xtask check`) now keeps that path
 free of network code structurally, in three parts:
 
-1. **No network client crate in any Atlas crate.** `dependency_policy.rs`
+1. **No network client crate in any Syrinx crate.** `dependency_policy.rs`
    rejects a direct dependency of any workspace member on a client or socket
    crate (`reqwest`, `hyper`, `ureq`, `tokio`, `socket2`, `mio` and others in
    `NETWORK_CRATES`), including dev, build, optional and renamed ones, and any
    `windows` feature that exposes Windows networking (`Win32_Networking*`,
    `Win32_NetworkManagement*`, `Win32_Web*`, `Networking*`, `Web*`). The same
-   pattern already confines `atlas-update` to cryptography.
+   pattern already confines `syrinx-update` to cryptography.
 2. **The headless crates cannot reach one at all.** The check now reads
    Cargo's full resolved graph (it previously used `--no-deps`) and walks it
-   from `atlas-core`, `atlas-search`, `atlas-store` and the other headless
+   from `syrinx-core`, `syrinx-search`, `syrinx-store` and the other headless
    crates. Any path to a network crate, however indirect, fails with that
    path printed. This is where the typed text is parsed and ranked.
 3. **No socket or HTTP API on the typing path.** Standard-library sockets need
@@ -119,10 +119,10 @@ free of network code structurally, in three parts:
    `TcpListener`, `UdpSocket`, `ToSocketAddrs`, WinHTTP/WinINet entry points
    and `http_client`.
 
-What this does **not** prove: `atlas-app` depends on GPUI, and GPUI itself
+What this does **not** prove: `syrinx-app` depends on GPUI, and GPUI itself
 depends on an HTTP client (`gpui-pre-http-client`, `gpui-pre-reqwest`) for
-loading remote images. Atlas never passes GPUI a remote image, and part 1
-stops `atlas-app` from using such a crate directly, but the check cannot rule
+loading remote images. Syrinx never passes GPUI a remote image, and part 1
+stops `syrinx-app` from using such a crate directly, but the check cannot rule
 out that a later GPUI call fetches something. WebView2 is also, by design,
 the network for pages; the check proves that typing does not drive it, not
 that pages are offline. A text scan can be evaded by deliberate aliasing, and
@@ -132,7 +132,7 @@ up.
 
 ## Also in this branch
 
-- **Home page date (P1-28).** `atlas_platform::calendar::local_date_heading`
+- **Home page date (P1-28).** `syrinx_platform::calendar::local_date_heading`
   calls Windows' `GetDateFormatEx` with the canvas's `dddd, MMMM d` picture
   ("Friday, October 9") in the owner's display language and local time zone.
   It adds the `Win32_Globalization` feature to the existing `windows =0.62.2`
@@ -148,11 +148,11 @@ up.
 
 ## Files
 
-- `crates/atlas-core/src/address_entry.rs`, `address_display.rs` (new, with
+- `crates/syrinx-core/src/address_entry.rs`, `address_display.rs` (new, with
   tests), `lib.rs`, `commands.rs`.
-- `crates/atlas-app/src/navigation.rs` (now an adapter), `ui.rs`,
+- `crates/syrinx-app/src/navigation.rs` (now an adapter), `ui.rs`,
   `ui/home.rs`.
-- `crates/atlas-platform/src/calendar.rs` (new), `lib.rs`, `Cargo.toml`
+- `crates/syrinx-platform/src/calendar.rs` (new), `lib.rs`, `Cargo.toml`
   (one `windows` feature).
 - `crates/xtask/src/dependency_policy.rs`, `network_sources.rs` (new),
   `main.rs`.
@@ -166,7 +166,7 @@ Use synthetic addresses only. Nothing here needs a signed-in account.
    opens. Type `example.com` and press Alt Enter: a Google search for
    "example.com" opens.
 2. With a local server running (or none), type `localhost:8080` and Enter:
-   Atlas goes to `http://localhost:8080/` (a connection error page is fine).
+   Syrinx goes to `http://localhost:8080/` (a connection error page is fine).
 3. Type `1.5`, `e.g.` and `two words`, each with Enter: each is a Google
    search.
 4. Open `https://example.com/caf%C3%A9`: the address field reads
@@ -183,7 +183,7 @@ Use synthetic addresses only. Nothing here needs a signed-in account.
 1. Should bare private-network addresses such as `192.168.1.1` open over
    `http` like loopback ones (routers and NAS boxes rarely have certificates),
    or stay on `https`? Recommendation: `http` for private ranges too,
-   because an `https` attempt to a router usually just fails and Atlas has no
+   because an `https` attempt to a router usually just fails and Syrinx has no
    automatic fallback.
-2. Should Atlas ever display Unicode host names? Recommendation: no for v1;
+2. Should Syrinx ever display Unicode host names? Recommendation: no for v1;
    keep punycode, and revisit only with Chrome's full IDN rules.

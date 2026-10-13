@@ -1,14 +1,14 @@
 ---
-title: "Atlas v1 — Notes — Plan (plan 3)"
+title: "Syrinx v1 — Notes — Plan (plan 3)"
 status: active
 created: 2026-10-09
-subject: Atlas v1 plan 3 — the Notes plugin (spec phase 4)
-relates_to: "docs/plans/Atlas v1 — Plan.md (plan 1, and the v1-wide decisions D1–D38); docs/plans/Atlas v1 — Plugins and Fledge — Plan.md; docs/research/04-forge-and-notes.md"
+subject: Syrinx v1 plan 3 — the Notes plugin (spec phase 4)
+relates_to: "docs/plans/Syrinx v1 — Plan.md (plan 1, and the v1-wide decisions D1–D38); docs/plans/Syrinx v1 — Plugins and Fledge — Plan.md; docs/research/04-forge-and-notes.md"
 issues_repo: not yet created
 branch: claude/plan-atlas-v1
 ---
 
-# Atlas v1 — Notes
+# Syrinx v1 — Notes
 
 > **Status: active, approved by the owner on 2026-10-10.** Implementation is
 > queued behind plans 1 and 2. Work uses plan 1's D41 local branch,
@@ -22,7 +22,7 @@ The owner wants notes in the same window and the same search as the browser
 and code (`docs/spec.md`, "Notes"): roughly Obsidian crossed with Notion,
 with no graph view (S4).
 
-The important promise is that leaving Atlas does not strand the notes.
+The important promise is that leaving Syrinx does not strand the notes.
 Markdown files remain the source of truth; SQLite and the full-text index
 are rebuildable catalogues. A successful v1 lets the owner write, follow
 links, find context and edit a simple property table without damaging an
@@ -35,9 +35,9 @@ not the v1 bar (D5).
   wikilinks, Obsidian's property types, a subset of its `.base` format.
 - **Rust indexer:** pulldown-cmark and serde-saphyr into SQLite tables for
   notes, headings, links and properties, feeding both search tiers; every
-  change Atlas makes is a byte-range patch.
+  change Syrinx makes is a byte-range patch.
 - **The editor:** CodeMirror 6 with live preview in a local web view (D28),
-  with Atlas's shortcut routing on that web view.
+  with Syrinx's shortcut routing on that web view.
 - **Backlinks, rename with link rewrite, the outline panel,** outside-edit
   handling (debounced watcher, conflict banner when dirty).
 - **One table view** over a folder or tag: frontmatter columns, one sort,
@@ -83,15 +83,15 @@ This plan adds no separate analytics integration or personal-data prompts.
 - **D32 stays settled:** English and Latin-script input are the input-test
   scope. Unicode preservation and offset conversion still need tests;
   excluding an IME matrix does not permit corrupting existing text.
-- `plugin-notes` reaches Atlas through `atlas-plugin-api` and `Host`, with
+- `plugin-notes` reaches Syrinx through `syrinx-plugin-api` and `Host`, with
   no direct dependency on core, store, search, GPUI or wry. Storage and
-  indexing services stay behind the host; `atlas-ui` renders the shell and
-  `atlas-platform` owns WebView2 plumbing.
+  indexing services stay behind the host; `syrinx-ui` renders the shell and
+  `syrinx-platform` owns WebView2 plumbing.
   Required host capabilities are reviewed before implementation, because
   changing the public plugin contract needs the owner's approval.
-- Atlas's database and recovery metadata stay in local app data (D13).
+- Syrinx's database and recovery metadata stay in local app data (D13).
   Choosing a vault does not move SQLite beside the markdown files. A vault
-  folder may have its own external sync tool; Atlas supplies no sync client.
+  folder may have its own external sync tool; Syrinx supplies no sync client.
 - Tests use generated vaults only. The owner may assess their own notes in
   the app; agents do not inspect or copy them into fixtures or reports.
 
@@ -228,13 +228,13 @@ explanation, never through an independent disk patch.
 The seven property kinds are text, list, number, checkbox, date, date and
 time, and tags. One property name has a vault-wide type; `tags` is special.
 Frontmatter is YAML at the beginning of a note. Unknown keys, comments,
-ordering and unedited values survive every Atlas change.
+ordering and unedited values survive every Syrinx change.
 
 The first table supports a folder or tag source, selected property columns,
 one sort and property/operator/value filters joined by AND. Its saved form
 has one `table` view in a `.base` file. There is no `.base` source/from key:
 represent the folder/tag restriction as filters, and include
-`file.ext == "md"` so Obsidian does not add attachment rows to Atlas's note
+`file.ext == "md"` so Obsidian does not add attachment rows to Syrinx's note
 table. Combine global and view-level conditions with AND. `order` specifies
 columns, not row sorting; the exact saved sort representation needs the
 compatibility check below. The query implementation parses the supported
@@ -242,14 +242,14 @@ expressions into Rust values rather than executing arbitrary JavaScript.
 
 Typed edits are byte-range patches against a validated revision. Complex
 YAML constructs are never normalised merely to make a property editable.
-If Atlas cannot safely locate or replace a value, it leaves the bytes intact
+If Syrinx cannot safely locate or replace a value, it leaves the bytes intact
 and explains that the value needs source editing. Malformed frontmatter
 does not make the whole note unreadable or erase its existing index entry
 without an error state.
 
 A `.base` file containing unsupported filters, formulas or views is clearly
 labelled and left unchanged, with the original source available to read
-(N3). Atlas does not present a partial interactive table as though it had
+(N3). Syrinx does not present a partial interactive table as though it had
 applied every condition: dropping a filter can show the wrong rows.
 
 ## Sequencing
@@ -290,7 +290,7 @@ Checksum disagreement, disk conflicts, denied writes and interrupted saves
 retain recoverable text. Palette and sidebar overlays return focus correctly
 without consuming editor shortcuts or introducing duplicate undo steps.
 Recovery drafts survive a forced interruption, and restored text cannot
-silently overwrite a file changed while Atlas was closed.
+silently overwrite a file changed while Syrinx was closed.
 An external write deliberately raced between fingerprint validation and
 replacement remains recoverable and produces a conflict. Replacement
 partial failures and failed flushing do not clear unsaved drafts.
@@ -321,8 +321,8 @@ Deliver typed property display, the table subset, `.base` persistence,
 filtering, sorting and inline property edits. Unsupported features follow
 N3: label them, preserve them and expose the original source for reading.
 
-**Exit:** Atlas-created tables open correctly in a disposable Obsidian test
-vault, and the supported Obsidian-created subset opens correctly in Atlas.
+**Exit:** Syrinx-created tables open correctly in a disposable Obsidian test
+vault, and the supported Obsidian-created subset opens correctly in Syrinx.
 Folder/tag fixtures containing notes, attachments and a `.base` file produce
 the same note rows in both apps; global and view filters both take effect.
 Edited values change only intended bytes. An already-open note immediately
@@ -335,7 +335,7 @@ restoring stale content over newer disk edits.
 that the selected dependencies remain fast in the real shell.
 
 Deliver a compatibility matrix, measured performance report and keyboard
-and accessibility pass in the five Atlas palettes. Review the resulting
+and accessibility pass in the five Syrinx palettes. Review the resulting
 Notes interface with the owner against `design/README.md`; that document
 has no detailed Notes board, so this plan does not invent an approved one.
 
@@ -403,7 +403,7 @@ for these current checks. No new dependency is approved by being listed.
 
 | Claim | Current evidence and remaining limit |
 |---|---|
-| CodeMirror transactions and undo can support the bridge. | The [reference manual](https://codemirror.net/docs/ref/) documents transaction annotations, undo-history control and UTF-16 positions. The [split-view example](https://codemirror.net/examples/split/) explicitly forwards changes and keeps one undo history. Atlas's Rust bridge still needs fault-injection tests. |
+| CodeMirror transactions and undo can support the bridge. | The [reference manual](https://codemirror.net/docs/ref/) documents transaction annotations, undo-history control and UTF-16 positions. The [split-view example](https://codemirror.net/examples/split/) explicitly forwards changes and keeps one undo history. Syrinx's Rust bridge still needs fault-injection tests. |
 | Mixed line endings need preservation outside CodeMirror's default text model. | The [state implementation](https://raw.githubusercontent.com/codemirror/state/main/src/state.ts) splits lines and joins them with the chosen separator. Phase 2 must prove original-byte/EOL mapping and unchanged-range preservation; matching logical-text hashes alone is insufficient. |
 | The markdown parser exposes relevant syntax and locations. | `pulldown-cmark` documents [wikilink and metadata options](https://docs.rs/pulldown-cmark/latest/pulldown_cmark/struct.Options.html) and [offset iteration](https://docs.rs/pulldown-cmark/latest/pulldown_cmark/struct.Parser.html). Event ranges alone do not prove every link destination can be rewritten safely. |
 | Unfinished Markdown is not generally invalid Markdown. | [CommonMark's character model](https://spec.commonmark.org/0.31.2/#characters-and-lines) accepts every Unicode character sequence as a document. Distinguish frontmatter/encoding/I/O failures from ordinary incomplete markup. |
@@ -416,7 +416,7 @@ for these current checks. No new dependency is approved by being listed.
 ## Issue map
 
 The owner approved these 16 local slices on 2026-10-10, exactly as
-recorded in [the approved Plans 2–4 breakdown](<Atlas v1 — Plans 2–4 slice proposals.md>).
+recorded in [the approved Plans 2–4 breakdown](<Syrinx v1 — Plans 2–4 slice proposals.md>).
 The boundaries, deliverables and explicit blockers below are unchanged from
 that approval. Every slice also depends on the preceding slice in this plan;
 finish each phase exit before its next phase. The breakdown's common gates
@@ -444,7 +444,7 @@ approvals remain separate; the map does not waive predecessor or operator gates.
 | Approved ID | Why and deliverable | Done evidence and explicit blockers |
 | --- | --- | --- |
 | P3-04 | Native and editor copies must agree on which document and revision they describe. Build the trusted bundled CodeMirror surface and versioned change/acknowledgement bridge, origin/type/access checks, UTF-16/UTF-8 conversion and canonical checksums. | Synthetic protocol tests cover delayed, duplicate, stale and previous-editor messages, mixed line endings, encoding markers and supplementary Unicode. Typing stays local; synchronization failure retains the live buffer. Blocked by Phase 1 and editor dependency/Host capability approval where required. |
-| P3-05 | Editor views must not change the source merely to display it. Add live preview, source editing, outline navigation and Atlas shortcut/focus routing through the shared bridge. | Typing, paste, undo/redo and outline navigation preserve text and do not add duplicate undo events. Palette/sidebar overlays restore editor focus; unknown syntax remains editable source. Inspect the actual local editor view. No unsafe disk-save path is exposed while later safety slices remain open. |
+| P3-05 | Editor views must not change the source merely to display it. Add live preview, source editing, outline navigation and Syrinx shortcut/focus routing through the shared bridge. | Typing, paste, undo/redo and outline navigation preserve text and do not add duplicate undo events. Palette/sidebar overlays restore editor focus; unknown syntax remains editable source. Inspect the actual local editor view. No unsafe disk-save path is exposed while later safety slices remain open. |
 | P3-06 | A matching buffer checksum alone does not protect against outside disk changes. Implement staged saves for one acknowledged revision, source-byte/line-ending preservation, checked flushing, expected disk revision and recoverable replacement failures. | Unchanged files round-trip byte-for-byte. Tests race an outside write between validation and replacement and interrupt each durability step; both versions remain recoverable. Denied writes, partial replacement failures and edits during saving retain dirty state. No write-through guarantee is attributed to unsupported `ReplaceFileW` flags. |
 | P3-07 | Watcher events are hints, and unsaved work must survive a crash. Add debounced reconciliation, clean reload, dirty conflict state, recovery drafts and restart reconciliation against current disk. | External replace/delete/rename and delayed/missed events are covered. Conflict pauses saving; disk/editor/separate-copy choices are deliberate. Restart cannot silently overwrite changed files, and an older completed save cannot clear a newer draft. Drafts remain in local app data outside logs and fixtures. |
 | P3-08 | Ordinary save controls must use the proven safety path. Enable Notes autosave after a short pause and Ctrl S, error/retry presentation and document transactions shared with non-editor edits. | Checksum disagreement, conflicts and write failures keep recoverable text and prevent unsafe retry. Autosave and explicit save clear only the durably saved revision. Forge's later explicit-save policy remains a caller choice on the same service. |
@@ -463,7 +463,7 @@ approvals remain separate; the map does not waive predecessor or operator gates.
 | --- | --- | --- |
 | P3-12 | Typed properties need verified interoperability before storage conventions become permanent. Verify the seven property kinds and vault-wide type metadata using a disposable generated Obsidian vault; implement bounded interpretation and safe source ranges. | Record the supported metadata contract and any unresolved product choice for the owner. Unknown keys, YAML comments/order and complex unsupported values stay intact; malformed content remains source-readable. Blocked by Phase 3 and authorized application access if required for the compatibility check. |
 | P3-13 | A saved table must apply every supported filter without pretending unsupported views are equivalent. Implement one folder/tag table, selected columns, one sort, AND filters and `.base` round trips. | Generated cross-application fixtures verify note-only rows, `file.ext == "md"`, global/view filter combination and the actual sort representation. Unsupported filters/formulas/views are labelled, unchanged and source-readable. No partial interactive result silently drops a condition. |
-| P3-14 | Table edits must not compete with the editor's live copy. Route property changes through the shared revision, save/conflict and undo service as validated byte-range patches. | Only intended bytes change; an open note immediately reflects a table edit and can undo it without restoring stale disk content. Unsafe YAML replacements fail visibly rather than normalizing the file. Phase 4 closes with supported Obsidian-to-Atlas and Atlas-to-Obsidian table checks. |
+| P3-14 | Table edits must not compete with the editor's live copy. Route property changes through the shared revision, save/conflict and undo service as validated byte-range patches. | Only intended bytes change; an open note immediately reflects a table edit and can undo it without restoring stale disk content. Unsafe YAML replacements fail visibly rather than normalizing the file. Phase 4 closes with supported Obsidian-to-Syrinx and Syrinx-to-Obsidian table checks. |
 
 ### Phase 5 — compatibility and acceptance
 

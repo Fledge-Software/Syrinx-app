@@ -6,7 +6,7 @@ respective plans now carry these exact rows in their issue maps. Implementation
 remains queued behind every predecessor and acceptance gate; this approval
 authorizes no dependency addition, public API change, commit or merge.
 The separate permission for computer-use testing covers a fresh synthetic
-Atlas window, not general integration-app access or personal data.
+Syrinx window, not general integration-app access or personal data.
 
 The breakdown records the approved concrete increments without
 reopening settled product choices. Large phases hide the points where a
@@ -23,9 +23,9 @@ outstanding evidence are recorded in [the implementation ledger](../implementati
 
 ## Authority and common gates
 
-The approved sources remain [Plan 2](<Atlas v1 — Plugins and Fledge — Plan.md>),
-[Plan 3](<Atlas v1 — Notes — Plan.md>) and
-[Plan 4](<Atlas v1 — Forge — Plan.md>), beneath `docs/decisions.md`,
+The approved sources remain [Plan 2](<Syrinx v1 — Plugins and Fledge — Plan.md>),
+[Plan 3](<Syrinx v1 — Notes — Plan.md>) and
+[Plan 4](<Syrinx v1 — Forge — Plan.md>), beneath `docs/decisions.md`,
 `docs/spec.md` and `design/README.md` in the repository's authority order.
 These approved IDs identify local slices, not published issues. The plans and
 their settled decisions are unchanged. The issue maps reproduce the approved
@@ -59,7 +59,7 @@ boundaries below; later changes to those boundaries require owner review.
 - **Measurements:** fix synthetic workloads, repeat counts and any unset
   acceptance budgets before optimization. Reuse D48's complete 100,000-row,
   5 ms p95 tier 1 requirement with the worst sample reported. Research timing
-  proposals and simulated service delays are not achieved Atlas measurements.
+  proposals and simulated service delays are not achieved Syrinx measurements.
 - **Scope:** none of these plans adds a separate analytics collector. D39's
   schema/control and slice approval remains separate. All page-web-view privacy
   and identity rules continue to apply; trusted local editor/terminal surfaces
@@ -72,18 +72,18 @@ palette, storage, both search tiers, themes, shell and local gate, and pass its
 GPUI idle and browser exits. This slice map is approved; the three preview
 placeholder rows do not satisfy the predecessor entry gate.
 
-The main ownership boundary is `crates/atlas-plugin-api`: it depends on no
-other Atlas crate. Plugins depend only on that crate for Atlas services.
-`atlas-core` hosts lifecycle and registration, `atlas-ui` renders owned view
-descriptions, `atlas-app` wires adapters, and `atlas-platform` owns native
+The main ownership boundary is `crates/syrinx-plugin-api`: it depends on no
+other Syrinx crate. Plugins depend only on that crate for Syrinx services.
+`syrinx-core` hosts lifecycle and registration, `syrinx-ui` renders owned view
+descriptions, `syrinx-app` wires adapters, and `syrinx-platform` owns native
 surfaces. These are planned locations, not claims that the crates exist today.
 
 ### Phase 1 — contract and a test plugin
 
 | Approved ID | Why and deliverable | Done evidence and explicit blockers |
 | --- | --- | --- |
-| P2-01 | A reviewed boundary prevents later plugins from depending on private application objects. Define the versioned manifest, owned serializable commands/results, errors, tab/view references, forms/lists, Host requests and bounded index batches in `atlas-plugin-api`; review the object-safe asynchronous contract before consumers depend on it. | Serialization and compatibility tests reject unsupported versions and malformed identities. No GPUI, WebView2, SQLite or borrowed core state crosses the boundary. Blocked by the Plan 2 entry gate and any required concrete API approval. |
-| P2-02 | Registration mistakes must fail before commands become visible. Add explicit built-in registration, duplicate-ID rejection, command/view ownership checks and dependency-boundary checks in `atlas-core` and `xtask`. | A synthetic plugin uses the same contract as future built-ins. Duplicate plugins/commands, foreign command ownership and unknown views fail deterministically; no early activation occurs during manifest discovery. |
+| P2-01 | A reviewed boundary prevents later plugins from depending on private application objects. Define the versioned manifest, owned serializable commands/results, errors, tab/view references, forms/lists, Host requests and bounded index batches in `syrinx-plugin-api`; review the object-safe asynchronous contract before consumers depend on it. | Serialization and compatibility tests reject unsupported versions and malformed identities. No GPUI, WebView2, SQLite or borrowed core state crosses the boundary. Blocked by the Plan 2 entry gate and any required concrete API approval. |
+| P2-02 | Registration mistakes must fail before commands become visible. Add explicit built-in registration, duplicate-ID rejection, command/view ownership checks and dependency-boundary checks in `syrinx-core` and `xtask`. | A synthetic plugin uses the same contract as future built-ins. Duplicate plugins/commands, foreign command ownership and unknown views fail deterministically; no early activation occurs during manifest discovery. |
 | P2-03 | A slow or failed plugin must leave browsing usable. Implement lazy activation, bounded request queues, request identity, cancellation, observed completion, timeout/uncertain-outcome states and lifecycle cleanup. | Synthetic lifecycle tests cover late completion, close/reopen, unavailable service and uncertain writes without automatic resubmission. Fix workload and queue/timeout bounds before judging behavior. No blanket panic swallowing or native-crash-isolation claim is introduced. |
 | P2-04 | Plugin settings must use the shared store without exposing another plugin's namespace. Add Host-scoped settings/storage services and a synthetic service adapter through application wiring. | Tests reject cross-plugin access, prove persistence and error propagation, and exercise the test plugin through activation, commands, view requests and close/reopen. The complete Phase 1 gate passes; this trusted-native boundary is not described as a security sandbox. |
 
@@ -120,7 +120,7 @@ mail/calendar/document integration, marketplace or third-party sandbox.
 This slice map is approved. Missing Host capabilities still need review and
 any required public-contract approval before implementation.
 
-`plugin-notes` describes behavior through `atlas-plugin-api`; host services own
+`plugin-notes` describes behavior through `syrinx-plugin-api`; host services own
 files, indexing and document safety. The shared document/CodeMirror bridge is
 designed for Forge reuse. The exact host-service module placement is an
 implementation review, not permission to let the plugin import core or storage.
@@ -138,7 +138,7 @@ implementation review, not permission to let the plugin import core or storage.
 | Approved ID | Why and deliverable | Done evidence and explicit blockers |
 | --- | --- | --- |
 | P3-04 | Native and editor copies must agree on which document and revision they describe. Build the trusted bundled CodeMirror surface and versioned change/acknowledgement bridge, origin/type/access checks, UTF-16/UTF-8 conversion and canonical checksums. | Synthetic protocol tests cover delayed, duplicate, stale and previous-editor messages, mixed line endings, encoding markers and supplementary Unicode. Typing stays local; synchronization failure retains the live buffer. Blocked by Phase 1 and editor dependency/Host capability approval where required. |
-| P3-05 | Editor views must not change the source merely to display it. Add live preview, source editing, outline navigation and Atlas shortcut/focus routing through the shared bridge. | Typing, paste, undo/redo and outline navigation preserve text and do not add duplicate undo events. Palette/sidebar overlays restore editor focus; unknown syntax remains editable source. Inspect the actual local editor view. No unsafe disk-save path is exposed while later safety slices remain open. |
+| P3-05 | Editor views must not change the source merely to display it. Add live preview, source editing, outline navigation and Syrinx shortcut/focus routing through the shared bridge. | Typing, paste, undo/redo and outline navigation preserve text and do not add duplicate undo events. Palette/sidebar overlays restore editor focus; unknown syntax remains editable source. Inspect the actual local editor view. No unsafe disk-save path is exposed while later safety slices remain open. |
 | P3-06 | A matching buffer checksum alone does not protect against outside disk changes. Implement staged saves for one acknowledged revision, source-byte/line-ending preservation, checked flushing, expected disk revision and recoverable replacement failures. | Unchanged files round-trip byte-for-byte. Tests race an outside write between validation and replacement and interrupt each durability step; both versions remain recoverable. Denied writes, partial replacement failures and edits during saving retain dirty state. No write-through guarantee is attributed to unsupported `ReplaceFileW` flags. |
 | P3-07 | Watcher events are hints, and unsaved work must survive a crash. Add debounced reconciliation, clean reload, dirty conflict state, recovery drafts and restart reconciliation against current disk. | External replace/delete/rename and delayed/missed events are covered. Conflict pauses saving; disk/editor/separate-copy choices are deliberate. Restart cannot silently overwrite changed files, and an older completed save cannot clear a newer draft. Drafts remain in local app data outside logs and fixtures. |
 | P3-08 | Ordinary save controls must use the proven safety path. Enable Notes autosave after a short pause and Ctrl S, error/retry presentation and document transactions shared with non-editor edits. | Checksum disagreement, conflicts and write failures keep recoverable text and prevent unsafe retry. Autosave and explicit save clear only the durably saved revision. Forge's later explicit-save policy remains a caller choice on the same service. |
@@ -157,7 +157,7 @@ implementation review, not permission to let the plugin import core or storage.
 | --- | --- | --- |
 | P3-12 | Typed properties need verified interoperability before storage conventions become permanent. Verify the seven property kinds and vault-wide type metadata using a disposable generated Obsidian vault; implement bounded interpretation and safe source ranges. | Record the supported metadata contract and any unresolved product choice for the owner. Unknown keys, YAML comments/order and complex unsupported values stay intact; malformed content remains source-readable. Blocked by Phase 3 and authorized application access if required for the compatibility check. |
 | P3-13 | A saved table must apply every supported filter without pretending unsupported views are equivalent. Implement one folder/tag table, selected columns, one sort, AND filters and `.base` round trips. | Generated cross-application fixtures verify note-only rows, `file.ext == "md"`, global/view filter combination and the actual sort representation. Unsupported filters/formulas/views are labelled, unchanged and source-readable. No partial interactive result silently drops a condition. |
-| P3-14 | Table edits must not compete with the editor's live copy. Route property changes through the shared revision, save/conflict and undo service as validated byte-range patches. | Only intended bytes change; an open note immediately reflects a table edit and can undo it without restoring stale disk content. Unsafe YAML replacements fail visibly rather than normalizing the file. Phase 4 closes with supported Obsidian-to-Atlas and Atlas-to-Obsidian table checks. |
+| P3-14 | Table edits must not compete with the editor's live copy. Route property changes through the shared revision, save/conflict and undo service as validated byte-range patches. | Only intended bytes change; an open note immediately reflects a table edit and can undo it without restoring stale disk content. Unsafe YAML replacements fail visibly rather than normalizing the file. Phase 4 closes with supported Obsidian-to-Syrinx and Syrinx-to-Obsidian table checks. |
 
 ### Phase 5 — compatibility and acceptance
 
@@ -178,8 +178,8 @@ with the live canvas using authorized access before UI implementation; no new
 visual direction is chosen here.
 
 `plugin-forge` contributes owned descriptions through Host; Rust services own
-files, parsers, Git, language servers and processes. `atlas-ui` renders native
-chrome and `atlas-platform` manages the trusted local editor/terminal surfaces.
+files, parsers, Git, language servers and processes. `syrinx-ui` renders native
+chrome and `syrinx-platform` manages the trusted local editor/terminal surfaces.
 The eight initially required highlighting languages remain CSS, JavaScript,
 HTML, TypeScript, Svelte, Rust, GDScript and SQL.
 
@@ -188,7 +188,7 @@ HTML, TypeScript, Svelte, Rust, GDScript and SQL.
 | Approved ID | Why and deliverable | Done evidence and explicit blockers |
 | --- | --- | --- |
 | P4-01 | Project and document identity must be distinct before more than one file opens. Add one-root selection, lazy tree, bounded file opening, generic Forge lifecycle and shared document reuse. | Reopening a file does not create another buffer. Missing/binary/unsupported files fail safely. Project switch and whole-Forge close collect Save/Discard/Cancel choices before mutation; failed saves or Cancel keep work open. Blocked by the Forge entry gate. |
-| P4-02 | Forge needs its agreed keyboard and navigation behavior before richer tools. Wire explicit Ctrl S/recovery, dirty indicators, code-location history, focused-file Ctrl W and the shared command table. | Ctrl K/L/T remain Atlas actions; Ctrl W closes only the active editor file. Sidebar default/peek/pinning, address and back/forward behavior match the approved design, with reload hidden. Synthetic round trips, outside edits and bridge failures preserve work; inspect the layout and focused keys with the owner. |
+| P4-02 | Forge needs its agreed keyboard and navigation behavior before richer tools. Wire explicit Ctrl S/recovery, dirty indicators, code-location history, focused-file Ctrl W and the shared command table. | Ctrl K/L/T remain Syrinx actions; Ctrl W closes only the active editor file. Sidebar default/peek/pinning, address and back/forward behavior match the approved design, with reload hidden. Synthetic round trips, outside edits and bridge failures preserve work; inspect the layout and focused keys with the owner. |
 | P4-03 | Highlighting cannot block typing or paint stale revisions. Audit and bundle the required grammars/queries, then implement incremental Rust Tree-sitter parsing and revisioned visible-region highlighting. | All eight required languages and mixed Svelte/HTML/script/style fixtures pass. Multiline/off-screen edits invalidate correctly; missing/failed grammar leaves plain text usable. Record large-file workload and limits before optimization. No runtime grammar download or GPL query import occurs. Phase 1 closes with the owner-reviewed editor layout and complete document-safety regressions. |
 
 ### Phase 2 — bounded interactive terminal
@@ -196,7 +196,7 @@ HTML, TypeScript, Svelte, Rust, GDScript and SQL.
 | Approved ID | Why and deliverable | Done evidence and explicit blockers |
 | --- | --- | --- |
 | P4-04 | A terminal needs proven transport and process ownership before output starts flowing. Audit the Windows pseudoterminal and xterm.js dependencies, installed shell and actual local WebView2 bridge; implement bounded input/output and resize/start/exit states. | Measure both bridge directions on synthetic data. Missing shell/startup failure is visible; no install or WSL addition occurs. Origin/message checks isolate the trusted terminal surface. Blocked by Phase 1 and exact dependency/Host reviews. |
-| P4-05 | Renderer acknowledgements must bound every output queue. Implement flow control through xterm.js write completion, UTF-8 chunk handling and responsive input/control paths. | Flood tests preserve output, accept Atlas keys and Ctrl C, and resume reads after renderer capacity returns. Resize and split Unicode sequences work. Record actual queue/throughput bounds rather than inheriting the old Tauri claim. |
+| P4-05 | Renderer acknowledgements must bound every output queue. Implement flow control through xterm.js write completion, UTF-8 chunk handling and responsive input/control paths. | Flood tests preserve output, accept Syrinx keys and Ctrl C, and resume reads after renderer capacity returns. Resize and split Unicode sequences work. Record actual queue/throughput bounds rather than inheriting the old Tauri claim. |
 | P4-06 | An ignored interrupt must not strand a task or its children. Implement explicit Stop and tracked process-tree teardown, integrating running-task Stop/Cancel with existing dirty-document close preparation. | A child that ignores Ctrl C and a renderer with blocked output both stop through the explicit path. Cancel changes no document/process state; chosen saves finish before any discard/stop. Repeated close/reopen leaves no PTY processes, readers or subscriptions. Phase 2 closes with native flood/focus/cleanup evidence. |
 
 ### Phase 3 — deliberate Git reads and writes
@@ -224,14 +224,14 @@ HTML, TypeScript, Svelte, Rust, GDScript and SQL.
 | P4-15 | Opening a project must not execute its task discovery code. Add declarative task descriptions and safe discovery for Cargo, npm-family scripts, just/make and installed Python entry points, preserving the project's package manager. | Synthetic discovery fixtures cover duplicate names/origins, missing tools and unsafe executable declarations. Cargo discovery is offline/locked with rustup auto-install disabled for the command; `make -qp` is not assumed passive. No special uv/Poetry/tox/nox adapter or downloader is added. Blocked by Phase 4. |
 | P4-16 | A selected task must run against saved source and remain stoppable. Integrate explicit task launch, progress/exit/restart with the proven terminal/process service and save-all preparation. | Any dirty-document save failure blocks launch, including a file open in another group. Synthetic providers cover run/failure/cancel, and Stop cleans children under blocked output. The user sees what will run; discovery never implies execution. |
 | P4-17 | Split views must share one logical buffer and undo history. Add editor groups, per-view selections/scroll positions and coordinated shared transactions. | Two views stay synchronized through edit, undo/redo, save, outside change and close. Ctrl W closes the focused file view according to the approved policy without closing all Forge. Saves and recovery still operate on document identity, not a second copy per pane. |
-| P4-18 | The context rail must use existing sources rather than creating another index. Connect revisioned outline, related Notes and selected-file Git history through Host/search, with navigation and sidebar-width behavior. | Navigation cannot show stale file context. Pinning the Atlas sidebar folds the rail as the design specifies; missing context has honest empty/error states. Phase 5 closes with tasks, splits and rail exercised together. |
+| P4-18 | The context rail must use existing sources rather than creating another index. Connect revisioned outline, related Notes and selected-file Git history through Host/search, with navigation and sidebar-width behavior. | Navigation cannot show stale file context. Pinning the Syrinx sidebar folds the rail as the design specifies; missing context has honest empty/error states. Phase 5 closes with tasks, splits and rail exercised together. |
 
 ### Phase 6 — workflow, performance and closure
 
 | Approved ID | Why and deliverable | Done evidence and explicit blockers |
 | --- | --- | --- |
 | P4-19 | One successful edit does not prove a complete development workflow. Run generated project workflows across editing, recovery, terminal/tasks, Git and supported language-server actions, including repeated open/close and interruptions. | Repository and JavaScript/native gates pass; no unowned child processes, lost buffers or stale search contributions remain. Cover keyboard focus and all dirty-file/running-task cancellation branches. Blocked by Phase 5. |
-| P4-20 | Performance must include the rest of Atlas, not only an isolated editor. Measure cold/warm opening, input paint, highlighting, large files, scrolling, completion, terminal floods and incremental memory/idle cost using fixed workloads/budgets. | Repeat with background browser tabs and report failures and limits. The research's frame/10 MB/million-line/100 MB proposals are not assumed passed. If Rust highlighting misses its budget, investigate and seek approval before adding a second parser location. D48 remains unchanged. |
+| P4-20 | Performance must include the rest of Syrinx, not only an isolated editor. Measure cold/warm opening, input paint, highlighting, large files, scrolling, completion, terminal floods and incremental memory/idle cost using fixed workloads/budgets. | Repeat with background browser tabs and report failures and limits. The research's frame/10 MB/million-line/100 MB proposals are not assumed passed. If Rust highlighting misses its budget, investigate and seek approval before adding a second parser location. D48 remains unchanged. |
 | P4-21 | Final acceptance requires the actual Windows workflow and approved visual design. Complete five-palette, scale-factor, keyboard/accessibility and owner workflow review, then update the implementation ledger with evidence and known limits. | All phase exits, cleanup checks and measured budgets pass, and the owner accepts the workflow. No unresolved data-integrity defect, skipped gate or unverified visible behavior is labelled complete. This acceptance does not itself authorize a repository commit, merge, release or publication. |
 
 This map adds no debugger, semantic-token implementation, minimap, native
@@ -245,7 +245,7 @@ slices**, retaining the plans' phase order and acceptance obligations.
 This approval satisfies their separate slice-map gate. It does not declare
 predecessor work complete or supply future operator, public-API, dependency,
 integration-access, commit or merge permissions. The separately approved
-frizbee correction and fresh synthetic Atlas window testing have their own
+frizbee correction and fresh synthetic Syrinx window testing have their own
 narrow scopes; they do not waive these plans' remaining gates.
 
 The next implementation remains P1-05 and the authorized D49 preview work.

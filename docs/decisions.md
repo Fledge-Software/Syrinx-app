@@ -5,6 +5,9 @@ Each entry says what changed and why. The spec's "Decisions already made"
 still stand unless an entry here says otherwise. Design decisions are
 recorded separately, in `design/README.md`.
 
+Entries keep the wording of their date: until the product was named Syrinx
+on 2026-10-12, it was called Atlas, so older entries say Atlas.
+
 ## 2026-10-12
 
 - **The product is named Syrinx.** "Atlas" was a working name. It collides
@@ -25,6 +28,7 @@ recorded separately, in `design/README.md`.
   merge. The owner directed all finished work to main on 2026-10-12. The
   repository stays local, with no remote and no pushes. Commits still
   happen only within this approved slice workflow.
+
 - **Atlas never takes the foreground from another application.** When the
   owner has moved to another program, Atlas does not bring itself to the
   front: no `SetForegroundWindow`, no synthetic Alt press and no GPUI

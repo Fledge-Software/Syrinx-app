@@ -1,12 +1,13 @@
 @AGENTS.md
 @docs/trapstoknow.md
 
-# Atlas
+# Syrinx
 
-Atlas (working name) is a browser-first workspace app: a Windows desktop
-browser with a vertical-tab sidebar, where Forge (code), Notes and Fledge run
-as built-in plugins that open as tabs. Pages render in WebView2 driven from
-Rust through wry, and Atlas's own interface is drawn in Rust with the
+Syrinx is a browser-first workspace app: a Windows desktop browser with a
+vertical-tab sidebar, where Forge (code), Notes and Fledge run as built-in
+plugins that open as tabs. It was called Atlas, a working name, until the
+owner named it Syrinx on 2026-10-12; older records still say Atlas. Pages render in WebView2 driven from
+Rust through wry, and Syrinx's own interface is drawn in Rust with the
 conditionally approved GPUI base (D37's idle-patch gate still applies).
 
 - The product spec, the decisions already made and the phased plan are in
@@ -14,7 +15,7 @@ conditionally approved GPUI base (D37's idle-patch gate still applies).
   relitigated.
 - The owner's decisions since the spec are in `docs/decisions.md`; where it
   and the spec disagree, it wins. The v1 plan, with every decision argued,
-  is `docs/plans/Atlas v1 — Plan.md`.
+  is `docs/plans/Syrinx v1 — Plan.md`.
 - The design target and the decisions made since the spec are in
   `design/README.md`. The live canvas is the source of truth for the design;
   `design/canvas/` is a snapshot of it.
@@ -26,7 +27,7 @@ above, and `docs/spec.md` below. Before picking up work, also read:
 
 - `docs/decisions.md`: the owner's decisions since the spec, which win over
   it.
-- `docs/plans/Atlas v1 — Plan.md`: its "Decisions taken" table, its "Open
+- `docs/plans/Syrinx v1 — Plan.md`: its "Decisions taken" table, its "Open
   threads" and the part of the plan the work you are taking comes from. The
   owner approved all four plans on 2026-10-10; their decisions are settled.
   Where they disagree with the files above, those files still win.
@@ -63,8 +64,8 @@ above, and `docs/spec.md` below. Before picking up work, also read:
   After it, take the next piece of work from the earliest phase or plan with
   open work, and if that is blocked, ask before skipping ahead. See "Work
   order" in `AGENTS.md`.
-- **Atlas is a separate project from Fledge-App.** Fledge reaches Atlas only
-  as a plugin talking to Fledge's API; don't put Atlas code or docs in the
+- **Syrinx is a separate project from Fledge-App.** Fledge reaches Syrinx only
+  as a plugin talking to Fledge's API; don't put Syrinx code or docs in the
   Fledge-App repository.
 - **Fixing a PR means committing on that PR's branch** (once the repository
   is on GitHub). Conflict resolutions, CI fixes and review-comment fixes go to
@@ -72,7 +73,7 @@ above, and `docs/spec.md` below. Before picking up work, also read:
   second pull request that "supersedes" the first. Merge the base branch into
   the PR branch and push; do not rebase, amend or force-push somebody else's
   branch.
-- **Build and test on this machine.** Atlas is a Windows desktop app with no
+- **Build and test on this machine.** Syrinx is a Windows desktop app with no
   server or deploy. Run `cargo xtask check` as defined in `docs/LOCAL-DEV.md`:
   dependency checks, formatting, Clippy, tests and an application smoke run
   under D38's `local` profile. After changing anything the owner sees, run

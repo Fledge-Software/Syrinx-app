@@ -1,15 +1,15 @@
 ---
-title: "Atlas later — Mobile sync outline"
+title: "Syrinx later — Mobile sync outline"
 status: deferred
 created: 2026-10-10
-subject: Optional device sync over Tailscale or Headscale for a future mobile Atlas, with optional cloud sync later
-relates_to: "docs/decisions.md; docs/plans/Atlas v1 — Plan.md"
+subject: Optional device sync over Tailscale or Headscale for a future mobile Syrinx, with optional cloud sync later
+relates_to: "docs/decisions.md; docs/plans/Syrinx v1 — Plan.md"
 ---
 
 # Future mobile sync
 
-Atlas should let people carry their saved destinations and selected settings
-between desktop and mobile without requiring an Atlas-hosted sync service.
+Syrinx should let people carry their saved destinations and selected settings
+between desktop and mobile without requiring a Syrinx-hosted sync service.
 On 2026-10-10, the owner requested this future feature: an easy in-app
 walkthrough, reuse of existing Tailscale accounts, support for existing
 Headscale installations, and an optional cloud alternative later.
@@ -21,16 +21,16 @@ dependencies and the detailed delivery plan still need their own review.
 
 ## What server independence means
 
-The product promise is **sync without an Atlas-hosted server**. Each device
-keeps its own local data and exchanges changes with paired Atlas devices.
-Tailscale supplies private network connectivity; Atlas supplies the sync
+The product promise is **sync without a Syrinx-hosted server**. Each device
+keeps its own local data and exchanges changes with paired Syrinx devices.
+Tailscale supplies private network connectivity; Syrinx supplies the sync
 protocol, offline queues, conflict handling and device pairing.
 
 Hosted Tailscale still uses a coordination service for device discovery,
 keys and network policy. Connections can travel directly between devices
 or through encrypted packet relays when necessary. Relays carry encrypted
-traffic; they are not durable storage for Atlas changes waiting for an
-offline device. These are networking capabilities, not an existing Atlas
+traffic; they are not durable storage for Syrinx changes waiting for an
+offline device. These are networking capabilities, not an existing Syrinx
 sync implementation. See Tailscale's [control and data planes](https://tailscale.com/docs/concepts/control-data-planes)
 and [connection types](https://tailscale.com/docs/reference/connection-types).
 
@@ -46,25 +46,25 @@ infrastructure.
 ## The setup walkthrough
 
 Offer an optional **Connect your devices** flow during onboarding and in
-Settings. Skipping it leaves Atlas usable locally. Reuse the installed
+Settings. Skipping it leaves Syrinx usable locally. Reuse the installed
 official Tailscale client first: this preserves the user's existing network
 and avoids requiring a second network identity. Embedding a networking
-client inside Atlas is a possible later alternative, but adds packaging,
+client inside Syrinx is a possible later alternative, but adds packaging,
 platform and compatibility work before its usability benefit is proven.
 
 1. **Choose the existing setup.** Present “I'm new to Tailscale,” “I already
    use Tailscale,” and “I use Headscale.” An existing Tailscale account and
-   private network can be reused; Atlas should not require a new account.
+   private network can be reused; Syrinx should not require a new account.
 2. **Guide installation and connection.** For new users, provide the
    platform's official installation route, explain the system VPN prompt,
    and guide sign-in in Tailscale. Resume the walkthrough afterward and
    verify connectivity. Existing users skip completed steps. Headscale
    users reuse their connected client or follow platform-specific custom
    server instructions and any required node approval.
-3. **Pair Atlas devices.** Use a short-lived QR code, with an accessible
+3. **Pair Syrinx devices.** Use a short-lived QR code, with an accessible
    alternative, and confirmation of the other device. Pairing establishes
-   Atlas-level trust: membership in the same private network must not by
-   itself grant access to Atlas data. Users can inspect and revoke pairs.
+   Syrinx-level trust: membership in the same private network must not by
+   itself grant access to Syrinx data. Users can inspect and revoke pairs.
 4. **Choose what syncs.** Explain each category before enabling it. The
    initial scope proposed below keeps the first delivery manageable.
 5. **Check and finish.** Verify the peer connection and complete an initial
@@ -80,9 +80,9 @@ Both mobile platforms support custom coordination servers through the
 official client: [iOS setup](https://tailscale.com/docs/how-to/set-up-custom-control-server?tab=ios)
 and [Android setup](https://tailscale.com/docs/how-to/set-up-custom-control-server?tab=android).
 Near plug-and-play use is the target for an existing network. Automatic
-detection, app-to-app navigation and return-to-Atlas behavior are unverified
+detection, app-to-app navigation and return-to-Syrinx behavior are unverified
 until prototyped on supported client versions. Installation, account sign-in
-and OS permission prompts remain user actions; Atlas never collects the
+and OS permission prompts remain user actions; Syrinx never collects the
 user's Tailscale or Headscale login credentials.
 
 ## Data and sync design
@@ -109,7 +109,7 @@ remain design work. Conflicting edits must not silently discard user data.
 
 Separate the sync engine from its transport, meaning the mechanism that
 delivers changes. Tailscale and Headscale provide a reachable private
-network for the same Atlas protocol. Avoid making sync correctness depend
+network for the same Syrinx protocol. Avoid making sync correctness depend
 on Tailscale's hosted account APIs or features absent from Headscale.
 Application-level device authentication and end-to-end encryption should
 be designed with the later cloud route in mind, including revocation and
@@ -118,15 +118,15 @@ key recovery, rather than relying solely on network membership.
 ## Availability and mobile limits
 
 In the device-only design, peers need an opportunity to exchange changes.
-If the PC is asleep or Atlas's sync component is not running there, phone
+If the PC is asleep or Syrinx's sync component is not running there, phone
 edits remain queued. An optional always-on user-owned device could hold
-changes between visits; that requires an Atlas sync component, not just a
+changes between visits; that requires a Syrinx sync component, not just a
 Tailscale relay. It is a later possibility, not a required purchase or an
 approved deployment target.
 
-Sync on opening and resuming Atlas should be the reliable baseline, with
+Sync on opening and resuming Syrinx should be the reliable baseline, with
 background work when the operating system permits. A connected VPN does
-not keep Atlas running continuously. Apple controls background execution,
+not keep Syrinx running continuously. Apple controls background execution,
 and Android Doze can defer network and sync activity. Do not promise instant
 sync while the app is closed. See [Apple background strategies](https://developer.apple.com/documentation/backgroundtasks/choosing-background-strategies-for-your-app)
 and [Android Doze and App Standby](https://developer.android.com/training/monitoring-device-state/doze-standby).
@@ -143,7 +143,7 @@ automatically broadening network access.
 Later, offer a cloud service as another delivery route for the same sync
 engine. An end-to-end encrypted mailbox could retain changes until each
 device retrieves them, allowing devices to sync without being online
-together. This is proposed Atlas architecture, not a Tailscale feature.
+together. This is proposed Syrinx architecture, not a Tailscale feature.
 
 The cloud option should remain optional, while Tailscale and Headscale
 remain usable independently. Switching routes should preserve identities

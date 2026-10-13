@@ -3,7 +3,7 @@
 D44 lets the owner hide the sidebar, so its rows must remain reachable without
 giving the page less space. GPUI content and the native WebView2 child cannot
 reliably share that rectangle. The peek therefore uses the palette's existing
-`WindowKind::PopUp` and `atlas_platform::browser::set_overlay_owner` mechanism:
+`WindowKind::PopUp` and `syrinx_platform::browser::set_overlay_owner` mechanism:
 set `GWLP_HWNDPARENT` to the browser window and remove topmost status. It does
 not hide, suspend, snapshot or resize the page.
 
@@ -36,7 +36,7 @@ entity for changes. Search transfers into the owned palette. Deferred popup
 actions carry a generation number so an old popup cannot close or focus a
 replacement. Dismissal returns through the main window and the existing
 `BrowserCommand::Focus` / `WebView::focus()` path. Losing activation closes
-without activating Atlas again, including when a dismissal was already queued.
+without activating Syrinx again, including when a dismissal was already queued.
 Hover opening uses the native no-activation path and leaves keyboard focus in
 the page. Clicking the peek can activate it. While it is open, an unmodified
 Escape from the page is forwarded with that popup's generation; ordinary page
@@ -80,7 +80,7 @@ features for this lookup; dependency versions and the lockfile remain unchanged.
 
 Hidden-state settlement, main-window activation and palette completion restart
 sampling for a stationary pointer. Eligibility uses a pure predicate, and edge
-membership calls `atlas_ui::sidebar::in_peek_zone`. A held press remains exactly
+membership calls `syrinx_ui::sidebar::in_peek_zone`. A held press remains exactly
 `Suppressed` through ineligible drag samples; explicit dismissal is separate.
 Page-focused Ctrl Alt S rejects right Alt, preserving AltGr+S. Native pointer
 and monitor failures retain their operation, HRESULT and Windows message.
@@ -144,20 +144,20 @@ Alt Tab, page focus and multi-monitor acceptance remain the owner's checks
 below. The gate's smoke launch and the native test of popup ownership are
 narrower evidence, not substitutes for those checks.
 
-Shared existing files changed are `crates/atlas-app/src/ui.rs`, `main.rs`,
+Shared existing files changed are `crates/syrinx-app/src/ui.rs`, `main.rs`,
 `palette.rs`, `ui/sidebar_view.rs`, `ui/favorites.rs` and `ui/page_card.rs`;
-`crates/atlas-platform/src/browser.rs` and `browser/page.rs`;
-`crates/atlas-ui/src/sidebar.rs`; and the implementation ledger, plan's DW-3
+`crates/syrinx-platform/src/browser.rs` and `browser/page.rs`;
+`crates/syrinx-ui/src/sidebar.rs`; and the implementation ledger, plan's DW-3
 row and traps document. The workspace root manifest, lockfile and platform `lib.rs` are unchanged.
 The review adds only Windows API feature declarations to the platform manifest. New files are the peek, timing and title-bar modules,
 the platform pointer helper, the synthetic HTML fixture and this note.
 
 ## Owner's manual checks
 
-Use a fresh synthetic profile, not your everyday Atlas directory:
+Use a fresh synthetic profile, not your everyday Syrinx directory:
 
 ```powershell
-cargo run --package atlas-app --profile local --offline --locked -- --test-data-dir "$PWD\target\p1-17-owner-profile"
+cargo run --package syrinx-app --profile local --offline --locked -- --test-data-dir "$PWD\target\p1-17-owner-profile"
 ```
 
 If that directory already exists, choose a new sibling name. Reuse the chosen
@@ -166,7 +166,7 @@ directory only for the restart checks below.
 In a second terminal, serve the committed synthetic fixture:
 
 ```powershell
-python -m http.server 8765 --bind 127.0.0.1 --directory crates/atlas-app/tests/fixtures
+python -m http.server 8765 --bind 127.0.0.1 --directory crates/syrinx-app/tests/fixtures
 ```
 
 Open `http://127.0.0.1:8765/peek.html` through Ctrl L. This page has a text
@@ -188,7 +188,7 @@ successful cycle does not prove reliability.
    counter must stay unchanged while it is open. With the page input focused
    before hovering, type while peeking: text should still enter that input.
 3. Move right out of the peek over the live page, then repeat leaving above,
-   below and outside Atlas. It should close. In a synthetic page input that
+   below and outside Syrinx. It should close. In a synthetic page input that
    was focused before peeking, type after dismissal: input should go to the
    page without another click. Repeat with Escape, keeping the pointer on
    the edge: the peek must stay closed until you leave and return.
@@ -204,9 +204,9 @@ successful cycle does not prove reliability.
    is already open, using its still-exposed left strip. Release outside the
    window and use Alt Tab mid-drag; neither should leave a stuck drag.
 6. With the peek open, Alt Tab to another app. The peek must disappear and
-   Atlas must not steal focus back. It must not have its own Alt Tab entry or
+   Syrinx must not steal focus back. It must not have its own Alt Tab entry or
    remain topmost above the other app. Return: the page should be usable.
-7. Wide and compact now show the custom Atlas title bar too. In wide, compact
+7. Wide and compact now show the custom Syrinx title bar too. In wide, compact
    and hidden, check minimize, maximize, restore and close glyphs; maximized must
    show the overlapping restore glyph and the accessible label Restore. Hover
    maximize/restore to check Windows snap layouts. Reopen the peek, minimize,
@@ -216,11 +216,11 @@ successful cycle does not prove reliability.
    straddling their boundary with its left edge on the other monitor. Verify title-bar
    dragging, double-click maximize, and back/forward/reload/address clicks do
    not interfere with each other.
-8. Close Atlas while peeking using its close button. Separately, Alt F4 while
+8. Close Syrinx while peeking using its close button. Separately, Alt F4 while
    the peek has focus (click Favorites Edit first) should dismiss it; a second
-   Alt F4 closes Atlas. Without clicking the hover popup, Alt F4 still closes
+   Alt F4 closes Syrinx. Without clicking the hover popup, Alt F4 still closes
    the main window because hover did not take focus.
-   There must be no orphan popup or lingering synthetic Atlas process. Start
+   There must be no orphan popup or lingering synthetic Syrinx process. Start
    again and check that a fresh hover still works after every dismissal path.
 
 9. Keep the pointer on the strip while hiding with Ctrl Alt S, returning after
