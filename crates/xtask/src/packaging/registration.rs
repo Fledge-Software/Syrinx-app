@@ -321,6 +321,24 @@ mod tests {
     }
 
     #[test]
+    fn every_icon_is_the_executables_embedded_hawk() {
+        // Index 0 is syrinx.exe's first and only icon, which syrinx-app's build.rs compiles in.
+        let icons: Vec<_> = VALUES
+            .iter()
+            .filter(|value| {
+                value.key.ends_with(r"\DefaultIcon")
+                    || matches!(value.name, "ApplicationIcon" | "DisplayIcon")
+            })
+            .collect();
+        assert_eq!(icons.len(), 5);
+        for icon in icons {
+            assert_eq!(icon.data, Data::String("{exe},0"), "{}", icon.key);
+        }
+        let shortcut = include_str!("../../../../packaging/register-syrinx.ps1");
+        assert!(shortcut.contains("$shortcut.IconLocation = \"$Executable,0\""));
+    }
+
+    #[test]
     fn browser_launch_command_takes_no_arguments() {
         assert!(VALUES.contains(&string(
             r"Software\Clients\StartMenuInternet\SyrinxBrowser\shell\open\command",

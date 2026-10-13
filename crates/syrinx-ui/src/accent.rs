@@ -2,8 +2,8 @@
 
 use crate::color::Color;
 
-/// The spec's default accent, `#FF8A65`.
-pub const DEFAULT_ACCENT: Color = Color::hex(0xFF8A65);
+/// The default accent, the logo's orange `#FF612E` (2026-10-13; the spec's `#FF8A65` before).
+pub const DEFAULT_ACCENT: Color = Color::hex(0xFF612E);
 
 /// The accent swatches the canvas's Customize panel offers.
 pub const ACCENT_PRESETS: [Color; 4] = [
@@ -12,6 +12,12 @@ pub const ACCENT_PRESETS: [Color; 4] = [
     Color::hex(0x6FD3A8),
     Color::hex(0xE8C16A),
 ];
+
+/// The default until 2026-10-13. A stored copy now loads as `DEFAULT_ACCENT` (owner decision).
+pub const FORMER_DEFAULT_ACCENT: Color = Color::hex(0xFF8A65);
+
+/// Lighter ink tones tried, in order, when an accent fails on Haze or Glass (percent lightness).
+const LIFTED_INK_LIGHTNESS: [f64; 11] = [70., 72., 74., 76., 78., 80., 82., 84., 86., 88., 90.];
 
 /// Dark text on accent-filled badges (the canvas's `badgeText`).
 pub const BADGE_TEXT: Color = Color::hex(0x1F120D);
@@ -84,6 +90,20 @@ impl AccentColors {
         }
     }
 
+    /// Lighter inks in the accent's hue, lightest last, for an accent that fails on Haze or
+    /// Glass. Only tones lighter than the accent itself are offered, so ink never darkens.
+    ///
+    /// The palette keeps the accent's own ink unless the contrast audit fails, then takes the
+    /// first tone that passes (owner decision B, 2026-10-13). The logo orange `#FF612E` needs
+    /// 70%; the green and gold presets already pass and keep their own colour.
+    pub fn lifted_inks(accent: Accent) -> impl Iterator<Item = Color> {
+        let own = accent.fill().lightness_percent();
+        LIFTED_INK_LIGHTNESS
+            .into_iter()
+            .filter(move |lightness| *lightness > own)
+            .map(move |lightness| accent.tone(100., lightness))
+    }
+
     /// Paper's derivation: ink becomes `hsl(h, min(85, s)%, 36%)` and the wash `hex + 24`.
     pub fn light(accent: Accent) -> Self {
         Self {
@@ -108,16 +128,31 @@ mod tests {
     #[test]
     fn dark_states_use_the_canvas_alpha_suffixes() {
         let colors = AccentColors::dark(Accent::default());
-        assert_eq!(colors.soft.to_rgba_u32(), 0xFF8A6526);
-        assert_eq!(colors.soft_line.to_rgba_u32(), 0xFF8A658C);
-        assert_eq!(colors.ring.to_rgba_u32(), 0xFF8A6533);
+        assert_eq!(colors.soft.to_rgba_u32(), 0xFF612E26);
+        assert_eq!(colors.soft_line.to_rgba_u32(), 0xFF612E8C);
+        assert_eq!(colors.ring.to_rgba_u32(), 0xFF612E33);
         assert_eq!(colors.ink, DEFAULT_ACCENT);
+    }
+
+    #[test]
+    fn lifted_inks_only_get_lighter_in_the_accents_hue() {
+        let orange: Vec<_> = AccentColors::lifted_inks(Accent::default()).collect();
+        assert_eq!(orange.first(), Some(&Color::hsl(15., 100., 70.)));
+        assert_eq!(orange.last(), Some(&Color::hsl(15., 100., 90.)));
+        // #6EA8FF is 71.6% light, so its first candidate is 72%.
+        let blue = Accent::new(Color::hex(0x6EA8FF));
+        let first = AccentColors::lifted_inks(blue)
+            .next()
+            .expect("a lighter tone");
+        assert!(first.lightness_percent() > blue.fill().lightness_percent());
+        let white = Accent::new(Color::hex(0xFFFFFF));
+        assert_eq!(AccentColors::lifted_inks(white).count(), 0);
     }
 
     #[test]
     fn paper_ink_is_a_darker_tone_of_the_same_hue() {
         let colors = AccentColors::light(Accent::default());
-        assert_eq!(colors.ink, Color::hsl(14., 85., 36.));
+        assert_eq!(colors.ink, Color::hsl(15., 85., 36.));
         assert_eq!(colors.soft.alpha, 0x24);
         assert!(colors.ink.relative_luminance() < DEFAULT_ACCENT.relative_luminance());
     }
