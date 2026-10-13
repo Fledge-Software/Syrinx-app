@@ -7,10 +7,12 @@ mod history_repair;
 mod preferences;
 mod recovery;
 mod retention;
+mod synthetic;
 
 pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
 pub use recovery::RecoveryPrompt;
+pub use synthetic::SyntheticCatalogue;
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -139,6 +141,11 @@ pub enum SessionCommand {
         start: i64,
         end: i64,
     },
+    /// P1-33's acceptance run only: grows the in-memory catalogue to `total` synthetic rows.
+    /// Nothing is persisted, and a worker not started with `spawn_acceptance` refuses.
+    GrowSyntheticCatalogue {
+        total: usize,
+    },
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -189,6 +196,13 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<SearchResults, SessionError>,
     },
+    /// Sent just before `Search`, only by a worker started with `spawn_acceptance`.
+    QueryTimed {
+        request_id: u64,
+        elapsed: Duration,
+    },
+    /// The answer to `GrowSyntheticCatalogue`.
+    SyntheticCatalogue(Result<SyntheticCatalogue, SessionError>),
     /// Sent after the import's single save committed, or when the model refused it unchanged.
     Imported {
         request_id: u64,
@@ -240,6 +254,10 @@ pub enum SessionError {
     WorkerPanicked,
     EventReceiverClosed,
     RecoveryUnavailable,
+    /// A synthetic catalogue request asked for fewer rows than present, or too many.
+    SyntheticCatalogue,
+    /// Only a worker started for P1-33's acceptance run takes synthetic rows.
+    AcceptanceOnly,
     Recovery(String),
     RecoveryFailed {
         startup: Box<SessionError>,
@@ -275,6 +293,12 @@ impl fmt::Display for SessionError {
             Self::EventReceiverClosed => formatter.write_str("The session event receiver closed"),
             Self::RecoveryUnavailable => {
                 formatter.write_str("This recovery decision is no longer available")
+            }
+            Self::SyntheticCatalogue => {
+                formatter.write_str("The synthetic catalogue cannot take that many rows")
+            }
+            Self::AcceptanceOnly => {
+                formatter.write_str("Synthetic rows are only for the palette acceptance run")
             }
             Self::Recovery(error) => write!(formatter, "Cannot restore the backup: {error}"),
             Self::RecoveryFailed { startup, recovery } => {
@@ -312,11 +336,26 @@ impl SessionHandle {
 pub fn spawn(
     data_dir: PathBuf,
 ) -> Result<(SessionHandle, UnboundedReceiver<SessionEvent>), SessionError> {
+    spawn_worker(data_dir, false)
+}
+
+/// As `spawn`, for P1-33's acceptance run: only this worker accepts synthetic rows and
+/// reports each query's catalogue time.
+pub fn spawn_acceptance(
+    data_dir: PathBuf,
+) -> Result<(SessionHandle, UnboundedReceiver<SessionEvent>), SessionError> {
+    spawn_worker(data_dir, true)
+}
+
+fn spawn_worker(
+    data_dir: PathBuf,
+    acceptance: bool,
+) -> Result<(SessionHandle, UnboundedReceiver<SessionEvent>), SessionError> {
     let (commands, receiver) = mpsc::channel();
     let (events, event_receiver) = unbounded();
     let worker = thread::Builder::new()
         .name("atlas-session".to_owned())
-        .spawn(move || finish_worker(run(data_dir, receiver, &events), &events))
+        .spawn(move || finish_worker(run(data_dir, acceptance, receiver, &events), &events))
         .map_err(|error| SessionError::WorkerStart {
             code: error.raw_os_error(),
         })?;
@@ -346,12 +385,14 @@ fn finish_worker(
 
 fn run(
     data_dir: PathBuf,
+    acceptance: bool,
     commands: mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
     let Some((store, mut worker)) = startup_session(&data_dir, &commands, events)? else {
         return Ok(());
     };
+    worker.acceptance = acceptance;
     let result = worker.serve(&store, commands, events);
     finish_store(result, store.shutdown())
 }
@@ -467,6 +508,10 @@ struct Worker {
     destinations: QuickDestinations,
     /// The settings read at startup, handed to the window once.
     startup_settings: BTreeMap<String, String>,
+    /// P1-33's synthetic rows in the catalogue; non-zero only in an acceptance run.
+    synthetic_rows: usize,
+    /// Set only by `spawn_acceptance`: synthetic rows are accepted and queries are timed.
+    acceptance: bool,
 }
 
 impl Worker {
@@ -505,6 +550,8 @@ impl Worker {
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
             startup_settings: stored_preferences.settings,
+            synthetic_rows: 0,
+            acceptance: false,
         })
     }
 
@@ -602,6 +649,9 @@ impl Worker {
                 scope,
                 policy,
             } => return self.answer_query(request_id, &text, scope, policy, events),
+            SessionCommand::GrowSyntheticCatalogue { total } => {
+                return self.grow_synthetic(total, events);
+            }
             SessionCommand::RecentHistory { request_id, limit } => {
                 let result = store.recent_visits(limit).map_err(SessionError::Store);
                 return emit(events, SessionEvent::History { request_id, result });
@@ -738,13 +788,48 @@ impl Worker {
         policy: SearchPolicy,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        // Ordinary runs read no clock here; only an acceptance worker times its queries.
+        let started = self.acceptance.then(Instant::now);
         let result = utc_seconds().and_then(|now| {
             self.catalogue
                 .query(text, scope, now, policy)
                 .map_err(SessionError::Search)
         });
+        if let Some(started) = started {
+            let elapsed = started.elapsed();
+            emit(
+                events,
+                SessionEvent::QueryTimed {
+                    request_id,
+                    elapsed,
+                },
+            )?;
+        }
         // Failures carry the same identity as successful replies, so stale queries stay silent.
         emit(events, SessionEvent::Search { request_id, result })
+    }
+
+    /// Grows P1-33's in-memory synthetic rows; any other worker refuses.
+    fn grow_synthetic(
+        &mut self,
+        total: usize,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        if !self.acceptance {
+            let refused = Err(SessionError::AcceptanceOnly);
+            return emit(events, SessionEvent::SyntheticCatalogue(refused));
+        }
+        let started = Instant::now();
+        let result = utc_seconds()
+            .and_then(|now| {
+                synthetic::grow(&mut self.catalogue, &mut self.synthetic_rows, total, now)
+            })
+            .map(|()| SyntheticCatalogue {
+                synthetic_rows: self.synthetic_rows,
+                catalogue_rows: self.catalogue.len(),
+                elapsed: started.elapsed(),
+            });
+        emit(events, SessionEvent::SyntheticCatalogue(result))
     }
 
     fn clear_history(
@@ -1000,6 +1085,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::ObserveNavigation { .. }
         | SessionCommand::SaveSettings(_)
         | SessionCommand::EditDestinations { .. }
+        | SessionCommand::GrowSyntheticCatalogue { .. }
         | SessionCommand::Shutdown => {}
     }
     Ok(())

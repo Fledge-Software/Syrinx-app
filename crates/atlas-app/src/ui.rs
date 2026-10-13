@@ -19,6 +19,7 @@ mod navigation_intents;
 mod navigation_status;
 mod page_card;
 mod page_lifecycle;
+mod palette_acceptance;
 mod panes;
 mod peek;
 mod peek_state;
@@ -219,6 +220,15 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
     })
 }
 
+/// How this launch runs: normally, or as one of the unattended synthetic checks.
+pub struct LaunchChecks {
+    pub smoke: bool,
+    /// P1-15's measurement mode: this many synthetic tabs suspended in a fresh profile.
+    pub suspended_tabs: usize,
+    /// P1-33's palette acceptance run.
+    pub acceptance: Option<crate::acceptance::AcceptancePlan>,
+}
+
 struct PalettePopup {
     window: WindowHandle<Root>,
     view: Entity<PaletteView>,
@@ -284,19 +294,25 @@ pub struct BrowserView {
     smoke: bool,
     smoke_navigation: bool,
     smoke_waiting: bool,
+    /// P1-33's scripted palette acceptance run; `None` in every other launch.
+    acceptance: Option<palette_acceptance::Acceptance>,
     outcome: Arc<AtomicU8>,
 }
 
 impl BrowserView {
     pub fn new(
         data_dir: PathBuf,
-        smoke: bool,
-        suspended_tabs: usize,
+        checks: LaunchChecks,
         outcome: Arc<AtomicU8>,
         links: Option<LinkFeed>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let LaunchChecks {
+            smoke,
+            suspended_tabs,
+            acceptance,
+        } = checks;
         let mut view = Self {
             fullscreen: None,
             crashes: process_recovery::CrashState::default(),
@@ -372,6 +388,7 @@ impl BrowserView {
             smoke,
             smoke_navigation: false,
             smoke_waiting: false,
+            acceptance: acceptance.map(palette_acceptance::Acceptance::new),
             outcome,
         };
         window.focus(&view.focus, cx);
@@ -387,11 +404,17 @@ impl BrowserView {
         if let Some(links) = links {
             view.start_link_feed(links, window, cx);
         }
+        view.start_acceptance(window, cx);
         view
     }
 
     fn start_session(&mut self, directory: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let (session, mut events) = match session::spawn(directory) {
+        let started = if self.acceptance.is_some() {
+            session::spawn_acceptance(directory)
+        } else {
+            session::spawn(directory)
+        };
+        let (session, mut events) = match started {
             Ok(started) => started,
             Err(error) => {
                 self.fail(error.to_string());
@@ -563,7 +586,9 @@ impl BrowserView {
                         address: "about:blank".to_owned(),
                     });
                 }
-                if new_home && !self.closing && !self.smoke && !self.suspended_fixture.enabled() {
+                let unattended =
+                    self.smoke || self.suspended_fixture.enabled() || self.acceptance.is_some();
+                if new_home && !self.closing && !unattended {
                     self.open_palette(false, window, cx);
                 }
             }
@@ -583,14 +608,22 @@ impl BrowserView {
                     let failed = result.is_err();
                     // Saved instances collapse into one row against the current model.
                     let result = result.map(|results| palette::arrange(results, &self.model));
-                    let accepted = palette
-                        .view
-                        .update(cx, |palette, cx| palette.receive(local, result, cx));
-                    if self.smoke && accepted && failed {
+                    let view = palette.view.clone();
+                    // The reply may apply a waiting Enter, which closes the popup's own window.
+                    // An `Err` means the popup already closed and its reply has nothing to show.
+                    let delivered = palette.window.update(cx, |_, popup, cx| {
+                        view.update(cx, |palette, cx| palette.receive(local, result, popup, cx))
+                    });
+                    if self.smoke && failed && matches!(delivered, Ok(true)) {
                         self.outcome.store(2, Ordering::Release);
                     }
                 }
             }
+            SessionEvent::QueryTimed {
+                request_id,
+                elapsed,
+            } => self.acceptance_query_timed(request_id, elapsed),
+            SessionEvent::SyntheticCatalogue(result) => self.acceptance_synthetic(result),
             SessionEvent::Imported { request_id, result } => {
                 self.bookmarks_imported(request_id, result);
             }
@@ -714,7 +747,10 @@ impl BrowserView {
                 self.sync_pages();
             }
             BrowserEvent::RuntimeVersion(version) => self.runtime_version_observed(version),
-            BrowserEvent::Title { id, title } => self.metadata(id, Some(title), None),
+            BrowserEvent::Title { id, title } => {
+                self.acceptance_title(id, &title);
+                self.metadata(id, Some(title), None);
+            }
             BrowserEvent::CloseRequested { id } => {
                 if let Some(command) = page_lifecycle::observed_close(id, self.closing) {
                     self.command(command);
@@ -883,6 +919,11 @@ impl BrowserView {
         if !page_command_allowed(self.closing, &command) {
             return false;
         }
+        if let BrowserCommand::Create { url, .. } | BrowserCommand::Navigate { url, .. } = &command
+            && !self.acceptance_permits(url)
+        {
+            return false;
+        }
         let Some(browser) = &self.browser else {
             self.message = "The page host is unavailable.".to_owned();
             return false;
@@ -962,6 +1003,10 @@ impl BrowserView {
                 return;
             }
         };
+        // An acceptance run never records or loads anything beyond its loopback pages.
+        if !self.acceptance_permits(&url) {
+            return;
+        }
         self.command(SessionCommand::NavigateActive { address: url });
     }
 
@@ -1092,6 +1137,7 @@ impl BrowserView {
         let popup_error = ownership_error.clone();
         let registry = self.commands.clone();
         let context = self.command_context();
+        let probe = self.acceptance_probe();
         let main_bounds = window.bounds();
         let main_width = f32::from(main_bounds.size.width);
         // The design's palette is 880 wide; narrower windows drop the preview pane.
@@ -1103,6 +1149,9 @@ impl BrowserView {
             ),
             size(px(width), px(560.)),
         );
+        if let Some(probe) = &probe {
+            probe.window_requested(std::time::Instant::now());
+        }
         let popup = cx.open_window(
             WindowOptions {
                 kind: WindowKind::PopUp,
@@ -1112,6 +1161,9 @@ impl BrowserView {
                 ..Default::default()
             },
             move |popup, cx| {
+                if let Some(probe) = &probe {
+                    probe.window_created(std::time::Instant::now());
+                }
                 popup.set_window_title("Atlas command palette");
                 let ownership = native_handle(popup)
                     .map_err(str::to_owned)
@@ -1128,8 +1180,9 @@ impl BrowserView {
                     }
                     true
                 });
-                let palette =
-                    cx.new(|cx| PaletteView::new(initial, events, registry, context, popup, cx));
+                let palette = cx.new(|cx| {
+                    PaletteView::new(initial, events, registry, context, probe, popup, cx)
+                });
                 *popup_retained.borrow_mut() = Some(palette.clone());
                 let root = cx.new(|cx| Root::new(palette.clone(), popup, cx));
                 popup.defer(cx, move |popup, cx| {
@@ -1156,6 +1209,7 @@ impl BrowserView {
                     view: retained.borrow_mut().take().expect("opened palette view"),
                 });
                 self.message = "Palette open".to_owned();
+                self.arm_open_probe(cx);
             }
             Err(_) => {
                 self.message = "Cannot open the command palette.".to_owned();
@@ -1214,6 +1268,7 @@ impl BrowserView {
                     .checked_add(1)
                     .expect("search request IDs exhausted");
                 self.pending_query = Some((self.query_sequence, request_id));
+                self.acceptance_query_sent(request_id);
                 self.command(SessionCommand::Query {
                     request_id: self.query_sequence,
                     policy: search_policy(&text, scope),
