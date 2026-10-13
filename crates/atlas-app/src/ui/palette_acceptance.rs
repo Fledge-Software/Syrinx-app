@@ -50,6 +50,10 @@ pub(super) struct Acceptance {
     probe: PresentProbe,
     /// The latest title each synthetic page reported; its script writes its focus there.
     titles: HashMap<u64, String>,
+    /// How often each page went from not focused to focused, to tell late theft from no focus.
+    focus_gains: HashMap<u64, usize>,
+    /// Focus steps the browser view took, so a focus trace can show their order.
+    marks: Vec<(Instant, &'static str)>,
     synthetic: Option<Result<SyntheticCatalogue, SessionError>>,
     /// Set when a page was about to leave the loopback server; the run then aborts.
     refused: Option<String>,
@@ -61,6 +65,8 @@ impl Acceptance {
             plan,
             probe: PresentProbe::default(),
             titles: HashMap::new(),
+            focus_gains: HashMap::new(),
+            marks: Vec::new(),
             synthetic: None,
             refused: None,
         }
@@ -75,8 +81,13 @@ impl BrowserView {
     }
 
     pub(super) fn acceptance_title(&mut self, id: u64, title: &str) {
-        if let Some(acceptance) = self.acceptance.as_mut() {
-            acceptance.titles.insert(id, title.to_owned());
+        let Some(acceptance) = self.acceptance.as_mut() else {
+            return;
+        };
+        let focused = title.ends_with("focus:yes");
+        let previous = acceptance.titles.insert(id, title.to_owned());
+        if focused && previous.is_none_or(|previous| !previous.ends_with("focus:yes")) {
+            *acceptance.focus_gains.entry(id).or_default() += 1;
         }
     }
 
@@ -123,21 +134,11 @@ impl BrowserView {
         false
     }
 
-    /// Arms the probe at the start of the new popup's first frame, the one that presents it.
-    pub(super) fn arm_open_probe(&mut self, cx: &mut App) {
-        let (Some(acceptance), Some(palette)) = (&self.acceptance, &self.palette) else {
-            return;
-        };
-        let probe = acceptance.probe.clone();
-        let view = palette.view.clone();
-        let armed = palette.window.update(cx, |_, popup, _| {
-            popup.on_next_frame(move |_, cx| {
-                probe.arm_open();
-                view.update(cx, |_, cx| cx.notify());
-            });
-        });
-        if armed.is_err() {
-            self.message = "The palette closed before its first frame could be timed.".to_owned();
+    /// A page can leave the loopback server without a command from Atlas (a redirect, its own
+    /// script or a link). Its address arrives after the request was sent; the run then aborts.
+    pub(super) fn acceptance_observed(&mut self, url: &str) {
+        if !self.acceptance_permits(url) {
+            eprintln!("A page left its loopback server by itself; the acceptance run stops.");
         }
     }
 
@@ -172,6 +173,29 @@ impl BrowserView {
             .update(cx, |_, popup, _| native_handle(popup))
             .map_err(|_| "The palette window is gone.".to_owned())?
             .map_err(str::to_owned)
+    }
+
+    /// Records one focus step for the run's focus traces; ordinary runs record nothing.
+    pub(super) fn acceptance_mark(&mut self, step: &'static str) {
+        if let Some(acceptance) = self.acceptance.as_mut() {
+            acceptance.marks.push((Instant::now(), step));
+        }
+    }
+
+    fn focus_gains(&self, id: TabId) -> usize {
+        self.acceptance
+            .as_ref()
+            .and_then(|acceptance| acceptance.focus_gains.get(&id.get()).copied())
+            .unwrap_or(0)
+    }
+
+    /// Where Windows keyboard focus is now, for the focus-return diagnosis.
+    fn keyboard_focus(&self) -> String {
+        let popup = self.kept_palette_hwnd();
+        match probe_win32::keyboard_focus(self.parent_hwnd, popup) {
+            Ok(focus) => focus.label().to_owned(),
+            Err(error) => format!("unreadable ({error})"),
+        }
     }
 
     /// What the synthetic page's own script last reported about `document.hasFocus()`.
@@ -340,10 +364,14 @@ impl Run {
             .await?
             .is_some();
         let foreground = probe_win32::foreground_window() == self.main;
+        let keyboard = self.with(|view, _, _| view.keyboard_focus())?;
         self.report.check(
             "page_focus_baseline",
             focused,
-            format!("document.hasFocus() reported by the page: {focused}; Atlas in foreground: {foreground}"),
+            format!(
+                "document.hasFocus() reported by the page: {focused}; \
+                 Atlas in foreground: {foreground}; keyboard focus: {keyboard}"
+            ),
         );
         Ok(())
     }
@@ -382,7 +410,7 @@ impl Run {
         Ok(OpenSample {
             presented: since(open.presented),
             requested: since(open.requested),
-            created: since(open.created),
+            started: since(open.started),
             rendered: since(open.rendered),
         })
     }
@@ -391,15 +419,20 @@ impl Run {
         let focus = self.focus_tab()?;
         let mut returned = 0;
         let mut slowest = Duration::ZERO;
+        let mut places = FocusTally::default();
+        let mut popups = HashSet::new();
         for index in 0..OPEN_SAMPLES {
             let sample = self.open_timed().await?;
             self.report.opens.push(sample);
+            popups.insert(self.with(|view, _, cx| view.palette_hwnd(cx))??);
             if index == 0 {
                 self.check_stacking()?;
                 self.check_palette_took_focus(focus).await?;
             }
             // A missing focus return is measured; a palette that stays open stops the run.
-            if let Some(elapsed) = self.escape_to_page(focus).await? {
+            let outcome = self.escape_to_page(focus).await?;
+            places.add(&outcome);
+            if let Some(elapsed) = outcome.returned {
                 returned += 1;
                 slowest = slowest.max(elapsed);
             }
@@ -411,12 +444,32 @@ impl Run {
             returned == OPEN_SAMPLES,
             format!(
                 "{returned}/{opened} openings returned focus to the page; slowest {slowest:?}; \
-                 Atlas in foreground now: {}",
+                 Atlas in foreground now: {}; {places}",
                 probe_win32::foreground_window() == self.main
             ),
         );
+        self.report.check(
+            "openings_reuse_one_popup",
+            popups.len() == 1,
+            format!("{} native popups across {opened} openings", popups.len()),
+        );
         self.check_no_stale_refocus("no_stale_refocus_after_escape", focus)
-            .await
+            .await?;
+        self.check_hidden_popup_idle().await
+    }
+
+    /// The kept popup must not render while hidden, so it adds nothing to idle CPU (D37).
+    async fn check_hidden_popup_idle(&mut self) -> Result<(), String> {
+        let before = self.probe.renders();
+        self.sleep(STALE_WINDOW).await;
+        let renders = self.probe.renders() - before;
+        let open = self.with(|view, _, _| view.palette.is_some())?;
+        self.report.check(
+            "hidden_popup_renders_nothing",
+            renders == 0 && !open,
+            format!("palette renders while hidden for {STALE_WINDOW:?}: {renders}; open {open}"),
+        );
+        Ok(())
     }
 
     fn check_stacking(&mut self) -> Result<(), String> {
@@ -462,27 +515,55 @@ impl Run {
         Ok(())
     }
 
-    /// Presses Esc in the palette, which must close; returns how long focus took to reach the
-    /// page, or `None` when the page never reported focus.
-    async fn escape_to_page(&mut self, focus: TabId) -> Result<Option<Duration>, String> {
-        let pressed = self.with(|view, _, cx| {
+    /// Presses Esc in the palette, which must close; records how long focus took to reach the
+    /// page (`None` when it never did) and where Windows keyboard focus was.
+    async fn escape_to_page(&mut self, focus: TabId) -> Result<EscapeOutcome, String> {
+        let (pressed, gains_before) = self.with(|view, _, cx| {
             let popup = view.palette_hwnd(cx)?;
+            if let Some(acceptance) = view.acceptance.as_mut() {
+                acceptance.marks.clear();
+            }
             let pressed = Instant::now();
             probe_win32::post_key(popup, Key::Escape).map_err(|error| error.to_string())?;
-            Ok::<_, String>(pressed)
+            Ok::<_, String>((pressed, view.focus_gains(focus)))
         })??;
-        self.wait_for(
-            Duration::from_secs(3),
-            "Esc to close the palette",
-            |view, _, _| view.palette.is_none().then_some(()),
-        )
-        .await?;
-        let returned = self
-            .try_wait(Duration::from_secs(3), |view, _, _| {
-                (view.page_focus(focus) == Some(true)).then_some(())
-            })
+        let at_close = self
+            .wait_for(
+                Duration::from_secs(3),
+                "Esc to close the palette",
+                |view, _, _| view.palette.is_none().then(|| view.keyboard_focus()),
+            )
             .await?;
-        Ok(returned.map(|()| pressed.elapsed()))
+        let mut trace = FocusTrace::new(pressed, &at_close);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let returned = loop {
+            let (focused, keyboard) = self
+                .with(|view, _, _| (view.page_focus(focus) == Some(true), view.keyboard_focus()))?;
+            trace.observe(&keyboard);
+            if focused {
+                break Some(pressed.elapsed());
+            }
+            if Instant::now() >= deadline {
+                break None;
+            }
+            self.sleep(POLL).await;
+        };
+        let (at_end, gains_after, marks) = self.with(|view, _, _| {
+            let marks = view
+                .acceptance
+                .as_mut()
+                .map(|acceptance| std::mem::take(&mut acceptance.marks))
+                .unwrap_or_default();
+            (view.keyboard_focus(), view.focus_gains(focus), marks)
+        })?;
+        trace.add_marks(&marks);
+        Ok(EscapeOutcome {
+            returned,
+            at_close,
+            at_end,
+            gained: gains_after > gains_before,
+            trace: trace.to_string(),
+        })
     }
 
     /// After the palette closed, nothing may reopen it or take focus from the page.
@@ -492,20 +573,33 @@ impl Run {
         page: TabId,
     ) -> Result<(), String> {
         self.sleep(STALE_WINDOW).await;
-        let (palette_open, windows, focused, active) = self.with(|view, _, cx| {
-            (
-                view.palette.is_some(),
-                cx.windows().len(),
-                view.page_focus(page),
-                view.model.active_id,
-            )
-        })?;
-        let passed = !palette_open && windows == 1 && focused == Some(true) && active == Some(page);
+        let main = self.main;
+        let (palette_open, popup_visible, windows, focused, active, keyboard) =
+            self.with(|view, _, cx| {
+                let popup_visible = view.kept_palette_hwnd().is_some_and(|popup| {
+                    probe_win32::overlay_stacking(popup, main)
+                        .is_ok_and(|stacking| stacking.visible)
+                });
+                (
+                    view.palette.is_some(),
+                    popup_visible,
+                    cx.windows().len(),
+                    view.page_focus(page),
+                    view.model.active_id,
+                    view.keyboard_focus(),
+                )
+            })?;
+        // The main window and the kept, hidden palette popup (DW-90).
+        let passed = !palette_open
+            && !popup_visible
+            && windows == 2
+            && focused == Some(true)
+            && active == Some(page);
         self.report.check(
             name,
             passed,
             format!(
-                "after {STALE_WINDOW:?}: palette open {palette_open}; windows {windows}; page focus {focused:?}; expected tab active {}",
+                "after {STALE_WINDOW:?}: palette open {palette_open}; popup visible {popup_visible}; windows {windows}; page focus {focused:?}; expected tab active {}; keyboard focus: {keyboard}",
                 active == Some(page)
             ),
         );
@@ -526,10 +620,13 @@ impl Run {
             })
             .await?
             .is_some();
+        let keyboard = self.with(|view, _, _| view.keyboard_focus())?;
         self.report.check(
             "rapid_open_then_escape",
             posted.is_ok() && returned,
-            format!("Esc posted: {posted:?}; focus returned: {returned}"),
+            format!(
+                "Esc posted: {posted:?}; focus returned: {returned}; keyboard focus: {keyboard}"
+            ),
         );
         self.check_no_stale_refocus("no_stale_refocus_after_rapid_escape", focus)
             .await?;
@@ -555,7 +652,7 @@ impl Run {
             ),
         );
         // Focus return is already measured above; here only the close matters.
-        let _focus_return = self.escape_to_page(focus).await?;
+        let _closed = self.escape_to_page(focus).await?;
         self.sleep(SETTLE).await;
         Ok(())
     }
@@ -681,7 +778,7 @@ impl Run {
             bursts,
         });
         // Focus return is already measured above; here only the close matters.
-        let _focus_return = self.escape_to_page(focus).await?;
+        let _closed = self.escape_to_page(focus).await?;
         self.sleep(SETTLE).await;
         Ok(())
     }
@@ -764,6 +861,105 @@ impl Run {
             worker: key.worker,
             superseded: key.superseded,
         })
+    }
+}
+
+/// What one Esc did to focus.
+struct EscapeOutcome {
+    /// How long the page took to report focus; `None` when it never did.
+    returned: Option<Duration>,
+    /// Windows keyboard focus when the palette had closed, and after the wait.
+    at_close: String,
+    at_end: String,
+    /// Whether the page reported gaining focus at any point after Esc.
+    gained: bool,
+    /// Keyboard focus changes and the view's focus steps, in milliseconds after Esc.
+    trace: String,
+}
+
+/// Where keyboard focus went after one Esc, and when the browser view acted.
+struct FocusTrace {
+    pressed: Instant,
+    last: String,
+    steps: Vec<(Duration, String)>,
+}
+
+impl FocusTrace {
+    fn new(pressed: Instant, at_close: &str) -> Self {
+        Self {
+            pressed,
+            last: at_close.to_owned(),
+            steps: vec![(pressed.elapsed(), format!("closed, keys: {at_close}"))],
+        }
+    }
+
+    fn observe(&mut self, keyboard: &str) {
+        if keyboard != self.last {
+            self.last = keyboard.to_owned();
+            self.steps
+                .push((self.pressed.elapsed(), format!("keys: {keyboard}")));
+        }
+    }
+
+    fn add_marks(&mut self, marks: &[(Instant, &'static str)]) {
+        for (at, step) in marks {
+            let since = at.saturating_duration_since(self.pressed);
+            self.steps.push((since, (*step).to_owned()));
+        }
+        self.steps.sort_by_key(|(at, _)| *at);
+    }
+}
+
+impl std::fmt::Display for FocusTrace {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let steps: Vec<String> = self
+            .steps
+            .iter()
+            .map(|(at, step)| format!("{:.1} ms {step}", at.as_secs_f64() * 1000.))
+            .collect();
+        write!(formatter, "[{}]", steps.join("; "))
+    }
+}
+
+/// Counts where keyboard focus was after each Esc, for the check's detail.
+#[derive(Default)]
+struct FocusTally {
+    at_close: std::collections::BTreeMap<String, usize>,
+    at_end: std::collections::BTreeMap<String, usize>,
+    gained_then_lost: usize,
+    /// The first opening's trace, and the first failed one's.
+    first_trace: Option<String>,
+    failed_trace: Option<String>,
+}
+
+impl FocusTally {
+    fn add(&mut self, outcome: &EscapeOutcome) {
+        *self.at_close.entry(outcome.at_close.clone()).or_default() += 1;
+        *self.at_end.entry(outcome.at_end.clone()).or_default() += 1;
+        if outcome.gained && outcome.returned.is_none() {
+            self.gained_then_lost += 1;
+        }
+        self.first_trace
+            .get_or_insert_with(|| outcome.trace.clone());
+        if outcome.returned.is_none() {
+            self.failed_trace
+                .get_or_insert_with(|| outcome.trace.clone());
+        }
+    }
+}
+
+impl std::fmt::Display for FocusTally {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "keyboard focus at close {:?}, after the wait {:?}; \
+             page gained then lost focus {} times; first trace {}; first failed trace {}",
+            self.at_close,
+            self.at_end,
+            self.gained_then_lost,
+            self.first_trace.as_deref().unwrap_or("none"),
+            self.failed_trace.as_deref().unwrap_or("none")
+        )
     }
 }
 

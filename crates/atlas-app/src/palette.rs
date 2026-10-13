@@ -58,15 +58,35 @@ impl PaletteEvent {
     }
 }
 
+/// The kept popup's native window and the main window that owns it (DW-90).
+#[derive(Clone, Copy)]
+pub struct PaletteNative {
+    pub popup: isize,
+    pub owner: isize,
+}
+
+/// What one opening of the palette starts with.
+pub struct PaletteEntry {
+    pub initial: String,
+    pub events: UnboundedSender<PaletteEvent>,
+    pub context: CommandContext,
+}
+
+/// The palette's view. Its popup is created once, hidden between uses and reset on each
+/// opening (DW-90), so each opening is an entry with its own event channel.
 pub struct PaletteView {
     input: Entity<InputState>,
-    events: UnboundedSender<PaletteEvent>,
+    /// The open entry's channel; `None` while the popup is hidden.
+    events: Option<UnboundedSender<PaletteEvent>>,
     choices: PaletteChoices,
     commands: CommandMatcher,
+    /// Why commands are unavailable, shown again at each opening.
+    command_problem: Option<String>,
     context: CommandContext,
     chip: Chip,
     view: View,
     scroll: ScrollHandle,
+    native: PaletteNative,
     /// Present-time stamps for P1-33's acceptance run; `None` in every other run.
     probe: Option<PresentProbe>,
     _subscription: Subscription,
@@ -86,11 +106,10 @@ impl PaletteView {
         self.input.update(cx, |input, cx| input.focus(window, cx));
     }
 
+    /// Builds the hidden palette; nothing is sent until `begin` opens an entry.
     pub fn new(
-        initial: String,
-        events: UnboundedSender<PaletteEvent>,
         registry: Rc<CommandRegistry>,
-        context: CommandContext,
+        native: PaletteNative,
         probe: Option<PresentProbe>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -99,44 +118,86 @@ impl PaletteView {
             InputState::new(window, cx)
                 .placeholder("Search tabs and bookmarks, run > commands, or enter an address")
         });
-        input.update(cx, |input, cx| {
-            input.set_value(initial, window, cx);
-            input.focus(window, cx);
-            input.select_all(window, cx);
-        });
         let subscription =
             cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
                 InputEvent::Change => this.query(cx),
                 InputEvent::PressEnter { .. } => this.submit(false, window, cx),
                 _ => {}
             });
-        let (commands, status) = match CommandMatcher::new(registry) {
+        let (commands, command_problem) = match CommandMatcher::new(registry) {
             Ok(commands) => (commands, None),
             Err(error) => (
                 CommandMatcher::empty(),
                 Some(format!("Commands are unavailable: {error}")),
             ),
         };
-        let mut view = Self {
+        Self {
             input,
-            events,
+            events: None,
             choices: PaletteChoices::default(),
             commands,
-            context,
+            command_problem,
+            context: CommandContext::default(),
             chip: Chip::default(),
             view: View::Everything,
             scroll: ScrollHandle::new(),
+            native,
             probe,
             _subscription: subscription,
-        };
-        view.query(cx);
-        if let Some(status) = status {
-            view.choices.status = status;
         }
-        view
+    }
+
+    /// Opens an entry: the text, rows, selection, scope chip and any waiting Enter start
+    /// fresh, and the first query goes out on the entry's own channel.
+    pub fn begin(&mut self, entry: PaletteEntry, window: &mut Window, cx: &mut Context<Self>) {
+        self.events = Some(entry.events);
+        self.context = entry.context;
+        self.choices.reset();
+        self.chip = Chip::default();
+        self.view = View::Everything;
+        self.scroll = ScrollHandle::new();
+        self.input.update(cx, |input, cx| {
+            input.set_value(entry.initial, window, cx);
+            input.focus(window, cx);
+            input.select_all(window, cx);
+        });
+        // `set_value` does not emit a change event, so query explicitly.
+        self.query(cx);
+        if let Some(problem) = &self.command_problem {
+            self.choices.status = problem.clone();
+        }
+    }
+
+    /// Whether an entry is open, so its keys and replies still mean something.
+    pub fn is_open(&self) -> bool {
+        self.events.is_some()
+    }
+
+    /// Ends the entry as if Esc were pressed; the browser then returns focus to the page.
+    pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_open() {
+            return;
+        }
+        self.emit(PaletteEvent::Closed);
+        self.close(window, cx);
+    }
+
+    /// Hides the popup and drops the entry's channel, which ends the browser's receiver.
+    pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.events = None;
+        cx.notify();
+        let hidden = atlas_platform::browser::hide_overlay(self.native.popup, self.native.owner);
+        if let Err(error) = hidden {
+            // A popup that cannot hide is removed; the browser builds a new one next time.
+            eprintln!("Cannot hide the command palette ({error}); closing it instead.");
+            window.remove_window();
+        }
     }
 
     fn query(&mut self, cx: &mut Context<Self>) {
+        if !self.is_open() {
+            return;
+        }
         let input = self.input.read(cx).value().to_string();
         let parsed = ParsedQuery::parse(&input);
         self.view = parsed.view(self.chip);
@@ -150,6 +211,9 @@ impl PaletteView {
 
     /// Re-runs the current text after the tab model or command context changed.
     pub fn refresh(&mut self, context: CommandContext, cx: &mut Context<Self>) {
+        if !self.is_open() {
+            return;
+        }
         self.context = context;
         let input = self.input.read(cx).value().to_string();
         let parsed = ParsedQuery::parse(&input);
@@ -186,7 +250,7 @@ impl PaletteView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.choices.receive(request_id, result) {
+        if !self.is_open() || !self.choices.receive(request_id, result) {
             return false;
         }
         if let Some(probe) = &self.probe {
@@ -228,12 +292,18 @@ impl PaletteView {
     }
 
     fn emit(&mut self, event: PaletteEvent) {
-        if self.events.unbounded_send(event).is_err() {
+        let Some(events) = &self.events else {
+            return;
+        };
+        if events.unbounded_send(event).is_err() {
             self.choices.status = "The browser window is no longer available.".to_owned();
         }
     }
 
     fn submit(&mut self, force_search: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_open() {
+            return;
+        }
         let text = self.input.read(cx).value().to_string();
         let Some(event) = self.choices.submission(text, force_search) else {
             // A waiting Enter shows its status until the reply applies it.
@@ -243,7 +313,7 @@ impl PaletteView {
         self.finish(event, window, cx);
     }
 
-    /// Sends the entry's final event and closes the popup; command rows become their action.
+    /// Sends the entry's final event and hides the popup; command rows become their action.
     fn finish(&mut self, event: PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
         let event = match event {
             PaletteEvent::Activate(target @ Target::Command(_)) => {
@@ -257,7 +327,7 @@ impl PaletteView {
             event => event,
         };
         self.emit(event);
-        window.remove_window();
+        self.close(window, cx);
     }
 
     /// Choosing a chip drops a typed prefix, since the prefix would otherwise override it.
@@ -356,10 +426,7 @@ impl Render for PaletteView {
                 this.move_selection(false, cx);
                 cx.stop_propagation();
             }))
-            .on_action(cx.listener(|this, _: &Dismiss, window, _| {
-                this.emit(PaletteEvent::Closed);
-                window.remove_window();
-            }))
+            .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss(window, cx)))
             .on_action(cx.listener(|this, _: &NextResult, _, cx| this.move_selection(true, cx)))
             .on_action(
                 cx.listener(|this, _: &PreviousResult, _, cx| this.move_selection(false, cx)),
