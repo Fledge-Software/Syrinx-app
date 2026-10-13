@@ -165,7 +165,10 @@ you found it in the commit message, not here.
   `Focus`. With another application in front, never call `activate_window`:
   its synthetic Alt and `SetForegroundWindow` take the screen from the owner
   (owner decision, 2026-10-12). Defer the page's focus until the owner brings
-  Atlas back, through the main window's activation observer. Source:
+  Atlas back, through the main window's activation observer, and drop the
+  deferral if the owner returns by clicking a chrome control: GPUI runs the
+  activation callback from a task, after the click has focused the control.
+  Source:
   `gpui-pre-windows-0.3.8/src/window.rs`, `activate`, and P1-33's runs
   `1791858770` (0/20) and `1791859013` (20/20 with only this change), recorded
   in `docs/p1-33-palette-acceptance.md` (code-confirmed and measured).

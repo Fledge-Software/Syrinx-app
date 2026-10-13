@@ -168,6 +168,7 @@ impl BrowserView {
                 main: 0,
                 focus_tab: None,
                 enter_tab: None,
+                started_in_front: false,
             };
             let report = run.run().await;
             finish(&view, cx, &report);
@@ -261,6 +262,8 @@ struct Run {
     main: isize,
     focus_tab: Option<TabId>,
     enter_tab: Option<TabId>,
+    /// Whether Atlas was in front when the run began; a deferral then proves nothing.
+    started_in_front: bool,
 }
 
 impl Run {
@@ -359,6 +362,7 @@ impl Run {
             })
             .await?
             .is_some();
+        self.started_in_front = in_front;
         if !in_front {
             eprintln!("Atlas is not in front; the palette will stay closed until it is.");
         }
@@ -469,11 +473,13 @@ impl Run {
         let opened = self.report.opens.len();
         self.report.check(
             "escape_returns_page_focus",
-            returned + deferred == OPEN_SAMPLES,
+            escape_focus_proven(returned, deferred, self.started_in_front),
             format!(
                 "{returned}/{opened} openings returned focus to the page and {deferred} deferred \
-                 it until Atlas is activated; slowest {slowest:?}; \
+                 it until Atlas is activated (a deferral is unproven: completing it is an owner \
+                 hand check); started in front {}; slowest {slowest:?}; \
                  Atlas in foreground now: {}; {places}",
+                self.started_in_front,
                 probe_win32::foreground_window() == self.main
             ),
         );
@@ -924,6 +930,15 @@ impl Run {
     }
 }
 
+/// Every Esc must return focus; a run that began with Atlas in front may defer none, since
+/// the harness cannot bring Atlas back to complete a deferral without taking the foreground.
+fn escape_focus_proven(returned: usize, deferred: usize, started_in_front: bool) -> bool {
+    if started_in_front {
+        return returned == OPEN_SAMPLES;
+    }
+    returned + deferred == OPEN_SAMPLES
+}
+
 /// Whether `focus_page` is waiting for the owner to bring Atlas back to the front, which
 /// is the expected result while another application is in front (owner, 2026-10-12).
 fn focus_deferred(view: &BrowserView) -> bool {
@@ -1055,4 +1070,23 @@ fn post_typed(view: &BrowserView, cx: &mut App, typed: Typed) -> Result<(), Stri
         Typed::Backspace => probe_win32::post_key(popup, Key::Backspace),
     };
     sent.map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_deferral_counts_only_when_the_run_began_behind() {
+        assert!(escape_focus_proven(OPEN_SAMPLES, 0, true));
+        assert!(
+            !escape_focus_proven(OPEN_SAMPLES - 1, 1, true),
+            "a run that began in front cannot complete a deferral itself"
+        );
+        assert!(escape_focus_proven(OPEN_SAMPLES - 1, 1, false));
+        assert!(
+            !escape_focus_proven(OPEN_SAMPLES - 2, 1, false),
+            "one Esc lost focus"
+        );
+    }
 }

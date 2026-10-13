@@ -360,7 +360,7 @@ impl BrowserView {
                         this.peek_state.rearm();
                     }
                     this.watch_peek(window, cx);
-                    this.focus_page_after_activation();
+                    this.focus_page_after_activation(window, cx);
                 }
             }),
             message: "Opening your workspace…".to_owned(),
@@ -1199,9 +1199,10 @@ impl BrowserView {
             self.focus_page(window, cx);
             return;
         };
-        // Find keeps focus in its Atlas input; a queued page Focus would take it back.
+        // Find keeps focus in its Atlas input; activating natively now means no later
+        // activation takes the keys back, and Atlas never takes the foreground (2026-10-12).
         if action == BrowserAction::FindInPage {
-            window.activate_window();
+            self.activate_main_now();
         }
         match browser_shortcut(action) {
             Some(shortcut) => self.shortcut(shortcut, window, cx),
@@ -1260,9 +1261,12 @@ impl BrowserView {
         }
     }
 
-    /// Completes a `focus_page` that waited for the owner to bring Atlas back.
-    fn focus_page_after_activation(&mut self) {
-        if !std::mem::take(&mut self.page_focus_on_activation) {
+    /// Completes a `focus_page` that waited for the owner to bring Atlas back, unless the
+    /// owner has since put the keys in a chrome control.
+    fn focus_page_after_activation(&mut self, window: &Window, cx: &App) {
+        let deferred = std::mem::take(&mut self.page_focus_on_activation);
+        let root_focused = window.focused(cx).map(|focused| focused == self.focus);
+        if !deferred_focus_applies(deferred, root_focused) {
             return;
         }
         self.acceptance_mark("activation observed");
@@ -1532,6 +1536,10 @@ impl Render for BrowserView {
             .track_focus(&self.focus)
             .flex()
             .flex_col()
+            // A click in Atlas's chrome decides focus itself, so a deferred page focus lapses.
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+                this.page_focus_on_activation = false;
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.sidebar_drag_moved(event, window, cx);
             }))
@@ -1755,6 +1763,12 @@ fn button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> 
     crate::controls::push_button(frame, label)
 }
 
+/// Whether a deferred page focus still applies on activation: only while GPUI focus is on
+/// the window root (`Some(true)`) or nowhere (`None`), not on a control the owner chose.
+fn deferred_focus_applies(deferred: bool, root_focused: Option<bool>) -> bool {
+    deferred && root_focused != Some(false)
+}
+
 fn native_handle(window: &Window) -> Result<isize, &'static str> {
     let handle =
         HasWindowHandle::window_handle(window).map_err(|_| "The native window is unavailable.")?;
@@ -1786,6 +1800,24 @@ mod palette_shortcut_tests {
     use futures::FutureExt;
 
     use super::*;
+
+    #[test]
+    fn a_deferred_page_focus_yields_to_a_control_the_owner_chose() {
+        assert!(
+            deferred_focus_applies(true, Some(true)),
+            "the root still has focus"
+        );
+        assert!(deferred_focus_applies(true, None), "nothing has focus");
+        assert!(
+            !deferred_focus_applies(true, Some(false)),
+            "a clicked chrome control keeps the keys"
+        );
+        assert!(
+            !deferred_focus_applies(false, Some(true)),
+            "nothing was deferred"
+        );
+        assert!(!deferred_focus_applies(false, None));
+    }
 
     #[test]
     fn saved_activation_reaches_the_worker_even_from_a_stale_snapshot() {
