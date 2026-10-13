@@ -7,6 +7,18 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
+- **Atlas never takes the foreground from another application.** When the
+  owner has moved to another program, Atlas does not bring itself to the
+  front: no `SetForegroundWindow`, no synthetic Alt press and no GPUI
+  `activate_window`. A page that should take the keys while Atlas is behind
+  waits, and takes them when the owner returns to Atlas; Ctrl K while
+  Atlas is not in front leaves the palette closed rather than float a popup
+  over the other program. The review of DW-90 found that the palette's Esc
+  fallback called GPUI's `activate_window`, which forces the foreground with
+  a synthetic Alt key. Keeping that fallback was rejected: focus returning a
+  little sooner does not justify Atlas stealing the screen from whatever the
+  owner is doing.
+
 - **Palette ranking is judged from key press to rows on screen (P1-33).**
   A keystroke's ranked rows must be presented within two display refresh
   intervals at the 95th percentile (33.3 ms at 60 Hz), with the maximum
