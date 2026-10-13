@@ -95,6 +95,8 @@ pub struct ObservedResponse {
     pub cache_control: Vec<String>,
     /// The request's `Sec-Fetch-Dest`, which tells a page from a frame or a subresource.
     pub destination: Option<String>,
+    /// The request's method; anything but `GET` came from a form submission.
+    pub method: String,
 }
 
 impl fmt::Debug for ObservedResponse {
@@ -118,6 +120,9 @@ pub struct DocumentFacts<'a> {
     pub redirects: &'a [String],
     /// Every response observed during the navigation, in any order.
     pub responses: &'a [ObservedResponse],
+    /// The document that was committed when the navigation began, when the owner did not
+    /// start it (WebView2's `IsUserInitiated` was false).
+    pub unprompted_from: Option<&'a str>,
     /// The tab's navigation generation when these facts were gathered.
     pub generation: u64,
 }
@@ -137,6 +142,11 @@ pub enum Ineligible {
     OwnerExcluded,
     /// Step 6: the navigation passed through an excluded site.
     RedirectThroughExcluded,
+    /// Step 6: an excluded site's own script or form started the navigation, as a sign-in
+    /// hop does; a link the owner follows out of the site is still eligible.
+    LeftExcludedUnprompted,
+    /// Step 6: the document, or a hop before it, came from a form submission (a `POST`).
+    FormPost,
     /// Step 7: no response was observed for the document, so `no-store` is unproven.
     NoResponse,
     /// Step 7: the document's response was not a success.
@@ -199,6 +209,8 @@ pub fn judge(
     policy.address_allowed(facts.address)?;
     policy.address_allowed(facts.document_address)?;
     redirects_allowed(policy, facts.redirects)?;
+    opener_allowed(policy, facts.unprompted_from)?;
+    no_form_post(facts.responses)?;
     response_allows_storing(facts.document_address, facts.responses)?;
     if facts.generation != current_generation {
         return Err(Ineligible::Stale);
@@ -223,6 +235,32 @@ fn redirects_allowed(policy: &PageTextPolicy, redirects: &[String]) -> Result<()
         .any(|hop| policy.address_allowed(hop).is_err())
     {
         return Err(Ineligible::RedirectThroughExcluded);
+    }
+    Ok(())
+}
+
+/// Step 6: a navigation the owner did not start may not leave an excluded site. A page
+/// that is not a web address (a blank tab) is not a site, so leaving it is allowed.
+fn opener_allowed(
+    policy: &PageTextPolicy,
+    unprompted_from: Option<&str>,
+) -> Result<(), Ineligible> {
+    let Some(opener) = unprompted_from else {
+        return Ok(());
+    };
+    match policy.address_allowed(opener) {
+        Ok(()) | Err(Ineligible::Scheme) => Ok(()),
+        Err(_) => Err(Ineligible::LeftExcludedUnprompted),
+    }
+}
+
+/// Step 6: any hop sent with a method other than `GET` makes the document a form result.
+fn no_form_post(responses: &[ObservedResponse]) -> Result<(), Ineligible> {
+    if responses
+        .iter()
+        .any(|response| !response.method.eq_ignore_ascii_case("GET"))
+    {
+        return Err(Ineligible::FormPost);
     }
     Ok(())
 }
@@ -281,7 +319,7 @@ fn web_host(address: &str) -> Result<String, Ineligible> {
         return Err(Ineligible::Scheme);
     }
     let host = parsed.host_str().ok_or(Ineligible::Scheme)?;
-    let host = host.strip_suffix('.').unwrap_or(host);
+    let host = host.trim_end_matches('.');
     if host.is_empty() {
         return Err(Ineligible::Scheme);
     }
@@ -352,6 +390,7 @@ mod tests {
             content_type: None,
             cache_control: Vec::new(),
             destination: None,
+            method: "GET".into(),
         };
         assert!(!format!("{response:?}").contains("sentinel"));
     }

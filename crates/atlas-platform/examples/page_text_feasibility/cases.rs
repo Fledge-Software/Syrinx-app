@@ -3,6 +3,13 @@
 use std::time::{Duration, Instant};
 
 use atlas_platform::browser::{BrowserCommand, DiscardReason, Ineligible};
+use windows::Win32::{
+    Foundation::{LPARAM, WPARAM},
+    UI::WindowsAndMessaging::{
+        GUITHREADINFO, GW_CHILD, GetGUIThreadInfo, GetWindow, GetWindowThreadProcessId, IsChild,
+        PostMessageW, WM_KEYDOWN, WM_KEYUP,
+    },
+};
 
 use super::{
     Browser, CaseResult, Options, Seen, combine, pages, server::Role, server::Server,
@@ -59,7 +66,7 @@ fn main_run(
         browser.wait_finals(quiet, 1, OUTCOME_TIMEOUT)?;
         let listening_before = listening_ports(browser)?;
         type Case = fn(&mut Browser, &Server) -> Result<CaseResult, String>;
-        let cases: [(&str, Case); 14] = [
+        let cases: [(&str, Case); 19] = [
             ("F1", f1),
             ("F2", f2),
             ("F3", f3),
@@ -73,6 +80,11 @@ fn main_run(
             ("F12", f12),
             ("F15", f15),
             ("F16", f16),
+            ("F20", f20),
+            ("F21", f21),
+            ("F22", f22),
+            ("F23", f23),
+            ("F24", f24),
             ("F13", f13),
         ];
         for (name, case) in cases {
@@ -323,6 +335,143 @@ fn f12(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
         details.push(format!("{path}: {summary}"));
     }
     Ok(CaseResult::new("F12", passed, details.join("; ")))
+}
+
+/// F20 (added in review): a navigation that never commits must not read the excluded page
+/// still on screen.
+fn f20(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
+    let mut passed = true;
+    let mut details = Vec::new();
+    for path in ["/nocontent", "/resetcontent"] {
+        let id = browser.open(&server.sites.url(Role::Bank, "/landing"), true)?;
+        browser.wait_finals(id, 1, OUTCOME_TIMEOUT)?;
+        let known = browser.log.outcomes(id).len();
+        browser.navigate(id, &server.sites.url(Role::Plain, path))?;
+        browser.pump_for(Duration::from_secs(5))?;
+        let after = browser.log.outcomes(id)[known..].to_vec();
+        let shown = browser.log.urls.get(&id).cloned().unwrap_or_default();
+        browser.close(id)?;
+        passed &= !requested(&after);
+        let summary = if after.is_empty() {
+            "no outcome".to_owned()
+        } else {
+            describe(&after)
+        };
+        details.push(format!("{path}: {summary}; tab shows {}", path_of(&shown)));
+    }
+    Ok(CaseResult::new("F20", passed, details.join("; ")))
+}
+
+/// F21: a bank page's own script sends it to a plain page; that page is not read.
+fn f21(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
+    let wanted = [Ineligible::LeftExcludedUnprompted];
+    let hop = Hop {
+        name: "F21",
+        start: (Role::Bank, "/signin/script"),
+        reached: "/landing?via=script",
+    };
+    hop_case(browser, server, hop, &wanted)
+}
+
+/// F22: a bank page's auto-submitting form posts to a plain page; that page is not read.
+fn f22(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
+    let wanted = [Ineligible::LeftExcludedUnprompted, Ineligible::FormPost];
+    let hop = Hop {
+        name: "F22",
+        start: (Role::Bank, "/signin/form"),
+        reached: "/posted",
+    };
+    hop_case(browser, server, hop, &wanted)
+}
+
+/// F24: a form POST on an ordinary site is skipped too.
+fn f24(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
+    let hop = Hop {
+        name: "F24",
+        start: (Role::Plain, "/signin/form"),
+        reached: "/posted",
+    };
+    hop_case(browser, server, hop, &[Ineligible::FormPost])
+}
+
+/// A page that moves on by itself, and the plain-site path it should reach.
+struct Hop {
+    name: &'static str,
+    start: (Role, &'static str),
+    reached: &'static str,
+}
+
+fn hop_case(
+    browser: &mut Browser,
+    server: &Server,
+    hop: Hop,
+    wanted: &[Ineligible],
+) -> Result<CaseResult, String> {
+    let before = server.hits(Role::Plain, hop.reached)?;
+    let id = browser.open(&server.sites.url(hop.start.0, hop.start.1), true)?;
+    // The page leaves 300 ms after loading; allow the next page's settle delay and a margin.
+    browser.pump_for(Duration::from_secs(6))?;
+    let seen = browser.log.outcomes(id);
+    let shown = browser.log.urls.get(&id).cloned().unwrap_or_default();
+    browser.close(id)?;
+    let reached = server.hits(Role::Plain, hop.reached)? > before;
+    let passed = reached && !requested(&seen) && has_ineligible(&seen, wanted);
+    Ok(CaseResult::new(
+        hop.name,
+        passed,
+        format!(
+            "{}; reached {}: {reached}; tab shows {}",
+            describe(&seen),
+            hop.reached,
+            path_of(&shown)
+        ),
+    ))
+}
+
+/// F23: the owner follows a link out of a bank page (a synthetic Enter key on a focused
+/// link); the plain page it opens is still read.
+fn f23(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
+    let id = browser.open(&server.sites.url(Role::Bank, "/link-out"), true)?;
+    browser.wait_finals(id, 1, OUTCOME_TIMEOUT)?;
+    browser.send(BrowserCommand::Focus { id })?;
+    browser.pump_for(Duration::from_millis(500))?;
+    if let Err(error) = press_enter(browser) {
+        browser.close(id)?;
+        return Ok(CaseResult::new("F23", false, error));
+    }
+    let followed = browser.wait_finals(id, 2, OUTCOME_TIMEOUT);
+    browser.pump_for(Duration::from_millis(300))?;
+    let seen = browser.log.outcomes(id);
+    let shown = browser.log.urls.get(&id).cloned().unwrap_or_default();
+    browser.close(id)?;
+    let passed = followed.is_ok()
+        && captured(&seen).is_some_and(|capture| capture.text == "landing-sentinel-plain");
+    Ok(CaseResult::new(
+        "F23",
+        passed,
+        format!("{}; tab shows {}", describe(&seen), path_of(&shown)),
+    ))
+}
+
+/// Posts Enter to the window that has keyboard focus inside the harness window.
+fn press_enter(browser: &Browser) -> Result<(), String> {
+    let child = unsafe { GetWindow(browser.parent, GW_CHILD) }
+        .map_err(|_| "Synthetic page window is missing.".to_owned())?;
+    let thread = unsafe { GetWindowThreadProcessId(child, None) };
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe { GetGUIThreadInfo(thread, &mut info) }
+        .map_err(|_| "Synthetic focus query failed.".to_owned())?;
+    if !unsafe { IsChild(browser.parent, info.hwndFocus) }.as_bool() {
+        return Err("Synthetic key target is outside the harness window.".into());
+    }
+    for (message, flags) in [(WM_KEYDOWN, 1), (WM_KEYUP, 0xC000_0001)] {
+        unsafe { PostMessageW(Some(info.hwndFocus), message, WPARAM(0x0D), LPARAM(flags)) }
+            .map_err(|_| "Synthetic Enter key failed.".to_owned())?;
+    }
+    Ok(())
 }
 
 fn f13(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {

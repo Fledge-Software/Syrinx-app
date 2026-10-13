@@ -14,12 +14,14 @@ fn document(address: &str) -> EligibleDocument {
         content_type: Some("text/html".to_owned()),
         cache_control: Vec::new(),
         destination: Some("document".to_owned()),
+        method: "GET".to_owned(),
     }];
     let facts = DocumentFacts {
         address,
         document_address: address,
         redirects: &[],
         responses: &responses,
+        unprompted_from: None,
         generation: 1,
     };
     judge(Some(&policy), facts, 1).expect("eligible synthetic page")

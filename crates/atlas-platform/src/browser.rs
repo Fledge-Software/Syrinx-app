@@ -141,7 +141,8 @@ pub enum BrowserCommand {
         span: Option<ClearSpan>,
     },
     /// Switches page-text capture on or off (P1-25). Only pages created while it is on are
-    /// observed; `None` means no DevTools call is ever made.
+    /// observed. With `None`, no new call is made and a snapshot still in flight is dropped
+    /// unread; one already being parsed may still report its text.
     SetPageTextPolicy(Option<PageTextPolicy>),
     Shutdown,
 }
@@ -156,8 +157,12 @@ pub enum PageTextOutcome {
     Requested {
         address: String,
     },
-    /// The tab changed while the snapshot was in flight; it was dropped unread.
+    /// The tab changed, or capture was switched off, while the snapshot was in flight; it
+    /// was dropped unread.
     Superseded,
+    /// The web view does not show the judged document (a navigation that never committed,
+    /// such as a 204), so no call was made.
+    NotCommitted,
     /// The snapshot was read and then thrown away.
     Discarded(DiscardReason),
     Captured(CapturedText),
@@ -174,6 +179,8 @@ pub enum DiscardReason {
     SignInOrPayment,
     /// The response exceeded the parse bound.
     TooLarge,
+    /// Another snapshot was parsing and one waiting, so this one was skipped.
+    Busy,
     /// The response did not have the documented shape.
     Malformed,
 }
@@ -610,7 +617,7 @@ fn run(
         recovery: recovery::RecoveryBudget::default(),
         bounds: PageBounds::default(),
         parent,
-        page_text_policy: page_text::SharedPolicy::default(),
+        page_text: page_text::TextContext::default(),
         events: events.clone(),
         shortcuts: NativeSink {
             send: shortcut_send,
@@ -719,7 +726,7 @@ struct BrowserState {
     recovery: recovery::RecoveryBudget,
     bounds: PageBounds,
     parent: isize,
-    page_text_policy: page_text::SharedPolicy,
+    page_text: page_text::TextContext,
     events: EventSink,
     shortcuts: NativeSink,
 }
@@ -745,7 +752,7 @@ impl BrowserState {
                 events: self.events.clone(),
                 shortcuts: self.shortcuts.clone(),
                 popups: self.popups.clone(),
-                text_policy: self.page_text_policy.clone(),
+                text: self.page_text.clone(),
             },
         )
     }
@@ -810,7 +817,7 @@ impl BrowserState {
                     .emit(BrowserEvent::DataCleared { request, outcome });
             }
             BrowserCommand::SetPageTextPolicy(policy) => {
-                *self.page_text_policy.borrow_mut() = policy.map(std::rc::Rc::new);
+                self.page_text.set_policy(policy);
             }
             BrowserCommand::Resize(next) => {
                 next.validate()?;

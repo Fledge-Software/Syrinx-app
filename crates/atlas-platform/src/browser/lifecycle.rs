@@ -258,6 +258,12 @@ impl Lifecycle {
         self.state.borrow().timer.due()
     }
 
+    /// A `TrySuspend` is pending or has succeeded; `IsSuspended` reads false until it completes.
+    pub(super) fn suspension_requested(&self) -> bool {
+        let state = self.state.borrow();
+        state.pending || state.timer.suspending()
+    }
+
     pub(super) fn tick(&self, view: &WebView) -> Result<(), BrowserError> {
         let request = {
             let mut state = self.state.borrow_mut();

@@ -50,7 +50,7 @@ pub(super) struct PageContext {
     pub(super) events: EventSink,
     pub(super) shortcuts: NativeSink,
     pub(super) popups: super::popups::PopupRequests,
-    pub(super) text_policy: super::page_text::SharedPolicy,
+    pub(super) text: super::page_text::TextContext,
 }
 
 pub(super) struct Page {
@@ -75,7 +75,7 @@ impl Page {
             events,
             shortcuts,
             popups,
-            text_policy,
+            text: text_context,
         } = context;
         let destination = std::rc::Rc::new(std::cell::RefCell::new("about:blank".to_owned()));
         let life = super::lifecycle::CallbackLife::new();
@@ -131,13 +131,23 @@ impl Page {
         register_focus_arrival(&view, id, events.clone())?;
         register_focus_departure(&view, shortcuts.clone(), id, events.clone())?;
         // Observes headers and navigations only while capture is on; never a request filter.
-        let text = super::page_text::PageText::register(
+        // A failure is reported and leaves the page unread; it never stops the tab opening.
+        let text = match super::page_text::PageText::register(
             &view,
             id,
-            text_policy,
+            text_context,
             events.clone(),
             shortcuts.clone(),
-        )?;
+        ) {
+            Ok(text) => text,
+            Err(error) => {
+                events.emit(BrowserEvent::Error {
+                    tab: Some(id),
+                    error,
+                });
+                None
+            }
+        };
         register_shortcuts(&view, shortcuts, id, events)?;
         Ok(Self {
             destination,
@@ -195,10 +205,12 @@ impl Page {
     }
 
     pub(super) fn tick(&self) -> Result<(), BrowserError> {
+        // Suspension is requested first, so a capture never starts beside a pending TrySuspend.
         self.lifecycle.tick(&self.view)?;
+        let suspending = self.lifecycle.suspension_requested();
         self.text
             .as_ref()
-            .map_or(Ok(()), |text| text.tick(&self.view))
+            .map_or(Ok(()), |text| text.tick(&self.view, suspending))
     }
     pub(super) fn suspend_due(&self) -> Option<std::time::Instant> {
         self.lifecycle.due()

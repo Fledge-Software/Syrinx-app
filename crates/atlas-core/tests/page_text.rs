@@ -25,6 +25,7 @@ fn html(address: &str, cache_control: &[&str]) -> ObservedResponse {
             .map(|value| (*value).to_owned())
             .collect(),
         destination: Some("document".to_owned()),
+        method: "GET".to_owned(),
     }
 }
 
@@ -38,6 +39,7 @@ fn facts<'a>(
         document_address: address,
         redirects,
         responses,
+        unprompted_from: None,
         generation: 4,
     }
 }
@@ -62,6 +64,9 @@ fn google_sites_are_excluded_and_lookalikes_are_not() {
         "https://www.google.co.uk/search",
         "https://mail.google.com/",
         "https://GOOGLE.COM./",
+        "https://www.google.com../",
+        "https://developer.android.com/",
+        "https://sub.domain.goog/",
         "https://docs.google.com./d/1",
         "https://youtube.com/watch",
         "https://m.youtube.com/",
@@ -82,6 +87,7 @@ fn google_sites_are_excluded_and_lookalikes_are_not() {
         "https://notgoogle.com/",
         "https://google.com.example.test/",
         "https://googlex.com/",
+        "https://notandroid.com/",
         "https://youtube.com.example.test/",
         "https://xn--ggle-0nda.test/",
         "https://example.test/google.com",
@@ -165,6 +171,66 @@ fn a_redirect_through_an_excluded_site_is_never_read() {
         verdict(bank, &ordinary, &[html(bank, &[])]),
         Err(Ineligible::BankingOrPayment)
     );
+}
+
+// U4: sign-in hops (owner's decision, 2026-10-12). A navigation an excluded site's script or
+// form started is skipped; a link the owner follows out of the site is not.
+#[test]
+fn a_navigation_an_excluded_site_started_by_itself_is_never_read() {
+    let responses = [html(PAGE, &[])];
+    let judged = |unprompted_from| {
+        let facts = DocumentFacts {
+            unprompted_from,
+            ..facts(PAGE, &[], &responses)
+        };
+        judge(Some(&policy()), facts, 4).map(|_| ())
+    };
+    for opener in [
+        "https://bank.test/login",
+        "https://accounts.google.com/signin",
+        "https://owner.test/sso",
+    ] {
+        assert_eq!(
+            judged(Some(opener)),
+            Err(Ineligible::LeftExcludedUnprompted),
+            "{opener}"
+        );
+    }
+    // Leaving an ordinary page or a blank tab by script is allowed, as is a user's link
+    // out of the bank (no unprompted opener is recorded then).
+    assert_eq!(judged(Some("https://other.example.test/")), Ok(()));
+    assert_eq!(judged(Some("about:blank")), Ok(()));
+    assert_eq!(judged(None), Ok(()));
+}
+
+// U4: any form submission, on any site, makes the document ineligible.
+#[test]
+fn a_document_produced_by_a_form_post_is_never_read() {
+    let posted = ObservedResponse {
+        method: "POST".to_owned(),
+        ..html(PAGE, &[])
+    };
+    assert_eq!(
+        verdict(PAGE, &[], std::slice::from_ref(&posted)),
+        Err(Ineligible::FormPost)
+    );
+    // A POST answered with a redirect to a plain GET page is still a form result.
+    let start = "https://plain.example.test/submit";
+    let hop = ObservedResponse {
+        address: start.to_owned(),
+        status: 303,
+        ..posted
+    };
+    let redirects = vec![start.to_owned()];
+    assert_eq!(
+        verdict(PAGE, &redirects, &[hop, html(PAGE, &[])]),
+        Err(Ineligible::FormPost)
+    );
+    let lower = ObservedResponse {
+        method: "get".to_owned(),
+        ..html(PAGE, &[])
+    };
+    assert_eq!(verdict(PAGE, &[], &[lower]), Ok(()));
 }
 
 // U5: every spelling of no-store, and malformed headers, fail closed.

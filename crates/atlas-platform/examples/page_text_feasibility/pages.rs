@@ -109,6 +109,12 @@ pub fn route(role: Role, path: &str, sites: &Sites) -> Reply {
         ["go", code, target, rest @ ..] => redirect(code, target, rest, sites, false),
         ["gons", code, target, rest @ ..] => redirect(code, target, rest, sites, true),
         ["navigate", mode] => self_navigation(mode, sites),
+        ["signin", mode] => sign_in_hop(mode, sites),
+        ["link-out"] => link_out(sites),
+        ["posted"] => Reply::html(
+            "<!doctype html><meta charset=utf-8><title>posted</title>\
+             <link rel=icon href=data:,><p>posted-sentinel</p>",
+        ),
         ["race", delay] => race(delay, sites),
         ["frames"] => frames(sites),
         ["frame-child"] => Reply::html(format!(
@@ -121,6 +127,9 @@ pub fn route(role: Role, path: &str, sites: &Sites) -> Reply {
         ["pdf"] => Reply::typed("application/pdf", b"%PDF-1.4\n%synthetic\n".to_vec()),
         ["image"] => Reply::typed("image/png", PNG.to_vec()),
         ["text"] => Reply::typed("text/plain", b"plain-text-sentinel".to_vec()),
+        // F20: successful responses that commit no document, leaving the previous one shown.
+        ["nocontent"] => Reply::html("").status("204 No Content"),
+        ["resetcontent"] => Reply::html("").status("205 Reset Content"),
         ["missing"] => Reply::html("<p>missing-sentinel</p>").status("404 Not Found"),
         ["broken"] => Reply::html("<p>broken-sentinel</p>").status("500 Internal Server Error"),
         ["history", ..] => Reply::html(HISTORY),
@@ -197,6 +206,38 @@ fn self_navigation(mode: &str, sites: &Sites) -> Reply {
     Reply::html(format!(
         "<!doctype html><meta charset=utf-8><title>leaving</title><link rel=icon href=data:,>\
          <p>Leaving page</p>{navigation}"
+    ))
+}
+
+/// F21 and F22: an excluded page sends itself on by script or by an auto-submitting form,
+/// as a sign-in hop does. Served from the plain site, the form case is F24's plain POST.
+fn sign_in_hop(mode: &str, sites: &Sites) -> Reply {
+    let landing = sites.url(Role::Plain, "/landing?via=script");
+    let posted = sites.url(Role::Plain, "/posted");
+    let leaving = match mode {
+        "script" => format!(
+            "<script>addEventListener('load',()=>setTimeout(()=>{{location.href='{landing}';}},300));</script>"
+        ),
+        "form" => format!(
+            "<form method=post action='{posted}'><input type=hidden name=token value=synthetic></form>\
+             <script>addEventListener('load',()=>setTimeout(()=>document.forms[0].submit(),300));</script>"
+        ),
+        _ => return bad_request(),
+    };
+    Reply::html(format!(
+        "<!doctype html><meta charset=utf-8><title>hop</title><link rel=icon href=data:,>\
+         <p>Hop page</p>{leaving}"
+    ))
+}
+
+/// F23: a link out of the page, focused by the page's own script so a synthetic Enter
+/// key follows it as the owner would.
+fn link_out(sites: &Sites) -> Reply {
+    let landing = sites.url(Role::Plain, "/landing?via=link");
+    Reply::html(format!(
+        "<!doctype html><meta charset=utf-8><title>link-out</title><link rel=icon href=data:,>\
+         <p><a id=out href='{landing}'>Continue</a></p>\
+         <script>out.focus();addEventListener('focus',()=>out.focus());</script>"
     ))
 }
 
