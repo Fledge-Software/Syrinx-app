@@ -95,7 +95,6 @@ pub(crate) fn count(connection: &Connection) -> Result<i64, StoreError> {
         .map_err(|error| database_error(StoreOperation::Read, error))
 }
 
-// TODO(DW-7): Add remembered-choice removal through P1-29 settings or a P1-12 follow-up.
 pub(crate) fn save(
     connection: &Connection,
     origin: &str,
@@ -111,4 +110,21 @@ pub(crate) fn save(
         )
         .map_err(|error| database_error(StoreOperation::Write, error))?;
     Ok(())
+}
+
+// TODO(DW-7): Add the P1-29 settings control that calls `Store::forget_permission`.
+/// Removes one remembered choice so the next request asks again; `false` when none was saved.
+pub(crate) fn forget(
+    connection: &Connection,
+    origin: &str,
+    kind: PermissionKind,
+) -> Result<bool, StoreError> {
+    validate_origin(origin)?;
+    let removed = connection
+        .execute(
+            "DELETE FROM site_permissions WHERE origin = ?1 AND kind = ?2",
+            params![origin, kind as i32],
+        )
+        .map_err(|error| database_error(StoreOperation::Write, error))?;
+    Ok(removed == 1)
 }
