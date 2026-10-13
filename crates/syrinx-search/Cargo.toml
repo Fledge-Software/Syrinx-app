@@ -10,5 +10,9 @@ publish.workspace = true
 syrinx-core = { path = "../syrinx-core" }
 frizbee.workspace = true
 
+[features]
+# Opt-in timing diagnostics over the 100,000-row acceptance workload; see docs/p1-05-search.md.
+acceptance-diagnostics = []
+
 [lints]
 workspace = true

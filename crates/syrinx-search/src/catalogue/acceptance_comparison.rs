@@ -1,4 +1,4 @@
-//! Compares the test-only Unicode candidate with production on the unchanged acceptance workload.
+//! Profiles and compares exact search paths on the unchanged acceptance workload.
 
 use std::{hint::black_box, time::Instant};
 
@@ -8,6 +8,157 @@ use crate::{BlankQuery, BoostWeights, Entry, Scope, SearchPolicy, SearchResults,
 #[path = "../../../xtask/src/benchmark/workload.rs"]
 mod workload;
 use workload::*;
+
+#[test]
+fn partitioned_unchanged_acceptance_workload_comparison() {
+    let mut catalogue = build_catalogue().expect("unchanged acceptance corpus");
+    let cases = cases();
+    let mut revision = 0;
+    let mut samples = Vec::new();
+    for iteration in 0..WARMUPS + PASSES {
+        let pass = if iteration < WARMUPS {
+            iteration
+        } else {
+            iteration - WARMUPS
+        };
+        for offset in 0..cases.len() {
+            let case = &cases[case_index(offset, pass, cases.len())];
+            refresh_generation(&mut catalogue, &mut revision).expect("synthetic revision");
+            let policy = policy(&case.text).expect("unchanged policy");
+            let candidate_first = pass % 2 == 1;
+            let mut run = |candidate| {
+                let started = Instant::now();
+                let result = if candidate {
+                    catalogue.query(black_box(case.text.as_str()), case.scope, NOW, policy)
+                } else {
+                    catalogue.query_with_strategy(
+                        black_box(case.text.as_str()),
+                        case.scope,
+                        NOW,
+                        policy,
+                        QueryStrategy::Bounded,
+                        &mut Unobserved,
+                    )
+                }
+                .expect("complete query");
+                (result, started.elapsed().as_nanos())
+            };
+            let (first, first_ns) = run(candidate_first);
+            let (second, second_ns) = run(!candidate_first);
+            assert_eq!(first, second, "partition parity for {}", case.label);
+            assert_eq!(first.generation, catalogue.generation());
+            if iteration == 0 {
+                assert_eq!(
+                    first,
+                    catalogue
+                        .query_exhaustive(&case.text, case.scope, NOW, policy,)
+                        .expect("exhaustive warmup")
+                );
+            }
+            if iteration >= WARMUPS {
+                let (baseline_ns, candidate_ns) = if candidate_first {
+                    (second_ns, first_ns)
+                } else {
+                    (first_ns, second_ns)
+                };
+                samples.push((
+                    case.label,
+                    pass,
+                    candidate_first,
+                    first.generation,
+                    baseline_ns,
+                    candidate_ns,
+                ));
+            }
+        }
+    }
+    assert_eq!(samples.len(), 1_040);
+    assert_eq!(revision, ((WARMUPS + PASSES) * cases.len()) as u64);
+    for (label, pass, candidate_first, generation, baseline_ns, candidate_ns) in samples {
+        println!(
+            "d48_partition_pair case={label} pass={pass} candidate_first={candidate_first} generation={generation} baseline_ns={baseline_ns} candidate_ns={candidate_ns}"
+        );
+    }
+}
+
+// Attribute the actual acceptance cases without treating a busy-machine profile as acceptance.
+#[test]
+fn complete_workload_stage_profile() {
+    use super::{QueryObserver, QueryStage};
+    struct Stages {
+        previous: Instant,
+        elapsed: [u128; 5],
+        candidates: usize,
+        scored: usize,
+    }
+    impl QueryObserver for Stages {
+        fn stage_finished(&mut self, stage: QueryStage) {
+            let index = match stage {
+                QueryStage::Setup => 0,
+                QueryStage::MembershipAndCandidates => 1,
+                QueryStage::HeapAndExactScoring => 2,
+                QueryStage::FinalistOrdering => 3,
+                QueryStage::HighlightsAndOwnedResults => 4,
+                QueryStage::RangeMembershipAndRanking => unreachable!("bounded profile"),
+            };
+            let now = Instant::now();
+            self.elapsed[index] = now.duration_since(self.previous).as_nanos();
+            self.previous = now;
+        }
+        fn candidates(&mut self, count: usize) {
+            self.candidates = count;
+        }
+        fn candidate_scored(&mut self) {
+            self.scored += 1;
+        }
+    }
+    let mut catalogue = build_catalogue().expect("synthetic acceptance corpus");
+    let cases = cases();
+    let mut revision = 0;
+    let mut samples = Vec::new();
+    for pass in 0..5 {
+        for offset in 0..cases.len() {
+            let case = &cases[case_index(offset, pass, cases.len())];
+            refresh_generation(&mut catalogue, &mut revision).expect("synthetic mutation");
+            let policy = policy(&case.text).expect("synthetic policy");
+            let mut stages = Stages {
+                previous: Instant::now(),
+                elapsed: [0; 5],
+                candidates: 0,
+                scored: 0,
+            };
+            let actual = catalogue
+                .query_with_strategy(
+                    &case.text,
+                    case.scope,
+                    NOW,
+                    policy,
+                    QueryStrategy::Bounded,
+                    &mut stages,
+                )
+                .expect("profiled query");
+            assert_eq!(
+                actual,
+                catalogue
+                    .query(&case.text, case.scope, NOW, policy)
+                    .expect("production query")
+            );
+            samples.push((case.label, pass, stages));
+        }
+    }
+    for (label, pass, stages) in samples {
+        println!(
+            "d48_stage case={label} pass={pass} setup_ns={} membership_ns={} ranking_ns={} ordering_ns={} highlights_ns={} candidates={} scored={}",
+            stages.elapsed[0],
+            stages.elapsed[1],
+            stages.elapsed[2],
+            stages.elapsed[3],
+            stages.elapsed[4],
+            stages.candidates,
+            stages.scored
+        );
+    }
+}
 
 struct Pair {
     case_index: usize,
