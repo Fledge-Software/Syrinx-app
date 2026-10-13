@@ -4,7 +4,7 @@ status: active
 created: 2026-10-09
 subject: Syrinx v1 plan 1 — the engine, the browser core and the command palette; also holds the v1-wide decisions that plans 2–4 share
 relates_to: "docs/spec.md; docs/decisions.md; design/README.md; docs/research/; sibling plans: Syrinx v1 — Plugins and Fledge, Syrinx v1 — Notes, Syrinx v1 — Forge"
-issues_repo: not yet created (the repository is local; the owner creates it before anything is published)
+issues_repo: Fledge-Software/Syrinx-app (added by the owner 2026-10-13; work is still tracked in this plan until the owner moves it to issues)
 branch: claude/plan-atlas-v1
 ---
 
@@ -917,7 +917,14 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
     (MIT, Apache-2.0, BSD) or as whole MPL-2.0 files kept under MPL, and no
     GPL code (the brief already keeps Zed's GPL-3.0 code out). Decided by
     the owner before the repository goes public.
-  - **GitHub:** the owner's only account is ZanderOfficial. The repository
+  - **GitHub, resolved 2026-10-13:** the repository is
+    `Fledge-Software/Syrinx-app`, added by the owner as `origin`
+    (`docs/decisions.md`). Still open: whether to move this plan's issue
+    map and deferred-work register into GitHub issues, as `AGENTS.md`
+    ("Where outstanding work goes") describes for once Syrinx is on GitHub.
+    Recommendation: not until Plan 1's remaining work is settled, so the
+    registers do not split mid-plan.
+  - **GitHub, earlier note:** the owner's only account is ZanderOfficial. The repository
     will probably move to the Fledge Software organisation eventually; for now
     Syrinx is a local project; D41 removes the repository prerequisite.
     Which account or organisation it is created under is decided when the
