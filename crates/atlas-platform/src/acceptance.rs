@@ -11,9 +11,9 @@ use windows::Win32::{
     UI::{
         Input::KeyboardAndMouse::{MAPVK_VK_TO_VSC, MapVirtualKeyW, VK_BACK, VK_ESCAPE, VK_RETURN},
         WindowsAndMessaging::{
-            GW_HWNDPREV, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongPtrW,
-            GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, WM_CHAR, WM_KEYDOWN,
-            WM_KEYUP, WS_EX_TOPMOST,
+            GUITHREADINFO, GW_HWNDPREV, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow,
+            GetGUIThreadInfo, GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId, IsChild,
+            IsWindow, IsWindowVisible, PostMessageW, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WS_EX_TOPMOST,
         },
     },
 };
@@ -41,6 +41,8 @@ pub enum ProbeError {
     DisplayUnreadable,
     /// Windows reported a refresh rate outside 24 to 1000 Hz.
     ImplausibleRefresh(u32),
+    /// Windows did not report the interface thread's focus window.
+    FocusUnreadable,
 }
 
 impl std::fmt::Display for ProbeError {
@@ -52,6 +54,9 @@ impl std::fmt::Display for ProbeError {
             Self::PostFailed => formatter.write_str("Windows refused the posted input message."),
             Self::DisplayUnreadable => {
                 formatter.write_str("Windows did not report the display's current mode.")
+            }
+            Self::FocusUnreadable => {
+                formatter.write_str("Windows did not report which window has keyboard focus.")
             }
             Self::ImplausibleRefresh(hertz) => {
                 write!(
@@ -85,6 +90,51 @@ pub fn overlay_stacking(popup: isize, main: isize) -> Result<OverlayStacking, Pr
         topmost: style as u32 & WS_EX_TOPMOST.0 != 0,
         visible: unsafe { IsWindowVisible(handle) }.as_bool(),
         above_main: is_above(popup, main),
+    })
+}
+
+/// Which window holds Windows keyboard focus for Atlas's interface thread.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum KeyboardFocus {
+    /// No window on the thread's input queue has focus.
+    Nobody,
+    /// The main window itself, so keys go to GPUI rather than the page.
+    MainWindow,
+    /// A descendant of the main window: the page host or a WebView2 child.
+    InsideMainWindow,
+    /// The overlay popup passed to the query.
+    Popup,
+    Elsewhere,
+}
+
+impl KeyboardFocus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Nobody => "nobody",
+            Self::MainWindow => "main window",
+            Self::InsideMainWindow => "inside main window",
+            Self::Popup => "popup",
+            Self::Elsewhere => "elsewhere",
+        }
+    }
+}
+
+/// Reads the focus window of the main window's input queue and says where it is.
+pub fn keyboard_focus(main: isize, popup: Option<isize>) -> Result<KeyboardFocus, ProbeError> {
+    own_window(main)?;
+    let thread = unsafe { GetWindowThreadProcessId(hwnd(main), None) };
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe { GetGUIThreadInfo(thread, &mut info) }.map_err(|_| ProbeError::FocusUnreadable)?;
+    let focus = info.hwndFocus;
+    Ok(match focus.0 as isize {
+        0 => KeyboardFocus::Nobody,
+        handle if handle == main => KeyboardFocus::MainWindow,
+        handle if Some(handle) == popup => KeyboardFocus::Popup,
+        _ if unsafe { IsChild(hwnd(main), focus) }.as_bool() => KeyboardFocus::InsideMainWindow,
+        _ => KeyboardFocus::Elsewhere,
     })
 }
 
@@ -201,5 +251,6 @@ mod tests {
         assert_eq!(post_key(0, Key::Enter), Err(ProbeError::NotAtlasWindow));
         assert_eq!(overlay_stacking(0, 0), Err(ProbeError::NotAtlasWindow));
         assert_eq!(refresh_interval(0), Err(ProbeError::NotAtlasWindow));
+        assert_eq!(keyboard_focus(0, None), Err(ProbeError::NotAtlasWindow));
     }
 }
