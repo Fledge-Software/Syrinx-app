@@ -46,7 +46,10 @@ use windows::Win32::{
 };
 
 pub use clear_data::{BrowsingDataKinds, ClearOutcome, ClearSpan};
-pub use overlay::{OverlayMonitor, OverlayPointer, overlay_monitor, overlay_pointer};
+pub use overlay::{
+    OverlayMonitor, OverlayPointer, OverlayRect, activate_if_foreground, atlas_in_foreground,
+    hide_overlay, overlay_monitor, overlay_pointer, show_overlay,
+};
 use page::Page;
 
 const COMMAND_MESSAGE: u32 = WM_APP + 41;
@@ -380,6 +383,8 @@ pub enum BrowserError {
     Focus,
     Metadata,
     OverlayOwner,
+    /// Windows refused to move, size or show a kept overlay popup.
+    OverlayPlacement,
     /// WebView2 refused a data clear; `code` is its HRESULT.
     ClearData {
         code: i32,

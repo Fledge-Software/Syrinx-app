@@ -192,11 +192,49 @@ you found it in the commit message, not here.
 
 ## The interface: GPUI on Windows
 
+- **The page loses the keys right after Atlas focuses it.** GPUI's
+  `Window::activate_window` does its Win32 work later, from a spawned task:
+  `SetActiveWindow`, then `SetFocus` on the GPUI window, a synthetic Alt press
+  and `SetForegroundWindow`. A page `Focus` sent in the same update reaches
+  WebView2 first, so that `SetFocus` takes the keys back. Esc in the palette
+  returned focus to the page 0 of 20 times; the harness found keyboard focus on
+  the main window itself every time. With Atlas already in front, activate
+  natively and synchronously (`activate_if_foreground`) before sending the page
+  `Focus`. With another application in front, never call `activate_window`:
+  its synthetic Alt and `SetForegroundWindow` take the screen from the owner
+  (owner decision, 2026-10-12). Defer the page's focus until the owner brings
+  Atlas back, through the main window's activation observer, and drop the
+  deferral if the owner returns by clicking a chrome control: GPUI runs the
+  activation callback from a task, after the click has focused the control.
+  Source:
+  `gpui-pre-windows-0.3.8/src/window.rs`, `activate`, and P1-33's runs
+  `1791858770` (0/20) and `1791859013` (20/20 with only this change), recorded
+  in `docs/p1-33-palette-acceptance.md` (code-confirmed and measured).
+- **A native resize or show inside a GPUI update loses the window's new size
+  and first frame.** `SetWindowPos` and `ShowWindow` deliver `WM_SIZE` and
+  `WM_SHOWWINDOW` synchronously; GPUI's callbacks then find the app borrowed,
+  log the failure and drop the bounds change or the draw, consuming the frame
+  demand. Move or show a kept GPUI window from a spawned task, outside any
+  `update` closure, as DW-90's `show_palette` does. Hiding inside an update is
+  safe: it only loses one modifier-state refresh. Source:
+  `gpui-pre-0.3.8/src/window.rs` (`on_resize`, `on_request_frame` use
+  `AsyncApp::update`, which is `try_borrow_mut`) and
+  `gpui-pre-windows-0.3.8/src/events.rs` (code-confirmed).
+- **A hidden GPUI window keeps waking for a focused input's caret.** The
+  gpui-base input's caret blink re-arms a 500 ms timer that only a blur stops,
+  and GPUI delivers blur listeners during a draw, which a hidden window never
+  has. Hiding the palette with its input focused woke Atlas twice a second.
+  Drop the used input when hiding (dropping its entity cancels the blink task)
+  and create a fresh, unfocused one; P1-33's harness counts the input's
+  notifications while hidden. Source: gpui-base's `BlinkCursor` and GPUI's
+  `on_blur` dispatch in `gpui-pre-0.3.8/src/window.rs` (code-confirmed;
+  found in DW-90's review).
 - **Opening a window from inside an entity's update panics if the new window's
   render updates that entity.** GPUI's `open_window` draws the window once before
   it returns, so the render runs synchronously inside the caller's lease and
   fails with "cannot update BrowserView while it is already being updated". The
-  sidebar peek did this from its hover sampler. Open such a window from
+  sidebar peek did this from its hover sampler; DW-90's harness hit it too, and a
+  synthetic hover reproduced it before the fix. Open such a window from
   `cx.defer` (or a task) outside every update, and recheck that the request is
   still wanted when it runs. Source: `gpui-pre-0.3.8/src/app.rs`, lines
   1431–1455, and the fix in `ui/peek.rs` (`docs/p1-17-peek.md`).
@@ -323,7 +361,9 @@ you found it in the commit message, not here.
   yourself. Blur is optional under D7. Source: note 08, section 3.2 (high).
 - **Keys go to the page while GPUI still shows a caret.** Nothing in GPUI
   hands focus back to WebView2. After the palette closes, activate the main
-  window, then call wry's `WebView::focus()`. Source: note 08, sections 2.3
+  window, then call wry's `WebView::focus()`. The activation must have
+  finished first; GPUI's own `activate_window` has not, and it also forces the
+  foreground (see the first trap in this section). Source: note 08, sections 2.3
   and 3.3 (medium, code-read only).
 - **A caret version requirement on GPUI breaks the build.** Snapshot releases
   come weekly and may change the API; a `^` requirement has already moved apps

@@ -171,8 +171,15 @@ impl BrowserView {
             });
             // Import has the default focus, so Enter imports and Escape cancels.
             let focus = preview.read(cx).focus.clone();
+            // Activate only while Atlas is in front; it never takes the foreground (2026-10-12).
             popup.defer(cx, move |popup, cx| {
-                popup.activate_window();
+                let activated = native_handle(popup).and_then(|handle| {
+                    atlas_platform::browser::activate_if_foreground(handle)
+                        .map_err(|_| "Cannot activate the preview.")
+                });
+                if let Err(error) = activated {
+                    eprintln!("{error}");
+                }
                 popup.focus(&focus, cx);
             });
             cx.new(|cx| Root::new(preview, popup, cx))
