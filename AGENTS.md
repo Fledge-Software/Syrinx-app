@@ -159,7 +159,9 @@ time:
   `main` once the review approves it and the gate passes; see
   `docs/decisions.md`. Commits still need the owner's
   request. The owner-requested planning baseline is committed as `d79fc29`.
-  No remote or push is authorized.
+  Since 2026-10-13 the repository is on GitHub at `Fledge-Software/Syrinx-app`:
+  push only the branch your session was assigned, never `main` unless the
+  owner asks (`docs/decisions.md`).
 
 - **Always take the next piece of work from the earliest phase or plan that
   still has open work.** Within one, go in the plan's order unless its notes
@@ -414,7 +416,8 @@ the task description seems to imply it or a script or tool makes it easy:
 ### Version control
 - Committing when the owner has not asked (the v1 plan's own commits to its
   branch are the exception, D1)
-- Adding a remote or pushing anywhere: the repository is local only
+- Adding another remote, pushing `main` or a branch other than the one your
+  session was assigned, or opening a pull request unasked
 - Force-pushing, or rewriting history (rebase, amend, filter-branch) that
   someone else may have
 - Deleting branches or tags

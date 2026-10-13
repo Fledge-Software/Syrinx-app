@@ -20,8 +20,9 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   merge once `cargo xtask check` passes. This entry does not make the
   repository public, choose its licence or move outstanding work from the
   plan's registers into GitHub issues; each of those is still the owner's
-  decision. The "local only" wording in `CLAUDE.md` and `AGENTS.md` still
-  needs updating to match.
+  decision. An agent pushes only the branch its session was assigned, and
+  pushes `main` or opens a pull request only when the owner asks; `CLAUDE.md`
+  and `AGENTS.md` say the same.
 
 - **The Syrinx logo is the hawk emblem in `design/brand/syrinx-logo.svg`.**
   It is used for the app icon, taskbar and Start entries, installer,
