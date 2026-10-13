@@ -28,6 +28,10 @@ pub(super) struct PaletteChoices {
     prefixed: bool,
     /// The owner moved the selection, so a reply keeps it on the same destination.
     moved: bool,
+    /// The current request has not been answered, so its rows are still unknown.
+    awaiting_reply: bool,
+    /// Enter pressed while waiting, with the text it submits once the reply arrives.
+    deferred: Option<String>,
     pub(super) counts: ChipCounts,
 }
 
@@ -46,6 +50,7 @@ impl PaletteChoices {
             .expect("palette request IDs exhausted");
         self.status = "Searching locally…".to_owned();
         self.results.clear();
+        self.awaiting_reply = true;
         self.request_id
     }
 
@@ -71,6 +76,8 @@ impl PaletteChoices {
         self.selected = Some(0);
         self.refresh_selection = None;
         self.moved = false;
+        // Changed text replaces whatever an earlier Enter was waiting to submit.
+        self.deferred = None;
         self.request_id
     }
 
@@ -125,6 +132,7 @@ impl PaletteChoices {
         }
         let selected_target = self.selected_hit().map(|hit| hit.target);
         let refresh_selection = self.refresh_selection.take();
+        self.awaiting_reply = false;
         let succeeded = result.is_ok();
         match result {
             Ok(results) => {
@@ -219,7 +227,33 @@ impl PaletteChoices {
             .then_some(PaletteEvent::Activate(target))
     }
 
-    pub(super) fn submission(&self, text: String, force_search: bool) -> Option<PaletteEvent> {
+    /// What Enter does now. While the current request is unanswered and no visible row or
+    /// Go to is selected, Enter waits for the reply instead of searching the web.
+    pub(super) fn submission(&mut self, text: String, force_search: bool) -> Option<PaletteEvent> {
+        if self.must_wait_for_rows(force_search) {
+            self.status = "Waiting for local results…".to_owned();
+            self.deferred = Some(text);
+            return None;
+        }
+        self.decide(text, force_search)
+    }
+
+    /// The submission an Enter pressed while waiting makes, once its reply has arrived.
+    pub(super) fn take_deferred(&mut self) -> Option<PaletteEvent> {
+        if self.awaiting_reply {
+            return None;
+        }
+        let text = self.deferred.take()?;
+        self.decide(text, false)
+    }
+
+    /// Enter waits when the rows it would choose from have not arrived and nothing is chosen.
+    fn must_wait_for_rows(&self, force_search: bool) -> bool {
+        let go_to_selected = self.selected == Some(0) && self.address.is_some();
+        !force_search && self.awaiting_reply && self.selected_hit().is_none() && !go_to_selected
+    }
+
+    fn decide(&self, text: String, force_search: bool) -> Option<PaletteEvent> {
         // Enter on a prefixed query only runs or opens a listed row; Alt Enter stays explicit.
         if self.prefixed && !force_search {
             return self
@@ -290,7 +324,12 @@ mod tests {
         }
     }
 
-    fn assert_submit(choices: &PaletteChoices, input: &str, force_search: bool, expected: &str) {
+    fn assert_submit(
+        choices: &mut PaletteChoices,
+        input: &str,
+        force_search: bool,
+        expected: &str,
+    ) {
         match choices.submission(input.to_owned(), force_search) {
             Some(PaletteEvent::Submit {
                 text,
@@ -303,7 +342,7 @@ mod tests {
         }
     }
 
-    fn assert_target(choices: &PaletteChoices, expected: Target) {
+    fn assert_target(choices: &mut PaletteChoices, expected: Target) {
         assert!(matches!(
             choices.submission(ADDRESS.to_owned(), false),
             Some(PaletteEvent::Activate(target)) if target == expected
@@ -315,7 +354,7 @@ mod tests {
         let mut choices = PaletteChoices::default();
         let request = choices.query(ADDRESS);
         assert_eq!(choices.address.as_deref(), Some(ADDRESS));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
         choices.next();
         assert_eq!(
             choices.selected,
@@ -324,14 +363,14 @@ mod tests {
         );
         assert!(choices.receive(request, Ok(results(&targets()))));
         assert_eq!(choices.selected, Some(0));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
         assert!(choices.receive(request, Ok(results(&[]))));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
         assert!(choices.receive(
             request,
             Err(SessionError::Search(SearchError::QueryTooLong))
         ));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
     }
 
     #[test]
@@ -342,24 +381,24 @@ mod tests {
         assert!(choices.receive(request, Ok(results(&[tab, saved]))));
         choices.next();
         assert_eq!(choices.selected, Some(1));
-        assert_target(&choices, tab);
+        assert_target(&mut choices, tab);
         choices.previous();
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
         choices.previous();
         assert_eq!(choices.selected, Some(0));
         choices.next();
         choices.next();
         choices.next();
         assert_eq!(choices.selected, Some(2));
-        assert_target(&choices, saved);
+        assert_target(&mut choices, saved);
 
         // An updated ranking must not quietly change the chosen destination.
         assert!(choices.receive(request, Ok(results(&[saved, tab]))));
         assert_eq!(choices.selected, Some(1));
-        assert_target(&choices, saved);
+        assert_target(&mut choices, saved);
         assert!(choices.receive(request, Ok(results(&[tab]))));
         assert_eq!(choices.selected, Some(0));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
     }
 
     #[test]
@@ -368,7 +407,7 @@ mod tests {
         let old = choices.query(ADDRESS);
         assert!(choices.receive(old, Ok(results(&targets()))));
         choices.next();
-        assert_target(&choices, targets()[0]);
+        assert_target(&mut choices, targets()[0]);
         let next_address = "https://next-palette.example.test/";
         let next = choices.query(next_address);
         assert_ne!(next, old);
@@ -378,16 +417,16 @@ mod tests {
         assert!(!choices.receive(old, Err(SessionError::Search(SearchError::QueryTooLong))));
         assert_eq!(choices.status, status);
         assert!(choices.results.is_empty());
-        assert_submit(&choices, next_address, false, next_address);
+        assert_submit(&mut choices, next_address, false, next_address);
         assert!(choices.receive(next, Ok(results(&targets()))));
-        assert_submit(&choices, next_address, false, next_address);
+        assert_submit(&mut choices, next_address, false, next_address);
 
         // The owning UI correlates popup identities; a new popup starts fresh local state.
         let mut reopened = PaletteChoices::default();
         assert_eq!(reopened.query(ADDRESS), old);
         assert!(reopened.results.is_empty());
         assert_eq!(reopened.selected, Some(0));
-        assert_submit(&reopened, ADDRESS, false, ADDRESS);
+        assert_submit(&mut reopened, ADDRESS, false, ADDRESS);
     }
 
     #[test]
@@ -402,21 +441,25 @@ mod tests {
             let mut choices = PaletteChoices::default();
             let request = choices.query(input);
             assert_eq!(choices.address, None);
-            assert_submit(&choices, input, false, input);
             if let Err(error) = navigation::recognized_address(input) {
                 assert_eq!(choices.status, error);
             }
+            assert!(choices.submission(input.to_owned(), false).is_none());
             assert!(choices.receive(request, Ok(results(&targets()))));
-            assert_target(&choices, targets()[0]);
+            assert!(matches!(
+                choices.take_deferred(),
+                Some(PaletteEvent::Activate(target)) if target == targets()[0]
+            ));
+            assert_target(&mut choices, targets()[0]);
             choices.next();
-            assert_target(&choices, targets()[1]);
+            assert_target(&mut choices, targets()[1]);
             choices.previous();
-            assert_target(&choices, targets()[0]);
+            assert_target(&mut choices, targets()[0]);
             assert!(choices.receive(
                 request,
                 Err(SessionError::Search(SearchError::QueryTooLong))
             ));
-            assert_submit(&choices, input, false, input);
+            assert_submit(&mut choices, input, false, input);
         }
     }
 
@@ -426,16 +469,16 @@ mod tests {
         let mut choices = PaletteChoices::default();
         let request = choices.query(input);
         assert_eq!(choices.address.as_deref(), Some(ADDRESS));
-        assert_submit(&choices, input, false, ADDRESS);
-        assert_submit(&choices, input, true, input);
+        assert_submit(&mut choices, input, false, ADDRESS);
+        assert_submit(&mut choices, input, true, input);
         assert!(choices.receive(request, Ok(results(&targets()))));
         choices.next();
-        assert_target(&choices, targets()[0]);
-        assert_submit(&choices, input, true, input);
+        assert_target(&mut choices, targets()[0]);
+        assert_submit(&mut choices, input, true, input);
 
         // Clicking Go to explicitly selects its row, regardless of the previous local choice.
         choices.select(0);
-        assert_submit(&choices, input, false, ADDRESS);
+        assert_submit(&mut choices, input, false, ADDRESS);
     }
 
     #[test]
@@ -456,7 +499,7 @@ mod tests {
         assert!(choices.receive(refreshed, Ok(results(&[first]))));
         assert_eq!(choices.status, "1 tabs · 0 saved pages");
         assert_eq!(choices.results.len(), 1);
-        assert_target(&choices, first);
+        assert_target(&mut choices, first);
         assert!(choices.activation(refreshed, second).is_none());
     }
 
@@ -468,7 +511,7 @@ mod tests {
             let initial = choices.query(input);
             assert!(choices.receive(initial, Ok(results(&[tab, saved]))));
             choices.select(choices.address_rows() + 1);
-            assert_target(&choices, saved);
+            assert_target(&mut choices, saved);
 
             let first_refresh = choices.refresh();
             let latest_refresh = choices.refresh();
@@ -481,7 +524,7 @@ mod tests {
                 Err(SessionError::Search(SearchError::QueryTooLong))
             ));
             assert!(choices.receive(latest_refresh, Ok(results(&[saved, tab]))));
-            assert_target(&choices, saved);
+            assert_target(&mut choices, saved);
             assert_eq!(choices.selected, Some(choices.address_rows()));
             assert!(matches!(
                 choices.activation(latest_refresh, saved),
@@ -503,7 +546,7 @@ mod tests {
             assert!(choices.activation(request, tab).is_none());
             assert!(choices.activation(refresh, tab).is_none());
             if input == ADDRESS {
-                assert_submit(&choices, input, false, ADDRESS);
+                assert_submit(&mut choices, input, false, ADDRESS);
                 choices.next();
             } else {
                 assert_eq!(choices.selected, None);
@@ -513,7 +556,7 @@ mod tests {
                 assert!(choices.submission(input.to_owned(), false).is_none());
                 choices.next();
             }
-            assert_target(&choices, saved);
+            assert_target(&mut choices, saved);
         }
     }
 
@@ -530,19 +573,22 @@ mod tests {
         ));
         assert!(choices.results.is_empty());
         assert!(choices.submission("synthetic".to_owned(), false).is_none());
-        assert_submit(&choices, "synthetic", true, "synthetic");
+        assert_submit(&mut choices, "synthetic", true, "synthetic");
 
-        // A new input query keeps the established no-result submission behavior.
+        // A new input query waits for its own reply, never an earlier one.
         let current = choices.query("new synthetic query");
-        assert_submit(
-            &choices,
-            "new synthetic query",
-            false,
-            "new synthetic query",
+        assert!(
+            choices
+                .submission("new synthetic query".to_owned(), false)
+                .is_none()
         );
         assert!(!choices.receive(refresh, Ok(results(&[saved]))));
+        assert!(choices.take_deferred().is_none());
         assert!(choices.receive(current, Ok(results(&[saved]))));
-        assert_target(&choices, saved);
+        assert!(matches!(
+            choices.take_deferred(),
+            Some(PaletteEvent::Activate(target)) if target == saved
+        ));
     }
 
     #[test]
@@ -552,21 +598,21 @@ mod tests {
         let initial = choices.query(ADDRESS);
         assert!(choices.receive(initial, Ok(results(&[tab, saved]))));
         let refresh = choices.refresh();
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
         assert!(choices.receive(refresh, Ok(results(&[saved, tab]))));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
 
         choices.next();
-        assert_target(&choices, saved);
+        assert_target(&mut choices, saved);
         let pending = choices.refresh();
         assert!(choices.submission(ADDRESS.to_owned(), false).is_none());
         // Only Go to is available while local rows are being refreshed.
         choices.previous();
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
         let latest = choices.refresh();
         assert!(!choices.receive(pending, Ok(results(&[saved, tab]))));
         assert!(choices.receive(latest, Ok(results(&[saved, tab]))));
-        assert_submit(&choices, ADDRESS, false, ADDRESS);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
     }
 
     #[test]
@@ -583,7 +629,7 @@ mod tests {
         assert_eq!(choices.status, "1 tabs · 1 saved pages");
         assert_eq!(choices.results[0].title, "Changed synthetic title");
         assert_eq!(choices.results[0].address, "https://changed.example.test/");
-        assert_target(&choices, tab);
+        assert_target(&mut choices, tab);
 
         let removed = choices.refresh();
         assert!(choices.receive(removed, Ok(results(&[tab]))));
@@ -618,10 +664,11 @@ mod tests {
             choices.results.is_empty(),
             "weak rows wait for the worker reply"
         );
-        // Enter before the reply keeps the established web-search fallback, not the command.
-        assert_submit(&choices, "synthetic", false, "synthetic");
+        // Enter before the reply waits for it; newer text then cancels that Enter.
+        assert!(choices.submission("synthetic".to_owned(), false).is_none());
         let current = choices.query_scoped("synthetic newer", true);
         choices.stage_commands(staged(&[], 0), true, false);
+        assert!(choices.deferred.is_none());
 
         // The older reply neither shows its commands nor replaces the chip counts.
         assert!(!choices.receive(old, Ok(results(&[tab]))));
@@ -637,7 +684,7 @@ mod tests {
         let order: Vec<_> = choices.results.iter().map(|hit| hit.target).collect();
         assert_eq!(order, [tab, saved, command(1)]);
         assert_eq!(choices.counts.everything, 3);
-        assert_target(&choices, tab);
+        assert_target(&mut choices, tab);
 
         // A worker failure keeps the local command rows.
         let failed = choices.query_scoped("synthetic", true);
@@ -657,7 +704,7 @@ mod tests {
         assert!(choices.receive(request, Ok(results(&[tab]))));
         let order: Vec<_> = choices.results.iter().map(|hit| hit.target).collect();
         assert_eq!(order, [command(2), tab, command(3)]);
-        assert_target(&choices, command(2));
+        assert_target(&mut choices, command(2));
     }
 
     #[test]
@@ -666,9 +713,9 @@ mod tests {
         // Commands are local: `>rel` can run before the worker answers.
         let request = choices.query_scoped(">rel", false);
         choices.stage_commands(staged(&[4], 1), true, true);
-        assert_target(&choices, command(4));
+        assert_target(&mut choices, command(4));
         assert!(choices.receive(request, Ok(results(&[]))));
-        assert_target(&choices, command(4));
+        assert_target(&mut choices, command(4));
 
         // Nothing listed means Enter does nothing, never a web search for ">zzz".
         for input in [">zzz", "@", "/nothing"] {
@@ -684,7 +731,7 @@ mod tests {
                 "{input}"
             );
             // Alt Enter is an explicit request and still searches the web.
-            assert_submit(&choices, input, true, input);
+            assert_submit(&mut choices, input, true, input);
         }
     }
 
@@ -695,9 +742,50 @@ mod tests {
         let request = choices.query_scoped(">", false);
         choices.stage_commands(staged(&[1, 2], 2), false, true);
         choices.next();
-        assert_target(&choices, command(2));
+        assert_target(&mut choices, command(2));
         assert!(choices.receive(request, Ok(results(&[tab]))));
-        assert_target(&choices, command(2));
+        assert_target(&mut choices, command(2));
+    }
+
+    #[test]
+    fn enter_before_the_reply_opens_its_top_row_instead_of_searching() {
+        let [tab, saved] = targets();
+        let mut choices = PaletteChoices::default();
+        let request = choices.query_scoped("synthetic target", true);
+        choices.stage_commands(staged(&[], 0), true, false);
+        assert!(
+            choices
+                .submission("synthetic target".to_owned(), false)
+                .is_none()
+        );
+        assert_eq!(choices.status, "Waiting for local results…");
+        assert!(choices.take_deferred().is_none(), "no reply yet");
+        assert!(choices.receive(request, Ok(results(&[tab, saved]))));
+        assert!(matches!(
+            choices.take_deferred(),
+            Some(PaletteEvent::Activate(target)) if target == tab
+        ));
+        assert!(choices.take_deferred().is_none(), "Enter is applied once");
+    }
+
+    #[test]
+    fn enter_before_an_empty_reply_searches_only_once_nothing_matched() {
+        let input = "synthetic nothing";
+        let mut choices = PaletteChoices::default();
+        let request = choices.query_scoped(input, true);
+        choices.stage_commands(staged(&[], 0), true, false);
+        assert!(choices.submission(input.to_owned(), false).is_none());
+        assert!(choices.receive(request, Ok(results(&[]))));
+        assert!(matches!(
+            choices.take_deferred(),
+            Some(PaletteEvent::Submit { text, force_search: false }) if text == input
+        ));
+
+        // Alt Enter is explicit and searches at once; Go to is known before the reply.
+        choices.query_scoped(input, true);
+        assert_submit(&mut choices, input, true, input);
+        choices.query_scoped(ADDRESS, true);
+        assert_submit(&mut choices, ADDRESS, false, ADDRESS);
     }
 
     #[test]
@@ -707,7 +795,7 @@ mod tests {
         assert_eq!(choices.address, None);
         assert_eq!(choices.status, "Searching locally…");
         assert!(choices.receive(request, Ok(results(&targets()))));
-        assert_target(&choices, targets()[0]);
+        assert_target(&mut choices, targets()[0]);
 
         // Refused addresses only explain themselves where an address could be entered.
         choices.query_scoped("JAVASCRIPT:1", false);

@@ -178,10 +178,12 @@ impl PaletteView {
         });
     }
 
+    /// Shows the current request's rows, then applies an Enter that was waiting for them.
     pub fn receive(
         &mut self,
         request_id: u64,
         result: Result<SearchResults, SessionError>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         if !self.choices.receive(request_id, result) {
@@ -189,6 +191,10 @@ impl PaletteView {
         }
         if let Some(probe) = &self.probe {
             probe.replied(request_id, Instant::now());
+        }
+        if let Some(event) = self.choices.take_deferred() {
+            self.finish(event, window, cx);
+            return true;
         }
         self.scroll_to_selection();
         cx.notify();
@@ -223,10 +229,10 @@ impl PaletteView {
     }
 
     fn submit(&mut self, force_search: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(event) = self
-            .choices
-            .submission(self.input.read(cx).value().to_string(), force_search)
-        else {
+        let text = self.input.read(cx).value().to_string();
+        let Some(event) = self.choices.submission(text, force_search) else {
+            // A waiting Enter shows its status until the reply applies it.
+            cx.notify();
             return;
         };
         self.finish(event, window, cx);
