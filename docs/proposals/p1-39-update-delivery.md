@@ -156,11 +156,31 @@ button.
 **How the request is made.** Recommended: WinHTTP, Windows' built-in HTTP
 client, through the `windows =0.62.2` crate already pinned. TLS then uses
 Windows' own certificate validation, and the lockfile gains no package.
-The rejected alternative is `reqwest` with `rustls`, which would add dozens
-of packages to audit for one feature. WinHTTP needs a narrow exception to
-D9's rule in `check-deps`: one new crate (proposed: `syrinx-update-net`),
-one feature (`Win32_Networking_WinHttp`), and no other Syrinx crate allowed
-to depend on it except `syrinx-app`. Whether WinHTTP's automatic proxy
+The rejected alternative is `reqwest` with `rustls`. Those packages are
+already in `Cargo.lock`, because GPUI pulls in `gpui-pre-reqwest`, `hyper`,
+`hyper-rustls`, `rustls` and `tokio`, so the cost is not lockfile growth.
+It is audit surface and an async runtime inside a Syrinx crate. Today
+`check-deps` keeps all of that out of Syrinx's own crates, and using it
+would make a TLS stack and `tokio` part of Syrinx's reviewed code for one
+feature.
+
+The dependency check (`crates/xtask/src/dependency_policy.rs`) needs three
+narrow changes, not one:
+
+1. **Lift the verifier quarantine.** Today any crate depending on
+   `syrinx-update` is refused with "nothing may use the update verifier
+   before P1-39 is approved". P1-39b needs `syrinx-app` to depend on it,
+   and P1-39c needs `syrinx-update-net` to as well. Only those two would be
+   allowed.
+2. **Let `syrinx-update-net` use `windows`.** Add it to
+   `may_use_platform_library`, which allows only `syrinx-platform` and the
+   verifier today. Give it its own exact feature allowlist, like the
+   verifier's `Win32_Foundation` and `Win32_Security_Cryptography`.
+3. **Make the one D9 exception.** Allow `Win32_Networking_WinHttp` in that
+   crate alone, with no other networking namespace or network crate, and
+   no Syrinx crate other than `syrinx-app` allowed to depend on it.
+
+Whether WinHTTP's automatic proxy
 detection behaves like the browser's on this machine is unverified, and
 P1-39c must test it.
 
@@ -206,8 +226,12 @@ command with the key (see "The release key").
 ## Download bounds and staging
 
 All update files live in `%LOCALAPPDATA%\Syrinx\data\Updates\`, inside the
-installed data folder chosen on 2026-10-12. That folder is local, not
-roaming (D13). The bounds:
+installed data folder the owner chose on 2026-10-12
+(`docs/p1-37-installer-design.md`, line 142). That folder is local, not
+roaming (D13). The 2026-10-12 naming entry in `docs/decisions.md` (line 62)
+still names `%LOCALAPPDATA%\Atlas\data`. P1-37's later decision and the
+`DATA_FOLDER` constant in `crates/syrinx-app/src/main.rs` both use
+`Syrinx\data`, and this proposal follows them. The bounds:
 
 | What | Limit |
 | --- | --- |
@@ -298,9 +322,10 @@ install an older version by design.
 
 **Foreground.** The relaunched Syrinx does not force itself to the front.
 It skips the launch activation (`cx.activate(true)` in
-`crates/syrinx-app/src/main.rs`) when started by the helper. Windows shows
-it normally if the owner is still in Syrinx's context, and leaves it
-behind if they have moved to another app (question 6).
+`crates/syrinx-app/src/main.rs`) when started by the helper. We expect Windows to show
+it normally if the owner is still in Syrinx's context and to leave it
+behind if they have moved to another app. That behaviour is unverified, and
+P1-39b must check it on this machine (question 6).
 
 ## The release key, at a high level
 
@@ -387,8 +412,8 @@ These replace the single P1-39 row, as an amendment that renumbers nothing.
 | ID | Delivers | Network | Blocked by | Then blocks |
 | --- | --- | --- | --- | --- |
 | P1-39a | The statement format and its verifier in `syrinx-update`. `cargo xtask package` emits P1-38's `manifest`; today it writes only `syrinx-package.json` (`crates/xtask/src/packaging/manifest.rs`). `cargo xtask sign-update` is tested with in-memory keys | None | P1-38, this approval | P1-39b |
-| P1-39b | Staging, "Install update from file…", `syrinx-apply.exe`, the pre-update snapshot, restart and rollback, with the recovery tests | None | P1-39a | P1-39c |
-| P1-39c | `syrinx-update-net` (WinHTTP), its narrow `check-deps` exception, the Settings button and palette command, and the confirmation and ready messages | Owner-pressed check only | P1-39b, owner's host approval | P1-39d |
+| P1-39b | Staging, "Install update from file…", `syrinx-apply.exe`, the pre-update snapshot, restart and rollback, with the recovery tests. `check-deps` lifts the verifier quarantine for `syrinx-app` only (change 1) | None | P1-39a | P1-39c |
+| P1-39c | `syrinx-update-net` (WinHTTP). Its `check-deps` changes: it may depend on the verifier (change 1), it may use `windows` with its own feature allowlist (change 2), and it alone may use `Win32_Networking_WinHttp` (change 3). Also the Settings button and palette command, and the confirmation and ready messages | Owner-pressed check only | P1-39b, owner's host approval | P1-39d |
 | P1-39d | Owner gates: the key ceremony and pinning (DW-30), host set-up, and the first real update run by the owner. Recorded in a P1-39 note | Owner's own | P1-39c | P1-40, AN-01 |
 
 P1-39a and P1-39b deliver real value even if the owner declines a host:
@@ -420,8 +445,10 @@ Each is a yes or no. The recommendation is in brackets.
 7. Will you create two release keys (a primary on a hardware key, a backup
    stored offline), pin both, and keep them away from every agent session?
    *(Recommended: yes.)*
-8. Do you approve WinHTTP in one new crate, `syrinx-update-net`, as the
-   only exception to D9's no-network rule in `check-deps`?
-   *(Recommended: yes.)*
+8. Do you approve these three dependency-check changes? (a) `syrinx-app`
+   and `syrinx-update-net` may depend on the update verifier; (b)
+   `syrinx-update-net` may use the `windows` crate, with its own exact
+   feature list; (c) that crate alone may use WinHTTP, the only exception
+   to D9's no-network rule. *(Recommended: yes.)*
 9. Do you approve splitting P1-39 into P1-39a to P1-39d as above, with no
    other renumbering? *(Recommended: yes.)*
