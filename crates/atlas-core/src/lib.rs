@@ -15,8 +15,9 @@ pub use address_entry::{EntryError, entry_destination, google_search, recognized
 pub use web_address::{WebAddressError, web_address};
 
 pub use page_text::{
-    DocumentFacts, EligibleDocument, Ineligible, ObservedResponse, PageTextPolicy, PolicyError,
-    SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, TEXT_LIMIT_BYTES, judge, same_document_due,
+    DocumentFacts, EligibleDocument, Ineligible, LeftDocument, ObservedResponse, PageTextPolicy,
+    PolicyError, SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, TEXT_LIMIT_BYTES, judge,
+    same_document_address, same_document_due,
 };
 
 pub use bookmark_import::{

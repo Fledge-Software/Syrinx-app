@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use atlas_platform::browser::{BrowserCommand, DiscardReason, Ineligible};
+use atlas_platform::browser::{BrowserCommand, BrowserEvent, DiscardReason, Ineligible};
 use windows::Win32::{
     Foundation::{LPARAM, WPARAM},
     UI::WindowsAndMessaging::{
@@ -66,7 +66,7 @@ fn main_run(
         browser.wait_finals(quiet, 1, OUTCOME_TIMEOUT)?;
         let listening_before = listening_ports(browser)?;
         type Case = fn(&mut Browser, &Server) -> Result<CaseResult, String>;
-        let cases: [(&str, Case); 19] = [
+        let cases: [(&str, Case); 22] = [
             ("F1", f1),
             ("F2", f2),
             ("F3", f3),
@@ -85,6 +85,9 @@ fn main_run(
             ("F22", f22),
             ("F23", f23),
             ("F24", f24),
+            ("F25", f25),
+            ("F26", f26),
+            ("F27", f27),
             ("F13", f13),
         ];
         for (name, case) in cases {
@@ -364,7 +367,7 @@ fn f20(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
 
 /// F21: a bank page's own script sends it to a plain page; that page is not read.
 fn f21(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
-    let wanted = [Ineligible::LeftExcludedUnprompted];
+    let wanted = [Ineligible::LeftExcluded];
     let hop = Hop {
         name: "F21",
         start: (Role::Bank, "/signin/script"),
@@ -375,7 +378,7 @@ fn f21(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
 
 /// F22: a bank page's auto-submitting form posts to a plain page; that page is not read.
 fn f22(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
-    let wanted = [Ineligible::LeftExcludedUnprompted, Ineligible::FormPost];
+    let wanted = [Ineligible::LeftExcluded, Ineligible::FormPost];
     let hop = Hop {
         name: "F22",
         start: (Role::Bank, "/signin/form"),
@@ -429,7 +432,7 @@ fn hop_case(
 }
 
 /// F23: the owner follows a link out of a bank page (a synthetic Enter key on a focused
-/// link); the plain page it opens is still read.
+/// link). Only Atlas's own navigations leave an excluded site cleanly, so it is not read.
 fn f23(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
     let id = browser.open(&server.sites.url(Role::Bank, "/link-out"), true)?;
     browser.wait_finals(id, 1, OUTCOME_TIMEOUT)?;
@@ -444,13 +447,142 @@ fn f23(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
     let seen = browser.log.outcomes(id);
     let shown = browser.log.urls.get(&id).cloned().unwrap_or_default();
     browser.close(id)?;
+    let reached = path_of(&shown).starts_with("landing?via=link");
     let passed = followed.is_ok()
-        && captured(&seen).is_some_and(|capture| capture.text == "landing-sentinel-plain");
+        && reached
+        && !requested(&seen)
+        && has_ineligible(&seen, &[Ineligible::LeftExcluded]);
     Ok(CaseResult::new(
         "F23",
         passed,
         format!("{}; tab shows {}", describe(&seen), path_of(&shown)),
     ))
+}
+
+/// F25: a form `POST` answered by 302, 303 or 307, to the same site and to another; the
+/// final page (a `GET` for 302 and 303) is still a form result.
+fn f25(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
+    let mut passed = true;
+    let mut details = Vec::new();
+    for (code, target) in [
+        ("302", Role::Plain),
+        ("303", Role::Plain),
+        ("307", Role::Plain),
+        ("302", Role::Plain2),
+        ("303", Role::Plain2),
+        ("307", Role::Plain2),
+    ] {
+        let before = server.hits(target, "/landing")?;
+        let path = format!("/postto/{code}/{}", target.name());
+        let id = browser.open(&server.sites.url(Role::Plain, &path), true)?;
+        browser.pump_for(Duration::from_secs(6))?;
+        let seen = browser.log.outcomes(id);
+        browser.close(id)?;
+        let reached = server.hits(target, "/landing")? > before;
+        passed &= reached && !requested(&seen) && has_ineligible(&seen, &[Ineligible::FormPost]);
+        details.push(format!(
+            "{code} to {}: {}; reached landing: {reached}",
+            target.name(),
+            describe(&seen)
+        ));
+    }
+    Ok(CaseResult::new("F25", passed, details.join("; ")))
+}
+
+/// F26: the bank's script leaves for a relay page whose own script moves on again before
+/// its settle delay; the page after the relay is skipped as tainted, and an Atlas navigation
+/// afterwards is read.
+fn f26(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
+    let id = browser.open(&server.sites.url(Role::Bank, "/signin/chain"), true)?;
+    browser.pump_for(Duration::from_secs(7))?;
+    let chain = browser.log.outcomes(id);
+    let shown = browser.log.urls.get(&id).cloned().unwrap_or_default();
+    let known = chain.len();
+    browser.navigate(id, &server.sites.url(Role::Plain, "/landing?via=atlas"))?;
+    let read = browser.wait_finals(
+        id,
+        chain.iter().filter(|seen| seen.is_final()).count() + 1,
+        OUTCOME_TIMEOUT,
+    );
+    browser.pump_for(Duration::from_millis(300))?;
+    let after = browser.log.outcomes(id)[known..].to_vec();
+    browser.close(id)?;
+    let skipped = chain
+        .iter()
+        .filter(|seen| matches!(seen, Seen::Ineligible(Ineligible::LeftExcluded)))
+        .count();
+    let passed = skipped >= 1
+        && !requested(&chain)
+        && path_of(&shown).starts_with("landing?via=relay")
+        && read.is_ok()
+        && captured(&after).is_some();
+    Ok(CaseResult::new(
+        "F26",
+        passed,
+        format!(
+            "chain: {}; tab shows {}; then Atlas navigation: {}",
+            describe(&chain),
+            path_of(&shown),
+            describe(&after)
+        ),
+    ))
+}
+
+/// F27: a popup opened from a bank page starts tainted. The same popup from a plain page is
+/// not tainted (whatever else it is judged), so the taint comes from the opener.
+fn f27(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
+    let mut passed = true;
+    let mut details = Vec::new();
+    for (role, clean_opener) in [(Role::Bank, false), (Role::Plain, true)] {
+        let opener = browser.open(&server.sites.url(role, "/popup-out"), true)?;
+        browser.wait_finals(opener, 1, OUTCOME_TIMEOUT)?;
+        browser.send(BrowserCommand::Focus { id: opener })?;
+        browser.pump_for(Duration::from_millis(500))?;
+        let popup = press_enter(browser).and_then(|()| adopt_popup(browser, opener));
+        let popup = match popup {
+            Ok(popup) => popup,
+            Err(error) => {
+                browser.close(opener)?;
+                passed = false;
+                details.push(format!("{}: {error}", role.name()));
+                continue;
+            }
+        };
+        let judged = browser.wait_finals(popup, 1, OUTCOME_TIMEOUT);
+        browser.pump_for(Duration::from_millis(300))?;
+        let seen = browser.log.outcomes(popup);
+        browser.close(popup)?;
+        browser.close(opener)?;
+        let ok = if clean_opener {
+            !seen.is_empty() && !has_ineligible(&seen, &[Ineligible::LeftExcluded])
+        } else {
+            !requested(&seen) && has_ineligible(&seen, &[Ineligible::LeftExcluded])
+        };
+        passed &= judged.is_ok() && ok;
+        details.push(format!("from {}: {}", role.name(), describe(&seen)));
+    }
+    Ok(CaseResult::new("F27", passed, details.join("; ")))
+}
+
+/// Waits for `opener`'s popup request and adopts it as a new shown tab, as Atlas does.
+fn adopt_popup(browser: &mut Browser, opener: u64) -> Result<u64, String> {
+    let mut request = None;
+    browser.wait("popup request", OUTCOME_TIMEOUT, |_, event| {
+        if let Some(BrowserEvent::PopupRequested {
+            id, request: asked, ..
+        }) = event
+            && *id == opener
+        {
+            request = Some(*asked);
+        }
+        request.is_some()
+    })?;
+    let request = request.ok_or("Synthetic popup request was lost.")?;
+    let id = browser.next_id;
+    browser.next_id += 1;
+    browser.send(BrowserCommand::AdoptPopup { request, id })?;
+    browser.send(BrowserCommand::ShowActive(Some(id)))?;
+    Ok(id)
 }
 
 /// Posts Enter to the window that has keyboard focus inside the harness window.

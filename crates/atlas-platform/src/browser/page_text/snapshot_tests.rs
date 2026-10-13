@@ -21,7 +21,7 @@ fn document(address: &str) -> EligibleDocument {
         document_address: address,
         redirects: &[],
         responses: &responses,
-        unprompted_from: None,
+        left: None,
         generation: 1,
     };
     judge(Some(&policy), facts, 1).expect("eligible synthetic page")

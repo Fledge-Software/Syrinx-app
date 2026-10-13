@@ -83,6 +83,21 @@ impl PageTextPolicy {
         }
         Ok(())
     }
+
+    /// Whether a document reached this way carries an excluded site's taint: its navigation
+    /// left an excluded or tainted document without Atlas starting it, or passed through an
+    /// excluded site. The platform carries the taint until Atlas itself navigates the tab.
+    pub fn taints(&self, left: Option<LeftDocument<'_>>, redirects: &[String]) -> bool {
+        left_allowed(self, left).is_err() || redirects_allowed(self, redirects).is_err()
+    }
+}
+
+/// The document a navigation left, recorded only when Atlas did not start the navigation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LeftDocument<'a> {
+    pub address: &'a str,
+    /// The left document was itself reached by leaving an excluded or tainted document.
+    pub tainted: bool,
 }
 
 /// A response WebView2 reported for the tab, read only for status and headers.
@@ -120,9 +135,9 @@ pub struct DocumentFacts<'a> {
     pub redirects: &'a [String],
     /// Every response observed during the navigation, in any order.
     pub responses: &'a [ObservedResponse],
-    /// The document that was committed when the navigation began, when the owner did not
-    /// start it (WebView2's `IsUserInitiated` was false).
-    pub unprompted_from: Option<&'a str>,
+    /// The document the navigation left, when Atlas did not start it (a link, a page script,
+    /// a form, a popup, back, forward or reload).
+    pub left: Option<LeftDocument<'a>>,
     /// The tab's navigation generation when these facts were gathered.
     pub generation: u64,
 }
@@ -142,9 +157,9 @@ pub enum Ineligible {
     OwnerExcluded,
     /// Step 6: the navigation passed through an excluded site.
     RedirectThroughExcluded,
-    /// Step 6: an excluded site's own script or form started the navigation, as a sign-in
-    /// hop does; a link the owner follows out of the site is still eligible.
-    LeftExcludedUnprompted,
+    /// Step 6: the navigation left an excluded site, or a page reached that way, and Atlas
+    /// did not start it: a sign-in hop, a link or a popup.
+    LeftExcluded,
     /// Step 6: the document, or a hop before it, came from a form submission (a `POST`).
     FormPost,
     /// Step 7: no response was observed for the document, so `no-store` is unproven.
@@ -209,7 +224,7 @@ pub fn judge(
     policy.address_allowed(facts.address)?;
     policy.address_allowed(facts.document_address)?;
     redirects_allowed(policy, facts.redirects)?;
-    opener_allowed(policy, facts.unprompted_from)?;
+    left_allowed(policy, facts.left)?;
     no_form_post(facts.responses)?;
     response_allows_storing(facts.document_address, facts.responses)?;
     if facts.generation != current_generation {
@@ -239,19 +254,25 @@ fn redirects_allowed(policy: &PageTextPolicy, redirects: &[String]) -> Result<()
     Ok(())
 }
 
-/// Step 6: a navigation the owner did not start may not leave an excluded site. A page
-/// that is not a web address (a blank tab) is not a site, so leaving it is allowed.
-fn opener_allowed(
-    policy: &PageTextPolicy,
-    unprompted_from: Option<&str>,
-) -> Result<(), Ineligible> {
-    let Some(opener) = unprompted_from else {
+/// Step 6: a navigation Atlas did not start may not leave an excluded or tainted document.
+/// A page that is not a web address (a blank tab) is not a site, so it taints nothing itself.
+fn left_allowed(policy: &PageTextPolicy, left: Option<LeftDocument<'_>>) -> Result<(), Ineligible> {
+    let Some(left) = left else {
         return Ok(());
     };
-    match policy.address_allowed(opener) {
-        Ok(()) | Err(Ineligible::Scheme) => Ok(()),
-        Err(_) => Err(Ineligible::LeftExcludedUnprompted),
+    if left.tainted {
+        return Err(Ineligible::LeftExcluded);
     }
+    match policy.address_allowed(left.address) {
+        Ok(()) | Err(Ineligible::Scheme) => Ok(()),
+        Err(_) => Err(Ineligible::LeftExcluded),
+    }
+}
+
+/// Whether two addresses name the same document once parsed, ignoring any fragment; Atlas
+/// uses it to recognise the navigation it asked for.
+pub fn same_document_address(first: &str, second: &str) -> bool {
+    without_fragment(first).is_some_and(|first| Some(first) == without_fragment(second))
 }
 
 /// Step 6: any hop sent with a method other than `GET` makes the document a form result.
