@@ -25,7 +25,8 @@ impl Unavailable {
         }
     }
 
-    /// An address the owner chose for the crashed tab; no taint carries into it.
+    /// An address the owner chose for the crashed tab: it restores without taint, with the
+    /// same effect as an Atlas navigation from a blank page.
     pub(super) fn chosen(destination: String) -> Self {
         Self {
             destination,
