@@ -2293,7 +2293,7 @@ is claimed for this new source. Root execution commands are:
 
 ```powershell
 cargo test -p xtask --profile local --offline --locked benchmark::tests -- --test-threads=1
-cargo test -p syrinx-search --profile local --offline --locked catalogue::acceptance_comparison::unicode_selected_unchanged_acceptance_workload_comparison -- --nocapture --test-threads=1
+cargo test -p syrinx-search --profile local --offline --locked --features acceptance-diagnostics catalogue::acceptance_comparison::unicode_selected_unchanged_acceptance_workload_comparison -- --nocapture --test-threads=1
 ```
 
 Independent source review passed the extraction and complete comparison. Scoped
@@ -2346,3 +2346,189 @@ this negative result rather than promoting the gate or restricting evaluation
 to CJK and emoji. Any future implementation proposal must address that limitation
 before another production decision. No production search code changed; D48 and
 its three-process acceptance requirement remain unmet.
+
+### Complete-query partition design — 2026-10-12
+
+Repeated per-row membership, bounds and heap work dominate the existing stage
+evidence. A cache-order change cannot remove that linear pass. The continuation
+therefore evaluates a structural change behind the same public API. The machine
+currently has competing builds; fresh acceptance timing remains pending. The new
+`complete_workload_stage_profile` diagnostic covers all 26 actual workload cases,
+including mutations, and reports setup, membership/candidates, ranking, ordering
+and highlights separately. Busy-machine durations are attribution, not D48 proof.
+
+Three alternatives are considered. An incremental prefix membership cache could
+save most scans during consecutive typing, at roughly 12.5 KB per 100,000-row
+cached prefix plus invalidation metadata. Mutations must invalidate or repair
+those snapshots. However, deletion budgets change at four
+characters, arbitrary edits need fallback, and the benchmark rotates unrelated
+queries with mutations. It cannot promise a cold complete-query improvement.
+An aggregate index over equivalent field pairs could replace many row visits with
+bucket counts and rank bounds. Its scan reduction could approach the ratio of
+rows to occupied buckets, but approaches one when most field pairs are unique.
+Even a single four-byte row-to-bucket mapping adds 0.4 MB at 100,000 rows, before
+bucket bounds and membership metadata. Mutations must update affected buckets;
+the existing range-index experiments already explore that direction.
+Their promotion needs a separate review of fallback occupancy and update costs.
+
+Choose four independent partitions of the complete bounded search. Each counts
+every matching row in its partition and computes its exact top N using the
+existing membership, bounds, score cache and tie ordering. The global top N must
+belong to the union of those local top Ns: a discarded row already has N better
+rows in its own partition. Summed disjoint scope counts remain exact. Only the
+global finalists need the existing original-text highlight path. Unlike the old
+matcher-only parallel probe, this divides candidate scanning and heap work too.
+
+The estimate is up to fourfold reduction in the scan/ranking portion, not total
+latency; thread creation, coordination and serial highlights limit it. Eligible
+group scores are shared through one query-local table of standard-library
+`OnceLock` cells: one worker computes each original representative and others
+reuse that exact score, including rejection and accepted zero scores. Numeric
+queries keep their existing local fallback caches. Four partitions retain
+O(rows) transient candidates, four bounded query caches, at most 2,048 shared
+score cells and four times N finalists, plus three native thread stacks.
+No strings, index or query answers are persistently duplicated.
+Small catalogues and unsupported typo budgets retain the serial path. Mutation
+complexity is unchanged; the existing ranking scratch may retain capacity for
+four times N finalists. Query completion joins all workers before any mutation
+can proceed. Native thread creation failure falls back to computing that
+partition on the caller; worker panics propagate.
+
+Retain this change only with exact full-result comparisons, mutation/Unicode/tie
+regressions and the full gate. No budget, corpus, feature, dependency or public
+API changes are proposed. Three quiet fresh-process benchmarks are still the
+acceptance condition; if none can run, leave them explicitly for integration.
+
+### Partition diagnostic and score-sharing correction — 2026-10-12
+
+The first candidate kept independent score caches. All five new regressions and
+all 1,040 complete-result pairs passed, with exhaustive equality in the first
+warmup. The five-pass stage profile covers all 26 cases and 130 samples. Raw
+logs and checked tables are `target/d48-partition-regressions-20261012.log`,
+`target/d48-stage-profile-direct-20261012.log`,
+`target/d48-exactness-pairs-20261012.log`,
+`target/d48-profile-summary-20261012.md` and
+`target/d48-pair-summary-20261012.md`. Competing builds were active throughout:
+none of these times establishes D48 or reproduces the historical 10/26 result.
+
+The serial stage medians support dividing the row scan: broad-character spends
+5.634 ms in membership/candidates and 2.615 ms in ranking, with 0.101 ms in
+highlights. Long-near-match instead spends 2.588, 7.263 and 3.579 ms respectively;
+serial highlight work remains a material limit after partitioning.
+
+Independent caches improve most cases but regress long-match in 37/40 pairs:
+its paired median increases 0.808 ms and p95 increases from 7.718 to 8.496 ms.
+The diagnostic threshold counts are 8/26 serial and 17/26 partitioned, not valid
+acceptance verdicts. Preserve that regression. Local top N selection can score
+the same expensive equivalence group in every partition, which the serial path
+scores once. The final design therefore shares those exact query-local scores
+through `OnceLock`, retaining field guards and disabling reuse for numeric
+queries. Concurrent regressions verify one computation, rejection/zero-score
+parity with both typo budgets and fresh cells after recycled group IDs.
+The correction passes both shared-score regressions, all five partition
+regressions and a fresh 1,040-pair exactness comparison, including exhaustive
+first-warmup equality. The logs are
+`target/d48-shared-score-regressions-20261012.log`,
+`target/d48-shared-partition-regressions-20261012.log` and
+`target/d48-shared-exactness-pairs-20261012.log`; all exit zero.
+`target/d48-shared-pair-summary-20261012.md` verifies every case/pass pair,
+balanced execution order and generations 100131 through 101170.
+
+The long-match regression is not reproduced: the corrected candidate improves
+38/40 pairs against its serial control, with paired median -1.059 ms and p95
+7.571 versus 6.242 ms. All 25 nonblank cases have negative paired median changes.
+The blank control follows the same serial algorithm and changes by +0.040 ms.
+Long-near-match remains the slowest candidate case at p95 8.077 ms, maximum
+8.397 ms. Diagnostic threshold counts are 9/26 serial and 17/26 candidate.
+These busy-machine data neither satisfy nor invalidate the required three quiet
+production runs. No claim that D48 is met, or impossible, follows from them.
+
+### Full gate and acceptance handoff — 2026-10-12
+
+The implementation must remain reviewable while the timing environment is busy.
+`cargo xtask check` passes dependency boundaries, formatting, workspace Clippy
+with warnings denied, all 445 workspace tests (including 184 search unit tests
+and five public matcher regressions), documentation tests and application smoke.
+The log is `target/d48-gate-20261012-jobs2.log`, SHA-256
+`6db10855bbd73f0ddde97b2b32c00c519508246bc6b998788642edc2ed77a8df`.
+The existing wry dependency warning remains visible; no suppression or vendor
+change was added. The first queued gate was stopped before executing checks to
+restart with two Cargo build jobs in this process only. Its cancelled log,
+`target/d48-gate-20261012.log`, is preserved. No other session was stopped.
+
+The unchanged baseline from `7dbf579` was built before the production edits and
+preserved as `target/d48-baseline-20261012/xtask.exe`, SHA-256
+`13b28a7f627eb2c9e2c54d0508f32a8352a15d8397f3c8b412f150411d8666d4`.
+Its dependency check executes successfully. The corrected production benchmark
+executable is also built; `target/d48-final-benchmark-build-20261012.log` exits
+zero. Neither build establishes timing acceptance. No Application Control block
+was encountered, and no Windows setting, pin, feature, lockfile or shared product
+source outside `syrinx-search` was changed.
+
+The first 30-minute short-poll window found no build-free interval; see
+`target/d48-quiet-window-20261012.log`. The final post-gate follow-up ran from
+11:17 to 11:24 EDT with no build-free interval; its last check still found eleven
+Cargo/compiler processes. `target/d48-acceptance-window-20261012.log` records
+those checks and ending this session's waiting poll after review. Other sessions'
+processes were left alone. Baseline reproduction and three fresh-process
+production acceptance runs remain for Claude when the machine is quiet.
+Use the preserved baseline executable with `bench` for three baseline runs, then
+the unchanged `cargo xtask bench` command for three candidate runs, with a fresh
+report path each time and no competing builds. Stop if baseline results differ
+materially from the historical 10/26. Retain every p95, maximum and failed report.
+P1-05 remains partial; D48 is unchanged. The diagnostic gains justify quiet
+remeasurement, not a budget change or a claim that the design cannot meet it.
+
+### Review corrections: diagnostics out of the gate — 2026-10-12
+
+Review found three problems with the partition change, and this section records
+how each was corrected.
+
+**The timing diagnostics ran in every gate.** `acceptance_comparison.rs` held
+three ordinary tests: `partitioned_unchanged_acceptance_workload_comparison`,
+`complete_workload_stage_profile` and the earlier
+`unicode_selected_unchanged_acceptance_workload_comparison`. Each builds the
+100,000-row workload and runs over a thousand complete queries, so every
+`cargo xtask check` paid for more than 2,000 queries and printed timings taken
+on a busy machine, which mean nothing. The module now compiles only with the
+new opt-in `acceptance-diagnostics` feature of `syrinx-search`. The gate builds
+default features, so it no longer runs them. `#[ignore]` was rejected because
+the repository forbids it; moving them into `cargo xtask bench` was rejected
+because they compare test-only strategies through private catalogue functions
+that a separate binary cannot reach. Their correctness assertions remain in
+the gate on small data: the existing partition regressions compare the serial,
+partitioned and exhaustive paths, the membership-order tests cover that
+strategy, and the new
+`public_partitioned_query_matches_exhaustive_for_acceptance_shapes` runs the
+acceptance query shapes through the public `query` at the 16,384-row
+threshold against the exhaustive oracle. Run a diagnostic explicitly with:
+
+```powershell
+cargo test -p syrinx-search --profile local --offline --locked --features acceptance-diagnostics catalogue::acceptance_comparison::partitioned_unchanged_acceptance_workload_comparison -- --nocapture --test-threads=1
+cargo test -p syrinx-search --profile local --offline --locked --features acceptance-diagnostics catalogue::acceptance_comparison::complete_workload_stage_profile -- --nocapture --test-threads=1
+```
+
+Because the gate's Clippy step does not enable the feature, check the module
+with `cargo clippy -p syrinx-search --all-targets --features
+acceptance-diagnostics --profile local --offline --locked -- -D warnings` after
+changing it. That check passed for this correction.
+
+**A refused worker thread was silently discarded.** When the operating system
+refused to start a partition worker, the code searched that partition on the
+caller, which keeps results complete, but it dropped the `io::Error`. The
+fallback stays, and the refusal is now counted: `Catalogue::worker_fallbacks()`
+returns a `WorkerFallbacks` value with the number of refused workers and the
+last error kind. The new regression
+`refused_workers_fall_back_to_complete_results_and_are_recorded` uses a
+test-only strategy whose workers are always refused, checks exhaustive parity
+and checks that three refusals are recorded for nineteen rows.
+
+**The quiet-machine result needs the machine's shape.** Each partitioned query
+starts three native threads beside the caller, so its timing depends on how
+many logical processors are free. The quiet-machine acceptance record must
+state the logical processor count, for example from
+`$env:NUMBER_OF_PROCESSORS`, beside the three baseline and three candidate
+reports. An optional seventh run with Atlas open and a few ordinary pages
+loaded shows how the four partitions behave when other work competes for
+cores. Record it as a separate under-load result; it does not replace the
+quiet acceptance runs, and D48 is judged on the quiet ones.

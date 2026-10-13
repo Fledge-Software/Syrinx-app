@@ -87,6 +87,14 @@ pub struct SearchPolicy {
     pub boosts: BoostWeights,
 }
 
+/// Records partition workers the operating system refused to start.
+/// Their rows were searched on the caller, so results stay complete; only parallelism was lost.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WorkerFallbacks {
+    pub refused: u64,
+    pub last_error: Option<std::io::ErrorKind>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ScopeCounts {
     pub tabs: usize,
