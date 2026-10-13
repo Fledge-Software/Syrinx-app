@@ -13,7 +13,8 @@ branch: claude/plan-atlas-v1
 > **Status: active, approved by the owner on 2026-10-10.** Implementation is
 > queued behind plans 1 and 2. Work uses plan 1's D41 local branch,
 > independent-review and owner-approved-merge workflow; commits still need
-> an owner request. This plan's later slice breakdown requires approval.
+> an owner request. The owner also approved this plan's 16-slice breakdown
+> on 2026-10-10; its predecessor and acceptance gates remain in force.
 
 ## Why this exists
 
@@ -253,9 +254,9 @@ applied every condition: dropping a filter can show the wrong rows.
 
 ## Sequencing
 
-Each phase has a usable result and a clear predecessor. Readiness is approved;
-prepare the local slice breakdown for the owner's separate approval before
-implementation. These are phases, not published issues.
+Each phase has a usable result and a clear predecessor. Readiness and the
+local slice breakdown are approved; the issue map below preserves the
+implementation gates. These are phases, not published issues.
 
 ### Phase 1 — Open and index a synthetic vault
 
@@ -414,14 +415,65 @@ for these current checks. No new dependency is approved by being listed.
 
 ## Issue map
 
-Readiness is approved. Prepare reviewable local slices with blocking
-dependencies and obtain the owner's breakdown approval before implementing
-them. Plan 1's approved 40-slice map does not stand in for this plan's map.
-D41 permits local implementation without a remote: use a branch per slice,
-independent review and the owner's approval for every merge. Commit only on
-request. Open work and the slice map stay in this plan; add repository issue
-links only after the owner separately authorizes repository setup and
-publication.
+The owner approved these 16 local slices on 2026-10-10, exactly as
+recorded in [the approved Plans 2–4 breakdown](<Atlas v1 — Plans 2–4 slice proposals.md>).
+The boundaries, deliverables and explicit blockers below are unchanged from
+that approval. Every slice also depends on the preceding slice in this plan;
+finish each phase exit before its next phase. The breakdown's common gates
+apply to every row. All rows are queued, not implemented.
+
+**Entry gate:** Plans 1 and 2 pass their exits, including Plan 2 owner acceptance.
+This slice map is approved. Missing Host capabilities still need review and
+any required public-contract approval before implementation.
+
+D41 supplies one local branch and independent review per slice, with owner
+approval before every merge. Commit only on request. No remote, push, public
+issue or upstream message is authorized. Concrete dependency and public-API
+approvals remain separate; the map does not waive predecessor or operator gates.
+
+### Phase 1 — open and index a synthetic vault
+
+| Approved ID | Why and deliverable | Done evidence and explicit blockers |
+| --- | --- | --- |
+| P3-01 | A vault must have a clear boundary before reading or writing files. Add the one-vault existing/new picker and bounded host file service, canonical relative identities, path containment and cancellation. | Generated fixtures cover Windows case collisions, reserved names, junction/symlink escapes, inaccessible files and unsupported encodings. Switching removes the old vault's contributions; cancellation leaves files untouched. Blocked by the Notes entry gate and required capability/dependency reviews. |
+| P3-02 | Rebuildable metadata must preserve the Markdown source. Add Rust indexing of notes, headings, links and properties, scan progress and malformed/unsupported-file states; record synthetic small/medium/large vault workloads. | Rebuilding reproduces catalogue records from files. Unfinished Markdown stays editable; malformed frontmatter is reported without rewriting source or silently erasing a previously valid entry. Parser candidates receive exact audits before adoption. |
+| P3-03 | Notes need shared navigation and search before editing adds complexity. Connect stable note targets, incremental/revisioned updates, explicit rescan and both search contributions through Host. | A generated vault can be opened, searched, closed and reindexed. Stale parse/search results cannot replace a newer revision; cancelled/superseded scans cannot restore the old vault. Phase 1 closes with both search tiers verified. |
+
+### Phase 2 — edit and save without losing text
+
+| Approved ID | Why and deliverable | Done evidence and explicit blockers |
+| --- | --- | --- |
+| P3-04 | Native and editor copies must agree on which document and revision they describe. Build the trusted bundled CodeMirror surface and versioned change/acknowledgement bridge, origin/type/access checks, UTF-16/UTF-8 conversion and canonical checksums. | Synthetic protocol tests cover delayed, duplicate, stale and previous-editor messages, mixed line endings, encoding markers and supplementary Unicode. Typing stays local; synchronization failure retains the live buffer. Blocked by Phase 1 and editor dependency/Host capability approval where required. |
+| P3-05 | Editor views must not change the source merely to display it. Add live preview, source editing, outline navigation and Atlas shortcut/focus routing through the shared bridge. | Typing, paste, undo/redo and outline navigation preserve text and do not add duplicate undo events. Palette/sidebar overlays restore editor focus; unknown syntax remains editable source. Inspect the actual local editor view. No unsafe disk-save path is exposed while later safety slices remain open. |
+| P3-06 | A matching buffer checksum alone does not protect against outside disk changes. Implement staged saves for one acknowledged revision, source-byte/line-ending preservation, checked flushing, expected disk revision and recoverable replacement failures. | Unchanged files round-trip byte-for-byte. Tests race an outside write between validation and replacement and interrupt each durability step; both versions remain recoverable. Denied writes, partial replacement failures and edits during saving retain dirty state. No write-through guarantee is attributed to unsupported `ReplaceFileW` flags. |
+| P3-07 | Watcher events are hints, and unsaved work must survive a crash. Add debounced reconciliation, clean reload, dirty conflict state, recovery drafts and restart reconciliation against current disk. | External replace/delete/rename and delayed/missed events are covered. Conflict pauses saving; disk/editor/separate-copy choices are deliberate. Restart cannot silently overwrite changed files, and an older completed save cannot clear a newer draft. Drafts remain in local app data outside logs and fixtures. |
+| P3-08 | Ordinary save controls must use the proven safety path. Enable Notes autosave after a short pause and Ctrl S, error/retry presentation and document transactions shared with non-editor edits. | Checksum disagreement, conflicts and write failures keep recoverable text and prevent unsafe retry. Autosave and explicit save clear only the durably saved revision. Forge's later explicit-save policy remains a caller choice on the same service. |
+| P3-09 | Existing images and links must be usable without turning note text into executable content. Add bounded local Markdown image resolution and explicit ordinary attachment opening. | Relative/missing/escaping paths and unsupported images produce honest states; no preview loads remote resources. Note text is not executable HTML/script. Local editor focus and save/recovery regressions pass together, closing Phase 2. Paste/drop importing and special embeds remain excluded. |
+
+### Phase 3 — links and guarded rename
+
+| Approved ID | Why and deliverable | Done evidence and explicit blockers |
+| --- | --- | --- |
+| P3-10 | Link navigation and backlinks must agree before any rewrite uses them. Add wikilink completion, heading navigation, linked backlinks and a documented supported Markdown-link corpus. | Fixtures cover aliases, headings, missing/ambiguous destinations, duplicate filenames, case variants and links inside code blocks. Unlinked mentions remain separate search results. Blocked by the complete save/recovery/editor exit. |
+| P3-11 | Renaming several files is not an atomic operation. Add previewed rename and lossless destination-range rewrites through the shared document service, with revision checks and a recoverable operation record. | Inject failure between each write; report completed or recoverable partial work. Guarded undo refuses later outside changes, and dirty open buffers participate or block clearly. Case-only renames, aliases, headings and unrelated bytes survive. Phase 3 closes with recovery evidence. |
+
+### Phase 4 — typed properties and one table
+
+| Approved ID | Why and deliverable | Done evidence and explicit blockers |
+| --- | --- | --- |
+| P3-12 | Typed properties need verified interoperability before storage conventions become permanent. Verify the seven property kinds and vault-wide type metadata using a disposable generated Obsidian vault; implement bounded interpretation and safe source ranges. | Record the supported metadata contract and any unresolved product choice for the owner. Unknown keys, YAML comments/order and complex unsupported values stay intact; malformed content remains source-readable. Blocked by Phase 3 and authorized application access if required for the compatibility check. |
+| P3-13 | A saved table must apply every supported filter without pretending unsupported views are equivalent. Implement one folder/tag table, selected columns, one sort, AND filters and `.base` round trips. | Generated cross-application fixtures verify note-only rows, `file.ext == "md"`, global/view filter combination and the actual sort representation. Unsupported filters/formulas/views are labelled, unchanged and source-readable. No partial interactive result silently drops a condition. |
+| P3-14 | Table edits must not compete with the editor's live copy. Route property changes through the shared revision, save/conflict and undo service as validated byte-range patches. | Only intended bytes change; an open note immediately reflects a table edit and can undo it without restoring stale disk content. Unsafe YAML replacements fail visibly rather than normalizing the file. Phase 4 closes with supported Obsidian-to-Atlas and Atlas-to-Obsidian table checks. |
+
+### Phase 5 — compatibility and acceptance
+
+| Approved ID | Why and deliverable | Done evidence and explicit blockers |
+| --- | --- | --- |
+| P3-15 | Compatibility and performance claims need reproducible limits. Complete the synthetic compatibility matrix and measure index/reopen/update, note open, input paint, save acknowledgement, table filtering, renderer memory and idle cost. | Use the workloads recorded before optimization; keep D48 intact. Report failures and supported/unsupported forms explicitly. All interruption and byte-preservation tests plus the repository/editor gates pass. Blocked by Phase 4. |
+| P3-16 | The owner must accept the actual Notes workflow before Forge builds on it. Complete keyboard/accessibility and five-palette review, then owner acceptance of Notes and its known limits. | Inspect the implemented UI against the design authority without inventing a detailed approved Notes board. Any personal-vault assessment is owner-operated with only pass/fail recorded. Notes acceptance and the owner's go-ahead are explicit blockers for Forge. |
+
+This map adds no graph, WYSIWYG mode, advanced Bases formulas/relations/views,
+special embeds, attachment importing or sync client.
 
 ## Iteration log
 
@@ -454,3 +506,6 @@ publication.
   Commits remain on request. D39 permits local aggregate analytics and
   explicit report export with owner-reviewed suggestions; note content and
   recovery drafts remain excluded.
+- **2026-10-10:** The owner subsequently approved the exact 16-slice map
+  and dependencies now recorded above. Predecessor exits, operator acceptance
+  and separate public-API/dependency/commit/merge permissions remain in force.

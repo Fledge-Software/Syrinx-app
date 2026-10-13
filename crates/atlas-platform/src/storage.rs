@@ -1,11 +1,15 @@
 //! Retains checked directory and database identities for the store's lifetime.
 
 mod backup;
+mod deletions;
 mod native;
 mod recovery;
 mod session;
+mod startup;
 
+pub use deletions::{DeletionJournal, JournalError, read_deletion_log};
 pub use recovery::{RecoveryError, RecoveryOffer, RecoveryOutcome, offer_recovery};
+pub use startup::{StartupStorage, prepare_startup};
 
 #[cfg(test)]
 mod tests;
@@ -65,25 +69,34 @@ impl WindowsDirectoryLease {
         probe: Arc<dyn LocationProbe>,
     ) -> Result<Self, LocationError> {
         let prepared = prepare_directory(data_directory, probe)?;
+        // Normal startup must refuse unfinished recovery before it can create a primary.
+        prepared.control.revalidate()?;
+        inspect_sidecars(&prepared.path)?;
+
+        // Preserve an existing database; exclusive creation handles a missing one.
+        let database_path = prepared.path.join(DATABASE_NAME);
+        let database_file = match native::optional_retained_file(
+            &database_path,
+            LocationOperation::OpenDatabase,
+        )? {
+            Some(file) => file,
+            None => native::create_database(&database_path)?,
+        };
+        let database = GuardedEntry::regular_file(database_path, database_file)?;
+        Self::from_prepared(prepared, database)
+    }
+
+    fn from_prepared(
+        prepared: PreparedDirectory,
+        database: GuardedEntry,
+    ) -> Result<Self, LocationError> {
         let archive = Arc::new(backup::WindowsBackupArchive::new(prepared.clone()));
         let PreparedDirectory {
-            path: destination,
             directories,
             control,
             probe,
+            ..
         } = prepared;
-        // Normal startup must refuse unfinished recovery before it can create a primary.
-        control.revalidate()?;
-        inspect_sidecars(&destination)?;
-
-        // Preserve an existing database; exclusive creation handles a missing one.
-        let database_path = destination.join(DATABASE_NAME);
-        let database_file =
-            match native::optional_file(&database_path, LocationOperation::OpenDatabase)? {
-                Some(file) => file,
-                None => native::create_database(&database_path)?,
-            };
-        let database = GuardedEntry::regular_file(database_path, database_file)?;
         let lease = Self {
             sqlite_path: sqlite_database_path(&database.path),
             database,
@@ -153,6 +166,14 @@ fn prepare_directory(
     data_directory: &Path,
     probe: Arc<dyn LocationProbe>,
 ) -> Result<PreparedDirectory, LocationError> {
+    prepare_directory_with_creation(data_directory, probe, false).map(|(prepared, _)| prepared)
+}
+
+fn prepare_directory_with_creation(
+    data_directory: &Path,
+    probe: Arc<dyn LocationProbe>,
+    exclusive_fresh_control: bool,
+) -> Result<(PreparedDirectory, bool), LocationError> {
     // Check the supplied path before any directory or database is created.
     let requested = normal_absolute_path(data_directory)?;
     if requested.file_name().is_none() {
@@ -174,23 +195,39 @@ fn prepare_directory(
 
     // Create one checked child at a time while retaining every parent handle.
     let mut destination = physical_parent;
-    for component in missing {
-        destination.push(component);
-        create_directory(&destination)?;
-        directories.push(GuardedEntry::directory(&destination)?);
+    let mut created_final = false;
+    let final_index = missing.len().checked_sub(1);
+    for (index, component) in missing.into_iter().enumerate() {
+        destination.push(&component);
+        if exclusive_fresh_control && Some(index) == final_index {
+            let parent = directories.last().ok_or(LocationError::InvalidPath)?;
+            let file = native::create_directory(&parent.file, &component)?;
+            directories.push(GuardedEntry::from_directory_file(&destination, file)?);
+            created_final = true;
+        } else {
+            create_directory(&destination)?;
+            directories.push(GuardedEntry::directory(&destination)?);
+        }
     }
     refuse_sync_roots(&directories, probe.as_ref())?;
 
     // Maintenance can inspect an interrupted recovery without creating an empty primary.
     let directories = Arc::new(directories);
-    let control = session::LifecycleControl::acquire(&destination, Arc::clone(&directories))?;
+    let control = if exclusive_fresh_control && created_final {
+        session::LifecycleControl::acquire_new(&destination, Arc::clone(&directories))?
+    } else {
+        session::LifecycleControl::acquire(&destination, Arc::clone(&directories))?
+    };
     control.revalidate_location()?;
-    Ok(PreparedDirectory {
-        path: destination,
-        directories,
-        control,
-        probe,
-    })
+    Ok((
+        PreparedDirectory {
+            path: destination,
+            directories,
+            control,
+            probe,
+        },
+        created_final,
+    ))
 }
 
 trait LocationProbe: Send + Sync {
@@ -220,7 +257,7 @@ struct GuardedEntry {
 
 impl GuardedEntry {
     fn directory(path: &Path) -> Result<Self, LocationError> {
-        let file = native::open_directory(path, false)?;
+        let file = native::open_retained_directory(path)?;
         Self::from_directory_file(path, file)
     }
 

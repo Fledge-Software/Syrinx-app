@@ -50,6 +50,24 @@ impl LifecycleControl {
             check_entry(&native::entry_info(&file)?, false)?;
         }
         let file = native::open_control(&path)?;
+        Self::from_file(directory, directory_guards, path, file)
+    }
+
+    pub(super) fn acquire_new(
+        directory: &Path,
+        directory_guards: Arc<Vec<GuardedEntry>>,
+    ) -> Result<Self, LocationError> {
+        let path = directory.join(CONTROL_NAME);
+        let file = native::create_control(&path)?;
+        Self::from_file(directory, directory_guards, path, file)
+    }
+
+    fn from_file(
+        directory: &Path,
+        directory_guards: Arc<Vec<GuardedEntry>>,
+        path: PathBuf,
+        file: File,
+    ) -> Result<Self, LocationError> {
         let entry = GuardedEntry::regular_file(path, file)?;
         Ok(Self {
             state: Arc::new(LifecycleState {

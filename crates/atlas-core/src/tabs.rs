@@ -1,8 +1,17 @@
 //! Keeps open tabs and persistent saved destinations in one sidebar and palette model.
 
+mod folders;
+mod import;
 mod snapshot;
 
-pub use snapshot::{SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot};
+pub use folders::{
+    FolderContents, FolderRemoval, RemovedSavedEntries, SavedEntryId, SavedFolder, SavedFolderId,
+    SavedPlacement, saved_folder_contents,
+};
+pub use import::{AppendedSavedTree, NewSavedItem};
+pub use snapshot::{
+    SavedFolderSnapshot, SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot,
+};
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -139,11 +148,16 @@ impl fmt::Debug for SavedPage {
     }
 }
 
-/// Each saved page has one row, whether its associated live tab exists or not.
+/// Each folder and saved page has one row, whether its associated live tab exists or not.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SidebarRow<'a> {
+    Folder {
+        folder: &'a SavedFolder,
+        parent: Option<SavedFolderId>,
+    },
     Saved {
         page: &'a SavedPage,
+        parent: Option<SavedFolderId>,
         open_tab: Option<&'a Tab>,
     },
     Ordinary(&'a Tab),
@@ -161,13 +175,27 @@ pub enum Activation {
 pub enum TabError {
     InvalidTabId,
     InvalidSavedPageId,
+    InvalidSavedFolderId,
     UnknownTab(TabId),
     UnknownSavedPage(SavedPageId),
+    UnknownSavedFolder(SavedFolderId),
+    FolderCycle {
+        folder: SavedFolderId,
+        parent: SavedFolderId,
+    },
     NotWebTab(TabId),
     NotOrdinaryTab(TabId),
-    InvalidPosition { index: usize, group_len: usize },
+    InvalidPosition {
+        index: usize,
+        group_len: usize,
+    },
     IdExhausted,
     SavedPageIdExhausted,
+    SavedFolderIdExhausted,
+    /// Folder names may not be empty or only spaces (owner decision, 2026-10-12).
+    EmptyFolderTitle,
+    /// A confirmed delete no longer matches what the owner was shown, so nothing is deleted.
+    FolderContentsChanged(SavedFolderId),
 }
 
 impl fmt::Display for TabError {
@@ -176,10 +204,20 @@ impl fmt::Display for TabError {
         match self {
             Self::InvalidTabId => formatter.write_str("tab IDs must be nonzero"),
             Self::InvalidSavedPageId => formatter.write_str("saved page IDs must be nonzero"),
+            Self::InvalidSavedFolderId => formatter.write_str("saved folder IDs must be nonzero"),
             Self::UnknownTab(id) => write!(formatter, "tab {} is not open", id.get()),
             Self::UnknownSavedPage(id) => {
                 write!(formatter, "saved page {} does not exist", id.get())
             }
+            Self::UnknownSavedFolder(id) => {
+                write!(formatter, "saved folder {} does not exist", id.get())
+            }
+            Self::FolderCycle { folder, parent } => write!(
+                formatter,
+                "folder {} cannot move inside its own descendant {}",
+                folder.get(),
+                parent.get()
+            ),
             Self::NotWebTab(id) => write!(formatter, "tab {} is not a web tab", id.get()),
             Self::NotOrdinaryTab(id) => {
                 write!(formatter, "tab {} belongs to a saved page", id.get())
@@ -190,6 +228,15 @@ impl fmt::Display for TabError {
             ),
             Self::IdExhausted => formatter.write_str("no unused tab IDs remain"),
             Self::SavedPageIdExhausted => formatter.write_str("no unused saved page IDs remain"),
+            Self::SavedFolderIdExhausted => {
+                formatter.write_str("no unused saved folder IDs remain")
+            }
+            Self::EmptyFolderTitle => formatter.write_str("folder names cannot be empty"),
+            Self::FolderContentsChanged(id) => write!(
+                formatter,
+                "folder {} changed after its deletion was confirmed",
+                id.get()
+            ),
         }
     }
 }
@@ -203,13 +250,17 @@ struct ClosedTab {
 }
 
 /// Ordered saved pages, open tabs and a bounded in-session history of closed web tabs.
+/// `layout` is the saved tree; `saved` and `folders` hold its records in the same order.
 #[derive(Default)]
 pub struct TabModel {
     tabs: Vec<Tab>,
     saved: Vec<SavedPage>,
+    folders: Vec<SavedFolder>,
+    layout: Vec<SavedPlacement>,
     active: Option<TabId>,
     last_id: u64,
     last_saved_id: u64,
+    last_folder_id: u64,
     closed: VecDeque<ClosedTab>,
 }
 
@@ -236,21 +287,30 @@ impl TabModel {
         self.saved.iter().find(|page| page.id == id)
     }
 
-    /// Merges both ordered groups without allocating or searching for each saved row.
+    /// Merges the saved tree and the ordinary group without searching for each saved row.
     pub fn sidebar_rows(&self) -> impl Iterator<Item = SidebarRow<'_>> {
-        // The open saved prefix matches catalogue order, allowing a linear merge.
+        // Pages, folders and the open saved prefix all follow layout order: a linear merge.
         let boundary = self.saved_tab_count();
         let mut open_saved = self.tabs[..boundary].iter().peekable();
-        let saved_rows = self.saved.iter().map(move |page| {
-            let open_tab = if open_saved
-                .peek()
-                .is_some_and(|tab| tab.saved_page_id == Some(page.id))
-            {
-                open_saved.next()
-            } else {
-                None
-            };
-            SidebarRow::Saved { page, open_tab }
+        let mut pages = self.saved.iter();
+        let mut folders = self.folders.iter();
+        let saved_rows = self.layout.iter().filter_map(move |placement| {
+            let parent = placement.parent;
+            match placement.entry {
+                SavedEntryId::Folder(_) => {
+                    let folder = folders.next()?;
+                    Some(SidebarRow::Folder { folder, parent })
+                }
+                SavedEntryId::Page(_) => {
+                    let page = pages.next()?;
+                    let open_tab = open_saved.next_if(|tab| tab.saved_page_id == Some(page.id));
+                    Some(SidebarRow::Saved {
+                        page,
+                        parent,
+                        open_tab,
+                    })
+                }
+            }
         });
         saved_rows.chain(self.tabs[boundary..].iter().map(SidebarRow::Ordinary))
     }
@@ -297,6 +357,10 @@ impl TabModel {
             id: saved_id,
             metadata: self.tabs[index].metadata.clone(),
         });
+        self.layout.push(SavedPlacement {
+            entry: SavedEntryId::Page(saved_id),
+            parent: None,
+        });
 
         // Only the tab owns the live association; the saved record holds no live ID.
         let mut tab = self.tabs.remove(index);
@@ -337,8 +401,17 @@ impl TabModel {
 
     /// Removes the saved destination, leaving any open page at the ordinary start.
     pub fn remove_saved(&mut self, id: SavedPageId) -> Result<SavedPage, TabError> {
+        // Pages have no children, so removing the placement removes only this row.
+        let placement = self.placement_index(SavedEntryId::Page(id))?;
+        self.layout.remove(placement);
+        self.unlink_saved_page(id)
+            .ok_or(TabError::UnknownSavedPage(id))
+    }
+
+    /// Deletes a saved record whose placement is already gone, keeping any live page open.
+    fn unlink_saved_page(&mut self, id: SavedPageId) -> Option<SavedPage> {
         // Removing a saved row never closes its live tab or changes its identity.
-        let saved_index = self.saved_index_of(id)?;
+        let saved_index = self.saved.iter().position(|page| page.id == id)?;
         let page = self.saved.remove(saved_index);
         if let Some(tab_index) = self.open_saved_index(id) {
             let mut tab = self.tabs.remove(tab_index);
@@ -352,7 +425,7 @@ impl TabModel {
                 closed.saved_page_id = None;
             }
         }
-        Ok(page)
+        Some(page)
     }
 
     pub fn select(&mut self, id: TabId) -> Result<(), TabError> {
@@ -369,25 +442,11 @@ impl TabModel {
         Ok(())
     }
 
-    /// Moves a saved row, including an unopened one, to a final zero-based position.
+    /// Moves a saved row, including an unopened one, to a final position within its folder.
     pub fn move_saved(&mut self, id: SavedPageId, index: usize) -> Result<(), TabError> {
-        // Validate the destination before changing either stored order.
-        let current = self.saved_index_of(id)?;
-        Self::validate_position(index, self.saved.len())?;
-        if current == index {
-            return Ok(());
-        }
-
-        // Remove the live member while the saved order changes, then merge it back.
-        let open_tab = self
-            .open_saved_index(id)
-            .map(|index| self.tabs.remove(index));
-        let page = self.saved.remove(current);
-        self.saved.insert(index, page);
-        if let Some(tab) = open_tab {
-            self.tabs.insert(self.saved_tab_position(index), tab);
-        }
-        Ok(())
+        let entry = SavedEntryId::Page(id);
+        let parent = self.saved_parent(entry)?;
+        self.move_saved_entry(entry, parent, index)
     }
 
     /// Moves an ordinary tab to a final zero-based position within its group.
@@ -549,6 +608,7 @@ impl fmt::Debug for TabModel {
             .debug_struct("TabModel")
             .field("open_count", &self.tabs.len())
             .field("saved_count", &self.saved.len())
+            .field("folder_count", &self.folders.len())
             .field("active", &self.active)
             .field("closed_count", &self.closed.len())
             .finish_non_exhaustive()

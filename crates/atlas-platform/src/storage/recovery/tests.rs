@@ -138,8 +138,77 @@ fn corrupt_newest_candidate_falls_back_but_foreign_primary_never_does() {
     );
 }
 
+/// Marks a synthetic backup as written by a newer Atlas (schema version 7, one past current).
+fn mark_newer_schema(path: &Path) {
+    let mut bytes = fs::read(path).expect("read synthetic backup");
+    bytes[60..64].copy_from_slice(&7u32.to_be_bytes());
+    fs::write(path, &bytes).expect("mark synthetic backup as newer");
+}
+
+/// Rewrites a synthetic backup into the version 1 schema that predates saved folders.
+fn downgrade_to_flat_schema(path: &Path) {
+    let connection = rusqlite::Connection::open(path).expect("open synthetic backup");
+    connection
+        .execute_batch(
+            "DROP TABLE site_permissions; DROP TABLE history_deletion_state; DROP TABLE history_visits; DROP TABLE history_urls; DROP TABLE settings; DROP TABLE quick_destinations; DROP TABLE saved_layout; DROP TABLE saved_folder_state; DROP TABLE saved_folders; PRAGMA user_version = 1;",
+        )
+        .expect("downgrade synthetic backup");
+    assert!(connection.close().is_ok(), "close synthetic backup");
+}
+
 #[test]
-fn healthy_primary_and_nonzero_or_pending_deletions_are_refused() {
+fn newer_schema_backups_are_skipped_reported_and_left_unchanged() {
+    let fixture = Fixture::new();
+    let backups = seeded(&fixture, 2);
+    mark_newer_schema(&backups[1].2);
+    let newest = fs::read(&backups[1].2).expect("read newer synthetic backup");
+    damage(&fixture, false);
+
+    // The older usable backup is still offered instead of refusing every candidate.
+    let offer =
+        offer_recovery(&fixture.root, &DeletionLog::default()).expect("older backup is offered");
+    assert_eq!(offer.metadata(), backups[0].0);
+    drop(offer);
+    assert_eq!(
+        fs::read(&backups[1].2).expect("reread newer synthetic backup"),
+        newest
+    );
+
+    // With only newer backups left, recovery says so rather than claiming none exist.
+    mark_newer_schema(&backups[0].2);
+    assert!(matches!(
+        offer_recovery(&fixture.root, &DeletionLog::default()),
+        Err(RecoveryError::OnlyNewerSchemaBackups { skipped: 2 })
+    ));
+}
+
+#[test]
+fn flat_schema_backup_restores_and_the_next_open_migrates_it() {
+    let fixture = Fixture::new();
+    let backups = seeded(&fixture, 1);
+    downgrade_to_flat_schema(&backups[0].2);
+    damage(&fixture, false);
+    let offer =
+        offer_recovery(&fixture.root, &DeletionLog::default()).expect("flat backup is offered");
+    assert_eq!(offer.metadata(), backups[0].0);
+    offer.confirm().expect("flat backup is restored");
+
+    // Opening the store migrates the restored file and keeps its records.
+    restored(&fixture, &backups[0].1);
+    let connection = rusqlite::Connection::open(fixture.root.join(DATABASE_NAME))
+        .expect("open restored synthetic database");
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("read restored schema version");
+    assert_eq!(version, 6);
+    assert!(
+        connection.close().is_ok(),
+        "close restored synthetic database"
+    );
+}
+
+#[test]
+fn healthy_primary_is_refused_whatever_the_deletion_journal_holds() {
     let fixture = Fixture::new();
     seeded(&fixture, 1);
     assert!(matches!(
@@ -156,14 +225,7 @@ fn healthy_primary_and_nonzero_or_pending_deletions_are_refused() {
     deletions.accept(record).expect("accept synthetic request");
     assert!(matches!(
         offer_recovery(&fixture.root, &deletions),
-        Err(RecoveryError::DeletionReplayRequired)
-    ));
-    deletions
-        .accept(deletions.completion().expect("synthetic completion"))
-        .expect("accept synthetic completion");
-    assert!(matches!(
-        offer_recovery(&fixture.root, &deletions),
-        Err(RecoveryError::DeletionReplayRequired)
+        Err(RecoveryError::HealthyPrimary)
     ));
 }
 
@@ -227,6 +289,29 @@ fn every_interrupted_stage_requires_a_new_offer_and_can_finish_the_same_source()
             );
         }
         assert!(backups[0].2.exists());
+    }
+}
+
+#[test]
+fn guarded_startup_resumes_the_exact_pending_source_before_normal_open() {
+    for completed_moves in [0, 4, 5] {
+        let fixture = Fixture::new();
+        let backups = seeded(&fixture, 1);
+        damage(&fixture, true);
+        let offer = offer_recovery(&fixture.root, &DeletionLog::default())
+            .expect("initial synthetic offer");
+        interrupt(offer, completed_moves);
+        let crate::StartupStorage::Recovery(renewed) =
+            crate::prepare_startup(&fixture.root, &DeletionLog::default())
+                .expect("guarded startup must reconcile pending intent")
+        else {
+            panic!("pending recovery must require confirmation even after installation");
+        };
+        assert_eq!(renewed.metadata(), backups[0].0);
+        renewed
+            .confirm()
+            .expect("confirm the same synthetic source");
+        restored(&fixture, &backups[0].1);
     }
 }
 
@@ -342,4 +427,85 @@ fn recovery_bundle(fixture: &Fixture) -> PathBuf {
                 .is_some_and(|name| name.to_string_lossy().starts_with("recovery-"))
         })
         .expect("synthetic recovery bundle exists")
+}
+
+/// Clears `[start, end)` in journal order: durable request, store, durable completion.
+fn journaled_clear(
+    journal: &mut crate::storage::DeletionJournal,
+    store: &Store,
+    start: i64,
+    end: i64,
+) {
+    let range = atlas_store::deletion::DeletionRange::new(start, end).expect("synthetic range");
+    let request = journal
+        .log()
+        .request(atlas_store::deletion::DeletionCategory::History, range)
+        .expect("prepare synthetic request");
+    journal.append(request).expect("request is durable");
+    let pending = journal.log().pending().expect("clear is pending");
+    store
+        .apply_history_deletions(&[pending])
+        .expect("live clear applies");
+    let completion = journal.log().completion().expect("prepare completion");
+    journal.append(completion).expect("completion is durable");
+}
+
+#[test]
+fn recovery_replays_every_later_clear_onto_the_restored_copy() {
+    let fixture = Fixture::new();
+    let lease = Arc::new(
+        WindowsDirectoryLease::prepare(&fixture.root).expect("prepare synthetic location"),
+    );
+    let store = Store::open(lease.clone()).expect("open synthetic store");
+    let mut journal =
+        crate::storage::DeletionJournal::open(&lease).expect("open synthetic journal");
+    for (address, at) in [
+        ("https://kept.example.test/", 50),
+        ("https://first-clear.example.test/", 150),
+        ("https://second-clear.example.test/", 250),
+    ] {
+        store
+            .record_visit(address.to_owned(), String::new(), at)
+            .expect("record synthetic visit");
+    }
+
+    // The newest backup holds the first clear; the second clear happens after it.
+    journaled_clear(&mut journal, &store, 100, 200);
+    let BackupOutcome::Created(backup) = store
+        .backup_if_due(86_400, true)
+        .expect("create synthetic backup")
+    else {
+        panic!("synthetic backup must be due");
+    };
+    assert_eq!(backup.deletion_generation, 1);
+    journaled_clear(&mut journal, &store, 200, 300);
+    let expected = store.history_entries().expect("live history");
+    assert_eq!(expected.len(), 1);
+    store.shutdown().expect("close synthetic store");
+    drop(journal);
+    drop(lease);
+    damage(&fixture, false);
+
+    // A journal that has lost the backup's clear refuses recovery instead of guessing.
+    assert!(matches!(
+        offer_recovery(&fixture.root, &DeletionLog::default()),
+        Err(RecoveryError::Deletion(DeletionError::MissingGeneration))
+    ));
+    let log = crate::storage::read_deletion_log(&fixture.root).expect("read synthetic journal");
+    assert_eq!(log.completed_generation(), 2);
+    let offer = offer_recovery(&fixture.root, &log).expect("journal covers the backup");
+    assert_eq!(offer.metadata(), backup);
+    offer
+        .confirm()
+        .expect("confirmed recovery replays and installs");
+
+    // The restored copy holds neither clear and records the journal's generation.
+    let bundle = recovery_bundle(&fixture);
+    assert!(!bundle.join("replacement.db-journal").exists());
+    let lease =
+        WindowsDirectoryLease::prepare(&fixture.root).expect("recovered location opens normally");
+    let store = Store::open(Arc::new(lease)).expect("recovered SQLite opens");
+    assert_eq!(store.history_deletion_generation(), Ok(2));
+    assert_eq!(store.history_entries(), Ok(expected));
+    store.shutdown().expect("close recovered store");
 }

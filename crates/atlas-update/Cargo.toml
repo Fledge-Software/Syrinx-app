@@ -1,0 +1,14 @@
+# Verifies signed update packages locally before anything is installed (P1-38).
+[package]
+name = "atlas-update"
+description = "Atlas's local verifier for signed update packages"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,82 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1758,6 +1758,7 @@
+   default_context_menus: bool,
+   environment: Option<ICoreWebView2Environment>,
+   profile_name: Option<String>,
++  window_close_requested_handler: Option<Rc<dyn Fn()>>,
+ }
+ 
+ #[cfg(windows)]
+@@ -1774,6 +1775,7 @@
+       extension_path: None,
+       environment: None,
+       profile_name: None,
++      window_close_requested_handler: None,
+     }
+   }
+ }
+@@ -1871,6 +1873,10 @@
+   /// Profile names must follow the WebView2 naming rules (alphanumeric, `.`,
+   /// `_`, `-`, ` `, up to 64 chars, not starting/ending with `.` or ` `).
+   fn with_profile_name<S: Into<String>>(self, name: S) -> Self;
++
++  /// Delegates a page's close request to the host instead of destroying its window.
++  /// The callback must defer closing the web view until after the event returns.
++  fn with_window_close_requested_handler(self, handler: impl Fn() + 'static) -> Self;
+ }
+ 
+ #[cfg(windows)]
+@@ -1922,6 +1928,11 @@
+ 
+   fn with_profile_name<S: Into<String>>(mut self, name: S) -> Self {
+     self.platform_specific.profile_name = Some(name.into());
++    self
++  }
++
++  fn with_window_close_requested_handler(mut self, handler: impl Fn() + 'static) -> Self {
++    self.platform_specific.window_close_requested_handler = Some(Rc::new(handler));
+     self
+   }
+ }
+--- a/src/webview2/mod.rs
++++ b/src/webview2/mod.rs
+@@ -475,7 +475,16 @@
+     unsafe { Self::set_webview_settings(&webview, &attributes, &pl_attrs)? };
+ 
+     // Webview handlers
+-    unsafe { Self::attach_handlers(hwnd, &webview, &mut attributes, &mut token, env)? };
++    unsafe {
++      Self::attach_handlers(
++        hwnd,
++        &webview,
++        &mut attributes,
++        &mut token,
++        env,
++        pl_attrs.window_close_requested_handler.clone(),
++      )?
++    };
+ 
+     // IPC handler
+     if let Some(ipc_handler) = attributes.ipc_handler.take() {
+@@ -678,10 +687,18 @@
+     attributes: &mut WebViewAttributes,
+     token: &mut EventRegistrationToken,
+     env: &ICoreWebView2Environment,
++    close_requested: Option<Rc<dyn Fn()>>,
+   ) -> Result<()> {
+-    // Close container HWND when `window.close` is called in JS
++    // Delegate close requests when configured; otherwise close the container HWND.
+     webview.add_WindowCloseRequested(
+-      &WindowCloseRequestedEventHandler::create(Box::new(move |_, _| DestroyWindow(hwnd))),
++      &WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
++        if let Some(handler) = &close_requested {
++          handler();
++          Ok(())
++        } else {
++          DestroyWindow(hwnd)
++        }
++      })),
+       token,
+     )?;
+ 

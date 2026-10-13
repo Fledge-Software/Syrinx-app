@@ -1,7 +1,16 @@
-//! Confines Windows storage-location checks to Atlas's platform boundary.
+//! Confines Windows storage, page, single-instance, calendar and Edge services to the platform
+//! boundary.
 
+pub mod acceptance;
+pub mod browser;
+pub mod calendar;
+pub mod edge;
+pub mod file_dialog;
+pub mod instance;
+pub mod notice;
 mod storage;
 
 pub use storage::{
-    RecoveryError, RecoveryOffer, RecoveryOutcome, WindowsDirectoryLease, offer_recovery,
+    DeletionJournal, JournalError, RecoveryError, RecoveryOffer, RecoveryOutcome, StartupStorage,
+    WindowsDirectoryLease, offer_recovery, prepare_startup, read_deletion_log,
 };
