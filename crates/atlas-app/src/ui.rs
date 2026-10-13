@@ -608,10 +608,13 @@ impl BrowserView {
                     let failed = result.is_err();
                     // Saved instances collapse into one row against the current model.
                     let result = result.map(|results| palette::arrange(results, &self.model));
-                    let accepted = palette
-                        .view
-                        .update(cx, |palette, cx| palette.receive(local, result, cx));
-                    if self.smoke && accepted && failed {
+                    let view = palette.view.clone();
+                    // The reply may apply a waiting Enter, which closes the popup's own window.
+                    // An `Err` means the popup already closed and its reply has nothing to show.
+                    let delivered = palette.window.update(cx, |_, popup, cx| {
+                        view.update(cx, |palette, cx| palette.receive(local, result, popup, cx))
+                    });
+                    if self.smoke && failed && matches!(delivered, Ok(true)) {
                         self.outcome.store(2, Ordering::Release);
                     }
                 }
