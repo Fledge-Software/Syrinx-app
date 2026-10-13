@@ -52,7 +52,7 @@ pub(super) struct PageContext {
     pub(super) popups: super::popups::PopupRequests,
     pub(super) text: super::page_text::TextContext,
     /// An adopted popup whose opener showed an excluded or tainted document.
-    pub(super) opener_tainted: bool,
+    pub(super) starts_tainted: bool,
 }
 
 pub(super) struct Page {
@@ -78,7 +78,7 @@ impl Page {
             shortcuts,
             popups,
             text: text_context,
-            opener_tainted,
+            starts_tainted,
         } = context;
         let destination = std::rc::Rc::new(std::cell::RefCell::new("about:blank".to_owned()));
         let life = super::lifecycle::CallbackLife::new();
@@ -139,8 +139,11 @@ impl Page {
             &view,
             id,
             text_context,
-            opener_tainted,
-            (events.clone(), shortcuts.clone()),
+            starts_tainted,
+            super::page_text::Channels {
+                events: events.clone(),
+                native: shortcuts.clone(),
+            },
         ) {
             Ok(text) => text,
             Err(error) => {
@@ -175,6 +178,17 @@ impl Page {
         }
     }
 
+    fn withdraw_atlas_request(&self) {
+        if let Some(text) = &self.text {
+            text.atlas_navigation_cancelled();
+        }
+    }
+
+    /// The taint a rebuilt page starts with after a crash; an unobserved page fails closed.
+    pub(super) fn tainted(&self) -> bool {
+        self.text.as_ref().is_none_or(|text| text.tainted())
+    }
+
     /// Whether a popup this page opens starts tainted; a page Atlas does not observe gives
     /// no evidence, so its popups do (fail closed).
     pub(super) fn popup_tainted(&self) -> bool {
@@ -187,20 +201,28 @@ impl Page {
         self.destination.borrow().clone()
     }
 
+    /// Loads `url` as Atlas's own navigation, which clears an excluded site's taint (P1-25).
     pub(super) fn navigate(&self, url: &str) -> Result<(), BrowserError> {
+        if let Some(text) = &self.text {
+            text.atlas_navigation(url);
+        }
+        self.load(url)
+    }
+
+    /// Reloads a crashed tab's address without counting as Atlas's navigation, so the taint
+    /// it was rebuilt with stays.
+    pub(super) fn restore(&self, url: &str) -> Result<(), BrowserError> {
+        self.load(url)
+    }
+
+    fn load(&self, url: &str) -> Result<(), BrowserError> {
         validate_url(url)?;
         self.lifecycle.resume(&self.view)?;
         // Mark the load first, so a hidden page cannot be suspended before WebView2 starts it.
         self.lifecycle.navigation_requested();
-        // Only a navigation Atlas starts clears an excluded site's taint (P1-25).
-        if let Some(text) = &self.text {
-            text.atlas_navigation(url);
-        }
         if self.view.load_url(url).is_err() {
             self.lifecycle.navigation_refused();
-            if let Some(text) = &self.text {
-                text.atlas_navigation_refused();
-            }
+            self.withdraw_atlas_request();
             return Err(BrowserError::Navigation);
         }
         *self.destination.borrow_mut() = url.to_owned();
@@ -267,6 +289,8 @@ impl Page {
                 | BrowserCommand::Reload { .. }
         ) {
             self.lifecycle.resume(&self.view)?;
+            // Back, forward and reload replace a pending Atlas navigation request.
+            self.withdraw_atlas_request();
         }
         match command {
             BrowserCommand::ExitFullscreen { .. } => super::lifecycle::exit_fullscreen(&self.view),

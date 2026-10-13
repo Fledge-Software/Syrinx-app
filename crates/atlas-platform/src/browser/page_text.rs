@@ -10,7 +10,9 @@ use std::{cell::RefCell, rc::Rc, time::Instant};
 
 use atlas_core::{EligibleDocument, Ineligible, PageTextPolicy};
 use webview2_com::{
-    Microsoft::Web::WebView2::Win32::{ICoreWebView2, ICoreWebView2_2, ICoreWebView2_3},
+    Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2, ICoreWebView2_2, ICoreWebView2_3, ICoreWebView2NavigationStartingEventArgs,
+    },
     NavigationCompletedEventHandler, NavigationStartingEventHandler, ProcessFailedEventHandler,
     SourceChangedEventHandler, WebResourceResponseReceivedEventHandler, take_pwstr,
 };
@@ -63,22 +65,22 @@ pub(super) struct PageText {
 
 impl PageText {
     /// Subscribes only when capture is on as the page is created, so a page created with
-    /// capture off is never observed or read. An adopted popup passes `opener_tainted`.
+    /// capture off is never observed or read. An adopted popup passes `starts_tainted`.
     pub(super) fn register(
         view: &WebView,
         id: u64,
         context: TextContext,
-        opener_tainted: bool,
-        channels: (EventSink, NativeSink),
+        starts_tainted: bool,
+        channels: Channels,
     ) -> Result<Option<Self>, BrowserError> {
         if context.policy().is_none() {
             return Ok(None);
         }
-        let (events, native) = channels;
+        let Channels { events, native } = channels;
         let text = Self {
             id,
             context,
-            state: Rc::new(RefCell::new(TextState::seeded(opener_tainted))),
+            state: Rc::new(RefCell::new(TextState::seeded(starts_tainted))),
             events,
             native,
         };
@@ -97,11 +99,20 @@ impl PageText {
 
     /// Atlas itself asked the tab to load `address`; only such a navigation clears taint.
     pub(super) fn atlas_navigation(&self, address: &str) {
-        self.state.borrow_mut().atlas_navigation(address);
+        self.state
+            .borrow_mut()
+            .atlas_navigation(address, Instant::now());
     }
 
-    pub(super) fn atlas_navigation_refused(&self) {
-        self.state.borrow_mut().atlas_navigation_refused();
+    /// Withdraws Atlas's pending request: refused, or replaced by back, forward, reload or
+    /// another page action.
+    pub(super) fn atlas_navigation_cancelled(&self) {
+        self.state.borrow_mut().atlas_navigation_cancelled();
+    }
+
+    /// This page's taint, carried into its replacement when crash recovery rebuilds it.
+    pub(super) fn tainted(&self) -> bool {
+        self.state.borrow().tainted()
     }
 
     /// Whether a popup this page opens starts tainted: the page shows an excluded site or
@@ -242,34 +253,17 @@ impl PageText {
         let (id, state, events, _) = self.channels();
         let handler = NavigationStartingEventHandler::create(Box::new(move |core, args| {
             let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
-            let mut raw = PWSTR::null();
-            let mut redirected = BOOL::default();
-            let mut navigation = 0;
-            let read = unsafe {
-                args.Uri(&mut raw)
-                    .and_then(|()| args.IsRedirected(&mut redirected))
-                    .and_then(|()| args.NavigationId(&mut navigation))
+            let core = core.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+            let start = match read_start(&core, &args) {
+                Ok(start) => start,
+                Err(error) => {
+                    // Without the hop, the chain is unknown: forget it and taint (fail closed).
+                    state.borrow_mut().forget_navigation(Instant::now());
+                    report(&events, id);
+                    return Err(error);
+                }
             };
-            let address = take_pwstr(raw);
-            let source = core
-                .ok_or_else(|| windows::core::Error::from(E_POINTER))
-                .and_then(|core| source_of(&core));
-            let (read, source) = match (read, source) {
-                (Ok(()), Ok(source)) => (Ok(()), source),
-                (Err(error), _) | (_, Err(error)) => (Err(error), String::new()),
-            };
-            if let Err(error) = read {
-                // Without the hop, the chain is unknown: forget the document so it fails closed.
-                state.borrow_mut().forget_navigation();
-                report(&events, id);
-                return Err(error);
-            }
-            let cancelled = state.borrow_mut().navigation_started(Start {
-                address,
-                redirected: redirected.as_bool(),
-                navigation,
-                source,
-            });
+            let cancelled = state.borrow_mut().navigation_started(start);
             cancelled_notice(&events, id, cancelled);
             Ok(())
         }));
@@ -317,7 +311,7 @@ impl PageText {
             };
             let source = take_pwstr(raw);
             if let Err(error) = read {
-                state.borrow_mut().forget_navigation();
+                state.borrow_mut().forget_navigation(Instant::now());
                 report(&events, id);
                 return Err(error);
             }
@@ -389,6 +383,36 @@ impl PageText {
         unsafe { core.add_ProcessFailed(&handler, &mut token) }
             .map_err(|_| BrowserError::EventRegistration)
     }
+}
+
+/// The channels a page's results leave by: its events and the worker's native wake-up.
+pub(super) struct Channels {
+    pub(super) events: EventSink,
+    pub(super) native: NativeSink,
+}
+
+/// One hop's facts from `NavigationStarting`, with the web view's Source as the document left.
+fn read_start(
+    core: &ICoreWebView2,
+    args: &ICoreWebView2NavigationStartingEventArgs,
+) -> windows::core::Result<Start> {
+    let mut raw = PWSTR::null();
+    let read = unsafe { args.Uri(&mut raw) };
+    let address = take_pwstr(raw);
+    read?;
+    let mut redirected = BOOL::default();
+    let mut navigation = 0;
+    unsafe {
+        args.IsRedirected(&mut redirected)?;
+        args.NavigationId(&mut navigation)?;
+    }
+    Ok(Start {
+        address,
+        redirected: redirected.as_bool(),
+        navigation,
+        source: source_of(core)?,
+        at: Instant::now(),
+    })
 }
 
 /// Whether the web view shows `address` now, ignoring any fragment.
