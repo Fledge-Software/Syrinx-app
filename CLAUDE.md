@@ -53,8 +53,9 @@ above, and `docs/spec.md` below. Before picking up work, also read:
 - **The repository is on GitHub at `Fledge-Software/Syrinx-app` (owner,
   2026-10-13).** Push only the branch your session was assigned, never
   `main` unless the owner asks, and open a pull request only when the owner
-  asks. Publication and the licence are still the owner's decisions; see
-  `docs/decisions.md`.
+  asks. Syrinx is MPL-2.0; the owner makes the repository public. A weekly
+  preview release runs from `.github/workflows/weekly-release.yml`; see
+  `docs/releasing.md` and `docs/decisions.md`.
 - **Local implementation is approved (D41; workflow updated 2026-10-12).**
   Build each slice on its own branch in a local worktree. Once an
   independent review approves it and `cargo xtask check` passes, merge it to

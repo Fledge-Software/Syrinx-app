@@ -1,0 +1,183 @@
+# Builds, gates and publishes a weekly Syrinx preview, then updates syrinxapp.dev (owner, 2026-10-13).
+name: Weekly preview release
+
+on:
+  schedule:
+    # Thursday 10:00 New York time. GitHub schedules in UTC, so both offsets are listed and
+    # the plan job keeps only the one that matches daylight saving on the day.
+    - cron: "0 14 * * 4" # 10:00 EDT
+    - cron: "0 15 * * 4" # 10:00 EST
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Release even if main has no new commits since the last preview"
+        type: boolean
+        default: false
+
+concurrency:
+  group: weekly-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Decide whether to release
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      version: ${{ steps.decide.outputs.version }}
+      previous_tag: ${{ steps.decide.outputs.previous_tag }}
+      source: ${{ steps.decide.outputs.source }}
+      public: ${{ steps.decide.outputs.public }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - id: decide
+        name: Pick the version, or skip a quiet week
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          FORCE: ${{ inputs.force }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/plan-release.sh
+
+  release:
+    name: Gate, package and publish the GitHub release
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 240
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: v${{ needs.plan.outputs.version }}
+      PREVIOUS_TAG: ${{ needs.plan.outputs.previous_tag }}
+      SOURCE: ${{ needs.plan.outputs.source }}
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      asset: ${{ steps.package.outputs.asset }}
+      sha256: ${{ steps.package.outputs.sha256 }}
+      size: ${{ steps.package.outputs.size }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source }}
+          fetch-depth: 0
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-registry-${{ hashFiles('Cargo.lock') }}
+
+      # The xtask alias builds offline, so fetch the locked dependencies first.
+      - name: Fetch locked dependencies
+        shell: bash
+        run: cargo fetch --locked
+
+      - name: Make the release commit
+        shell: bash
+        run: .github/scripts/set-version.sh "$VERSION"
+
+      - name: Run the gate
+        run: cargo xtask check
+
+      - id: package
+        name: Build the portable package
+        shell: bash
+        run: .github/scripts/package-release.sh "$VERSION"
+
+      - name: Capture screenshots on synthetic data
+        shell: pwsh
+        run: ./.github/scripts/capture-screenshots.ps1 -Executable target/local/syrinx.exe -OutputFolder target/screenshots
+
+      - name: Write release notes
+        shell: bash
+        run: .github/scripts/release-notes.sh "$PREVIOUS_TAG" "$SOURCE" "$VERSION" "${{ github.repository }}" > target/release-notes.md
+
+      - name: Tag and publish the GitHub release
+        shell: bash
+        run: |
+          git tag -a "$TAG" -m "Syrinx $VERSION preview" -m "Source: $SOURCE"
+          git push origin "refs/tags/$TAG"
+          gh release create "$TAG" \
+            "target/package/${{ steps.package.outputs.asset }}" target/package/SHA256SUMS.txt \
+            --prerelease --title "Syrinx $VERSION preview" --notes-file target/release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site-inputs
+          path: |
+            target/release-notes.md
+            target/screenshots/
+          if-no-files-found: error
+
+  site:
+    name: Publish the release on syrinxapp.dev
+    needs: [plan, release]
+    # Visitors cannot download from a private repository, so the site waits until it is public.
+    if: needs.plan.outputs.public == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Fledge-Software/syrinx-public-site
+          ref: main
+          token: ${{ secrets.SITE_REPO_TOKEN }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: site-inputs
+          path: ${{ runner.temp }}/site-inputs
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Write the release into the site and check it builds
+        env:
+          INPUTS: ${{ runner.temp }}/site-inputs
+          VERSION: ${{ needs.plan.outputs.version }}
+          ASSET: ${{ needs.release.outputs.asset }}
+          RELEASES: https://github.com/${{ github.repository }}/releases
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/publish-release.mjs \
+            --version "$VERSION" \
+            --date "$(TZ=America/New_York date +%F)" \
+            --url "$RELEASES/tag/v$VERSION" \
+            --download "$RELEASES/download/v$VERSION/$ASSET" \
+            --sha256 "${{ needs.release.outputs.sha256 }}" \
+            --size "${{ needs.release.outputs.size }}" \
+            --notes "$INPUTS/release-notes.md" \
+            --screenshots "$INPUTS/screenshots"
+          pnpm build
+
+      - name: Push to the site's main branch (Vercel deploys it)
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/data/release.json src/content/releases src/assets/screenshots
+          git commit -m "Publish Syrinx $VERSION preview" -m "Written by the weekly release workflow in Fledge-Software/Syrinx-app."
+          git push origin HEAD:main

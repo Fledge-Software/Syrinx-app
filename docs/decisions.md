@@ -12,6 +12,34 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-13
 
+- **Syrinx is licensed under MPL-2.0 and the source repository goes public.**
+  The owner chose the Mozilla Public License 2.0 (the text is `LICENSE`)
+  and asked for `Fledge-Software/Syrinx-app` to be made public so release
+  downloads work for visitors. The owner flips the visibility, not an agent,
+  after reviewing the pre-publication checklist in `docs/releasing.md`.
+  MPL-2.0 is file-level copyleft, the same licence Firefox uses: changes to
+  Syrinx's own files stay open, while Syrinx can still be combined with
+  permissively licensed code. The alternatives were MIT OR Apache-2.0
+  (rejected: allows closed forks of Syrinx's files) and GPL-3.0 (rejected:
+  would bind the whole program and every plugin built into it). The existing
+  dependency rule does not change: outside code still comes in only under
+  permissive licences or as whole MPL-2.0 files, and GPL code stays out,
+  because GPL code cannot be relicensed into an MPL-2.0 program.
+
+- **A preview release is published every Thursday at 10:00 New York time.**
+  `.github/workflows/weekly-release.yml` runs the gate on a GitHub-hosted
+  Windows runner, builds the P1-37 portable zip and publishes it as a GitHub
+  pre-release, then writes the release into `Fledge-Software/syrinx-public-site`
+  and pushes that repository's `main`, which Vercel deploys to
+  syrinxapp.dev. Versions are `0.N.0`, one minor step per release; a week in
+  which `main` gained no commits is skipped. The version bump lives in a
+  release commit on top of the `main` commit it was built from and is
+  reached only through its tag, so the workflow never pushes Syrinx-app's
+  `main`. Releases stay unsigned (D38), and the website says so. Website
+  screenshots are captured on the runner from fresh synthetic profiles and
+  reserved example domains, never the owner's data. Details and the owner's
+  one-time setup are in `docs/releasing.md`.
+
 - **Syrinx is on GitHub at `Fledge-Software/Syrinx-app`.** The owner created
   the repository under the Fledge Software organisation and added it as
   `origin`, and confirmed on 2026-10-13 that the remote is theirs. This
