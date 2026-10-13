@@ -5,3 +5,7 @@
 
 # Python caches from the brand tools in design/brand/tools.
 __pycache__/
+
+# Agent worktrees are local checkouts of branches, not project files.
+# .claude/skills is project content and stays tracked.
+/.claude/worktrees/
