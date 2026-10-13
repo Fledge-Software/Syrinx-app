@@ -313,3 +313,185 @@ fn corrupted_permission_is_never_interpreted_as_a_grant() {
     store.shutdown().expect("close corrupt synthetic store");
     directory.cleanup();
 }
+
+#[test]
+fn forget_deletes_only_the_matching_row_on_a_plain_connection() {
+    let directory = TestDirectory::new();
+    let connection = directory.connection();
+    connection
+        .execute_batch(crate::permissions::TABLE)
+        .expect("create synthetic permission table");
+    let save = |origin: &str, kind: PermissionKind| {
+        crate::permissions::save(&connection, origin, kind, true).expect("save synthetic choice");
+    };
+    save("https://row.example.test", PermissionKind::Camera);
+    save("https://row.example.test", PermissionKind::Fonts);
+    save("https://other.example.test", PermissionKind::Camera);
+    let forget =
+        |origin: &str, kind: PermissionKind| crate::permissions::forget(&connection, origin, kind);
+    assert_eq!(
+        forget("https://row.example.test", PermissionKind::Camera),
+        Ok(true)
+    );
+    assert_eq!(
+        forget("https://row.example.test", PermissionKind::Camera),
+        Ok(false)
+    );
+    assert_eq!(
+        forget("https://row.example.test?x", PermissionKind::Camera),
+        Err(StoreError::InvalidEncoding(EncodingField::Permission))
+    );
+    assert_eq!(crate::permissions::count(&connection), Ok(2));
+    assert_eq!(
+        crate::permissions::load(
+            &connection,
+            "https://row.example.test",
+            PermissionKind::Camera
+        ),
+        Ok(None)
+    );
+    close(connection);
+    directory.cleanup();
+}
+
+/// Saves one synthetic choice through the serialized writer.
+fn remember(store: &Store, origin: &str, kind: PermissionKind, allowed: bool) {
+    store
+        .remember_permission(origin.into(), kind, allowed)
+        .expect("remember synthetic choice");
+}
+
+#[test]
+fn forgetting_one_choice_asks_again_and_keeps_other_kinds_and_origins() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    remember(
+        &store,
+        "https://forget.example.test",
+        PermissionKind::Camera,
+        true,
+    );
+    remember(
+        &store,
+        "https://forget.example.test",
+        PermissionKind::Microphone,
+        false,
+    );
+    remember(
+        &store,
+        "https://keep.example.test",
+        PermissionKind::Camera,
+        false,
+    );
+    assert_eq!(
+        store.forget_permission("https://forget.example.test".into(), PermissionKind::Camera),
+        Ok(true)
+    );
+    assert_eq!(
+        store.permission("https://forget.example.test", PermissionKind::Camera),
+        Ok(None),
+        "a forgotten choice asks again"
+    );
+    assert_eq!(
+        store.permission("https://forget.example.test", PermissionKind::Microphone),
+        Ok(Some(false))
+    );
+    assert_eq!(
+        store.permission("https://keep.example.test", PermissionKind::Camera),
+        Ok(Some(false))
+    );
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn forgetting_an_unsaved_choice_reports_false_and_invalid_origins_are_refused() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    remember(
+        &store,
+        "https://saved.example.test",
+        PermissionKind::Location,
+        true,
+    );
+    assert_eq!(
+        store.forget_permission(
+            "https://absent.example.test".into(),
+            PermissionKind::Location
+        ),
+        Ok(false)
+    );
+    assert_eq!(
+        store.forget_permission("http://saved.example.test".into(), PermissionKind::Location),
+        Ok(false),
+        "the scheme stays part of the origin"
+    );
+    assert_eq!(
+        store.forget_permission(
+            "https://saved.example.test/private".into(),
+            PermissionKind::Location
+        ),
+        Err(StoreError::InvalidEncoding(EncodingField::Permission))
+    );
+    assert_eq!(
+        store.permission("https://saved.example.test", PermissionKind::Location),
+        Ok(Some(true))
+    );
+    assert_eq!(
+        store.forget_permission(
+            "https://saved.example.test".into(),
+            PermissionKind::Location
+        ),
+        Ok(true)
+    );
+    assert_eq!(
+        store.forget_permission(
+            "https://saved.example.test".into(),
+            PermissionKind::Location
+        ),
+        Ok(false),
+        "a second forget finds nothing"
+    );
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn forgotten_choice_stays_forgotten_after_restart() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    remember(
+        &store,
+        "https://restart.example.test",
+        PermissionKind::Notifications,
+        true,
+    );
+    remember(
+        &store,
+        "https://restart.example.test",
+        PermissionKind::Clipboard,
+        true,
+    );
+    assert_eq!(
+        store.forget_permission(
+            "https://restart.example.test".into(),
+            PermissionKind::Notifications
+        ),
+        Ok(true)
+    );
+    store.shutdown().expect("close first store");
+    let store = Store::open(directory.lease()).expect("reopen synthetic store");
+    assert_eq!(
+        store.permission(
+            "https://restart.example.test",
+            PermissionKind::Notifications
+        ),
+        Ok(None)
+    );
+    assert_eq!(
+        store.permission("https://restart.example.test", PermissionKind::Clipboard),
+        Ok(Some(true))
+    );
+    store.shutdown().expect("close reopened store");
+    directory.cleanup();
+}

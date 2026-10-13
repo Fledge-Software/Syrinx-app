@@ -189,6 +189,27 @@ impl Store {
         result.recv().map_err(|_| StoreError::WorkerUnavailable)?
     }
 
+    /// Forgets one remembered origin/kind choice so the next request asks again. Returns
+    /// `false` when no choice was saved, which callers may report as already forgotten.
+    pub fn forget_permission(
+        &self,
+        origin: String,
+        kind: crate::PermissionKind,
+    ) -> Result<bool, StoreError> {
+        crate::permissions::validate_origin(&origin)?;
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::ForgetPermission {
+                origin,
+                kind,
+                reply,
+            })
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
+    }
+
     /// Creates a daily validated backup only while idle. This blocks on the existing writer queue.
     pub fn backup_if_due(
         &self,
@@ -358,6 +379,11 @@ enum WriterRequest {
         allowed: bool,
         reply: mpsc::SyncSender<Result<(), StoreError>>,
     },
+    ForgetPermission {
+        origin: String,
+        kind: crate::PermissionKind,
+        reply: mpsc::SyncSender<Result<bool, StoreError>>,
+    },
     Save(SaveRequest),
     /// A committed revision a reader loaded; no reply.
     Remember(StoredSnapshot),
@@ -460,6 +486,14 @@ fn serve_writes(
                         allowed,
                     ))
                     .map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::ForgetPermission {
+                origin,
+                kind,
+                reply,
+            } => {
+                let result = crate::permissions::forget(&writer.connection, &origin, kind);
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
             WriterRequest::Save(request) => {
                 let saved_rows = committed
