@@ -7,7 +7,24 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
-- **Page text skips sign-in hops (P1-25).** A page reached by a navigation
+- **Page text skips every exit from an excluded site unless Atlas started it
+  (P1-25, "skip all exits").** A page reached by leaving an excluded document
+  (Google, a bank or payment site, or a site the owner excluded) is never
+  read, unless Atlas itself started that navigation from the address bar,
+  the palette, a bookmark, a saved page, a tile or Home. Links, page
+  scripts, auto-submitting forms, popups, back, forward and reload all count
+  as leaving. The taint carries on: a page reached that way passes it to the
+  next page it leads to, until Atlas navigates the tab, so a sign-in
+  callback that moves on by script is not read either. A popup opened from
+  an excluded or tainted page starts tainted. This replaces the
+  user-initiated test in the entry below: WebView2's `IsUserInitiated`
+  follows Chromium's short-lived user activation, so a "Continue" click on a
+  bank page counted as the owner's own navigation and its next page was
+  read. Keeping the user-initiated test was rejected for that reason. The
+  form-`POST` rule below stands.
+
+- **Page text skips sign-in hops (P1-25).** *(Its user-initiated test was
+  replaced the same day by "skip all exits" above; the `POST` rule stands.)* A page reached by a navigation
   that an excluded site (Google, a bank or payment site, or a site the owner
   excluded) started by itself, through its own script or an auto-submitting
   form, is not read. Neither is any page produced by a form submission (a
