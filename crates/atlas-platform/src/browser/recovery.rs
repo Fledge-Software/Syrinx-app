@@ -131,7 +131,7 @@ impl BrowserState {
             .get(&id)
             .ok_or(BrowserError::UnknownTab)?
             .clone();
-        let page = self.build_page(id)?;
+        let page = self.build_page(id, false)?;
         page.navigate(&url)?;
         page.show(self.active == Some(id), self.bounds)?;
         self.pages.insert(id, page);

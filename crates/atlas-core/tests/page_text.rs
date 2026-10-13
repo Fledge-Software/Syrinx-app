@@ -3,8 +3,8 @@
 use std::time::{Duration, Instant};
 
 use atlas_core::{
-    DocumentFacts, Ineligible, ObservedResponse, PageTextPolicy, SAME_DOCUMENT_INTERVAL,
-    SETTLE_DELAY, judge, same_document_due,
+    DocumentFacts, Ineligible, LeftDocument, ObservedResponse, PageTextPolicy,
+    SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, judge, same_document_address, same_document_due,
 };
 
 const PAGE: &str = "https://plain.example.test/article";
@@ -39,7 +39,7 @@ fn facts<'a>(
         document_address: address,
         redirects,
         responses,
-        unprompted_from: None,
+        left: None,
         generation: 4,
     }
 }
@@ -173,34 +173,69 @@ fn a_redirect_through_an_excluded_site_is_never_read() {
     );
 }
 
-// U4: sign-in hops (owner's decision, 2026-10-12). A navigation an excluded site's script or
-// form started is skipped; a link the owner follows out of the site is not.
+// U4: leaving an excluded site (owner's decision, 2026-10-12, "skip all exits"). Any
+// navigation Atlas did not start out of an excluded or tainted document is skipped.
 #[test]
-fn a_navigation_an_excluded_site_started_by_itself_is_never_read() {
+fn every_exit_from_an_excluded_site_that_atlas_did_not_start_is_never_read() {
     let responses = [html(PAGE, &[])];
-    let judged = |unprompted_from| {
+    let judged = |left| {
         let facts = DocumentFacts {
-            unprompted_from,
+            left,
             ..facts(PAGE, &[], &responses)
         };
         judge(Some(&policy()), facts, 4).map(|_| ())
     };
-    for opener in [
+    let left = |address, tainted| Some(LeftDocument { address, tainted });
+    for excluded in [
         "https://bank.test/login",
         "https://accounts.google.com/signin",
         "https://owner.test/sso",
     ] {
         assert_eq!(
-            judged(Some(opener)),
-            Err(Ineligible::LeftExcludedUnprompted),
-            "{opener}"
+            judged(left(excluded, false)),
+            Err(Ineligible::LeftExcluded),
+            "{excluded}"
         );
     }
-    // Leaving an ordinary page or a blank tab by script is allowed, as is a user's link
-    // out of the bank (no unprompted opener is recorded then).
-    assert_eq!(judged(Some("https://other.example.test/")), Ok(()));
-    assert_eq!(judged(Some("about:blank")), Ok(()));
+    // A tainted ordinary page or blank popup passes its taint on.
+    assert_eq!(
+        judged(left("https://callback.example.test/", true)),
+        Err(Ineligible::LeftExcluded)
+    );
+    assert_eq!(
+        judged(left("about:blank", true)),
+        Err(Ineligible::LeftExcluded)
+    );
+    // Leaving a clean ordinary page or blank tab is allowed, as is any Atlas navigation.
+    assert_eq!(judged(left("https://other.example.test/", false)), Ok(()));
+    assert_eq!(judged(left("about:blank", false)), Ok(()));
     assert_eq!(judged(None), Ok(()));
+}
+
+// U4: the taint the platform carries forward uses the same rule, plus excluded redirect hops.
+#[test]
+fn taint_follows_exits_and_excluded_redirects() {
+    let policy = policy();
+    let bank = Some(LeftDocument {
+        address: "https://bank.test/",
+        tainted: false,
+    });
+    assert!(policy.taints(bank, &[]));
+    assert!(policy.taints(None, &["https://accounts.google.com/o".to_owned()]));
+    let clean = Some(LeftDocument {
+        address: PAGE,
+        tainted: false,
+    });
+    assert!(!policy.taints(clean, &["https://other.example.test/".to_owned()]));
+    assert!(!policy.taints(None, &[]));
+    assert!(same_document_address(
+        "http://127.0.0.1:80/a#top",
+        "http://127.0.0.1/a"
+    ));
+    assert!(!same_document_address(
+        PAGE,
+        "https://plain.example.test/other"
+    ));
 }
 
 // U4: any form submission, on any site, makes the document ineligible.

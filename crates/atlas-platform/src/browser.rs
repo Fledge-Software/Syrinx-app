@@ -141,8 +141,10 @@ pub enum BrowserCommand {
         span: Option<ClearSpan>,
     },
     /// Switches page-text capture on or off (P1-25). Only pages created while it is on are
-    /// observed. With `None`, no new call is made and a snapshot still in flight is dropped
-    /// unread; one already being parsed may still report its text.
+    /// observed; switching on later starts clean only for new tabs. With `None`, no new call
+    /// is made and a snapshot still in flight is dropped unread, but one already queued or
+    /// being parsed can still report `Captured`, so the receiver re-checks the setting.
+    /// Pages already observed keep tracking excluded-site taint with the last lists.
     SetPageTextPolicy(Option<PageTextPolicy>),
     Shutdown,
 }
@@ -733,16 +735,21 @@ struct BrowserState {
 
 impl BrowserState {
     fn new_page(&self, id: u64) -> Result<Page, BrowserError> {
+        self.new_popup(id, false)
+    }
+
+    /// A new page; an adopted popup inherits its opener's page-text taint.
+    fn new_popup(&self, id: u64, opener_tainted: bool) -> Result<Page, BrowserError> {
         if id == 0 {
             return Err(BrowserError::InvalidTab);
         }
         if self.pages.contains_key(&id) || self.unavailable.contains_key(&id) {
             return Err(BrowserError::DuplicateTab);
         }
-        self.build_page(id)
+        self.build_page(id, opener_tainted)
     }
 
-    fn build_page(&self, id: u64) -> Result<Page, BrowserError> {
+    fn build_page(&self, id: u64, opener_tainted: bool) -> Result<Page, BrowserError> {
         Page::new(
             id,
             self.parent,
@@ -753,6 +760,7 @@ impl BrowserState {
                 shortcuts: self.shortcuts.clone(),
                 popups: self.popups.clone(),
                 text: self.page_text.clone(),
+                opener_tainted,
             },
         )
     }
@@ -767,11 +775,13 @@ impl BrowserState {
             }
             BrowserCommand::AdoptPopup { request, id } => {
                 let pending = self.popups.take(request).ok_or(BrowserError::Popup)?;
-                if !self.pages.contains_key(&pending.opener) {
-                    return Err(BrowserError::UnknownTab);
-                }
                 // Every page uses this environment and the default profile; do not navigate the target.
-                let page = self.new_page(id)?;
+                let opener_tainted = self
+                    .pages
+                    .get(&pending.opener)
+                    .ok_or(BrowserError::UnknownTab)?
+                    .popup_tainted();
+                let page = self.new_popup(id, opener_tainted)?;
                 pending.adopt(&page.webview())?;
                 self.pages.insert(id, page);
             }

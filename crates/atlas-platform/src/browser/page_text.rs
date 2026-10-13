@@ -22,23 +22,33 @@ use wry::{WebView, WebViewExtWindows};
 
 use super::{BrowserError, BrowserEvent, DiscardReason, EventSink, NativeSink, PageTextOutcome};
 use reader::{Arrival, Job, Reader};
-use state::{Start, TextState, without_fragment};
+use state::{Rules, Start, TextState, without_fragment};
 
-/// What every page on the worker shares: the capture policy (`None` means off) and the one
-/// parse worker.
+/// What every page on the worker shares: the capture policy (`None` means off), the last
+/// exclusion lists, which keep deciding taint while capture is off, and the one parse worker.
 #[derive(Clone, Default)]
 pub(super) struct TextContext {
     policy: Rc<RefCell<Option<Rc<PageTextPolicy>>>>,
+    last: Rc<RefCell<Option<Rc<PageTextPolicy>>>>,
     reader: Reader,
 }
 
 impl TextContext {
     pub(super) fn set_policy(&self, policy: Option<PageTextPolicy>) {
-        *self.policy.borrow_mut() = policy.map(Rc::new);
+        let policy = policy.map(Rc::new);
+        if let Some(policy) = &policy {
+            *self.last.borrow_mut() = Some(policy.clone());
+        }
+        *self.policy.borrow_mut() = policy;
     }
 
     fn policy(&self) -> Option<Rc<PageTextPolicy>> {
         self.policy.borrow().clone()
+    }
+
+    /// The lists taint is judged by: the current ones, or the last ones while capture is off.
+    fn exclusions(&self) -> Option<Rc<PageTextPolicy>> {
+        self.last.borrow().clone()
     }
 }
 
@@ -53,21 +63,22 @@ pub(super) struct PageText {
 
 impl PageText {
     /// Subscribes only when capture is on as the page is created, so a page created with
-    /// capture off is never observed or read.
+    /// capture off is never observed or read. An adopted popup passes `opener_tainted`.
     pub(super) fn register(
         view: &WebView,
         id: u64,
         context: TextContext,
-        events: EventSink,
-        native: NativeSink,
+        opener_tainted: bool,
+        channels: (EventSink, NativeSink),
     ) -> Result<Option<Self>, BrowserError> {
         if context.policy().is_none() {
             return Ok(None);
         }
+        let (events, native) = channels;
         let text = Self {
             id,
             context,
-            state: Rc::new(RefCell::new(TextState::default())),
+            state: Rc::new(RefCell::new(TextState::seeded(opener_tainted))),
             events,
             native,
         };
@@ -82,6 +93,34 @@ impl PageText {
 
     pub(super) fn due(&self) -> Option<Instant> {
         self.state.borrow().due()
+    }
+
+    /// Atlas itself asked the tab to load `address`; only such a navigation clears taint.
+    pub(super) fn atlas_navigation(&self, address: &str) {
+        self.state.borrow_mut().atlas_navigation(address);
+    }
+
+    pub(super) fn atlas_navigation_refused(&self) {
+        self.state.borrow_mut().atlas_navigation_refused();
+    }
+
+    /// Whether a popup this page opens starts tainted: the page shows an excluded site or
+    /// was itself reached by leaving one. An unreadable address fails closed.
+    pub(super) fn popup_tainted(&self, view: &WebView) -> bool {
+        if self.state.borrow().tainted() {
+            return true;
+        }
+        let Some(policy) = self.context.exclusions() else {
+            return true;
+        };
+        let Ok(source) = source_of(&view.webview()) else {
+            return true;
+        };
+        let opener = atlas_core::LeftDocument {
+            address: &source,
+            tainted: false,
+        };
+        policy.taints(Some(opener), &[])
     }
 
     /// A capture deferred while suspending runs once the page is shown again.
@@ -197,23 +236,28 @@ impl PageText {
         });
     }
 
-    /// Records each requested address, including every redirect hop, and whether the owner
-    /// started the navigation (step 6).
+    /// Records each requested address, including every redirect hop, and the document a new
+    /// navigation leaves, read from the web view's Source (step 6).
     fn register_navigation_starting(&self, core: &ICoreWebView2) -> Result<(), BrowserError> {
         let (id, state, events, _) = self.channels();
-        let handler = NavigationStartingEventHandler::create(Box::new(move |_core, args| {
+        let handler = NavigationStartingEventHandler::create(Box::new(move |core, args| {
             let args = args.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
             let mut raw = PWSTR::null();
             let mut redirected = BOOL::default();
-            let mut user_initiated = BOOL::default();
             let mut navigation = 0;
             let read = unsafe {
                 args.Uri(&mut raw)
                     .and_then(|()| args.IsRedirected(&mut redirected))
-                    .and_then(|()| args.IsUserInitiated(&mut user_initiated))
                     .and_then(|()| args.NavigationId(&mut navigation))
             };
             let address = take_pwstr(raw);
+            let source = core
+                .ok_or_else(|| windows::core::Error::from(E_POINTER))
+                .and_then(|core| source_of(&core));
+            let (read, source) = match (read, source) {
+                (Ok(()), Ok(source)) => (Ok(()), source),
+                (Err(error), _) | (_, Err(error)) => (Err(error), String::new()),
+            };
             if let Err(error) = read {
                 // Without the hop, the chain is unknown: forget the document so it fails closed.
                 state.borrow_mut().forget_navigation();
@@ -223,8 +267,8 @@ impl PageText {
             let cancelled = state.borrow_mut().navigation_started(Start {
                 address,
                 redirected: redirected.as_bool(),
-                user_initiated: user_initiated.as_bool(),
                 navigation,
+                source,
             });
             cancelled_notice(&events, id, cancelled);
             Ok(())
@@ -257,7 +301,8 @@ impl PageText {
             .map_err(|_| BrowserError::EventRegistration)
     }
 
-    /// A new document or a History API change; the latter may schedule a rate-limited capture.
+    /// A new document, which inherits taint, or a History API change, which may schedule a
+    /// rate-limited capture. Taint is tracked even while capture is off.
     fn register_source(&self, core: &ICoreWebView2) -> Result<(), BrowserError> {
         let (id, state, events, _) = self.channels();
         let context = self.context.clone();
@@ -271,19 +316,23 @@ impl PageText {
                     .and_then(|()| args.IsNewDocument(&mut new_document))
             };
             let source = take_pwstr(raw);
-            let Some(policy) = context.policy() else {
-                state.borrow_mut().advance();
-                return read;
-            };
             if let Err(error) = read {
                 state.borrow_mut().forget_navigation();
                 report(&events, id);
                 return Err(error);
             }
+            let Some(policy) = context.exclusions() else {
+                state.borrow_mut().advance();
+                return Ok(());
+            };
+            let rules = Rules {
+                policy: &policy,
+                capture: context.policy().is_some(),
+            };
             let cancelled = state.borrow_mut().source_changed(
                 source,
                 new_document.as_bool(),
-                &policy,
+                rules,
                 Instant::now(),
             );
             cancelled_notice(&events, id, cancelled);
@@ -310,13 +359,17 @@ impl PageText {
                 report(&events, id);
                 return Err(error);
             }
-            let Some(policy) = context.policy() else {
+            let Some(policy) = context.exclusions() else {
                 return Ok(());
+            };
+            let rules = Rules {
+                policy: &policy,
+                capture: context.policy().is_some(),
             };
             state.borrow_mut().navigation_completed(
                 navigation,
                 success.as_bool(),
-                &policy,
+                rules,
                 Instant::now(),
             );
             Ok(())
@@ -340,11 +393,16 @@ impl PageText {
 
 /// Whether the web view shows `address` now, ignoring any fragment.
 fn shows(core: &ICoreWebView2, address: &str) -> Result<bool, BrowserError> {
+    let source = source_of(core).map_err(|_| BrowserError::PageText)?;
+    Ok(without_fragment(&source) == without_fragment(address))
+}
+
+/// The address the web view shows now.
+fn source_of(core: &ICoreWebView2) -> windows::core::Result<String> {
     let mut raw = PWSTR::null();
     let read = unsafe { core.Source(&mut raw) };
     let source = take_pwstr(raw);
-    read.map_err(|_| BrowserError::PageText)?;
-    Ok(without_fragment(&source) == without_fragment(address))
+    read.map(|()| source)
 }
 
 fn is_suspended(core: &ICoreWebView2) -> Result<bool, BrowserError> {

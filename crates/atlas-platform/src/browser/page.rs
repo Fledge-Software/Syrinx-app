@@ -51,6 +51,8 @@ pub(super) struct PageContext {
     pub(super) shortcuts: NativeSink,
     pub(super) popups: super::popups::PopupRequests,
     pub(super) text: super::page_text::TextContext,
+    /// An adopted popup whose opener showed an excluded or tainted document.
+    pub(super) opener_tainted: bool,
 }
 
 pub(super) struct Page {
@@ -76,6 +78,7 @@ impl Page {
             shortcuts,
             popups,
             text: text_context,
+            opener_tainted,
         } = context;
         let destination = std::rc::Rc::new(std::cell::RefCell::new("about:blank".to_owned()));
         let life = super::lifecycle::CallbackLife::new();
@@ -136,8 +139,8 @@ impl Page {
             &view,
             id,
             text_context,
-            events.clone(),
-            shortcuts.clone(),
+            opener_tainted,
+            (events.clone(), shortcuts.clone()),
         ) {
             Ok(text) => text,
             Err(error) => {
@@ -172,6 +175,14 @@ impl Page {
         }
     }
 
+    /// Whether a popup this page opens starts tainted; a page Atlas does not observe gives
+    /// no evidence, so its popups do (fail closed).
+    pub(super) fn popup_tainted(&self) -> bool {
+        self.text
+            .as_ref()
+            .is_none_or(|text| text.popup_tainted(&self.view))
+    }
+
     pub(super) fn destination(&self) -> String {
         self.destination.borrow().clone()
     }
@@ -181,8 +192,15 @@ impl Page {
         self.lifecycle.resume(&self.view)?;
         // Mark the load first, so a hidden page cannot be suspended before WebView2 starts it.
         self.lifecycle.navigation_requested();
+        // Only a navigation Atlas starts clears an excluded site's taint (P1-25).
+        if let Some(text) = &self.text {
+            text.atlas_navigation(url);
+        }
         if self.view.load_url(url).is_err() {
             self.lifecycle.navigation_refused();
+            if let Some(text) = &self.text {
+                text.atlas_navigation_refused();
+            }
             return Err(BrowserError::Navigation);
         }
         *self.destination.borrow_mut() = url.to_owned();

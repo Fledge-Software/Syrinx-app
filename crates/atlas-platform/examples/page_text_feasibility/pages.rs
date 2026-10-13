@@ -111,6 +111,9 @@ pub fn route(role: Role, path: &str, sites: &Sites) -> Reply {
         ["navigate", mode] => self_navigation(mode, sites),
         ["signin", mode] => sign_in_hop(mode, sites),
         ["link-out"] => link_out(sites),
+        ["popup-out"] => popup_out(sites),
+        ["relay"] => relay(sites),
+        ["postto", code, target] => post_to(code, target, sites),
         ["posted"] => Reply::html(
             "<!doctype html><meta charset=utf-8><title>posted</title>\
              <link rel=icon href=data:,><p>posted-sentinel</p>",
@@ -174,6 +177,7 @@ fn redirect(code: &str, target: &str, rest: &[&str], sites: &Sites, hop_no_store
     let status = match code {
         "301" => "301 Moved Permanently",
         "302" => "302 Found",
+        "303" => "303 See Other",
         "307" => "307 Temporary Redirect",
         "308" => "308 Permanent Redirect",
         _ => return bad_request(),
@@ -214,7 +218,11 @@ fn self_navigation(mode: &str, sites: &Sites) -> Reply {
 fn sign_in_hop(mode: &str, sites: &Sites) -> Reply {
     let landing = sites.url(Role::Plain, "/landing?via=script");
     let posted = sites.url(Role::Plain, "/posted");
+    let relay = sites.url(Role::Plain, "/relay");
     let leaving = match mode {
+        "chain" => format!(
+            "<script>addEventListener('load',()=>setTimeout(()=>{{location.href='{relay}';}},300));</script>"
+        ),
         "script" => format!(
             "<script>addEventListener('load',()=>setTimeout(()=>{{location.href='{landing}';}},300));</script>"
         ),
@@ -238,6 +246,40 @@ fn link_out(sites: &Sites) -> Reply {
         "<!doctype html><meta charset=utf-8><title>link-out</title><link rel=icon href=data:,>\
          <p><a id=out href='{landing}'>Continue</a></p>\
          <script>out.focus();addEventListener('focus',()=>out.focus());</script>"
+    ))
+}
+
+/// F26: an ordinary page that moves on by its own script, as an OAuth callback does.
+fn relay(sites: &Sites) -> Reply {
+    let landing = sites.url(Role::Plain, "/landing?via=relay");
+    Reply::html(format!(
+        "<!doctype html><meta charset=utf-8><title>relay</title><link rel=icon href=data:,>\
+         <p>Relay page</p>\
+         <script>addEventListener('load',()=>setTimeout(()=>{{location.href='{landing}';}},300));</script>"
+    ))
+}
+
+/// F27: a focused button that opens a plain page in a popup when a synthetic Enter clicks it.
+fn popup_out(sites: &Sites) -> Reply {
+    let landing = sites.url(Role::Plain, "/landing?via=popup");
+    Reply::html(format!(
+        "<!doctype html><meta charset=utf-8><title>popup-out</title><link rel=icon href=data:,>\
+         <p><button id=go onclick=\"window.open('{landing}')\">Open</button></p>\
+         <script>go.focus();addEventListener('focus',()=>go.focus());</script>"
+    ))
+}
+
+/// F25: an auto-submitting form `POST` answered by a redirect (`code`) to `target`'s landing.
+fn post_to(code: &str, target: &str, sites: &Sites) -> Reply {
+    if !matches!(code, "302" | "303" | "307") || Role::ALL.iter().all(|role| role.name() != target)
+    {
+        return bad_request();
+    }
+    let action = sites.url(Role::Plain, &format!("/go/{code}/{target}/landing"));
+    Reply::html(format!(
+        "<!doctype html><meta charset=utf-8><title>post</title><link rel=icon href=data:,>\
+         <form method=post action='{action}'><input type=hidden name=token value=synthetic></form>\
+         <script>addEventListener('load',()=>setTimeout(()=>document.forms[0].submit(),300));</script>"
     ))
 }
 

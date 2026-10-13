@@ -1,11 +1,11 @@
 //! What one tab has observed about its current document, kept apart from WebView2 so the
-//! scheduling rules can be tested without a window.
+//! scheduling and exit rules can be tested without a window.
 
 use std::time::Instant;
 
 use atlas_core::{
-    DocumentFacts, EligibleDocument, Ineligible, ObservedResponse, PageTextPolicy, judge,
-    same_document_due,
+    DocumentFacts, EligibleDocument, Ineligible, LeftDocument, ObservedResponse, PageTextPolicy,
+    judge, same_document_address, same_document_due,
 };
 
 /// The most top-level responses remembered for one navigation.
@@ -25,11 +25,13 @@ pub(super) struct TextState {
     document: Option<String>,
     /// The address shown now; differs from `document` after a History API change.
     address: Option<String>,
-    /// The last document that committed, kept across navigation starts so that a navigation
-    /// the owner did not start knows which document it left.
-    committed: Option<String>,
-    /// The committed document a navigation left when the owner did not start it.
-    unprompted_from: Option<String>,
+    /// An address Atlas itself asked this tab to load, until its navigation starts.
+    atlas_requested: Option<String>,
+    /// The document this navigation left, when Atlas did not start it.
+    left: Option<Left>,
+    /// The committed document was reached by leaving an excluded or tainted document; kept
+    /// until Atlas itself navigates the tab, even while capture is off.
+    tainted: bool,
     loaded: bool,
     /// When a capture falls due, and the generation it was scheduled for.
     due: Option<(Instant, u64)>,
@@ -39,9 +41,43 @@ pub(super) struct TextState {
     in_flight: bool,
 }
 
+/// The exclusion lists to apply, and whether capture is on now. While capture is off the
+/// last lists still decide taint, but nothing is scheduled.
+#[derive(Clone, Copy)]
+pub(super) struct Rules<'a> {
+    pub(super) policy: &'a PageTextPolicy,
+    pub(super) capture: bool,
+}
+
+/// What `NavigationStarting` reported for one hop.
+pub(super) struct Start {
+    pub(super) address: String,
+    pub(super) redirected: bool,
+    pub(super) navigation: u64,
+    /// The web view's `Source()` as the navigation began: the document being left.
+    pub(super) source: String,
+}
+
+struct Left {
+    address: String,
+    tainted: bool,
+}
+
 impl TextState {
+    /// A popup's state: it starts tainted when its opener's document was excluded or tainted.
+    pub(super) fn seeded(tainted: bool) -> Self {
+        Self {
+            tainted,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn generation(&self) -> u64 {
         self.generation
+    }
+
+    pub(super) fn tainted(&self) -> bool {
+        self.tainted
     }
 
     /// The next wake-up; none while a call is in flight, so the worker does not spin.
@@ -58,43 +94,73 @@ impl TextState {
         self.due.take().is_some()
     }
 
+    /// Atlas asked the tab to load `address` (address bar, palette, bookmark, tile, Home).
+    pub(super) fn atlas_navigation(&mut self, address: &str) {
+        self.atlas_requested = Some(address.to_owned());
+    }
+
+    /// WebView2 refused Atlas's request before starting it.
+    pub(super) fn atlas_navigation_refused(&mut self) {
+        self.atlas_requested = None;
+    }
+
     pub(super) fn navigation_started(&mut self, start: Start) -> bool {
         let cancelled = self.advance();
         if start.redirected && self.navigation == Some(start.navigation) {
             self.redirects.extend(self.requested.take());
         } else {
-            self.navigation = Some(start.navigation);
-            self.redirects.clear();
-            self.responses.clear();
-            self.unprompted_from = self.committed.clone().filter(|_| !start.user_initiated);
+            self.begin_navigation(&start);
         }
-        let address = start.address;
-        self.requested = Some(address);
+        self.requested = Some(start.address);
         self.document = None;
         self.address = None;
         self.loaded = false;
         cancelled
     }
 
+    /// A new navigation: a fresh chain, and the document left unless Atlas started it.
+    fn begin_navigation(&mut self, start: &Start) {
+        self.navigation = Some(start.navigation);
+        self.redirects.clear();
+        self.responses.clear();
+        let started_by_atlas = self
+            .atlas_requested
+            .as_deref()
+            .is_some_and(|requested| same_document_address(requested, &start.address));
+        if started_by_atlas {
+            self.atlas_requested = None;
+            self.left = None;
+            return;
+        }
+        self.left = Some(Left {
+            address: start.source.clone(),
+            tainted: self.tainted,
+        });
+    }
+
     /// Forgets the navigation when its facts could not be read, so nothing is judged readable.
+    /// The taint is kept: an unreadable start never clears it.
     pub(super) fn forget_navigation(&mut self) -> bool {
         let cancelled = self.navigation_started(Start {
             address: String::new(),
             redirected: false,
-            user_initiated: true,
             navigation: u64::MAX,
+            source: String::new(),
         });
         self.requested = None;
         cancelled
     }
 
-    /// Whether a response is the one the current navigation is waiting for.
+    /// Whether a response belongs to the current navigation: its final address or any
+    /// earlier hop, since a redirect's response can arrive after the next hop starts.
     pub(super) fn wants_response(&self, address: &str) -> bool {
+        let address = without_fragment(address);
         self.responses.len() < RESPONSE_RECORDS
             && self
-                .requested
-                .as_deref()
-                .is_some_and(|requested| without_fragment(requested) == without_fragment(address))
+                .redirects
+                .iter()
+                .chain(self.requested.as_ref())
+                .any(|hop| without_fragment(hop) == address)
     }
 
     pub(super) fn record_response(&mut self, response: ObservedResponse) {
@@ -107,30 +173,39 @@ impl TextState {
         &mut self,
         source: String,
         new_document: bool,
-        policy: &PageTextPolicy,
+        rules: Rules<'_>,
         now: Instant,
     ) -> bool {
         let cancelled = self.advance();
         if new_document {
-            self.committed = Some(source.clone());
+            self.commit(rules.policy);
             self.document = Some(source.clone());
             self.address = Some(source);
             self.loaded = false;
             return cancelled;
         }
         self.address = Some(source);
-        if self.loaded && self.document.is_some() {
-            let due = same_document_due(self.last_capture, now, policy.settle_delay());
+        if rules.capture && self.loaded && self.document.is_some() {
+            let due = same_document_due(self.last_capture, now, rules.policy.settle_delay());
             self.due = Some((due, self.generation));
         }
         cancelled
+    }
+
+    /// A new document committed: it inherits the taint of what its navigation left.
+    fn commit(&mut self, policy: &PageTextPolicy) {
+        let left = self.left.as_ref().map(|left| LeftDocument {
+            address: &left.address,
+            tainted: left.tainted,
+        });
+        self.tainted = policy.taints(left, &self.redirects);
     }
 
     pub(super) fn navigation_completed(
         &mut self,
         navigation: u64,
         success: bool,
-        policy: &PageTextPolicy,
+        rules: Rules<'_>,
         now: Instant,
     ) {
         if self.navigation != Some(navigation) {
@@ -138,14 +213,14 @@ impl TextState {
         }
         // A reload or a visit to the same address raises no SourceChanged (F14 found this).
         // The guess is confirmed against the web view's Source before any call, and never
-        // replaces `committed`, which only a real commit sets.
+        // changes the taint, which only a real commit sets.
         if success && self.document.is_none() {
             self.document = self.requested.clone();
             self.address = self.requested.clone();
         }
         self.loaded = success && self.document.is_some();
-        if self.loaded {
-            self.due = Some((now + policy.settle_delay(), self.generation));
+        if rules.capture && self.loaded {
+            self.due = Some((now + rules.policy.settle_delay(), self.generation));
         }
     }
 
@@ -210,20 +285,14 @@ impl TextState {
             document_address: document,
             redirects: &redirects,
             responses: &self.responses,
-            unprompted_from: self.unprompted_from.as_deref(),
+            left: self.left.as_ref().map(|left| LeftDocument {
+                address: &left.address,
+                tainted: left.tainted,
+            }),
             generation: scheduled,
         };
         judge(policy, facts, self.generation)
     }
-}
-
-/// What `NavigationStarting` reported for one hop.
-pub(super) struct Start {
-    pub(super) address: String,
-    pub(super) redirected: bool,
-    /// False when a page script or form, not the owner or Atlas, started the navigation.
-    pub(super) user_initiated: bool,
-    pub(super) navigation: u64,
 }
 
 pub(super) fn without_fragment(address: &str) -> &str {
@@ -237,11 +306,19 @@ mod tests {
 
     const START: &str = "https://plain.example.test/start";
     const PAGE: &str = "https://plain.example.test/page";
+    const BANK: &str = "https://bank.test/login";
 
     fn policy() -> PageTextPolicy {
         PageTextPolicy::new(&["owner.test"])
             .and_then(|policy| policy.with_banking(&["bank.test"]))
             .expect("synthetic policy")
+    }
+
+    fn on(policy: &PageTextPolicy) -> Rules<'_> {
+        Rules {
+            policy,
+            capture: true,
+        }
     }
 
     fn html(address: &str) -> ObservedResponse {
@@ -255,22 +332,40 @@ mod tests {
         }
     }
 
+    /// A hop that leaves a blank tab.
     fn start(address: &str, redirected: bool, navigation: u64) -> Start {
+        exit("about:blank", address, navigation, redirected)
+    }
+
+    /// A hop that leaves `from`, as the web view's Source reports it.
+    fn exit(from: &str, address: &str, navigation: u64, redirected: bool) -> Start {
         Start {
             address: address.to_owned(),
             redirected,
-            user_initiated: true,
             navigation,
+            source: from.to_owned(),
         }
     }
 
-    /// A page that loaded and committed without redirects, under `navigation`.
+    /// A page that loaded and committed without redirects, under `page.navigation`.
     fn visit(state: &mut TextState, page: Start, now: Instant) {
         let (address, navigation) = (page.address.clone(), page.navigation);
         state.navigation_started(page);
         state.record_response(html(&address));
-        state.source_changed(address, true, &policy(), now);
-        state.navigation_completed(navigation, true, &policy(), now);
+        state.source_changed(address, true, on(&policy()), now);
+        state.navigation_completed(navigation, true, on(&policy()), now);
+    }
+
+    /// The same, for a navigation Atlas started.
+    fn atlas_visit(
+        state: &mut TextState,
+        from: &str,
+        address: &str,
+        navigation: u64,
+        now: Instant,
+    ) {
+        state.atlas_navigation(address);
+        visit(state, exit(from, address, navigation, false), now);
     }
 
     fn verdict(state: &mut TextState, now: Instant) -> Result<(), Ineligible> {
@@ -284,8 +379,8 @@ mod tests {
         state.navigation_started(start(START, false, 7));
         state.navigation_started(start(PAGE, true, 7));
         state.record_response(html(PAGE));
-        state.source_changed(PAGE.into(), true, &policy(), now);
-        state.navigation_completed(7, true, &policy(), now);
+        state.source_changed(PAGE.into(), true, on(&policy()), now);
+        state.navigation_completed(7, true, on(&policy()), now);
         state
     }
 
@@ -296,8 +391,8 @@ mod tests {
         state.navigation_started(start("https://bank.test/login", false, 3));
         state.navigation_started(start(PAGE, true, 3));
         state.record_response(html(PAGE));
-        state.source_changed(PAGE.into(), true, &policy(), now);
-        state.navigation_completed(3, true, &policy(), now);
+        state.source_changed(PAGE.into(), true, on(&policy()), now);
+        state.navigation_completed(3, true, on(&policy()), now);
         let scheduled = state.take_due(now + Duration::from_secs(3)).expect("due");
         assert_eq!(
             state.judge(Some(&policy()), scheduled).map(|_| ()),
@@ -315,14 +410,14 @@ mod tests {
         // A reload: start and completion only.
         state.navigation_started(start(PAGE, false, 8));
         state.record_response(html(PAGE));
-        state.navigation_completed(8, true, &policy(), now);
+        state.navigation_completed(8, true, on(&policy()), now);
         assert_eq!(state.document.as_deref(), Some(PAGE));
         let scheduled = state.take_due(now + Duration::from_secs(3)).expect("due");
         let document = state.judge(Some(&policy()), scheduled).expect("eligible");
         assert_eq!(document.address(), PAGE);
         // A failed completion schedules nothing.
         state.navigation_started(start(PAGE, false, 9));
-        state.navigation_completed(9, false, &policy(), now);
+        state.navigation_completed(9, false, on(&policy()), now);
         assert_eq!(state.due(), None);
     }
 
@@ -332,7 +427,7 @@ mod tests {
         let mut state = TextState::default();
         state.navigation_started(start(PAGE, false, 1));
         state.navigation_started(start(START, false, 2));
-        state.navigation_completed(1, true, &policy(), now);
+        state.navigation_completed(1, true, on(&policy()), now);
         assert_eq!(state.due(), None);
         assert_eq!(state.document, None);
     }
@@ -346,7 +441,7 @@ mod tests {
         state.call_started();
         let captured_at = now + Duration::from_secs(3);
         state.call_finished(captured_at);
-        state.source_changed(format!("{PAGE}/2"), false, &policy(), captured_at);
+        state.source_changed(format!("{PAGE}/2"), false, on(&policy()), captured_at);
         assert_eq!(
             state.due(),
             Some(captured_at + atlas_core::SAME_DOCUMENT_INTERVAL)
@@ -360,7 +455,7 @@ mod tests {
         state.take_due(now + Duration::from_secs(3)).expect("due");
         state.call_started();
         // A History API change while in flight schedules a capture it must not spin on.
-        state.source_changed(format!("{PAGE}/2"), false, &policy(), now);
+        state.source_changed(format!("{PAGE}/2"), false, on(&policy()), now);
         assert_eq!(state.due(), None);
         assert_eq!(state.take_due(now + Duration::from_secs(60)), None);
         state.call_finished(now);
@@ -395,54 +490,101 @@ mod tests {
     }
 
     #[test]
-    fn a_script_navigation_out_of_an_excluded_page_is_a_sign_in_hop() {
+    fn a_script_navigation_out_of_an_excluded_page_is_skipped_and_the_taint_carries_on() {
         let now = Instant::now();
         let mut state = TextState::default();
-        visit(&mut state, start("https://bank.test/login", false, 1), now);
-        let scripted = Start {
-            user_initiated: false,
-            ..start(PAGE, false, 2)
-        };
-        visit(&mut state, scripted, now);
-        assert_eq!(
-            verdict(&mut state, now),
-            Err(Ineligible::LeftExcludedUnprompted)
+        atlas_visit(&mut state, "about:blank", BANK, 1, now);
+        visit(&mut state, exit(BANK, PAGE, 2, false), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+        // The callback page's own script moves on: still tainted, still skipped.
+        visit(&mut state, exit(PAGE, START, 3, false), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+        // Only a navigation Atlas starts clears the taint.
+        atlas_visit(&mut state, START, PAGE, 4, now);
+        assert_eq!(verdict(&mut state, now), Ok(()));
+        visit(&mut state, exit(PAGE, START, 5, false), now);
+        assert_eq!(verdict(&mut state, now), Ok(()));
+    }
+
+    #[test]
+    fn a_link_out_of_an_excluded_page_is_skipped() {
+        let now = Instant::now();
+        let mut state = TextState::default();
+        atlas_visit(&mut state, "about:blank", BANK, 1, now);
+        // A click is not an Atlas navigation, however recently the owner touched the page.
+        visit(&mut state, exit(BANK, PAGE, 2, false), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+    }
+
+    #[test]
+    fn atlas_navigation_is_recognised_only_for_the_address_it_asked_for() {
+        let now = Instant::now();
+        let mut state = TextState::default();
+        atlas_visit(&mut state, "about:blank", BANK, 1, now);
+        // A page script's navigation that starts before Atlas's own does not consume it.
+        state.atlas_navigation(PAGE);
+        visit(&mut state, exit(BANK, START, 2, false), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+        visit(
+            &mut state,
+            exit(START, &format!("{PAGE}#top"), 3, false),
+            now,
         );
-        // The same page's own script moving on again leaves a plain page, which is allowed.
-        let onward = Start {
-            user_initiated: false,
-            ..start(START, false, 3)
-        };
-        visit(&mut state, onward, now);
         assert_eq!(verdict(&mut state, now), Ok(()));
     }
 
     #[test]
-    fn a_user_link_out_of_an_excluded_page_stays_eligible() {
+    fn a_redirect_through_an_excluded_site_taints_the_next_exit() {
         let now = Instant::now();
         let mut state = TextState::default();
-        visit(&mut state, start("https://bank.test/", false, 1), now);
-        visit(&mut state, start(PAGE, false, 2), now);
-        assert_eq!(verdict(&mut state, now), Ok(()));
+        state.atlas_navigation(START);
+        state.navigation_started(start(START, false, 1));
+        state.navigation_started(start("https://accounts.google.com/o", true, 1));
+        state.navigation_started(start(PAGE, true, 1));
+        state.record_response(html(PAGE));
+        state.source_changed(PAGE.into(), true, on(&policy()), now);
+        assert!(state.tainted());
+        visit(&mut state, exit(PAGE, START, 2, false), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
     }
 
     #[test]
-    fn a_cancelled_navigation_does_not_move_the_committed_document() {
+    fn a_cancelled_navigation_leaves_the_source_as_the_document_left() {
         let now = Instant::now();
         let mut state = TextState::default();
-        visit(&mut state, start("https://bank.test/", false, 1), now);
+        atlas_visit(&mut state, "about:blank", BANK, 1, now);
         // A 204 or a download from the bank: start and completion, no new document.
-        state.navigation_started(start(PAGE, false, 2));
-        state.navigation_completed(2, true, &policy(), now);
-        let scripted = Start {
-            user_initiated: false,
-            ..start(START, false, 3)
+        state.navigation_started(exit(BANK, PAGE, 2, false));
+        state.navigation_completed(2, true, on(&policy()), now);
+        visit(&mut state, exit(BANK, START, 3, false), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+    }
+
+    #[test]
+    fn taint_is_tracked_while_capture_is_off_and_nothing_is_scheduled() {
+        let now = Instant::now();
+        let mut state = TextState::default();
+        let policy = policy();
+        let off = Rules {
+            policy: &policy,
+            capture: false,
         };
-        visit(&mut state, scripted, now);
-        assert_eq!(
-            verdict(&mut state, now),
-            Err(Ineligible::LeftExcludedUnprompted)
-        );
+        state.navigation_started(exit(BANK, PAGE, 1, false));
+        state.source_changed(PAGE.into(), true, off, now);
+        state.navigation_completed(1, true, off, now);
+        assert!(state.tainted());
+        assert_eq!(state.due(), None);
+    }
+
+    #[test]
+    fn a_popup_from_an_excluded_or_tainted_opener_starts_tainted() {
+        let now = Instant::now();
+        let mut state = TextState::seeded(true);
+        visit(&mut state, start(PAGE, false, 1), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+        let mut clean = TextState::seeded(false);
+        visit(&mut clean, start(PAGE, false, 1), now);
+        assert_eq!(verdict(&mut clean, now), Ok(()));
     }
 
     #[test]
@@ -454,8 +596,27 @@ mod tests {
             method: "POST".to_owned(),
             ..html(PAGE)
         });
-        state.source_changed(PAGE.into(), true, &policy(), now);
-        state.navigation_completed(1, true, &policy(), now);
+        state.source_changed(PAGE.into(), true, on(&policy()), now);
+        state.navigation_completed(1, true, on(&policy()), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::FormPost));
+    }
+
+    #[test]
+    fn a_post_redirect_response_arriving_after_the_next_hop_still_counts() {
+        let now = Instant::now();
+        let mut state = TextState::default();
+        let submit = "https://plain.example.test/submit";
+        state.navigation_started(start(submit, false, 1));
+        state.navigation_started(start(PAGE, true, 1));
+        // The 303's response event arrives after the redirect's NavigationStarting.
+        state.record_response(ObservedResponse {
+            method: "POST".to_owned(),
+            status: 303,
+            ..html(submit)
+        });
+        state.record_response(html(PAGE));
+        state.source_changed(PAGE.into(), true, on(&policy()), now);
+        state.navigation_completed(1, true, on(&policy()), now);
         assert_eq!(verdict(&mut state, now), Err(Ineligible::FormPost));
     }
 
@@ -464,7 +625,7 @@ mod tests {
         let now = Instant::now();
         let mut state = loaded(now);
         state.forget_navigation();
-        state.navigation_completed(u64::MAX, true, &policy(), now);
+        state.navigation_completed(u64::MAX, true, on(&policy()), now);
         assert_eq!(state.due(), None);
         assert!(!state.wants_response(PAGE));
     }
