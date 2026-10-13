@@ -94,7 +94,14 @@ jobs:
         run: .github/scripts/set-version.sh "$VERSION"
 
       - name: Run the gate
+        id: gate
         run: cargo xtask check
+
+      # A test that crashes the process hides its own name; one at a time, the last line names it.
+      - name: On a test crash, rerun the app's tests one at a time
+        if: failure() && steps.gate.outcome == 'failure'
+        shell: bash
+        run: cargo test --workspace --bin syrinx --profile local --offline --locked -- --test-threads=1 2>&1 | tail -n 60
 
       - id: package
         name: Build the portable package
