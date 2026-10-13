@@ -5,13 +5,13 @@ decisions: D39; D13, D37, D40 and D47 constrain it
 date: 2026-10-12
 ---
 
-# AN-01 and AN-02: Atlas's local usage report
+# AN-01 and AN-02: Syrinx's local usage report
 
 ## Why this proposal exists
 
 On 2026-10-10 the owner replaced the blanket "no telemetry" rule with D39:
-Atlas may count how it is used, on this computer only, so that the owner can
-later hand a report to a model and get suggestions for improving Atlas. D39
+Syrinx may count how it is used, on this computer only, so that the owner can
+later hand a report to a model and get suggestions for improving Syrinx. D39
 also said what that may not include: no account or device identifiers, no
 addresses, searches, file paths or document text, no detailed timeline of
 events, and no automatic upload. And it said that nothing is collected until
@@ -32,7 +32,7 @@ counts as private by itself, one call site at a time. That is how a
 
 - **Counter**: a number that only goes up, such as "palette opened".
 - **Timing histogram**: for one measured operation, a fixed row of counters,
-  one per time range (bucket). Atlas adds one to the bucket the measurement
+  one per time range (bucket). Syrinx adds one to the bucket the measurement
   falls in and keeps nothing else: not the measurement, not when it happened.
 - **Error category**: a counter for a fixed kind of failure, such as
   "storage write failed". Never an error message, code or path.
@@ -56,7 +56,7 @@ counts as private by itself, one call site at a time. That is how a
 4. **Nothing profiles sensitive behaviour, even as a count.** For example,
    there is no counter of "pages skipped because they were banking sites":
    that would be a monthly count of the owner's banking visits. Counts are
-   about Atlas's features, not about which parts of the owner's life they
+   about Syrinx's features, not about which parts of the owner's life they
    touched.
 5. **Off is truly off.** When collection is off, the recording calls do
    nothing and no file exists.
@@ -72,18 +72,18 @@ justified was left out (see "Rejected fields").
 
 | Field | Type | Why |
 |---|---|---|
-| `schema_version` | integer, `1` | Lets a later Atlas or a model read old reports correctly. |
-| `atlas_version` | string, Atlas's own version (`0.1.0`) | Ties numbers to a build, so a regression can be traced to a change. Not an identifier: every copy of a build has the same one. |
+| `schema_version` | integer, `1` | Lets a later Syrinx or a model read old reports correctly. |
+| `syrinx_version` | string, Syrinx's own version (`0.1.0`) | Ties numbers to a build, so a regression can be traced to a change. Not an identifier: every copy of a build has the same one. |
 | `period_start` | date, `YYYY-MM-DD`, local calendar | Needed to read counts as rates. Day precision only. |
 | `period_end` | date, `YYYY-MM-DD` | The day of export, or the day a completed period closed. |
-| `days_used` | integer | Days in the period on which Atlas started at least once; turns totals into per-day rates. Atlas stores only the last day it counted, never a list of days. |
-| `about` | fixed text compiled into Atlas | Explains the units and bucket edges to the reader or model. Identical in every report. |
+| `days_used` | integer | Days in the period on which Syrinx started at least once; turns totals into per-day rates. Syrinx stores only the last day it counted, never a list of days. |
+| `about` | fixed text compiled into Syrinx | Explains the units and bucket edges to the reader or model. Identical in every report. |
 
 ### Feature counters
 
 | Field | Counts | Question it answers |
 |---|---|---|
-| `app.started` | Atlas launches | Baseline for every rate. |
+| `app.started` | Syrinx launches | Baseline for every rate. |
 | `tab.created` | New ordinary tabs (Ctrl T, new-window adoption, palette) | How tab-heavy is use? |
 | `tab.closed` | Tab closures | |
 | `tab.reopened` | Ctrl Shift T reopenings (D42) | Is the 20-entry stack used, and is it enough? |
@@ -115,7 +115,7 @@ justified was left out (see "Rejected fields").
 | `sidebar.peek_shown` | Hover-peek shown (P1-17) | Does peek trigger by accident? |
 | `home.tile_opened` | Quick access tile opened (P1-28) | |
 | `favorite.opened` | Sidebar Favorite opened (D45) | |
-| `find.opened` | Atlas's own find opened (Ctrl K route, P1-13) | |
+| `find.opened` | Syrinx's own find opened (Ctrl K route, P1-13) | |
 | `page_text.captured` | Pages captured for full text (P1-26) | Cost against `palette.chose_page_text`. One total only; skips are not split by reason (principle 4). |
 | `settings.opened` | Settings or Customize opened | |
 
@@ -145,7 +145,7 @@ milliseconds, and the last bucket counts everything above the previous edge.
 
 | Field | Scale | Measures | Why |
 |---|---|---|---|
-| `startup.first_frame_ms` | Start-up | Process start to Atlas's first painted frame | D6 start-up in real use. |
+| `startup.first_frame_ms` | Start-up | Process start to Syrinx's first painted frame | D6 start-up in real use. |
 | `startup.session_restored_ms` | Start-up | Process start to restored tabs listed (P1-19) | Whether restore slows start-up. |
 | `palette.open_to_paint_ms` | Interaction | Ctrl K to palette painted | Phase 4's one-frame target. |
 | `search.tier1_ms` | Interaction | One keystroke's complete tier 1 ranking (D48's path) | D48 in daily use, not only the benchmark. |
@@ -162,7 +162,7 @@ milliseconds, and the last bucket counts everything above the previous edge.
 | `error.storage_write` | A durable write failed |
 | `error.storage_location_refused` | The data folder was refused (synced folder, D13) |
 | `error.backup_failed` | A daily snapshot failed |
-| `error.recovery_offered` | Atlas offered a backup restore (D46) |
+| `error.recovery_offered` | Syrinx offered a backup restore (D46) |
 | `error.unclean_shutdown` | The previous run did not exit cleanly |
 | `error.renderer_failed` | A page's renderer process failed (P1-16) |
 | `error.browser_process_exited` | The shared WebView2 browser process exited |
@@ -189,7 +189,7 @@ milliseconds, and the last bucket counts everything above the previous edge.
 **Where.** Settings, in a "Usage report" section, beside the privacy settings.
 
 **Default: off.** Nothing is counted until the owner turns it on. The
-switch reads "Count how I use Atlas, on this computer only", with one line
+switch reads "Count how I use Syrinx, on this computer only", with one line
 under it: "Nothing is sent anywhere. You can view, export or delete the
 counts at any time."
 
@@ -210,7 +210,7 @@ starts a new period today, after a confirmation.
 
 - **A period lasts at most 30 days.** On the first start after 30 days, the
   current period becomes the *previous* period, and a new one begins.
-- **Atlas keeps at most two periods**: the current one and the previous one.
+- **Syrinx keeps at most two periods**: the current one and the previous one.
   Starting a new period deletes the period before the previous one. The
   longest anything is kept is therefore about 60 days.
 - 30 days was chosen because a month gives enough use to see patterns and
@@ -221,7 +221,7 @@ starts a new period today, after a confirmation.
   never restored from them, so a restore can never bring back counts the
   owner reset or deleted (the same reasoning as D47). Losing usage counts in
   a disaster is harmless.
-- **Location.** The file lives in Atlas's local (not roaming) app-data
+- **Location.** The file lives in Syrinx's local (not roaming) app-data
   folder beside the database, behind the same synced-folder guard (D13).
 
 ## Storage and overhead
@@ -243,7 +243,7 @@ at most once every five minutes, and only if a counter changed, plus once at
 clean shutdown. A crash loses at most five minutes of counts.
 
 **Idle cost.** The flush timer is armed only after a counter changes, so an
-idle Atlas wakes up zero extra times. This protects D37's 0.5% idle-CPU bar.
+idle Syrinx wakes up zero extra times. This protects D37's 0.5% idle-CPU bar.
 
 **Budget, checked by AN-01's tests:**
 
@@ -254,7 +254,7 @@ idle Atlas wakes up zero extra times. This protects D37's 0.5% idle-CPU bar.
 | Extra idle wake-ups | Zero |
 | Disk writes | At most one per five minutes while in use, under 32 KiB each |
 | Start-up cost of loading the file | Under 1 ms at the 95th percentile |
-| A malformed or oversized usage file | Refused, renamed aside and counted once in `error.usage_file_reset`; never crashes Atlas |
+| A malformed or oversized usage file | Refused, renamed aside and counted once in `error.usage_file_reset`; never crashes Syrinx |
 
 ## Report preview and export (AN-02)
 
@@ -266,13 +266,13 @@ from the same bytes, so what the owner reads is what leaves.
 **Export.** Two explicit buttons:
 
 - **Save report…** opens the standard Windows save dialog with the
-  suggested name `atlas-usage-report-<period_start>-to-<period_end>.json`.
-  The owner chooses the folder; Atlas remembers nothing about it.
+  suggested name `syrinx-usage-report-<period_start>-to-<period_end>.json`.
+  The owner chooses the folder; Syrinx remembers nothing about it.
 - **Copy report** puts the same text on the clipboard, for pasting into a
   model chat.
 
-Nothing is exported, written outside Atlas's folder or put on the clipboard
-in any other way. Atlas makes no network call for this feature, now or in
+Nothing is exported, written outside Syrinx's folder or put on the clipboard
+in any other way. Syrinx makes no network call for this feature, now or in
 AN-02.
 
 **Exact file format.**
@@ -282,7 +282,7 @@ AN-02.
 - Keys in the fixed order of the schema; every field present, zeros
   included.
 - No other content: no file metadata, no comments, no path, no user name.
-  (The file system will record a creation time, as for any file; Atlas
+  (The file system will record a creation time, as for any file; Syrinx
   adds none.)
 
 A sample with synthetic numbers (abbreviated where marked; the real file
@@ -291,11 +291,11 @@ lists every field):
 ```json
 {
   "schema_version": 1,
-  "atlas_version": "0.1.0",
+  "syrinx_version": "0.1.0",
   "period_start": "2026-11-02",
   "period_end": "2026-11-30",
   "days_used": 24,
-  "about": "Aggregate counts from Atlas, kept on the owner's computer. Counters are totals for the period. Timing buckets are named by their upper edge in milliseconds; gt_N counts everything above N. No addresses, searches, text, paths or identifiers are recorded.",
+  "about": "Aggregate counts from Syrinx, kept on the owner's computer. Counters are totals for the period. Timing buckets are named by their upper edge in milliseconds; gt_N counts everything above N. No addresses, searches, text, paths or identifiers are recorded.",
   "counts": {
     "app.started": 31,
     "tab.created": 412,
@@ -340,13 +340,13 @@ real report never contains them.)
 ## How a model gets the report
 
 Nothing is integrated. The owner exports or copies the report and pastes it
-into whichever model chat they choose. Atlas has no model provider, API key,
+into whichever model chat they choose. Syrinx has no model provider, API key,
 upload, background analysis or automatic interface change, and none is
 proposed. The preview shows a suggested prompt the owner can copy with it:
 
-> This is a usage report from Atlas, a desktop browser I use. It contains
+> This is a usage report from Syrinx, a desktop browser I use. It contains
 > only aggregate counts and timing buckets for one period, described in its
-> "about" field. Suggest up to five changes that might make Atlas faster or
+> "about" field. Suggest up to five changes that might make Syrinx faster or
 > easier for me, each tied to the numbers that support it. Say what each
 > number cannot tell you, and do not assume why I did something from how
 > often I did it.
@@ -361,7 +361,7 @@ it came from the owner.
 ### AN-01: local aggregate counters
 
 **Delivers.** The version 1 schema as enums in a new module of
-`atlas-core` (no window needed, so it is testable headlessly); the
+`syrinx-core` (no window needed, so it is testable headlessly); the
 atomic recorder; the usage file with its two periods, rotation and atomic
 writes through the session worker; the Settings switch, Reset and their
 confirmations; and the recording calls at each call site that exists by then.
@@ -417,7 +417,7 @@ for the owner what is in a report and what is not.
 - **No extra metadata.** The exported JSON's key set equals the schema
   exactly; no path, user name or time beyond the two period dates.
 - **Nothing leaves without a click.** No code path writes a report outside
-  Atlas's folder or touches the clipboard except from the two buttons; the
+  Syrinx's folder or touches the clipboard except from the two buttons; the
   dependency check confirms no network crate was added.
 - **Empty and off states.** With collection off, the buttons are disabled
   and nothing can be exported.
@@ -450,7 +450,7 @@ Why there:
 - **Not a blocker if declined.** If the owner chooses not to count, P1-40
   waits only for P1-39, as in the approved map.
 - **Parallel work (2026-10-11 decision).** The headless part of AN-01 (the
-  enums, recorder, file and tests in `atlas-core`) depends on no later slice
+  enums, recorder, file and tests in `syrinx-core`) depends on no later slice
   and could be built on its own branch in parallel once approved; the call
   sites and the Settings section still wait for P1-39. This proposal does
   not ask for that; it is noted so the option is visible.
@@ -475,7 +475,7 @@ Each is a yes or no. The recommendation is in brackets.
    from them? *(Recommended: yes.)*
 6. Is a JSON file, saved through Save report… or copied with Copy report,
    with you pasting it into a model yourself, the right way to share it,
-   with no model or upload built into Atlas? *(Recommended: yes.)*
+   with no model or upload built into Syrinx? *(Recommended: yes.)*
 7. Do you approve adding AN-01 after P1-39 and AN-02 before P1-40, as two
    new rows that renumber nothing, with P1-40 waiting for AN-02 only if you
    choose to count? *(Recommended: yes.)*

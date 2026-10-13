@@ -8,7 +8,7 @@ remain open (see "What remains").
 
 ## Why this work exists
 
-D37 approved GPUI for Atlas's interface on condition that an idle Atlas costs
+D37 approved GPUI for Syrinx's interface on condition that an idle Syrinx costs
 less than 0.5% of **one** CPU core. Phase 0 measured about 3.75% of a core
 (`docs/research/09-phase-0-verdict.md`) and traced it to GPUI's Windows
 backend: a background "VSync" thread calls `RedrawWindow` on every window on
@@ -16,7 +16,7 @@ every display refresh, so each window receives a `WM_PAINT` message 60 times a
 second (on this 60 Hz display) even when nothing in it changed. GPUI then
 decides there is nothing to draw, but waking the UI thread, running the
 message handler and polling input on each tick still costs CPU. Without a fix,
-Atlas would fail D37's bar and the engine/UI choice would go back to the owner.
+Syrinx would fail D37's bar and the engine/UI choice would go back to the owner.
 
 The design, and the list of wakeups that must not be lost, is in
 `docs/gpui-idle-patch-review.md`. This document records what was built, how it
@@ -64,13 +64,13 @@ runs as noise.
 
 - **Builds compared.** The unpatched build uses the registry package; the
   patched build uses the vendored package. Each candidate was built twice:
-  a minimal throwaway GPUI window ("harness") and the real `atlas-app`. The
-  unpatched `atlas-app` was built by temporarily removing the patch line and
+  a minimal throwaway GPUI window ("harness") and the real `syrinx-app`. The
+  unpatched `syrinx-app` was built by temporarily removing the patch line and
   restored afterwards; the two executables differ only in that package and
   its dependants.
 - **Evidence files.** The harness source, the measurement scripts and the
   text logs are committed under `docs/evidence/p1-06/`. The absolute path in
-  the patched harness manifest is replaced by `<atlas checkout>`; the logs
+  the patched harness manifest is replaced by `<syrinx checkout>`; the logs
   contain only process names, synthetic profile runs and timings. The gate
   log stays in the ignored `target/` because it contains local user paths;
   its hash is recorded below.
@@ -84,10 +84,10 @@ runs as noise.
   process, waits 300 s, reads again, and divides the CPU-seconds used by the
   wall time. The result is a percentage of **one** core; it is not divided by
   24. Each build ran twice, interleaved unpatched/patched
-  (`series.ps1`). `atlas-app` ran with `--test-data-dir` pointing at a fresh,
+  (`series.ps1`). `syrinx-app` ran with `--test-data-dir` pointing at a fresh,
   newly named temporary directory, so it opened a synthetic empty profile; it
   showed the Home view and started no WebView2 process, so its process tree
-  was atlas-app alone. It was closed through its window afterwards.
+  was syrinx-app alone. It was closed through its window afterwards.
   Two limits of the script: a descendant that exits inside the 300 s window
   is not counted (it is only reported as "exited during window", which was
   0 in every run), and the retained logs' `EXIT` lines are blank because the
@@ -124,7 +124,7 @@ animation and 18/s at the end) and the patched build passes all of them.
 | Program | Unpatched run 1 | Unpatched run 2 | Patched run 1 | Patched run 2 |
 | --- | ---: | ---: | ---: | ---: |
 | Harness (one window) | 1.859% | 1.656% | 0.460% | 0.244% |
-| `atlas-app`, fresh profile | 1.996% | 1.755% | 0.347% | 0.229% |
+| `syrinx-app`, fresh profile | 1.996% | 1.755% | 0.347% | 0.229% |
 
 All four patched runs are under the 0.5% bar and all four unpatched runs are
 more than three times over it. The patch removes roughly 80 to 85% of idle
@@ -137,7 +137,7 @@ The remaining cost is most likely the VSync thread still waking once per
 display refresh, as the design review predicted; this was inferred, not
 profiled per thread.
 
-The unpatched `atlas-app` measured 1.76 to 2.00% here, against Phase 0's
+The unpatched `syrinx-app` measured 1.76 to 2.00% here, against Phase 0's
 3.75%. The reason is not known. The programs differ (Phase 0 measured its
 throwaway spike, not this application), and so did the machine load, but
 neither cause was tested.
@@ -188,13 +188,13 @@ The workspace gate does not run the vendored crate's tests (see below).
   multiple monitors. The code paths raise demand for each, but only source
   review supports them.
 - **Window inspection.** The scenarios check renders and paint counts, not
-  pixels. The agent could not take screenshots of the Atlas window; the owner
+  pixels. The agent could not take screenshots of the Syrinx window; the owner
   should look at a patched window, resize it, minimize and restore it, and
   scroll with a touchpad.
 - **Eight suspended tabs.** D37's bar is stated with eight tabs suspended.
   Suspension does not exist until P1-15, and hiding page views is not
   suspension, so this criterion stays open. Suspended WebView2 processes will
-  add their own cost on top of the 0.23 to 0.35% measured for `atlas-app`
+  add their own cost on top of the 0.23 to 0.35% measured for `syrinx-app`
   (and up to 0.46% for the harness) here.
 - **First-page startup.** P1-06 also asks for the equivalent start-to-first-
   page comparison over five launches; it was not run in this slice.

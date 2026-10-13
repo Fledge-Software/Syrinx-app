@@ -9,7 +9,7 @@ rule (DW-1), the commit step, the file dialog and the preview window. See
 ## Why this exists
 
 The owner imports bookmarks once, from the HTML file that Chrome, Edge and
-Firefox all export (D14). Atlas never reads another browser's profile, and v1
+Firefox all export (D14). Syrinx never reads another browser's profile, and v1
 imports no passwords or history (D15). Under D43, imported pages become
 saved rows that start unloaded, with the export's folder hierarchy and order
 preserved. Opening every imported page would waste memory, and a lost folder
@@ -24,7 +24,7 @@ independent means it can be reviewed and merged without waiting on that.
 
 ## What was built
 
-`crates/atlas-core/src/bookmark_import.rs` and its four submodules:
+`crates/syrinx-core/src/bookmark_import.rs` and its four submodules:
 
 | File | Role |
 | --- | --- |
@@ -41,13 +41,13 @@ order) and an `ImportSummary` (bookmark, folder and empty-folder counts,
 deepest nesting, duplicate addresses, shortened titles, unclosed lists and
 every skipped entry with its line and reason).
 
-**Why `atlas-core` and not a new crate.** The parser needs only `url`, through the shared address rule, and
+**Why `syrinx-core` and not a new crate.** The parser needs only `url`, through the shared address rule, and
 produces data the core model will consume when P1-21's folders exist.
 `crates/xtask/src/dependency_policy.rs` only stops core crates from reaching
 the shell, GPUI or WebView2; a module adds nothing it would need to check.
 A separate crate would add a workspace member, a manifest and a dependency
 edge for about 900 lines of code with one consumer. The main alternative,
-`atlas-store`, was rejected because parsing must not touch the database.
+`syrinx-store`, was rejected because parsing must not touch the database.
 
 **Why hand-written.** The export format is a tiny, fixed subset of old HTML.
 A general HTML parser (for example `html5ever`) would add a large dependency
@@ -84,7 +84,7 @@ All three browsers write the "Netscape bookmark file":
 - **Bookmarks.** `<A HREF=…>` with its text as the title and `ADD_DATE` as
   whole seconds since 1970. A non-numeric date is treated as absent.
   `ICON`, `ICON_URI`, `LAST_MODIFIED`, `SHORTCUTURL` and `TAGS` are ignored:
-  embedded favicons are untrusted `data:` content, and Atlas fetches favicons
+  embedded favicons are untrusted `data:` content, and Syrinx fetches favicons
   itself.
 - **Missing closing tags.** Real exports never close `<DT>` and sometimes omit
   `</A>` or `</H3>`. A link's title ends at `</A>` or at the next structural
@@ -119,11 +119,11 @@ All three browsers write the "Netscape bookmark file":
 
 Only `http` and `https` addresses that navigation would open become
 bookmarks. **There is one address rule** (DW-1, done 2026-10-12):
-`atlas_core::web_address` in `crates/atlas-core/src/web_address.rs`, built on
-the `url` crate. Navigation (`crates/atlas-app/src/navigation.rs`) and the
+`syrinx_core::web_address` in `crates/syrinx-core/src/web_address.rs`, built on
+the `url` crate. Navigation (`crates/syrinx-app/src/navigation.rs`) and the
 parser both call it, and the commit step calls it again on every bookmark
-before writing. The owner approved `atlas-core` taking `url` on 2026-10-12;
-it is the exact version already pinned for `atlas-app` (`=2.5.8`), so the
+before writing. The owner approved `syrinx-core` taking `url` on 2026-10-12;
+it is the exact version already pinned for `syrinx-app` (`=2.5.8`), so the
 lockfile gains one dependency edge and no package.
 
 Before that rule, the parser only refuses what an export never contains raw:
@@ -137,7 +137,7 @@ something was skipped. Skipped entries carry a reason:
 | `ScriptAddress` | `javascript:` bookmarklets. A saved page must never run script on open. |
 | `DataAddress` | `data:` addresses, which can hide arbitrary content. |
 | `UnsupportedScheme(name)` | `file`, `place`, `chrome`, `edge`, `about`, `ftp`, … The scheme name is shortened to 32 characters. |
-| `CredentialsInAddress` | `user:password@host`. Navigation already refuses these, and Atlas never saves credentials. |
+| `CredentialsInAddress` | `user:password@host`. Navigation already refuses these, and Syrinx never saves credentials. |
 | `InvalidAddress` | Refused by the shared rule (no host, a bad port, an invalid IPv6 literal, a forbidden host character such as `%`), or by the pre-filter above. |
 | `MissingAddress` | No or empty `HREF`. |
 | `AddressTooLong` | Over the address limit, checked on the raw address and again after normalizing, which can lengthen it; a shortened address would point somewhere else. |
@@ -161,7 +161,7 @@ normalizing with the shared address rule. A bookmark whose address appeared
 earlier in the file is kept, because
 the owner may have filed the same page in two folders on purpose, and counted
 in `duplicate_addresses` so the preview can mention it. Whether the import
-should also flag addresses that already exist as Atlas saved pages is for the
+should also flag addresses that already exist as Syrinx saved pages is for the
 commit step, which can see the store.
 
 ### Encoding: UTF-8 only
@@ -213,7 +213,7 @@ was skipped; it must not be logged.
 All fixtures are hand-written and synthetic: invented titles, addresses on
 `example.test` and `example.com`, and placeholder icon data. No browser
 profile or real export was read. They are in
-`crates/atlas-core/tests/fixtures/bookmarks/`:
+`crates/syrinx-core/tests/fixtures/bookmarks/`:
 
 - `chrome.html`: bookmarks bar with toolbar marker, three nested levels, a
   bookmarklet, a duplicate address, an empty folder, escaped titles and
@@ -233,7 +233,7 @@ Because this machine checks files out with CRLF line endings (see
 build the CRLF variant themselves, so results do not depend on checkout
 settings.
 
-`crates/atlas-core/tests/bookmark_import.rs` checks each fixture's full
+`crates/syrinx-core/tests/bookmark_import.rs` checks each fixture's full
 outline, roles, dates, counts and skipped lines. It also checks the refusal
 of non-exports, UTF-16 and invalid UTF-8, and each bound at and beyond its
 limit, including an entry left open at the end of the file. Its fuzz-style
@@ -247,8 +247,8 @@ each submodule cover the tokenizer, entity decoding and address rules.
 **Gate record.** `cargo xtask check` passed on the first commit
 (`target/p1-22-import-parser-gate-final.log`). The first run after the
 review fixes stopped because Windows Application Control blocked the
-unchanged `atlas-search` library test executable
-(`atlas_search-b1ee3862afdb890c.exe`, os error 4551;
+unchanged `syrinx-search` library test executable
+(`syrinx_search-b1ee3862afdb890c.exe`, os error 4551;
 `target/p1-22-review-fixes-gate.log`). An unchanged retry passed the full
 gate (`target/p1-22-review-fixes-gate-retry.log`). No Windows setting was
 changed, and the block's cause is unproved, as in `docs/trapstoknow.md`.
@@ -266,17 +266,17 @@ interception is a single guarded arm in `ui.rs`'s palette handler;
 `palette.rs` is unchanged. **Moving the command into the command registry
 is left for the palette merge**, which owns that registry.
 
-**File dialog.** `atlas_platform::file_dialog::choose_file` shows Windows'
+**File dialog.** `syrinx_platform::file_dialog::choose_file` shows Windows'
 own file-open dialog (`IFileOpenDialog`) through the `windows` features
-`atlas-platform` already enables, so no crate or feature was added. Only
+`syrinx-platform` already enables, so no crate or feature was added. Only
 existing file-system files can be chosen. It runs on a dedicated thread with
 its own COM apartment, owned by the main window, so the interface thread
 never blocks or re-enters. The same thread reads the file (refusing more
 than 32 MiB from its size before reading, and reading at most one byte past
 the limit) and parses it. Nothing from the file or its path is logged.
 
-**Preview.** `crates/atlas-app/src/ui/import.rs` opens a popup owned by the
-main window, like the palette, drawn with `atlas-ui` tokens (spacing, radii,
+**Preview.** `crates/syrinx-app/src/ui/import.rs` opens a popup owned by the
+main window, like the palette, drawn with `syrinx-ui` tokens (spacing, radii,
 type sizes, the panel, line, text and accent colours). It names the new
 folder, then shows pages, folders and empty folders, the deepest nesting,
 duplicate addresses, shortened titles and closed lists (zero notes are left
@@ -288,7 +288,7 @@ is reported in the status line with a request to re-export, and no preview
 opens.
 
 **Commit.** On Import the parsed tree goes to the session worker as
-`SessionCommand::ImportBookmarks`. `atlas_core::commit_bookmark_import`
+`SessionCommand::ImportBookmarks`. `syrinx_core::commit_bookmark_import`
 converts it and calls the new `TabModel::append_saved_folder`, which:
 
 - adds one new top-level folder at the end of the saved rows, named after
@@ -326,7 +326,7 @@ because expanding a 50,000-page import at start-up would build every row.
 **Visible change for the owner: every folder starts collapsed after a
 restart**, including folders the owner made and never imported, not only
 imported ones (`collapse_restored_folders`, called on the first session
-snapshot in `crates/atlas-app/src/ui.rs`). Folders created during a session
+snapshot in `crates/syrinx-app/src/ui.rs`). Folders created during a session
 still start expanded, and any folder can be expanded with one click. The
 alternative, keeping restored folders expanded, would make a restart after a
 large import build every row; remembering each folder's open state across
@@ -352,7 +352,7 @@ row on each save and the catalogue re-checked every saved page. Now:
   model again.
 
 Measured by `ordinary_changes_after_a_large_import_stay_fast`
-(`crates/atlas-app/src/session/import_tests.rs`) on this machine, with
+(`crates/syrinx-app/src/session/import_tests.rs`) on this machine, with
 other builds running: the import itself 0.6–0.8 s; then title updates
 median 42.6–48.1 ms (worst 47–58 ms), navigations median 42.8–47.0 ms
 (worst 55–60 ms), and the first change after a restart 44 ms. Before the
@@ -365,21 +365,21 @@ gate becoming timing-flaky.
 
 **Tests.** All synthetic, all databases disposable:
 
-- `crates/atlas-core/src/web_address.rs`: normalization and refusals.
-- `crates/atlas-core/tests/bookmark_commit.rs`: the Chrome fixture becomes
+- `crates/syrinx-core/src/web_address.rs`: normalization and refusals.
+- `crates/syrinx-core/tests/bookmark_commit.rs`: the Chrome fixture becomes
   one folder in export order with nothing opened and a valid, restorable
   snapshot; the import appends after existing rows and leaves live tabs and
   selection alone; refused addresses are reported and not written; unnamed
   folders and untitled pages; identity exhaustion leaves the model
   unchanged; folder naming; and a 40,000-page, 20-deep import.
-- `crates/atlas-store/src/engine/tests/import.rs`: an import is exactly one
+- `crates/syrinx-store/src/engine/tests/import.rs`: an import is exactly one
   revision and survives reopening; a failure injected part-way through the
   page rows, or on the last layout row, leaves the previous revision and
   rows unchanged, and the same import then commits; live-tab changes after
   an import, before and after reopening, round-trip exactly while a trigger
   proves no saved row is deleted.
-- `crates/atlas-app/src/session/import_tests.rs`: the timing above.
-- `crates/atlas-app/src/ui/import.rs`: command recognition, skip grouping,
+- `crates/syrinx-app/src/session/import_tests.rs`: the timing above.
+- `crates/syrinx-app/src/ui/import.rs`: command recognition, skip grouping,
   summary lines, the bounded read and refusal messages.
 
 **Gate record (import step).** In this worktree's own target directory,
@@ -408,11 +408,11 @@ directory).
 ## Owner's manual check
 
 The owner, not an agent, exports their own bookmarks and runs the import:
-export from Chrome, Edge or Firefox as HTML; in Atlas press Ctrl K, type
+export from Chrome, Edge or Firefox as HTML; in Syrinx press Ctrl K, type
 `>import bookmarks` and press Enter; choose the file; check that the
 preview's counts and skipped entries look right; press Enter or Import;
 check the status line and the new collapsed folder, expand it, and check
-that browsing stays responsive; restart Atlas and check that the rows are
+that browsing stays responsive; restart Syrinx and check that the rows are
 still there, collapsed and unloaded. Also try Escape or Cancel, and a
 non-export file.
 The default limits stay as decided; if the owner's file is refused for size

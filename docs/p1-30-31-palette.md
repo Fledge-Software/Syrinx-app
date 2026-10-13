@@ -1,11 +1,11 @@
 # P1-30 and P1-31 command palette: what was built and what the owner checks
 
 Plan 1's slices P1-30 and P1-31 turn the Ctrl K entry popup from P1-10 into
-the command palette the spec puts at the centre of Atlas (S5, spec section 3).
+the command palette the spec puts at the centre of Syrinx (S5, spec section 3).
 Before them, the popup searched open tabs and saved pages and could navigate
 to an address, but it could not run a single command, had no scope chips,
 showed no matched characters and offered no preview. Browser commands lived
-only as hand-written key bindings in `crates/atlas-app/src/ui.rs`, so a later
+only as hand-written key bindings in `crates/syrinx-app/src/ui.rs`, so a later
 plugin would have had nowhere to register its own. This note records what the
 two slices deliver, the choices made and what the owner needs to try in the
 running app, because a passing gate does not prove that focus returned to a
@@ -13,8 +13,8 @@ page or that a highlight is drawn in the right place.
 
 ## P1-30: one command source and the full palette
 
-**The command registry** (`crates/atlas-core/src/commands.rs`) is the single
-list of things Atlas can run. A command has an identifier
+**The command registry** (`crates/syrinx-core/src/commands.rs`) is the single
+list of things Syrinx can run. A command has an identifier
 (`browser.new-tab`), a title, optional search keywords ("refresh" finds
 Reload), a scope (browser or a named plugin), an enablement rule, an action
 and an optional shortcut. The action is an enum: `Browser(BrowserAction)` for
@@ -37,19 +37,19 @@ page (Ctrl D) and, since P1-20 merged, Open history (Ctrl H), which runs the
 history view's `toggle_history`. `ui::bind_keys` now derives every GPUI key binding from the
 registry instead of listing them again; Ctrl K stays a separate binding
 because the palette is where commands run, not a command itself. The native
-accelerator router in `atlas-platform` still maps the same keys for a focused
+accelerator router in `syrinx-platform` still maps the same keys for a focused
 page; it belongs to another slice and was not changed.
 
 The palette sample window (`--palette-sample`) was not registered as a
 command: it is a development review window that quits the application when it
-closes, so opening it from the running browser would close Atlas.
+closes, so opening it from the running browser would close Syrinx.
 
 Enablement uses a small `CommandContext` (is a tab selected, is a web page
 showing, how many tabs are open). Disabled commands are hidden rather than
 shown greyed out: on Home, typing "reload" finds nothing instead of offering
 a row that cannot run.
 
-**The palette itself** (`crates/atlas-app/src/palette.rs` and
+**The palette itself** (`crates/syrinx-app/src/palette.rs` and
 `palette/`) is still P1-10's single owned popup window; no second overlay
 mechanism was added (D7). It now has:
 
@@ -95,7 +95,7 @@ Ctrl K lists open tabs and bookmarks, and `>` lists every command. Choosing a
 chip removes a typed prefix, because the prefix would otherwise override it.
 
 **Highlights.** Matched characters are drawn in the accent ink at semibold
-weight, as on the Palette board. `atlas-search` already widens the matcher's
+weight, as on the Palette board. `syrinx-search` already widens the matcher's
 byte positions to whole UTF-8 characters (see the frizbee traps in
 `docs/trapstoknow.md`), but GPUI's text renderer requires character
 boundaries, so `palette/display.rs` checks every range again: ranges that
@@ -112,7 +112,7 @@ a very long address cannot stall layout. Previews use only the catalogue's
 title and address; page-text previews (tier 2) need the full-text slices
 (P1-23 onwards) and are not part of this work.
 
-**One activation path.** `crates/atlas-core/src/activation.rs` resolves an
+**One activation path.** `crates/syrinx-core/src/activation.rs` resolves an
 `ActivationTarget` (a tab or a saved page) into one action: focus a live tab,
 or load an unloaded saved page. A saved page that is already open is focused,
 never loaded again (D43). `BrowserView::activate` is the one path for the
@@ -143,15 +143,15 @@ Alt Enter web search changes and D48's speed target are out of scope here.
 
 ## Files
 
-- `crates/atlas-core/src/commands.rs`, `activation.rs` (new, with tests).
-- `crates/atlas-app/src/palette.rs` and `palette/` (`choices.rs`,
+- `crates/syrinx-core/src/commands.rs`, `activation.rs` (new, with tests).
+- `crates/syrinx-app/src/palette.rs` and `palette/` (`choices.rs`,
   `commands.rs`, `display.rs`, `query.rs`, `render.rs`).
-- `crates/atlas-app/src/ui.rs`: key bindings from the registry, command
+- `crates/syrinx-app/src/ui.rs`: key bindings from the registry, command
   execution, the shared activation path, the popup's size and passing the
   command context; `ui/sidebar_view.rs` row clicks use the same activation path.
   The palette reads every colour from `theme::current()`, so it follows
   Customize.
-- No change to `atlas-search`'s public API or internals.
+- No change to `syrinx-search`'s public API or internals.
 
 ## What the owner checks in the running app
 
@@ -179,13 +179,13 @@ needs a signed-in account.
 7. Click the Bookmarks chip, then the Everything chip: the list narrows and
    widens; any typed prefix is removed.
 8. With a saved page already open in a tab, search for it and press Enter on
-   its row. Atlas switches to the open tab; no second copy appears in the
+   its row. Syrinx switches to the open tab; no second copy appears in the
    sidebar. Close that tab, search again and press Enter: it opens once.
 9. Use Up and Down past the visible rows: the list scrolls with the
    selection. Esc closes the palette and focus returns to the page.
 10. On Home (no page showing), type `>reload`: nothing is offered, because
     there is no page to reload.
-11. Make the Atlas window narrower than about 770 pixels and press Ctrl K: the
+11. Make the Syrinx window narrower than about 770 pixels and press Ctrl K: the
     palette still works, without the preview pane.
 12. Press Ctrl T, Ctrl W, Ctrl Shift T, Ctrl R, Alt Left and Right, Ctrl L,
     Ctrl Tab, Ctrl D and Ctrl H outside the palette: each behaves as before.

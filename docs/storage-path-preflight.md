@@ -14,8 +14,8 @@ P1-04's snapshot implementation.
 
 ## Boundary and dependency gate
 
-`atlas-platform` implements Windows filesystem discovery and validation.
-`atlas-store` defines a small owned directory-guard contract and accepts
+`syrinx-platform` implements Windows filesystem discovery and validation.
+`syrinx-store` defines a small owned directory-guard contract and accepts
 its implementation from the application. The dependency points from platform
 to store, never from store to platform. Introducing the filesystem-only
 platform crate is a prerequisite of P1-03, not the start of browser or UI work.
@@ -46,12 +46,12 @@ The complete active graph and exact package versions are reviewed in
 for `windows`. No `CloudFilters`, WebView2 or GPUI feature is needed. The owner
 approved Unicode-3.0 for `unicode-ident 1.0.26` and Zlib for SQLite's
 `foldhash 0.2.0` dependency on 2026-10-10. These are narrow package allowances,
-not a licence selection for Atlas.
+not a licence selection for Syrinx.
 
 ## Discovery and refusal rules
 
 Use `SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, ...)` for the current user,
-then append Atlas's fixed child names. Environment variables, the working
+then append Syrinx's fixed child names. Environment variables, the working
 directory and a folder name containing `OneDrive` are not location proofs.
 Do not request known-folder creation during discovery. Manage the returned
 allocation according to the API's `CoTaskMemFree` requirement.
@@ -113,7 +113,7 @@ contents against writes.
 Resolve the handle's final path and volume, and query `FileAttributeTagInfo`,
 `FileStandardInfo` and `FileIdInfo` with `GetFileInformationByHandleEx`.
 Unsupported identity information or normalization failures refuse the open.
-Create a missing Atlas-owned directory one component at a time only after its
+Create a missing Syrinx-owned directory one component at a time only after its
 parent passes, then immediately validate and retain the new handle. Check
 again before SQLite opens its first connection; all later connections reuse
 the retained proof. A normalized path alone is insufficient because
@@ -121,7 +121,7 @@ normalization follows redirects.
 [Handle information](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex),
 [final path](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew)
 
-Inspect an existing `atlas.db` and its `-wal`, `-shm` and `-journal` companions
+Inspect an existing `syrinx.db` and its `-wal`, `-shm` and `-journal` companions
 before SQLite opens anything. Refuse a reparse point, directory,
 delete-pending file or `NumberOfLinks` other than one. Holding an additional
 non-delete-shared main-database handle can preserve its identity; its

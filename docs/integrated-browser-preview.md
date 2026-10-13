@@ -26,16 +26,16 @@ reproduced; no focus fix or security change was made.
 Earlier normal-start attempts produced black captures and two activation failures;
 a direct launch of the same binary in another fresh synthetic profile then
 showed the Windows lock screen. The integration agent stopped Computer Use
-and asked the owner to unlock. This does not establish an Atlas black-window
+and asked the owner to unlock. This does not establish a Syrinx black-window
 failure. On October 11 the owner explicitly said “GO AHEAD”, confirmed Windows
-unlocked and Atlas visible/responsive. The integration agent then observed Home
+unlocked and Syrinx visible/responsive. The integration agent then observed Home
 and the palette rendered normally in synthetic `atlas-app-focus-20261010`
 process 46216, window 6097856. Clicking edit element 3 showed a caret/popup
 focus, but value entry failed with “element 3 is not available in cached app
 state for atlas-app-focus-20261010.exe”; a refreshed list exposed only the main
 window. The manual `about:blank`, two-second wait and Enter check was initially
 pending, then the owner confirmed “All three worked”. Unlock is no longer the
-blocker; the tool-targeting failure did not establish an Atlas typing failure.
+blocker; the tool-targeting failure did not establish a Syrinx typing failure.
 No new focus-ordering fix is applied, and broader focus acceptance remains open.
 
 The disposable pending-creation shutdown test passes its `controller` and
@@ -299,10 +299,10 @@ the uncommitted P1-05 search work. No commit, merge, remote or push is approved.
 
 | Integration | Existing foundation | Reviewable behavior |
 |---|---|---|
-| Session worker | `atlas-core`, `atlas-store`, `atlas-platform` directory guard | Tab and saved-page mutations persist before the UI treats them as saved; reopening restores the logical session; blocking storage stays off the window thread. |
+| Session worker | `syrinx-core`, `syrinx-store`, `syrinx-platform` directory guard | Tab and saved-page mutations persist before the UI treats them as saved; reopening restores the logical session; blocking storage stays off the window thread. |
 | Page host | Approved wry 0.57 / WebView2 stack | A shared Evergreen environment displays real pages with navigation and page-focused shortcuts, local crash reporting and SmartScreen enabled. Page views get no custom identity, IPC or injected scripts. |
 | Browser window | Exact GPUI snapshot and checked-in design direction | Vertical rows read the same model as the palette; saved destinations survive unloading; native page bounds follow resizing. |
-| Ctrl K | Existing `atlas-search` catalogue | Local results focus or open shared destinations; explicit navigation and Google web search work without live suggestions. |
+| Ctrl K | Existing `syrinx-search` catalogue | Local results focus or open shared destinations; explicit navigation and Google web search work without live suggestions. |
 | Backups and shutdown | Existing P1-04 store lifecycle | Idle daily backups use the validated seven-copy mechanism; closing drains saved mutations and shuts the store down cleanly. |
 
 Unsigned local execution remains required (D38 clarification). The preview
@@ -341,7 +341,7 @@ it still needs execution and does not claim every runtime child has exited.
 For a manual test that must survive a restart, pass
 `--test-data-dir <fresh-local-directory>`. This is an explicit test-only
 override; never point it at the owner's daily database or old spike profile.
-Normal launches retain the separate `%LOCALAPPDATA%\AtlasProductPreview`
+Normal launches retain the separate `%LOCALAPPDATA%\SyrinxProductPreview`
 profile. Nothing is installed or registered with Windows.
 
 The dependency-boundary check, complete workspace Clippy with warnings
@@ -361,7 +361,7 @@ to close that window. Do not terminate a possibly used window or present the
 old executable as containing the latest fixes. No commit or merge is approved.
 
 Subsequent validation no longer needs to replace that running executable.
-`cargo rustc -p atlas-app --bin atlas-app --profile local --offline --locked -- --emit=link=target/local/atlas-app-validation.exe`
+`cargo rustc -p syrinx-app --bin syrinx-app --profile local --offline --locked -- --emit=link=target/local/atlas-app-validation.exe`
 built the same current application source to a separate ignored executable.
 It remains unsigned. Running that executable with `--smoke` in the normal
 desktop context returned success in approximately five seconds, including

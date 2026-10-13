@@ -1,0 +1,11 @@
+# Keep Syrinx's design tokens as plain data so every surface draws from one source.
+[package]
+name = "syrinx-ui"
+description = "Syrinx's design tokens: palettes, accent, metrics and sidebar width states"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

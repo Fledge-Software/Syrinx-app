@@ -7,7 +7,7 @@ exclude = [
     "vendor/frizbee-0.13.0",
     "vendor/gpui-pre-windows-0.3.8",
 ]
-default-members = ["crates/atlas-app"]
+default-members = ["crates/syrinx-app"]
 resolver = "3"
 
 [workspace.package]
@@ -34,7 +34,7 @@ url = "=2.5.8"
 # P1-04 needs SQLite's damaged-input fixes before validating recovery candidates.
 [patch.crates-io]
 libsqlite3-sys = { path = "vendor/libsqlite3-sys-0.38.2" }
-# The approved close callback lets Atlas persist tab closure before native teardown.
+# The approved close callback lets Syrinx persist tab closure before native teardown.
 wry = { path = "vendor/wry-0.57.0" }
 # The approved padding correction keeps ASCII scores and highlights inside real text.
 frizbee = { path = "vendor/frizbee-0.13.0" }

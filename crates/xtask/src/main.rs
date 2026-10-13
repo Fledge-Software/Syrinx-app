@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 #[cfg(not(target_os = "windows"))]
-compile_error!("Atlas's development gate supports Windows 11 only.");
+compile_error!("Syrinx's development gate supports Windows 11 only.");
 
 const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | bench | palette-acceptance>";
 
@@ -159,7 +159,7 @@ fn check_workspace(root: &Path) -> Result<(), String> {
         &[
             "run",
             "--package",
-            "atlas-app",
+            "syrinx-app",
             "--profile",
             "local",
             "--offline",

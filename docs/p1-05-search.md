@@ -8,9 +8,9 @@ merge and uses branch `codex/p1-05-search`, based on completion record
 
 ## Scope and boundaries
 
-`crates/atlas-search` holds derived searchable records, typed destinations,
+`crates/syrinx-search` holds derived searchable records, typed destinations,
 incremental replacement/removal and the complete query path. The shared
-`atlas-core` tab and saved-page identities remain authoritative. History and
+`syrinx-core` tab and saved-page identities remain authoritative. History and
 command identities are opaque inputs; this crate neither collects history
 nor registers commands. It contains no database, network call, UI toolkit,
 plugin host, full-text index or timer.
@@ -163,10 +163,10 @@ helpers use D38's optimized route. Assertions and overflow checks remain
 inherited; no security settings changed. SQLite's Clippy build helper then
 executed, but that sequence does not prove the cause of its earlier block.
 
-The owner has no signing certificate and explicitly requires Atlas to stay
+The owner has no signing certificate and explicitly requires Syrinx to stay
 unsigned. Today's signature checks returned `NotSigned` for the actual app,
 main xtask, store-test executable and native probe. The current unsigned app
-launched directly, printed `Atlas 0.1.0` and exited with status 0. A filtered
+launched directly, printed `Syrinx 0.1.0` and exited with status 0. A filtered
 Code Integrity event 3077 matched the blocked execution to policy
 `VerifiedAndReputableDesktop`, status `0xc0e90002`. These observations neither
 make a certificate a development prerequisite nor establish an unsigned
@@ -200,14 +200,14 @@ performance remains open, and the preview must not be called a passed P1-05.
 
 ## Read-only bottleneck investigation, 2026-10-10
 
-The measured cost is predominantly matching and scoring, before Atlas chooses
-its final results. In `crates/atlas-search/src/catalogue.rs`, `rank_matches`
+The measured cost is predominantly matching and scoring, before Syrinx chooses
+its final results. In `crates/syrinx-search/src/catalogue.rs`, `rank_matches`
 passes every title and every address to frizbee's batch matcher. The pinned
 0.13.0 source, `src/matcher/algo.rs`, runs its candidate filter and then the
 scoring path for every accepted field in `match_list_into_impl`. That path
 uses Smith-Waterman within its supported window and a greedy fallback beyond
 that window.
-Atlas already uses `IndexAsc` to avoid the library's score sort, partially
+Syrinx already uses `IndexAsc` to avoid the library's score sort, partially
 selects its own best results and computes highlights only for those finalists.
 Reducing those final allocations alone does not address the dominant work.
 
@@ -218,7 +218,7 @@ baseline's long query still admits 10,000 long titles, which each enter the
 scoring path. The published package's `BENCHMARKS.md`, under "All Match", also
 reports 11.90–21.05 ms for one typo over 100,000 fields as median field length
 varies from 16 to 128. That upstream Linux workload and machine differ from
-Atlas's; these numbers explain why the dependency's broad-match cost cannot
+Syrinx's; these numbers explain why the dependency's broad-match cost cannot
 be assumed to meet D48, rather than predict this machine's performance. The
 audited source package and checksum are recorded in `docs/dependency-audit.md`.
 
@@ -226,7 +226,7 @@ The next optimization must avoid unnecessary scoring while retaining exact
 membership and counts. A possible route is an incrementally maintained field
 index that rejects impossible candidates, followed by proven score bounds
 that skip scoring only when a candidate cannot beat the current last
-finalist. Those bounds must include Atlas's boosts and stable target tie
+finalist. Those bounds must include Syrinx's boosts and stable target tie
 breaks. Counts still require exact membership across every scope, including
 accepted zero-score matches, and final highlights must keep the existing
 Unicode and empty-trace behavior. Frizbee's candidate filter is private
@@ -247,7 +247,7 @@ this read-only investigation.
 ## Conservative ASCII candidate-filter experiment, 2026-10-10
 
 To avoid sending provably impossible fields through the full matcher,
-`crates/atlas-search/src/candidate.rs` now maintains character-presence masks
+`crates/syrinx-search/src/candidate.rs` now maintains character-presence masks
 beside the catalogue entries. For wholly ASCII query and field strings, it
 rejects a field only when the number of distinct absent query characters
 exceeds the typo budget. Each absent character requires at least one query
@@ -371,7 +371,7 @@ Longer original fields must retain the byte bound unless the actual trimmed
 window is independently known; their Unicode scorer can use the byte-based
 greedy fallback. Smart-case restrictions can only remove possible matches
 from this upper bound. The row bound is the larger field bound plus the
-same exact Atlas boost, with the existing Target tie comparison.
+same exact Syrinx boost, with the existing Target tie comparison.
 
 The source proof is in the cached `frizbee 0.13.0` package:
 `src/smith_waterman/algo/ascii.rs:66-153` and
@@ -2026,7 +2026,7 @@ slot lookup and branching, so reuse counts alone cannot establish a speedup.
 The concrete next action belongs to the integration chat's serialized queue:
 
 ```powershell
-cargo test -p atlas-search --profile local --offline --locked catalogue::range_index::tests::bound_reuse -- --nocapture --test-threads=1
+cargo test -p syrinx-search --profile local --offline --locked catalogue::range_index::tests::bound_reuse -- --nocapture --test-threads=1
 ```
 
 Preserve the existing diagnostic first: fourteen queries, two fixtures, two
@@ -2213,7 +2213,7 @@ matching algorithm. Runtime validation remains pending. The exact isolated comma
 is:
 
 ```powershell
-cargo test -p atlas-search --profile local --offline --locked catalogue::range_index::tests::membership_order::unicode_selected -- --nocapture --test-threads=1
+cargo test -p syrinx-search --profile local --offline --locked catalogue::range_index::tests::membership_order::unicode_selected -- --nocapture --test-threads=1
 ```
 
 ### Unicode-selected triplet results — 2026-10-11
@@ -2273,7 +2273,7 @@ bodies identical, with the original benchmark loop changing only that helper cal
 Its validation, checksums, timing boundaries, JSON output and acceptance logic
 remain unchanged.
 
-The new `atlas-search` test-only `catalogue/acceptance_comparison.rs` compares
+The new `syrinx-search` test-only `catalogue/acceptance_comparison.rs` compares
 actual production `Catalogue::query` with the Unicode-selected test strategy.
 It retains all 100,000 rows, 26 cases, fifty results, five warmup passes and forty
 measured passes. Rotation resets after warmups exactly as in the benchmark.
@@ -2293,7 +2293,7 @@ is claimed for this new source. Root execution commands are:
 
 ```powershell
 cargo test -p xtask --profile local --offline --locked benchmark::tests -- --test-threads=1
-cargo test -p atlas-search --profile local --offline --locked catalogue::acceptance_comparison::unicode_selected_unchanged_acceptance_workload_comparison -- --nocapture --test-threads=1
+cargo test -p syrinx-search --profile local --offline --locked catalogue::acceptance_comparison::unicode_selected_unchanged_acceptance_workload_comparison -- --nocapture --test-threads=1
 ```
 
 Independent source review passed the extraction and complete comparison. Scoped

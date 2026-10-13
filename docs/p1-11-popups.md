@@ -1,4 +1,4 @@
-# P1-11: preserve popup openers when opening Atlas tabs
+# P1-11: preserve popup openers when opening Syrinx tabs
 
 Status: partial checkpoint on `codex/p1-11-popups`. The 2026-10-12 full gate
 passed all 439 tests and the application smoke run without error 4551. The final
@@ -9,19 +9,19 @@ its original lifecycle suite fails to finish the first synthetic navigation.
 P1-11 is not complete. This is not OAuth or visual acceptance.
 
 A sign-in page can open a child window and wait for a message from that child.
-Opening its address as an unrelated tab breaks that exchange. Atlas must adopt
+Opening its address as an unrelated tab breaks that exchange. Syrinx must adopt
 the native new-window request, rather than navigate a second view to its URL.
 
-`crates/atlas-platform/src/browser/popups.rs` retains WebView2's new-window
+`crates/syrinx-platform/src/browser/popups.rs` retains WebView2's new-window
 arguments and deferral on the browser thread. Its callback marks the request
 handled, so WebView2 does not open an unmanaged window. Only an owned request
 number, opener ID and address cross to the UI and session worker. The session
-saves the new tab before acknowledging the request. Atlas then constructs a
+saves the new tab before acknowledging the request. Syrinx then constructs a
 page with the same environment and default profile, without calling Navigate,
 sets it as the requested new window, and completes the deferral. Native failure
 is reported rather than represented as a successfully created page.
 
-The pinned wry handler with no application callback also sets Handled. Atlas
+The pinned wry handler with no application callback also sets Handled. Syrinx
 registers its native handler after construction, through wry's exposed WebView2
 object. The synthetic opener/message test establishes that both handlers coexist correctly.
 No dependency or vendor source is changed. Page identity, scripts, IPC, request
@@ -34,7 +34,7 @@ most 32 simultaneous pending deferrals; unsupported destinations or an exhausted
 request queue are explicitly blocked. These bounds prevent retained native
 requests from growing without limit while storage is busy.
 
-Adopted blank pages remain native pages rather than Atlas Home. Their native
+Adopted blank pages remain native pages rather than Syrinx Home. Their native
 request identities are not persisted or restored. Persistence tests cover
 correlation, closed openers and restarting with the committed tab metadata.
 
@@ -44,7 +44,7 @@ Run the required gate from this worktree and keep its output under `target/`:
 
 ```powershell
 cargo xtask check *> target/p1-11-gate.log
-cargo run --package atlas-platform --example page_close --profile local --offline --locked *> target/p1-11-native.log
+cargo run --package syrinx-platform --example page_close --profile local --offline --locked *> target/p1-11-native.log
 ```
 
 The existing `page_close` example now also serves two synthetic loopback pages.
@@ -110,7 +110,7 @@ production focus command. It still requires the child's `document.hasFocus()`
 title report. No page-focus assertion or lifecycle deadline was relaxed.
 
 This separates two different operations: Windows deciding which application is
-foreground, and WebView2 moving focus into an Atlas page. Microsoft's
+foreground, and WebView2 moving focus into a Syrinx page. Microsoft's
 [foreground rules](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
 permit activation to be denied, whereas
 [MoveFocus](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2controller#movefocus)
@@ -144,7 +144,7 @@ To repeat native focus acceptance in the owner's interactive desktop terminal,
 run the already-built fixture without moving it:
 
 ```powershell
-& 'C:\Users\<user>\Documents\GitHub\Atlas-wt\p1-11-popups\target\popup-check\local\examples\page_close.exe'
+& 'C:\Users\<user>\Documents\GitHub\Syrinx-wt\p1-11-popups\target\popup-check\local\examples\page_close.exe'
 ```
 
 It should briefly show the synthetic window, print that native page focus passed,
@@ -220,8 +220,8 @@ timers also run late.
 
 ## Owner checks after the gate and native fixture pass
 
-1. Run `cargo atlas` from this worktree. From a page that opens a sign-in popup,
-   trigger the popup yourself. A new ordinary Atlas tab should appear and become
+1. Run `cargo syrinx` from this worktree. From a page that opens a sign-in popup,
+   trigger the popup yourself. A new ordinary Syrinx tab should appear and become
    active; there should be no separate unmanaged browser window.
 2. Type in the new tab, use Ctrl L and Escape, and confirm typing returns to the
    page. Switch to the opener and back. Close the child; its sidebar row should
@@ -229,7 +229,7 @@ timers also run late.
 3. Perform Google and GitHub sign-in yourself if desired. The child should be
    able to complete its message exchange with the opener. These real-account
    checks belong to the owner and are not covered by synthetic acceptance.
-4. Resize Atlas with the popup tab active, then close and reopen Atlas. The tab
+4. Resize Syrinx with the popup tab active, then close and reopen Syrinx. The tab
    metadata should restore normally; a restarted tab cannot restore a live
    JavaScript opener connection from the previous process.
 
@@ -247,7 +247,7 @@ not green. In addition, the continuation instruction prohibits
 creating another branch and permits commits only on the current branch; the
 per-slice workflow requires a separate branch for P1-12. Resolve that boundary
 before starting the next slice. No merge was made. The only shared
-application file changed is `crates/atlas-app/src/ui.rs`, with popup routing,
+application file changed is `crates/syrinx-app/src/ui.rs`, with popup routing,
 state and blank-page display wiring. `Cargo.toml`, `Cargo.lock`, platform exports
 and vendor patches remain unchanged. Shared documentation changes are the P1-11
 row in `docs/implementation-status.md` and the focus-fixture entry in

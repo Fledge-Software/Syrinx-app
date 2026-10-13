@@ -23,7 +23,7 @@ pub fn run(root: &Path) -> Result<(), String> {
         &[
             "build",
             "--package",
-            "atlas-app",
+            "syrinx-app",
             "--profile",
             "local",
             "--offline",
@@ -63,7 +63,7 @@ pub fn run(root: &Path) -> Result<(), String> {
 
 /// Starts the visible app on a fresh synthetic profile; a hidden launch cannot test focus.
 fn launch(root: &Path, report: &Path, base: &str) -> Result<std::process::ExitStatus, String> {
-    let executable: PathBuf = root.join("target").join("local").join("atlas-app.exe");
+    let executable: PathBuf = root.join("target").join("local").join("syrinx.exe");
     Command::new(&executable)
         .arg("--test-palette-acceptance")
         .arg(report)
@@ -154,16 +154,16 @@ fn requested_label(request: &[u8]) -> Option<&'static str> {
     })
 }
 
-/// The page's own script writes `document.hasFocus()` into its title; Atlas injects nothing.
+/// The page's own script writes `document.hasFocus()` into its title; Syrinx injects nothing.
 fn page(label: &str) -> String {
     format!(
-        r#"<!doctype html><meta charset=utf-8><title>atlas-p133-{label} focus:pending</title>
+        r#"<!doctype html><meta charset=utf-8><title>syrinx-p133-{label} focus:pending</title>
 <link rel=icon href=data:,><h1>Synthetic P1-33 page: {label}</h1>
 <input aria-label="Synthetic input"><script>
 let last = '';
 const report = () => {{
   const state = document.hasFocus() ? 'yes' : 'no';
-  if (state !== last) {{ last = state; document.title = 'atlas-p133-{label} focus:' + state; }}
+  if (state !== last) {{ last = state; document.title = 'syrinx-p133-{label} focus:' + state; }}
 }};
 addEventListener('focus', report); addEventListener('blur', report);
 setInterval(report, 50); report();
@@ -324,7 +324,7 @@ mod tests {
     fn the_page_reports_focus_only_through_its_own_title() {
         let html = page("focus-page");
         assert!(html.contains("document.hasFocus()"));
-        assert!(html.contains("atlas-p133-focus-page focus:"));
+        assert!(html.contains("syrinx-p133-focus-page focus:"));
         assert!(!html.contains("http"), "the page loads nothing else");
     }
 

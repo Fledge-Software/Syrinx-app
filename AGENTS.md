@@ -1,4 +1,4 @@
-# Atlas: rules for agents
+# Syrinx: rules for agents
 
 These are the rules for any agent working in this repository. `CLAUDE.md`
 loads this file and `docs/trapstoknow.md`; other agents should read both
@@ -40,24 +40,24 @@ failures instead of swallowing them. Follow the same shape in product code.
 
 ## Layout
 
-Atlas is a Rust Cargo workspace on Windows 11. P1-01 provides `atlas-app`
-and `xtask`; P1-02 adds the window-independent `atlas-core` model. Later
+Syrinx is a Rust Cargo workspace on Windows 11. P1-01 provides `syrinx-app`
+and `xtask`; P1-02 adds the window-independent `syrinx-core` model. Later
 crates are added in their approved slice.
 The layout proposed in `docs/research/03-core-architecture.md` ("Crate
 layout") is the starting point, adjusted for the engine and interface
 decisions made since (D3 and D4 in the plan), and the scaffold settles it:
 
-- `crates/atlas-plugin-api` holds the `Plugin` trait and the data types that
-  cross it. It depends on no other Atlas crate.
-- `crates/atlas-core` holds the tab model, session, palette and command
-  registry and the plugin host; `crates/atlas-store` holds rusqlite and its
-  migrations; `crates/atlas-search` holds the in-memory catalogue (frizbee)
+- `crates/syrinx-plugin-api` holds the `Plugin` trait and the data types that
+  cross it. It depends on no other Syrinx crate.
+- `crates/syrinx-core` holds the tab model, session, palette and command
+  registry and the plugin host; `crates/syrinx-store` holds rusqlite and its
+  migrations; `crates/syrinx-search` holds the in-memory catalogue (frizbee)
   and the full-text index (chosen by plan 1's FTS5/Tantivy comparison).
 - `crates/plugin-notes`, `crates/plugin-forge` and `crates/plugin-fledge`
   are the built-in plugins, and `crates/fledge-client` holds the Fledge API
   trait and its stand-in client.
-- `atlas-app` and `atlas-ui` draw the interface with the approved GPUI base;
-  `atlas-platform` owns WebView2 and Win32. Other product crates remain free
+- `syrinx-app` and `syrinx-ui` draw the interface with the approved GPUI base;
+  `syrinx-platform` owns WebView2 and Win32. Other product crates remain free
   of toolkit/web-view dependencies so the core stays testable without a window.
 - Notes and Forge edit in CodeMirror 6 inside a small local web view (D28).
 - `docs/` holds the spec, the owner's decisions, the plans, the research
@@ -91,7 +91,7 @@ authority:
 3. **`design/README.md`** and the live design canvas it links, for anything
    the owner sees. When the canvas and the snapshot in `design/canvas/`
    disagree, the canvas wins.
-4. **`docs/plans/Atlas v1 — Plan.md`**, the v1 plan. Its "Decisions taken"
+4. **`docs/plans/Syrinx v1 — Plan.md`**, the v1 plan. Its "Decisions taken"
    table argues the standing and later decisions with what was rejected and
    why. It is `active`, and its "Decisions taken" are settled. Where it
    disagrees with the three above, they win and the disagreement goes under
@@ -105,6 +105,12 @@ authority:
   snapshots, wry, the WebView2 Evergreen runtime). Notes 07 and 08 correct
   parts of the earlier notes, and note 03 assumes Tauri, which D3 and D4
   replaced. Where a note disagrees with the plan or the decisions, they win.
+- **Older records say Atlas.** Atlas was the working name until the owner
+  named the product Syrinx on 2026-10-12. Research notes, dated decisions,
+  handoffs, prompts, review records and Phase 0 evidence keep the wording
+  of their time; read Atlas there as Syrinx. To follow an old path,
+  `crates/atlas-*` is now `crates/syrinx-*` and `docs/plans/Atlas … .md`
+  is now `docs/plans/Syrinx … .md`.
 - **Anything marked ⚠️ or "unverified" is checked before anything is built on
   it.** The plan's "Still unproven" section lists them.
 
@@ -124,7 +130,7 @@ Some work needs the owner, not an agent:
 - anything on Fledge's side. The Fledge-side gaps are a list for the owner,
   not issues or pull requests in Fledge's repositories;
 - installing software system-wide on the owner's machine, and registering
-  Atlas as a browser with Windows.
+  Syrinx as a browser with Windows.
 
 If the next task needs one of these, point at it and ask; do not work
 around it.
@@ -192,7 +198,7 @@ style problem.
   if Phase 0 shows the default fails, and then only with the owner (D22).
 - **Never attach an IPC handler to a page web view.** It adds `window.ipc`,
   which was reported to break Google Docs and Sheets, and it hands untrusted
-  pages a channel into Atlas. Only Atlas's own local web views (the editors)
+  pages a channel into Syrinx. Only Syrinx's own local web views (the editors)
   talk to Rust.
 - **Never inject scripts, add request filters, rewrite headers or open a
   remote debugging port on Google's sites.** Google blocks sign-in for exactly
@@ -201,27 +207,27 @@ style problem.
   sites, banking and payment sites, pages sent with `Cache-Control: no-store`
   or a site the owner excluded, and the extraction method must inject nothing
   on an excluded site.
-- **Pass Atlas's own browser arguments.** wry's defaults switch SmartScreen
-  off (`docs/research/08-gpui-and-wry-on-windows.md`, 5.1); Atlas keeps it on.
+- **Pass Syrinx's own browser arguments.** wry's defaults switch SmartScreen
+  off (`docs/research/08-gpui-and-wry-on-windows.md`, 5.1); Syrinx keeps it on.
 - Use the Evergreen WebView2 runtime only, and add no DRM code: Widevine
   lives inside the runtime.
 
 **Plugins:**
 
-- **A plugin crate depends only on `atlas-plugin-api`.** Built-in plugins use
+- **A plugin crate depends only on `syrinx-plugin-api`.** Built-in plugins use
   the same API a third party will, so only owned, serialisable values cross
-  the trait and a plugin reaches Atlas only through its `Host`
+  the trait and a plugin reaches Syrinx only through its `Host`
   (`docs/research/03-core-architecture.md`, "The plugin trait").
 - **Fledge sits behind a trait.** The Fledge plugin calls Fledge only through
   the `fledge-client` trait, on the stand-in client until the real client is
-  built after Fledge's Stage C (D24). Atlas authenticates as an ordinary OAuth
+  built after Fledge's Stage C (D24). Syrinx authenticates as an ordinary OAuth
   client with only the permissions the owner grants (D23).
-- **Atlas is a separate project from Fledge-App.** Never put Atlas code or
+- **Syrinx is a separate project from Fledge-App.** Never put Syrinx code or
   docs in a Fledge repository, and never open issues or pull requests there.
 
 **Privacy and the owner's data:**
 
-- **Only the approved local analytics scope (D39).** To help improve Atlas,
+- **Only the approved local analytics scope (D39).** To help improve Syrinx,
   the owner approved aggregate feature/command counts, timings and error
   categories with explicit report export. Exclude account/device identifiers,
   URLs, searches, paths, document text and detailed event timelines. No
@@ -233,7 +239,7 @@ style problem.
   SmartScreen after reviewing their data collection. Local crash dumps do
   not disable every required runtime diagnostic. Do not promise complete
   anonymity for one person's exported usage report or change Windows settings.
-- **Crash dumps stay local.** Atlas builds its own WebView2 environment with
+- **Crash dumps stay local.** Syrinx builds its own WebView2 environment with
   `IsCustomCrashReportingEnabled` set, because wry never sets it and the
   default uploads dumps to Microsoft (note 08, section 5).
 - **No live search suggestions.** While the owner types, the palette ranks
@@ -271,7 +277,7 @@ style problem.
 - **Approved narrow licence exception, 2026-10-10:** `unicode-ident 1.0.26`
   may carry Unicode-3.0 alongside its MIT/Apache-2.0 terms. The owner approved
   it for the pinned Windows bindings' build dependency. This does not choose
-  Atlas's licence or approve unrelated packages; see `docs/dependency-audit.md`.
+  Syrinx's licence or approve unrelated packages; see `docs/dependency-audit.md`.
 - **Approved narrow licence exception, 2026-10-10:** `foldhash 0.2.0` may use
   Zlib for the pinned SQLite prepared-statement cache's dependency. The owner
   approved that package and version, not a general licence-policy expansion.
@@ -281,14 +287,14 @@ style problem.
   existing Rust dependency versions/features and verify the source identities
   as specified in `docs/p1-04-sqlite-maintenance-review.md`. Unchanged upstream
   `TODO`/`FIXME` comments are permitted only inside
-  `vendor/libsqlite3-sys-0.38.2`; Atlas-authored work remains subject to the
+  `vendor/libsqlite3-sys-0.38.2`; Syrinx-authored work remains subject to the
   ordinary rule. This approval covers neither commits nor merges.
 - **Approved narrow source patch, 2026-10-10:** wry remains exactly 0.57.0
   with the Windows close callback proposed in `docs/page-close-event-review.md`.
-  The owner approved that two-file dependency patch and its Atlas close-event
+  The owner approved that two-file dependency patch and its Syrinx close-event
   API so page-requested closure follows the durable tab lifecycle. Unchanged
   upstream `TODO`/`FIXME` comments and existing lint annotations are permitted
-  only inside `vendor/wry-0.57.0`; no new Atlas-authored suppression is allowed.
+  only inside `vendor/wry-0.57.0`; no new Syrinx-authored suppression is allowed.
   Preserve all other archive files, dependency versions and features. This
   approval does not cover another dependency patch, commits, merges,
   publication or sending an upstream message; prepare the upstream diff locally.
@@ -310,7 +316,7 @@ style problem.
   (`default-features=false`, `std` and `safe_read`), licence and other package
   files. Unchanged upstream `TODO`/`FIXME` comments and existing lint
   annotations are permitted only inside `vendor/frizbee-0.13.0`; no new
-  Atlas-authored suppression or deferred-work marker is allowed. Record the
+  Syrinx-authored suppression or deferred-work marker is allowed. Record the
   archive inventory, exact diff and modified hashes, and validate the unchanged
   dependency graph. This approval covers neither another dependency patch nor
   commits, merges, pushes, publication or an upstream message.
@@ -321,7 +327,7 @@ style problem.
   upstream `TODO`/`FIXME` comments, including those at
   `src/shaders.hlsl:490` and `:704`, and existing lint annotations are
   permitted only inside `vendor/gpui-pre-windows-0.3.8`; no new
-  Atlas-authored suppression or deferred-work marker is allowed. Preserve the
+  Syrinx-authored suppression or deferred-work marker is allowed. Preserve the
   exact pin, features, licence and all other package files; record the
   archive inventory, exact diff and modified hashes, and validate the
   unchanged dependency graph. This approval covers neither another dependency
@@ -354,7 +360,7 @@ the gate, and fail somewhere else. Add a new trap there, not here.
 
 ## Develop and test on this machine
 
-Atlas is a desktop app for one owner on Windows 11, so there is no server,
+Syrinx is a desktop app for one owner on Windows 11, so there is no server,
 deploy or cloud preview. Build, run and test it on the owner's machine; the
 scaffold writes how into `docs/LOCAL-DEV.md`. Run the app and look at the
 window after changing anything the owner sees: a passing gate does not prove
@@ -362,20 +368,20 @@ a page card resized, a popup stacked correctly or focus came back to the page.
 
 ## Where outstanding work goes
 
-**While Atlas is local:** in the plan. Open questions go under the plan's
+**While Syrinx is local:** in the plan. Open questions go under the plan's
 "Open threads" and Phase 0's results go in its report. Plan 1's approved
 40-slice breakdown is its local "Issue map"; each phase is a future milestone.
 Use the local branch/review workflow in D41. Later plans get approved slice
 breakdowns before implementation; creating GitHub is no longer a prerequisite.
 
-**Once Atlas is on GitHub:** in that repository's issue tracker, and nowhere
+**Once Syrinx is on GitHub:** in that repository's issue tracker, and nowhere
 else. Each plan entry gets an issue under its milestone, and the plan's
 "Issue map" records them.
 
-Either way, a deferred-work marker (`TODO`, `FIXME`, `HACK`) in Atlas-authored
+Either way, a deferred-work marker (`TODO`, `FIXME`, `HACK`) in Syrinx-authored
 code is allowed only when it carries a tag from the plan's "Deferred work"
 register, as in `TODO(DW-3): restore zoom per site`. Add the register row
-first. Once Atlas is on GitHub, each row becomes an issue, and the marker
+first. Once Syrinx is on GitHub, each row becomes an issue, and the marker
 stays until that issue is fixed. `cargo xtask check` rejects untagged or
 unregistered markers. The owner set this rule on 2026-10-11. A marker never
 excuses a failing test, a silenced lint or a swallowed error.
@@ -384,7 +390,7 @@ excuses a failing test, a silenced lint or a swallowed error.
 
 **Commits, plans, reports, and later milestones, issues, pull requests and
 comments are written to educate.** Assume the reader does not have the full
-context: a new contributor once Atlas is open source, or the owner six months
+context: a new contributor once Syrinx is open source, or the owner six months
 from now who has forgotten why.
 
 - **Say why before what.** The reason a piece of work exists goes stale
@@ -419,7 +425,7 @@ the task description seems to imply it or a script or tool makes it easy:
 ### Destructive or irreversible operations
 - `rm -rf`, bulk file deletion, or deleting anything you didn't create this
   session
-- Deleting or overwriting the owner's Atlas database, its snapshots, or the
+- Deleting or overwriting the owner's Syrinx database, its snapshots, or the
   WebView2 user-data folder, which holds the owner's signed-in sessions
 - Running a migration against the owner's daily database instead of a test
   copy
@@ -432,12 +438,12 @@ the task description seems to imply it or a script or tool makes it easy:
 - Turning off SmartScreen, the web view sandbox or web security, granting
   site permissions automatically, or opening a remote debugging port "to make
   it work"
-- Adding any network call Atlas makes on its own (an update check, a
+- Adding any network call Syrinx makes on its own (an update check, a
   download, a suggestion fetch)
 
 ### Environment and the owner's machine
 - Installing software system-wide, or changing Windows settings or the
-  registry (including registering Atlas as a browser or the default browser)
+  registry (including registering Syrinx as a browser or the default browser)
 - Changing CI or release scripts, once they exist
 - Upgrading a major version of a core dependency, or moving the GPUI, wry or
   `webview2-com` pins
@@ -467,7 +473,7 @@ the task description seems to imply it or a script or tool makes it easy:
 ### Scope
 - Refactors that touch more than a handful of unrelated files
 - Changing public APIs other code depends on, above all the `Plugin` trait
-  in `atlas-plugin-api`
+  in `syrinx-plugin-api`
 - Renaming or moving files or directories that other tooling or docs may
   reference
 
