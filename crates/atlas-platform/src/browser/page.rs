@@ -45,11 +45,22 @@ impl HasWindowHandle for Parent {
     }
 }
 
+/// The worker-wide channels and shared state every page is built with.
+pub(super) struct PageContext {
+    pub(super) events: EventSink,
+    pub(super) shortcuts: NativeSink,
+    pub(super) popups: super::popups::PopupRequests,
+    pub(super) text: super::page_text::TextContext,
+    /// An adopted popup whose opener showed an excluded or tainted document.
+    pub(super) starts_tainted: bool,
+}
+
 pub(super) struct Page {
     destination: std::rc::Rc<std::cell::RefCell<String>>,
     lifecycle: super::lifecycle::Lifecycle,
     permissions: super::permissions::Permissions,
     essentials: super::essentials::Essentials,
+    text: Option<super::page_text::PageText>,
     view: WebView,
     placement: Cell<Placement>,
 }
@@ -60,10 +71,15 @@ impl Page {
         parent: isize,
         environment: &ICoreWebView2Environment,
         bounds: PageBounds,
-        events: EventSink,
-        shortcuts: NativeSink,
-        popups: super::popups::PopupRequests,
+        context: PageContext,
     ) -> Result<Self, BrowserError> {
+        let PageContext {
+            events,
+            shortcuts,
+            popups,
+            text: text_context,
+            starts_tainted,
+        } = context;
         let destination = std::rc::Rc::new(std::cell::RefCell::new("about:blank".to_owned()));
         let life = super::lifecycle::CallbackLife::new();
         let events = events.for_page(life.clone());
@@ -117,12 +133,34 @@ impl Page {
         let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
         register_focus_arrival(&view, id, events.clone())?;
         register_focus_departure(&view, shortcuts.clone(), id, events.clone())?;
+        // Observes headers and navigations only while capture is on; never a request filter.
+        // A failure is reported and leaves the page unread; it never stops the tab opening.
+        let text = match super::page_text::PageText::register(
+            &view,
+            id,
+            text_context,
+            starts_tainted,
+            super::page_text::Channels {
+                events: events.clone(),
+                native: shortcuts.clone(),
+            },
+        ) {
+            Ok(text) => text,
+            Err(error) => {
+                events.emit(BrowserEvent::Error {
+                    tab: Some(id),
+                    error,
+                });
+                None
+            }
+        };
         register_shortcuts(&view, shortcuts, id, events)?;
         Ok(Self {
             destination,
             lifecycle,
             permissions,
             essentials,
+            text,
             view,
             placement: Cell::new(Placement::new(bounds)),
         })
@@ -140,17 +178,51 @@ impl Page {
         }
     }
 
+    fn withdraw_atlas_request(&self) {
+        if let Some(text) = &self.text {
+            text.atlas_navigation_cancelled();
+        }
+    }
+
+    /// The taint a rebuilt page starts with after a crash; an unobserved page fails closed.
+    pub(super) fn tainted(&self) -> bool {
+        self.text.as_ref().is_none_or(|text| text.tainted())
+    }
+
+    /// Whether a popup this page opens starts tainted; a page Atlas does not observe gives
+    /// no evidence, so its popups do (fail closed).
+    pub(super) fn popup_tainted(&self) -> bool {
+        self.text
+            .as_ref()
+            .is_none_or(|text| text.popup_tainted(&self.view))
+    }
+
     pub(super) fn destination(&self) -> String {
         self.destination.borrow().clone()
     }
 
+    /// Loads `url` as Atlas's own navigation, which clears an excluded site's taint (P1-25).
     pub(super) fn navigate(&self, url: &str) -> Result<(), BrowserError> {
+        if let Some(text) = &self.text {
+            text.atlas_navigation(url);
+        }
+        self.load(url)
+    }
+
+    /// Reloads a crashed tab's address without counting as Atlas's navigation, so the taint
+    /// it was rebuilt with stays.
+    pub(super) fn restore(&self, url: &str) -> Result<(), BrowserError> {
+        self.load(url)
+    }
+
+    fn load(&self, url: &str) -> Result<(), BrowserError> {
         validate_url(url)?;
         self.lifecycle.resume(&self.view)?;
         // Mark the load first, so a hidden page cannot be suspended before WebView2 starts it.
         self.lifecycle.navigation_requested();
         if self.view.load_url(url).is_err() {
             self.lifecycle.navigation_refused();
+            self.withdraw_atlas_request();
             return Err(BrowserError::Navigation);
         }
         *self.destination.borrow_mut() = url.to_owned();
@@ -166,14 +238,25 @@ impl Page {
         };
         self.lifecycle.show(&self.view, visible, place)?;
         self.update_placement(|placement| placement.shown(visible));
+        if let Some(text) = self.text.as_ref().filter(|_| visible) {
+            text.resumed();
+        }
         Ok(())
     }
 
     pub(super) fn tick(&self) -> Result<(), BrowserError> {
-        self.lifecycle.tick(&self.view)
+        // Suspension is requested first, so a capture never starts beside a pending TrySuspend.
+        self.lifecycle.tick(&self.view)?;
+        let suspending = self.lifecycle.suspension_requested();
+        self.text
+            .as_ref()
+            .map_or(Ok(()), |text| text.tick(&self.view, suspending))
     }
     pub(super) fn suspend_due(&self) -> Option<std::time::Instant> {
         self.lifecycle.due()
+    }
+    pub(super) fn text_due(&self) -> Option<std::time::Instant> {
+        self.text.as_ref().and_then(super::page_text::PageText::due)
     }
 
     /// Follows the card if this page is shown; hidden pages catch up when shown.
@@ -206,6 +289,8 @@ impl Page {
                 | BrowserCommand::Reload { .. }
         ) {
             self.lifecycle.resume(&self.view)?;
+            // Back, forward and reload replace a pending Atlas navigation request.
+            self.withdraw_atlas_request();
         }
         match command {
             BrowserCommand::ExitFullscreen { .. } => super::lifecycle::exit_fullscreen(&self.view),

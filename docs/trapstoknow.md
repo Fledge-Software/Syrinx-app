@@ -12,6 +12,44 @@ you found it in the commit message, not here.
 
 ## Page tabs: WebView2 through wry
 
+- **A repeated response header shows only its first line.** A synthetic page
+  sent `Cache-Control: max-age=0` and then `Cache-Control: no-store`; both
+  `GetHeaders` and the full `GetIterator` of `WebResourceResponseReceived`
+  reported only `max-age=0`, so Atlas captured a `no-store` page (F2). Commas
+  inside one line are split correctly. No WebView2 route Atlas may use exposes
+  the later line, and a request filter to see it is forbidden. The owner
+  accepted this on 2026-10-12 as a known limit of D35's `no-store` rule
+  (`docs/decisions.md`): do not read a missing `no-store` as proof that a
+  page allows storing, and do not work around it. A report to Microsoft goes
+  only with the owner's approval; none has been sent. Source:
+  `docs/p1-25-page-text.md`, F2 (observed on this runtime).
+- **A sign-in hop is not a redirect, and `IsUserInitiated` is not the
+  owner's intent.** A bank or Google page that sends the tab on by script, a
+  form or a link raises a fresh `NavigationStarting` with `IsRedirected`
+  false, so a redirect-chain check misses it. `IsUserInitiated` follows
+  Chromium's short-lived user activation: a click (or a posted Enter) on the
+  bank page makes the next navigation "user-initiated". Recognise Atlas's own
+  navigations by the address it asked for, read `Source()` at the start as
+  the document being left, carry the taint forward, and match a redirect's
+  response to any hop of the navigation, since it can arrive after the next
+  hop starts. Source: `docs/p1-25-page-text.md`, F21–F26 (observed).
+- **An adopted popup's first document has no matching response event.** On
+  this runtime the popup's page was judged `NoResponse`, so popups fail
+  closed and are never read (F27). Do not "fix" this by assuming headers;
+  find an observable response first. Source: `docs/p1-25-page-text.md`, F27
+  (observed).
+- **A reload or same-address visit raises no `SourceChanged`.** Only
+  `NavigationStarting` and `NavigationCompleted` arrive, so code that learns the
+  document address from `SourceChanged` sees no document after a reload. P1-25
+  takes the navigation's last requested address on successful completion.
+  Source: `docs/p1-25-page-text.md`, F14 (observed).
+- **`DOMSnapshot.captureSnapshot` keeps `visibility: hidden` text and sends -1 for
+  an empty attribute value.** Without the `visibility` computed style, hidden
+  text is laid out and returned (F1); `contenteditable=""` arrives with value
+  index -1, which a strict string lookup rejects as malformed (F10). Request
+  only `visibility` and read -1 as the empty string. Source:
+  `docs/p1-25-page-text.md` (observed).
+
 - **A recreated controller can reuse an old permission request number.** A
   delayed session-worker reply could then match a new prompt on the same live
   tab. P1-16 allocates request IDs across controller lifetimes and clears retired

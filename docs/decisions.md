@@ -7,6 +7,25 @@ recorded separately, in `design/README.md`.
 
 ## 2026-10-12
 
+- **The product is named Syrinx.** "Atlas" was a working name. It collides
+  with OpenAI's ChatGPT Atlas, a browser in the same category, and the name
+  is crowded across developer tools. The syrinx is a bird's vocal organ,
+  which fits beside Fledge. The owner holds the domain `syrinxapp.dev`.
+  Code, crates, the data folder and Windows registration names still say
+  Atlas until a dedicated rename slice changes them together. That slice
+  must also handle the data folder (`%LOCALAPPDATA%\Atlas\data`) before the
+  owner's first real install (P1-37). New work should not spread the old
+  name further than it must.
+- **Finished work merges to main; slices are built in local worktrees.**
+  This replaces D41's routing through the integration branch
+  `codex/integrated-browser-preview`, which left main at P1-04 while
+  reviewed work piled up elsewhere. Each slice is built on its own branch
+  in a local worktree. It merges to `main` with `--no-ff` once an
+  independent review approves it and `cargo xtask check` passes after the
+  merge. The owner directed all finished work to main on 2026-10-12. The
+  repository stays local, with no remote and no pushes. Commits still
+  happen only within this approved slice workflow.
+
 - **Palette ranking is judged from key press to rows on screen (P1-33).**
   A keystroke's ranked rows must be presented within two display refresh
   intervals at the 95th percentile (33.3 ms at 60 Hz), with the maximum
@@ -31,6 +50,50 @@ recorded separately, in `design/README.md`.
   It is a separate slice after P1-33 merges, rerun through P1-33's harness.
   Keeping a new window per opening was rejected, because it cannot meet the
   one-frame target.
+
+- **Page text skips every exit from an excluded site unless Atlas started it
+  (P1-25, "skip all exits").** A page reached by leaving an excluded document
+  (Google, a bank or payment site, or a site the owner excluded) is never
+  read, unless Atlas itself started that navigation from the address bar,
+  the palette, a bookmark, a saved page, a tile or Home. Links, page
+  scripts, auto-submitting forms, popups, back, forward and reload all count
+  as leaving. The taint carries on: a page reached that way passes it to the
+  next page it leads to, until Atlas navigates the tab, so a sign-in
+  callback that moves on by script is not read either. A popup opened from
+  an excluded or tainted page starts tainted. This replaces the
+  user-initiated test in the entry below: WebView2's `IsUserInitiated`
+  follows Chromium's short-lived user activation, so a "Continue" click on a
+  bank page counted as the owner's own navigation and its next page was
+  read. Keeping the user-initiated test was rejected for that reason. The
+  form-`POST` rule below stands.
+
+- **Page text skips sign-in hops (P1-25).** *(Its user-initiated test was
+  replaced the same day by "skip all exits" above; the `POST` rule stands.)* A page reached by a navigation
+  that an excluded site (Google, a bank or payment site, or a site the owner
+  excluded) started by itself, through its own script or an auto-submitting
+  form, is not read. Neither is any page produced by a form submission (a
+  `POST`) on any site, including one that redirects to an ordinary page
+  afterwards. A link the owner follows out of an excluded site still leads to
+  a readable page if that page is otherwise eligible. Sign-in flows carry
+  tokens and personal details from the excluded site to the next page this
+  way, which the redirect rule alone did not catch. Atlas tells these apart
+  from WebView2's own `IsUserInitiated` flag and the request method it
+  reports, with no request filter and no injected script. Reading such pages
+  and relying only on the exclusion lists was rejected.
+
+- **A split `no-store` header is an accepted limit (P1-25, F2).** When a site
+  sends `Cache-Control` as several separate header lines, WebView2 shows
+  Atlas only the first, so a `no-store` on a later line is missed and the
+  page can be read. The owner accepted this as a known limit rather than
+  adding a request filter, which the Google guardrails forbid. A report to
+  Microsoft is possible but is sent only with the owner's approval; nothing
+  has been sent.
+
+- **Page text uses the browser's `visibility` style (P1-25).** The snapshot
+  asks WebView2 for each node's computed `visibility`, so text a page hides
+  with `visibility: hidden` is left out, as it is for `display: none`. This
+  departs from the proposal's empty style list; the owner approved it after
+  the F1 test showed hidden text being kept.
 
 - **A background tab finishes loading before it is put to sleep (P1-15).**
   The five-second countdown before a hidden page is suspended now starts
