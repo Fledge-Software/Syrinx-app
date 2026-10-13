@@ -23,11 +23,10 @@ that basis:
   involved: the profile and the text were synthetic. The palette now waits for
   the reply. The run now aborts on any destination outside its loopback pages.
   See "Product bug found by the harness" below.
-- **Opening fails:** about half a second, roughly 30 frames against one.
-  Nearly all of it falls between the call into GPUI's `open_window` and the
-  moment the new window exists, which points at GPUI's window creation. That
-  attribution stays provisional until the owner's foreground run. DW-90 is the
-  approved follow-up.
+- **Opening passes since DW-90.** It took about half a second, roughly 30
+  frames against one, almost all of it inside GPUI's `open_window`. DW-90 now
+  creates the popup once and shows, resets and hides it: the opening p95 is
+  about 6 ms against 16.7 ms (see "DW-90: the kept popup" below).
 - **Composed ranking passes at 1,000 and 10,000 rows but fails at 100,000:**
   key to presented rows has a p95 of about 58 ms against the owner's 33.3 ms.
   Digit-heavy queries (`row-0420`) take up to about 106 to 123 ms in the worker.
@@ -35,11 +34,11 @@ that basis:
   stays with P1-05.
 - **Overlay ownership, not-topmost, z-order and popup reuse pass.**
 - **Enter activation passes** since the fix (run `1791856583`).
-- **Focus return after Esc fails, now with Atlas in the foreground:** 0 of 20
-  in run `1791856583`, where Windows reported Atlas as the foreground window.
-  Foreground denial therefore no longer explains it on its own. Whether this
-  is a product defect or how the page reports focus is not diagnosed; it
-  needs its own investigation.
+- **Focus return after Esc was a product defect; it is diagnosed and fixed.**
+  GPUI's `activate_window` set Win32 focus to the main window from a task that
+  ran after Atlas had already sent the page its focus. Esc now passes 20 of 20,
+  and so does Esc pressed before the palette's first frame. See "Why Esc did
+  not return focus to the page" below.
 
 Nothing slow has been hidden or excluded.
 
@@ -70,7 +69,9 @@ The app flag is not part of the default gate. Like `--smoke` and
 under `%TEMP%`, never `%LOCALAPPDATA%\AtlasProductPreview`. Startup problems go
 to stderr only, never to a message box. It refuses any page base other than
 `http://127.0.0.1:<port>`, and it cannot be combined with `--smoke`,
-`--test-data-dir`, the suspended-tab mode or a link. A 600-second watchdog
+`--test-data-dir`, the suspended-tab mode or a link. Once running, the run
+also aborts when a page reports an address outside its loopback pages; see
+"What the loopback guard covers" below. A 600-second watchdog
 (exit code 124) bounds the whole run, as `--smoke`'s 30-second one does. The
 run takes about three minutes after the build.
 
@@ -118,12 +119,12 @@ DirectComposition swap chain, so the compositor shows the frame at the next
 display refresh. That refresh is up to one more interval (16.7 ms here) and is
 not included. The numbers are "submitted to the compositor", not "photons".
 
-Window creation is a special case. `App::open_window` renders the new window
-once without presenting it. The probe therefore arms the opening measurement
-from `Window::on_next_frame`, registered right after the window is created,
-and notifies the palette view so the first real frame renders and presents.
-That frame re-renders the palette once more than a normal run would, so the
-opening time may be slightly too high, never too low.
+For an opening, the show task arms the probe and marks the palette for a
+fresh frame just before it calls Windows to show the popup. GPUI draws and
+presents that frame while handling the popup's `WM_SHOWWINDOW`, before the
+window is visible, so the first visible frame already shows the new entry.
+(Before DW-90 the probe was armed from `Window::on_next_frame` after
+`open_window` returned.)
 
 **Cost in ordinary runs.** The palette holds `Option<PresentProbe>`, which is
 `None` outside an acceptance run. It costs one `Option` check per query,
@@ -138,17 +139,21 @@ timing is on.
 ### Opening
 
 The run measures 20 openings, each with the focus page focused. Each one runs
-from just before the `Palette` action to the first presented frame of the new
-popup, and is broken into stages:
+from just before the `Palette` action to the first presented frame of the
+popup, and is broken into stages. Since DW-90 the popup already exists,
+hidden, so the stages are:
 
-- **open_window called**: `open_palette` has finished its own preparation
-  (closing a peek, building the request and computing the popup's bounds) and
-  is about to call GPUI's `open_window`;
-- **window created**: inside `open_window`, the native popup, its
-  DirectX/DirectComposition resources and its swap chain exist, and the
-  palette view is about to be built;
-- **first render**: the unpresented render inside `open_window`;
+- **show requested**: `open_palette` has reset the kept popup for this
+  entry (text, rows, selection, scope chip and any waiting Enter), sent its
+  first query and queued the task that shows it;
+- **show started**: that task begins moving the hidden popup into place;
+- **first render**: the palette's first render after the opening began,
+  which GPUI draws as Windows shows the popup;
 - **presented**: the first frame presented.
+
+Before DW-90 the stages were `open_window` called, window created (inside
+GPUI's `open_window`), first render and presented; the earlier runs below
+use those names.
 
 **Budget (owner decision, 2026-10-12):** within one refresh interval at the
 95th percentile, with every sample and the maximum reported. The interval comes
@@ -228,12 +233,20 @@ popup fixture does. The checks:
 | `popup_above_page` | the popup is visible and above the main window in the z-order |
 | `palette_takes_keyboard_focus` | the page reports blur once the palette opens |
 | `escape_returns_page_focus` | after each of the 20 Esc presses the palette closes and the page reports focus again |
-| `no_stale_refocus_after_escape` | one second later: no palette, one window, page still focused, same tab |
-| `rapid_open_then_escape` | Esc posted in the same turn as Ctrl K, before the popup's first frame, still closes it and returns focus |
+| `openings_reuse_one_popup` | all 20 openings used the same native popup (DW-90) |
+| `no_stale_refocus_after_escape` | one second later: no open entry, the kept popup hidden, two windows (main and kept popup), page still focused, same tab |
+| `hidden_popup_renders_nothing` | for one second with the palette hidden, the palette view does not render (D37's idle budget) |
+| `rapid_open_then_escape` | Esc posted in the same turn as Ctrl K, before the popup is shown, still ends the entry, keeps the popup hidden and returns focus |
 | `no_stale_refocus_after_rapid_escape` | as above, after the rapid case |
-| `second_ctrl_k_reuses_popup` | Ctrl K while open keeps the same popup and two windows in total |
+| `second_ctrl_k_reuses_popup` | Ctrl K while open keeps the same popup and entry, and two windows in total |
 | `enter_activates_selected_tab` | typing the background tab's name selects its tab row; Enter switches to it and its page reports focus |
-| `no_stale_refocus_after_enter` | one second later: no palette, target tab still active and focused |
+| `no_stale_refocus_after_enter` | one second later: no open entry, popup hidden, target tab still active and focused |
+
+Each focus check's detail also records where Windows keyboard focus is
+(`GetGUIThreadInfo` on the interface thread: the main window itself, inside
+it, which is the page host and WebView2, the popup, or elsewhere). The Esc
+check adds a trace for the first opening and the first failed one: keyboard
+focus changes and the browser view's focus steps, in milliseconds after Esc.
 
 ## Results on this machine
 
@@ -279,8 +292,8 @@ is off in the pinned build.
 P1-10 opens a new native popup for every Ctrl K and removes it on close
 (`BrowserView::open_palette`, `PaletteView::finish`), so every opening pays
 this cost. The owner approved **DW-90** on 2026-10-12: create the popup once
-and show and hide it. That is a separate slice after this one merges; P1-33
-does not change how the palette opens.
+and show and hide it. DW-90 has since done so; its results are in "DW-90: the
+kept popup" below.
 
 ### Ranking (run `1791855053`)
 
@@ -389,6 +402,122 @@ and may take keyboard focus back from the WebView2 child after `focus_page`
 ran. This is not diagnosed. It belongs in its own slice before P1-33 can
 pass.
 
+## DW-90: the kept popup
+
+**Why.** Every Ctrl K built a new native popup with its own DirectX and
+DirectComposition swap chain, which took about half a second inside GPUI's
+`open_window`. The owner's budget is one refresh interval at p95, which no
+per-opening window could meet (`docs/decisions.md`, 2026-10-12).
+
+**What changed** (`crates/atlas-app/src/ui/palette_popup.rs`,
+`crates/atlas-app/src/palette.rs` and
+`crates/atlas-platform/src/browser/overlay.rs`):
+
+- The popup is created once, hidden (`WindowOptions { show: false }`), owned
+  by the main window and not topmost, right after the first session state
+  arrives, so even the first Ctrl K is fast. If it is ever lost, the next
+  Ctrl K builds a new one.
+- Each Ctrl K opens an *entry*: `PaletteView::begin` resets the text, rows,
+  selection, scope chip, status and any waiting Enter, gives the entry its own
+  event channel and sends the first query. Request IDs keep counting across
+  entries, so a reply to an earlier entry can never match.
+- A task outside any GPUI update then moves the popup to its place (computed in
+  logical pixels from the main window, converted at the main window's scale)
+  and shows it. Windows' resize and show messages must reach GPUI while its app
+  state is free; inside an update GPUI drops them (see the traps). When the
+  popup crosses to a monitor with another scale, Windows resizes it, so it is
+  placed a second time. With Atlas in front, the popup is then activated
+  synchronously; if another application has taken the foreground, the popup
+  is shown without activation and Atlas does not steal the foreground back.
+- Esc, Enter, a run command and Windows' close request end the entry and hide
+  the popup. Hiding activates the main window first when the popup is active,
+  so Windows never picks the next window itself. The entry's channel is
+  dropped, which ends the browser's receiver.
+- Stale-event guards are per entry: the receiver drops events from any entry
+  but the current one, and the show task does nothing if Esc or Enter already
+  ended its entry (the rapid-Esc case). A popup-origin Ctrl K is dispatched
+  only while its entry still takes input, which keeps the queued-refocus trap
+  handled.
+- At shutdown the kept popup is removed with the main window.
+- A hidden window schedules no frames: GPUI's VSync thread skips windows that
+  are not visible (D37's patch), and the harness checks that the palette does
+  not render while hidden.
+
+**Results.** All runs are on the same busy machine as above.
+
+| run | Atlas in front | opening presented p50 / p95 / max (ms) | Esc returns focus |
+|---|---|---|---|
+| `1791858770`, before (diagnostics only) | no | 501.7 / 556.5 / 566.4 | 0 of 20 |
+| `1791859013`, focus fix only | no | 493.9 / 528.8 / 558.6 | 20 of 20 |
+| `1791859688`, kept popup, first version | from the middle of the run | 3.9 / 9.9 / 14.4 | 3 of 20 |
+| `1791859981`, with the activation follow-up | yes | 4.5 / 6.3 / 9.0 | 20 of 20 |
+| `1791860064` | yes | 4.5 / 6.5 / 7.4 | 20 of 20 |
+| `1791860299`, final | yes | 4.3 / 5.9 / 6.9 | 20 of 20 |
+| `1791860396`, final, with a UI Automation client attached | yes | 4.2 / 6.8 / 8.1 | 20 of 20 |
+| `1791861452`, final code after a refactor | no | 3.7 / 10.6 / 394.1 | 20 of 20 |
+
+In the final run the stages were: show requested at p95 0.16 ms, show started
+at 0.26 ms, first render at 2.0 ms and presented at 5.9 ms, so the opening
+passes with about 11 ms to spare. Every focus and stacking check passed,
+including `openings_reuse_one_popup` (one native popup across 20 openings)
+and `hidden_popup_renders_nothing` (0 renders in one hidden second). Ranking
+is unchanged by DW-90: worker p95 1.0, 7.6 and 37.3 ms and composed p95 28.3,
+29.3 and 58.3 ms at 1k, 10k and 100k rows, so D48 and the 100,000-row
+composed budget still fail and stay with P1-05.
+
+**The 3-of-20 run.** In `1791859688` Atlas was not in front when the run
+started (its baseline check failed too) and was by the end. With Atlas behind
+another application, `focus_page` asked GPUI to activate the window and
+waited for an activation event to focus the page; when Windows reported no
+activation change, no event came and the page was never focused. `focus_page`
+now also focuses the page from a task queued right after GPUI's activation
+task. This explanation is inferred from the code and the run's checks: that
+run had no focus trace yet. The last run, `1791861452`, had Atlas behind
+another window throughout and passed 20 of 20; its first trace shows the
+background path: at 29 ms after Esc `focus_page` waits for GPUI, at 101 ms
+the activation is observed and the page's focus sent, and at 118 ms keyboard
+focus is in the page.
+
+**One slow opening.** The first opening of `1791861452` took 394 ms: its show
+task started 79 ms after Ctrl K and its first render came at 391 ms. The other
+19 took 2 to 11 ms, and no earlier run's first opening exceeded 10 ms. Atlas
+was behind another window, so the popup was shown without activation; why
+that first frame was late is not established. It does not change the p95.
+
+## Why Esc did not return focus to the page
+
+**Symptom.** After Esc closed the palette, the page never reported
+`document.hasFocus()` again: 0 of 20 in every earlier run, including run
+`1791856583` with Atlas in front. Enter, which also returns focus to a page,
+passed.
+
+**Evidence.** The harness now reads which window has Windows keyboard focus
+(`GetGUIThreadInfo`). In the before run `1791858770` it was the main window
+itself, not the page, after all 20 Esc presses, both when the palette had
+closed and three seconds later; the page never reported focus even briefly.
+
+**Cause.** `focus_page` called GPUI's `Window::activate_window` and then sent
+the page its `Focus` command. On Windows, `activate_window` does its work
+later, from a spawned task: `SetActiveWindow`, `SetFocus` on the GPUI window,
+a synthetic Alt press and `SetForegroundWindow`
+(`gpui-pre-windows-0.3.8/src/window.rs`, `activate`). The page's `Focus`
+reached WebView2 first, and the task's `SetFocus` then took the keys back to
+the main window. Enter's pass is consistent with this: the target tab's
+`Focus` is sent later, after a round trip to the session worker, by which
+time GPUI's task had run. The hypothesis in the earlier draft, that Windows reactivating the
+owner of a destroyed popup took the keys, was not the cause: the fix below
+works with the old destroy-per-opening popup.
+
+**Fix.** With Atlas already in front, `focus_page` now activates the main
+window natively and synchronously (`atlas_platform::browser::
+activate_if_foreground`) and then sends the page `Focus`. With another
+application in front, it still asks GPUI to bring Atlas forward and focuses
+the page only after GPUI's task has run. Run `1791859013` changed only this,
+keeping the old popup, and passed 20 of 20 Esc presses and the rapid Esc.
+With the kept popup, the focus trace of the final run shows the order: at
+17.3 ms after Esc the main window is activated and the page's focus sent, and
+by 17.4 ms keyboard focus is inside the main window, in the page.
+
 ## Product bug found by the harness
 
 **Enter before the local reply searched the web.** Each keystroke starts a
@@ -417,14 +546,32 @@ between the query and an empty reply.
 the synthetic query "enter-target" to www.google.com. Their synthetic
 profiles under `%TEMP%` (`atlas-window-smoke-33716-1791855054…`, from run
 `1791855053`, and `…42036-…`, most likely `1791845322`, whose Enter check also
-failed) record that address. No personal data was involved. The profiles
-are kept for the owner to review. The harness now also refuses any
-destination outside its loopback pages, at two points: before the session
-worker records an address (`BrowserView::navigate`), and before WebView2
-creates or navigates a page (`page_command`). A refusal fails the run and
-aborts it with the reason. `AcceptancePlan::refusal` is unit-tested. Before
-pressing Enter, the harness also waits until the input holds the full target
-text and the palette has the reply to its newest request.
+failed) recorded that address. No personal data was involved. The owner had
+both profiles deleted on 2026-10-12. Before pressing Enter, the harness now
+waits until the input holds the full target text and the palette has the
+reply to its newest request.
+
+### What the loopback guard covers
+
+In an acceptance run, Atlas refuses any destination other than the run's
+loopback pages and `about:blank` (`AcceptancePlan::refusal`, unit-tested). A
+refusal fails the run and aborts it at its next step. The guard acts at three
+points:
+
+- before the session worker records an address Atlas navigates to
+  (`BrowserView::navigate`);
+- before WebView2 creates a page or navigates one on Atlas's command
+  (`page_command`);
+- when a page reports a new address on its own (`BrowserEvent::Url`, through
+  `acceptance_observed`): a redirect, the page's own script or a link.
+
+The first two stop the request before anything leaves the machine. The third
+cannot: WebView2 reports the address after the navigation started, so the
+first request has already been sent. It ends the run instead of letting it
+continue somewhere else. The synthetic pages load nothing and contain no
+links, so this has not happened in any run. The guard does not cover requests
+a loopback page makes without navigating (there are none in the synthetic
+pages) or WebView2's own background traffic.
 
 The checks that do not depend on activation pass in every run: ownership, no
 topmost, z-order above the page, palette reuse on a second Ctrl K, and no
@@ -442,8 +589,11 @@ reopened palette or leaked window after Esc, rapid Esc or Enter.
   queueing beyond the bursts' last-key latency and superseded count.
 - **Compositor latency** after `Present` (up to one refresh) and display
   latency.
-- **Why focus does not return after Esc.** The foreground run `1791856583`
-  failed it too; the cause is not diagnosed.
+- **The sidebar peek's Esc.** It goes through the same `focus_page` as the
+  palette, so the fix applies to it. A harness check was attempted, but
+  opening the peek from a script inside a `BrowserView` update panics in GPUI
+  (a separate defect, recorded in the traps and flagged for its own slice), so
+  the peek's Esc is an owner check.
 - **Liveness under the palette (D7: no freeze frame).** A playing video should
   keep moving under the open palette. This is visual, so it is an owner check.
 - **The owner's real catalogue shape.** Synthetic titles are deliberately
@@ -451,8 +601,14 @@ reopened palette or leaked window after Esc, rapid Esc or Enter.
   history has fewer shared digit runs.
 - **Wide and narrow palettes.** The run uses the window's default size (wide,
   with the preview pane).
-- **No UIA rerun.** P1-33 changes no accessibility role, element id or focus
-  handle, so P1-36's UI Automation probe was not repeated.
+- **UIA rerun (DW-90).** DW-90 changes no role, element id or focus handle,
+  but it keeps the palette's handles alive across entries, so P1-36's probe
+  was repeated: a read-only UI Automation client walked every Atlas window's
+  tree every 100 ms through a whole acceptance run (`1791860396`, 267 sweeps,
+  largest window tree 77 nodes). The palette appeared as "Command palette"
+  with its "Search or command" field in 204 sweeps. Atlas did not panic and
+  every focus check passed. The probe script was not committed; it sends no
+  input.
 
 ## Owner checks
 
@@ -460,15 +616,17 @@ reopened palette or leaked window after Esc, rapid Esc or Enter.
    machine, without touching the keyboard or mouse, and keep the three reports
    in `target\p1-33\`. Report the opening p95 and its stages, the 100,000-row
    worker and composed p95s, the burst figures and every failed check.
-2. In particular: does `escape_returns_page_focus` still fail when you run it
-   (it failed 0/20 in the agent's foreground run)? Does
-   `enter_activates_selected_tab` pass every time? Does the
-   opening still spend its time between `open_window called` and
-   `window created`?
+2. In particular: does `escape_returns_page_focus` pass 20 of 20, and does
+   `enter_activates_selected_tab` pass every time? Is the opening's p95 under
+   one refresh interval?
 3. By hand: open a synthetic local video page, press Ctrl K and type. The video
    keeps playing under the palette (D7), the palette does not stay on top
    when you Alt Tab to another app, and Esc puts the keys back into the page
-   (type in a text field).
+   (type in a text field). Do the same from the sidebar peek: Esc there must
+   also put the keys back into the page.
+4. With the window on a second monitor at a different scale, and after
+   resizing the window, Ctrl K opens the palette centred 72 pixels below the
+   window's top at the right size, with no flash of the previous query.
 
 ## Owner decisions (2026-10-12)
 
@@ -502,12 +660,21 @@ cover:
 
 With the Enter fix and the loopback guard, the run passed 940 tests.
 
+With DW-90 and the focus fix, `cargo xtask check` passed on 2026-10-12 with
+946 tests. The new ones cover the palette's placement at any width, monitor
+position and scale (`ui/palette_popup.rs`), a new entry forgetting the last
+one while request IDs keep counting, Enter waiting through a model refresh
+between its submission and the reply (`palette/choices.rs`), and the refusal
+of non-window handles by the popup and focus helpers in `atlas-platform`.
+
 ## Files
 
 - `crates/atlas-app/src/acceptance.rs` and `acceptance/{probe,report}.rs`: the
   plan, the present-time probe and the JSON report with p50/p95/max and
   verdicts (unit-tested).
-- `crates/atlas-app/src/ui/palette_acceptance.rs`: the scripted run.
+- `crates/atlas-app/src/ui/palette_acceptance.rs`: the scripted run, with
+  the keyboard-focus traces and the DW-90 checks.
+- `crates/atlas-app/src/ui/palette_popup.rs`: DW-90's kept popup.
 - `crates/atlas-app/src/session/synthetic.rs`: in-memory synthetic rows. In
   `session.rs`: `spawn_acceptance`, the `GrowSyntheticCatalogue` command and
   the `QueryTimed`/`SyntheticCatalogue` events; the worker test is in
@@ -517,7 +684,9 @@ With the Enter fix and the loopback guard, the run passed 940 tests.
 - `crates/atlas-app/src/ui.rs`: plumbing (`LaunchChecks`, the open-window
   stamp, title and query hooks).
 - `crates/atlas-platform/src/acceptance.rs`: owner/topmost/z-order/foreground
-  queries, the refresh interval with explicit errors, and input posted to
-  Atlas's own windows only.
+  and keyboard-focus queries, the refresh interval with explicit errors, and
+  input posted to Atlas's own windows only.
+- `crates/atlas-platform/src/browser/overlay.rs`: showing, hiding and
+  activating the kept popup.
 - `crates/xtask/src/palette_acceptance.rs`: build, loopback synthetic pages,
   launch and summary.
