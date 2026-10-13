@@ -1,0 +1,15 @@
+# Keep Syrinx's state independent of the window and browser engine.
+[package]
+name = "syrinx-core"
+description = "Syrinx's window-independent tab model and application state"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The owner approved `url` on 2026-10-12 so navigation and import share one address rule (DW-1).
+[dependencies]
+url.workspace = true
+
+[lints]
+workspace = true

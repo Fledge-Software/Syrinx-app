@@ -1,4 +1,4 @@
 # Use the same executable profile for the gate and development commands.
 [alias]
 xtask = "run --offline --locked --profile local --package xtask --"
-atlas = "run --offline --locked --profile local --package atlas-app --"
+syrinx = "run --offline --locked --profile local --package syrinx-app --"

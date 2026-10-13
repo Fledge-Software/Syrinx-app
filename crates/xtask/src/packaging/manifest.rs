@@ -1,11 +1,11 @@
-//! The package's fixed file layout and its `atlas-package.json` manifest.
+//! The package's fixed file layout and its `syrinx-package.json` manifest.
 
 use serde_json::{Value, json};
 
 use super::registration::{ACCEPTS_OPEN_URL, DATA_FOLDER, EXECUTABLE, GENERATED_SCRIPT, PRODUCT};
 
 /// Manifest file name at the package root; the install script and P1-38 read it.
-pub const MANIFEST: &str = "atlas-package.json";
+pub const MANIFEST: &str = "syrinx-package.json";
 
 /// Manifest format; raise it whenever a reader would misread the new shape.
 pub const FORMAT: u64 = 1;
@@ -15,11 +15,11 @@ pub const TARGET: &str = "x86_64-pc-windows-msvc";
 
 /// Owner-run scripts copied from `packaging/` into every package.
 pub const SCRIPTS: [&str; 5] = [
-    "atlas-common.ps1",
+    "syrinx-common.ps1",
     GENERATED_SCRIPT,
-    "install-atlas.ps1",
-    "register-atlas.ps1",
-    "unregister-atlas.ps1",
+    "install-syrinx.ps1",
+    "register-syrinx.ps1",
+    "unregister-syrinx.ps1",
 ];
 
 /// Which build a package holds. No timestamp, so one commit yields one manifest.
@@ -46,7 +46,7 @@ pub fn layout() -> Vec<&'static str> {
     files
 }
 
-/// Folder and zip name, such as `Atlas-0.1.0-1a2b3c4d5e6f-x64`; uncommitted builds say so.
+/// Folder and zip name, such as `Syrinx-0.1.0-1a2b3c4d5e6f-x64`; uncommitted builds say so.
 pub fn package_name(identity: &BuildIdentity) -> String {
     let dirty = if identity.dirty { "-dirty" } else { "" };
     format!(
@@ -142,12 +142,12 @@ mod tests {
         assert_eq!(
             layout(),
             [
-                "atlas-app.exe",
-                "atlas-common.ps1",
-                "atlas-registration.ps1",
-                "install-atlas.ps1",
-                "register-atlas.ps1",
-                "unregister-atlas.ps1",
+                "install-syrinx.ps1",
+                "register-syrinx.ps1",
+                "syrinx-common.ps1",
+                "syrinx-registration.ps1",
+                "syrinx.exe",
+                "unregister-syrinx.ps1",
             ]
         );
         assert!(!layout().contains(&MANIFEST));
@@ -155,12 +155,12 @@ mod tests {
 
     #[test]
     fn name_identifies_version_commit_and_uncommitted_builds() {
-        assert_eq!(package_name(&identity()), "Atlas-0.1.0-0123456789ab-x64");
+        assert_eq!(package_name(&identity()), "Syrinx-0.1.0-0123456789ab-x64");
         let dirty = BuildIdentity {
             dirty: true,
             ..identity()
         };
-        assert_eq!(package_name(&dirty), "Atlas-0.1.0-0123456789ab-dirty-x64");
+        assert_eq!(package_name(&dirty), "Syrinx-0.1.0-0123456789ab-dirty-x64");
     }
 
     #[test]
@@ -168,13 +168,13 @@ mod tests {
         let text = render(&identity(), &files()).unwrap();
         let manifest: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(manifest["format"], 1);
-        assert_eq!(manifest["product"], "Atlas");
+        assert_eq!(manifest["product"], "Syrinx");
         assert_eq!(manifest["version"], "0.1.0");
         assert_eq!(manifest["commit"], "0123456789ab");
         assert_eq!(manifest["dirty"], false);
         assert_eq!(manifest["target"], TARGET);
         assert_eq!(manifest["signed"], false);
-        assert_eq!(manifest["executable"], "atlas-app.exe");
+        assert_eq!(manifest["executable"], "syrinx.exe");
         assert_eq!(manifest["accepts_open_url"], ACCEPTS_OPEN_URL);
         assert_eq!(manifest["data_folder"], DATA_FOLDER);
         let listed: Vec<_> = manifest["files"]
