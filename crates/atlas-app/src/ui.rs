@@ -221,9 +221,6 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
     })
 }
 
-/// How long a page waits for GPUI to activate Atlas before its focus request lapses.
-const PAGE_FOCUS_ACTIVATION_LIMIT: std::time::Duration = std::time::Duration::from_secs(1);
-
 /// How this launch runs: normally, or as one of the unattended synthetic checks.
 pub struct LaunchChecks {
     pub smoke: bool,
@@ -279,8 +276,8 @@ pub struct BrowserView {
     /// The palette popup, created once and kept hidden between entries (DW-90).
     kept_palette: Option<palette_popup::KeptPalette>,
     palette_entries: u64,
-    /// When GPUI was asked to bring Atlas forward, so the page is focused once it is active.
-    page_focus_on_activation: Option<std::time::Instant>,
+    /// The page is to take the keys once the owner brings Atlas back to the front.
+    page_focus_on_activation: bool,
     commands: Rc<CommandRegistry>,
     main_window: gpui::AnyWindowHandle,
     peek: Option<peek::PeekPopup>,
@@ -372,7 +369,7 @@ impl BrowserView {
             palette: None,
             kept_palette: None,
             palette_entries: 0,
-            page_focus_on_activation: None,
+            page_focus_on_activation: false,
             commands: Rc::new(CommandRegistry::browser()),
             main_window: Window::window_handle(window),
             peek: None,
@@ -1239,28 +1236,18 @@ impl BrowserView {
             window.focus(&self.focus, cx);
         }
         // GPUI's `activate_window` focuses the window later, from a task, which takes the keys
-        // back from a page focused now. With Atlas in front, activate at once instead.
-        if main && self.activate_main_now() {
+        // back from a page focused now; it also forces the foreground. With Atlas in front,
+        // activate natively at once instead.
+        if self.activate_main_now() {
             self.acceptance_mark("focus_page: activated at once");
-            self.page_focus_on_activation = None;
+            self.page_focus_on_activation = false;
             self.focus_shown_page();
             return;
         }
-        // Another application is in front: the page is focused once GPUI has activated Atlas.
-        self.acceptance_mark("focus_page: waiting for GPUI activation");
-        self.page_focus_on_activation = Some(std::time::Instant::now());
-        window.activate_window();
-        // GPUI's activation task was queued first; when Windows reports no activation change,
-        // this follow-up still focuses the page after that task.
-        cx.spawn(async move |view, cx| {
-            if view
-                .update(cx, |view, _| view.focus_page_after_activation())
-                .is_err()
-            {
-                eprintln!("The browser closed before its page could take focus.");
-            }
-        })
-        .detach();
+        // Atlas never takes the foreground from another application (owner, 2026-10-12): the
+        // page takes the keys when the owner returns to Atlas.
+        self.acceptance_mark("focus_page: deferred until Atlas is activated");
+        self.page_focus_on_activation = true;
     }
 
     fn activate_main_now(&mut self) -> bool {
@@ -1273,16 +1260,13 @@ impl BrowserView {
         }
     }
 
-    /// Completes a `focus_page` that had to wait for GPUI to bring Atlas forward.
+    /// Completes a `focus_page` that waited for the owner to bring Atlas back.
     fn focus_page_after_activation(&mut self) {
-        let Some(requested) = self.page_focus_on_activation.take() else {
+        if !std::mem::take(&mut self.page_focus_on_activation) {
             return;
-        };
-        self.acceptance_mark("activation observed");
-        // A much later activation is the owner's own click, which decides focus itself.
-        if requested.elapsed() < PAGE_FOCUS_ACTIVATION_LIMIT {
-            self.focus_shown_page();
         }
+        self.acceptance_mark("activation observed");
+        self.focus_shown_page();
     }
 
     fn focus_shown_page(&mut self) {

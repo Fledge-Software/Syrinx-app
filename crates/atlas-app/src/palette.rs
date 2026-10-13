@@ -75,6 +75,8 @@ pub struct PaletteEntry {
 /// The palette's view. Its popup is created once, hidden between uses and reset on each
 /// opening (DW-90), so each opening is an entry with its own event channel.
 pub struct PaletteView {
+    /// Replaced at each close: a focused input's caret blink re-arms a 500 ms timer that
+    /// only a blur stops, and a hidden window never draws the frame that delivers the blur.
     input: Entity<InputState>,
     /// The open entry's channel; `None` while the popup is hidden.
     events: Option<UnboundedSender<PaletteEvent>>,
@@ -89,7 +91,9 @@ pub struct PaletteView {
     native: PaletteNative,
     /// Present-time stamps for P1-33's acceptance run; `None` in every other run.
     probe: Option<PresentProbe>,
-    _subscription: Subscription,
+    _input_events: Subscription,
+    /// Counts the input's notifications for P1-33's acceptance run; `None` otherwise.
+    _input_count: Option<Subscription>,
 }
 
 pub fn bind_keys(cx: &mut App) {
@@ -114,16 +118,7 @@ impl PaletteView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Search tabs and bookmarks, run > commands, or enter an address")
-        });
-        let subscription =
-            cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
-                InputEvent::Change => this.query(cx),
-                InputEvent::PressEnter { .. } => this.submit(false, window, cx),
-                _ => {}
-            });
+        let (input, input_events, input_count) = new_input(probe.as_ref(), window, cx);
         let (commands, command_problem) = match CommandMatcher::new(registry) {
             Ok(commands) => (commands, None),
             Err(error) => (
@@ -143,7 +138,8 @@ impl PaletteView {
             scroll: ScrollHandle::new(),
             native,
             probe,
-            _subscription: subscription,
+            _input_events: input_events,
+            _input_count: input_count,
         }
     }
 
@@ -174,17 +170,18 @@ impl PaletteView {
     }
 
     /// Ends the entry as if Esc were pressed; the browser then returns focus to the page.
+    /// The popup is hidden even without an entry, so a stray visible popup can always close.
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.is_open() {
-            return;
+        if self.is_open() {
+            self.emit(PaletteEvent::Closed);
         }
-        self.emit(PaletteEvent::Closed);
         self.close(window, cx);
     }
 
     /// Hides the popup and drops the entry's channel, which ends the browser's receiver.
     pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.events = None;
+        self.replace_input(window, cx);
         cx.notify();
         let hidden = atlas_platform::browser::hide_overlay(self.native.popup, self.native.owner);
         if let Err(error) = hidden {
@@ -192,6 +189,15 @@ impl PaletteView {
             eprintln!("Cannot hide the command palette ({error}); closing it instead.");
             window.remove_window();
         }
+    }
+
+    /// Drops the used input, which cancels its caret blink, for a fresh unfocused one.
+    fn replace_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.blur(cx);
+        let (input, input_events, input_count) = new_input(self.probe.as_ref(), window, cx);
+        self.input = input;
+        self._input_events = input_events;
+        self._input_count = input_count;
     }
 
     fn query(&mut self, cx: &mut Context<Self>) {
@@ -381,6 +387,27 @@ impl PaletteView {
         let shortcut = command.shortcut.as_ref().map(atlas_core::Shortcut::label);
         Some(Preview::command(hit, plugin, shortcut))
     }
+}
+
+/// The palette's search field, with its Change and Enter handlers.
+fn new_input(
+    probe: Option<&PresentProbe>,
+    window: &mut Window,
+    cx: &mut Context<PaletteView>,
+) -> (Entity<InputState>, Subscription, Option<Subscription>) {
+    let input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("Search tabs and bookmarks, run > commands, or enter an address")
+    });
+    let events = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
+        InputEvent::Change => this.query(cx),
+        InputEvent::PressEnter { .. } => this.submit(false, window, cx),
+        _ => {}
+    });
+    let count = probe
+        .cloned()
+        .map(|probe| cx.observe(&input, move |_, _, _| probe.input_notified()));
+    (input, events, count)
 }
 
 impl Render for PaletteView {

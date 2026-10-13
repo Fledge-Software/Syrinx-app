@@ -3,11 +3,12 @@
 use std::time::Duration;
 
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, WPARAM},
+    Foundation::{FILETIME, HWND, LPARAM, WPARAM},
     Graphics::Gdi::{
         DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW, GetMonitorInfoW,
         MONITOR_DEFAULTTONEAREST, MONITORINFO, MONITORINFOEXW, MonitorFromWindow,
     },
+    System::Threading::{GetCurrentProcess, GetProcessTimes},
     UI::{
         Input::KeyboardAndMouse::{MAPVK_VK_TO_VSC, MapVirtualKeyW, VK_BACK, VK_ESCAPE, VK_RETURN},
         WindowsAndMessaging::{
@@ -43,6 +44,8 @@ pub enum ProbeError {
     ImplausibleRefresh(u32),
     /// Windows did not report the interface thread's focus window.
     FocusUnreadable,
+    /// Windows did not report this process's CPU time.
+    CpuTimeUnreadable,
 }
 
 impl std::fmt::Display for ProbeError {
@@ -54,6 +57,9 @@ impl std::fmt::Display for ProbeError {
             Self::PostFailed => formatter.write_str("Windows refused the posted input message."),
             Self::DisplayUnreadable => {
                 formatter.write_str("Windows did not report the display's current mode.")
+            }
+            Self::CpuTimeUnreadable => {
+                formatter.write_str("Windows did not report Atlas's CPU time.")
             }
             Self::FocusUnreadable => {
                 formatter.write_str("Windows did not report which window has keyboard focus.")
@@ -136,6 +142,29 @@ pub fn keyboard_focus(main: isize, popup: Option<isize>) -> Result<KeyboardFocus
         _ if unsafe { IsChild(hwnd(main), focus) }.as_bool() => KeyboardFocus::InsideMainWindow,
         _ => KeyboardFocus::Elsewhere,
     })
+}
+
+/// The CPU time Atlas's own process has used so far, user and kernel together; page
+/// processes belong to WebView2 and are not included.
+pub fn process_cpu_time() -> Result<Duration, ProbeError> {
+    let mut created = FILETIME::default();
+    let mut exited = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    }
+    .map_err(|_| ProbeError::CpuTimeUnreadable)?;
+    let ticks =
+        |time: FILETIME| u64::from(time.dwHighDateTime) << 32 | u64::from(time.dwLowDateTime);
+    // FILETIME counts 100-nanosecond intervals.
+    Ok(Duration::from_nanos((ticks(kernel) + ticks(user)) * 100))
 }
 
 /// Whether `upper` appears before `lower` when walking up the z-order from `lower`.
