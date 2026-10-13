@@ -242,7 +242,9 @@ impl BrowserView {
                     self.peek_state.dismiss();
                 }
                 match error {
-                    PeekOpenError::Notice(message) => self.message = message,
+                    // A superseded request's failure is no longer the owner's concern.
+                    PeekOpenError::Notice(message) if wanted => self.message = message,
+                    PeekOpenError::Notice(_) => {}
                     PeekOpenError::Orphaned => self.fail("Cannot close the failed sidebar popup."),
                 }
             }
@@ -300,14 +302,7 @@ impl BrowserView {
             return;
         }
         // A queued key or click must not reactivate Atlas after Alt Tab.
-        let active =
-            match overlay_pointer(self.parent_hwnd, self.peek.as_ref().map(|peek| peek.hwnd)) {
-                Ok(pointer) => pointer.active,
-                Err(error) => {
-                    self.message = error;
-                    false
-                }
-            };
+        let active = self.owner_in_front();
         self.retire_peek(cx);
         if !active {
             cx.notify();
@@ -351,9 +346,23 @@ impl BrowserView {
         }
         self.peek_owner_geometry = current;
         let was_open = self.peek.is_some();
+        // Minimizing moves the window while it is still active; it must not take the page's focus.
+        let refocus = was_open && window.is_window_active() && self.owner_in_front();
         self.retire_peek(cx);
-        if was_open && window.is_window_active() {
+        if refocus {
             self.focus_page(window, cx);
+        }
+    }
+
+    /// Whether the main window is in front and not minimized, natively rather than as GPUI
+    /// last heard. Unknown counts as not in front, so nothing is refocused.
+    fn owner_in_front(&mut self) -> bool {
+        match overlay_pointer(self.parent_hwnd, self.peek.as_ref().map(|peek| peek.hwnd)) {
+            Ok(pointer) => pointer.active,
+            Err(error) => {
+                self.message = error;
+                false
+            }
         }
     }
 
@@ -427,6 +436,7 @@ struct PeekRequest {
     display_id: gpui::DisplayId,
 }
 
+/// Why a requested popup could not be opened.
 enum PeekOpenError {
     /// Shown to the owner; a later hover can try again.
     Notice(String),
@@ -534,6 +544,7 @@ enum PeekStep {
     Cancel,
     /// Close the popup on screen.
     Retire,
+    /// Leave the popup, or the pending request, as it is.
     Keep,
 }
 
