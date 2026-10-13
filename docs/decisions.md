@@ -5,6 +5,26 @@ Each entry says what changed and why. The spec's "Decisions already made"
 still stand unless an entry here says otherwise. Design decisions are
 recorded separately, in `design/README.md`.
 
+## 2026-10-13
+
+- **The Syrinx logo is the hawk emblem in `design/brand/syrinx-logo.svg`.**
+  It is used for the app icon, taskbar and Start entries, installer,
+  favicon and website.
+  - **Icons sit on a dark tile.** Every icon is the hawk on a near-black
+    rounded square. The hawk's head is cream (#FFFDF7) and disappears on
+    light backgrounds such as light taskbars, the Paper theme and light
+    browser tabs. A transparent hawk is used only where the background is
+    known to be dark.
+  - **The default accent matches the logo's orange, #FF612E**, replacing
+    #FF8A65. It stays customisable, and must still meet the 4.5:1 text
+    contrast rule in all five palettes, with a per-palette adjustment only
+    where needed.
+  - **The executable's icon is compiled by the Windows SDK's `rc.exe`** from
+    a small build script, with no new dependency. The `embed-resource`
+    crate was the rejected alternative. The rasters and `.ico` are
+    generated once from the SVG and committed. Building the project must
+    not require a rasterizer.
+
 ## 2026-10-12
 
 - **The product is named Syrinx.** "Atlas" was a working name. It collides
