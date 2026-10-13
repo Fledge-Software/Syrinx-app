@@ -2,18 +2,24 @@
 
 use std::{fmt::Write as _, time::Duration};
 
+use super::BURST_CADENCE;
+
 /// D48: a complete tier-1 search within 5 ms at the 95th percentile.
 const D48_BUDGET: Duration = Duration::from_millis(5);
 /// Used, and reported as assumed, when Windows does not report the display's refresh rate.
 const ASSUMED_INTERVAL: Duration = Duration::from_micros(16_667);
-/// Proposed, not approved: keystroke to presented rows within two refresh intervals.
-const PROPOSED_COMPOSED_FRAMES: u32 = 2;
+/// Owner decision 2026-10-12: keystroke to presented rows within two refresh intervals.
+const COMPOSED_FRAMES: u32 = 2;
+const OPEN_BUDGET: &str = "p95 within one refresh interval (owner decision 2026-10-12)";
+const COMPOSED_BUDGET: &str = "p95 within two refresh intervals (owner decision 2026-10-12)";
 
 /// One palette opening.
 #[derive(Clone, Copy, Debug)]
 pub struct OpenSample {
     /// From the open action to the first presented frame.
     pub presented: Duration,
+    /// From the open action to the call into GPUI's `open_window`.
+    pub requested: Duration,
     /// From the open action to the native window existing, before the view is built.
     pub created: Duration,
     /// From the open action to the first render inside window creation.
@@ -40,6 +46,16 @@ impl KeySample {
     }
 }
 
+/// One word typed or erased at a fixed cadence without waiting for each key's rows.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BurstSample {
+    /// The last key posted, to the frame showing the final text's rows.
+    pub final_rows: Option<Duration>,
+    /// Palette requests started during the burst, and replies the palette accepted.
+    pub queries: u64,
+    pub replies: u64,
+}
+
 /// The keystrokes measured at one synthetic catalogue size.
 #[derive(Clone, Debug)]
 pub struct SizeResult {
@@ -47,6 +63,8 @@ pub struct SizeResult {
     pub catalogue_rows: usize,
     pub seed: Duration,
     pub samples: Vec<KeySample>,
+    /// Back-to-back typing; reported, with no budget of its own.
+    pub bursts: Vec<BurstSample>,
 }
 
 /// A pass/fail functional check with what was observed.
@@ -61,6 +79,8 @@ pub struct Check {
 #[derive(Clone, Debug, Default)]
 pub struct Report {
     pub refresh: Option<Duration>,
+    /// Why Windows did not report the refresh interval, when it did not.
+    pub refresh_problem: Option<String>,
     pub opens: Vec<OpenSample>,
     pub sizes: Vec<SizeResult>,
     pub checks: Vec<Check>,
@@ -132,22 +152,32 @@ impl Report {
     }
 
     /// D48 is judged on the worker's catalogue time; every key must also show its rows.
-    fn size_passed(size: &SizeResult) -> bool {
+    fn d48_passed(size: &SizeResult) -> bool {
         let timed_out = size.samples.iter().any(KeySample::timed_out);
         let worker = Stats::of(size.samples.iter().filter_map(|key| key.worker));
         !timed_out && worker.is_some_and(|stats| stats.within(D48_BUDGET))
     }
 
     fn composed_budget(&self) -> Duration {
-        self.interval() * PROPOSED_COMPOSED_FRAMES
+        self.interval() * COMPOSED_FRAMES
     }
 
-    /// Only stated budgets and functional checks decide the run; proposed budgets are reported.
+    /// Key to presented rows, judged at p95; a key without rows fails it.
+    fn composed_passed(&self, size: &SizeResult) -> bool {
+        let timed_out = size.samples.iter().any(KeySample::timed_out);
+        let composed = Stats::of(size.samples.iter().filter_map(|key| key.rows));
+        !timed_out && composed.is_some_and(|stats| stats.within(self.composed_budget()))
+    }
+
+    /// Every stated budget and functional check must pass; bursts are reported only.
     pub fn passed(&self) -> bool {
         self.aborted.is_none()
             && self.open_passed()
             && !self.sizes.is_empty()
-            && self.sizes.iter().all(Self::size_passed)
+            && self
+                .sizes
+                .iter()
+                .all(|size| Self::d48_passed(size) && self.composed_passed(size))
             && self.checks.iter().all(|check| check.passed)
     }
 
@@ -172,10 +202,15 @@ impl Report {
 
     fn display_json(&self) -> String {
         let measured = self.refresh.is_some();
+        let problem = self
+            .refresh_problem
+            .as_deref()
+            .map_or("null".to_owned(), quoted);
         object(&[
             ("interval_ms", number(milliseconds(self.interval()))),
             ("refresh_hz", number(1. / self.interval().as_secs_f64())),
             ("measured", measured.to_string()),
+            ("problem", problem),
         ])
     }
 
@@ -187,13 +222,14 @@ impl Report {
             .map(|open| frames(open.presented, budget).to_string())
             .collect();
         object(&[
-            (
-                "budget",
-                quoted("p95 within one refresh interval (plan, phase 4)"),
-            ),
+            ("budget", quoted(OPEN_BUDGET)),
             ("budget_ms", number(milliseconds(budget))),
             ("passed", self.open_passed().to_string()),
             ("presented", stats_json(self.open_stats())),
+            (
+                "open_window_called",
+                stats_json(Stats::of(self.opens.iter().map(|open| open.requested))),
+            ),
             (
                 "window_created",
                 stats_json(Stats::of(self.opens.iter().map(|open| open.created))),
@@ -213,7 +249,6 @@ impl Report {
     fn size_json(&self, size: &SizeResult) -> String {
         let samples = &size.samples;
         let composed = Stats::of(samples.iter().filter_map(|key| key.rows));
-        let proposed = self.composed_budget();
         let timeouts = samples.iter().filter(|key| key.timed_out()).count();
         let superseded = samples.iter().filter(|key| key.superseded).count();
         object(&[
@@ -224,7 +259,7 @@ impl Report {
             ("timeouts", timeouts.to_string()),
             ("superseded", superseded.to_string()),
             ("d48_budget_ms", number(milliseconds(D48_BUDGET))),
-            ("d48_passed", Self::size_passed(size).to_string()),
+            ("d48_passed", Self::d48_passed(size).to_string()),
             (
                 "worker",
                 stats_json(Stats::of(samples.iter().filter_map(|key| key.worker))),
@@ -238,18 +273,13 @@ impl Report {
                 stats_json(Stats::of(samples.iter().filter_map(|key| key.echo))),
             ),
             ("composed", stats_json(composed)),
+            ("composed_budget", quoted(COMPOSED_BUDGET)),
             (
-                "proposed_composed_budget",
-                quoted("p95 within two refresh intervals (proposed; owner question)"),
+                "composed_budget_ms",
+                number(milliseconds(self.composed_budget())),
             ),
-            (
-                "proposed_composed_budget_ms",
-                number(milliseconds(proposed)),
-            ),
-            (
-                "proposed_composed_passed",
-                (timeouts == 0 && composed.is_some_and(|stats| stats.within(proposed))).to_string(),
-            ),
+            ("composed_passed", self.composed_passed(size).to_string()),
+            ("burst", burst_json(&size.bursts)),
             (
                 "composed_ms",
                 durations_json(samples.iter().filter_map(|key| key.rows)),
@@ -266,6 +296,29 @@ impl Report {
 fn frames(latency: Duration, interval: Duration) -> u32 {
     let ratio = latency.as_secs_f64() / interval.as_secs_f64();
     (ratio.ceil() as u32).max(1)
+}
+
+/// Back-to-back typing: final-key latency and how many requests a newer one replaced.
+fn burst_json(bursts: &[BurstSample]) -> String {
+    let queries: u64 = bursts.iter().map(|burst| burst.queries).sum();
+    let replies: u64 = bursts.iter().map(|burst| burst.replies).sum();
+    let missing = bursts
+        .iter()
+        .filter(|burst| burst.final_rows.is_none())
+        .count();
+    object(&[
+        ("cadence_ms", number(milliseconds(BURST_CADENCE))),
+        ("words", bursts.len().to_string()),
+        ("missing_final_rows", missing.to_string()),
+        (
+            "final_rows",
+            stats_json(Stats::of(
+                bursts.iter().filter_map(|burst| burst.final_rows),
+            )),
+        ),
+        ("queries", queries.to_string()),
+        ("superseded", queries.saturating_sub(replies).to_string()),
+    ])
 }
 
 fn check_json(check: &Check) -> String {
@@ -381,10 +434,10 @@ mod tests {
     }
 
     #[test]
-    fn stated_budgets_decide_the_run_and_proposed_ones_do_not() {
+    fn the_owner_budgets_decide_the_run() {
         let fast_key = KeySample {
             echo: Some(ms(2)),
-            rows: Some(ms(40)),
+            rows: Some(ms(20)),
             round_trip: Some(ms(4)),
             worker: Some(ms(3)),
             superseded: false,
@@ -393,6 +446,7 @@ mod tests {
             refresh: Some(Duration::from_micros(16_667)),
             opens: vec![OpenSample {
                 presented: ms(10),
+                requested: ms(1),
                 created: ms(3),
                 rendered: ms(4),
             }],
@@ -401,17 +455,23 @@ mod tests {
                 catalogue_rows: 1_004,
                 seed: ms(20),
                 samples: vec![fast_key],
+                bursts: vec![BurstSample {
+                    final_rows: Some(ms(90)),
+                    queries: 5,
+                    replies: 2,
+                }],
             }],
             ..Report::default()
         };
         report.check("synthetic", true, "ok");
-        // The 40 ms composed latency misses the proposed budget but cannot fail the run.
+        // A slow burst is reported but has no budget of its own.
         assert!(report.passed());
-        assert!(
-            report
-                .to_json(1)
-                .contains("\"proposed_composed_passed\": false")
-        );
+        assert!(report.to_json(1).contains("\"superseded\": 3"));
+
+        report.sizes[0].samples[0].rows = Some(ms(40));
+        assert!(!report.passed(), "40 ms misses two 16.7 ms frames at p95");
+        assert!(report.to_json(1).contains("\"composed_passed\": false"));
+        report.sizes[0].samples[0].rows = Some(ms(20));
 
         report.sizes[0].samples.push(KeySample {
             worker: Some(ms(3)),
@@ -421,6 +481,7 @@ mod tests {
         report.sizes[0].samples.pop();
         report.opens.push(OpenSample {
             presented: ms(30),
+            requested: ms(1),
             created: ms(3),
             rendered: ms(4),
         });

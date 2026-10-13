@@ -37,14 +37,29 @@ pub enum ProbeError {
     /// The handle is not a window, or belongs to another process.
     NotAtlasWindow,
     PostFailed,
+    /// Windows did not report the monitor or its current display mode.
+    DisplayUnreadable,
+    /// Windows reported a refresh rate outside 24 to 1000 Hz.
+    ImplausibleRefresh(u32),
 }
 
 impl std::fmt::Display for ProbeError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::NotAtlasWindow => "The window is not one of this Atlas process's windows.",
-            Self::PostFailed => "Windows refused the posted input message.",
-        })
+        match self {
+            Self::NotAtlasWindow => {
+                formatter.write_str("The window is not one of this Atlas process's windows.")
+            }
+            Self::PostFailed => formatter.write_str("Windows refused the posted input message."),
+            Self::DisplayUnreadable => {
+                formatter.write_str("Windows did not report the display's current mode.")
+            }
+            Self::ImplausibleRefresh(hertz) => {
+                write!(
+                    formatter,
+                    "Windows reported an implausible {hertz} Hz refresh rate."
+                )
+            }
+        }
     }
 }
 
@@ -98,15 +113,15 @@ pub fn foreground_window() -> isize {
     unsafe { GetForegroundWindow() }.0 as isize
 }
 
-/// The display refresh interval of the monitor showing `window`, if Windows reports one.
-pub fn refresh_interval(window: isize) -> Option<Duration> {
-    own_window(window).ok()?;
+/// The display refresh interval of the monitor showing one of Atlas's windows.
+pub fn refresh_interval(window: isize) -> Result<Duration, ProbeError> {
+    own_window(window)?;
     let monitor = unsafe { MonitorFromWindow(hwnd(window), MONITOR_DEFAULTTONEAREST) };
     let mut info = MONITORINFOEXW::default();
     info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
     let read = unsafe { GetMonitorInfoW(monitor, (&raw mut info).cast::<MONITORINFO>()) };
     if !read.as_bool() {
-        return None;
+        return Err(ProbeError::DisplayUnreadable);
     }
     let mut mode = DEVMODEW {
         dmSize: std::mem::size_of::<DEVMODEW>() as u16,
@@ -114,12 +129,13 @@ pub fn refresh_interval(window: isize) -> Option<Duration> {
     };
     let device = windows::core::PCWSTR(info.szDevice.as_ptr());
     if !unsafe { EnumDisplaySettingsW(device, ENUM_CURRENT_SETTINGS, &mut mode) }.as_bool() {
-        return None;
+        return Err(ProbeError::DisplayUnreadable);
     }
     let hertz = mode.dmDisplayFrequency;
-    PLAUSIBLE_HZ
-        .contains(&hertz)
-        .then(|| Duration::from_secs_f64(1. / f64::from(hertz)))
+    if !PLAUSIBLE_HZ.contains(&hertz) {
+        return Err(ProbeError::ImplausibleRefresh(hertz));
+    }
+    Ok(Duration::from_secs_f64(1. / f64::from(hertz)))
 }
 
 /// Posts typed text to one Atlas window as `WM_CHAR` messages, one UTF-16 unit each.
@@ -184,6 +200,6 @@ mod tests {
         );
         assert_eq!(post_key(0, Key::Enter), Err(ProbeError::NotAtlasWindow));
         assert_eq!(overlay_stacking(0, 0), Err(ProbeError::NotAtlasWindow));
-        assert!(refresh_interval(0).is_none());
+        assert_eq!(refresh_interval(0), Err(ProbeError::NotAtlasWindow));
     }
 }

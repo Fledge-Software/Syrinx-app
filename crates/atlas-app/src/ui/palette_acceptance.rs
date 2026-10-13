@@ -10,7 +10,10 @@ use gpui::{AsyncWindowContext, WeakEntity};
 
 use super::*;
 use crate::{
-    acceptance::{AcceptancePlan, KeySample, OpenSample, PresentProbe, Report, SizeResult},
+    acceptance::{
+        AcceptancePlan, BURST_CADENCE, BurstSample, KeySample, OpenSample, PresentProbe, Report,
+        SizeResult,
+    },
     session::{SessionError, SyntheticCatalogue},
 };
 
@@ -22,7 +25,8 @@ const SETTLE: Duration = Duration::from_millis(300);
 const STALE_WINDOW: Duration = Duration::from_secs(1);
 /// A keystroke whose rows take longer than this counts as a timeout.
 const KEY_LIMIT: Duration = Duration::from_secs(3);
-/// Gap between keystrokes, roughly a fast typist's pace.
+/// Pause after a keystroke's rows are presented, so each key is measured on its own.
+/// This hides queueing between keys; the bursts below measure back-to-back typing.
 const TYPING_GAP: Duration = Duration::from_millis(20);
 const OPEN_SAMPLES: usize = 20;
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
@@ -284,7 +288,11 @@ impl Run {
         )
         .await?;
         self.main = self.with(|view, _, _| view.parent_hwnd)?;
-        self.report.refresh = probe_win32::refresh_interval(self.main);
+        // An unread interval is reported as such; verdicts then assume 60 Hz.
+        match probe_win32::refresh_interval(self.main) {
+            Ok(interval) => self.report.refresh = Some(interval),
+            Err(error) => self.report.refresh_problem = Some(error.to_string()),
+        }
         Ok(())
     }
 
@@ -342,6 +350,7 @@ impl Run {
         let since = |at: Option<Instant>| at.map_or(Duration::ZERO, |at| at - started);
         Ok(OpenSample {
             presented: since(open.presented),
+            requested: since(open.requested),
             created: since(open.created),
             rendered: since(open.rendered),
         })
@@ -593,7 +602,8 @@ impl Run {
         Ok(())
     }
 
-    /// Grows the catalogue to `rows`, then types and erases each word one key at a time.
+    /// Grows the catalogue to `rows`, then types and erases each word one key at a time,
+    /// then again in bursts.
     async fn measure_ranking(&mut self, rows: usize) -> Result<(), String> {
         let focus = self.focus_tab()?;
         self.with(|view, _, _| {
@@ -622,11 +632,13 @@ impl Run {
                 }
             }
         }
+        let bursts = self.measure_bursts().await?;
         self.report.sizes.push(SizeResult {
             synthetic_rows: grown.synthetic_rows,
             catalogue_rows: grown.catalogue_rows,
             seed: grown.elapsed,
             samples,
+            bursts,
         });
         // Focus return is already measured above; here only the close matters.
         let _focus_return = self.escape_to_page(focus).await?;
@@ -634,20 +646,60 @@ impl Run {
         Ok(())
     }
 
+    /// Types each word and then erases it at `BURST_CADENCE`, never waiting between keys.
+    async fn measure_bursts(&mut self) -> Result<Vec<BurstSample>, String> {
+        let mut bursts = Vec::new();
+        for word in WORDS {
+            let typing: Vec<Typed> = word.chars().map(Typed::Character).collect();
+            bursts.push(self.burst(&typing, word).await?);
+            let erasing = vec![Typed::Backspace; typing.len()];
+            bursts.push(self.burst(&erasing, "").await?);
+        }
+        Ok(bursts)
+    }
+
+    /// Times the last key of a burst to the frame showing the final text's rows.
+    async fn burst(&mut self, keys: &[Typed], expected: &str) -> Result<BurstSample, String> {
+        let (queries_before, replies_before) = self.probe.counts();
+        self.probe.begin_burst();
+        let mut last_posted = Instant::now();
+        for (index, typed) in keys.iter().enumerate() {
+            if index > 0 {
+                self.sleep(BURST_CADENCE).await;
+            }
+            last_posted = self.with(|view, _, cx| {
+                let posted = Instant::now();
+                post_typed(view, cx, *typed)?;
+                Ok::<_, String>(posted)
+            })??;
+        }
+        let probe = self.probe.clone();
+        let settled = self
+            .try_wait(KEY_LIMIT, |view, _, cx| {
+                let palette = view.palette.as_ref()?.view.read(cx);
+                let key = probe.key()?;
+                let current = key.request == Some(palette.current_request())
+                    && palette.input_text(cx) == expected;
+                key.presented.filter(|_| current)
+            })
+            .await?;
+        let (queries, replies) = self.probe.counts();
+        self.probe.take_key();
+        self.sleep(SETTLE).await;
+        Ok(BurstSample {
+            final_rows: settled.map(|presented| presented - last_posted),
+            queries: queries - queries_before,
+            replies: replies - replies_before,
+        })
+    }
+
     /// Posts one key to the palette and waits for the frame that shows its rows.
     async fn keystroke(&mut self, typed: Typed) -> Result<KeySample, String> {
         let probe = self.probe.clone();
         let posted = self.with(|view, _, cx| {
-            let popup = view.palette_hwnd(cx)?;
             let posted = Instant::now();
             probe.begin_key();
-            let sent = match typed {
-                Typed::Character(character) => {
-                    probe_win32::post_text(popup, character.encode_utf8(&mut [0; 4]))
-                }
-                Typed::Backspace => probe_win32::post_key(popup, Key::Backspace),
-            };
-            sent.map_err(|error| error.to_string())?;
+            post_typed(view, cx, typed)?;
             Ok::<_, String>(posted)
         })??;
         let probe = self.probe.clone();
@@ -679,4 +731,16 @@ impl Run {
 enum Typed {
     Character(char),
     Backspace,
+}
+
+/// Posts one typed key to the open palette's own window.
+fn post_typed(view: &BrowserView, cx: &mut App, typed: Typed) -> Result<(), String> {
+    let popup = view.palette_hwnd(cx)?;
+    let sent = match typed {
+        Typed::Character(character) => {
+            probe_win32::post_text(popup, character.encode_utf8(&mut [0; 4]))
+        }
+        Typed::Backspace => probe_win32::post_key(popup, Key::Backspace),
+    };
+    sent.map_err(|error| error.to_string())
 }
