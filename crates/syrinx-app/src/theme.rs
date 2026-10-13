@@ -106,8 +106,19 @@ pub(crate) fn panel() -> Rgba {
     token(|palette| palette.panel)
 }
 
+/// Accent text and thin marks: the ink, which Haze/Glass may lighten and Paper darkens.
 pub(crate) fn accent() -> Rgba {
     token(|palette| palette.accent.ink)
+}
+
+/// The chosen accent itself, for filled controls, so they match badges in every palette.
+pub(crate) fn accent_fill() -> Rgba {
+    token(|palette| palette.accent.fill)
+}
+
+/// Text drawn on `accent_fill` (the audited badge text).
+pub(crate) fn on_accent_fill() -> Rgba {
+    token(|palette| palette.accent.on_fill)
 }
 
 /// The keyboard focus ring and its inner line (`syrinx_ui::focus`).
