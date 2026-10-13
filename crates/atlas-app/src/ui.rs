@@ -279,6 +279,8 @@ pub struct BrowserView {
     commands: Rc<CommandRegistry>,
     main_window: gpui::AnyWindowHandle,
     peek: Option<peek::PeekPopup>,
+    /// The generation of a peek whose window opens once the current update ends.
+    peek_opening: Option<u64>,
     peek_state: peek_state::PeekState,
     peek_monitoring: bool,
     peek_generation: u64,
@@ -367,6 +369,7 @@ impl BrowserView {
             commands: Rc::new(CommandRegistry::browser()),
             main_window: Window::window_handle(window),
             peek: None,
+            peek_opening: None,
             peek_state: peek_state::PeekState::default(),
             peek_monitoring: false,
             peek_generation: 0,
