@@ -148,8 +148,10 @@ time:
   (spec phase 3, kept thin by D34); plan 3, Notes (spec phase 4); plan 4,
   Forge (spec phase 5).
 - **The local workflow is approved (D41).** GitHub is not required before
-  implementation. Each approved slice gets one local branch and independent
-  review; the owner approves every merge. Commits still need the owner's
+  implementation. Each approved slice is built on one branch in a local
+  worktree and reviewed independently. Since 2026-10-12, a slice merges to
+  `main` once the review approves it and the gate passes; see
+  `docs/decisions.md`. Commits still need the owner's
   request. The owner-requested planning baseline is committed as `d79fc29`.
   No remote or push is authorized.
 
