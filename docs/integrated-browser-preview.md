@@ -177,7 +177,7 @@ patches remain unauthorized.
 
 Earlier in this session, the boost-helper binary rendered Home and Ctrl K in
 a fresh synthetic window (process 41380; TEMP profile
-`SyrinxApprovedWindow-d8f8830e3b6e4779806d246aa0b6da9c`). The initial tool approval
+`AtlasApprovedWindow-d8f8830e3b6e4779806d246aa0b6da9c`). The initial tool approval
 timeout recovered, but typing raised the parent instead of reaching the popup.
 Navigation and remaining interactive acceptance are unverified. The synthetic
 window later closed with Alt F4; its process is absent and stderr is empty.
