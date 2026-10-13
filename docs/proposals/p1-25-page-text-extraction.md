@@ -306,6 +306,20 @@ and nothing is read; only its title and address reach tier 1 as today.
    ordinary site often carries account details or tokens in that return
    page. The reverse case (an ordinary site redirecting into an excluded
    one) is ineligible at step 3, 4 or 5 on the final address.
+
+   *Added by the owner's decision of 2026-10-12 (`docs/decisions.md`):*
+   sign-in hops are skipped too. A sign-in flow often leaves the excluded
+   site by its own script or an auto-submitting form rather than a redirect,
+   and WebView2 reports that as a new navigation, not a redirect hop. So a
+   document is also ineligible when (a) its navigation was not started by
+   the owner (`NavigationStarting`'s `IsUserInitiated` is false) and the
+   document committed when it began was on an excluded site, or (b) any
+   response of its navigation was requested with a method other than `GET`
+   (a form `POST`, read from the request in `WebResourceResponseReceived`),
+   on any site. A link the owner follows out of an excluded site is
+   user-initiated, so its page stays eligible if it passes every other step.
+   Both facts are read from events Atlas already observes; no filter and no
+   injection.
 7. **The final response was observed and allows storing.** Atlas must have
    matched a `WebResourceResponseReceived` event to this document's final
    address with a 2xx status, a `text/html` or `application/xhtml+xml` type,
@@ -455,6 +469,11 @@ the target address, so a test can assert that **zero** calls were made.
 | F17 | Suspended (`TrySuspend`) and hidden tabs | No capture while suspended; deferred until visible or resumed |
 | F18 | With `with_devtools(false)` | The host call still works; F12 still opens nothing; no TCP listening port appears for the WebView2 processes before or after capture |
 | F19 | Capture switched off | Zero CDP calls over the whole run |
+| F20 | A 204 and a 205 response requested from an excluded page | No call; the excluded page stays shown and unread *(added in review)* |
+| F21 | `bank.test` sends itself to `plain.test` by script (`location.href`) | Ineligible, zero calls *(owner's decision, 2026-10-12)* |
+| F22 | `bank.test` auto-submits a form `POST` to `plain.test` | Ineligible, zero calls *(same)* |
+| F23 | The owner follows a link out of `bank.test` to an ordinary page | Captured *(same)* |
+| F24 | An ordinary page auto-submits a form `POST` to itself | Ineligible, zero calls *(same)* |
 
 **Evidence.** P1-25 delivers `docs/p1-25-page-text-feasibility.md` with each
 case's result, the measurements, every failure kept rather than retried away,
@@ -475,7 +494,9 @@ Each is a yes or no. The recommendation is in brackets.
    *(Recommended: yes.)*
 3. Should a page reached through a redirect chain that passed through an
    excluded site (for example, returning from a bank's or Google's sign-in to
-   an ordinary site) be left unread? *(Recommended: yes.)*
+   an ordinary site) be left unread? *(Recommended: yes.)* *The owner
+   answered yes, and on 2026-10-12 extended it to script and form sign-in
+   hops and every form `POST` (step 6).*
 4. Should "Google's sites" include YouTube and Google's other own domains
    (such as `gmail.com` and `googleusercontent.com`), not only `google.com`
    and its country domains? *(Recommended: yes.)*

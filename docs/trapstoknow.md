@@ -17,9 +17,20 @@ you found it in the commit message, not here.
   `GetHeaders` and the full `GetIterator` of `WebResourceResponseReceived`
   reported only `max-age=0`, so Atlas captured a `no-store` page (F2). Commas
   inside one line are split correctly. No WebView2 route Atlas may use exposes
-  the later line; treat this as a known residual of D35's `no-store` rule, not
-  as proof a page allows storing. Source: `docs/p1-25-page-text.md`, F2
-  (observed on this runtime).
+  the later line, and a request filter to see it is forbidden. The owner
+  accepted this on 2026-10-12 as a known limit of D35's `no-store` rule
+  (`docs/decisions.md`): do not read a missing `no-store` as proof that a
+  page allows storing, and do not work around it. A report to Microsoft goes
+  only with the owner's approval; none has been sent. Source:
+  `docs/p1-25-page-text.md`, F2 (observed on this runtime).
+- **A sign-in hop is not a redirect.** A bank or Google page that sends the
+  tab on by script or an auto-submitting form raises a fresh
+  `NavigationStarting` with `IsRedirected` false, so a redirect-chain check
+  misses it. Read `IsUserInitiated` there and the request's `Method()` in
+  `WebResourceResponseReceived`, and remember the last committed document
+  across navigations that commit nothing (a 204 or a download). A posted
+  Enter key on a focused link counts as user-initiated. Source:
+  `docs/p1-25-page-text.md`, F21–F24 (observed).
 - **A reload or same-address visit raises no `SourceChanged`.** Only
   `NavigationStarting` and `NavigationCompleted` arrive, so code that learns the
   document address from `SourceChanged` sees no document after a reload. P1-25

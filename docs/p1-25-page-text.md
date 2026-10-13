@@ -12,9 +12,13 @@ synthetic pages. Storing the text, the capture setting and expiry are P1-26.
 
 The short answer: the approved method works and no detection signal was
 found (F15 identical), so the proposal's fallback is not triggered. One case
-fails and needs the owner's attention: WebView2 hides the second line of a
+still fails, by the owner's decision: WebView2 hides the second line of a
 repeated `Cache-Control` header, so a page that sends `no-store` only on a
-later line is read (F2, below).
+later line is read (F2). On 2026-10-12 the owner accepted that as a known
+limit, approved the `visibility` computed style, and added a rule that
+sign-in hops are skipped (F21–F24); all three are recorded in
+`docs/decisions.md`. The independent review's fixes are listed under
+"Review changes".
 
 ## What was built
 
@@ -31,32 +35,49 @@ later line is read (F2, below).
   (proposal question 5). `Cache-Control` is parsed strictly (RFC 9111 list
   syntax, quoted strings); an unreadable header counts as `no-store`.
   Responses from frames are told apart by `Sec-Fetch-Dest`; a missing
-  response fails closed.
+  response fails closed. **Sign-in hops** (owner's decision, 2026-10-12): a
+  navigation the owner did not start that leaves a committed document on an
+  excluded site is ineligible (`LeftExcludedUnprompted`), and so is any
+  document whose navigation sent a request with a method other than `GET`,
+  on any site, including a `POST` answered with a redirect
+  (`FormPost`).
 - **Observation** (`crates/atlas-platform/src/browser/page_text.rs`). Only
   when capture is switched on as a page is created, the page subscribes to
-  `NavigationStarting` (each redirect hop), `WebResourceResponseReceived`
-  (status, `Content-Type`, `Cache-Control` and the request's
-  `Sec-Fetch-Dest` of the navigation's own requests; no filter, no body, no
-  other header), `SourceChanged`, `NavigationCompleted` and `ProcessFailed`.
-  Each tab keeps a generation that rises on every navigation start, address
-  change and process failure.
+  `NavigationStarting` (each redirect hop and its `IsUserInitiated` flag),
+  `WebResourceResponseReceived` (status, `Content-Type`, `Cache-Control`
+  and the request's method and `Sec-Fetch-Dest` for the navigation's own
+  requests; no filter, no body, no other header), `SourceChanged`,
+  `NavigationCompleted` and `ProcessFailed`. Each tab keeps a generation that
+  rises on every navigation start, address change and process failure, and
+  remembers the last document that actually committed, so a 204 or a
+  download from a bank page does not hide where a later script navigation
+  began. The rules that use these facts live in `page_text/state.rs`, apart
+  from WebView2, so they have unit tests.
 - **Capture.** Two seconds after a successful load (step 8's settle delay)
   the page thread judges the document and, if eligible, makes the one call
   with `{"computedStyles":["visibility"],"includePaintOrder":false,
   "includeDOMRects":false,"includeBlendedBackgroundColors":false,
   "includeTextColorOpacities":false}`. A single wrapper announces every call
   with its address (`PageTextOutcome::Requested`), which is how the harness
-  counts calls. When the response arrives, a changed generation drops it
-  unread (`Superseded`); otherwise a short-lived thread parses it
-  (`page_text/snapshot.rs`): responses over 32 MiB are refused, `inputValue`
+  counts calls. Just before the call, the generation is checked again and
+  the web view's `Source()` must equal the judged address; otherwise the
+  call is not made (`Stale` or `NotCommitted`). When the response arrives, a
+  changed generation, or capture switched off, drops it unread
+  (`Superseded`); otherwise one bounded worker parses it
+  (`page_text/reader.rs` and `page_text/snapshot.rs`): responses over 8 MiB
+  are dropped unparsed, one snapshot parses while at most one waits and any
+  further one is skipped (`Busy`), `inputValue`
   and `textValue` are deleted before anything else is read, the root
   document's address must match the judged one (step 9), a password or
   payment-card field discards the document (step 10), and only laid-out text
   nodes of the root document outside `input`, `textarea`, `select`,
   editable regions, `script`, `style`, `noscript`, `template` and `title` are
   kept, capped at 256 KiB (step 11). History API address changes are rechecked
-  and captured at most once per 30 seconds per tab. A suspended tab's capture
-  waits until the tab is shown.
+  and captured at most once per 30 seconds per tab. While a call is in
+  flight the tab schedules no wake-up, and a capture that fell due meanwhile
+  runs when the call returns. A capture that falls due while the tab is
+  suspended, or while a `TrySuspend` is requested but not finished, waits
+  until the tab is shown.
 - **Commands and events.** `BrowserCommand::SetPageTextPolicy` switches
   capture on or off; `BrowserEvent::PageText` reports each outcome. The app
   never sends the command, so the running product makes no call and
@@ -97,27 +118,33 @@ cargo build -p atlas-platform --example page_text_feasibility --profile local --
 .\target\local\examples\page_text_feasibility.exe --only F1,F2 --race-runs 20
 ```
 
-The recorded run is `target/p125-final.log` (2026-10-12, the WebView2
-Evergreen runtime on this machine; `target/` is not committed). It exits 1
-because F2 fails.
+The recorded run is `target/p125-final-2.log` (2026-10-12, after the review
+changes and the sign-in-hop rule, the WebView2 Evergreen runtime on this
+machine; `target/` is not committed). It exits 1 because F2 fails, as the
+owner accepted. The first run is kept as `target/p125-final.log`.
 
 ## Results
 
-Unit tests U1–U7 are in `crates/atlas-core/tests/page_text.rs` (12 tests) and
-the module tests (7); snapshot reading has 9 tests on synthetic DevTools
-responses. `cargo xtask check` passed on 2026-10-12 with all 930 workspace
-tests and the application smoke run (`target/p125-gate.log`).
+Unit tests U1–U7 are in `crates/atlas-core/tests/page_text.rs` (14 tests,
+including the two sign-in-hop rules) and the module tests (7). The
+platform's observation state has 12 tests in `page_text/state.rs`, including
+regressions for the in-flight wake-up, step 8's scheduled generation, a
+cancelled navigation that leaves the committed document unchanged, script
+and link exits from a bank and a posted document; snapshot reading has 9
+tests on synthetic DevTools responses. `cargo xtask check` passed on
+2026-10-12 with all 961 workspace tests and the application smoke run
+(`target/p125-gate-2.log`).
 
 | # | Result | What happened |
 |---|---|---|
 | F1 | **Pass** | Stored text equals the expected visible text exactly: heading, inline bold run joined correctly, shadow-DOM text, French, Hebrew (RTL) and Japanese; `display:none`, `visibility:hidden`, `<script>`, `<noscript>` and `<style>` absent. The first run with `computedStyles: []`, as the proposal wrote, **kept the `visibility:hidden` text**; requesting only the `visibility` style fixed it (see "Deviations"). |
-| F2 | **Fail** | Six of seven spellings pass: `no-store`, `No-Store`, `private, no-store`, `max-age=0 ,  no-store  ` → ineligible, no call; `no-store="` and `max-age=0 private` → malformed, no call. **Two separate header lines, `max-age=0` then `no-store`, were read.** WebView2 reports only the first line: both `GetHeaders("Cache-Control")` and the full `GetIterator` returned `max-age=0` alone (diagnostic run, 2026-10-12). |
+| F2 | **Fail (accepted limit)** | Six of seven spellings pass: `no-store`, `No-Store`, `private, no-store`, `max-age=0 ,  no-store  ` → ineligible, no call; `no-store="` and `max-age=0 private` → malformed, no call. **Two separate header lines, `max-age=0` then `no-store`, were read.** WebView2 reports only the first line: both `GetHeaders("Cache-Control")` and the full `GetIterator` returned `max-age=0` alone (diagnostic run, 2026-10-12). |
 | F3 | Pass | `bank`, `pay`: ineligible (banking); `owner`: ineligible (owner); zero calls. |
 | F4 | Pass | `plain` → `bank` by 301, 302, 307 and 308: ineligible, zero calls. |
 | F5 | Pass | `bank` → `plain` by 302 and 307: ineligible (redirect through an excluded site), zero calls. |
 | F6 | Pass | `no-store` on the redirect hop only: captured. On the final page only: ineligible, no call. |
 | F7 | Pass | Timer, `location.assign` and meta refresh to `bank` 500 ms after load: the scheduled capture was cancelled, the bank page judged ineligible, zero calls. |
-| F8 | Pass | 500 runs with a 100 ms settle and a navigation to `bank` 50–249 ms after load: 313 race pages captured, 117 cancelled before dispatch, 70 dropped unread because the tab changed while the call was in flight, **0 discarded at step 9**, 0 calls to `bank`, 0 bank text stored. |
+| F8 | Pass | 500 runs with a 100 ms settle and a navigation to `bank` 50–249 ms after load: 319 race pages captured, 116 cancelled before dispatch, 65 dropped unread because the tab changed while the call was in flight, **0 discarded at step 9**, 0 calls to `bank`, 0 bank text stored. |
 | F9 | Pass | Only "Frame host page" stored. The response held 2 documents: the root and the same-origin frame; the cross-origin `plain2` and `bank` frames did not appear (site isolation). |
 | F10 | Pass | Password page discarded whole. On the fields page, only "Comment page" stored: no typed input, textarea, editable-region, `value` attribute or option text. |
 | F11 | Pass | `autocomplete=cc-number` page discarded. |
@@ -125,10 +152,15 @@ tests and the application smoke run (`target/p125-gate.log`).
 | F13 | Pass | First capture at load; five `pushState` calls three seconds later were each rechecked (four cancelled by the next); exactly one more capture, of `/history/5`, 30.02 s after the first. |
 | F14 | Recorded | A **service worker's synthetic response raises `WebResourceResponseReceived`** with the worker's headers (0 network hits), so it was judged on those and captured. Back navigation, a second visit to a `max-age=600` page and a reload each raised a matching response and were captured; reload needed a fix, below. Server hits (landing 1, cacheable 2) were **identical with and without the subscription**, so subscribing did not change caching in this test. No case reached the fail-closed branch, so whether a true back/forward-cache restore raises the event is not established. |
 | F15 | **Pass** | Probe results in a tab that had captured `plain` and in a fresh tab were identical: `navigator.webdriver` false, console getter not read, `debugger` not paused, 238 enumerable globals with the same name hash, no automation globals. The fallback is not triggered. |
-| F16 | Pass | 1,000 nodes: 70.6 KB response, 12 ms call, 2 ms parse. 10,000 nodes: 750 KB, 94 ms, 17 ms. 100,000 nodes: 8.1 MB, 979 ms, 170 ms, text capped at 256 KiB. The page's own long-task observer recorded no new task over 50 ms during any capture. Atlas interface frames were not measured (no Atlas window in the harness). |
+| F16 | Pass | 1,000 nodes: 70.6 KB response, 14 ms call, 2 ms parse. 10,000 nodes: 750 KB, 105 ms, 22 ms. 100,000 nodes: 8.1 MB, 1.15 s, 227 ms, text capped at 256 KiB. The page's own long-task observer recorded no new task over 50 ms during any capture. Atlas interface frames were not measured (no Atlas window in the harness). |
 | F17 | Pass | A hidden tab suspended at five seconds; its capture fell due at seven and did not run; showing the tab resumed it and the capture ran. |
 | F18 | Pass (partial) | The host call works with `with_devtools(false)` (every capture above). No TCP listening socket belonged to this run's WebView2 processes (6 then 7 processes, found by profile path) before or after captures. Whether F12 opens DevTools was not exercised. |
 | F19 | Pass | A run with capture off produced zero page-text events, including zero calls. |
+| F20 | Pass | From a shown bank page, a 204 and a 205 navigation committed nothing: the bank page stayed shown, no capture was scheduled for it and no call was made. *(Added in review.)* |
+| F21 | Pass | The bank page's script set `location.href` to a plain page 300 ms after load. The plain page loaded and was judged `LeftExcludedUnprompted`; zero calls. |
+| F22 | Pass | The bank page auto-submitted a `POST` form to a plain page. The server received the `POST`; the page was judged `LeftExcludedUnprompted` (the `FormPost` rule would also apply); zero calls. |
+| F23 | Pass | A bank page focused its own link; the harness posted an Enter key to the focused page window. The plain page it opened was captured (`landing-sentinel-plain`), so a posted key counts as user-initiated and the rule does not block links the owner follows. |
+| F24 | Pass | A plain page auto-submitted a `POST` form to itself: judged `FormPost`, zero calls. |
 
 Earlier runs also found a product defect, fixed before the recorded run: the
 runtime sends -1 for an empty attribute value (`contenteditable=""`), which
@@ -137,12 +169,53 @@ too, without loosening any check: the probe page's initial title began with the 
 prefix, and the port query lost its quotes on the PowerShell command line and
 found no processes (the case now fails if it finds none).
 
+## Review changes (2026-10-12)
+
+The independent review's findings, each fixed in a new commit:
+
+1. **No busy loop while a call is in flight.** `TextState::due` reports no
+   wake-up while a call is outstanding; a capture that fell due meanwhile is
+   re-armed when the call returns (state test
+   `no_wake_up_is_reported_while_a_call_is_in_flight`).
+2. **Switching capture off mid-call** drops the response unread
+   (`Superseded`). `SetPageTextPolicy(None)` now documents that a snapshot
+   already handed to the parser may still report.
+3. **Never the previous document.** The call re-checks the generation and
+   requires `Source()` to equal the judged address (F20, and the
+   `NotCommitted` outcome). Step 8 now compares the generation the capture
+   was scheduled for with the one at judging time; the earlier code compared
+   a value with itself.
+4. **Memory.** The parse limit is 8 MiB (the 100,000-node page was 8.1 MB);
+   one worker thread parses and at most one more snapshot waits. **Deviation:**
+   the size is checked after webview2-com has converted the UTF-16 response
+   to a Rust string, not before. Measuring first means implementing the COM
+   completion handler directly, which needs a direct `windows-core`
+   dependency that is not approved. Worst case, one oversized response is
+   converted and then dropped unparsed. Owner question 4.
+5. **`TextState` unit tests,** listed above.
+6. **F2 trap reworded** as the owner's accepted limit.
+7. **No call while suspending.** Capture is deferred when `TrySuspend` has
+   been requested but has not finished, not only when `IsSuspended` reads
+   true (F17 passes). A suspension requested while a call is already in
+   flight is not exercised by the harness and is unverified.
+8. **Hardening:** every trailing dot is stripped from a host; a page-text
+   registration failure is reported as a browser error and leaves that tab
+   uncaptured instead of failing the page; the header helpers share one
+   function; the Google list gained `.goog`, `android.com`, `chrome.com`,
+   `gvt1.com`, `gvt2.com` and `googleblog.com` (owner question 2).
+9. **Known limit, editors:** text inside script-driven code editors that do
+   not use `contenteditable` (Monaco and Ace style, which keep a hidden
+   `textarea` and draw the text in ordinary elements) and pages put into
+   `designMode` are not recognised as editable, so their visible text can be
+   read. Typed text in their hidden `textarea` is still removed.
+
 ## Deviations from the proposal
 
 1. **One computed style.** The proposal said "computed styles switched off".
    With none, `visibility:hidden` text is laid out and returned (F1 failed).
    Atlas now requests only `visibility` and drops `hidden`/`collapse`. It is
    the same method and still requests no rectangles, paint order or colours.
+   **The owner approved this on 2026-10-12.**
 2. **Loopback addresses instead of `--host-resolver-rules`,** as above.
 3. **Reloads.** WebView2 raises no `SourceChanged` for a reload or a visit to
    the same address, so the document address is then taken from the
@@ -150,6 +223,9 @@ found no processes (the case now fails if it finds none).
    judged against its own response.
 4. **Report name.** This report is `docs/p1-25-page-text.md`, not the
    proposal's `p1-25-page-text-feasibility.md`.
+5. **Sign-in hops,** added to step 6 by the owner's decision; the proposal
+   now records it.
+6. **Size check after conversion,** review item 4 above.
 
 ## Production recommendation for P1-26
 
@@ -164,29 +240,33 @@ above. Specifically:
   F8 shows the in-flight generation check catches every race seen; step 9
   never had to.
 - Skip or defer capture above a measured size. A 100,000-node page cost about
-  one second in the renderer and 170 ms of parsing; P1-26 should cap by
-  response size (the 32 MiB bound is a safety limit, not a budget) and measure
+  1.15 s in the renderer and 227 ms of parsing; P1-26 should cap by
+  response size (the 8 MiB bound is a safety limit, not a budget) and measure
   Atlas interface frames in the running app, which this harness could not.
-- **Decide the repeated-header gap (F2)** before switching capture on for
-  daily use; see the owner questions.
+- Keep the sign-in-hop rule. It follows only one step: a plain page that a
+  sign-in page's script reached, and whose own script then moves on to
+  another plain page, leaves the second page eligible. Multi-step sign-in
+  flows through ordinary sites can therefore still be read on their last
+  step; the site lists and the password/card guard remain the backstop.
+- F2 is an accepted limit; the settings text in P1-26 should not promise
+  that every `no-store` page is skipped.
 - Treat a service worker's response as the page's response (F14). That
   follows the proposal's rule, but it means a site's worker, not its server,
   decides `no-store` for pages it serves.
 
 ## Owner checks and questions
 
-1. **F2, repeated `Cache-Control` lines.** WebView2 shows only the first line
-   of a repeated header, and no API Atlas is allowed to use exposes the rest.
-   A site that sends `no-store` on a second `Cache-Control` line will have its
-   text stored. Options: (a) accept this as a documented residual of D35,
-   relying on the site lists and the password/card guard for sensitive pages
-   (recommended, because servers normally send one line and no allowed method
-   can see the second); (b) report it to Microsoft and keep capture off until
-   it is fixed; (c) reconsider the method, which the proposal's other
-   candidates do not solve either. This is your decision.
+1. **F2** is decided: accepted as a known limit. Should a report be sent to
+   Microsoft? Nothing has been sent; it goes only with your approval.
 2. Review the built-in banking and payment list in
    `crates/atlas-core/src/page_text/sites.rs` (proposal question 5) and the
-   Google list beside it (question 4).
-3. Confirm the `visibility` computed style (deviation 1).
-4. In the running product after P1-26: check that F12 opens no DevTools and
+   Google list beside it (question 4), including the six domains added in
+   review: `.goog`, `android.com`, `chrome.com`, `gvt1.com`, `gvt2.com` and
+   `googleblog.com`.
+3. The `visibility` computed style is approved (deviation 1).
+4. **Size check after conversion** (review item 4): accept it, or approve a
+   direct `windows-core` dependency (already compiled into the app through
+   webview2-com) so the size is checked before conversion? Recommended:
+   accept for now; the parser still never sees an oversized response.
+5. In the running product after P1-26: check that F12 opens no DevTools and
    that capturing a large page causes no visible pause.
