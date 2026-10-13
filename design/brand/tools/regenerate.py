@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import ico
 import png
@@ -46,6 +47,9 @@ FAVICON_ICO_SIZES = [16, 32, 48]
 
 
 def main():
+    # Start from an empty work folder so no earlier run's Edge profile is ever reused.
+    if WORK_DIR.exists():
+        shutil.rmtree(WORK_DIR)
     hawk = hawk_paths()
     write_tile_svgs(hawk)
     rasters = render_icon_sizes()
@@ -122,8 +126,10 @@ def render(svg, size, target):
         "--no-default-browser-check",
         "--disable-extensions",
         "--disable-sync",
-        # A fresh profile per shot: a reused one can hand off to a still-exiting Edge and hang.
-        f"--user-data-dir={WORK_DIR / f'edge-profile-{svg.stem}-{size}'}",
+        "--disable-background-networking",
+        "--disable-component-update",
+        # A new empty profile per shot: a reused one can hand off to a still-exiting Edge and hang.
+        f"--user-data-dir={tempfile.mkdtemp(prefix='edge-profile-', dir=WORK_DIR)}",
         "--force-device-scale-factor=1",
         "--hide-scrollbars",
         "--default-background-color=00000000",

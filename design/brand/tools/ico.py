@@ -20,7 +20,7 @@ def pack(path, images):
 
 
 def sizes(path):
-    """Reads back the entry sizes, so the build can check the .ico it just wrote."""
+    """Reads back the entry sizes, so the tool can check the .ico it just wrote."""
     data = path.read_bytes()
     reserved, kind, count = struct.unpack("<HHH", data[:DIRECTORY_SIZE])
     if reserved != 0 or kind != ICON_TYPE:
