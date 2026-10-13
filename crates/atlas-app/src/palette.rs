@@ -222,6 +222,11 @@ impl PaletteView {
         self.choices.request_id
     }
 
+    /// Whether the newest request's rows are shown, for P1-33's acceptance run.
+    pub fn answered(&self) -> bool {
+        self.choices.answered()
+    }
+
     fn emit(&mut self, event: PaletteEvent) {
         if self.events.unbounded_send(event).is_err() {
             self.choices.status = "The browser window is no longer available.".to_owned();

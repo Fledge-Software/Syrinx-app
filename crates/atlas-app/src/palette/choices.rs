@@ -238,6 +238,11 @@ impl PaletteChoices {
         self.decide(text, force_search)
     }
 
+    /// Whether the current request's reply has arrived.
+    pub(super) fn answered(&self) -> bool {
+        !self.awaiting_reply
+    }
+
     /// The submission an Enter pressed while waiting makes, once its reply has arrived.
     pub(super) fn take_deferred(&mut self) -> Option<PaletteEvent> {
         if self.awaiting_reply {

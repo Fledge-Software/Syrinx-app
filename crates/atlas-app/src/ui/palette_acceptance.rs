@@ -540,11 +540,13 @@ impl Run {
             let popup = view.palette_hwnd(cx)?;
             probe_win32::post_text(popup, ENTER_PAGE).map_err(|error| error.to_string())
         })??;
+        // Enter only once the full text's own reply selects the target, as the bursts do.
         let target = Target::Tab(enter);
         let selected = self
             .try_wait(Duration::from_secs(3), |view, _, cx| {
-                let palette = view.palette.as_ref()?;
-                (palette.view.read(cx).selected_target() == Some(target)).then_some(())
+                let palette = view.palette.as_ref()?.view.read(cx);
+                let settled = palette.input_text(cx) == ENTER_PAGE && palette.answered();
+                (settled && palette.selected_target() == Some(target)).then_some(())
             })
             .await?
             .is_some();
@@ -565,20 +567,27 @@ impl Run {
             })
             .await?
             .is_some();
-        let (active, message) = self.with(|view, _, _| {
+        let (active, address, message) = self.with(|view, _, _| {
             let active = view.model.active_id.map(|id| match id {
                 id if id == enter => "the target tab",
                 id if id == focus => "the focus page",
                 _ => "another tab",
             });
-            (active, view.message.clone())
+            let address = view
+                .model
+                .tabs
+                .iter()
+                .find(|tab| Some(tab.id) == view.model.active_id)
+                .map(|tab| tab.metadata.address.clone());
+            (active, address, view.message.clone())
         })?;
         self.report.check(
             "enter_activates_selected_tab",
             selected && switched && focused,
             format!(
                 "target row selected: {selected}; target tab active: {switched}; \
-                 target page reported focus: {focused}; active now: {active:?}; status: {message}"
+                 target page reported focus: {focused}; active now: {active:?}; \
+                 active address: {address:?}; status: {message}"
             ),
         );
         self.check_no_stale_refocus("no_stale_refocus_after_enter", enter)
