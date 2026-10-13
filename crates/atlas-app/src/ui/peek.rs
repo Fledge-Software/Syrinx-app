@@ -341,6 +341,22 @@ impl BrowserView {
         }
     }
 
+    /// A real move, resize or rescale retires the peek, which would otherwise sit at stale
+    /// screen coordinates. GPUI also reports bounds on every activation change; those leave
+    /// it alone, so clicking into the peek keeps it and Alt Tab back can rearm the edge.
+    pub(super) fn owner_bounds_observed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = OwnerGeometry::of(window);
+        if !owner_moved(self.peek_owner_geometry, current) {
+            return;
+        }
+        self.peek_owner_geometry = current;
+        let was_open = self.peek.is_some();
+        self.retire_peek(cx);
+        if was_open && window.is_window_active() {
+            self.focus_page(window, cx);
+        }
+    }
+
     /// Whether `window` is the open peek popup rather than the main window.
     pub(super) fn is_peek_window(&self, window: &Window) -> bool {
         self.peek
@@ -378,6 +394,29 @@ impl BrowserView {
         self.sidebar_state_settled(previous, window, cx);
         self.focus_page(window, cx);
     }
+}
+
+/// Where the main window sits and at what scale; the peek is placed from these.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct OwnerGeometry {
+    bounds: Bounds<Pixels>,
+    viewport: gpui::Size<Pixels>,
+    scale: f32,
+}
+
+impl OwnerGeometry {
+    pub(super) fn of(window: &Window) -> Self {
+        Self {
+            bounds: window.bounds(),
+            viewport: window.viewport_size(),
+            scale: window.scale_factor(),
+        }
+    }
+}
+
+/// Only a changed placement invalidates the peek; a repeated report is not a move.
+fn owner_moved(previous: OwnerGeometry, current: OwnerGeometry) -> bool {
+    previous != current
 }
 
 /// Where a requested peek opens, and the generation that must still be awaited when it does.
@@ -649,6 +688,32 @@ mod tests {
         assert!(!peek_eligible(true, true, false, Hidden, false));
         for state in [Compact, Wide] {
             assert!(!peek_eligible(true, false, false, state, false));
+        }
+    }
+
+    #[test]
+    fn only_a_real_move_resize_or_rescale_retires_the_peek() {
+        let placed = OwnerGeometry {
+            bounds: main_bounds(100., 100.),
+            viewport: size(px(1280.), px(764.)),
+            scale: 1.5,
+        };
+        // Activation changes (Alt Tab, clicking into the peek) repeat the same placement.
+        assert!(!owner_moved(placed, placed));
+        let moved = OwnerGeometry {
+            bounds: main_bounds(300., 100.),
+            ..placed
+        };
+        let resized = OwnerGeometry {
+            viewport: size(px(1000.), px(764.)),
+            ..placed
+        };
+        let rescaled = OwnerGeometry {
+            scale: 2.,
+            ..placed
+        };
+        for changed in [moved, resized, rescaled] {
+            assert!(owner_moved(placed, changed), "{changed:?}");
         }
     }
 

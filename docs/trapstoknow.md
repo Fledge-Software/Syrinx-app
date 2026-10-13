@@ -238,6 +238,13 @@ you found it in the commit message, not here.
   `cx.defer` (or a task) outside every update, and recheck that the request is
   still wanted when it runs. Source: `gpui-pre-0.3.8/src/app.rs`, lines
   1431–1455, and the fix in `ui/peek.rs` (`docs/p1-17-peek.md`).
+- **A bounds observer fires on every activation change, not only on a move.**
+  GPUI's activation callback calls `bounds_changed`, which runs every
+  `observe_window_bounds` observer. The peek's watch closed the peek when it was
+  clicked and undid the rearm after Alt Tab. Compare the window's actual
+  bounds, viewport and scale with the last seen values before acting. Source:
+  `gpui-pre-0.3.8/src/window.rs`, line 1953, and `docs/p1-17-peek.md`
+  (code-confirmed and observed with posted activation).
 
 - **A popup's input form can survive after its Enter handler loses its window.**
   `InputState` and `subscribe_in` are tied to the creating window. Do not render
