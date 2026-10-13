@@ -5,6 +5,7 @@ mod deferred_work;
 mod dependency_policy;
 mod network_sources;
 mod packaging;
+mod palette_acceptance;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use std::process::{Command, ExitCode, Stdio};
 #[cfg(not(target_os = "windows"))]
 compile_error!("Atlas's development gate supports Windows 11 only.");
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | bench>";
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.
@@ -45,6 +46,7 @@ fn run() -> Result<(), String> {
         Some("write-registration") => packaging::write_registration(&root),
         Some("package") => packaging::package(&root),
         Some("bench") => benchmark::run(),
+        Some("palette-acceptance") => palette_acceptance::run(&root),
         Some("--help" | "-h") => {
             println!("{USAGE}");
             Ok(())

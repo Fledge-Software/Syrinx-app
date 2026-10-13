@@ -6,7 +6,7 @@ mod display;
 mod query;
 mod render;
 
-use std::rc::Rc;
+use std::{rc::Rc, time::Instant};
 
 use atlas_core::{CommandAction, CommandContext, CommandRegistry};
 use atlas_platform::browser::BrowserShortcut;
@@ -26,7 +26,7 @@ use commands::{CommandMatcher, CommandMatches};
 use display::Preview;
 use query::{Chip, ParsedQuery, View};
 
-use crate::{session::SessionError, theme, ui};
+use crate::{acceptance::PresentProbe, session::SessionError, theme, ui};
 
 actions!(palette, [Dismiss, NextResult, PreviousResult, SearchWeb]);
 
@@ -67,6 +67,8 @@ pub struct PaletteView {
     chip: Chip,
     view: View,
     scroll: ScrollHandle,
+    /// Present-time stamps for P1-33's acceptance run; `None` in every other run.
+    probe: Option<PresentProbe>,
     _subscription: Subscription,
 }
 
@@ -89,6 +91,7 @@ impl PaletteView {
         events: UnboundedSender<PaletteEvent>,
         registry: Rc<CommandRegistry>,
         context: CommandContext,
+        probe: Option<PresentProbe>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -123,6 +126,7 @@ impl PaletteView {
             chip: Chip::default(),
             view: View::Everything,
             scroll: ScrollHandle::new(),
+            probe,
             _subscription: subscription,
         };
         view.query(cx);
@@ -139,6 +143,7 @@ impl PaletteView {
         let request_id = self
             .choices
             .query_scoped(&input, self.view.accepts_address());
+        self.probe_query(request_id);
         self.send_query(request_id, parsed.text, parsed.prefix.is_some());
         cx.notify();
     }
@@ -149,6 +154,7 @@ impl PaletteView {
         let input = self.input.read(cx).value().to_string();
         let parsed = ParsedQuery::parse(&input);
         let request_id = self.choices.refresh();
+        self.probe_query(request_id);
         self.send_query(request_id, parsed.text, parsed.prefix.is_some());
         cx.notify();
     }
@@ -172,18 +178,53 @@ impl PaletteView {
         });
     }
 
+    /// Shows the current request's rows, then applies an Enter that was waiting for them.
     pub fn receive(
         &mut self,
         request_id: u64,
         result: Result<SearchResults, SessionError>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         if !self.choices.receive(request_id, result) {
             return false;
         }
+        if let Some(probe) = &self.probe {
+            probe.replied(request_id, Instant::now());
+        }
+        if let Some(event) = self.choices.take_deferred() {
+            self.finish(event, window, cx);
+            return true;
+        }
         self.scroll_to_selection();
         cx.notify();
         true
+    }
+
+    fn probe_query(&self, request_id: u64) {
+        if let Some(probe) = &self.probe {
+            probe.queried(request_id);
+        }
+    }
+
+    /// The row Enter would open or run, for P1-33's acceptance run.
+    pub fn selected_target(&self) -> Option<Target> {
+        self.choices.selected_hit().map(|hit| hit.target)
+    }
+
+    /// The typed text, for P1-33's acceptance run.
+    pub fn input_text(&self, cx: &App) -> String {
+        self.input.read(cx).value().to_string()
+    }
+
+    /// The newest request identity, for P1-33's acceptance run.
+    pub fn current_request(&self) -> u64 {
+        self.choices.request_id
+    }
+
+    /// Whether the newest request's rows are shown, for P1-33's acceptance run.
+    pub fn answered(&self) -> bool {
+        self.choices.answered()
     }
 
     fn emit(&mut self, event: PaletteEvent) {
@@ -193,10 +234,10 @@ impl PaletteView {
     }
 
     fn submit(&mut self, force_search: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(event) = self
-            .choices
-            .submission(self.input.read(cx).value().to_string(), force_search)
-        else {
+        let text = self.input.read(cx).value().to_string();
+        let Some(event) = self.choices.submission(text, force_search) else {
+            // A waiting Enter shows its status until the reply applies it.
+            cx.notify();
             return;
         };
         self.finish(event, window, cx);
@@ -274,6 +315,13 @@ impl PaletteView {
 
 impl Render for PaletteView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Deferred work runs after this frame's present, so the stamp follows it.
+        if let Some(probe) = &self.probe
+            && probe.rendered(Instant::now())
+        {
+            let probe = probe.clone();
+            cx.defer(move |_| probe.presented(Instant::now()));
+        }
         let tokens = theme::current();
         let wide = f32::from(window.viewport_size().width) >= PREVIEW_MIN_WIDTH;
         let list = render::list(self, wide, cx);

@@ -42,6 +42,10 @@ impl Fixture {
         spawn(self.0.clone()).expect("start synthetic session worker")
     }
 
+    fn start_acceptance(&self) -> (SessionHandle, UnboundedReceiver<SessionEvent>) {
+        spawn_acceptance(self.0.clone()).expect("start acceptance session worker")
+    }
+
     fn cleanup(self) {
         assert_eq!(self.0.parent(), Some(self.1.as_path()));
         assert_eq!(self.0, self.1.join("State"));
@@ -1682,6 +1686,87 @@ fn popup_allocation_is_durable_correlated_and_refuses_a_closed_opener() {
     );
     stop(handle, &mut events);
     fixture.cleanup();
+}
+
+#[test]
+fn synthetic_catalogue_is_searchable_timed_and_never_persisted() {
+    let fixture = Fixture::new();
+    // An ordinary worker neither times queries nor accepts synthetic rows.
+    let (handle, mut events) = fixture.start();
+    let initial = state(&mut events);
+    send(&handle, synthetic_query(70));
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::Search { request_id: 70, .. }
+    ));
+    send(
+        &handle,
+        SessionCommand::GrowSyntheticCatalogue { total: 1_000 },
+    );
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::SyntheticCatalogue(Err(SessionError::AcceptanceOnly))
+    ));
+    stop(handle, &mut events);
+
+    let (handle, mut events) = fixture.start_acceptance();
+    state(&mut events);
+    send(
+        &handle,
+        SessionCommand::GrowSyntheticCatalogue { total: 1_000 },
+    );
+    let SessionEvent::SyntheticCatalogue(Ok(grown)) = next_event(&mut events) else {
+        panic!("expected the synthetic catalogue size")
+    };
+    assert_eq!((grown.synthetic_rows, grown.catalogue_rows), (1_000, 1_000));
+    send(
+        &handle,
+        SessionCommand::GrowSyntheticCatalogue { total: 10 },
+    );
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::SyntheticCatalogue(Err(SessionError::SyntheticCatalogue))
+    ));
+
+    send(&handle, synthetic_query(71));
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::QueryTimed { request_id: 71, .. }
+    ));
+    let SessionEvent::Search {
+        request_id: 71,
+        result: Ok(results),
+    } = next_event(&mut events)
+    else {
+        panic!("expected the timed synthetic search")
+    };
+    assert!(results.counts.history > 0);
+    stop(handle, &mut events);
+
+    // A restart sees only durable state: the synthetic rows lived in memory.
+    let (handle, mut events) = fixture.start();
+    let restored = state(&mut events);
+    assert_eq!(restored.model, initial.model);
+    send(&handle, synthetic_query(72));
+    let SessionEvent::Search {
+        request_id: 72,
+        result: Ok(results),
+    } = next_event(&mut events)
+    else {
+        panic!("expected an untimed search after restart")
+    };
+    assert_eq!(results.counts.history, 0);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+fn synthetic_query(request_id: u64) -> SessionCommand {
+    SessionCommand::Query {
+        request_id,
+        text: "harbor guide".to_owned(),
+        scope: Scope::Everything,
+        policy: query_policy(),
+    }
 }
 
 #[path = "crash_restart_tests.rs"]

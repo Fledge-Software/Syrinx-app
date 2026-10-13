@@ -8,6 +8,8 @@ use std::{
 };
 
 const HARD_DEADLINE: Duration = Duration::from_secs(30);
+/// P1-33's acceptance run seeds 100,000 rows and types several hundred keys, so it waits longer.
+const ACCEPTANCE_DEADLINE: Duration = Duration::from_secs(600);
 
 pub(crate) struct SmokeWatchdog {
     cancel: Sender<()>,
@@ -51,6 +53,11 @@ enum WatchdogFailure {
 impl SmokeWatchdog {
     pub(crate) fn start() -> Result<Self, WatchdogError> {
         Self::start_with(HARD_DEADLINE, terminate_smoke)
+    }
+
+    /// Bounds P1-33's palette acceptance run, which also uses a fresh synthetic profile.
+    pub(crate) fn start_acceptance() -> Result<Self, WatchdogError> {
+        Self::start_with(ACCEPTANCE_DEADLINE, terminate_smoke)
     }
 
     fn start_with(
@@ -102,7 +109,7 @@ fn terminate_smoke(failure: WatchdogFailure) {
         WatchdogFailure::Deadline => 124,
         WatchdogFailure::ControlDisconnected => 125,
     };
-    // Only --smoke's fresh synthetic profile reaches this last resort; normal runs never start it.
+    // Only the smoke and acceptance runs' fresh synthetic profiles reach this last resort.
     std::process::exit(code);
 }
 
