@@ -19,6 +19,15 @@ recorded separately, in `design/README.md`.
   little sooner does not justify Atlas stealing the screen from whatever the
   owner is doing.
 
+  There are two exceptions, both following the owner's own action. Launching
+  Atlas brings it to the front (`cx.activate(true)` in
+  `crates/atlas-app/src/main.rs`). A link the owner clicks in another program
+  while Atlas is their browser also brings it forward
+  (`ui/incoming_links.rs`): the forwarding instance grants the foreground
+  through `AllowSetForegroundWindow` (`crates/atlas-platform/src/instance/pipe.rs`). Every
+  other activation, including Find in page, F6 pane cycling and the bookmark
+  import preview, activates natively only while Atlas is already in front.
+
 - **Palette ranking is judged from key press to rows on screen (P1-33).**
   A keystroke's ranked rows must be presented within two display refresh
   intervals at the 95th percentile (33.3 ms at 60 Hz), with the maximum

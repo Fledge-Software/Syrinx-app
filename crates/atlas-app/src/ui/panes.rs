@@ -165,7 +165,9 @@ impl BrowserView {
             self.message = error.to_string();
             return;
         }
-        window.activate_window();
+        // Native activation: GPUI's `activate_window` sends a synthetic Alt and forces the
+        // foreground (owner decision, 2026-10-12).
+        self.activate_main_now();
         let Landing::Control(entry) = landing else {
             let field = self.panes.address_field.clone();
             window.focus(&field, cx);

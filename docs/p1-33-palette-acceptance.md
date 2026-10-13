@@ -510,7 +510,19 @@ five-second window and read 62.5 ms, 1.25% of a core: four of Windows' 15.6 ms
 accounting ticks, starting right after the openings, which is why the window
 is now 30 s after a five-second settle. Esc returned focus 20 of 20 times in
 both runs, all through the "activated at once" path, since Atlas was in
-front; the deferred path was not exercised by these runs. One Esc in
+front; the deferred path was not exercised by these runs.
+
+**The deferral is an owner hand check.** The harness cannot complete a
+deferred focus itself: that needs the owner to bring Atlas back, and the
+harness must not take the foreground either. `escape_returns_page_focus`
+therefore fails if any Esc deferred in a run that began with Atlas in front,
+and counts deferrals as expected only in a run that began behind. To check
+the path by hand: open the palette, switch to another program, let Esc be
+delivered, then click Atlas's window frame and confirm the page has the keys.
+Then repeat, returning by clicking the sidebar address field: the field must
+keep the keys, because a click in Atlas's chrome cancels the deferral and
+the activation observer completes it only while GPUI focus is still on the
+window root or nowhere. One Esc in
 `1791863160` took 272 ms to reach the page, and three of its twenty closes
 found keys on the main window for a moment before the page took them.
 
