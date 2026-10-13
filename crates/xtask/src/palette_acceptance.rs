@@ -214,8 +214,8 @@ fn render_summary(report: &Value) -> String {
 fn opening_lines(lines: &mut Vec<String>, open: &Value) {
     lines.push("\n## Opening (Ctrl K action to first presented frame)\n".to_owned());
     lines.push(TABLE_HEADER.to_owned());
-    lines.push(stats_row("open_window called", &open["open_window_called"]));
-    lines.push(stats_row("window created", &open["window_created"]));
+    lines.push(stats_row("show requested", &open["show_requested"]));
+    lines.push(stats_row("show started", &open["show_started"]));
     lines.push(stats_row("first render", &open["first_render"]));
     lines.push(stats_row("presented", &open["presented"]));
     lines.push(format!(

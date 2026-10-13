@@ -13,11 +13,11 @@ use std::{
 /// One palette opening: from the open action to its first presented frame.
 #[derive(Clone, Copy, Debug)]
 pub struct OpenTiming {
-    /// When `open_palette` called GPUI's `open_window`, after its own preparation.
+    /// When `open_palette` had reset the kept popup and queued its show (DW-90).
     pub requested: Option<Instant>,
-    /// When the native popup window existed and its view was about to be built.
-    pub created: Option<Instant>,
-    /// The first render, inside window creation, before anything is presented.
+    /// When the show task began moving and showing the hidden popup.
+    pub started: Option<Instant>,
+    /// The popup's first render after the opening began.
     pub rendered: Option<Instant>,
     pub presented: Option<Instant>,
 }
@@ -57,6 +57,10 @@ struct ProbeState {
     /// Every palette request started, and every reply the palette accepted.
     queries: u64,
     replies: u64,
+    /// Every palette render, to show that the hidden popup draws nothing (DW-90).
+    renders: u64,
+    /// Every notification from the palette's input, such as a caret blink.
+    input_notifications: u64,
 }
 
 /// Which measurements the next presented frame completes.
@@ -79,7 +83,7 @@ impl PresentProbe {
         let mut state = self.0.borrow_mut();
         state.open = Some(OpenTiming {
             requested: None,
-            created: None,
+            started: None,
             rendered: None,
             presented: None,
         });
@@ -87,21 +91,21 @@ impl PresentProbe {
         state.pending = Stamps::default();
     }
 
-    /// Called just before `open_palette` calls GPUI's `open_window`.
-    pub fn window_requested(&self, at: Instant) {
+    /// Called once `open_palette` has reset the popup and queued its show.
+    pub fn show_requested(&self, at: Instant) {
         if let Some(open) = self.0.borrow_mut().open.as_mut() {
             open.requested.get_or_insert(at);
         }
     }
 
-    /// Called once the native popup exists, before its view is built.
-    pub fn window_created(&self, at: Instant) {
+    /// Called when the show task starts, before the popup is moved and shown.
+    pub fn show_started(&self, at: Instant) {
         if let Some(open) = self.0.borrow_mut().open.as_mut() {
-            open.created.get_or_insert(at);
+            open.started.get_or_insert(at);
         }
     }
 
-    /// Called at the start of the first frame after window creation, which presents it.
+    /// Called just before the popup is shown; the frame drawn as it appears presents it.
     pub fn arm_open(&self) {
         self.0.borrow_mut().armed.open = true;
     }
@@ -208,6 +212,7 @@ impl PresentProbe {
     /// Called from the palette's render; returns whether a present stamp should be deferred.
     pub fn rendered(&self, at: Instant) -> bool {
         let mut state = self.0.borrow_mut();
+        state.renders += 1;
         if let Some(open) = state.open.as_mut()
             && open.rendered.is_none()
         {
@@ -218,6 +223,21 @@ impl PresentProbe {
         state.pending.echo |= armed.echo;
         state.pending.rows |= armed.rows;
         armed.any()
+    }
+
+    /// Called whenever the palette's input notifies, for example to blink its caret.
+    pub fn input_notified(&self) {
+        self.0.borrow_mut().input_notifications += 1;
+    }
+
+    /// How many times the palette's input has notified so far.
+    pub fn input_notifications(&self) -> u64 {
+        self.0.borrow().input_notifications
+    }
+
+    /// How many times the palette has rendered so far.
+    pub fn renders(&self) -> u64 {
+        self.0.borrow().renders
     }
 
     /// Completes every measurement whose frame has now been presented.
@@ -259,13 +279,13 @@ mod tests {
     }
 
     #[test]
-    fn an_opening_completes_only_on_the_frame_after_window_creation() {
+    fn an_opening_completes_only_on_a_frame_after_the_show_is_armed() {
         let probe = PresentProbe::default();
         let start = Instant::now();
         probe.begin_open();
-        probe.window_requested(later(start, 1));
-        probe.window_created(later(start, 2));
-        // Window creation renders without presenting, so nothing is pending yet.
+        probe.show_requested(later(start, 1));
+        probe.show_started(later(start, 2));
+        // A render before the popup is shown presents nothing, so nothing is pending yet.
         assert!(!probe.rendered(later(start, 3)));
         probe.presented(later(start, 4));
         assert!(probe.open().expect("opening").presented.is_none());
@@ -275,7 +295,7 @@ mod tests {
         probe.presented(later(start, 12));
         let open = probe.open().expect("opening");
         assert_eq!(open.requested, Some(later(start, 1)));
-        assert_eq!(open.created, Some(later(start, 2)));
+        assert_eq!(open.started, Some(later(start, 2)));
         assert_eq!(open.rendered, Some(later(start, 3)));
         assert_eq!(open.presented, Some(later(start, 12)));
     }

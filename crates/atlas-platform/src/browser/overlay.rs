@@ -4,14 +4,17 @@ use windows::Win32::{
     Foundation::{HWND, POINT, RECT},
     Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint},
     UI::{
-        HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
-        Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
+        HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
+        Input::KeyboardAndMouse::{GetActiveWindow, GetAsyncKeyState, SetActiveWindow, VK_LBUTTON},
         WindowsAndMessaging::{
             GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetWindowInfo, GetWindowRect,
-            IsIconic, WINDOWINFO,
+            GetWindowThreadProcessId, HWND_TOP, IsIconic, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE,
+            SWP_NOOWNERZORDER, SetWindowPos, ShowWindow, WINDOWINFO,
         },
     },
 };
+
+use super::{BrowserError, validate_window};
 
 pub struct OverlayPointer {
     pub x: i32,
@@ -94,6 +97,99 @@ pub fn overlay_monitor(x: i32, y: i32) -> Result<OverlayMonitor, String> {
     }
 }
 
+/// An overlay popup's place on screen, in physical pixels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OverlayRect {
+    pub left: i32,
+    pub top: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// Moves a kept popup to `rect` and shows it above its owner without activating it.
+///
+/// Call this outside any GPUI update: the popup's resize and first frame are delivered from
+/// these Win32 calls and GPUI drops them while its app state is borrowed.
+pub fn show_overlay(popup: isize, rect: OverlayRect) -> Result<(), BrowserError> {
+    validate_window(popup)?;
+    let handle = HWND(popup as *mut _);
+    let scale_before = unsafe { GetDpiForWindow(handle) };
+    place_overlay(handle, rect)?;
+    // Crossing to a monitor with another scale makes Windows resize the popup; restore `rect`.
+    if unsafe { GetDpiForWindow(handle) } != scale_before {
+        place_overlay(handle, rect)?;
+    }
+    unsafe {
+        let _previous_visibility = ShowWindow(handle, SW_SHOWNA);
+    }
+    Ok(())
+}
+
+/// Hides a kept popup; when it is active, its owner is activated first, synchronously.
+///
+/// Hiding the active window would let Windows choose what to activate next, possibly after
+/// the page was given focus.
+pub fn hide_overlay(popup: isize, owner: isize) -> Result<(), BrowserError> {
+    validate_window(popup)?;
+    validate_window(owner)?;
+    let popup = HWND(popup as *mut _);
+    if unsafe { GetActiveWindow() } == popup {
+        activate(HWND(owner as *mut _))?;
+    }
+    unsafe {
+        let _previous_visibility = ShowWindow(popup, SW_HIDE);
+    }
+    Ok(())
+}
+
+/// Whether one of this process's windows has the foreground.
+pub fn atlas_in_foreground() -> bool {
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.is_invalid() {
+        return false;
+    }
+    let mut process = 0;
+    unsafe { GetWindowThreadProcessId(foreground, Some(&raw mut process)) };
+    process == std::process::id()
+}
+
+/// Activates one of Atlas's windows at once when Atlas already has the foreground.
+///
+/// Returns `false`, changing nothing, when another application is in front: Atlas never
+/// takes the foreground from another application (owner decision, 2026-10-12).
+pub fn activate_if_foreground(window: isize) -> Result<bool, BrowserError> {
+    validate_window(window)?;
+    if !atlas_in_foreground() {
+        return Ok(false);
+    }
+    activate(HWND(window as *mut _))?;
+    Ok(true)
+}
+
+/// `SetActiveWindow` returns the previous active window, and the bindings report a NULL
+/// previous window as an error; the call succeeded when `window` is now active.
+fn activate(window: HWND) -> Result<(), BrowserError> {
+    if unsafe { SetActiveWindow(window) }.is_ok() || unsafe { GetActiveWindow() } == window {
+        return Ok(());
+    }
+    Err(BrowserError::Focus)
+}
+
+fn place_overlay(popup: HWND, rect: OverlayRect) -> Result<(), BrowserError> {
+    unsafe {
+        SetWindowPos(
+            popup,
+            Some(HWND_TOP),
+            rect.left,
+            rect.top,
+            rect.width,
+            rect.height,
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        )
+    }
+    .map_err(|_| BrowserError::OverlayPlacement)
+}
+
 fn native_error(operation: &str, error: windows::core::Error) -> String {
     format!(
         "{operation}: HRESULT {:#010X}: {}",
@@ -113,6 +209,19 @@ mod tests {
         },
         core::w,
     };
+
+    #[test]
+    fn kept_popup_calls_refuse_handles_that_are_not_windows() {
+        let rect = OverlayRect {
+            left: 0,
+            top: 0,
+            width: 10,
+            height: 10,
+        };
+        assert_eq!(show_overlay(0, rect), Err(BrowserError::InvalidWindow));
+        assert_eq!(hide_overlay(0, 0), Err(BrowserError::InvalidWindow));
+        assert_eq!(activate_if_foreground(0), Err(BrowserError::InvalidWindow));
+    }
 
     #[test]
     fn native_failures_keep_operation_hresult_and_message() {

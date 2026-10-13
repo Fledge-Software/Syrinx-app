@@ -28,6 +28,15 @@ const KEY_LIMIT: Duration = Duration::from_secs(3);
 /// Pause after a keystroke's rows are presented, so each key is measured on its own.
 /// This hides queueing between keys; the bursts below measure back-to-back typing.
 const TYPING_GAP: Duration = Duration::from_millis(20);
+/// How long the run sits idle with the palette hidden, measuring wake-ups and CPU; Windows
+/// counts process CPU time in about 15.6 ms ticks, so a short window cannot resolve 0.5%.
+const IDLE_WINDOW: Duration = Duration::from_secs(30);
+/// A pause before the idle window, so work queued by the openings has finished.
+const IDLE_SETTLE: Duration = Duration::from_secs(5);
+/// D37: an idle Atlas uses under half a percent of one core.
+const IDLE_CPU_BUDGET_PERCENT: f64 = 0.5;
+/// How long the run waits for Windows to put Atlas in front before it starts.
+const FOREGROUND_WAIT: Duration = Duration::from_secs(20);
 const OPEN_SAMPLES: usize = 20;
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 const PASSES: usize = 2;
@@ -50,6 +59,10 @@ pub(super) struct Acceptance {
     probe: PresentProbe,
     /// The latest title each synthetic page reported; its script writes its focus there.
     titles: HashMap<u64, String>,
+    /// How often each page went from not focused to focused, to tell late theft from no focus.
+    focus_gains: HashMap<u64, usize>,
+    /// Focus steps the browser view took, so a focus trace can show their order.
+    marks: Vec<(Instant, &'static str)>,
     synthetic: Option<Result<SyntheticCatalogue, SessionError>>,
     /// Set when a page was about to leave the loopback server; the run then aborts.
     refused: Option<String>,
@@ -61,6 +74,8 @@ impl Acceptance {
             plan,
             probe: PresentProbe::default(),
             titles: HashMap::new(),
+            focus_gains: HashMap::new(),
+            marks: Vec::new(),
             synthetic: None,
             refused: None,
         }
@@ -75,8 +90,13 @@ impl BrowserView {
     }
 
     pub(super) fn acceptance_title(&mut self, id: u64, title: &str) {
-        if let Some(acceptance) = self.acceptance.as_mut() {
-            acceptance.titles.insert(id, title.to_owned());
+        let Some(acceptance) = self.acceptance.as_mut() else {
+            return;
+        };
+        let focused = title.ends_with("focus:yes");
+        let previous = acceptance.titles.insert(id, title.to_owned());
+        if focused && previous.is_none_or(|previous| !previous.ends_with("focus:yes")) {
+            *acceptance.focus_gains.entry(id).or_default() += 1;
         }
     }
 
@@ -123,21 +143,11 @@ impl BrowserView {
         false
     }
 
-    /// Arms the probe at the start of the new popup's first frame, the one that presents it.
-    pub(super) fn arm_open_probe(&mut self, cx: &mut App) {
-        let (Some(acceptance), Some(palette)) = (&self.acceptance, &self.palette) else {
-            return;
-        };
-        let probe = acceptance.probe.clone();
-        let view = palette.view.clone();
-        let armed = palette.window.update(cx, |_, popup, _| {
-            popup.on_next_frame(move |_, cx| {
-                probe.arm_open();
-                view.update(cx, |_, cx| cx.notify());
-            });
-        });
-        if armed.is_err() {
-            self.message = "The palette closed before its first frame could be timed.".to_owned();
+    /// A page can leave the loopback server without a command from Atlas (a redirect, its own
+    /// script or a link). Its address arrives after the request was sent; the run then aborts.
+    pub(super) fn acceptance_observed(&mut self, url: &str) {
+        if !self.acceptance_permits(url) {
+            eprintln!("A page left its loopback server by itself; the acceptance run stops.");
         }
     }
 
@@ -158,6 +168,7 @@ impl BrowserView {
                 main: 0,
                 focus_tab: None,
                 enter_tab: None,
+                started_in_front: false,
             };
             let report = run.run().await;
             finish(&view, cx, &report);
@@ -172,6 +183,29 @@ impl BrowserView {
             .update(cx, |_, popup, _| native_handle(popup))
             .map_err(|_| "The palette window is gone.".to_owned())?
             .map_err(str::to_owned)
+    }
+
+    /// Records one focus step for the run's focus traces; ordinary runs record nothing.
+    pub(super) fn acceptance_mark(&mut self, step: &'static str) {
+        if let Some(acceptance) = self.acceptance.as_mut() {
+            acceptance.marks.push((Instant::now(), step));
+        }
+    }
+
+    fn focus_gains(&self, id: TabId) -> usize {
+        self.acceptance
+            .as_ref()
+            .and_then(|acceptance| acceptance.focus_gains.get(&id.get()).copied())
+            .unwrap_or(0)
+    }
+
+    /// Where Windows keyboard focus is now, for the focus-return diagnosis.
+    fn keyboard_focus(&self) -> String {
+        let popup = self.kept_palette_hwnd();
+        match probe_win32::keyboard_focus(self.parent_hwnd, popup) {
+            Ok(focus) => focus.label().to_owned(),
+            Err(error) => format!("unreadable ({error})"),
+        }
     }
 
     /// What the synthetic page's own script last reported about `document.hasFocus()`.
@@ -228,6 +262,8 @@ struct Run {
     main: isize,
     focus_tab: Option<TabId>,
     enter_tab: Option<TabId>,
+    /// Whether Atlas was in front when the run began; a deferral then proves nothing.
+    started_in_front: bool,
 }
 
 impl Run {
@@ -319,6 +355,17 @@ impl Run {
         )
         .await?;
         self.main = self.with(|view, _, _| view.parent_hwnd)?;
+        // The palette opens only while Atlas is in front (owner decision, 2026-10-12).
+        let in_front = self
+            .try_wait(FOREGROUND_WAIT, |_, _, _| {
+                atlas_platform::browser::atlas_in_foreground().then_some(())
+            })
+            .await?
+            .is_some();
+        self.started_in_front = in_front;
+        if !in_front {
+            eprintln!("Atlas is not in front; the palette will stay closed until it is.");
+        }
         // An unread interval is reported as such; verdicts then assume 60 Hz.
         match probe_win32::refresh_interval(self.main) {
             Ok(interval) => self.report.refresh = Some(interval),
@@ -335,15 +382,19 @@ impl Run {
         self.with(|view, window, cx| view.focus_page(window, cx))?;
         let focused = self
             .try_wait(Duration::from_secs(10), |view, _, _| {
-                view.page_focus(focus).filter(|focused| *focused)
+                focused_or_deferred(view, focus)
             })
-            .await?
-            .is_some();
+            .await?;
         let foreground = probe_win32::foreground_window() == self.main;
+        let keyboard = self.with(|view, _, _| view.keyboard_focus())?;
         self.report.check(
             "page_focus_baseline",
-            focused,
-            format!("document.hasFocus() reported by the page: {focused}; Atlas in foreground: {foreground}"),
+            focused.is_some(),
+            format!(
+                "page focus: {}; \
+                 Atlas in foreground: {foreground}; keyboard focus: {keyboard}",
+                focused.unwrap_or("none")
+            ),
         );
         Ok(())
     }
@@ -372,17 +423,24 @@ impl Run {
         })?;
         let probe = self.probe.clone();
         let open = self
-            .wait_for(
-                Duration::from_secs(5),
-                "the palette's first frame",
-                |_, _, _| probe.open().filter(|open| open.presented.is_some()),
-            )
-            .await?;
+            .try_wait(Duration::from_secs(5), |_, _, _| {
+                probe.open().filter(|open| open.presented.is_some())
+            })
+            .await?
+            .ok_or_else(|| {
+                if atlas_platform::browser::atlas_in_foreground() {
+                    "Timed out after 5s waiting for the palette's first frame.".to_owned()
+                } else {
+                    "Atlas is not in front, so the palette stays closed (owner decision \
+                     2026-10-12). Run the harness in the foreground and leave it alone."
+                        .to_owned()
+                }
+            })?;
         let since = |at: Option<Instant>| at.map_or(Duration::ZERO, |at| at - started);
         Ok(OpenSample {
             presented: since(open.presented),
             requested: since(open.requested),
-            created: since(open.created),
+            started: since(open.started),
             rendered: since(open.rendered),
         })
     }
@@ -390,33 +448,83 @@ impl Run {
     async fn measure_openings(&mut self) -> Result<(), String> {
         let focus = self.focus_tab()?;
         let mut returned = 0;
+        let mut deferred = 0;
         let mut slowest = Duration::ZERO;
+        let mut places = FocusTally::default();
+        let mut popups = HashSet::new();
         for index in 0..OPEN_SAMPLES {
             let sample = self.open_timed().await?;
             self.report.opens.push(sample);
+            popups.insert(self.with(|view, _, cx| view.palette_hwnd(cx))??);
             if index == 0 {
                 self.check_stacking()?;
                 self.check_palette_took_focus(focus).await?;
             }
             // A missing focus return is measured; a palette that stays open stops the run.
-            if let Some(elapsed) = self.escape_to_page(focus).await? {
+            let outcome = self.escape_to_page(focus).await?;
+            places.add(&outcome);
+            if let Some(elapsed) = outcome.returned {
                 returned += 1;
                 slowest = slowest.max(elapsed);
             }
+            deferred += usize::from(outcome.deferred);
             self.sleep(SETTLE).await;
         }
         let opened = self.report.opens.len();
         self.report.check(
             "escape_returns_page_focus",
-            returned == OPEN_SAMPLES,
+            escape_focus_proven(returned, deferred, self.started_in_front),
             format!(
-                "{returned}/{opened} openings returned focus to the page; slowest {slowest:?}; \
-                 Atlas in foreground now: {}",
+                "{returned}/{opened} openings returned focus to the page and {deferred} deferred \
+                 it until Atlas is activated (a deferral is unproven: completing it is an owner \
+                 hand check); started in front {}; slowest {slowest:?}; \
+                 Atlas in foreground now: {}; {places}",
+                self.started_in_front,
                 probe_win32::foreground_window() == self.main
             ),
         );
+        self.report.check(
+            "openings_reuse_one_popup",
+            popups.len() == 1,
+            format!("{} native popups across {opened} openings", popups.len()),
+        );
         self.check_no_stale_refocus("no_stale_refocus_after_escape", focus)
-            .await
+            .await?;
+        self.check_hidden_popup_idle().await
+    }
+
+    /// The kept popup must not render while hidden, so it adds nothing to idle CPU (D37).
+    async fn check_hidden_popup_idle(&mut self) -> Result<(), String> {
+        self.sleep(IDLE_SETTLE).await;
+        let renders_before = self.probe.renders();
+        let wakes_before = self.probe.input_notifications();
+        let cpu_before = probe_win32::process_cpu_time().map_err(|error| error.to_string())?;
+        let started = Instant::now();
+        self.sleep(IDLE_WINDOW).await;
+        let cpu = probe_win32::process_cpu_time().map_err(|error| error.to_string())? - cpu_before;
+        let elapsed = started.elapsed();
+        let renders = self.probe.renders() - renders_before;
+        let wakes = self.probe.input_notifications() - wakes_before;
+        let open = self.with(|view, _, _| view.palette.is_some())?;
+        self.report.check(
+            "hidden_popup_renders_nothing",
+            renders == 0 && wakes == 0 && !open,
+            format!(
+                "while hidden for {elapsed:?}: palette renders {renders}; input notifications \
+                 (caret blinks) {wakes}; open {open}"
+            ),
+        );
+        let share = cpu.as_secs_f64() / elapsed.as_secs_f64() * 100.;
+        self.report.check(
+            "idle_cpu_with_hidden_popup",
+            share < IDLE_CPU_BUDGET_PERCENT,
+            format!(
+                "Atlas's own process used {cpu:?} of CPU in {elapsed:?} ({share:.3}% of one \
+                 core; D37 budget {IDLE_CPU_BUDGET_PERCENT}%); WebView2's processes are not \
+                 counted"
+            ),
+        );
+        Ok(())
     }
 
     fn check_stacking(&mut self) -> Result<(), String> {
@@ -462,27 +570,63 @@ impl Run {
         Ok(())
     }
 
-    /// Presses Esc in the palette, which must close; returns how long focus took to reach the
-    /// page, or `None` when the page never reported focus.
-    async fn escape_to_page(&mut self, focus: TabId) -> Result<Option<Duration>, String> {
-        let pressed = self.with(|view, _, cx| {
+    /// Presses Esc in the palette, which must close; records how long focus took to reach the
+    /// page (`None` when it never did) and where Windows keyboard focus was.
+    async fn escape_to_page(&mut self, focus: TabId) -> Result<EscapeOutcome, String> {
+        let (pressed, gains_before) = self.with(|view, _, cx| {
             let popup = view.palette_hwnd(cx)?;
+            if let Some(acceptance) = view.acceptance.as_mut() {
+                acceptance.marks.clear();
+            }
             let pressed = Instant::now();
             probe_win32::post_key(popup, Key::Escape).map_err(|error| error.to_string())?;
-            Ok::<_, String>(pressed)
+            Ok::<_, String>((pressed, view.focus_gains(focus)))
         })??;
-        self.wait_for(
-            Duration::from_secs(3),
-            "Esc to close the palette",
-            |view, _, _| view.palette.is_none().then_some(()),
-        )
-        .await?;
-        let returned = self
-            .try_wait(Duration::from_secs(3), |view, _, _| {
-                (view.page_focus(focus) == Some(true)).then_some(())
-            })
+        let at_close = self
+            .wait_for(
+                Duration::from_secs(3),
+                "Esc to close the palette",
+                |view, _, _| view.palette.is_none().then(|| view.keyboard_focus()),
+            )
             .await?;
-        Ok(returned.map(|()| pressed.elapsed()))
+        let mut trace = FocusTrace::new(pressed, &at_close);
+        let mut deferred = false;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let returned = loop {
+            let (focused, waiting, keyboard) = self.with(|view, _, _| {
+                let focused = view.page_focus(focus) == Some(true);
+                (focused, focus_deferred(view), view.keyboard_focus())
+            })?;
+            trace.observe(&keyboard);
+            if focused {
+                break Some(pressed.elapsed());
+            }
+            if waiting {
+                deferred = true;
+                break None;
+            }
+            if Instant::now() >= deadline {
+                break None;
+            }
+            self.sleep(POLL).await;
+        };
+        let (at_end, gains_after, marks) = self.with(|view, _, _| {
+            let marks = view
+                .acceptance
+                .as_mut()
+                .map(|acceptance| std::mem::take(&mut acceptance.marks))
+                .unwrap_or_default();
+            (view.keyboard_focus(), view.focus_gains(focus), marks)
+        })?;
+        trace.add_marks(&marks);
+        Ok(EscapeOutcome {
+            returned,
+            deferred,
+            at_close,
+            at_end,
+            gained: gains_after > gains_before,
+            trace: trace.to_string(),
+        })
     }
 
     /// After the palette closed, nothing may reopen it or take focus from the page.
@@ -492,20 +636,36 @@ impl Run {
         page: TabId,
     ) -> Result<(), String> {
         self.sleep(STALE_WINDOW).await;
-        let (palette_open, windows, focused, active) = self.with(|view, _, cx| {
-            (
-                view.palette.is_some(),
-                cx.windows().len(),
-                view.page_focus(page),
-                view.model.active_id,
-            )
-        })?;
-        let passed = !palette_open && windows == 1 && focused == Some(true) && active == Some(page);
+        let main = self.main;
+        let (palette_open, popup_visible, windows, focused, active, keyboard) =
+            self.with(|view, _, cx| {
+                let popup_visible = view.kept_palette_hwnd().is_some_and(|popup| {
+                    probe_win32::overlay_stacking(popup, main)
+                        .is_ok_and(|stacking| stacking.visible)
+                });
+                (
+                    view.palette.is_some(),
+                    popup_visible,
+                    cx.windows().len(),
+                    focused_or_deferred(view, page),
+                    view.model.active_id,
+                    view.keyboard_focus(),
+                )
+            })?;
+        // The main window and the kept, hidden palette popup (DW-90).
+        let passed = !palette_open
+            && !popup_visible
+            && windows == 2
+            && focused.is_some()
+            && active == Some(page);
         self.report.check(
             name,
             passed,
             format!(
-                "after {STALE_WINDOW:?}: palette open {palette_open}; windows {windows}; page focus {focused:?}; expected tab active {}",
+                "after {STALE_WINDOW:?}: palette open {palette_open}; popup visible \
+                 {popup_visible}; windows {windows}; page focus {}; expected tab active {}; \
+                 keyboard focus: {keyboard}",
+                focused.unwrap_or("none"),
                 active == Some(page)
             ),
         );
@@ -522,14 +682,17 @@ impl Run {
         })?;
         let returned = self
             .try_wait(Duration::from_secs(3), |view, _, _| {
-                (view.palette.is_none() && view.page_focus(focus) == Some(true)).then_some(())
+                (view.palette.is_none() && focused_or_deferred(view, focus).is_some()).then_some(())
             })
             .await?
             .is_some();
+        let keyboard = self.with(|view, _, _| view.keyboard_focus())?;
         self.report.check(
             "rapid_open_then_escape",
             posted.is_ok() && returned,
-            format!("Esc posted: {posted:?}; focus returned: {returned}"),
+            format!(
+                "Esc posted: {posted:?}; focus returned: {returned}; keyboard focus: {keyboard}"
+            ),
         );
         self.check_no_stale_refocus("no_stale_refocus_after_rapid_escape", focus)
             .await?;
@@ -555,7 +718,7 @@ impl Run {
             ),
         );
         // Focus return is already measured above; here only the close matters.
-        let _focus_return = self.escape_to_page(focus).await?;
+        let _closed = self.escape_to_page(focus).await?;
         self.sleep(SETTLE).await;
         Ok(())
     }
@@ -681,7 +844,7 @@ impl Run {
             bursts,
         });
         // Focus return is already measured above; here only the close matters.
-        let _focus_return = self.escape_to_page(focus).await?;
+        let _closed = self.escape_to_page(focus).await?;
         self.sleep(SETTLE).await;
         Ok(())
     }
@@ -767,6 +930,130 @@ impl Run {
     }
 }
 
+/// Every Esc must return focus; a run that began with Atlas in front may defer none, since
+/// the harness cannot bring Atlas back to complete a deferral without taking the foreground.
+fn escape_focus_proven(returned: usize, deferred: usize, started_in_front: bool) -> bool {
+    if started_in_front {
+        return returned == OPEN_SAMPLES;
+    }
+    returned + deferred == OPEN_SAMPLES
+}
+
+/// Whether `focus_page` is waiting for the owner to bring Atlas back to the front, which
+/// is the expected result while another application is in front (owner, 2026-10-12).
+fn focus_deferred(view: &BrowserView) -> bool {
+    view.page_focus_on_activation && !atlas_platform::browser::atlas_in_foreground()
+}
+
+/// Whether the page has the keys (`"focused"`) or is waiting for activation (`"deferred"`).
+fn focused_or_deferred(view: &BrowserView, page: TabId) -> Option<&'static str> {
+    if view.page_focus(page) == Some(true) {
+        return Some("focused");
+    }
+    focus_deferred(view).then_some("deferred until Atlas is activated")
+}
+
+/// What one Esc did to focus.
+struct EscapeOutcome {
+    /// How long the page took to report focus; `None` when it never did.
+    returned: Option<Duration>,
+    /// Another application was in front, so the page waits for Atlas's activation.
+    deferred: bool,
+    /// Windows keyboard focus when the palette had closed, and after the wait.
+    at_close: String,
+    at_end: String,
+    /// Whether the page reported gaining focus at any point after Esc.
+    gained: bool,
+    /// Keyboard focus changes and the view's focus steps, in milliseconds after Esc.
+    trace: String,
+}
+
+/// Where keyboard focus went after one Esc, and when the browser view acted.
+struct FocusTrace {
+    pressed: Instant,
+    last: String,
+    steps: Vec<(Duration, String)>,
+}
+
+impl FocusTrace {
+    fn new(pressed: Instant, at_close: &str) -> Self {
+        Self {
+            pressed,
+            last: at_close.to_owned(),
+            steps: vec![(pressed.elapsed(), format!("closed, keys: {at_close}"))],
+        }
+    }
+
+    fn observe(&mut self, keyboard: &str) {
+        if keyboard != self.last {
+            self.last = keyboard.to_owned();
+            self.steps
+                .push((self.pressed.elapsed(), format!("keys: {keyboard}")));
+        }
+    }
+
+    fn add_marks(&mut self, marks: &[(Instant, &'static str)]) {
+        for (at, step) in marks {
+            let since = at.saturating_duration_since(self.pressed);
+            self.steps.push((since, (*step).to_owned()));
+        }
+        self.steps.sort_by_key(|(at, _)| *at);
+    }
+}
+
+impl std::fmt::Display for FocusTrace {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let steps: Vec<String> = self
+            .steps
+            .iter()
+            .map(|(at, step)| format!("{:.1} ms {step}", at.as_secs_f64() * 1000.))
+            .collect();
+        write!(formatter, "[{}]", steps.join("; "))
+    }
+}
+
+/// Counts where keyboard focus was after each Esc, for the check's detail.
+#[derive(Default)]
+struct FocusTally {
+    at_close: std::collections::BTreeMap<String, usize>,
+    at_end: std::collections::BTreeMap<String, usize>,
+    gained_then_lost: usize,
+    /// The first opening's trace, and the first failed one's.
+    first_trace: Option<String>,
+    failed_trace: Option<String>,
+}
+
+impl FocusTally {
+    fn add(&mut self, outcome: &EscapeOutcome) {
+        *self.at_close.entry(outcome.at_close.clone()).or_default() += 1;
+        *self.at_end.entry(outcome.at_end.clone()).or_default() += 1;
+        if outcome.gained && outcome.returned.is_none() {
+            self.gained_then_lost += 1;
+        }
+        self.first_trace
+            .get_or_insert_with(|| outcome.trace.clone());
+        if outcome.returned.is_none() {
+            self.failed_trace
+                .get_or_insert_with(|| outcome.trace.clone());
+        }
+    }
+}
+
+impl std::fmt::Display for FocusTally {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "keyboard focus at close {:?}, after the wait {:?}; \
+             page gained then lost focus {} times; first trace {}; first failed trace {}",
+            self.at_close,
+            self.at_end,
+            self.gained_then_lost,
+            self.first_trace.as_deref().unwrap_or("none"),
+            self.failed_trace.as_deref().unwrap_or("none")
+        )
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Typed {
     Character(char),
@@ -783,4 +1070,23 @@ fn post_typed(view: &BrowserView, cx: &mut App, typed: Typed) -> Result<(), Stri
         Typed::Backspace => probe_win32::post_key(popup, Key::Backspace),
     };
     sent.map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_deferral_counts_only_when_the_run_began_behind() {
+        assert!(escape_focus_proven(OPEN_SAMPLES, 0, true));
+        assert!(
+            !escape_focus_proven(OPEN_SAMPLES - 1, 1, true),
+            "a run that began in front cannot complete a deferral itself"
+        );
+        assert!(escape_focus_proven(OPEN_SAMPLES - 1, 1, false));
+        assert!(
+            !escape_focus_proven(OPEN_SAMPLES - 2, 1, false),
+            "one Esc lost focus"
+        );
+    }
 }

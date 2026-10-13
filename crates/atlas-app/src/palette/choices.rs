@@ -43,6 +43,15 @@ enum RefreshSelection {
 }
 
 impl PaletteChoices {
+    /// Starts a new palette entry: no rows, selection, status or waiting Enter. Request IDs
+    /// keep counting, so a reply to the previous entry can never match.
+    pub(super) fn reset(&mut self) {
+        *self = Self {
+            request_id: self.request_id,
+            ..Self::default()
+        };
+    }
+
     fn begin_query(&mut self) -> u64 {
         self.request_id = self
             .request_id
@@ -766,6 +775,64 @@ mod tests {
         assert_eq!(choices.status, "Waiting for local results…");
         assert!(choices.take_deferred().is_none(), "no reply yet");
         assert!(choices.receive(request, Ok(results(&[tab, saved]))));
+        assert!(matches!(
+            choices.take_deferred(),
+            Some(PaletteEvent::Activate(target)) if target == tab
+        ));
+        assert!(choices.take_deferred().is_none(), "Enter is applied once");
+    }
+
+    #[test]
+    fn a_new_entry_forgets_the_last_one_but_keeps_counting_requests() {
+        let [tab, _] = targets();
+        let mut choices = PaletteChoices::default();
+        let request = choices.query_scoped("synthetic target", true);
+        choices.stage_commands(staged(&[], 0), true, false);
+        assert!(choices.receive(request, Ok(results(&[tab]))));
+        choices.next();
+        let waiting = choices.query_scoped("synthetic target two", true);
+        assert!(
+            choices
+                .submission("synthetic target two".to_owned(), false)
+                .is_none()
+        );
+
+        choices.reset();
+        assert!(choices.results.is_empty());
+        assert_eq!(choices.selected, None);
+        assert_eq!(choices.status, "");
+        let next = choices.query_scoped("", true);
+        assert!(next > waiting, "request IDs keep increasing across entries");
+        assert!(
+            !choices.receive(waiting, Ok(results(&[tab]))),
+            "a reply to the old entry is ignored"
+        );
+        assert!(choices.receive(next, Ok(results(&[tab]))));
+        assert!(choices.take_deferred().is_none(), "the old Enter is gone");
+    }
+
+    #[test]
+    fn enter_waits_through_a_model_refresh_and_opens_the_refreshed_top_row() {
+        let [tab, saved] = targets();
+        let mut choices = PaletteChoices::default();
+        let first = choices.query_scoped("synthetic target", true);
+        choices.stage_commands(staged(&[], 0), true, false);
+        assert!(
+            choices
+                .submission("synthetic target".to_owned(), false)
+                .is_none()
+        );
+
+        // A committed model change re-runs the same text before the first reply arrives.
+        let refreshed = choices.refresh();
+        assert_ne!(refreshed, first);
+        choices.stage_commands(staged(&[], 0), true, false);
+        assert!(
+            !choices.receive(first, Ok(results(&[saved]))),
+            "the superseded reply is ignored"
+        );
+        assert!(choices.take_deferred().is_none(), "Enter still waits");
+        assert!(choices.receive(refreshed, Ok(results(&[tab, saved]))));
         assert!(matches!(
             choices.take_deferred(),
             Some(PaletteEvent::Activate(target)) if target == tab
