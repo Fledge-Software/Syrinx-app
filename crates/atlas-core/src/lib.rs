@@ -6,12 +6,19 @@ mod address_entry;
 mod bookmark_import;
 mod commands;
 mod destinations;
+mod page_text;
 mod tabs;
 mod web_address;
 
 pub use address_display::readable_address;
 pub use address_entry::{EntryError, entry_destination, google_search, recognized_address};
 pub use web_address::{WebAddressError, web_address};
+
+pub use page_text::{
+    DocumentFacts, EligibleDocument, Ineligible, LeftDocument, ObservedResponse, PageTextPolicy,
+    PolicyError, SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, TEXT_LIMIT_BYTES, judge,
+    same_document_address, same_document_due,
+};
 
 pub use bookmark_import::{
     BookmarkImport, DEFAULT_IMPORT_FOLDER, FolderRole, ImportCommit, ImportError, ImportLimits,

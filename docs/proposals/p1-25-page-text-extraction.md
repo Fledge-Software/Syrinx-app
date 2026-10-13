@@ -306,6 +306,23 @@ and nothing is read; only its title and address reach tier 1 as today.
    ordinary site often carries account details or tokens in that return
    page. The reverse case (an ordinary site redirecting into an excluded
    one) is ineligible at step 3, 4 or 5 on the final address.
+
+   *Added by the owner's decisions of 2026-10-12 (`docs/decisions.md`,
+   "skip all exits", which replaced a user-initiated test the same day):* a
+   sign-in flow often leaves the excluded site by its own script, a form or
+   a "Continue" link rather than a redirect, and WebView2 reports that as a
+   new navigation, not a redirect hop. So a document is also ineligible when
+   (a) Atlas did not start its navigation (the address bar, palette,
+   bookmark, saved page, tile or Home) and the document it left was on an
+   excluded site or was itself tainted, or (b) any response of its
+   navigation was requested with a method other than `GET` (a form `POST`,
+   read from the request in `WebResourceResponseReceived`), on any site.
+   A document reached under (a), or through an excluded redirect hop, is
+   tainted and passes the taint to every page it leads to until Atlas
+   navigates the tab; a popup opened from an excluded or tainted page starts
+   tainted. `IsUserInitiated` is not used: it follows Chromium's short-lived
+   user activation, so a click on the bank page counted. Every fact comes
+   from events Atlas already observes; no filter and no injection.
 7. **The final response was observed and allows storing.** Atlas must have
    matched a `WebResourceResponseReceived` event to this document's final
    address with a 2xx status, a `text/html` or `application/xhtml+xml` type,
@@ -455,6 +472,15 @@ the target address, so a test can assert that **zero** calls were made.
 | F17 | Suspended (`TrySuspend`) and hidden tabs | No capture while suspended; deferred until visible or resumed |
 | F18 | With `with_devtools(false)` | The host call still works; F12 still opens nothing; no TCP listening port appears for the WebView2 processes before or after capture |
 | F19 | Capture switched off | Zero CDP calls over the whole run |
+| F20 | A 204 and a 205 response requested from an excluded page | No call; the excluded page stays shown and unread *(added in review)* |
+| F21 | `bank.test` sends itself to `plain.test` by script (`location.href`) | Ineligible, zero calls *(owner's decision, 2026-10-12)* |
+| F22 | `bank.test` auto-submits a form `POST` to `plain.test` | Ineligible, zero calls *(same)* |
+| F23 | The owner follows a link out of `bank.test` to an ordinary page | Ineligible, zero calls *(changed by "skip all exits")* |
+| F24 | An ordinary page auto-submits a form `POST` to itself | Ineligible, zero calls *(same)* |
+| F25 | A form `POST` answered by 302, 303 and 307, same site and cross-site | Ineligible, zero calls *(re-review)* |
+| F26 | A bank page's script leads to a relay page whose script moves on | The page after the relay ineligible; an Atlas navigation afterwards read *(re-review)* |
+| F27 | A popup opened from a bank page | Ineligible, zero calls *(re-review)* |
+| F28 | Back into a tainted page after an Atlas navigation cleared the tab | Ineligible, zero calls *(third review)* |
 
 **Evidence.** P1-25 delivers `docs/p1-25-page-text-feasibility.md` with each
 case's result, the measurements, every failure kept rather than retried away,
@@ -475,7 +501,9 @@ Each is a yes or no. The recommendation is in brackets.
    *(Recommended: yes.)*
 3. Should a page reached through a redirect chain that passed through an
    excluded site (for example, returning from a bank's or Google's sign-in to
-   an ordinary site) be left unread? *(Recommended: yes.)*
+   an ordinary site) be left unread? *(Recommended: yes.)* *The owner
+   answered yes, and on 2026-10-12 extended it to every exit Atlas did not
+   start and every form `POST` (step 6).*
 4. Should "Google's sites" include YouTube and Google's other own domains
    (such as `gmail.com` and `googleusercontent.com`), not only `google.com`
    and its country domains? *(Recommended: yes.)*
