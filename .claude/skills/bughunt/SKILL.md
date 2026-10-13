@@ -2,7 +2,7 @@
 name: bughunt
 description: Hunt for real bugs in the repository that is open in this session — prove each one with a test that fails, fix the small ones on a branch and open one PR, and file the rest as GitHub issues. Use when the user runs /bughunt or asks for a bug sweep, bug hunt or regression check. Optional argument narrows the hunt to a path, feature or PR.
 argument-hint: "[path | feature | PR number | 'since <date>']"
-disable-model-invocation: true
+user-invocable: true
 ---
 
 # /bughunt — prove bugs, fix the small ones, file the rest

@@ -2,7 +2,7 @@
 name: planissues
 description: Turn a braindump into researched, iterated plans and then into GitHub issues in the Fledge format — discuss the idea and how realistic it is, research it, organise it (splitting it into several plans when it holds several), write the plan into the knowledge base, iterate on it with the user as many rounds as it takes, then slice the approved plan into an epic, milestone and issues. Use when the user runs /planissues. The argument is the braindump, a plan to resume, or "issues <plan>" to go straight to writing issues.
 argument-hint: "[braindump | <path to a plan .md> | issues <path to a plan .md>]"
-disable-model-invocation: true
+user-invocable: true
 ---
 
 # /planissues — braindump to plan to issues

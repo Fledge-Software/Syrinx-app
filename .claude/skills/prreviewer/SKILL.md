@@ -2,7 +2,7 @@
 name: prreviewer
 description: Review open pull requests in the repository open in this session, get each one mergeable (merge the base in, resolve conflicts, fix red CI, handle review threads), post a verdict, and merge to the default branch only after a human approves. Use when the user runs /prreviewer or asks to review, triage, fix up or merge PRs. Optional argument names specific PR numbers.
 argument-hint: "[#pr ... | all]"
-disable-model-invocation: true
+user-invocable: true
 ---
 
 # /prreviewer — review PRs to mergeable, merge on human approval

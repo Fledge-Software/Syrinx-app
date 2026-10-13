@@ -12,6 +12,17 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-13
 
+- **Syrinx is on GitHub at `Fledge-Software/Syrinx-app`.** The owner created
+  the repository under the Fledge Software organisation and added it as
+  `origin`, and confirmed on 2026-10-13 that the remote is theirs. This
+  replaces "local only, no remote and no pushes" in D41 and the 2026-10-12
+  entry below. `main` still changes only through the reviewed `--no-ff`
+  merge once `cargo xtask check` passes. This entry does not make the
+  repository public, choose its licence or move outstanding work from the
+  plan's registers into GitHub issues; each of those is still the owner's
+  decision. The "local only" wording in `CLAUDE.md` and `AGENTS.md` still
+  needs updating to match.
+
 - **The Syrinx logo is the hawk emblem in `design/brand/syrinx-logo.svg`.**
   It is used for the app icon, taskbar and Start entries, installer,
   favicon and website.
