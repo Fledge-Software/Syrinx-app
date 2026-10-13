@@ -401,7 +401,10 @@ impl BrowserView {
         };
         window.focus(&view.focus, cx);
         match native_handle(window) {
-            Ok(handle) => view.parent_hwnd = handle,
+            Ok(handle) => {
+                view.parent_hwnd = handle;
+                show_app_icon(handle);
+            }
             Err(error) => {
                 view.fail(error);
                 return view;
@@ -1772,6 +1775,14 @@ fn button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> 
 /// the window root (`Some(true)`) or nowhere (`None`), not on a control the owner chose.
 fn deferred_focus_applies(deferred: bool, root_focused: Option<bool>) -> bool {
     deferred && root_focused != Some(false)
+}
+
+/// Gives a Syrinx window the hawk icon at its DPI. If that fails, GPUI's window class still
+/// shows the same icon at the default size, so the failure is reported but not fatal.
+fn show_app_icon(hwnd: isize) {
+    if let Err(error) = syrinx_platform::app_icon::apply(hwnd) {
+        eprintln!("{error}");
+    }
 }
 
 fn native_handle(window: &Window) -> Result<isize, &'static str> {
