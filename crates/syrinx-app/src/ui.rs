@@ -295,6 +295,8 @@ pub struct BrowserView {
     incoming: incoming_links::IncomingLinks,
     runtime: runtime_notice::RuntimeNotice,
     parent_hwnd: isize,
+    /// The scale the window icon was last sized for; a monitor change re-sizes it.
+    icon_scale: f32,
     query_sequence: u64,
     pending_query: Option<(u64, u64)>,
     smoke: bool,
@@ -384,6 +386,7 @@ impl BrowserView {
             peek_owner_geometry: peek::OwnerGeometry::of(window),
             _peek_bounds_watch: cx.observe_window_bounds(window, |this, window, cx| {
                 this.owner_bounds_observed(window, cx);
+                this.refresh_icon_for_scale(window);
             }),
             home_palette: HomePaletteIntent::default(),
             importer: import::BookmarkImporter::default(),
@@ -391,6 +394,7 @@ impl BrowserView {
             incoming: incoming_links::IncomingLinks::default(),
             runtime: runtime_notice::RuntimeNotice::default(),
             parent_hwnd: 0,
+            icon_scale: window.scale_factor(),
             query_sequence: 0,
             pending_query: None,
             smoke,
@@ -1775,6 +1779,19 @@ fn button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> 
 /// the window root (`Some(true)`) or nowhere (`None`), not on a control the owner chose.
 fn deferred_focus_applies(deferred: bool, root_focused: Option<bool>) -> bool {
     deferred && root_focused != Some(false)
+}
+
+impl BrowserView {
+    /// Moving to a monitor with another scale (WM_DPICHANGED) resizes the window, so the
+    /// bounds watch re-sizes the taskbar and title-bar icons for the new DPI here.
+    fn refresh_icon_for_scale(&mut self, window: &Window) {
+        let scale = window.scale_factor();
+        if scale == self.icon_scale || self.parent_hwnd == 0 {
+            return;
+        }
+        self.icon_scale = scale;
+        show_app_icon(self.parent_hwnd);
+    }
 }
 
 /// Gives a Syrinx window the hawk icon at its DPI. If that fails, GPUI's window class still
