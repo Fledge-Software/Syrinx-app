@@ -52,14 +52,19 @@ the same day); all are recorded in `docs/decisions.md`. The independent review's
   requests; no filter, no body, no other header), `SourceChanged`,
   `NavigationCompleted` and `ProcessFailed`. Each tab keeps a generation that
   rises on every navigation start, address change and process failure. A
-  navigation is Atlas's own only when it starts for the address Atlas just
-  asked `Page::navigate` to load (creating a tab, the address bar and every
-  other Atlas entry point, and crash recovery, which reloads the address
-  Atlas last asked for). Each tab carries a taint flag: set when a document
+  navigation is Atlas's own only when it starts, within five seconds, for
+  the address Atlas just asked `Page::navigate` to load (creating a tab, the
+  address bar and every other Atlas entry point). The request is withdrawn
+  by back, forward, reload, a refused load, or a navigation that began after
+  it and failed; crash recovery's reload never counts as Atlas's own. Each tab carries a taint flag: set when a document
   commits after leaving an excluded or tainted document without Atlas, or
   through an excluded redirect hop, and cleared only by an Atlas navigation.
   It is tracked with the last exclusion lists even after capture is
-  switched off, for pages that were observed. An adopted popup starts with
+  switched off, for pages that were observed. Each tab also remembers up to
+  64 addresses (without fragment) it committed tainted, so back or forward
+  into one stays tainted, even if Atlas cleared the tab in between; an
+  unreadable navigation start taints the tab; a tab rebuilt after a crash
+  keeps its taint. An adopted popup starts with
   its opener's taint, and with taint when its opener was not observed. The
   rules live in `page_text/state.rs`, apart from WebView2, so they have unit
   tests. A response is matched to any hop of the current navigation, so a
@@ -129,17 +134,17 @@ cargo build -p atlas-platform --example page_text_feasibility --profile local --
 .\target\local\examples\page_text_feasibility.exe --only F1,F2 --race-runs 20
 ```
 
-The recorded run is `target/p125-final-3.log` (2026-10-12, after the
-re-review changes and "skip all exits", the WebView2 Evergreen runtime on
+The recorded run is `target/p125-final-4.log` (2026-10-12, after the third
+review's changes, the WebView2 Evergreen runtime on
 this machine; `target/` is not committed). It exits 1 because F2 fails, as
-the owner accepted. Earlier runs are kept as `target/p125-final.log` and
-`target/p125-final-2.log`.
+the owner accepted. Earlier runs are kept as `target/p125-final.log` to
+`target/p125-final-3.log`.
 
 ## Results
 
 Unit tests U1–U7 are in `crates/atlas-core/tests/page_text.rs` (15 tests,
 including the exit, taint and `POST` rules) and the module tests (7). The
-platform's observation state has 17 tests in `page_text/state.rs`, including
+platform's observation state has 22 tests in `page_text/state.rs`, including
 regressions for the in-flight wake-up, step 8's scheduled generation, a
 cancelled navigation, script and link exits from a bank, taint carried over
 several hops and cleared only by Atlas, Atlas navigation recognised only for
@@ -147,8 +152,8 @@ its own address, taint from an excluded redirect hop, taint tracked while
 capture is off, popup seeding, a posted document and a `POST` redirect whose
 response arrives after the next hop; snapshot reading has 9 tests on
 synthetic DevTools responses. `cargo xtask check` passed on 2026-10-12 with
-all 967 workspace tests and the application smoke run
-(`target/p125-gate-3.log`).
+all 972 workspace tests and the application smoke run
+(`target/p125-gate-4.log`).
 
 | # | Result | What happened |
 |---|---|---|
@@ -159,7 +164,7 @@ all 967 workspace tests and the application smoke run
 | F5 | Pass | `bank` → `plain` by 302 and 307: ineligible (redirect through an excluded site), zero calls. |
 | F6 | Pass | `no-store` on the redirect hop only: captured. On the final page only: ineligible, no call. |
 | F7 | Pass | Timer, `location.assign` and meta refresh to `bank` 500 ms after load: the scheduled capture was cancelled, the bank page judged ineligible, zero calls. |
-| F8 | Pass | 500 runs with a 100 ms settle and a navigation to `bank` 50–249 ms after load: 322 race pages captured, 112 cancelled before dispatch, 66 dropped unread because the tab changed while the call was in flight, **0 discarded at step 9**, 0 calls to `bank`, 0 bank text stored. |
+| F8 | Pass | 500 runs with a 100 ms settle and a navigation to `bank` 50–249 ms after load: 318 race pages captured, 111 cancelled before dispatch, 71 dropped unread because the tab changed while the call was in flight, **0 discarded at step 9**, 0 calls to `bank`, 0 bank text stored. |
 | F9 | Pass | Only "Frame host page" stored. The response held 2 documents: the root and the same-origin frame; the cross-origin `plain2` and `bank` frames did not appear (site isolation). |
 | F10 | Pass | Password page discarded whole. On the fields page, only "Comment page" stored: no typed input, textarea, editable-region, `value` attribute or option text. |
 | F11 | Pass | `autocomplete=cc-number` page discarded. |
@@ -167,7 +172,7 @@ all 967 workspace tests and the application smoke run
 | F13 | Pass | First capture at load; five `pushState` calls three seconds later were each rechecked (four cancelled by the next); exactly one more capture, of `/history/5`, 30.02 s after the first. |
 | F14 | Recorded | A **service worker's synthetic response raises `WebResourceResponseReceived`** with the worker's headers (0 network hits), so it was judged on those and captured. Back navigation, a second visit to a `max-age=600` page and a reload each raised a matching response and were captured; reload needed a fix, below. Server hits (landing 1, cacheable 2) were **identical with and without the subscription**, so subscribing did not change caching in this test. No case reached the fail-closed branch, so whether a true back/forward-cache restore raises the event is not established. |
 | F15 | **Pass** | Probe results in a tab that had captured `plain` and in a fresh tab were identical: `navigator.webdriver` false, console getter not read, `debugger` not paused, 238 enumerable globals with the same name hash, no automation globals. The fallback is not triggered. |
-| F16 | Pass | 1,000 nodes: 70.6 KB response, 12 ms call, 4 ms parse. 10,000 nodes: 750 KB, 112 ms, 24 ms. 100,000 nodes: 8.1 MB, 944 ms, 199 ms, text capped at 256 KiB. The page's own long-task observer recorded no new task over 50 ms during any capture. Atlas interface frames were not measured (no Atlas window in the harness). |
+| F16 | Pass | 1,000 nodes: 70.6 KB response, 12 ms call, 2 ms parse. 10,000 nodes: 750 KB, 101 ms, 24 ms. 100,000 nodes: 8.1 MB, 954 ms, 202 ms, text capped at 256 KiB. The page's own long-task observer recorded no new task over 50 ms during any capture. Atlas interface frames were not measured (no Atlas window in the harness). |
 | F17 | Pass | A hidden tab suspended at five seconds; its capture fell due at seven and did not run; showing the tab resumed it and the capture ran. |
 | F18 | Pass (partial) | The host call works with `with_devtools(false)` (every capture above). No TCP listening socket belonged to this run's WebView2 processes (6 then 7 processes, found by profile path) before or after captures. Whether F12 opens DevTools was not exercised. |
 | F19 | Pass | A run with capture off produced zero page-text events, including zero calls. |
@@ -178,6 +183,7 @@ all 967 workspace tests and the application smoke run
 | F24 | Pass | A plain page auto-submitted a `POST` form to itself: judged `FormPost`, zero calls. |
 | F25 | Pass | A plain page auto-submitted a `POST` answered by 302, 303 and 307, to the same site and to `plain2`. All six final pages (`GET` after 302 and 303) were reached and judged `FormPost`, zero calls. This shows WebView2 raises `WebResourceResponseReceived` for the redirect response on this runtime; the harness cannot tell whether it arrived before or after the next hop started, so the late-arrival case is covered by the state test `a_post_redirect_response_arriving_after_the_next_hop_still_counts`. |
 | F26 | Pass | The bank's script went to a plain relay page, whose own script moved on 300 ms later (before its settle delay, so the relay itself was never judged). The next plain page was judged `LeftExcluded`, which only the carried taint can cause because the relay is not excluded. An Atlas navigation in the same tab afterwards was captured. |
+| F28 | Pass | The bank's script reached a plain page (judged `LeftExcluded`); an Atlas navigation in the same tab was captured; Back returned to the first plain page, which was judged `LeftExcluded` again with zero calls. *(Third review.)* |
 | F27 | Pass | A focused button on a bank page opened a popup with `window.open` (synthetic Enter); the harness adopted it as Atlas does. The popup's page was judged `LeftExcluded`. The same popup from a plain page was not (`NoResponse`). **Finding:** an adopted popup's first document raised no matching response event on this runtime, so popups are never read today (they fail closed at step 7). |
 
 Earlier runs also found a product defect, fixed before the recorded run: the
@@ -244,6 +250,27 @@ The independent review's findings, each fixed in a new commit:
 5. **`SetPageTextPolicy`** now documents that a snapshot already queued can
    still report `Captured`; P1-26 must re-check the setting on receipt.
 
+## Third-review changes (2026-10-12)
+
+1. **A stale Atlas request cannot clear taint.** It expires after five
+   seconds and is withdrawn by back, forward, reload, a refused load and a
+   later navigation that fails (state tests
+   `an_atlas_request_that_never_started_does_not_clear_taint_later` and
+   `a_cancelled_navigation_or_another_atlas_action_withdraws_the_request`).
+2. **Crash recovery keeps taint.** A crashed tab's taint is kept with its
+   address, the rebuilt page starts with it, and its reload is not counted
+   as Atlas's navigation (`a_seeded_taint_survives_until_atlas_navigates`).
+   An address the owner types into a crashed tab is Atlas's own and starts
+   clean.
+3. **Back or forward into a tainted entry stays tainted** (F28 and
+   `back_into_a_tainted_document_stays_tainted`), using the per-tab set of
+   tainted addresses rather than `NavigationKind`. Its limit: the 65th
+   tainted address in one tab forgets the oldest.
+4. **An unreadable navigation start taints the tab** (fail closed;
+   `unreadable_navigation_facts_taint_the_tab`).
+5. Readability: a `Channels` struct, `new_page_with_taint`, and
+   `read_start` for the `NavigationStarting` facts.
+
 ## Deviations from the proposal
 
 1. **One computed style.** The proposal said "computed styles switched off".
@@ -282,6 +309,10 @@ above. Specifically:
   created while capture was off is never observed, so switching capture on
   later starts clean only for new tabs, and a popup from such a tab starts
   tainted. Taint is decided with the lists in force when the page commits.
+- **P1-26 owns taint across restarts:** taint is not saved, so session
+  restore starts every tab untainted, including a tab last showing a
+  tainted page. P1-26's restore rules must decide whether to persist it or
+  to restore such tabs without reading them.
 - **P1-26 must re-check the capture setting when it receives `Captured`:**
   a snapshot already queued or parsing when capture is switched off can
   still report its text (`SetPageTextPolicy` documents this).

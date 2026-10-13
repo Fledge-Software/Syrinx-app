@@ -480,6 +480,7 @@ the target address, so a test can assert that **zero** calls were made.
 | F25 | A form `POST` answered by 302, 303 and 307, same site and cross-site | Ineligible, zero calls *(re-review)* |
 | F26 | A bank page's script leads to a relay page whose script moves on | The page after the relay ineligible; an Atlas navigation afterwards read *(re-review)* |
 | F27 | A popup opened from a bank page | Ineligible, zero calls *(re-review)* |
+| F28 | Back into a tainted page after an Atlas navigation cleared the tab | Ineligible, zero calls *(third review)* |
 
 **Evidence.** P1-25 delivers `docs/p1-25-page-text-feasibility.md` with each
 case's result, the measurements, every failure kept rather than retried away,
