@@ -2,7 +2,7 @@
 name: prreviewall
 description: Run the full /prreviewer process on EVERY open pull request in the repository open in this session — review each, get it mergeable, post a verdict — then ask the human once which ready PRs to merge and merge them in a safe order. Use when the user runs /prreviewall or asks to review, fix up or clear out all open PRs.
 argument-hint: "[--include-drafts] [--skip #n ...]"
-disable-model-invocation: true
+user-invocable: true
 ---
 
 # /prreviewall — /prreviewer, for every open PR
