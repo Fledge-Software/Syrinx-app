@@ -38,8 +38,15 @@ application smoke, after the branding review. No gate count is recorded for
   runs; and the manual window checks listed in each slice's row.
 - *Owner-only slices:* P1-18 (site and sign-in acceptance, a crash-free day) and
   P1-40 (a default-browser week with memory and start-up evidence).
-- *Owner decisions:* P1-39's update host, network and install policy.
-- *Analytics:* AN-01/AN-02's schema and slice proposal is not yet approved.
+- *Approved, waiting on the owner's keys:* P1-39's update delivery
+  (`docs/proposals/p1-39-update-delivery.md`, approved 2026-10-13 and split
+  into P1-39a to P1-39d). P1-39a to P1-39c can be built and tested with
+  synthetic keys; production use waits on DW-30's release keys and the host
+  set-up, both owner actions in P1-39d.
+- *Analytics:* the owner approved
+  `docs/proposals/an-01-02-local-analytics.md` on 2026-10-12
+  (`docs/decisions.md`). AN-01 follows P1-39 and AN-02 precedes P1-40;
+  neither is built yet.
 - *Undiagnosed:* the intermittent permission and certificate fixture timeouts
   (5 of 15 untraced runs, P1-11 row), and the owner's original WebView2
   breakpoint crash, which the historical checkpoints below still record as

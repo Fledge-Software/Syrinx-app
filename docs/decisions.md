@@ -12,33 +12,40 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-13
 
-- **Syrinx is licensed under MPL-2.0 and the source repository goes public.**
-  The owner chose the Mozilla Public License 2.0 (the text is `LICENSE`)
-  and asked for `Fledge-Software/Syrinx-app` to be made public so release
-  downloads work for visitors. The owner flips the visibility, not an agent,
-  after reviewing the pre-publication checklist in `docs/releasing.md`.
-  MPL-2.0 is file-level copyleft, the same licence Firefox uses: changes to
-  Syrinx's own files stay open, while Syrinx can still be combined with
-  permissively licensed code. The alternatives were MIT OR Apache-2.0
-  (rejected: allows closed forks of Syrinx's files) and GPL-3.0 (rejected:
-  would bind the whole program and every plugin built into it). The existing
-  dependency rule does not change: outside code still comes in only under
-  permissive licences or as whole MPL-2.0 files, and GPL code stays out,
-  because GPL code cannot be relicensed into an MPL-2.0 program.
-
-- **A preview release is published every Thursday at 10:00 New York time.**
-  `.github/workflows/weekly-release.yml` runs the gate on a GitHub-hosted
-  Windows runner, builds the P1-37 portable zip and publishes it as a GitHub
-  pre-release, then writes the release into `Fledge-Software/syrinx-public-site`
-  and pushes that repository's `main`, which Vercel deploys to
-  syrinxapp.dev. Versions are `0.N.0`, one minor step per release; a week in
-  which `main` gained no commits is skipped. The version bump lives in a
-  release commit on top of the `main` commit it was built from and is
-  reached only through its tag, so the workflow never pushes Syrinx-app's
-  `main`. Releases stay unsigned (D38), and the website says so. Website
-  screenshots are captured on the runner from fresh synthetic profiles and
-  reserved example domains, never the owner's data. Details and the owner's
-  one-time setup are in `docs/releasing.md`.
+- **P1-39 update delivery is approved as proposed.** The owner answered yes
+  to all nine questions in `docs/proposals/p1-39-update-delivery.md`.
+  Syrinx checks for updates only when the owner presses "Check for updates"
+  in Settings or the palette, never at start-up or in the background;
+  start-up checks, a periodic check, BITS background transfers and
+  downloading through a WebView2 page were rejected, because each makes
+  network calls the owner did not ask for or leaves a timeline of launches
+  in the host's logs. Updates come from fixed HTTPS files under
+  `https://syrinxapp.dev/updates/v1/`, compiled into the executable with no
+  setting to redirect it; GitHub Releases of the private repository were
+  rejected because Syrinx would have to ship a token that can also read the
+  source. "Install update from file…" uses the same checks with no network.
+  The owner is willing to publish signed Syrinx builds at that address
+  before the licence is chosen, once P1-39b is done (the proposal's
+  recommendation was "yes, once P1-39b is done; your call"). Syrinx accepts
+  a release only through a signed latest-version statement that expires at
+  most 60 days after it was issued, which the owner re-signs at each release
+  and between releases, so a frozen host can hold Syrinx back for at most
+  that window. An update is downloaded only after the owner confirms its
+  version and size, and installed only through Restart now or the owner's
+  next quit, with the previous version kept and restored if the new one does
+  not start. After relaunching for an update, Syrinx does not force itself
+  to the front. The owner creates two offline release keys, a primary on a
+  hardware key and a backup stored separately, outside the repository and
+  outside every agent session; both public keys are pinned (DW-30), and a
+  separate statement-only key was deferred. `cargo xtask check-deps` changes
+  only as question 8 lists: `syrinx-app` and `syrinx-update-net` may depend
+  on the update verifier; `syrinx-update-net` may use the `windows` crate
+  with its own exact feature list; and that crate alone may use
+  `Win32_Networking_WinHttp`, the only exception to D9's no-network rule.
+  `reqwest` with `rustls` was rejected to keep a TLS stack and `tokio` out
+  of Syrinx's own crates. P1-39 is split into P1-39a to P1-39d as the
+  proposal's slice table defines, with no other renumbering. The release
+  keys remain the owner's to create, so production updates wait on DW-30.
 
 - **Syrinx is on GitHub at `Fledge-Software/Syrinx-app`.** The owner created
   the repository under the Fledge Software organisation and added it as
