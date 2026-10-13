@@ -207,13 +207,41 @@ packaging, formatting, Clippy with warnings denied, **995 tests** (none failed
 or ignored) and the application smoke run. The log is
 `target/peek-fix/gate.log`.
 
-A pointer resting on the edge cannot reopen the peek after an activation change
-until it leaves the edge. GPUI calls the window's bounds observers on every
-activation change (`gpui-pre-0.3.8/src/window.rs`, line 1953), and the peek's
-bounds watch retires and dismisses on each call. Clicking into the peek
-deactivates the main window, so by source reading it may also close the peek
-(owner checks 4 and 8 will show it). This predates the fix and is
-recorded for owner check 9 and as a separate follow-up; it is not changed here.
+## Fix: activation changes closed the peek (2026-10-13)
+
+While proving the crash fix, a second, older defect showed up. GPUI calls a
+window's bounds observers on every activation change, not only when it moves
+(`gpui-pre-0.3.8/src/window.rs`, line 1953, inside the activation callback).
+The peek's bounds watch retired and dismissed on each call. So clicking into
+the peek, which deactivates the main window, closed it at once, breaking the
+peek's main use. After Alt Tab back, the activation observer rearmed the edge
+but the bounds call that followed dismissed it again, so a resting pointer
+could not reopen the peek (check 9).
+
+`BrowserView::owner_bounds_observed` now compares the main window's
+`OwnerGeometry` (GPUI bounds, viewport size and scale) with the last value it
+saw, and retires only when one of them changed. A real move, resize, maximize
+or DPI change still closes the peek, and refocuses the page only when Atlas is
+active, as before. Minimizing and Alt Tab away still close it through the
+sampler, which finds Atlas inactive and never refocuses, so the queued-dismissal
+Alt Tab rule is unchanged. Ignoring activation-caused calls by tracking the
+activation callback was rejected: GPUI gives the observer no cause, and
+comparing placement is what the watch is for. `owner_moved` is unit-tested with
+an activation repeat and a move, resize and rescale.
+
+**Native evidence** (`target/peek-fix/peek_activation.py`). With the peek open
+by the hover script, it posts `WM_ACTIVATE` to Atlas's own windows as Windows
+does when the peek is clicked (main inactive, popup active), then a click on
+the peek's Favorites Edit, then main-window reactivation as after Alt Tab back.
+The crash-fix binary lost the peek at the first activation; the fixed binary
+kept it through all three steps, and a real window move still closed it in two
+further cycles. All runs exited with code 0 and empty stderr. Posted activation
+cannot change the real foreground window, so reopening from a resting pointer
+after a real Alt Tab remains owner check 9.
+
+With this fix and `main` at `54314c5` (DW-90) merged, `cargo xtask check`
+passed on 2026-10-13: **1005 tests**, none failed or ignored, and the
+application smoke run (`target/peek-fix/gate-2.log`).
 
 ## Owner's manual checks
 

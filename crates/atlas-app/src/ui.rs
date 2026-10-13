@@ -286,6 +286,8 @@ pub struct BrowserView {
     peek_state: peek_state::PeekState,
     peek_monitoring: bool,
     peek_generation: u64,
+    /// The main window's placement when the peek last checked it.
+    peek_owner_geometry: peek::OwnerGeometry,
     _peek_bounds_watch: Subscription,
     home_palette: HomePaletteIntent,
     importer: import::BookmarkImporter,
@@ -379,12 +381,9 @@ impl BrowserView {
             peek_state: peek_state::PeekState::default(),
             peek_monitoring: false,
             peek_generation: 0,
+            peek_owner_geometry: peek::OwnerGeometry::of(window),
             _peek_bounds_watch: cx.observe_window_bounds(window, |this, window, cx| {
-                let was_open = this.peek.is_some();
-                this.retire_peek(cx);
-                if was_open && window.is_window_active() {
-                    this.focus_page(window, cx);
-                }
+                this.owner_bounds_observed(window, cx);
             }),
             home_palette: HomePaletteIntent::default(),
             importer: import::BookmarkImporter::default(),
