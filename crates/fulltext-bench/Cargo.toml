@@ -1,0 +1,13 @@
+[package]
+name = "fulltext-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+rusqlite.workspace = true
+tantivy = { version = "=0.26.2", default-features = false, features = ["mmap", "lz4-compression"] }
+
+[lints]
+workspace = true

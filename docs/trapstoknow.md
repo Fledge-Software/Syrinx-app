@@ -379,6 +379,20 @@ you found it in the commit message, not here.
 
 ## Local search
 
+- **Tantivy prefix matches can produce empty native snippets.** In 0.26.2,
+  `PhrasePrefixQuery::query_terms` omits the suffix term used for prefix
+  matching. `SnippetGenerator::create` therefore cannot highlight that
+  expansion by itself. P1-23 expands the body terms inside the query timer
+  and rejects empty snippets for its matching body queries; otherwise the
+  timing would compare different amounts of work. Source:
+  `docs/p1-23-fulltext-bakeoff.md`, continuation method and focused tests.
+- **Tantivy deletion alone retains stored bodies in active segments.** D40
+  needs segment merging and successful garbage collection after releasing
+  old readers, including when only one segment has deletions. P1-23 scans
+  stored rows and checks physical/live document counts after maintenance;
+  hiding expired matches alone would not pass. Source:
+  `docs/p1-23-fulltext-bakeoff.md`, continuation retention checks.
+
 - **A NUL query can match padding beyond a field's text.** In the pinned
   frizbee 0.13.0 matcher, synthetic `\0` queries returned highlight indices
   equal to the field's byte length. Both the exhaustive and ASCII-filtered
