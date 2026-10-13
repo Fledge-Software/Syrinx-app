@@ -37,8 +37,8 @@ they return.
   (`permissions.rs:72-74`), but tab 2003 in `cancel_pending` is created and
   never shown (`permissions.rs:145-151`). In the certificate suite, tab 4000
   is never shown and its parent window is never made visible
-  (`security.rs:300-342`; compare the permission suite's `ShowWindow` at
-  `permissions.rs:33-38`). Hidden pages are what the product suspends.
+  (`security.rs:116-158`, parent never shown at `:116-133`; compare the
+  permission suite's `ShowWindow` at `permissions.rs:33-38`). Hidden pages are what the product suspends.
 - **A suspended page loses events.** `EventSink::prepare` (`browser.rs:533`)
   gives most events an epoch ticket; a suspension bumps the epoch, so an event
   emitted before it and read after it is dropped as stale by `into_current`
@@ -69,8 +69,9 @@ three failure rate, six passes in a row happen about 9% of the time by chance.
 
 Then keep each failed run's synthetic directories (`%TEMP%\syrinx-page-close-
 harness-*`). The certificate suite's directory holds the Python server's
-`server.log`, which records every ended connection and any traceback; it has
-never been inspected for a failed run.
+`server.log`, which records a line for each connection that ended in an
+exception (`certificate_server.py:83-86`) and, if the server crashed, its
+traceback; it has never been inspected for a failed run.
 
 ## Shared instrumentation: say which wait expired
 
@@ -94,8 +95,8 @@ lifecycle fix did not touch. Under the old timer, tab 2003 had five seconds
 from navigation start to load, run its `load` handler and have WebView2 raise
 `PermissionRequested`. If the machine was slow (the earlier lifecycle failures
 overlapped an optimized build), `TrySuspend` won: the request was then denied
-silently (`permissions.rs:107`) or its event dropped as stale, and the harness
-waited at `permissions.rs:152-159` until the deadline. Tab 4000 is exposed the
+silently (`browser/permissions.rs:107-109`) or its event dropped as stale,
+and the harness waited at `permissions.rs:152-159` until the deadline. Tab 4000 is exposed the
 same way whenever one navigation (for example the HTTPS attempt queued behind
 the Python server's 3 s socket wait) took over five seconds.
 
@@ -114,19 +115,20 @@ then shows no timeouts in 20 runs, record this as the diagnosis.
 
 ### 2. An HTTPS attempt fails without a certificate event (medium-high)
 
-**Mechanism.** `wait_rejection` (`security.rs:374-413`) needs both a failed
+**Mechanism.** `wait_rejection` (`security.rs:190-229`) needs both a failed
 completion *and* a `CertificateRejected` connection state. If an attempt fails
-for another reason (connection refused or reset because the Python server is
-busy on an earlier socket, has crashed, or has passed its 75 s lifetime), the
-state becomes `Failed`, no certificate event comes, and the loop ignores
+for another reason, such as a refused or reset connection, the state becomes
+`Failed`, no certificate event comes, and the loop ignores
 `Failed` and waits the full 45 s. The harness turns a fast, clear failure into
-a bare timeout.
+a bare timeout. A server busy on an earlier socket only delays a new
+connection, which waits in the listen backlog; a refusal or reset needs the
+server to have crashed or passed its 75 s lifetime.
 
 **Evidence.** The serial server with a 3 s per-socket wait
 (`certificate_server.py:67-86`), its `except` list that lets any other
 exception kill the server (`:83`), and the lifetime that starts before WebView2
-start-up (`:66`, against `security.rs:205-211`). A slow WebView2 start under
-load eats into the 75 s.
+start-up (`:66`; the server starts before `run_browser` at
+`security.rs:20-27`). A slow WebView2 start under load eats into the 75 s.
 
 **Confirm or reject.** First read the retained `server.log` of each failed
 run: a traceback, or the server's process gone before the second attempt,
@@ -143,7 +145,7 @@ event also covers subresources and extra sockets. If a second event for the
 failed attempt arrives after the harness has started the HTTP recovery
 navigation, the recovery is marked rejected; `completed` then refuses to
 record `Loaded` (`browser/security.rs:75-89`), and `wait_recovery`
-(`security.rs:344-372`) waits for an `Http/Loaded` state that never comes.
+(`security.rs:160-188`) waits for an `Http/Loaded` state that never comes.
 
 **Evidence.** Source only; the sticky rule exists on purpose (trap
 "Certificate failure is an expected navigation failure"). Microsoft documents
@@ -203,7 +205,7 @@ is awake. The harness hits this only if it idles about 5 s after a completion,
 so it needs a slow harness to matter.
 
 **Confirm or reject.** In a disposable copy, sleep 5.0 s (then 4.9 and 5.1 s)
-before the first certificate `Navigate` at `security.rs:321`. A timeout with
+before the first certificate `Navigate` at `security.rs:137-143`. A timeout with
 `Suspended` events around the navigation confirms the race.
 
 ## Candidates the source rules out
