@@ -8,11 +8,63 @@ request filters, dependency changes or database migration.
 
 ## Behavior and ownership
 
-`crates/atlas-platform/src/browser/lifecycle.rs` waits five seconds after a page
-is hidden, calls `TrySuspend`, and requires both successful completion and a
-true `IsSuspended` readback. Five seconds is an implementation grace period;
-the plan specifies a delay without fixing its length. A refused suspension
-retries after another grace period. Activation calls `Resume`, verifies the
+`crates/atlas-platform/src/browser/lifecycle.rs` calls `TrySuspend` on a
+hidden page once it has been settled for five seconds, and requires both
+successful completion and a true `IsSuspended` readback. Five seconds is an
+implementation grace period; the plan specifies a delay without fixing its
+length. A refused suspension retries after another grace period.
+
+The owner decided on 2026-10-12 that the countdown starts when a hidden page's
+navigation finishes, not when it starts. `TrySuspend` succeeds while a load is
+still running, and the frozen page then reports nothing until it is shown; the
+lifecycle-timeout diagnosis in `docs/p1-11-popups.md` found this. The decisions
+live in `browser/hidden_timer.rs`, a pure function of time with its own tests:
+
+- A hidden page with no navigation in flight is due five seconds after it was
+  hidden, or after its last navigation completed, successfully or not.
+- A main-frame navigation that starts while the page is hidden replaces the
+  five-second countdown with the 60-second bound below, until it completes.
+  Atlas's own `Navigate` marks the load before calling WebView2, so the page
+  cannot be suspended in the gap before `NavigationStarting` arrives.
+- A completion is matched by its `NavigationId`, so a superseded navigation's
+  late completion cannot settle the current one.
+- A load that never finishes is suspended 60 seconds after it began, so a hung
+  page cannot stay awake forever. A load keeps its first start time through:
+  - redirects, which keep their navigation's ID;
+  - while the page is hidden, new navigations the page starts itself, so a
+    hidden loop of script or meta-refresh navigations is still suspended
+    within 60 seconds of its first start.
+
+  An Atlas-requested navigation is dated from the request, and a navigation
+  the page starts while shown is dated from its own `NavigationStarting`.
+  This holds even if a superseded load has not yet reported its cancelled
+  completion. So a tab whose load hung past the limit is not suspended at once
+  when the owner navigates it elsewhere and then hides it.
+- Atlas's own request is tracked apart from the navigation WebView2 confirms.
+  A confirmed start takes its own time, a request WebView2 never starts (a
+  same-document jump, for example) expires at the 60-second bound, and a
+  refused `load_url` leaves a load already in flight tracked.
+- Once a suspension is requested, navigation events arm nothing until a resume
+  or a refused suspension. Otherwise a navigation event arriving while
+  `TrySuspend` was pending re-armed the timer and caused a second `TrySuspend`
+  on the suspended page (found in independent review).
+
+Known limitation, older than this change: `Lifecycle::resume` restarts the
+timer, clearing its suspended state, before it calls `Resume`. If `Resume`
+fails, or the readback still reports the controller suspended, the timer
+believes the page is awake while the controller stays suspended. It can then
+issue another `TrySuspend` on a suspended page, which calls the callback
+lifetime's `suspend` a second time. Moving the restart after a successful
+resume is not a trivial fix: it would also leave the suspended state set when a
+pending suspension had in fact failed, so that page would never be suspended
+again. It is recorded here rather than changed.
+
+Hiding before `TrySuspend`, resuming before placing a page and the delivery of
+completion state across suspension are unchanged. The native suspension suite
+in `examples/page_close/suspension.rs` creates a hidden page whose body the
+fixture server holds for six seconds; it must report its completion before it
+is suspended. Against the previous timer it failed with "Slow hidden page was
+suspended before it finished loading." Activation calls `Resume`, verifies the
 native state, then makes the view visible. Atlas does not also set a memory
 usage target. The worker's timer disappears when no grace periods remain.
 
