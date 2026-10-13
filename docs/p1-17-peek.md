@@ -201,6 +201,12 @@ moved, and exited with code 0 and an empty stderr after `WM_CLOSE`, in four
 consecutive cycles. A real pointer hover, Alt Tab and click-through remain the
 owner's checks below.
 
+After merging `main` (`841d29a`) into the branch, `cargo xtask check` passed on
+2026-10-13 with exit code 0: dependency boundaries, deferred markers,
+packaging, formatting, Clippy with warnings denied, **995 tests** (none failed
+or ignored) and the application smoke run. The log is
+`target/peek-fix/gate.log`.
+
 A pointer resting on the edge cannot reopen the peek after an activation change
 until it leaves the edge. GPUI calls the window's bounds observers on every
 activation change (`gpui-pre-0.3.8/src/window.rs`, line 1953), and the peek's
