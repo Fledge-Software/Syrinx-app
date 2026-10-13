@@ -2,7 +2,7 @@
 name: fledgepass
 description: One scheduled pass over the repository open in this session — triage it, then run /prreviewall, /issuecoder, /bughunt and /planissues as needed through worker subagents with a model per job, merging only PRs a human approved on GitHub. Built for unattended Routines started with /goal; keeps its own thread under 50% context. The argument is the repository's REPO CONTEXT block.
 argument-hint: "[REPO CONTEXT block]"
-disable-model-invocation: true
+user-invocable: true
 ---
 
 # /fledgepass — one scheduled pass over a repository
