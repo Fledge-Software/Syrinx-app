@@ -2,7 +2,9 @@
 
 use std::time::Instant;
 
-use atlas_platform::browser::{BrowserError, OverlayRect, activate_if_foreground, show_overlay};
+use atlas_platform::browser::{
+    BrowserError, OverlayRect, activate_if_foreground, atlas_in_foreground, show_overlay,
+};
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::Pixels;
 
@@ -45,6 +47,8 @@ impl BrowserView {
         }
     }
 
+    /// Ctrl K and the address field: open a new entry in the kept popup, or put the keys
+    /// back in the entry that is already open.
     pub(super) fn open_palette(
         &mut self,
         address: bool,
@@ -60,13 +64,18 @@ impl BrowserView {
             return;
         }
         if self.palette.is_some() {
-            self.refocus_palette(cx);
-            return;
+            if self.palette_entry_live(cx) {
+                self.refocus_palette(cx);
+                return;
+            }
+            // The entry already ended in the popup while its last event is queued.
+            self.retire_palette(cx);
         }
         let kept = match self.kept_palette(cx) {
             Ok(kept) => kept,
             Err(error) => {
                 self.message = error;
+                cx.notify();
                 return;
             }
         };
@@ -91,7 +100,7 @@ impl BrowserView {
     ) -> Option<u64> {
         // Each entry restarts what the browser waits for; replies to an earlier one are obsolete.
         self.pending_query = None;
-        self.page_focus_on_activation = None;
+        self.page_focus_on_activation = false;
         let (events, receiver) = unbounded();
         let start = PaletteEntry {
             initial: if address {
@@ -214,11 +223,7 @@ impl BrowserView {
             while let Some(event) = receiver.next().await {
                 let closed = event.finishes_entry();
                 let delivered = view.update_in(cx, |view, window, cx| {
-                    if view
-                        .palette
-                        .as_ref()
-                        .is_none_or(|palette| palette.entry != entry)
-                    {
+                    if !is_current(view.open_entry(), entry) {
                         return false;
                     }
                     view.palette_event(event, window, cx);
@@ -244,7 +249,12 @@ impl BrowserView {
                 probe.show_started(Instant::now());
                 probe.arm_open();
             }
-            let shown = show_overlay(hwnd, rect).and_then(|()| activate_if_foreground(hwnd));
+            // Atlas never takes the foreground from another application (owner, 2026-10-12).
+            let shown = if atlas_in_foreground() {
+                show_overlay(hwnd, rect).and_then(|()| activate_if_foreground(hwnd))
+            } else {
+                Ok(false)
+            };
             if view
                 .update(cx, |view, cx| view.palette_shown(entry, shown, cx))
                 .is_err()
@@ -257,16 +267,19 @@ impl BrowserView {
 
     /// The popup to show for `entry`, with its view marked for a fresh first frame.
     fn entry_to_show(&mut self, entry: u64, cx: &mut Context<Self>) -> Option<isize> {
-        let palette = self
-            .palette
-            .as_ref()
-            .filter(|palette| palette.entry == entry)?;
+        let palette = self.palette.as_ref()?;
+        let current = is_current(Some(palette.entry), entry);
         let view = palette.view.clone();
         let hwnd = palette.hwnd;
         view.update(cx, |palette, cx| {
             cx.notify();
-            palette.is_open().then_some(hwnd)
+            show_target(current, palette.is_open(), hwnd)
         })
+    }
+
+    /// The identity of the open entry, if any.
+    fn open_entry(&self) -> Option<u64> {
+        self.palette.as_ref().map(|palette| palette.entry)
     }
 
     fn palette_shown(
@@ -275,17 +288,16 @@ impl BrowserView {
         shown: Result<bool, BrowserError>,
         cx: &mut Context<Self>,
     ) {
-        if self
-            .palette
-            .as_ref()
-            .is_none_or(|palette| palette.entry != entry)
-        {
+        if !is_current(self.open_entry(), entry) {
             return;
         }
         match shown {
             Ok(true) => {}
-            // Another application took the foreground first; Atlas does not steal it back.
-            Ok(false) => self.message = "Click the palette to type in it.".to_owned(),
+            // Another application is in front: the entry ends rather than float above it.
+            Ok(false) => {
+                self.message = "Atlas was not in front, so the palette stayed closed.".to_owned();
+                self.dismiss_palette(cx);
+            }
             Err(error) => {
                 self.message = format!("Cannot show the command palette: {error}");
                 self.dismiss_palette(cx);
@@ -382,6 +394,17 @@ impl BrowserView {
     }
 }
 
+/// Whether an event or show task for `entry` still belongs to the open entry.
+fn is_current(open: Option<u64>, entry: u64) -> bool {
+    open == Some(entry)
+}
+
+/// The popup to show: only for the current entry, and only while it still takes input,
+/// since Esc can end it before its show task runs.
+fn show_target(current: bool, open: bool, hwnd: isize) -> Option<isize> {
+    (current && open).then_some(hwnd)
+}
+
 /// Where the palette sits over the main window, in GPUI's logical pixels.
 fn palette_bounds(main: Bounds<Pixels>) -> Bounds<Pixels> {
     let main_width = f32::from(main.size.width);
@@ -416,6 +439,24 @@ mod tests {
 
     fn main_window(x: f32, y: f32, width: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(x), px(y)), size(px(width), px(900.)))
+    }
+
+    #[test]
+    fn only_the_open_entry_receives_events_and_shows() {
+        assert!(is_current(Some(3), 3));
+        assert!(!is_current(Some(4), 3), "a stale entry's event is dropped");
+        assert!(!is_current(None, 3), "no entry is open");
+        assert_eq!(show_target(true, true, 42), Some(42));
+        assert_eq!(
+            show_target(true, false, 42),
+            None,
+            "Esc ended it before the show"
+        );
+        assert_eq!(
+            show_target(false, true, 42),
+            None,
+            "a newer entry owns the popup"
+        );
     }
 
     #[test]

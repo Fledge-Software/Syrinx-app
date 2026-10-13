@@ -43,8 +43,8 @@ use windows::Win32::{
 
 pub use clear_data::{BrowsingDataKinds, ClearOutcome, ClearSpan};
 pub use overlay::{
-    OverlayMonitor, OverlayPointer, OverlayRect, activate_if_foreground, hide_overlay,
-    overlay_monitor, overlay_pointer, show_overlay,
+    OverlayMonitor, OverlayPointer, OverlayRect, activate_if_foreground, atlas_in_foreground,
+    hide_overlay, overlay_monitor, overlay_pointer, show_overlay,
 };
 use page::Page;
 

@@ -59,6 +59,8 @@ struct ProbeState {
     replies: u64,
     /// Every palette render, to show that the hidden popup draws nothing (DW-90).
     renders: u64,
+    /// Every notification from the palette's input, such as a caret blink.
+    input_notifications: u64,
 }
 
 /// Which measurements the next presented frame completes.
@@ -221,6 +223,16 @@ impl PresentProbe {
         state.pending.echo |= armed.echo;
         state.pending.rows |= armed.rows;
         armed.any()
+    }
+
+    /// Called whenever the palette's input notifies, for example to blink its caret.
+    pub fn input_notified(&self) {
+        self.0.borrow_mut().input_notifications += 1;
+    }
+
+    /// How many times the palette's input has notified so far.
+    pub fn input_notifications(&self) -> u64 {
+        self.0.borrow().input_notifications
     }
 
     /// How many times the palette has rendered so far.

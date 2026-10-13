@@ -133,32 +133,46 @@ pub fn hide_overlay(popup: isize, owner: isize) -> Result<(), BrowserError> {
     validate_window(popup)?;
     validate_window(owner)?;
     let popup = HWND(popup as *mut _);
+    if unsafe { GetActiveWindow() } == popup {
+        activate(HWND(owner as *mut _))?;
+    }
     unsafe {
-        if GetActiveWindow() == popup {
-            SetActiveWindow(HWND(owner as *mut _)).map_err(|_| BrowserError::Focus)?;
-        }
         let _previous_visibility = ShowWindow(popup, SW_HIDE);
     }
     Ok(())
 }
 
-/// Activates one of Atlas's windows at once when Atlas already has the foreground.
-///
-/// Returns `false`, changing nothing, when another application is in front: Atlas then
-/// leaves activation to GPUI, which may still bring it forward.
-pub fn activate_if_foreground(window: isize) -> Result<bool, BrowserError> {
-    validate_window(window)?;
+/// Whether one of this process's windows has the foreground.
+pub fn atlas_in_foreground() -> bool {
     let foreground = unsafe { GetForegroundWindow() };
     if foreground.is_invalid() {
-        return Ok(false);
+        return false;
     }
     let mut process = 0;
     unsafe { GetWindowThreadProcessId(foreground, Some(&raw mut process)) };
-    if process != std::process::id() {
+    process == std::process::id()
+}
+
+/// Activates one of Atlas's windows at once when Atlas already has the foreground.
+///
+/// Returns `false`, changing nothing, when another application is in front: Atlas never
+/// takes the foreground from another application (owner decision, 2026-10-12).
+pub fn activate_if_foreground(window: isize) -> Result<bool, BrowserError> {
+    validate_window(window)?;
+    if !atlas_in_foreground() {
         return Ok(false);
     }
-    unsafe { SetActiveWindow(HWND(window as *mut _)) }.map_err(|_| BrowserError::Focus)?;
+    activate(HWND(window as *mut _))?;
     Ok(true)
+}
+
+/// `SetActiveWindow` returns the previous active window, and the bindings report a NULL
+/// previous window as an error; the call succeeded when `window` is now active.
+fn activate(window: HWND) -> Result<(), BrowserError> {
+    if unsafe { SetActiveWindow(window) }.is_ok() || unsafe { GetActiveWindow() } == window {
+        return Ok(());
+    }
+    Err(BrowserError::Focus)
 }
 
 fn place_overlay(popup: HWND, rect: OverlayRect) -> Result<(), BrowserError> {
