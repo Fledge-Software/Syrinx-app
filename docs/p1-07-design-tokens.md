@@ -2,7 +2,7 @@
 
 Plan 1's slice P1-07 exists so that every later UI slice draws its colours
 and sizes from one place instead of typing hex values into each view. Before
-it, `crates/atlas-app/src/ui.rs` and `palette.rs` hard-coded one dark look,
+it, `crates/syrinx-app/src/ui.rs` and `palette.rs` hard-coded one dark look,
 which made the other four base palettes in `design/README.md`, the
 user-chosen accent and the "Reduce transparency" fallback impossible to
 build without touching every view. This note records what the slice
@@ -12,12 +12,12 @@ owner. The authority for every value is the design canvas snapshot in
 
 ## What the slice delivers
 
-`crates/atlas-ui` is a new crate with no dependencies at all, not even GPUI.
+`crates/syrinx-ui` is a new crate with no dependencies at all, not even GPUI.
 Tokens are plain data and small functions, so they are tested without a
-window and any interface code can read them. `atlas-app` converts a token
-colour to a GPUI colour in `crates/atlas-app/src/theme.rs`. The dependency
+window and any interface code can read them. `syrinx-app` converts a token
+colour to a GPUI colour in `crates/syrinx-app/src/theme.rs`. The dependency
 rule in `crates/xtask/src/dependency_policy.rs` would have allowed
-`atlas-ui` to depend on GPUI; keeping it free of GPUI was chosen because it
+`syrinx-ui` to depend on GPUI; keeping it free of GPUI was chosen because it
 keeps the token tests fast and nothing in the tokens needs a GPUI type.
 
 - `palette.rs`: the five base palettes (Graphite, Haze, Glass, Tint, Paper),
@@ -27,7 +27,7 @@ keeps the token tests fast and nothing in the tokens needs a GPUI type.
   canvas key. Tint is computed from the accent's hue, exactly as the canvas
   does, so it is built by a function rather than stored as constants.
   Haze and Glass describe their ground as an OS material (Mica, Acrylic) with
-  Atlas's translucent tint over it, plus the canvas's stand-in wallpaper
+  Syrinx's translucent tint over it, plus the canvas's stand-in wallpaper
   colours, which are used only for contrast checks and samples.
 - `accent.rs`: the default accent `#FF8A65`, the four Customize presets from
   the canvas, and the derived states (`soft`, `soft_line`, `ring`, the badge
@@ -35,7 +35,7 @@ keeps the token tests fast and nothing in the tokens needs a GPUI type.
 - `PaletteId::resolve(reduce_transparency)`: Reduce transparency turns Haze
   and Glass into Graphite, as `design/README.md` says.
 - `metrics.rs`: spacing, radii, type sizes and weights, using the values the
-  canvas repeats. The canvas loads JetBrains Mono from the web; Atlas makes no
+  canvas repeats. The canvas loads JetBrains Mono from the web; Syrinx makes no
   network requests of its own, so the monospace hint font is Cascadia Mono
   with Consolas as fallback.
 - `sidebar.rs`: the D44 width states and drag thresholds, all marked
@@ -44,7 +44,7 @@ keeps the token tests fast and nothing in the tokens needs a GPUI type.
 - Shadows are not tokens yet; they stay in the canvas until a slice draws
   them.
 
-`atlas-app` now takes its existing colours from Graphite. Behaviour is
+`syrinx-app` now takes its existing colours from Graphite. Behaviour is
 unchanged: a unit test in `theme.rs` proves each token reproduces the exact
 hex value it replaced. Two preview colours are not in the design and were
 kept as named, unchanged values for the sidebar slices to replace:
@@ -54,11 +54,11 @@ kept as named, unchanged values for the sidebar slices to replace:
 - the palette's "Search the web" button grey `#29272A` (removed by P1-30,
   whose palette draws only from tokens; see `docs/p1-30-31-palette.md`).
 
-`crates/atlas-app/src/ui/recovery.rs` still has its three hex values
+`crates/syrinx-app/src/ui/recovery.rs` still has its three hex values
 (including the error text `#F2B5B5`, which is not in the design). It was left
 alone because another slice is changing `ui/` modules in parallel; it should
 move to the tokens once that work lands. `ui.rs`'s `SIDEBAR_WIDTH` likewise
-stays until P1-08 adopts `atlas_ui::sidebar::WIDE_WIDTH`.
+stays until P1-08 adopts `syrinx_ui::sidebar::WIDE_WIDTH`.
 
 ## Contrast results
 
@@ -122,7 +122,7 @@ failures come from its brightest stand-in wallpaper disc (`#C4623B`), which
 `design/README.md` already anticipates ("A bright wallpaper can still fail").
 
 The test `contrast_failures_match_the_recorded_owner_review_list` in
-`crates/atlas-ui/src/contrast.rs` holds exactly this list. It fails if a new
+`crates/syrinx-ui/src/contrast.rs` holds exactly this list. It fails if a new
 pair falls below its minimum or a recorded one starts passing, so the list
 cannot drift silently. The palette sample window shows the same failures
 per palette.
@@ -132,7 +132,7 @@ per palette.
 Run from the repository root on this machine:
 
 ```powershell
-cargo run --package atlas-app --profile local --offline --locked -- --palette-sample
+cargo run --package syrinx-app --profile local --offline --locked -- --palette-sample
 ```
 
 The window opens no profile, page or worker; closing it exits. Look for:
@@ -159,7 +159,7 @@ Then decide:
   should change (most likely the muted grey on a selected row in every dark
   palette, and Glass's muted grey generally). The fix belongs in the design
   canvas first, then in `palette.rs`.
-- **The D44 values, all PROPOSED in `crates/atlas-ui/src/sidebar.rs`:**
+- **The D44 values, all PROPOSED in `crates/syrinx-ui/src/sidebar.rs`:**
   - wide width **264 px** (from the spec; settled);
   - favicon-only width **52 px**: the canvas sidebar's 12 px left and 10 px
     right padding around one 30 px icon button;
@@ -184,10 +184,10 @@ Then decide:
 
 On 2026-10-11 the full local gate, `cargo xtask check`, passed on branch
 `claude/p1-07-design-tokens` (dependency boundaries, formatting, Clippy with
-warnings denied, every workspace test including atlas-ui's 27 and the
+warnings denied, every workspace test including syrinx-ui's 27 and the
 application smoke run); the log is `target/p1-07-gate.log`. No Application
 Control (os error 4551) block occurred. A normal launch of
-`--palette-sample` opened a window titled "Atlas · design token review
+`--palette-sample` opened a window titled "Syrinx · design token review
 (P1-07)" and stayed running until it was closed. The agent did not inspect
 the window's pixels, so the visual review above is still the owner's.
-`Cargo.lock` changed only by adding the dependency-free `atlas-ui` package.
+`Cargo.lock` changed only by adding the dependency-free `syrinx-ui` package.

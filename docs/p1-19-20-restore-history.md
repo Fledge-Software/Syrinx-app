@@ -20,10 +20,10 @@ P1-27, which must clear history and keep it cleared across backup restores
 
 Most of session restore already existed in source:
 
-- `atlas-store` commits the whole tab model, saved rows, associations, order,
+- `syrinx-store` commits the whole tab model, saved rows, associations, order,
   selection and identity watermarks in one transaction with a compare-and-save
-  revision (`crates/atlas-store/src/records.rs`).
-- The session worker (`crates/atlas-app/src/session.rs`, `Worker::restore`)
+  revision (`crates/syrinx-store/src/records.rs`).
+- The session worker (`crates/syrinx-app/src/session.rs`, `Worker::restore`)
   loads the committed snapshot at start-up and rebuilds the search catalogue
   from it. Restored tabs are reported with an empty `created` list, so the UI
   does not treat them as new pages.
@@ -37,7 +37,7 @@ after an **unclean** stop, and that start-up loads **only** the active page.
 
 ### Crash and restart proof
 
-`crates/atlas-app/src/session/crash_restart_tests.rs` runs a real unclean
+`crates/syrinx-app/src/session/crash_restart_tests.rs` runs a real unclean
 stop. The test re-executes its own test binary as a child process (the same
 pattern as the smoke watchdog's subprocess test) with a disposable directory
 under the system temp folder. The child drives the real session worker through
@@ -108,7 +108,7 @@ before.
 
 ### Recording: no duplicates from stale or repeated events
 
-`crates/atlas-app/src/session/history/tracker.rs` decides, without storage,
+`crates/syrinx-app/src/session/history/tracker.rs` decides, without storage,
 which page callbacks are visits and which address a title names;
 `session/history.rs` applies those decisions to the store and catalogue.
 
@@ -152,7 +152,7 @@ unindexable row or an unavailable clock is reported and the session continues.
 
 ### Search: incremental tier 1 updates through the public API
 
-No `atlas-search` change was needed. The catalogue already had
+No `syrinx-search` change was needed. The catalogue already had
 `Target::History(NonZeroU64)`, `Scope::History`, `Usage { visits, last_used }`
 and incremental `upsert`/`remove`. At start-up the worker upserts every
 `history_urls` row once; after each visit or retitle it upserts only that
@@ -163,7 +163,7 @@ address (`SessionCommand::OpenHistory`).
 
 ### The history list (Ctrl H)
 
-`crates/atlas-app/src/ui/history_list.rs` shows the 200 most recent visits in
+`crates/syrinx-app/src/ui/history_list.rs` shows the 200 most recent visits in
 the page card, newest first, each with its title (or address before a title is
 known), address and a coarse age. Clicking a row opens it in a new tab. Ctrl H
 or the toolbar's History button toggles the list; switching tabs closes it.
@@ -171,12 +171,12 @@ While the list is open no page is shown beneath it, because GPUI cannot draw
 over a WebView2 child window (see `docs/trapstoknow.md`). Only the newest read
 fills the list, so a slow reply cannot overwrite a newer one.
 
-**Ctrl H while a page has focus:** shortcuts reach Atlas from a focused page
-only through `AcceleratorKeyPressed` in `atlas-platform/src/browser/page.rs`,
+**Ctrl H while a page has focus:** shortcuts reach Syrinx from a focused page
+only through `AcceleratorKeyPressed` in `syrinx-platform/src/browser/page.rs`,
 which maps a fixed list. A parallel P1-13 session is adding the Ctrl H
 mapping there; the coordinator will connect it to this list
 (`toggle_history` in `ui.rs`) at integration. Until then Ctrl H works while
-Atlas's own interface has focus, and the toolbar button works in both cases.
+Syrinx's own interface has focus, and the toolbar button works in both cases.
 
 **Unbounded growth (DW-4, done in P1-27's follow-up: 90-day retention, see
 `docs/p1-27-clear-data.md`):** every visit is kept and every remembered address
@@ -187,7 +187,7 @@ in `Worker::restore`.
 
 ### D47: cleared history must not come back
 
-The existing pure contract in `atlas-store/src/deletion.rs` applies directly:
+The existing pure contract in `syrinx-store/src/deletion.rs` applies directly:
 its only category is `History` and its ranges are half-open Unix-second
 intervals. `Store::apply_history_deletions` is the history participant: it
 removes visits inside each range, drops addresses left without visits and
@@ -198,7 +198,7 @@ point, clears a range through the journal's request/apply/complete order,
 then opens the older copy and replays `DeletionLog::replay_after(0)`. The
 cleared visits are gone and the result matches the live database.
 
-**Deletion is not wired into the running app yet.** Nothing in Atlas calls
+**Deletion is not wired into the running app yet.** Nothing in Syrinx calls
 `apply_history_deletions` outside tests. P1-27 owns all of it: persisting the
 journal and its generation barrier outside restored state, a clear-history
 UI, calling the participant on the live database, updating the running
@@ -213,7 +213,7 @@ generation. P1-27 has since done all of this; see `docs/p1-27-clear-data.md`.
 All data is synthetic (`example.test` addresses, made-up titles) and every
 database is disposable.
 
-- `crates/atlas-store/src/engine/tests/history.rs`: visits merge by address,
+- `crates/syrinx-store/src/engine/tests/history.rs`: visits merge by address,
   list newest first, keep known titles, retitle without recreating removed
   entries and survive restart without touching the session revision; invalid
   visits are refused; a version 2 database upgrades through preferences to
@@ -222,27 +222,27 @@ database is disposable.
   history tables behind; damaged version 2 rows are
   refused before migrating, leaving the file byte-identical; the D47 replay
   test above.
-- `crates/atlas-store/src/engine/tests/history.rs` also covers
+- `crates/syrinx-store/src/engine/tests/history.rs` also covers
   `remove_visit`: it recomputes an address's totals, drops an address with no
   visit left, and is idempotent.
-- `crates/atlas-app/src/session/history/tracker.rs` (pure, with injected
+- `crates/syrinx-app/src/session/history/tracker.rs` (pure, with injected
   times): a title reported just before its address names the new visit (the
   review's regression); a settled title names the current address; forced
   and repeated settling; fragments, replays and quick scripted returns are
   not visits, while a return after the window is; a failed navigation
   retracts only its unconfirmed visit and drops the error page's title;
   restored and closed tabs record nothing.
-- `crates/atlas-app/src/session/history_tests.rs`: recording through the
+- `crates/syrinx-app/src/session/history_tests.rs`: recording through the
   worker with replayed address and title callbacks, a settled title, a
   fragment, a quick return through Home, a failed navigation retracted from
   storage and search, a late callback for a closed tab, history search,
   opening a result, restart and the restored tab's reload; and a missing
   entry as a recoverable failure.
-- `crates/atlas-app/src/session/crash_restart_tests.rs`: the crash proof
+- `crates/syrinx-app/src/session/crash_restart_tests.rs`: the crash proof
   above, which also checks that the acknowledged visit survives.
-- `crates/atlas-app/src/ui/history_list.rs`: stale replies, status text,
+- `crates/syrinx-app/src/ui/history_list.rs`: stale replies, status text,
   labels and ages.
-- `crates/atlas-platform/src/storage/recovery/tests.rs`: the newer-schema
+- `crates/syrinx-platform/src/storage/recovery/tests.rs`: the newer-schema
   marker moves to version 5, and the version 1 downgrade fixture also drops
   the history and preference tables and now expects migration to version 4.
 
@@ -271,14 +271,14 @@ cover what a passing gate cannot.
 
 ## Owner checks
 
-1. Run `cargo atlas`, browse a few sites, press Ctrl H (with the sidebar or
+1. Run `cargo syrinx`, browse a few sites, press Ctrl H (with the sidebar or
    toolbar focused) or click History, and confirm the list shows them newest
    first with titles; click one and confirm it opens in a new tab.
 2. Ctrl K, type part of a visited site's name, and confirm the history result
    appears and opens.
-3. Close Atlas normally, start it again, and confirm tabs, saved rows (closed
+3. Close Syrinx normally, start it again, and confirm tabs, saved rows (closed
    ones still unloaded) and history are back, and that only the active page
    loads.
-4. End Atlas from Task Manager while several tabs are open, restart, and
+4. End Syrinx from Task Manager while several tabs are open, restart, and
    confirm the footer says the session was recovered after an interrupted
    exit and nothing acknowledged is missing.

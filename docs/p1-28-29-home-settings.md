@@ -4,15 +4,15 @@ Plan 1's slices P1-28 and P1-29 exist so that the owner's quick destinations
 and chosen look survive a restart. Before them, Home was a placeholder
 ("Your workspace, together."), the sidebar's Forge/Notes/Fledge rows were
 labelled "coming soon", and every window drew Graphite with the default
-accent because `crates/atlas-app/src/theme.rs` held one fixed palette. This
+accent because `crates/syrinx-app/src/theme.rs` held one fixed palette. This
 note records what the two slices deliver, the storage they add, what is
 deliberately left for other slices, and the checks the owner runs on the
 window, because an agent cannot see it.
 
 ## What P1-28 delivers
 
-- **The canvas home page** (`crates/atlas-app/src/ui/home.rs`), drawn from the
-  `Main` board in `design/canvas/project/`: the accent mark, "Atlas", a
+- **The canvas home page** (`crates/syrinx-app/src/ui/home.rs`), drawn from the
+  `Main` board in `design/canvas/project/`: the accent mark, "Syrinx", a
   Customize button, the large search
   pill with its `Ctrl K` hint and the `>` `@` `/` prefix hints, the Quick
   access grid (eight per row, 72px monogram tiles, a dashed "Add shortcut"
@@ -24,7 +24,7 @@ window, because an agent cannot see it.
   takes navigation's address rule (`navigation::recognized_address`), so
   `example.com` becomes `https://example.com/`, but it never falls back to
   a web search: "two words" is refused with an explanation.
-- **Separate square Favorites (D45)** (`crates/atlas-app/src/ui/favorites.rs`):
+- **Separate square Favorites (D45)** (`crates/syrinx-app/src/ui/favorites.rs`):
   a four-column grid at the top of the sidebar, with its own Edit switch and
   its own dashed add tile. Favorites are not saved pages and do not appear
   among the inline saved rows; bookmark import still never creates them.
@@ -37,7 +37,7 @@ window, because an agent cannot see it.
   over the host name, into the palette's eight tile colours), so the same
   site has the same colour on Home and in Favorites, as `design/README.md`
   requires. Plugin tiles use the plugin colours.
-- **Model and limits** (`crates/atlas-core/src/destinations.rs`): each list
+- **Model and limits** (`crates/syrinx-core/src/destinations.rs`): each list
   holds at most 64 tiles; a name is 1–64 characters with no control
   characters; a stored target is an `http`/`https` address of at most 8 KiB
   with no whitespace or control characters, or a built-in plugin id. Tile
@@ -55,7 +55,7 @@ window, because an agent cannot see it.
 
 ## What P1-29 delivers
 
-- **The Customize panel** (`crates/atlas-app/src/ui/customize.rs`): all five
+- **The Customize panel** (`crates/syrinx-app/src/ui/customize.rs`): all five
   palettes with a miniature, name and description; the four accent presets
   plus a custom accent entered as `#RRGGBB`; and the Reduce transparency
   switch.
@@ -71,18 +71,18 @@ window, because an agent cannot see it.
   tokens. An open command palette window picks the new palette up on its
   next redraw.
 - **Persistence.** The worker saves the choice through the store's writer
-  and restores it before the first tab state, so Atlas starts in the chosen
+  and restores it before the first tab state, so Syrinx starts in the chosen
   look. An unreadable stored value falls back to the default for that key
   and the footer says so.
 
 ## Storage: schema version 3
 
 The migration adds two tables in one transaction
-(`crates/atlas-store/src/schema.rs`, `preferences_migration`). It only
+(`crates/syrinx-store/src/schema.rs`, `preferences_migration`). It only
 creates its own tables, so it composes with other slices' migrations.
 **Schema number: 3 on base `9c90d91`.** Whoever merges second renumbers.
-Two `atlas-platform` recovery tests name schema numbers directly
-(`crates/atlas-platform/src/storage/recovery/tests.rs`: the "newer" marker
+Two `syrinx-platform` recovery tests name schema numbers directly
+(`crates/syrinx-platform/src/storage/recovery/tests.rs`: the "newer" marker
 is now 4 and the flat downgrade also drops the two new tables); a renumber
 must update them too.
 
@@ -106,21 +106,21 @@ P1-29 also provides the storage for the sidebar presentation, which the plan
 assigns to it. The sidebar slice (`claude/p1-08-sidebar-states`) built the
 drag states and left saving them as deferred item DW-2, owned by P1-29, at
 the point where a drag is released. The hookup happens at integration under
-DW-2, using this API in `crates/atlas-ui/src/sidebar_setting.rs`:
+DW-2, using this API in `crates/syrinx-ui/src/sidebar_setting.rs`:
 
 | Key | Values | Default |
 | --- | --- | --- |
 | `sidebar.width_state` | `wide`, `favicon`, `hidden` | the sidebar slice's default (wide) |
 
-- Save: send `SessionCommand::SaveSettings(vec![atlas_ui::sidebar_setting(state)])`
+- Save: send `SessionCommand::SaveSettings(vec![syrinx_ui::sidebar_setting(state)])`
   when a drag settles. Peek is transient and is never stored.
 - Restore: in `BrowserView::restore_preferences`
-  (`crates/atlas-app/src/ui/customize.rs`), read
-  `settings.get(atlas_ui::SIDEBAR_WIDTH_STATE_KEY)` and parse it with
-  `atlas_ui::parse_sidebar_setting`; an unreadable value keeps the default.
+  (`crates/syrinx-app/src/ui/customize.rs`), read
+  `settings.get(syrinx_ui::SIDEBAR_WIDTH_STATE_KEY)` and parse it with
+  `syrinx_ui::parse_sidebar_setting`; an unreadable value keeps the default.
 
 The round trip through the worker and a restart is tested in
-`crates/atlas-app/src/session/preference_tests.rs`.
+`crates/syrinx-app/src/session/preference_tests.rs`.
 
 Opening a version 3 database validates the preference rows before any
 write; damaged rows (a position gap, an unknown plugin, an untrimmed label,
@@ -128,16 +128,16 @@ a non-web address) are refused without repair, like damaged tab rows. Backup
 validation reads them too. A failed migration rolls back to the intact
 version 2 file. These paths, the round trips and the restart are tested on
 disposable databases with synthetic labels and `example.test` addresses
-(`crates/atlas-store/src/engine/tests/preferences.rs`,
-`crates/atlas-app/src/session/preference_tests.rs`).
+(`crates/syrinx-store/src/engine/tests/preferences.rs`,
+`crates/syrinx-app/src/session/preference_tests.rs`).
 
 ## Left for other slices or the owner
 
 - **The header's local date is not shown yet.** Rust's standard library
   only knows UTC, and the dependency rule in `crates/xtask/src/dependency_policy.rs`
-  lets only `atlas-platform` call Win32 (`GetLocalTime`). Showing a UTC date
+  lets only `syrinx-platform` call Win32 (`GetLocalTime`). Showing a UTC date
   would be wrong every evening in the owner's time zone, so the date waits
-  for a one-function local-calendar helper in `atlas-platform` (owned by the
+  for a one-function local-calendar helper in `syrinx-platform` (owned by the
   platform work, not this slice).
 - **Sidebar presentation hookup.** Wired at the 2026-10-12 integration merge
   with the sidebar branch (DW-2, Done): a changed settled state is saved and
@@ -156,9 +156,9 @@ disposable databases with synthetic labels and `example.test` addresses
   decision.
 - **Glass uses Mica, not Acrylic.** GPUI's `Blurred` background is not the
   Windows 11 Acrylic (see `docs/trapstoknow.md`), and drawing real Acrylic
-  needs `DwmSetWindowAttribute` in `atlas-platform`. Until then Glass shows
+  needs `DwmSetWindowAttribute` in `syrinx-platform`. Until then Glass shows
   its tint over Mica.
-- **Reduce transparency is Atlas's own switch.** The canvas says it
+- **Reduce transparency is Syrinx's own switch.** The canvas says it
   "follows your system setting"; reading the Windows transparency setting
   was not added, so the panel says what the switch does instead. Whether it
   should follow Windows by default is a question for the owner;
@@ -171,10 +171,10 @@ disposable databases with synthetic labels and `example.test` addresses
 
 ## Manual checks for the owner
 
-Run `cargo atlas` (or the built `atlas-app.exe`) and look at the window.
+Run `cargo syrinx` (or the built `syrinx.exe`) and look at the window.
 
 1. **Home.** With no page open (or after Ctrl T and Esc), the page card
-   shows the accent mark, "Atlas", a Customize button (no date yet),
+   shows the accent mark, "Syrinx", a Customize button (no date yet),
    the search pill with "Ctrl K", the `>` `@` `/` hints, "Quick access" with
    only the dashed "Add shortcut" tile, and three dimmed plugin cards.
 2. **Search pill.** Clicking the pill opens the command palette.
@@ -207,5 +207,5 @@ Run `cargo atlas` (or the built `atlas-app.exe`) and look at the window.
 11. **Reduce transparency.** With Haze or Glass chosen, turn it on: the
     window turns Graphite while Haze/Glass stays selected. Turn it off.
 12. **Restart.** Choose Tint with a custom accent, Reduce transparency on,
-    some tiles and favorites. Close Atlas and start it again: the palette,
+    some tiles and favorites. Close Syrinx and start it again: the palette,
     accent, switch, tiles and their order are all as left.

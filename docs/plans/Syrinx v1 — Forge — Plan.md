@@ -1,14 +1,14 @@
 ---
-title: "Atlas v1 — Forge — Plan (plan 4)"
+title: "Syrinx v1 — Forge — Plan (plan 4)"
 status: active
 created: 2026-10-09
-subject: Atlas v1 plan 4 — the Forge code plugin (spec phase 5)
-relates_to: "docs/plans/Atlas v1 — Plan.md (plan 1 and the v1-wide decisions); docs/plans/Atlas v1 — Plugins and Fledge — Plan.md; docs/plans/Atlas v1 — Notes — Plan.md; docs/research/04-forge-and-notes.md"
+subject: Syrinx v1 plan 4 — the Forge code plugin (spec phase 5)
+relates_to: "docs/plans/Syrinx v1 — Plan.md (plan 1 and the v1-wide decisions); docs/plans/Syrinx v1 — Plugins and Fledge — Plan.md; docs/plans/Syrinx v1 — Notes — Plan.md; docs/research/04-forge-and-notes.md"
 issues_repo: not yet created
 branch: claude/plan-atlas-v1
 ---
 
-# Atlas v1 — Forge
+# Syrinx v1 — Forge
 
 > **Status: active, approved by the owner on 2026-10-10.** Implementation is
 > queued behind plans 1–3. Work uses plan 1's D41 local branch,
@@ -19,9 +19,9 @@ branch: claude/plan-atlas-v1
 ## Why this exists
 
 The owner uses PyCharm for every language and wants that development workflow
-inside Atlas (`docs/spec.md`, "Forge"). Forge supplies the project tree,
+inside Syrinx (`docs/spec.md`, "Forge"). Forge supplies the project tree,
 editor, terminal, basic Git and installed language servers without making
-Atlas start like an IDE. Its code and services load when Forge opens; normal
+Syrinx start like an IDE. Its code and services load when Forge opens; normal
 browsing remains the default. PyCharm is the direction, not the v1 bar (D5).
 
 Skipping the file-safety and process-lifecycle work would make an attractive
@@ -40,7 +40,7 @@ Implementation starts after plans 1–3 pass their exit criteria and the owner
 approves this plan's local slice breakdown. It consumes plan 2's plugin/Host
 contract and plan 3's shared local editor, versioned document bridge and safe-save path.
 If a required host operation is missing, resolve the contract before adding
-a second private route into Atlas. No `Plugin` API change happens implicitly.
+a second private route into Syrinx. No `Plugin` API change happens implicitly.
 
 Product analytics follows plan 1's D39: local aggregate feature/command
 counts, timings and error categories, with explicit report export and
@@ -74,7 +74,7 @@ UI implementation. No new visual direction is decided by this plan.
    run a selected task in the terminal, add split editor groups, and show the
    file outline, related notes and file history in the context rail.
 
-The Forge tab hides Atlas's sidebar by default; hover still peeks and pinning
+The Forge tab hides Syrinx's sidebar by default; hover still peeks and pinning
 narrows the editor. Back/forward navigate code locations, reload is hidden,
 and the address shows the project/file. These are existing design decisions.
 
@@ -86,8 +86,8 @@ resolved in the terminal or another tool without adding a three-way UI.
 
 The owner also approved one active project folder with split editor groups.
 Switching projects replaces that root after the agreed close/save checks;
-it does not create a second Atlas workspace. With an editor focused, Ctrl W
-closes its active file. Ctrl K always opens Atlas's palette. Closing Forge
+it does not create a second Syrinx workspace. With an editor focused, Ctrl W
+closes its active file. Ctrl K always opens Syrinx's palette. Closing Forge
 itself uses its sidebar close button or the keyboard-accessible "Close Forge"
 palette command, both reaching the same lifecycle handler.
 
@@ -100,26 +100,26 @@ on 2026-10-10.
 
 ### Key ownership
 
-Use plan 1's single command table in `atlas-core`, with the focused surface
+Use plan 1's single command table in `syrinx-core`, with the focused surface
 as context. The owner-approved editor exception does not change browser-tab
-shortcuts. No independent JavaScript keymap may silently shadow Atlas commands.
+shortcuts. No independent JavaScript keymap may silently shadow Syrinx commands.
 
 | Key/action | Page focused | Forge editor focused | Forge terminal focused |
 |---|---|---|---|
-| Ctrl K | Open Atlas palette. | Open Atlas palette, never commit. | Open Atlas palette. |
-| Ctrl L | Focus Atlas address/palette. | Focus Atlas address/palette. | Focus Atlas address/palette. |
+| Ctrl K | Open Syrinx palette. | Open Syrinx palette, never commit. | Open Syrinx palette. |
+| Ctrl L | Focus Syrinx address/palette. | Focus Syrinx address/palette. | Focus Syrinx address/palette. |
 | Ctrl T | Open a new browser tab. | Open a new browser tab. | Open a new browser tab. |
 | Ctrl W | Close the active browser tab. | Close the active editor file, applying dirty-file checks. | Leave terminal input to its shell; it must not close all of Forge. |
 | Ctrl Alt S | Toggle pinned sidebar. | Toggle pinned sidebar. | Toggle pinned sidebar. |
 | Ctrl S | Existing page behavior. | Save the active document. | Preserve terminal input; file saving remains an editor command. |
 | Ctrl C | Existing page behavior. | Copy the selection. | Send interrupt to the running terminal program. |
-| Escape | Close the active Atlas overlay, otherwise page behavior. | Close the active overlay/completion, otherwise editor behavior. | Close an Atlas overlay when open, otherwise send terminal input. |
+| Escape | Close the active Syrinx overlay, otherwise page behavior. | Close the active overlay/completion, otherwise editor behavior. | Close a Syrinx overlay when open, otherwise send terminal input. |
 | Close Forge command | Available in the palette when Forge is open. | Close the whole Forge view through its lifecycle handler. | The same whole-view close handler checks running tasks. |
 
 Back/forward in the Forge chrome and Alt Left/Right navigate code locations,
 as `design/README.md` already specifies. Git commit remains a named palette
 command and visible action; no replacement shortcut is invented. Focus returns
-to the previously active surface when the Atlas palette closes.
+to the previously active surface when the Syrinx palette closes.
 
 ## Not in v1
 
@@ -130,11 +130,11 @@ marketplace is added. Unsupported workflows remain available in the terminal.
 
 ## Boundaries and document safety
 
-`crates/plugin-forge` depends on `atlas-plugin-api` for its Atlas-facing
+`crates/plugin-forge` depends on `syrinx-plugin-api` for its Syrinx-facing
 contract. It contributes owned, serialisable descriptions and commands through
-the Host; it does not import core, store, search or GPUI. `atlas-ui` renders
-Forge's native chrome; `atlas-platform` alone creates and operates the local
-WebView2 surfaces, with `atlas-app` wiring the views and services. Rust host
+the Host; it does not import core, store, search or GPUI. `syrinx-ui` renders
+Forge's native chrome; `syrinx-platform` alone creates and operates the local
+WebView2 surfaces, with `syrinx-app` wiring the views and services. Rust host
 services handle filesystem access, indexing and child processes through the
 same contract a later plugin would use. Follow plan 2 for service ownership.
 
@@ -170,7 +170,7 @@ Only bundled local editor and terminal assets receive inter-process communicatio
 the channel between JavaScript and Rust. Validate origin, message type,
 document identity and revision before dispatching. Project HTML, a terminal
 link or language-server text cannot become executable local UI content.
-Page web views retain all of Atlas's existing no-injection rules.
+Page web views retain all of Syrinx's existing no-injection rules.
 
 ## Ordered implementation
 
@@ -222,7 +222,7 @@ is full and resume after it drains. Keep input/control messages responsive
 without silently dropping output. xterm.js documents that its non-blocking
 `write()` returns before parsing completes: use its completion acknowledgments
 to bound every queue across the transport, not merely the Rust send queue.
-Its write buffer can overflow; its throughput figures are not Atlas benchmarks
+Its write buffer can overflow; its throughput figures are not Syrinx benchmarks
 ([flow-control guide](https://xtermjs.org/docs/guides/flowcontrol/)).
 
 ⚠️ The old research's Tauri raw-ArrayBuffer transport and roughly 50 MB/s
@@ -239,18 +239,18 @@ including when output is blocked. portable-pty has a Windows ConPTY backend
 ([source](https://raw.githubusercontent.com/wezterm/wezterm/main/pty/src/win/conpty.rs)),
 but process-tree ownership and teardown require tests on this machine.
 
-**Exit:** a synthetic output flood still accepts Ctrl C and Atlas shortcuts;
+**Exit:** a synthetic output flood still accepts Ctrl C and Syrinx shortcuts;
 resizing and split UTF-8 sequences render correctly. Closing/reopening Forge
 does not leak its PTY processes, reader threads or renderer queues. Test Stop
 with a child that ignores interrupt and with a full output queue. Terminal
-contents are transient UI data, never Atlas diagnostic logs or test fixtures.
+contents are transient UI data, never Syrinx diagnostic logs or test fixtures.
 
 ### Phase 3 — Inspect and change Git state deliberately
 
 Implement `GitRead` against an audited in-process reader and test status,
 diff, log and file history on disposable local repositories. Reads must
 distinguish an unsupported repository from an empty or clean one. Refresh
-after both Atlas writes and external Git changes, with cancellable background
+after both Syrinx writes and external Git changes, with cancellable background
 work so status scanning does not block typing.
 
 For the approved actions, run the installed Git for Windows with
@@ -277,7 +277,7 @@ uses GPLv2 with a linking exception, outside the currently listed allowed
 licences ([licence](https://raw.githubusercontent.com/libgit2/libgit2/main/COPYING)).
 gix is a permissively licensed candidate ([manifest](https://raw.githubusercontent.com/GitoxideLabs/gitoxide/main/gix/Cargo.toml)),
 and its [changelog](https://raw.githubusercontent.com/GitoxideLabs/gitoxide/main/gix/CHANGELOG.md)
-shows active maintenance, not proof that a selected release meets Atlas's needs.
+shows active maintenance, not proof that a selected release meets Syrinx's needs.
 Its [maintainer status](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md)
 leaves reftable backend support unchecked. Verify the exact release against
 traditional refs, reftable, linked worktrees and the supported object formats.
@@ -303,7 +303,7 @@ Launch only installed, configured servers and keep their process ownership,
 JSON-RPC transport and lifecycle in Rust (D30). Start/stop with the applicable
 project/language lifetime, handle cancellation and timeouts, and surface a
 missing/crashed server while ordinary editing continues. Bound messages and
-result lists; do not stream unbounded server output into Atlas logs.
+result lists; do not stream unbounded server output into Syrinx logs.
 
 Installed does not mean passive. For example, rust-analyzer enables build
 scripts, procedural macros and checks on save by default, and its default
@@ -421,7 +421,7 @@ including accented text, punctuation, selection, undo and clipboard operations.
 Measure cold/warm Forge opening, input-to-paint, highlighting, large-file open,
 scrolling, completion after server reply, terminal flood responsiveness and
 incremental memory/idle CPU. Include repeated open/close and background
-browser tabs so a feature cannot pass by making the rest of Atlas stall.
+browser tabs so a feature cannot pass by making the rest of Syrinx stall.
 
 ⚠️ Research targets remain proposals: p95 input/highlight within roughly one
 60 Hz frame, a 10 MB file open within 300 ms, responsive million-line scrolling
@@ -474,7 +474,7 @@ Windows editor/terminal integration still require their phase-specific tests.
 ### Issue map
 
 The owner approved these 21 local slices on 2026-10-10, exactly as
-recorded in [the approved Plans 2–4 breakdown](<Atlas v1 — Plans 2–4 slice proposals.md>).
+recorded in [the approved Plans 2–4 breakdown](<Syrinx v1 — Plans 2–4 slice proposals.md>).
 The boundaries, deliverables and explicit blockers below are unchanged from
 that approval. Every slice also depends on the preceding slice in this plan;
 finish each phase exit before its next phase. The breakdown's common gates
@@ -496,7 +496,7 @@ approvals remain separate; the map does not waive predecessor or operator gates.
 | Approved ID | Why and deliverable | Done evidence and explicit blockers |
 | --- | --- | --- |
 | P4-01 | Project and document identity must be distinct before more than one file opens. Add one-root selection, lazy tree, bounded file opening, generic Forge lifecycle and shared document reuse. | Reopening a file does not create another buffer. Missing/binary/unsupported files fail safely. Project switch and whole-Forge close collect Save/Discard/Cancel choices before mutation; failed saves or Cancel keep work open. Blocked by the Forge entry gate. |
-| P4-02 | Forge needs its agreed keyboard and navigation behavior before richer tools. Wire explicit Ctrl S/recovery, dirty indicators, code-location history, focused-file Ctrl W and the shared command table. | Ctrl K/L/T remain Atlas actions; Ctrl W closes only the active editor file. Sidebar default/peek/pinning, address and back/forward behavior match the approved design, with reload hidden. Synthetic round trips, outside edits and bridge failures preserve work; inspect the layout and focused keys with the owner. |
+| P4-02 | Forge needs its agreed keyboard and navigation behavior before richer tools. Wire explicit Ctrl S/recovery, dirty indicators, code-location history, focused-file Ctrl W and the shared command table. | Ctrl K/L/T remain Syrinx actions; Ctrl W closes only the active editor file. Sidebar default/peek/pinning, address and back/forward behavior match the approved design, with reload hidden. Synthetic round trips, outside edits and bridge failures preserve work; inspect the layout and focused keys with the owner. |
 | P4-03 | Highlighting cannot block typing or paint stale revisions. Audit and bundle the required grammars/queries, then implement incremental Rust Tree-sitter parsing and revisioned visible-region highlighting. | All eight required languages and mixed Svelte/HTML/script/style fixtures pass. Multiline/off-screen edits invalidate correctly; missing/failed grammar leaves plain text usable. Record large-file workload and limits before optimization. No runtime grammar download or GPL query import occurs. Phase 1 closes with the owner-reviewed editor layout and complete document-safety regressions. |
 
 #### Phase 2 — bounded interactive terminal
@@ -504,7 +504,7 @@ approvals remain separate; the map does not waive predecessor or operator gates.
 | Approved ID | Why and deliverable | Done evidence and explicit blockers |
 | --- | --- | --- |
 | P4-04 | A terminal needs proven transport and process ownership before output starts flowing. Audit the Windows pseudoterminal and xterm.js dependencies, installed shell and actual local WebView2 bridge; implement bounded input/output and resize/start/exit states. | Measure both bridge directions on synthetic data. Missing shell/startup failure is visible; no install or WSL addition occurs. Origin/message checks isolate the trusted terminal surface. Blocked by Phase 1 and exact dependency/Host reviews. |
-| P4-05 | Renderer acknowledgements must bound every output queue. Implement flow control through xterm.js write completion, UTF-8 chunk handling and responsive input/control paths. | Flood tests preserve output, accept Atlas keys and Ctrl C, and resume reads after renderer capacity returns. Resize and split Unicode sequences work. Record actual queue/throughput bounds rather than inheriting the old Tauri claim. |
+| P4-05 | Renderer acknowledgements must bound every output queue. Implement flow control through xterm.js write completion, UTF-8 chunk handling and responsive input/control paths. | Flood tests preserve output, accept Syrinx keys and Ctrl C, and resume reads after renderer capacity returns. Resize and split Unicode sequences work. Record actual queue/throughput bounds rather than inheriting the old Tauri claim. |
 | P4-06 | An ignored interrupt must not strand a task or its children. Implement explicit Stop and tracked process-tree teardown, integrating running-task Stop/Cancel with existing dirty-document close preparation. | A child that ignores Ctrl C and a renderer with blocked output both stop through the explicit path. Cancel changes no document/process state; chosen saves finish before any discard/stop. Repeated close/reopen leaves no PTY processes, readers or subscriptions. Phase 2 closes with native flood/focus/cleanup evidence. |
 
 #### Phase 3 — deliberate Git reads and writes
@@ -532,14 +532,14 @@ approvals remain separate; the map does not waive predecessor or operator gates.
 | P4-15 | Opening a project must not execute its task discovery code. Add declarative task descriptions and safe discovery for Cargo, npm-family scripts, just/make and installed Python entry points, preserving the project's package manager. | Synthetic discovery fixtures cover duplicate names/origins, missing tools and unsafe executable declarations. Cargo discovery is offline/locked with rustup auto-install disabled for the command; `make -qp` is not assumed passive. No special uv/Poetry/tox/nox adapter or downloader is added. Blocked by Phase 4. |
 | P4-16 | A selected task must run against saved source and remain stoppable. Integrate explicit task launch, progress/exit/restart with the proven terminal/process service and save-all preparation. | Any dirty-document save failure blocks launch, including a file open in another group. Synthetic providers cover run/failure/cancel, and Stop cleans children under blocked output. The user sees what will run; discovery never implies execution. |
 | P4-17 | Split views must share one logical buffer and undo history. Add editor groups, per-view selections/scroll positions and coordinated shared transactions. | Two views stay synchronized through edit, undo/redo, save, outside change and close. Ctrl W closes the focused file view according to the approved policy without closing all Forge. Saves and recovery still operate on document identity, not a second copy per pane. |
-| P4-18 | The context rail must use existing sources rather than creating another index. Connect revisioned outline, related Notes and selected-file Git history through Host/search, with navigation and sidebar-width behavior. | Navigation cannot show stale file context. Pinning the Atlas sidebar folds the rail as the design specifies; missing context has honest empty/error states. Phase 5 closes with tasks, splits and rail exercised together. |
+| P4-18 | The context rail must use existing sources rather than creating another index. Connect revisioned outline, related Notes and selected-file Git history through Host/search, with navigation and sidebar-width behavior. | Navigation cannot show stale file context. Pinning the Syrinx sidebar folds the rail as the design specifies; missing context has honest empty/error states. Phase 5 closes with tasks, splits and rail exercised together. |
 
 #### Phase 6 — workflow, performance and closure
 
 | Approved ID | Why and deliverable | Done evidence and explicit blockers |
 | --- | --- | --- |
 | P4-19 | One successful edit does not prove a complete development workflow. Run generated project workflows across editing, recovery, terminal/tasks, Git and supported language-server actions, including repeated open/close and interruptions. | Repository and JavaScript/native gates pass; no unowned child processes, lost buffers or stale search contributions remain. Cover keyboard focus and all dirty-file/running-task cancellation branches. Blocked by Phase 5. |
-| P4-20 | Performance must include the rest of Atlas, not only an isolated editor. Measure cold/warm opening, input paint, highlighting, large files, scrolling, completion, terminal floods and incremental memory/idle cost using fixed workloads/budgets. | Repeat with background browser tabs and report failures and limits. The research's frame/10 MB/million-line/100 MB proposals are not assumed passed. If Rust highlighting misses its budget, investigate and seek approval before adding a second parser location. D48 remains unchanged. |
+| P4-20 | Performance must include the rest of Syrinx, not only an isolated editor. Measure cold/warm opening, input paint, highlighting, large files, scrolling, completion, terminal floods and incremental memory/idle cost using fixed workloads/budgets. | Repeat with background browser tabs and report failures and limits. The research's frame/10 MB/million-line/100 MB proposals are not assumed passed. If Rust highlighting misses its budget, investigate and seek approval before adding a second parser location. D48 remains unchanged. |
 | P4-21 | Final acceptance requires the actual Windows workflow and approved visual design. Complete five-palette, scale-factor, keyboard/accessibility and owner workflow review, then update the implementation ledger with evidence and known limits. | All phase exits, cleanup checks and measured budgets pass, and the owner accepts the workflow. No unresolved data-integrity defect, skipped gate or unverified visible behavior is labelled complete. This acceptance does not itself authorize a repository commit, merge, release or publication. |
 
 This map adds no debugger, semantic-token implementation, minimap, native

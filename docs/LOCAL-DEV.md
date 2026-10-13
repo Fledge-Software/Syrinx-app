@@ -1,6 +1,6 @@
 # Local development on Windows 11
 
-Atlas's first scaffold supplies the build and architecture checks (P1-01);
+Syrinx's first scaffold supplies the build and architecture checks (P1-01);
 P1-02 adds the tab and saved-page model without a window. Work on this machine,
 in the local repository, one approved slice at a time. The planning baseline
 is `d79fc29`; P1-01 was merged into `claude/plan-atlas-v1` as `ed19d6d`, and
@@ -12,15 +12,15 @@ commits still require the owner's request. There is no remote or push.
 
 - `Cargo.toml` defines the virtual workspace, resolver 3, shared package
   settings/lints and the `local` executable profile.
-- `crates/atlas-app` now contains D49's integrated preview window, session
+- `crates/syrinx-app` now contains D49's integrated preview window, session
   worker and Ctrl K palette. The owner approved bringing this integration
   forward; it does not mark the remaining slices complete. Its native page
-  host lives in `atlas-platform`. See `docs/integrated-browser-preview.md`
+  host lives in `syrinx-platform`. See `docs/integrated-browser-preview.md`
   for the implementation and validation status.
 - `crates/xtask` runs the gate and dependency-boundary check. Add product
   crates when their approved slices begin; there are no placeholder Plugin
   APIs or copied spike implementations.
-- `crates/atlas-core` owns live tab identities, selection and ordering, a
+- `crates/syrinx-core` owns live tab identities, selection and ordering, a
   20-entry closed-web-tab history, and saved-page identities that survive
   closing their live page. Its one third-party dependency is `url` (owner
   approval 2026-10-12, DW-1), for the shared web-address rule. The sidebar and
@@ -38,7 +38,7 @@ The product licence is still undecided; Cargo publishing is disabled.
 Run these from the repository in PowerShell:
 
 ```powershell
-cargo atlas
+cargo syrinx
 cargo xtask check
 ```
 
@@ -56,7 +56,7 @@ cargo xtask check-packaging
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --profile local --offline --locked -- -D warnings
 cargo test --workspace --profile local --offline --locked
-cargo run --package atlas-app --profile local --offline --locked -- --smoke
+cargo run --package syrinx-app --profile local --offline --locked -- --smoke
 ```
 
 The first line shows the standalone equivalent of the check that `xtask`
@@ -73,9 +73,15 @@ The watchdog exits with code 124 on its deadline or 125 if its control channel
 disconnects. It performs no output before exiting, so a locked stderr stream
 cannot prevent termination. A subprocess regression verifies both exits while
 holding stderr locked; other smoke failures retain their existing diagnostics.
-Normal `cargo atlas` uses
-`%LOCALAPPDATA%\AtlasProductPreview`, separate from the Phase 0 profiles;
-its State and WebView2 subfolders persist between launches. Compiling alone
+Normal `cargo syrinx` uses
+`%LOCALAPPDATA%\SyrinxProductPreview`, separate from the Phase 0 profiles;
+its State and WebView2 subfolders persist between launches. Before the
+product was named Syrinx (2026-10-12) this folder was
+`%LOCALAPPDATA%\AtlasProductPreview`; Syrinx never reads, moves or deletes
+it, or the installed `%LOCALAPPDATA%\Atlas\data`, and starts fresh. The old
+folders may hold signed-in WebView2 profiles: the owner deletes them by hand
+when they are no longer needed (see `docs/p1-37-installer-design.md`, "Where
+things live", for old registrations). Compiling alone
 does not establish D38. Fix formatting with
 `cargo fmt --all`. A passing gate is required before review and merge, and
 it does not replace inspecting a window once a slice introduces UI.
@@ -98,17 +104,17 @@ bring it to the owner; never change Smart App Control, SmartScreen or signing
 settings to get past it. Child Cargo commands also set `RUSTUP_AUTO_INSTALL=0`
 for that process, without changing the user's persistent environment.
 
-The owner requires local Atlas to run unsigned and has no signing certificate.
+The owner requires local Syrinx to run unsigned and has no signing certificate.
 A certificate is not an application requirement. `xtask.exe` is a separate
 development tool that runs the quality checks listed above; "optimized" means
 compiled with the release-style `local` profile. It is not the browser.
 On 2026-10-10, signature inspection reported `NotSigned` for
 `target/local/atlas-app.exe`, and launching that exact file printed
-`Atlas 0.1.0` and exited successfully. This proves the current console
+`Atlas 0.1.0` (its name then) and exited successfully. This proves the current console
 scaffold starts unsigned, not that the later browser window is implemented.
 
 During P1-05, Windows blocked `target/local/xtask.exe` and the store unit-test
-executable even on unchanged retries. Atlas-specific Code Integrity event
+executable even on unchanged retries. Syrinx-specific Code Integrity event
 3077 identifies policy `VerifiedAndReputableDesktop` and status `0xc0e90002`.
 Microsoft explains that Smart App Control can accept unsigned code it judges
 safe and block unsigned code it cannot confidently classify; optimization
@@ -119,7 +125,7 @@ app build. Do not claim a complete gate while tests remain blocked.
 
 On 2026-10-10, P1-01's full `cargo xtask check` passed: dependency boundaries,
 formatting, Clippy, all seven architecture tests and the application launch
-(`Atlas 0.1.0`). Immediately after an earlier rebuild, Windows had blocked
+(`Syrinx 0.1.0`). Immediately after an earlier rebuild, Windows had blocked
 `xtask.exe` with error 4551. Retrying the unchanged executable passed without
 rebuilding it or changing settings. The cause of that temporary block remains
 unproved; the successful run does not establish a policy exemption.
@@ -131,19 +137,19 @@ unproved; the successful run does not establish a policy exemption.
 import cannot hide GPUI or WebView2. Normal, optional, target-specific,
 development and build dependency declarations all count.
 
-- Only `atlas-app` and `atlas-ui` may directly depend on GPUI crates.
-- Only `atlas-platform` may directly depend on wry, WebView2 bindings or
+- Only `syrinx-app` and `syrinx-ui` may directly depend on GPUI crates.
+- Only `syrinx-platform` may directly depend on wry, WebView2 bindings or
   the checked `windows`/`windows-sys` Win32 bindings.
-- `atlas-core`, `atlas-store`, `atlas-search`, `atlas-plugin-api` and
+- `syrinx-core`, `syrinx-store`, `syrinx-search`, `syrinx-plugin-api` and
   `plugin-*` must not reach shell crates through other workspace crates.
-- A plugin's only Atlas dependency is `atlas-plugin-api`, and that API
-  must not depend on other Atlas crates. Fledge services stay behind Host.
+- A plugin's only Syrinx dependency is `syrinx-plugin-api`, and that API
+  must not depend on other Syrinx crates. Fledge services stay behind Host.
 
 This is a manifest architecture check, not a runtime sandbox or complete
 third-party dependency audit. Internal routes are matched by normalized
 workspace package names; third-party packages are leaves. It permits
-`atlas-app -> atlas-platform -> wry`, and does not mistake GPUI's own Windows
-dependencies for an Atlas boundary violation. Before introducing ambiguous
+`syrinx-app -> syrinx-platform -> wry`, and does not mistake GPUI's own Windows
+dependencies for a Syrinx boundary violation. Before introducing ambiguous
 same-name internal/external packages, extend the matcher to resolve their
 paths. Dependency audit details are in `docs/dependency-audit.md`.
 
@@ -176,7 +182,7 @@ rather than titles, addresses or page contents.
 For focused model development, use:
 
 ```powershell
-cargo test --package atlas-core --profile local --offline --locked
+cargo test --package syrinx-core --profile local --offline --locked
 ```
 
 Run the full gate before calling the slice done. The library contains no
@@ -192,7 +198,7 @@ or persistence is claimed by this result.
 
 ## Durable saved pages and session records
 
-P1-03 adds `atlas-store` and the filesystem part of `atlas-platform`. The
+P1-03 adds `syrinx-store` and the filesystem part of `syrinx-platform`. The
 console application still does not open a production database. The later
 application composition will obtain a `WindowsDirectoryLease` from the
 platform and pass it to `Store::open`; the store never imports Windows APIs.
@@ -215,12 +221,12 @@ their approved later slices.
 For focused storage development, use:
 
 ```powershell
-cargo test --package atlas-store --package atlas-platform --profile local --offline --locked
+cargo test --package syrinx-store --package syrinx-platform --profile local --offline --locked
 ```
 
 Native integration tests prepare fresh disposable directories. They query
 registered sync-root metadata without printing provider names or paths;
-they never discover or open the owner's Atlas database. Synthetic junctions
+they never discover or open the owner's Syrinx database. Synthetic junctions
 and hardlinks stay inside test-owned directories, and their target bytes are
 checked before cleanup. No Windows settings are changed.
 
@@ -253,13 +259,13 @@ complete 138-test result is recorded below. No production database has been open
 
 ## P1-04 storage lifecycle and maintenance
 
-`WindowsDirectoryLease` now holds an exclusive `atlas.lifecycle` control
+`WindowsDirectoryLease` now holds an exclusive `syrinx.lifecycle` control
 file. A second process or a second store using the same lease cannot start
 an overlapping session. The store flushes running status before opening
 SQLite. Explicit shutdown marks clean only after both readers close and the
 writer finishes; fallback destruction leaves unclean evidence. Missing or
 malformed evidence causes conservative checking of an existing database.
-An `atlas.recovery-intent` entry prevents normal startup from creating a
+An `syrinx.recovery-intent` entry prevents normal startup from creating a
 missing primary database after an interrupted restoration.
 
 A lifecycle write or flush failure is returned to the caller and poisons
@@ -268,12 +274,12 @@ bytes; it provides no guarantee about what survives a later process restart.
 The clean record is attempted only after the database connections have
 already closed successfully. No Windows durability setting is changed.
 
-`atlas-store::deletion` defines D47's content-free journal format and replay
+`syrinx-store::deletion` defines D47's content-free journal format and replay
 contract. Records contain a category, half-open Unix-second range and
 generation, with damage detection and paired request/completion records.
 Pending clears, missing required generations and malformed records refuse
 replay. Diagnostic output redacts the ranges. This module performs no file
-I/O or history collection. P1-27 persists it as `atlas.deletions` beside the
+I/O or history collection. P1-27 persists it as `syrinx.deletions` beside the
 database, with schema 5's applied generation as the barrier, and connects the
 clearing and replay participants; see `docs/p1-27-clear-data.md`.
 
@@ -285,7 +291,7 @@ and unknown entries remain preserved. A failed attempt remains due in the
 current session; restart discovers valid completion evidence again. Routine
 not-due calls use a cached timestamp and perform no archive enumeration.
 
-`atlas_platform::offer_recovery(directory, deletions)` returns a dated offer
+`syrinx_platform::offer_recovery(directory, deletions)` returns a dated offer
 for the newest verified backup when the primary is missing or demonstrably
 damaged. The UI must obtain the owner's confirmation before calling
 `RecoveryOffer::confirm`. An offer retains exclusive storage ownership; drop
@@ -310,17 +316,17 @@ and local merge on 2026-10-10; Plan 1's ledger records their completion.
 
 ## P1-05 local catalogue search
 
-`atlas-search` gives the later palette a derived in-memory catalogue. Rust
+`syrinx-search` gives the later palette a derived in-memory catalogue. Rust
 callers provide typed tab, saved-page, history and command records; the crate
 collects no history and performs no I/O. Queries return ranked, highlighted
 results and uncapped scope counts. Saved destinations and live pages remain
 distinct, preserving D43 when the running page navigates elsewhere. See
-`crates/atlas-search/README.md` for the input policy and matching limits.
+`crates/syrinx-search/README.md` for the input policy and matching limits.
 
 For focused development and the separate performance gate, use:
 
 ```powershell
-cargo test --package atlas-search --profile local --offline --locked
+cargo test --package syrinx-search --profile local --offline --locked
 cargo xtask bench > target/p1-05-search-run.json
 ```
 
@@ -346,13 +352,13 @@ The complete quality gate and D48 performance gate remain unresolved;
 
 `cargo xtask palette-acceptance` is on demand and not part of the gate. It
 builds the `local` app first, serves two synthetic pages on an ephemeral
-`127.0.0.1` port from the xtask process, and launches Atlas visibly with
+`127.0.0.1` port from the xtask process, and launches Syrinx visibly with
 `--test-palette-acceptance <report.json> http://127.0.0.1:<port>` on a fresh
-synthetic profile. Atlas then times palette opening and per-keystroke ranking
+synthetic profile. Syrinx then times palette opening and per-keystroke ranking
 at 1,000, 10,000 and 100,000 in-memory synthetic rows, checks overlay focus and
 stacking, and closes itself. Reports go to `target\p1-33\` as JSON and a
 Markdown summary. Run it in the foreground on a quiet machine and leave the
-keyboard and mouse alone: focus checks need Atlas to be the active app. Method
+keyboard and mouse alone: focus checks need Syrinx to be the active app. Method
 and results: `docs/p1-33-palette-acceptance.md`.
 
 ## Packaging (P1-37)
@@ -361,13 +367,13 @@ and results: `docs/p1-33-palette-acceptance.md`.
 cargo xtask package
 ```
 
-builds `atlas-app` with the `local` profile and its `installed` feature
-(data in `%LOCALAPPDATA%\Atlas\data`) into the separate
-`target\package-build` directory, so `target\local\atlas-app.exe` stays the
-development build using `AtlasProductPreview`. It writes a versioned folder
+builds `syrinx-app` with the `local` profile and its `installed` feature
+(data in `%LOCALAPPDATA%\Syrinx\data`) into the separate
+`target\package-build` directory, so `target\local\syrinx.exe` stays the
+development build using `SyrinxProductPreview`. It writes a versioned folder
 and zip under `target\package`, with a manifest and the owner-run scripts
 from `packaging/`. It installs and registers nothing. The gate's
-`cargo xtask check-packaging` step refuses a `packaging/atlas-registration.ps1`
+`cargo xtask check-packaging` step refuses a `packaging/syrinx-registration.ps1`
 that differs from the Rust registry table (regenerate it with
 `cargo xtask write-registration`) and parses every script without running
 it. Agents never run the packaging scripts; installation, registration and

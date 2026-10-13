@@ -1,11 +1,11 @@
 # P1-36: keyboard navigation and accessibility
 
-Atlas must be usable without a mouse and readable by a screen reader before
+Syrinx must be usable without a mouse and readable by a screen reader before
 the owner makes it the default browser (Phase 5, plan issue map P1-36). A
 compact or hidden sidebar is the worst case: icons without names and edges
 that only a drag can move. This slice adds F6 pane cycling, Tab between every
-chrome control, a visible focus ring from the `atlas-ui` tokens, accessible
-names and roles for Atlas's own controls, and the NVDA checks the owner runs.
+chrome control, a visible focus ring from the `syrinx-ui` tokens, accessible
+names and roles for Syrinx's own controls, and the NVDA checks the owner runs.
 
 Branch `claude/p1-36-accessibility`, from `codex/integrated-browser-preview`
 at `94b3cb1`.
@@ -35,7 +35,7 @@ vendored one; the core crate is the pinned registry package
   activates only when a UIA client asks (`gpui-pre-0.3.8/src/window.rs`,
   lines 1615–1656). It is on by default: only
   `Application::new_inaccessible` turns it off (`gpui-pre-0.3.8/src/app.rs`,
-  line 195), and Atlas starts through `gpui_platform::application()`.
+  line 195), and Syrinx starts through `gpui_platform::application()`.
 - An element appears in the tree only with an id **and** a role
   (`gpui-pre-0.3.8/src/_accessibility.rs`, lines 58–103). The public API is
   `role`, `aria_label`, `aria_description`, `aria_keyshortcuts`,
@@ -59,7 +59,7 @@ Known limits of that provider, each checked in source:
   palette keeps focus in its query field, which is the rows' sibling, so NVDA
   cannot hear the arrow keys move the selection. Recorded as **DW-60**.
 - **Plain text is not in the tree.** Text without an id is not reported, so
-  Atlas names the parts a screen reader must read (the permission question,
+  Syrinx names the parts a screen reader must read (the permission question,
   the runtime notice, the status line) with labelled nodes.
 - **Debug assertions panic on a malformed tree.** The `local` profile keeps
   `debug-assertions = true` (`Cargo.toml`, line 55), and the a11y builder
@@ -67,7 +67,7 @@ Known limits of that provider, each checked in source:
   node id, or a stray active descendant (`a11y.rs`, lines 232–243, 411–423,
   513–542 and 564–573). It runs only while a UIA client is attached, which
   includes screen readers and some password managers, so a gate run does not
-  build it. The next section shows why Atlas cannot make two focus claims,
+  build it. The next section shows why Syrinx cannot make two focus claims,
   and records a probe that built the tree.
 
 ## Why two nodes cannot report focus
@@ -85,7 +85,7 @@ claims in a frame need one handle tracked by two elements in that frame.
   handle is not the focused one, so its element only registers itself as
   focusable (`set_focusable`), which never panics.
 - **Each handle is tracked once per frame.** Every `track_focus` in
-  `atlas-app` was checked: the seven pane handles are private to
+  `syrinx-app` was checked: the seven pane handles are private to
   `PaneFocus` and reach elements only through `as_pane`, which `render` calls
   once per pane (the toolbar is drawn either in the title bar or under it,
   never both); the window root's `self.focus` is tracked by the fullscreen
@@ -106,14 +106,14 @@ UI Automation client (.NET `System.Windows.Automation` from PowerShell) to the
 `target\p1-36-uia-2` (logs `target\p1-36-uia-probe-*.log`). Attaching
 activates GPUI's AccessKit adapter, so every frame then built the tree with
 debug assertions on. Run 2 posted F6 seven times and Tab twelve times to
-Atlas's own window only, then called UIA `SetFocus` on twelve elements,
-including the "Address" toolbar region and its buttons. Atlas stayed up with
+Syrinx's own window only, then called UIA `SetFocus` on twelve elements,
+including the "Address" toolbar region and its buttons. Syrinx stayed up with
 an empty stderr, the tree had 35 nodes on Home, and focus followed as
 designed: F6 went address field → sidebar "Search · Ctrl K" → Home
 "Customize" → address field; Tab went through the toolbar and into the
 sidebar. Run 1 also survived, but sent its keys with `SendKeys` to whatever
 window was in the foreground, so its key results are not evidence; run 2
-replaced that with messages posted to Atlas's window. Rerun the probe after
+replaced that with messages posted to Syrinx's window. Rerun the probe after
 changing roles, ids or focus handles: the script is short and is described
 here instead of committed, because it drives a window and is not a test.
 - **The web page is a separate HWND.** The AccessKit tree covers GPUI's own
@@ -133,14 +133,14 @@ window behaviour is for the owner to confirm (no agent inspected a window).
 notice, permission request, find bar, sidebar, page, wrapping at each end.
 Closed bars and a hidden sidebar are skipped; the address field and the page
 card are always there. The order and skipping are pure functions in
-`crates/atlas-ui/src/focus.rs` (`next_pane`, `OpenPanes`) with eight tests,
+`crates/syrinx-ui/src/focus.rs` (`next_pane`, `OpenPanes`) with eight tests,
 including a bar that closes while focused handing focus to its neighbour.
 
 - From chrome, GPUI's `f6`/`shift-f6` bindings run
-  `BrowserView::cycle_pane` (`crates/atlas-app/src/ui/panes.rs`).
+  `BrowserView::cycle_pane` (`crates/syrinx-app/src/ui/panes.rs`).
 - **From a focused page**, WebView2's `AcceleratorKeyPressed` handler maps
   F6 to `BrowserShortcut::FocusNextPane` and Shift F6 to
-  `FocusPreviousPane` (`crates/atlas-platform/src/browser/page.rs`,
+  `FocusPreviousPane` (`crates/syrinx-platform/src/browser/page.rs`,
   `shortcut_for_modifiers`). The handler is unchanged in shape: it reads the
   key, sets `Handled` and posts; there is no COM call beyond the event
   arguments, and Ctrl F, Ctrl H, Ctrl P and the zoom keys still reach the page
@@ -151,15 +151,15 @@ including a bar that closes while focused handing focus to its neighbour.
   the same way (`BrowserShortcut::LeavePageBackward` for Shift Tab); a
   scripted focus move stays in the page (`register_focus_departure`,
   `departure_shortcut`, tested).
-- Landing (`atlas_ui::focus::landing`, tested): the address pane focuses the
+- Landing (`syrinx_ui::focus::landing`, tested): the address pane focuses the
   address field itself; a web page is focused natively (`focus_page`); any
   other pane focuses its region and steps to its first (or last) control. If
-  the step leaves the region, because the pane has no Tab stops (an Atlas
+  the step leaves the region, because the pane has no Tab stops (a Syrinx
   page card with nothing to press), focus stays on the region instead of
-  escaping to another pane (`atlas_ui::focus::settle`, tested).
-- **F6 is always Atlas's.** The page never sees F6; see owner question 5.
+  escaping to another pane (`syrinx_ui::focus::settle`, tested).
+- **F6 is always Syrinx's.** The page never sees F6; see owner question 5.
 
-**Tab and Shift Tab move between every Atlas control** in each Atlas window
+**Tab and Shift Tab move between every Syrinx control** in each Syrinx window
 (the main window, the palette and the import preview). The main window's
 order follows the screen: toolbar, bars, sidebar (search, Favorites, tab
 rows, row actions, new tab), the resize edge, then the page card's own
@@ -168,11 +168,11 @@ focused control. The resize edge was focusable before but could not be
 reached with Tab, because a tracked focus handle takes its Tab stop from the
 handle rather than from `tab_index`; it now can (new trap below).
 
-**A focus ring from the tokens.** `atlas_ui::focus` defines a 2 px ring in the
+**A focus ring from the tokens.** `syrinx_ui::focus` defines a 2 px ring in the
 accent ink, which `contrast::audit` already holds to WCAG 1.4.11's 3:1 on the
 ground, panel and card, with a 1 px inner line in the accent's on-fill colour
 so the ring still reads on accent-filled controls (a new test checks 3:1
-against every accent fill). `crates/atlas-app/src/controls.rs` draws it as an
+against every accent fill). `crates/syrinx-app/src/controls.rs` draws it as an
 inset shadow, so it never moves layout and a scrolling sidebar cannot clip it.
 
 **Focus returns predictably.** Closing the palette, peek or import preview
@@ -182,7 +182,7 @@ root, and a page that takes focus by click reports WebView2's `GotFocus`
 control keeps a ring while keys go to the page. Enter on a focused Cancel in
 the import preview now cancels instead of importing.
 
-**Names and roles.** Every Atlas control has a role and a name:
+**Names and roles.** Every Syrinx control has a role and a name:
 
 | Area | Role and name |
 | --- | --- |
@@ -191,7 +191,7 @@ the import preview now cancels instead of importing.
 | Bars | Status "Runtime notice" with its text; Alert "Permission request" with the question, "Remember for this site" checkbox (checked state), Deny, Allow; Search "Find in page" with a named field, Previous, Next, Close find |
 | Page card | Group "Page"; Home's Customize (expanded), Search (Ctrl K), Quick access tiles, Add shortcut, Edit/Done, move and remove buttons named for their tile, plugin cards; Customize dialog with palette and accent radio buttons, Custom accent, Reduce transparency switch, named colour field; tile form fields and target radio buttons; History rows as links; Clear browsing data checkboxes and time-range radio buttons |
 | Palette | Dialog "Command palette"; field "Search or command"; scope chips as radio buttons with their counts; results list box with named, selected options described by kind; "Search the web" (Alt Enter) |
-| Window | Status line at the bottom; caption buttons Minimize, Maximize/Restore, Close Atlas (unchanged) |
+| Window | Status line at the bottom; caption buttons Minimize, Maximize/Restore, Close Syrinx (unchanged) |
 
 **Not changed:** page web views' identity. No user agent, IPC handler,
 script, request filter or header change; the two new WebView2 handlers are
@@ -203,20 +203,20 @@ An agent cannot judge speech output, so these are the owner's. Use a fresh
 profile, never the daily one:
 
 ```
-cargo run --package atlas-app --profile local --offline --locked -- --test-data-dir target\p1-36-nvda
+cargo run --package syrinx-app --profile local --offline --locked -- --test-data-dir target\p1-36-nvda
 ```
 
 Install or start NVDA yourself (installing software is the owner's call; the
 portable copy also works). Then record pass/fail for each:
 
-1. **Window and toolbar.** Start Atlas with NVDA running. NVDA says the
+1. **Window and toolbar.** Start Syrinx with NVDA running. NVDA says the
    window title. Press F6: NVDA announces the address field as a button with
    the current address. Tab through Back, Forward, Reload, the security
    indicator area, Find in page, Downloads, Print, Zoom out, Reset zoom, Zoom
    in, Save page and History; each is announced by name, with its shortcut
    where one is listed above. A visible ring follows each one.
 2. **F6 order.** With no bars open, F6 goes address → sidebar → page →
-   address. On a web page, open Atlas's find bar with the toolbar's Find
+   address. On a web page, open Syrinx's find bar with the toolbar's Find
    button (Ctrl F goes to the page first, by decision) and the cycle includes
    the find bar after the toolbar. Shift F6 runs in reverse.
 3. **F6 from a page.** Open `https://example.com/`, click into the page,
@@ -227,7 +227,7 @@ portable copy also works). Then record pass/fail for each:
    control (New tab).
 4. **Page keys still the page's.** In a page, Ctrl F opens the page's find
    (or the engine's) as before, Ctrl P prints, and Ctrl plus or minus zooms;
-   none of them is taken by Atlas.
+   none of them is taken by Syrinx.
 5. **Sidebar in each width.** In wide, compact (Ctrl Alt S toggles hidden;
    drag or Left/Right on the edge for compact) and hidden: every row and
    Favorite is read by its title, not a letter; folders say expanded or
@@ -252,11 +252,11 @@ portable copy also works). Then record pass/fail for each:
    browsing data (checkboxes and time-range radio buttons).
 10. **Page content.** With focus inside a web page, NVDA's browse mode reads
     the page. Then, from the page, use NVDA's object navigation
-    (NVDA+Shift+Up) to see whether you can reach Atlas's sidebar without F6;
+    (NVDA+Shift+Up) to see whether you can reach Syrinx's sidebar without F6;
     record whether the two trees are connected.
-11. **No crash with NVDA attached.** Use Atlas for a few minutes with NVDA
+11. **No crash with NVDA attached.** Use Syrinx for a few minutes with NVDA
     running, opening the palette, peek and Customize. The `local` build keeps
-    debug assertions, so a malformed accessibility tree would stop Atlas;
+    debug assertions, so a malformed accessibility tree would stop Syrinx;
     report any such stop with its message.
 12. **Ring visibility.** In each of the five palettes, the focus ring is
     visible on the toolbar, a sidebar row, an accent-filled button (Save in a
@@ -278,7 +278,7 @@ portable copy also works). Then record pass/fail for each:
 4. **Installing NVDA.** The checks above need NVDA on your machine; agents
    do not install software. Narrator, which ships with Windows, is an
    acceptable first pass if you prefer not to install NVDA yet.
-5. **F6 belongs to Atlas, before the page.** WebView2's accelerator handler
+5. **F6 belongs to Syrinx, before the page.** WebView2's accelerator handler
    takes F6 and Shift F6 before a page sees them, so a web app that uses F6
    itself (rare; some spreadsheet and IDE pages do) never gets it. Edge and
    Chrome make the same choice. Recommendation: keep it, because few pages use
@@ -286,12 +286,12 @@ portable copy also works). Then record pass/fail for each:
 
 ## Files
 
-- `crates/atlas-ui/src/focus.rs` (new): pane order, open panes, ring tokens and
-  their tests; `crates/atlas-ui/src/lib.rs`.
-- `crates/atlas-platform/src/browser.rs`, `crates/atlas-platform/src/browser/page.rs`:
+- `crates/syrinx-ui/src/focus.rs` (new): pane order, open panes, ring tokens and
+  their tests; `crates/syrinx-ui/src/lib.rs`.
+- `crates/syrinx-platform/src/browser.rs`, `crates/syrinx-platform/src/browser/page.rs`:
   F6 and Tab-out from a page, page focus arrival, tests.
-- `crates/atlas-app/src/controls.rs` (new), `crates/atlas-app/src/ui/panes.rs`
+- `crates/syrinx-app/src/controls.rs` (new), `crates/syrinx-app/src/ui/panes.rs`
   (new) and the chrome files that now use them (`ui.rs`, `ui/*.rs`,
   `palette.rs`, `palette/render.rs`).
-- `docs/plans/Atlas v1 — Plan.md` (DW-60 to DW-62),
+- `docs/plans/Syrinx v1 — Plan.md` (DW-60 to DW-62),
   `docs/implementation-status.md`, `docs/trapstoknow.md`.

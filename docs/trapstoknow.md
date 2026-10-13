@@ -15,8 +15,8 @@ you found it in the commit message, not here.
 - **A repeated response header shows only its first line.** A synthetic page
   sent `Cache-Control: max-age=0` and then `Cache-Control: no-store`; both
   `GetHeaders` and the full `GetIterator` of `WebResourceResponseReceived`
-  reported only `max-age=0`, so Atlas captured a `no-store` page (F2). Commas
-  inside one line are split correctly. No WebView2 route Atlas may use exposes
+  reported only `max-age=0`, so Syrinx captured a `no-store` page (F2). Commas
+  inside one line are split correctly. No WebView2 route Syrinx may use exposes
   the later line, and a request filter to see it is forbidden. The owner
   accepted this on 2026-10-12 as a known limit of D35's `no-store` rule
   (`docs/decisions.md`): do not read a missing `no-store` as proof that a
@@ -28,7 +28,7 @@ you found it in the commit message, not here.
   form or a link raises a fresh `NavigationStarting` with `IsRedirected`
   false, so a redirect-chain check misses it. `IsUserInitiated` follows
   Chromium's short-lived user activation: a click (or a posted Enter) on the
-  bank page makes the next navigation "user-initiated". Recognise Atlas's own
+  bank page makes the next navigation "user-initiated". Recognise Syrinx's own
   navigations by the address it asked for, read `Source()` at the start as
   the document being left, carry the taint forward, and match a redirect's
   response to any hop of the navigation, since it can arrive after the next
@@ -72,7 +72,7 @@ you found it in the commit message, not here.
 
 - **An empty native Find.Start can leave its completion pending.** The P1-13
   fixture on this runtime completed a nonempty two-match search, but an empty
-  term never completed. Atlas opens its own find input without calling Start;
+  term never completed. Syrinx opens its own find input without calling Start;
   clearing calls Stop. Query IDs must change on both edits and bar reopen, since
   native cancellation cannot retract an event already queued to the UI. Moving
   logical GPUI focus alone is insufficient: transfer Windows focus from the page
@@ -86,7 +86,7 @@ you found it in the commit message, not here.
   tab/request identity in each callback and give each prompt's buttons distinct
   element IDs. Reject a delayed click after navigation, tab change or a new
   request. Also disable WebView2 permission persistence with `SavesInProfile`
-  false; otherwise a one-shot choice becomes durable outside Atlas's store.
+  false; otherwise a one-shot choice becomes durable outside Syrinx's store.
   Source: P1-12 independent review, stale-action regression and native fixture
   in `docs/p1-12-permissions.md`.
 
@@ -119,23 +119,23 @@ you found it in the commit message, not here.
   `docs/parallel-browser-navigation-review-2026-10-10.md` (source and native
   socket test confirmed; not the original WebView2 breakpoint diagnosis).
 
-- **A page closes its native window while its Atlas tab still looks open.**
+- **A page closes its native window while its Syrinx tab still looks open.**
   Published wry 0.57.0 destroys the child window directly on
-  `WindowCloseRequested`. Atlas's approved two-file patch delegates this
+  `WindowCloseRequested`. Syrinx's approved two-file patch delegates this
   request to its session worker, which saves the logical close before native
   teardown. Keep the callback queue-only, handle duplicate/stale live IDs,
   and leave saved rows intact. Source: `docs/page-close-event-review.md`
   (source-confirmed; synthetic native delivery and deferred destruction
   passed). This does not establish the owner's breakpoint crash cause.
 
-- **Browser shortcuts never reach Atlas while a page has focus.** Ctrl T,
+- **Browser shortcuts never reach Syrinx while a page has focus.** Ctrl T,
   Ctrl W, Ctrl L and Ctrl K go to the page, and wry has no event for them
   (wry issue #451, open since 2021). Register WebView2's
   `AcceleratorKeyPressed` yourself on every page web view, through
   `WebViewExtWindows::controller()` and `webview2-com`. The handler runs
   synchronously and blocks the browser process, and cross-process COM calls
   inside it fail with `RPC_E_CANTCALLOUT_ININPUTSYNCCALL`, so it should only
-  set `Handled` and post a message to Atlas's own event loop, ignoring
+  set `Handled` and post a message to Syrinx's own event loop, ignoring
   auto-repeat through `PhysicalKeyStatus.WasKeyDown`. Plain typing never
   reaches the handler; Ctrl and Alt combinations, F-keys and Esc do.
   Source: `docs/research/08-gpui-and-wry-on-windows.md`, section 4 (high, from
@@ -143,7 +143,7 @@ you found it in the commit message, not here.
 - **wry's default browser arguments switch SmartScreen off.** With no
   `with_additional_browser_args`, wry passes
   `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`, which
-  removes phishing and malware protection from every tab. Always pass Atlas's
+  removes phishing and malware protection from every tab. Always pass Syrinx's
   own arguments, and never include `--user-agent` among them. Source: note
   08, section 5.1 (high, from source).
 - **A custom user agent breaks Google instead of helping.** Toward Google's
@@ -158,7 +158,7 @@ you found it in the commit message, not here.
   web views with neither an IPC handler nor an initialization script; then wry
   injects nothing. Source: note 07, "What this means", item 4 (one user's
   trace; medium) and note 08, section 5.1 (high).
-- **Crash dumps go to Microsoft unless Atlas says otherwise.** wry builds its
+- **Crash dumps go to Microsoft unless Syrinx says otherwise.** wry builds its
   environment options internally and never sets
   `IsCustomCrashReportingEnabled`, so dumps follow Windows's diagnostic
   consent. Build the WebView2 environment yourself with `webview2-com`'s
@@ -171,7 +171,7 @@ you found it in the commit message, not here.
   navigated, or `window.opener` breaks. Source: note 08, section 5 (high).
 - **`TrySuspend` succeeds on a page that is still loading, and the frozen
   page then reports nothing.** No `NavigationCompleted` or close request
-  arrives until the page is resumed, and no error says why. Atlas therefore
+  arrives until the page is resumed, and no error says why. Syrinx therefore
   starts a hidden page's suspension countdown only when its navigation
   completes (`browser/hidden_timer.rs`, owner decision 2026-10-12); keep it
   that way, and never time suspension from when a load starts. Separately, a
@@ -192,18 +192,18 @@ you found it in the commit message, not here.
 
 ## The interface: GPUI on Windows
 
-- **The page loses the keys right after Atlas focuses it.** GPUI's
+- **The page loses the keys right after Syrinx focuses it.** GPUI's
   `Window::activate_window` does its Win32 work later, from a spawned task:
   `SetActiveWindow`, then `SetFocus` on the GPUI window, a synthetic Alt press
   and `SetForegroundWindow`. A page `Focus` sent in the same update reaches
   WebView2 first, so that `SetFocus` takes the keys back. Esc in the palette
   returned focus to the page 0 of 20 times; the harness found keyboard focus on
-  the main window itself every time. With Atlas already in front, activate
+  the main window itself every time. With Syrinx already in front, activate
   natively and synchronously (`activate_if_foreground`) before sending the page
   `Focus`. With another application in front, never call `activate_window`:
   its synthetic Alt and `SetForegroundWindow` take the screen from the owner
   (owner decision, 2026-10-12). Defer the page's focus until the owner brings
-  Atlas back, through the main window's activation observer, and drop the
+  Syrinx back, through the main window's activation observer, and drop the
   deferral if the owner returns by clicking a chrome control: GPUI runs the
   activation callback from a task, after the click has focused the control.
   Source:
@@ -223,7 +223,7 @@ you found it in the commit message, not here.
 - **A hidden GPUI window keeps waking for a focused input's caret.** The
   gpui-base input's caret blink re-arms a 500 ms timer that only a blur stops,
   and GPUI delivers blur listeners during a draw, which a hidden window never
-  has. Hiding the palette with its input focused woke Atlas twice a second.
+  has. Hiding the palette with its input focused woke Syrinx twice a second.
   Drop the used input when hiding (dropping its entity cancels the blink task)
   and create a fresh, unfocused one; P1-33's harness counts the input's
   notifications while hidden. Source: gpui-base's `BlinkCursor` and GPUI's
@@ -249,7 +249,7 @@ you found it in the commit message, not here.
 - **A queued peek dismissal can steal focus after Alt Tab.** A matching popup
   generation proves identity, not current activation. Check native foreground
   ownership again when applying the action, and close without refocusing when
-  Atlas has lost activation. Source: P1-17 source review and generation tests;
+  Syrinx has lost activation. Source: P1-17 source review and generation tests;
   the owner still verifies native timing.
 
 - **A queued palette refocus can discard the Enter or Escape behind it.**
@@ -261,7 +261,7 @@ you found it in the commit message, not here.
   (source-confirmed; native timing acceptance remains separate).
 
 - **A hidden launch cannot establish visible-window readiness.** Fresh
-  non-smoke Atlas processes started with `Start-Process -WindowStyle Hidden`
+  non-smoke Syrinx processes started with `Start-Process -WindowStyle Hidden`
   remained alive without a targetable window in both execution contexts.
   The same frozen executable opened Home when launched normally for the
   owner's explicitly approved interactive test. Keep hidden launch for
@@ -282,7 +282,7 @@ you found it in the commit message, not here.
   Windows message box; only `--smoke` suppresses it. A `--test-data-dir`
   run started with `Start-Process -WindowStyle Hidden` then blocks on a box
   nobody can see. Use `--smoke` for unattended runs, or launch visibly.
-  Source: P1-34/35 review of `atlas_platform::notice` (code-confirmed).
+  Source: P1-34/35 review of `syrinx_platform::notice` (code-confirmed).
 
 - **A smoke-test timeout on the GUI thread cannot bound a frozen GUI.** The
   earlier orderly timer also did nothing once shutdown began, so a missing
@@ -290,7 +290,7 @@ you found it in the commit message, not here.
   thread deadline for `--smoke` only, alongside orderly shutdown. A hard exit
   applies only to its freshly generated synthetic profile; it is not crash
   recovery or proof that a window is visible. Source: integrated-preview
-  timeout review in `crates/atlas-app/src/main.rs` and `ui.rs` (code-confirmed).
+  timeout review in `crates/syrinx-app/src/main.rs` and `ui.rs` (code-confirmed).
 
 - **An element with its own focus handle never becomes a Tab stop through
   `tab_index`.** GPUI applies `tab_index` only to handles it creates itself;
@@ -323,7 +323,7 @@ you found it in the commit message, not here.
   separate owned popup windows, which work. Source:
   `docs/research/09-phase-0-verdict.md` (observed in the spike; high).
 - **GPUI's Windows backend repaints every window on every display refresh,**
-  even when nothing changed, so an idle Atlas uses about 3.75% of a core.
+  even when nothing changed, so an idle Syrinx uses about 3.75% of a core.
   Patch the idle loop (D37) and measure idle CPU after any GPUI upgrade.
   Source: note 09 (measured; high).
 - **Smart App Control is off on the owner's machine since 2026-10-12.** The
@@ -349,7 +349,7 @@ you found it in the commit message, not here.
   and P1-05's local build-helper investigation.
 - **GPUI's popup window floats over every app.** `WindowKind::PopUp` is
   created `WS_EX_TOOLWINDOW | WS_EX_TOPMOST` and is not owned by the main
-  window, so the palette would stay on top when Atlas loses focus. Set its
+  window, so the palette would stay on top when Syrinx loses focus. Set its
   owner with `SetWindowLongPtrW(GWLP_HWNDPARENT, main_hwnd)` and drop
   `WS_EX_TOPMOST` if ownership gives the stacking needed; whether GPUI
   tolerates the change is unverified. `WindowKind::Dialog` disables its
@@ -446,7 +446,7 @@ you found it in the commit message, not here.
   `docs/storage-path-preflight.md` (high on the work performed; no timing
   claim).
 - **Holding sidecar handles can prevent SQLite's normal cleanup.** Refuse
-  unsafe `atlas.db-wal`, `-shm` and `-journal` entries before opening SQLite,
+  unsafe `syrinx.db-wal`, `-shm` and `-journal` entries before opening SQLite,
   then release their inspection handles. Keep the directory/main-database
   lease through connection close, rather than holding sidecars without delete
   sharing. Source: P1-03 design review and SQLite's WAL lifecycle, linked in
@@ -484,5 +484,5 @@ you found it in the commit message, not here.
   WebView2 has no Widevine, which is wrong for the runtime on this machine,
   and note 03's layout and boundary assume Tauri, which D3 and D4 replaced.
   Read notes 07 and 08 and the plan's "What we found" before relying on an
-  earlier note. Source: `docs/plans/Atlas v1 — Plan.md`, "What we found"
+  earlier note. Source: `docs/plans/Syrinx v1 — Plan.md`, "What we found"
   (high).

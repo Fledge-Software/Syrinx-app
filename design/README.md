@@ -1,10 +1,15 @@
-# Atlas design
+# Syrinx design
 
 The live design is the canvas **Atlas browser design**
 (<https://claude.ai/artifact/Cog1vuMS5rfYFmHLYPKj9f>, private to the owner).
 `canvas/project/` is a snapshot of its files taken on 2026-10-09; when the two
 disagree, the canvas wins. `reference/unified-workspace-mockup.html` is the
 original two-board mockup the spec points at.
+
+The canvas, its snapshot and the mockup predate the product's name and show
+the working name Atlas in titles and labels; read it as Syrinx, which is what
+the app says. The snapshot is left as taken; renaming the live canvas is the
+owner's call.
 
 ## What is on the canvas
 
@@ -17,7 +22,7 @@ original two-board mockup the spec points at.
   palettes, side by side. Every board also has a `theme` tweak.
 - **Forge, the code plugin:** editing (project tree, split editors, a
   completion from the language server, terminal, context rail), commit, diff
-  and log, and the editor with the Atlas sidebar open.
+  and log, and the editor with the Syrinx sidebar open.
 - **Sidebar:** one shared component; the other boards import it.
 
 ## Decisions made after the spec
@@ -27,7 +32,7 @@ the 2026-10-09 design pass. The owner-approved 2026-10-10 additions below
 (D43–D45) supersede the affected parts of the older canvas snapshot; changing
 them again requires the owner's approval.
 
-- **The browser is named Atlas** in the chrome (the mockup said "Perch").
+- **The browser is named Syrinx** in the chrome (the mockup said "Perch").
 - **No Extensions button.** Tauri's OS web views cannot run Chrome extensions.
 - **New tab is a `+` on the Open tabs header (Ctrl T)**, not a row, so no two
   rows read "New tab".
@@ -47,7 +52,7 @@ them again requires the owner's approval.
   this history and reopen through their permanent rows.
 - **The top square tiles are Favorites (D45).** They remain separate from
   the inline saved-page/folder records and may target websites, plugin pages
-  or other supported Atlas destinations. Plugin Favorites use the normal
+  or other supported Syrinx destinations. Plugin Favorites use the normal
   plugin lifecycle; before implementation, they show that the plugin is not
   yet available. This renames the spec's sidebar "pinned app tiles", not
   the home page's Quick access section.
@@ -90,13 +95,13 @@ them again requires the owner's approval.
 Forge takes PyCharm's workflow, not its look: tool windows docked around the
 editor, split editor groups, language-server completions and inline type
 hints, git commit, diff and log, a terminal, and a run control. Everything
-is drawn in Atlas's own visual language; none of JetBrains' icons or styling
+is drawn in Syrinx's own visual language; none of JetBrains' icons or styling
 is copied.
 
-- **A Forge tab hides the Atlas sidebar by default.** An IDE needs the width:
+- **A Forge tab hides the Syrinx sidebar by default.** An IDE needs the width:
   with the sidebar hidden the editors get about 875px, enough for two groups
   side by side. Hovering the left edge peeks the sidebar over the editor, as
-  everywhere in Atlas; pinning it with Ctrl Alt S narrows the editor and folds the
+  everywhere in Syrinx; pinning it with Ctrl Alt S narrows the editor and folds the
   context rail into a strip of icons.
 - **Back and forward move between code locations** in a Forge tab, as Alt Left
   and Alt Right do in PyCharm. Reload is hidden, because it means nothing there.
@@ -110,7 +115,7 @@ is copied.
   justfile) instead of keeping per-language settings.
 - **Git status uses a letter as well as a colour** (M, A, U), so it doesn't
   rely on hue alone.
-- **Forge's surfaces are opaque in every palette.** Only the Atlas title bar
+- **Forge's surfaces are opaque in every palette.** Only the Syrinx title bar
   around the card picks up Haze or Glass.
 - **The highlighter on the canvas is a stand-in** for Tree-sitter, and the
   completion for rust-analyzer over LSP; the code shown is illustrative.
@@ -127,7 +132,7 @@ feature on each system.
 |---|---|---|---|---|
 | Graphite | Solid dark (the default) | Plain colours | Plain colours | Plain colours |
 | Haze | Dark, softly coloured by the wallpaper | `mica` window effect | `sidebar` vibrancy | Falls back to Graphite |
-| Glass | See-through, with light edges | `acrylic` window effect plus Atlas's glass styling | `liquidGlassRegular` on macOS 26+, `hudWindow` vibrancy plus the styling before that | Falls back to Graphite |
+| Glass | See-through, with light edges | `acrylic` window effect plus Syrinx's glass styling | `liquidGlassRegular` on macOS 26+, `hudWindow` vibrancy plus the styling before that | Falls back to Graphite |
 | Tint | Dark gradient in the accent's hue, with grain | Plain colours | Plain colours | Plain colours |
 | Paper | Light | Plain colours | Plain colours | Plain colours |
 
@@ -147,7 +152,7 @@ Rules that hold for the see-through palettes:
   build 26300, so it may be fine there; the Phase 0 spike has to confirm it.
 - **Text gets lighter on glass.** The muted grey is raised in Haze and Glass so
   it stays at 4.5:1 over a mid-tone wallpaper. A bright wallpaper can still
-  fail, so Atlas's "Reduce transparency" switch follows the OS setting and
+  fail, so Syrinx's "Reduce transparency" switch follows the OS setting and
   turns both into Graphite.
 
 Zen gets its see-through look the same way, through the operating system:

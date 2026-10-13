@@ -16,14 +16,14 @@ still fails, by the owner's decision: WebView2 hides the second line of a
 repeated `Cache-Control` header, so a page that sends `no-store` only on a
 later line is read (F2). On 2026-10-12 the owner accepted that as a known
 limit, approved the `visibility` computed style, and added a rule that
-every exit from an excluded site that Atlas did not start is skipped
+every exit from an excluded site that Syrinx did not start is skipped
 (F21–F27, "skip all exits", which replaced an earlier user-initiated test
 the same day); all are recorded in `docs/decisions.md`. The independent review's fixes are listed under
 "Review changes".
 
 ## What was built
 
-- **Eligibility** (`crates/atlas-core/src/page_text.rs`, with
+- **Eligibility** (`crates/syrinx-core/src/page_text.rs`, with
   `page_text/sites.rs` and `page_text/cache_control.rs`). A pure function,
   `judge`, runs the proposal's steps 1 to 8 in order from facts the platform
   observed and returns either an `Ineligible` reason or an
@@ -37,13 +37,13 @@ the same day); all are recorded in `docs/decisions.md`. The independent review's
   syntax, quoted strings); an unreadable header counts as `no-store`.
   Responses from frames are told apart by `Sec-Fetch-Dest`; a missing
   response fails closed. **Exits** (owner's decision, 2026-10-12, "skip all
-  exits"): a document reached by a navigation Atlas did not start that left
+  exits"): a document reached by a navigation Syrinx did not start that left
   an excluded or tainted document is ineligible (`LeftExcluded`), and so is
   any document whose navigation sent a request with a method other than
   `GET`, on any site, including a `POST` answered with a redirect
   (`FormPost`). `PageTextPolicy::taints` applies the same rule, plus excluded
   redirect hops, to decide which committed documents carry the taint on.
-- **Observation** (`crates/atlas-platform/src/browser/page_text.rs`). Only
+- **Observation** (`crates/syrinx-platform/src/browser/page_text.rs`). Only
   when capture is switched on as a page is created, the page subscribes to
   `NavigationStarting` (each redirect hop, with the web view's `Source()` read
   as the document a new navigation leaves),
@@ -52,17 +52,17 @@ the same day); all are recorded in `docs/decisions.md`. The independent review's
   requests; no filter, no body, no other header), `SourceChanged`,
   `NavigationCompleted` and `ProcessFailed`. Each tab keeps a generation that
   rises on every navigation start, address change and process failure. A
-  navigation is Atlas's own only when it starts, within five seconds, for
-  the address Atlas just asked `Page::navigate` to load (creating a tab, the
-  address bar and every other Atlas entry point). The request is withdrawn
+  navigation is Syrinx's own only when it starts, within five seconds, for
+  the address Syrinx just asked `Page::navigate` to load (creating a tab, the
+  address bar and every other Syrinx entry point). The request is withdrawn
   by back, forward, reload, a refused load, or a navigation that began after
-  it and failed; crash recovery's reload never counts as Atlas's own. Each tab carries a taint flag: set when a document
-  commits after leaving an excluded or tainted document without Atlas, or
-  through an excluded redirect hop, and cleared only by an Atlas navigation.
+  it and failed; crash recovery's reload never counts as Syrinx's own. Each tab carries a taint flag: set when a document
+  commits after leaving an excluded or tainted document without Syrinx, or
+  through an excluded redirect hop, and cleared only by a Syrinx navigation.
   It is tracked with the last exclusion lists even after capture is
   switched off, for pages that were observed. Each tab also remembers up to
   64 addresses (without fragment) it committed tainted, so back or forward
-  into one stays tainted, even if Atlas cleared the tab in between (Atlas
+  into one stays tainted, even if Syrinx cleared the tab in between (Syrinx
   loading that address itself is read, as the owner decided); an
   unreadable navigation start taints the tab; a tab rebuilt after a crash
   keeps its taint. An adopted popup starts with
@@ -98,8 +98,8 @@ the same day); all are recorded in `docs/decisions.md`. The independent review's
 - **Commands and events.** `BrowserCommand::SetPageTextPolicy` switches
   capture on or off; `BrowserEvent::PageText` reports each outcome. The app
   never sends the command, so the running product makes no call and
-  subscribes to nothing (F19); `atlas-app` only ignores the new event.
-- **Dependency.** `atlas-platform` now declares the already audited
+  subscribes to nothing (F19); `syrinx-app` only ignores the new event.
+- **Dependency.** `syrinx-platform` now declares the already audited
   `serde_json =1.0.151` (`std` only); it was already compiled into the app
   through GPUI. See `docs/dependency-audit.md`, "P1-25".
 
@@ -111,7 +111,7 @@ subscription). The page web view keeps `with_devtools(false)`.
 
 ## The native harness
 
-`crates/atlas-platform/examples/page_text_feasibility.rs` (with
+`crates/syrinx-platform/examples/page_text_feasibility.rs` (with
 `page_text_feasibility/{cases,pages,server}.rs`) starts a synthetic HTTP
 server and a fresh WebView2 profile under the temporary folder for each of
 four browser runs. It never visits a real site and signs in to nothing.
@@ -125,12 +125,12 @@ each site listens on its own loopback address (`plain` 127.0.0.1, `bank`
 127.0.0.6), and the policy lists `127.0.0.2`/`127.0.0.3` as banking and
 `127.0.0.4`/`127.0.0.5` as owner exclusions through
 `PageTextPolicy::with_banking` and the owner list, so the same code path runs.
-Google's real domains are tested only in the `atlas-core` unit tests.
+Google's real domains are tested only in the `syrinx-core` unit tests.
 
 Run it, with no build of the same executable in progress:
 
 ```powershell
-cargo build -p atlas-platform --example page_text_feasibility --profile local --offline --locked
+cargo build -p syrinx-platform --example page_text_feasibility --profile local --offline --locked
 .\target\local\examples\page_text_feasibility.exe            # all cases, 500 race runs
 .\target\local\examples\page_text_feasibility.exe --only F1,F2 --race-runs 20
 ```
@@ -143,12 +143,12 @@ the owner accepted. Earlier runs are kept as `target/p125-final.log` to
 
 ## Results
 
-Unit tests U1–U7 are in `crates/atlas-core/tests/page_text.rs` (15 tests,
+Unit tests U1–U7 are in `crates/syrinx-core/tests/page_text.rs` (15 tests,
 including the exit, taint and `POST` rules) and the module tests (7). The
 platform's observation state has 22 tests in `page_text/state.rs`, including
 regressions for the in-flight wake-up, step 8's scheduled generation, a
 cancelled navigation, script and link exits from a bank, taint carried over
-several hops and cleared only by Atlas, Atlas navigation recognised only for
+several hops and cleared only by Syrinx, Syrinx navigation recognised only for
 its own address, taint from an excluded redirect hop, taint tracked while
 capture is off, popup seeding, a posted document and a `POST` redirect whose
 response arrives after the next hop; snapshot reading has 9 tests on
@@ -173,19 +173,19 @@ all 972 workspace tests and the application smoke run
 | F13 | Pass | First capture at load; five `pushState` calls three seconds later were each rechecked (four cancelled by the next); exactly one more capture, of `/history/5`, 30.02 s after the first. |
 | F14 | Recorded | A **service worker's synthetic response raises `WebResourceResponseReceived`** with the worker's headers (0 network hits), so it was judged on those and captured. Back navigation, a second visit to a `max-age=600` page and a reload each raised a matching response and were captured; reload needed a fix, below. Server hits (landing 1, cacheable 2) were **identical with and without the subscription**, so subscribing did not change caching in this test. No case reached the fail-closed branch, so whether a true back/forward-cache restore raises the event is not established. |
 | F15 | **Pass** | Probe results in a tab that had captured `plain` and in a fresh tab were identical: `navigator.webdriver` false, console getter not read, `debugger` not paused, 238 enumerable globals with the same name hash, no automation globals. The fallback is not triggered. |
-| F16 | Pass | 1,000 nodes: 70.6 KB response, 12 ms call, 2 ms parse. 10,000 nodes: 750 KB, 101 ms, 24 ms. 100,000 nodes: 8.1 MB, 954 ms, 202 ms, text capped at 256 KiB. The page's own long-task observer recorded no new task over 50 ms during any capture. Atlas interface frames were not measured (no Atlas window in the harness). |
+| F16 | Pass | 1,000 nodes: 70.6 KB response, 12 ms call, 2 ms parse. 10,000 nodes: 750 KB, 101 ms, 24 ms. 100,000 nodes: 8.1 MB, 954 ms, 202 ms, text capped at 256 KiB. The page's own long-task observer recorded no new task over 50 ms during any capture. Syrinx interface frames were not measured (no Syrinx window in the harness). |
 | F17 | Pass | A hidden tab suspended at five seconds; its capture fell due at seven and did not run; showing the tab resumed it and the capture ran. |
 | F18 | Pass (partial) | The host call works with `with_devtools(false)` (every capture above). No TCP listening socket belonged to this run's WebView2 processes (6 then 7 processes, found by profile path) before or after captures. Whether F12 opens DevTools was not exercised. |
 | F19 | Pass | A run with capture off produced zero page-text events, including zero calls. |
 | F20 | Pass | From a shown bank page, a 204 and a 205 navigation committed nothing: the bank page stayed shown, no capture was scheduled for it and no call was made. *(Added in review.)* |
 | F21 | Pass | The bank page's script set `location.href` to a plain page 300 ms after load. The plain page loaded and was judged `LeftExcluded`; zero calls. |
 | F22 | Pass | The bank page auto-submitted a `POST` form to a plain page. The server received the `POST`; the page was judged `LeftExcluded` (the `FormPost` rule would also apply); zero calls. |
-| F23 | Pass | A bank page focused its own link; the harness posted an Enter key to the focused page window. The plain page opened and was judged `LeftExcluded`, zero calls: a link out of an excluded site is not an Atlas navigation. (Under the replaced user-initiated test this page was captured, which is what prompted "skip all exits".) |
+| F23 | Pass | A bank page focused its own link; the harness posted an Enter key to the focused page window. The plain page opened and was judged `LeftExcluded`, zero calls: a link out of an excluded site is not a Syrinx navigation. (Under the replaced user-initiated test this page was captured, which is what prompted "skip all exits".) |
 | F24 | Pass | A plain page auto-submitted a `POST` form to itself: judged `FormPost`, zero calls. |
 | F25 | Pass | A plain page auto-submitted a `POST` answered by 302, 303 and 307, to the same site and to `plain2`. All six final pages (`GET` after 302 and 303) were reached and judged `FormPost`, zero calls. This shows WebView2 raises `WebResourceResponseReceived` for the redirect response on this runtime; the harness cannot tell whether it arrived before or after the next hop started, so the late-arrival case is covered by the state test `a_post_redirect_response_arriving_after_the_next_hop_still_counts`. |
-| F26 | Pass | The bank's script went to a plain relay page, whose own script moved on 300 ms later (before its settle delay, so the relay itself was never judged). The next plain page was judged `LeftExcluded`, which only the carried taint can cause because the relay is not excluded. An Atlas navigation in the same tab afterwards was captured. |
-| F28 | Pass | The bank's script reached a plain page (judged `LeftExcluded`); an Atlas navigation in the same tab was captured; Back returned to the first plain page, which was judged `LeftExcluded` again with zero calls. *(Third review.)* |
-| F27 | Pass | A focused button on a bank page opened a popup with `window.open` (synthetic Enter); the harness adopted it as Atlas does. The popup's page was judged `LeftExcluded`. The same popup from a plain page was not (`NoResponse`). **Finding:** an adopted popup's first document raised no matching response event on this runtime, so popups are never read today (they fail closed at step 7). |
+| F26 | Pass | The bank's script went to a plain relay page, whose own script moved on 300 ms later (before its settle delay, so the relay itself was never judged). The next plain page was judged `LeftExcluded`, which only the carried taint can cause because the relay is not excluded. A Syrinx navigation in the same tab afterwards was captured. |
+| F28 | Pass | The bank's script reached a plain page (judged `LeftExcluded`); a Syrinx navigation in the same tab was captured; Back returned to the first plain page, which was judged `LeftExcluded` again with zero calls. *(Third review.)* |
+| F27 | Pass | A focused button on a bank page opened a popup with `window.open` (synthetic Enter); the harness adopted it as Syrinx does. The popup's page was judged `LeftExcluded`. The same popup from a plain page was not (`NoResponse`). **Finding:** an adopted popup's first document raised no matching response event on this runtime, so popups are never read today (they fail closed at step 7). |
 
 Earlier runs also found a product defect, fixed before the recorded run: the
 runtime sends -1 for an empty attribute value (`contenteditable=""`), which
@@ -253,15 +253,15 @@ The independent review's findings, each fixed in a new commit:
 
 ## Third-review changes (2026-10-12)
 
-1. **A stale Atlas request cannot clear taint.** It expires after five
+1. **A stale Syrinx request cannot clear taint.** It expires after five
    seconds and is withdrawn by back, forward, reload, a refused load and a
    later navigation that fails (state tests
-   `an_atlas_request_that_never_started_does_not_clear_taint_later` and
-   `a_cancelled_navigation_or_another_atlas_action_withdraws_the_request`).
+   `a_syrinx_request_that_never_started_does_not_clear_taint_later` and
+   `a_cancelled_navigation_or_another_syrinx_action_withdraws_the_request`).
 2. **Crash recovery keeps taint.** A crashed tab's taint is kept with its
    address, the rebuilt page starts with it, and its reload is not counted
-   as Atlas's navigation (`a_seeded_taint_survives_until_atlas_navigates`).
-   An address the owner types into a crashed tab is Atlas's own and starts
+   as Syrinx's navigation (`a_seeded_taint_survives_until_syrinx_navigates`).
+   An address the owner types into a crashed tab is Syrinx's own and starts
    clean.
 3. **Back or forward into a tainted entry stays tainted** (F28 and
    `back_into_a_tainted_document_stays_tainted`), using the per-tab set of
@@ -276,7 +276,7 @@ The independent review's findings, each fixed in a new commit:
 
 1. **One computed style.** The proposal said "computed styles switched off".
    With none, `visibility:hidden` text is laid out and returned (F1 failed).
-   Atlas now requests only `visibility` and drops `hidden`/`collapse`. It is
+   Syrinx now requests only `visibility` and drops `hidden`/`collapse`. It is
    the same method and still requests no rectangles, paint order or colours.
    **The owner approved this on 2026-10-12.**
 2. **Loopback addresses instead of `--host-resolver-rules`,** as above.
@@ -292,8 +292,8 @@ The independent review's findings, each fixed in a new commit:
 
 ## Production recommendation for P1-26
 
-Adopt this path: `atlas_core::judge` before access, the observation and
-capture in `atlas-platform/src/browser/page_text.rs`, and the parameters
+Adopt this path: `syrinx_core::judge` before access, the observation and
+capture in `syrinx-platform/src/browser/page_text.rs`, and the parameters
 above. Specifically:
 
 - Keep capture off by default and subscribe only for pages created while it
@@ -305,7 +305,7 @@ above. Specifically:
 - Skip or defer capture above a measured size. A 100,000-node page cost about
   about one second in the renderer and 200 ms of parsing; P1-26 should cap by
   response size (the 8 MiB bound is a safety limit, not a budget) and measure
-  Atlas interface frames in the running app, which this harness could not.
+  Syrinx interface frames in the running app, which this harness could not.
 - Keep "skip all exits" and the carried taint. Its limits: a tab that was
   created while capture was off is never observed, so switching capture on
   later starts clean only for new tabs, and a popup from such a tab starts
@@ -331,7 +331,7 @@ above. Specifically:
 1. **F2** is decided: accepted as a known limit. Should a report be sent to
    Microsoft? Nothing has been sent; it goes only with your approval.
 2. Review the built-in banking and payment list in
-   `crates/atlas-core/src/page_text/sites.rs` (proposal question 5) and the
+   `crates/syrinx-core/src/page_text/sites.rs` (proposal question 5) and the
    Google list beside it (question 4), including the six domains added in
    review: `.goog`, `android.com`, `chrome.com`, `gvt1.com`, `gvt2.com` and
    `googleblog.com`.

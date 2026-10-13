@@ -1,14 +1,14 @@
 ---
-title: "Atlas v1 — Plan (plan 1: engine, browser core and palette)"
+title: "Syrinx v1 — Plan (plan 1: engine, browser core and palette)"
 status: active
 created: 2026-10-09
-subject: Atlas v1 plan 1 — the engine, the browser core and the command palette; also holds the v1-wide decisions that plans 2–4 share
-relates_to: "docs/spec.md; docs/decisions.md; design/README.md; docs/research/; sibling plans: Atlas v1 — Plugins and Fledge, Atlas v1 — Notes, Atlas v1 — Forge"
+subject: Syrinx v1 plan 1 — the engine, the browser core and the command palette; also holds the v1-wide decisions that plans 2–4 share
+relates_to: "docs/spec.md; docs/decisions.md; design/README.md; docs/research/; sibling plans: Syrinx v1 — Plugins and Fledge, Syrinx v1 — Notes, Syrinx v1 — Forge"
 issues_repo: not yet created (the repository is local; the owner creates it before anything is published)
 branch: claude/plan-atlas-v1
 ---
 
-# Atlas v1
+# Syrinx v1
 
 > **Status: active.** The owner approved all four plans, this plan's 40-slice
 > breakdown and the local implementation/review workflow on 2026-10-10 (D41).
@@ -22,7 +22,7 @@ branch: claude/plan-atlas-v1
 
 The owner works across a browser, an IDE (PyCharm), a notes app and their own
 business software, Fledge. Each holds part of the context, and none can
-search the others. Atlas puts all four in one window: a browser first, with
+search the others. Syrinx puts all four in one window: a browser first, with
 code, notes and Fledge as built-in plugins that open as tabs, and one command
 palette and one search over everything (`docs/spec.md`, "What this is").
 
@@ -46,7 +46,7 @@ The braindump is the "Brief" section of `docs/next-session-prompt.md` as
 committed in `e5ecfaf` (2026-10-09). It is kept there rather than copied here,
 because it is long; that commit is the unchanged original. In short:
 
-- **Atlas** is a browser-first workspace: a desktop browser with a
+- **Syrinx** is a browser-first workspace: a desktop browser with a
   vertical-tab sidebar, where Forge (code), Notes and Fledge run as built-in
   plugins that open as tabs, with one command palette and one search.
 - **Performance decides.** Low memory per tab, fast start, low typing and
@@ -60,7 +60,7 @@ because it is long; that commit is the unchanged original. In short:
   start-up and latency against Edge and a control build, both overlay
   approaches, and shortcuts while a page has focus. It ends with a per-OS
   verdict and a go/no-go against thresholds the owner confirms.
-- **v1 (proposed)** is Atlas as the owner's daily browser on Windows with spec
+- **v1 (proposed)** is Syrinx as the owner's daily browser on Windows with spec
   sections 1–4 and the Must items of `docs/research/02-browser-v1-scope.md`,
   split into four plans: (1) engine, browser core and palette; (2) plugin
   runtime and Fledge; (3) Notes; (4) Forge. Outline all four; build the first.
@@ -82,7 +82,7 @@ because it is long; that commit is the unchanged original. In short:
 Windows 11, build 26300, with agents assisting. The repository remains local.
 
 **What this plan assumes, until the owner confirms (⚠️):**
-- ⚠️ Success means Atlas is the owner's default browser for daily use, with
+- ⚠️ Success means Syrinx is the owner's default browser for daily use, with
   memory and start-up close to Edge's.
 - ⚠️ The 15 sites in `docs/research/06-engine-and-ui-performance.md` (Phase 0
   checklist, item 4) are the owner's real daily set.
@@ -111,7 +111,7 @@ their untested-runtime statements; outstanding checks are listed below.
 DRM security levels and third-party project timelines have not been
 re-established by the readiness review. They are not current guarantees or
 permission to reopen D3/D4. The current evidence is in
-`docs/plans/Atlas v1 — Readiness and implementation breakdown.md`.
+`docs/plans/Syrinx v1 — Readiness and implementation breakdown.md`.
 
 **WebView2 is a better fit than the earlier notes said**
 (`docs/research/07-google-sign-in-and-drm.md`):
@@ -132,7 +132,7 @@ permission to reopen D3/D4. The current evidence is in
   the 2021 block appeared (after entering an email) was not tried, because no
   credentials were used. (Medium.) If the default fails, there is no
   sanctioned fallback.
-- **Rules that keep Google working:** Atlas must never set a custom user
+- **Rules that keep Google working:** Syrinx must never set a custom user
   agent on page web views (that removes the Chrome presentation toward Google
   and exposes the WebView2 brand), must not attach an IPC handler to page web
   views (wry's injected `window.ipc` was reported to break Google Docs and
@@ -148,13 +148,13 @@ permission to reopen D3/D4. The current evidence is in
 - GPUI exposes the window's raw handle, so wry can build WebView2 tabs as
   child windows of a GPUI window.
 - GPUI's popup windows on Windows float above every app and use the old
-  Acrylic call, so Atlas sets the owner window and the
+  Acrylic call, so Syrinx sets the owner window and the
   `DWMSBT_TRANSIENTWINDOW` backdrop itself through raw Win32 calls, and hands
   focus back to the page with wry's `focus()`.
 - wry 0.57 covers the shared WebView2 environment, popups that keep
   `window.opener`, permissions, the memory level and downloads. Shortcuts
   (`AcceleratorKeyPressed`), fullscreen video, crashed tabs (`ProcessFailed`)
-  and `TrySuspend` need raw WebView2 calls through `webview2-com`. Atlas
+  and `TrySuspend` need raw WebView2 calls through `webview2-com`. Syrinx
   builds its own environment to keep crash dumps local, and overrides wry's
   default browser arguments, which switch SmartScreen off.
 - **The fallback for overlays is not ready.** WebView2 visual hosting in wry
@@ -218,7 +218,7 @@ Standing decisions, recorded so they are not re-litigated:
 | S4 | Graph view | Excluded | `docs/spec.md` | 2026-10-09 |
 | S5 | Command palette | Central | `docs/spec.md` | 2026-10-09 |
 | S6 | Deciding goal for engine and UI | Performance | `docs/decisions.md` | 2026-10-09 |
-| S7 | Import | ~~A CSV file only~~ Replaced by D14 with the owner's yes: Atlas doesn't read other browsers' profiles; it imports a file the owner exports | `docs/decisions.md` | 2026-10-09 |
+| S7 | Import | ~~A CSV file only~~ Replaced by D14 with the owner's yes: Syrinx doesn't read other browsers' profiles; it imports a file the owner exports | `docs/decisions.md` | 2026-10-09 |
 | S8 | Signing, SmartScreen, Microsoft Store | Deferred until productisation | `docs/decisions.md` | 2026-10-09 |
 | S9 | Distribution | Probably open source, released on GitHub | `docs/decisions.md` | 2026-10-09 |
 | S10 | Design | Every decision in `design/README.md` stands; changing one needs the owner's yes | `design/README.md` | 2026-10-09 |
@@ -233,49 +233,49 @@ Decisions made in this plan:
 | D49 | What should be runnable next? | Bring the integrated product browser forward: existing tabs, saved-page storage, backups and search connected to a GPUI window, vertical tabs, WebView2 navigation and Ctrl K. Keep remaining features and performance requirements tracked; commit/merge approvals still apply. | Continuing strict order before exposing any morning work in a window: the owner explicitly chose a usable integrated preview after rejecting the old spike. Calling the preview full v1: its unfinished requirements remain visible. | 2026-10-10 |
 | D48 | How is the 5 ms tier 1 search target measured? | Require 95% of repeated complete 100,000-row searches to finish within 5 ms; report the worst sample too. Measure ranking, scope counts and returned highlights together. | Requiring every measured sample below 5 ms: occasional Windows scheduling interruptions can dominate a maximum. Hiding maxima or measuring the matcher alone: conceals the actual responsiveness. | 2026-10-10 |
 | D47 | How does explicit history clearing survive restoring an older backup? | Keep a local deletion record containing only cleared date ranges and data categories, never URLs or page contents. Restoration honors it, preserving older recovery points without reintroducing cleared history. | Discarding all older backups whenever history is cleared: loses their recovery depth. Restoring deleted history: undoes the owner's clearing request. | 2026-10-10 |
-| D46 | May Atlas restore a damaged database automatically? | Offer the newest verified backup with its date and ask the owner before replacing the current database. Preserve damaged files locally. | Automatic restoration: the owner wants to confirm a replacement that may lose newer state. | 2026-10-10 |
-| D45 | What are the top square sidebar tiles? | Favorites, separate from inline saved pages/folders. They may target websites, plugin pages and other supported Atlas destinations. Plugin targets use the normal plugin lifecycle; until implemented, show the existing unavailable indication. | Website-only tiles exclude the owner's plugin destinations. Treating tiles as saved-page records conflates two navigation surfaces. An early plugin host or fake successful opening skips plan 2. | 2026-10-10 |
+| D46 | May Syrinx restore a damaged database automatically? | Offer the newest verified backup with its date and ask the owner before replacing the current database. Preserve damaged files locally. | Automatic restoration: the owner wants to confirm a replacement that may lose newer state. | 2026-10-10 |
+| D45 | What are the top square sidebar tiles? | Favorites, separate from inline saved pages/folders. They may target websites, plugin pages and other supported Syrinx destinations. Plugin targets use the normal plugin lifecycle; until implemented, show the existing unavailable indication. | Website-only tiles exclude the owner's plugin destinations. Treating tiles as saved-page records conflates two navigation surfaces. An early plugin host or fake successful opening skips plan 2. | 2026-10-10 |
 | D44 | Can the sidebar adapt to the space the owner wants? | Add smooth width dragging from wide with labels to favicon-only to hidden, with reverse dragging restoring it. Preserve hidden-sidebar hover peek and Ctrl Alt S. The owner's screenshot supplies direction; do not copy it into the repository. UI thresholds and compact-folder affordances remain for later review. | A fixed-width sidebar cannot provide the requested space control. Replacing hover peek or the shortcut removes settled navigation. Guessing thresholds before the UI prototype hides an undecided interaction. | 2026-10-10 |
 | D43 | How do saved pages fit among tabs? | Pin means Save: persistent inline rows and folders. Closing unloads only the live page; opening focuses an existing instance or loads the saved address. Live navigation leaves saved title/address unchanged. Remove/Unpin leaves a live page ordinary. Saved rows come first; saving appends to their group and removing an open saved page puts it at the start of ordinary tabs. HTML import preserves folders and starts unloaded. The owner approved the revised 40-slice map, with a flat foundation now and full folders/import later. | A separate bookmark destination misses the requested inline workflow. A temporary pin flag would require replacing P1-09's behavior later. Opening every imported page wastes memory. Updating saved addresses on navigation changes the destination without an explicit edit. D42's original live-pin behavior is superseded; its web-tab close/history rules remain. | 2026-10-10 |
-| D42 | How do tabs close, reorder and reopen predictably? | Closing the active page selects the next open page to its right, otherwise its left, skipping unloaded saved rows. Closing the last live page shows Home and keeps Atlas open. New ordinary web tabs append and become active. Reorder stays within saved/ordinary groups. Keep the 20 most recent web-tab closures, including saved-page instances. Ordinary reopen restores metadata/position. Under D43, saved reopen focuses its live instance or loads its fixed saved target if the row survives; if removed, history may reopen an ordinary page but never recreates the saved record. Plugins are excluded. No live page or form contents are retained. | Most-recently-used selection: the owner chose visible adjacency. Closing Atlas with its last page loses Home. A 100-entry stack: the owner chose 20. Retaining live pages/forms exceeds metadata-only reopen. Plugin reopen is already available through permanent rows. Restoring a deleted saved row would undo an explicit removal. | 2026-10-10; clarified by D43 |
+| D42 | How do tabs close, reorder and reopen predictably? | Closing the active page selects the next open page to its right, otherwise its left, skipping unloaded saved rows. Closing the last live page shows Home and keeps Syrinx open. New ordinary web tabs append and become active. Reorder stays within saved/ordinary groups. Keep the 20 most recent web-tab closures, including saved-page instances. Ordinary reopen restores metadata/position. Under D43, saved reopen focuses its live instance or loads its fixed saved target if the row survives; if removed, history may reopen an ordinary page but never recreates the saved record. Plugins are excluded. No live page or form contents are retained. | Most-recently-used selection: the owner chose visible adjacency. Closing Syrinx with its last page loses Home. A 100-entry stack: the owner chose 20. Retaining live pages/forms exceeds metadata-only reopen. Plugin reopen is already available through permanent rows. Restoring a deleted saved row would undo an explicit removal. | 2026-10-10; clarified by D43 |
 | D41 | May implementation proceed while the repository stays local? | Yes. The four plans and plan 1's 40-slice breakdown are approved. One local branch per slice, independent review, and the owner's approval before every merge replace D16's GitHub prerequisite. Commits still require the owner's request; first preserve the planning baseline with an explicitly requested documentation commit. No remote or pushes. | Waiting for GitHub: the owner wants to continue locally. Treating workflow approval as permission for commits or merges: those remain separate owner controls. | 2026-10-10 |
-| D40 | Does the seven-day page-text limit include Atlas backups? | Yes. Keep page text and its index in an expiring cache outside D13's seven daily durable-state snapshots. Expiry applies to active storage and must survive restart, replay and restore. This is an Atlas-managed retention policy, not forensic erasure. | Only hiding older text from search while keeping it in snapshots: exceeds the retention the owner chose. | 2026-10-10 |
-| D39 | Keep WebView2 despite its diagnostics, and may Atlas have analytics? | Keep WebView2 and SmartScreen and disclose the runtime's collection; crash dumps stay local. Replace the blanket no-analytics rule with local aggregate feature/command counts, timings and error categories, explicitly exported by the owner. No account/device IDs, URLs, searches, paths, document text or detailed event timeline; no automatic uploads. A model may suggest changes from a report the owner chooses to share, and the owner reviews changes. Review the concrete schema, retention/control behavior and added implementation slices before collection. | No analytics: the owner wants evidence to improve Atlas. Automatic uploads and an automatically adapting interface: the owner selected local counters, explicit export and reviewed suggestions. Removing IDs as an absolute anonymity guarantee: one person's report can remain identifiable by context. | 2026-10-10 |
-| D38 | How do development builds run, given Smart App Control blocks unsigned debug builds? | A release-style profile with debug info for the gate and dev runs; no change to Windows settings. The owner requires local Atlas to run unsigned for now; no certificate prerequisite. Verify each app build because this profile grants no policy exemption. | The owner adjusting Smart App Control: changes a security setting for convenience (`docs/research/09-phase-0-verdict.md`). Making a certificate mandatory: the owner has none and signing remains deferred. | 2026-10-10 |
-| D37 | May Atlas carry a patched GPUI? | Yes, on D12's rules: small, `=`-pinned, offered upstream, dropped once merged. First use: GPUI's Windows idle loop, which repaints every window each frame (idle CPU 3.75% of a core against the 0.5% bar). If the patch can't reach 0.5%, GPUI against Tauri returns to the owner | Switching to Tauri now: gives up about 0.9 s of start-up and 60–150 MB. Accepting high idle CPU: battery and heat for a browser left open all day | 2026-10-10 |
-| D36 | Does Atlas watch for Google sign-in breaking? | It shows a one-line notice when the WebView2 runtime version changes, so the owner watches for sign-in trouble, and offers to open the current Google page in Edge in one click if sign-in breaks. No automatic sign-in test | An automatic canary that signs in: credentials in a test. Nothing: a silent break would surprise the owner mid-work | 2026-10-09 |
+| D40 | Does the seven-day page-text limit include Syrinx backups? | Yes. Keep page text and its index in an expiring cache outside D13's seven daily durable-state snapshots. Expiry applies to active storage and must survive restart, replay and restore. This is a Syrinx-managed retention policy, not forensic erasure. | Only hiding older text from search while keeping it in snapshots: exceeds the retention the owner chose. | 2026-10-10 |
+| D39 | Keep WebView2 despite its diagnostics, and may Syrinx have analytics? | Keep WebView2 and SmartScreen and disclose the runtime's collection; crash dumps stay local. Replace the blanket no-analytics rule with local aggregate feature/command counts, timings and error categories, explicitly exported by the owner. No account/device IDs, URLs, searches, paths, document text or detailed event timeline; no automatic uploads. A model may suggest changes from a report the owner chooses to share, and the owner reviews changes. Review the concrete schema, retention/control behavior and added implementation slices before collection. | No analytics: the owner wants evidence to improve Syrinx. Automatic uploads and an automatically adapting interface: the owner selected local counters, explicit export and reviewed suggestions. Removing IDs as an absolute anonymity guarantee: one person's report can remain identifiable by context. | 2026-10-10 |
+| D38 | How do development builds run, given Smart App Control blocks unsigned debug builds? | A release-style profile with debug info for the gate and dev runs; no change to Windows settings. The owner requires local Syrinx to run unsigned for now; no certificate prerequisite. Verify each app build because this profile grants no policy exemption. | The owner adjusting Smart App Control: changes a security setting for convenience (`docs/research/09-phase-0-verdict.md`). Making a certificate mandatory: the owner has none and signing remains deferred. | 2026-10-10 |
+| D37 | May Syrinx carry a patched GPUI? | Yes, on D12's rules: small, `=`-pinned, offered upstream, dropped once merged. First use: GPUI's Windows idle loop, which repaints every window each frame (idle CPU 3.75% of a core against the 0.5% bar). If the patch can't reach 0.5%, GPUI against Tauri returns to the owner | Switching to Tauri now: gives up about 0.9 s of start-up and 60–150 MB. Accepting high idle CPU: battery and heat for a browser left open all day | 2026-10-10 |
+| D36 | Does Syrinx watch for Google sign-in breaking? | It shows a one-line notice when the WebView2 runtime version changes, so the owner watches for sign-in trouble, and offers to open the current Google page in Edge in one click if sign-in breaks. No automatic sign-in test | An automatic canary that signs in: credentials in a test. Nothing: a silent break would surprise the owner mid-work | 2026-10-09 |
 | D35 | How is page text indexed (D18) without breaking Google? | Indexed locally for 7 days, but never on Google's sites, banking and payment sites, or pages sent with `Cache-Control: no-store`; the owner can add sites to the exclusion list in settings. The extraction method is chosen in plan 1 and must inject nothing on excluded sites | Dropping it for v1: the owner wants recall by content. Indexing everything: breaks the rules that keep Google working (`docs/research/07-google-sign-in-and-drm.md`) and keeps a 7-day record of banking pages in the database and its snapshots | 2026-10-09 |
 | D34 | How big is plan 2 in v1? | Thin: the plugin runtime, the `Plugin` trait, the stand-in Fledge client and the palette's inline "New lead" action. D19's keep-local switches and D20's full Fledge client move to the real-client work after Stage C | Building D19 and D20 in full on the stand-in: design and settings on an API that doesn't exist yet and will change, against D5's "deliberately thin" | 2026-10-09 |
 | D32 | Which input methods must the editors be tested with? | English and Latin scripts only; no IME test matrix in v1 | Chinese, Japanese or Korean IME testing: not used by the owner | 2026-10-09 |
 | D31 | Run control and debugger in Forge v1? | Run control in (an addition to the spec): Forge reads tasks from Cargo, npm scripts, pyproject, just and make and runs them in a terminal. Debugger out of v1. On 2026-10-10 the owner confirmed standard installed Python entry points plus terminal commands are enough; runner-specific uv, Poetry, tox and nox adapters wait for a stated need. `[project.scripts]` values are entry-point references, not shell commands (see plan 4) | Both out: loses the PyCharm workflow the owner relies on. Debugger in: Zed's took 8 months and over 25,000 lines (`docs/research/04-forge-and-notes.md`). Guessing common Python task tables: adds adapters the owner has not requested | 2026-10-09; Python scope confirmed 2026-10-10 |
 | D30 | Where do Forge's language servers come from? | Only servers already installed (on PATH or set in settings) in v1; automatic download and update after v1 | Never downloading: the owner wants it later. Downloading in v1: network access, updates and more work | 2026-10-09 |
-| D29 | How does Forge do git? | The `git` command line for every write and network operation (commit with hooks, checkout, merge, push, fetch with the owner's credential helpers); fast reads (status, diff, log, blame) in process in Rust behind a `GitRead` trait. Requires Git for Windows. Departs from the spec's "use libgit2" with the owner's yes | libgit2 for everything: can't read reftable repositories (Git 3's default) and won't run hooks; Zed removed it on 2026-06-02 (`docs/research/04-forge-and-notes.md`). Bundling a git: a bigger download and Atlas's own update duty | 2026-10-09 |
+| D29 | How does Forge do git? | The `git` command line for every write and network operation (commit with hooks, checkout, merge, push, fetch with the owner's credential helpers); fast reads (status, diff, log, blame) in process in Rust behind a `GitRead` trait. Requires Git for Windows. Departs from the spec's "use libgit2" with the owner's yes | libgit2 for everything: can't read reftable repositories (Git 3's default) and won't run hooks; Zed removed it on 2026-06-02 (`docs/research/04-forge-and-notes.md`). Bundling a git: a bigger download and Syrinx's own update duty | 2026-10-09 |
 | D28 | Native editors or CodeMirror for Notes and Forge in v1? | CodeMirror 6 in a small local web view inside the tab, for both. Rust owns files, parsing (Tree-sitter, pulldown-cmark), git and the language-server client (which stays in Rust). One WebView2 renderer is used only while a Notes or Forge tab is open. **Exception to S3, stated:** CodeMirror owns the live buffer, selection and undo while typing; Rust is the authority for what is on disk and writes a save only after the two copies' checksums match. A native editor may replace it later | Native GPUI editors: selection, input methods and accessibility to build, no native rich-markdown editor to start from, and Zed's editor is GPL-3.0 (`docs/research/04-forge-and-notes.md`). Native for Forge only: still the bulk of that cost | 2026-10-09 |
 | D27 | Does a Notes vault stay usable in Obsidian? | Yes: plain markdown files, wikilinks, Obsidian's property types, and a subset of its `.base` database-view format | Free to diverge: the owner would lose the way out to Obsidian | 2026-10-09 |
 | D26 | Where does a lead's Company live? | Already decided on the Fledge side and being built, in Nest; Fledge's modules now share one database. The stand-in client models Company on the lead, and the real client reads it from Nest | — (decided in Fledge, not here) | 2026-10-09 |
-| D25 | Which channel does Atlas use for Fledge data? | A small, structured, versioned REST API on the same OAuth tokens, for leads, mail, calendar and docs (Fledge-side routes, on the owner's list) | Fledge's MCP server: returns prose for a model, has no leads tool, and would need structured output added (`docs/research/05-fledge-api.md`) | 2026-10-09 |
+| D25 | Which channel does Syrinx use for Fledge data? | A small, structured, versioned REST API on the same OAuth tokens, for leads, mail, calendar and docs (Fledge-side routes, on the owner's list) | Fledge's MCP server: returns prose for a model, has no leads tool, and would need structured output added (`docs/research/05-fledge-api.md`) | 2026-10-09 |
 | D24 | When can the real Fledge client be built? | After Fledge's Stage C, which the owner says comes after the Fledge redesign; no date. Plan 2 ships the Fledge plugin on the stand-in client behind the trait, and the real client is its own later work, started when Stage C lands | Targeting the real client in plan 2: nothing it needs is deployed (`docs/research/05-fledge-api.md`, "Short answer") | 2026-10-09 |
-| D23 | How does Atlas authenticate to Fledge? | As an ordinary OAuth client through Fledge's consent screen (OAuth 2.1, PKCE, loopback redirect), with only the permissions the owner grants | A pre-registered first-party client: Fledge would have to build a separate trust path (`docs/research/05-fledge-api.md`, owner questions) | 2026-10-09 |
-| D22 | If the owner's Google sign-in fails, in Phase 0 or later? | Stop and decide with the evidence: where it failed, and the options then (Google in Edge, presenting Atlas differently against Google's policy, or rethinking the engine). Because WebView2's Chrome presentation toward Google is undocumented and Evergreen updates silently, the same rule covers a break after launch | Deciding now: a no-go on the engine, or settling for Google in Edge, before knowing how it fails | 2026-10-09 |
-| D21 | Which Google sign-in paths must Phase 0 prove? | All the owner uses: password with a phone prompt or code, a passkey (Windows Hello or phone), and a Google Workspace account. ⚠️ If the Workspace admin has device checks (Context-Aware Access or Endpoint Verification), they need a browser extension Atlas can't run (`docs/research/07-google-sign-in-and-drm.md`, new questions) | — | 2026-10-09 |
-| D20 | What may Atlas do in Fledge? | Everything a person can, in the long run: Atlas is meant to become Fledge's desktop app. **Not in v1** (D34): it is built with the real client after Stage C. Sending mail and invites needs Fledge-side consent scopes that don't exist today (`docs/research/05-fledge-api.md`, "Work needed on the Fledge side"); that is a list for the owner, not issues in Fledge's repositories | Draft only (Fledge's current rule for outside apps): the owner wants Atlas to be Fledge's full client | 2026-10-09 |
-| D19 | Is Fledge data copied into Atlas's local index, or searched live? | The owner decides per kind of data: Fledge's plugin settings get a keep-local switch for each kind (docs, canvases, tables, leads, mail, calendar and so on). **Not in v1** (D34): built with the real client after Stage C | All copied: stores everything whether wanted or not. All live: every keystroke waits on the network | 2026-10-09 |
-| D18 | Does Atlas index the text of visited pages? | Yes, locally, for up to 7 days of history, with a setting to turn it off | Title and address only: the owner wants recall by content | 2026-10-09 |
-| D17 | Will Atlas run other people's plugins? | Later, not in v1. Built-ins use the same plugin API a third party would; the WebAssembly sandbox is built only once someone else's plugin exists | Never: closes a door the owner wants open. In v1: a sandbox, permissions and an installer, a large addition | 2026-10-09 |
-| D16 | When does building start, and how is work tracked while Atlas is local? | Phase 0 first, locally, then stop for the owner. The original post-spike GitHub prerequisite and outline-only restriction are superseded by D41: all four plans and plan 1's local slice map are approved, and implementation may use local branches with independent review and owner-approved merges. GitHub creation remains the owner's action when wanted. *Earlier wording required a repository before issue breakdown; the 2026-10-10 approval explicitly changes that gate.* | Breaking all four plans into implementation issues before Phase 0: its results could invalidate them. Requiring a repository now: the owner approved local implementation and deferred publication. | 2026-10-09; revised 2026-10-10 |
+| D23 | How does Syrinx authenticate to Fledge? | As an ordinary OAuth client through Fledge's consent screen (OAuth 2.1, PKCE, loopback redirect), with only the permissions the owner grants | A pre-registered first-party client: Fledge would have to build a separate trust path (`docs/research/05-fledge-api.md`, owner questions) | 2026-10-09 |
+| D22 | If the owner's Google sign-in fails, in Phase 0 or later? | Stop and decide with the evidence: where it failed, and the options then (Google in Edge, presenting Syrinx differently against Google's policy, or rethinking the engine). Because WebView2's Chrome presentation toward Google is undocumented and Evergreen updates silently, the same rule covers a break after launch | Deciding now: a no-go on the engine, or settling for Google in Edge, before knowing how it fails | 2026-10-09 |
+| D21 | Which Google sign-in paths must Phase 0 prove? | All the owner uses: password with a phone prompt or code, a passkey (Windows Hello or phone), and a Google Workspace account. ⚠️ If the Workspace admin has device checks (Context-Aware Access or Endpoint Verification), they need a browser extension Syrinx can't run (`docs/research/07-google-sign-in-and-drm.md`, new questions) | — | 2026-10-09 |
+| D20 | What may Syrinx do in Fledge? | Everything a person can, in the long run: Syrinx is meant to become Fledge's desktop app. **Not in v1** (D34): it is built with the real client after Stage C. Sending mail and invites needs Fledge-side consent scopes that don't exist today (`docs/research/05-fledge-api.md`, "Work needed on the Fledge side"); that is a list for the owner, not issues in Fledge's repositories | Draft only (Fledge's current rule for outside apps): the owner wants Syrinx to be Fledge's full client | 2026-10-09 |
+| D19 | Is Fledge data copied into Syrinx's local index, or searched live? | The owner decides per kind of data: Fledge's plugin settings get a keep-local switch for each kind (docs, canvases, tables, leads, mail, calendar and so on). **Not in v1** (D34): built with the real client after Stage C | All copied: stores everything whether wanted or not. All live: every keystroke waits on the network | 2026-10-09 |
+| D18 | Does Syrinx index the text of visited pages? | Yes, locally, for up to 7 days of history, with a setting to turn it off | Title and address only: the owner wants recall by content | 2026-10-09 |
+| D17 | Will Syrinx run other people's plugins? | Later, not in v1. Built-ins use the same plugin API a third party would; the WebAssembly sandbox is built only once someone else's plugin exists | Never: closes a door the owner wants open. In v1: a sandbox, permissions and an installer, a large addition | 2026-10-09 |
+| D16 | When does building start, and how is work tracked while Syrinx is local? | Phase 0 first, locally, then stop for the owner. The original post-spike GitHub prerequisite and outline-only restriction are superseded by D41: all four plans and plan 1's local slice map are approved, and implementation may use local branches with independent review and owner-approved merges. GitHub creation remains the owner's action when wanted. *Earlier wording required a repository before issue breakdown; the 2026-10-10 approval explicitly changes that gate.* | Breaking all four plans into implementation issues before Phase 0: its results could invalidate them. Requiring a repository now: the owner approved local implementation and deferred publication. | 2026-10-09; revised 2026-10-10 |
 | D15 | Does v1 import passwords? | No. There is no password manager in v1, so imported passwords would have nowhere safe to live and nothing to fill them in. The owner signs in once per site and stays signed in through cookies. Password import comes with a password manager after v1 | A small password manager in v1 (encrypted store, autofill, Passwords button back): sizeable and security-sensitive, against the spec's scope. Importing into WebView2's own store: no known import API, and it would turn saving on against D11 | 2026-10-09 |
 | D14 | What does the bookmark import read? | The standard HTML bookmarks file that Edge, Chrome and Firefox export (`<!DOCTYPE NETSCAPE-Bookmark-file-1>`, `docs/research/02b-default-browser-import-signing.md`). Replaces "a CSV file only" (S7) with the owner's yes; `docs/decisions.md` updated | CSV only: no browser exports bookmarks as CSV, so the owner would have to convert by hand. Both: a second format to build and test for no gain | 2026-10-09 |
-| D13 | How many database snapshots, and may the data folder be synced? | A daily `VACUUM INTO` snapshot taken when idle, 7 kept, in the local (not roaming, not synced) app-data folder; Atlas never puts its database in OneDrive or another synced folder | 30 days: more disk for little gain. A synced folder: SQLite's write-ahead log breaks there (`docs/research/03-core-architecture.md`, owner question 4) | 2026-10-09 |
-| D12 | May Atlas carry a patched fork of wry or tao? | Yes, if small: pinned, a handful of patches, each also offered upstream, dropped once upstream merges it | No forks: gaps in shortcut routing or the overlay raise would have to wait or be worked around (`docs/research/01-shell-and-engine.md`, owner question 4) | 2026-10-09 |
-| D11 | The Passwords button, and WebView2's own password saving | No Passwords button in v1, and WebView2's built-in password saving stays off; sites keep the owner signed in through their own cookies | Saving on as a stopgap: passwords would sit in WebView2's profile with no Atlas UI to see or manage them | 2026-10-09 |
+| D13 | How many database snapshots, and may the data folder be synced? | A daily `VACUUM INTO` snapshot taken when idle, 7 kept, in the local (not roaming, not synced) app-data folder; Syrinx never puts its database in OneDrive or another synced folder | 30 days: more disk for little gain. A synced folder: SQLite's write-ahead log breaks there (`docs/research/03-core-architecture.md`, owner question 4) | 2026-10-09 |
+| D12 | May Syrinx carry a patched fork of wry or tao? | Yes, if small: pinned, a handful of patches, each also offered upstream, dropped once upstream merges it | No forks: gaps in shortcut routing or the overlay raise would have to wait or be worked around (`docs/research/01-shell-and-engine.md`, owner question 4) | 2026-10-09 |
+| D11 | The Passwords button, and WebView2's own password saving | No Passwords button in v1, and WebView2's built-in password saving stays off; sites keep the owner signed in through their own cookies | Saving on as a stopgap: passwords would sit in WebView2's profile with no Syrinx UI to see or manage them | 2026-10-09 |
 | D10 | Does the import bring in history? | No: history starts empty and fills as the owner browses | Importing history: makes the palette useful on day one, but the owner doesn't want it | 2026-10-09 |
 | D9 | Which engine does "Search the web" use, and does the palette fetch suggestions as you type? | Google, with no live suggestions: while typing, the palette ranks only local tabs, bookmarks and history, so keystrokes stay on the machine and results never wait on the network. Suggestions may become a setting later | Google with live suggestions: sends every keystroke to Google and adds network latency to the palette. Another engine: the owner lives in Google | 2026-10-09 |
 | D8 | What pins the sidebar? | Ctrl Alt S, as Zen does; Ctrl S stays free to save in Forge and Notes. The owner approved changing this design decision; `design/README.md` updated | Ctrl S, as Arc does: collides with save in Forge and Notes (`docs/research/02-browser-v1-scope.md`, owner question 3) | 2026-10-09 |
 | D7 | What must the overlays achieve, and is a frozen page under the palette acceptable? | The palette and the sidebar peek must stay live, over web pages and over the editor web views. Phase 0 gates on an owned, live, near-opaque popup window with correct focus; the Acrylic blur is a bonus, not a gate. If that fails, stop and decide (WebView2 visual hosting, or a palette that shrinks the page). No freeze frame. *Revised after the realism check; blur was a gate* | Freeze frame (`docs/research/01-shell-and-engine.md`, recommendation): a playing video's picture would pause under the palette. Blur as a gate: a cosmetic effect deciding go/no-go, when the design already keeps the palette near-opaque (`design/README.md`) | 2026-10-09 |
 | D6 | What must Phase 0 prove (go/no-go)? | Hard musts: Google sign-in, YouTube (1080p and fullscreen), Disney+ and Hulu play. Also: at least 13 of the other daily sites pass; the palette and the sidebar peek draw live over a page with correct focus; Ctrl T, W, L and K work while a page has focus; memory with 10 tabs within 10% of Edge's; idle CPU near zero; the GPUI chrome paints before WebView2 finishes starting | Stricter (match Edge, every site): sets a bar no embedded engine is known to meet. Looser (only sign-in and overlays gate): lets a slow or broken base through to every later wave | 2026-10-09 |
-| D5 | How much is v1? | Four plans, each plugin's v1 deliberately thin: (1) engine, browser core and palette; (2) plugin runtime and Fledge on a stand-in client; (3) Notes; (4) Forge (editor, project tree, terminal, basic git, installed language servers; PyCharm is the direction, not the v1 bar). This Super-Pass builds plan 1, which ends at a browser the owner can use daily | Four plans at the spec's full depth: Forge alone would hold v1 back for a very long time (Zed's debugger took 8 months; `docs/research/04-forge-and-notes.md`). Plan 1 only, plugins in v2: drops the plugins that are Atlas's reason to exist | 2026-10-09 |
-| D4 | How is Atlas's own interface (the chrome) drawn? | Rust with GPUI, pinned to one snapshot base chosen in Phase 0. Phase 0 compares "GPUI chrome + a CodeMirror tab" with "Svelte chrome + a CodeMirror tab" (both with page tabs through wry directly), against a rule written before the spike: switch to Tauri 2 + Svelte if GPUI saves less than about 50 MB and 150 ms at start, or if the overlays work only in Tauri. *Revised after the realism check, because D28 moved the editors into web views* | Tauri 2 + Svelte now: gives up GPUI's start-time and memory lead before measuring it. GPUI with no comparison: commits to a pre-1.0 toolkit without evidence | 2026-10-09 |
-| D3 | Which engine renders pages in v1? | The system WebView2 (Edge's Chromium, part of Windows), driven from Rust; everything Atlas draws and decides stays Rust. Servo is added later as a per-tab engine once it handles the owner's sites, re-checked about every six months | Servo only: fails Google sign-in, YouTube, Drive and GitHub, has no DRM, downloads, PDF or printing, and runs unsandboxed by default (`docs/research/06-engine-and-ui-performance.md`, "Short answer"). Servo and WebView2 per tab from v1: two engines' plumbing for one developer. CEF: still embedded Chromium for Google, no Widevine without a Google licence, hundreds of MB and a release every 4–8 weeks. A Firefox (Gecko) fork like Zen: no desktop embedding API, so a full fork rebased every Firefox release; the owner dropped it | 2026-10-09 |
+| D5 | How much is v1? | Four plans, each plugin's v1 deliberately thin: (1) engine, browser core and palette; (2) plugin runtime and Fledge on a stand-in client; (3) Notes; (4) Forge (editor, project tree, terminal, basic git, installed language servers; PyCharm is the direction, not the v1 bar). This Super-Pass builds plan 1, which ends at a browser the owner can use daily | Four plans at the spec's full depth: Forge alone would hold v1 back for a very long time (Zed's debugger took 8 months; `docs/research/04-forge-and-notes.md`). Plan 1 only, plugins in v2: drops the plugins that are Syrinx's reason to exist | 2026-10-09 |
+| D4 | How is Syrinx's own interface (the chrome) drawn? | Rust with GPUI, pinned to one snapshot base chosen in Phase 0. Phase 0 compares "GPUI chrome + a CodeMirror tab" with "Svelte chrome + a CodeMirror tab" (both with page tabs through wry directly), against a rule written before the spike: switch to Tauri 2 + Svelte if GPUI saves less than about 50 MB and 150 ms at start, or if the overlays work only in Tauri. *Revised after the realism check, because D28 moved the editors into web views* | Tauri 2 + Svelte now: gives up GPUI's start-time and memory lead before measuring it. GPUI with no comparison: commits to a pre-1.0 toolkit without evidence | 2026-10-09 |
+| D3 | Which engine renders pages in v1? | The system WebView2 (Edge's Chromium, part of Windows), driven from Rust; everything Syrinx draws and decides stays Rust. Servo is added later as a per-tab engine once it handles the owner's sites, re-checked about every six months | Servo only: fails Google sign-in, YouTube, Drive and GitHub, has no DRM, downloads, PDF or printing, and runs unsandboxed by default (`docs/research/06-engine-and-ui-performance.md`, "Short answer"). Servo and WebView2 per tab from v1: two engines' plumbing for one developer. CEF: still embedded Chromium for Google, no Widevine without a Google licence, hundreds of MB and a release every 4–8 weeks. A Firefox (Gecko) fork like Zen: no desktop embedding API, so a full fork rebased every Firefox release; the owner dropped it | 2026-10-09 |
 | D2 | Which platforms does v1 run on? | Windows 11 only. macOS is neither built nor tested in v1 (the owner has no Mac and doesn't want Mac testing). ⚠️ Linux is assumed out too: the owner didn't name it, and wry's Linux child web views are X11-only (`docs/research/06-engine-and-ui-performance.md`, "Defer") | macOS in v1: no machine to test on, and it needs far more built (find, downloads, certificate warnings, mute; `docs/research/02-browser-v1-scope.md`). Linux in v1: it would make CEF the plan there | 2026-10-09 |
 | D1 | May the plan be committed while it is being planned? (`CLAUDE.md` says commits only when the owner asks) | Yes: commit as we go, to the local branch `claude/plan-atlas-v1`; no pushes, since there is no remote | Leaving the plan uncommitted until the end: a compaction or a closed session would lose the only record of the decisions | 2026-10-09 |
 
@@ -326,27 +326,27 @@ or security suitability.
 ### The parts
 
 The crate layout follows note 03's "Rust-toolkit variant", so the toolkit
-decision (D4) stays reversible: only `atlas-app` and `atlas-ui` know GPUI,
-and only `atlas-platform` knows WebView2.
+decision (D4) stays reversible: only `syrinx-app` and `syrinx-ui` know GPUI,
+and only `syrinx-platform` knows WebView2.
 
 ```
 Atlas-app/
   Cargo.toml          virtual workspace: members = ["crates/*"], resolver 3, shared lints
   crates/
-    atlas-plugin-api/ the Plugin trait and its data types; depends on no Atlas crate (used from plan 2)
-    atlas-core/       tab model, session, closed-tab stack, command registry, shortcut table, palette logic
-    atlas-store/      rusqlite: migrations, settings, tiles, bookmarks, history, sessions, snapshots
-    atlas-search/     tier 1 catalogue (frizbee + frecency); tier 2 full text (behind a FullText trait)
-    atlas-platform/   everything WebView2 and Win32: the shared environment, page web views,
+    syrinx-plugin-api/ the Plugin trait and its data types; depends on no Syrinx crate (used from plan 2)
+    syrinx-core/       tab model, session, closed-tab stack, command registry, shortcut table, palette logic
+    syrinx-store/      rusqlite: migrations, settings, tiles, bookmarks, history, sessions, snapshots
+    syrinx-search/     tier 1 catalogue (frizbee + frecency); tier 2 full text (behind a FullText trait)
+    syrinx-platform/   everything WebView2 and Win32: the shared environment, page web views,
                       shortcuts, fullscreen, crash, suspend, popups' owner and backdrop
-    atlas-ui/         GPUI widgets and the design tokens (five palettes, accent)
-    atlas-app/        the binary: window, sidebar, page card, home page, palette, wiring
-    xtask/            check-deps (only atlas-app/atlas-ui may depend on GPUI; only
-                      atlas-platform on wry or webview2-com), bench
+    syrinx-ui/         GPUI widgets and the design tokens (five palettes, accent)
+    syrinx-app/        the binary: window, sidebar, page card, home page, palette, wiring
+    xtask/            check-deps (only syrinx-app/syrinx-ui may depend on GPUI; only
+                      syrinx-platform on wry or webview2-com), bench
 ```
 
-`atlas-core`, `atlas-store` and `atlas-search` depend on neither GPUI nor
-WebView2, so they are tested with plain `cargo test`. `atlas-app` calls the
+`syrinx-core`, `syrinx-store` and `syrinx-search` depend on neither GPUI nor
+WebView2, so they are tested with plain `cargo test`. `syrinx-app` calls the
 core directly: with a Rust chrome there is no IPC boundary in plan 1.
 
 ### The tab model
@@ -368,7 +368,7 @@ can roll back recent commits. This is not a zero-loss guarantee
 The owner's D42/D43 rules make transitions follow the visible list. Closing
 the active page selects the next open page to its right, otherwise its left;
 unloaded saved rows are skipped. Closing the last live page shows Home
-without exiting Atlas. Saved entries precede ordinary tabs. Saving appends
+without exiting Syrinx. Saved entries precede ordinary tabs. Saving appends
 to the saved group; Remove/Unpin puts any remaining live page at the start
 of ordinary tabs. Reorder stays within each group. New ordinary web tabs
 append and become active. The in-session stack keeps the 20 most recent
@@ -399,7 +399,7 @@ plugin registry early; that remains plan 2 work.
 
 ### Pages
 
-- **One shared WebView2 environment,** built by Atlas through `webview2-com`
+- **One shared WebView2 environment,** built by Syrinx through `webview2-com`
   so it can keep crash dumps local (`IsCustomCrashReportingEnabled`) and
   replace wry's default browser arguments, which switch SmartScreen off
   (`docs/research/08-gpui-and-wry-on-windows.md`). Set options on the supplied
@@ -449,12 +449,12 @@ resource aim must be measured; Chromium decides process sharing and isolation
 ### Shortcuts
 
 Ordinary GPUI key handlers do not receive keys while a page has focus,
-so Atlas uses WebView2's `AcceleratorKeyPressed` on **every** web view it
+so Syrinx uses WebView2's `AcceleratorKeyPressed` on **every** web view it
 creates (pages now; the CodeMirror and terminal web views in plans 3 and 4).
 The handler is synchronous and blocks the browser process, so it only marks
 the key handled and posts a message to the GPUI thread, filtering repeats
 where appropriate. One command table in
-`atlas-core` maps keys to commands; the palette and menus read from it. The
+`syrinx-core` maps keys to commands; the palette and menus read from it. The
 sidebar pin key is Ctrl Alt S (D8/D44); it is distinct from saving a page.
 
 Phase 2 supplies a minimal owned address-entry popup for Ctrl L and Ctrl K,
@@ -480,7 +480,7 @@ must work over every kind of tab (D7).
 ### Storage
 
 rusqlite (bundled) with `rusqlite_migration`, WAL, `synchronous=NORMAL`,
-one writer thread and two readers, in `%LOCALAPPDATA%\Atlas\data\atlas.db`
+one writer thread and two readers, in `%LOCALAPPDATA%\Syrinx\data\syrinx.db`
 (never a synced folder), with a daily `VACUUM INTO` snapshot taken when idle
 and 7 kept (D13), and a clean-shutdown flag that triggers a `quick_check`
 after a crash (`docs/research/03-core-architecture.md`, "Storage").
@@ -492,7 +492,7 @@ snapshots and D18's seven-day page-text retention is settled by D40: the
 page-text cache and index stay outside these backups, with at most seven
 days retained. ⚠️ Prove expiry and restart/replay/restore behavior before
 enabling capture.
-The owner must confirm restoration before Atlas replaces the current
+The owner must confirm restoration before Syrinx replaces the current
 database with the newest verified backup, shown with its date; damaged files
 remain preserved locally (D46). Keep a local deletion record containing only
 cleared date ranges and data categories, never URLs or page contents, so
@@ -512,7 +512,7 @@ Lifecycle ownership, snapshots, rotation, confirmed recovery with interruption
 resume and the deletion-log contract are implemented. The complete 138-test
 gate and independent source reviews passed; the owner approved its commit and merge.
 
-P1-03's Windows directory guard belongs in `atlas-platform`, even though
+P1-03's Windows directory guard belongs in `syrinx-platform`, even though
 the browser engine is introduced later. The store accepts a directory lease
 through its own interface; it never depends on the platform crate. This
 filesystem prerequisite enforces D13 without weakening the headless boundary.
@@ -562,15 +562,15 @@ or password import is added (D10, D15).
 ### The home page and the design
 
 The new-tab page, sidebar, page card, palette and Customize panel follow the
-design canvas (`design/README.md`); its tokens become `atlas-ui`'s five
+design canvas (`design/README.md`); its tokens become `syrinx-ui`'s five
 palettes and the accent. The design direction is already chosen: the canvas
 is offered as the direction at the design gate. Haze uses Mica; Glass uses
-Acrylic plus Atlas's styling; both fall back to Graphite when "Reduce
+Acrylic plus Syrinx's styling; both fall back to Graphite when "Reduce
 transparency" is on. Pages stay opaque.
 
 D43–D45 amend the older snapshot: inline saved pages/folders share the
 sidebar with ordinary tabs, while the separate top square tiles are named
-Favorites and can target supported websites, plugin pages or other Atlas
+Favorites and can target supported websites, plugin pages or other Syrinx
 destinations. Plugin Favorites use the normal plugin lifecycle once it
 exists; before then they stay visibly unavailable. The home page's Quick
 access remains its own surface.
@@ -591,7 +591,7 @@ submission, not every required diagnostic. Crash logs and dumps stay local
 ([Microsoft's privacy description](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/data-privacy)).
 
 To guide improvements, D39 replaces the blanket no-analytics rule with
-local aggregate counters and explicit report export. Count Atlas feature
+local aggregate counters and explicit report export. Count Syrinx feature
 use, built-in commands, timings and error categories without identifiers,
 URLs, searches, paths, text or an event timeline. Use fixed metric names and
 coarse timing buckets; never collect content merely to strip it out later.
@@ -607,14 +607,14 @@ amendment outside the already approved 40-row map; they do not block the
 scaffold. Tests remain synthetic, and no real usage is read or exported here.
 
 Without
-Tauri, Atlas builds what Tauri gave for free (realism check, objection 6):
+Tauri, Syrinx builds what Tauri gave for free (realism check, objection 6):
 an updater that verifies ed25519/minisign signatures, single-instance
 forwarding of links opened from other apps, default-browser registration,
 and an installer. Update-file signatures are distinct from Windows code
 signing, which waits (S8). Unsigned builds can be blocked, not merely warned
 about; D38 records a locally working profile, not a security-policy exemption.
 The scaffold must run both its application and test executables under the
-unchanged Windows policy. Atlas notices WebView2 runtime changes (D36).
+unchanged Windows policy. Syrinx notices WebView2 runtime changes (D36).
 ⚠️ The update host, check cadence and installation/restart behavior need
 owner approval before any updater network call is implemented. Verify the
 signature before installation, and test rejection using synthetic packages.
@@ -646,8 +646,8 @@ amendment before implementation, without moving ahead of the foundations.
   tabs through wry in both, and one CodeMirror tab in each), run against
   note 06's checklist with these additions:
   - a **measurement protocol written before any number is taken:** private
-    working set of all Atlas or Edge processes; Edge on a fresh profile
-    with sleeping tabs at the same timeout as Atlas's suspend; the median of
+    working set of all Syrinx or Edge processes; Edge on a fresh profile
+    with sleeping tabs at the same timeout as Syrinx's suspend; the median of
     5 runs; idle CPU under 0.5% of one core over 5 minutes; the sites
     counted as N of 13 with "pass", "partial" and "fail" defined;
   - the owner's real Google sign-in on every path they use (D21), and
@@ -668,7 +668,7 @@ amendment before implementation, without moving ahead of the foundations.
 - **Delivers:** the scaffold (workspace, `xtask check-deps`, check commands,
   a first passing test, `docs/LOCAL-DEV.md`); the tab model crate with tests;
   storage with migrations and snapshots; the tier 1 search crate with
-  benchmarks; the design tokens in `atlas-ui`.
+  benchmarks; the design tokens in `syrinx-ui`.
 - **Also delivers (Phase 0 verdict):** the GPUI idle-loop patch (D37) with
   idle CPU re-measured under 0.5% of a core, and start-to-first-page
   re-measured the same way for GPUI and Tauri.
@@ -687,7 +687,7 @@ amendment before implementation, without moving ahead of the foundations.
 
 ### Phase 2 — The browser shell
 
-- **Why now:** the first build Atlas can browse with.
+- **Why now:** the first build Syrinx can browse with.
 - **Delivers:** the window, sidebar and page card with D44 width states;
   ordinary web tabs and flat inline saved rows (create, switch, close/unload,
   reopen, reorder, save/unpin); navigation and the address; the shortcut router;
@@ -699,7 +699,7 @@ amendment before implementation, without moving ahead of the foundations.
 - **Exit criteria:** the owner has tested what Phase 0 left untested (Hulu,
   Google sign-in with a password and phone prompt, staying signed in after a
   restart, and the 13 other daily sites, at least 13 passing); the owner can
-  browse their daily sites for a day in Atlas with no crash. With a page
+  browse their daily sites for a day in Syrinx with no crash. With a page
   focused, Ctrl T/W/L/K, Ctrl Tab/Shift Tab, Ctrl Shift T, Ctrl Alt S and the
   delivered navigation/find/print/download/zoom keys work. Palette result
   selection and scope keys are tested once Phase 4 adds them. Synthetic tests separately cover
@@ -709,14 +709,14 @@ amendment before implementation, without moving ahead of the foundations.
 
 ### Phase 3 — Browser memory and the home page
 
-- **Why now:** without history, bookmarks and restore, Atlas isn't a daily
+- **Why now:** without history, bookmarks and restore, Syrinx isn't a daily
   browser.
 - **Delivers:** history, page-text indexing with exclusions (after the
   tier 2 bake-off), full inline saved-page/folder management and unloaded
   HTML import, the closed-tab stack, session restore, the home page with
   Quick access, separate sidebar Favorites, and Customize settings for
   palette/accent and sidebar width/presentation; clearing controls cover both
-  WebView2 data and Atlas history/search copies, with partial failures shown.
+  WebView2 data and Syrinx history/search copies, with partial failures shown.
   WebView2 clearing applies to the shared profile, not only the active tab.
   Keep its controller alive and await completion; an aborted operation or
   missing callback cannot be reported as success. Never clear by deleting
@@ -742,11 +742,11 @@ amendment before implementation, without moving ahead of the foundations.
 
 ### Phase 5 — Daily driver
 
-- **Why now:** to make Atlas the owner's default browser.
+- **Why now:** to make Syrinx the owner's default browser.
 - **Delivers:** the signed updater, single-instance link forwarding,
   default-browser registration, an installer, the WebView2 runtime notice,
   and an accessibility pass (F6 between panes, NVDA over the chrome).
-- **Exit criteria:** Atlas is set as the default browser and used as the
+- **Exit criteria:** Syrinx is set as the default browser and used as the
   owner's only browser for a week, with memory and start-up within D6's
   thresholds.
 - **Proposed addition after D39:** local aggregate counters and explicit
@@ -757,7 +757,7 @@ amendment before implementation, without moving ahead of the foundations.
 
 ## What is deliberately not built
 
-In plan 1: Chrome extensions (an Atlas scope choice, even though current
+In plan 1: Chrome extensions (a Syrinx scope choice, even though current
 WebView2 has optional extension APIs); a password manager,
 password import and ad blocking; macOS and Linux; history import; automatic
 analytics uploads and remote crash reports;
@@ -771,11 +771,11 @@ and "New lead" until Stage C (D34); a graph view (S4).
 ## Outlined later features
 
 **Mobile sync over Tailscale or Headscale, with optional cloud sync later.**
-The owner requested this direction on 2026-10-10 so a future mobile Atlas
-can exchange selected data with desktop without an Atlas-hosted sync
+The owner requested this direction on 2026-10-10 so a future mobile Syrinx
+can exchange selected data with desktop without a Syrinx-hosted sync
 server. Setup must offer an easy in-app installation and pairing walkthrough,
 reuse existing Tailscale accounts, and support existing Headscale networks.
-The [mobile sync outline](<Atlas later — Mobile sync outline.md>) records
+The [mobile sync outline](<Syrinx later — Mobile sync outline.md>) records
 the setup flow, proposed data scope, common sync engine, offline and mobile
 limits, encrypted cloud alternative, acceptance criteria and open questions.
 
@@ -810,7 +810,7 @@ not be described as eliminating all server infrastructure.
   100,000-row benchmark passed correctness checks but missed the 5 ms p95
   limit in 25 of 26 cases; its worst sample was 383.737 ms. The measurements
   and ongoing profiling are in `docs/p1-05-search.md`. Upstream matcher
-  microbenchmarks do not establish Atlas's complete-path responsiveness.
+  microbenchmarks do not establish Syrinx's complete-path responsiveness.
   One-frame palette paint and the real product's D6 memory/startup comparisons
   remain unmeasured.
 - ⚠️ The private live design canvas has not been compared with the local
@@ -825,9 +825,9 @@ phases, acceptance criteria and remaining technical checks. The owner
 approved all four on 2026-10-10; their implementation remains queued after
 this plan, in order:
 
-- `docs/plans/Atlas v1 — Plugins and Fledge — Plan.md` (plan 2)
-- `docs/plans/Atlas v1 — Notes — Plan.md` (plan 3)
-- `docs/plans/Atlas v1 — Forge — Plan.md` (plan 4)
+- `docs/plans/Syrinx v1 — Plugins and Fledge — Plan.md` (plan 2)
+- `docs/plans/Syrinx v1 — Notes — Plan.md` (plan 3)
+- `docs/plans/Syrinx v1 — Forge — Plan.md` (plan 4)
 
 ## Open threads
 
@@ -913,13 +913,13 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
   the bake-off before Notes.
 - **The project:**
   - **Licence: undecided (owner, 2026-10-09).** Blocks going public. Until it
-    is chosen, Atlas takes in outside code only under permissive licences
+    is chosen, Syrinx takes in outside code only under permissive licences
     (MIT, Apache-2.0, BSD) or as whole MPL-2.0 files kept under MPL, and no
     GPL code (the brief already keeps Zed's GPL-3.0 code out). Decided by
     the owner before the repository goes public.
   - **GitHub:** the owner's only account is ZanderOfficial. The repository
     will probably move to the Fledge Software organisation eventually; for now
-    Atlas is a local project; D41 removes the repository prerequisite.
+    Syrinx is a local project; D41 removes the repository prerequisite.
     Which account or organisation it is created under is decided when the
     owner is ready to create the remote.
   - **Current local workflow, owner, 2026-10-10:** D41 explicitly approves
@@ -935,12 +935,12 @@ The minimum list from the brief, grouped. Each is cleared as it is answered.
 
 ## Deferred work
 
-Atlas-authored code may carry a deferred-work marker (`TODO`, `FIXME` or
+Syrinx-authored code may carry a deferred-work marker (`TODO`, `FIXME` or
 `HACK`) only when it is tagged with a row from this register, written as
 `TODO(DW-1): what is left`. The owner allowed this on 2026-10-11 so that
 known gaps can stay next to the code they concern, as long as each one is
 tracked here and comes back as a fix. `cargo xtask check` refuses an
-untagged marker or a tag missing from this table. Once Atlas is on GitHub,
+untagged marker or a tag missing from this table. Once Syrinx is on GitHub,
 each row gets an issue and the issue number goes in the last column. When
 the work is done, delete the marker and move the row's status to Done.
 
@@ -949,22 +949,22 @@ slice it belongs to, so whoever comes back to it knows when it is due.
 
 | ID | Deferred work and why | Owning slice | Status | Issue |
 | --- | --- | --- | --- | --- |
-| DW-1 | Unify the bookmark parser's address check with navigation's `web_address` (`crates/atlas-app/src/navigation.rs`) through one shared function in `atlas-core`; the owner approved `atlas-core` using `url` for this on 2026-10-12. Until then the parser uses a stricter syntactic copy, and the import commit step must re-check every address with navigation's rule and report failures as skipped. P1-22 is not complete until this is done. **Done 2026-10-12** on `claude/p1-22-import-commit`: `atlas_core::web_address` is the one rule; navigation and the parser call it, the parser's copy is deleted, and the commit step re-checks with it. | P1-22 | Done | |
-| DW-2 | Persist the sidebar's settled width state (wide, favicon-only or hidden) across restart. P1-08's drag works, but `atlas-store` has no settings table, so the state lives in `BrowserView` memory and resets to wide on restart; adding a settings table is a schema migration that belongs with P1-29's appearance settings. The marker is where the sidebar settles in `crates/atlas-app/src/ui/sidebar_view.rs`; see `docs/p1-08-sidebar-states.md`. Done at the 2026-10-12 integration merge: a drag release or key step that changes the state saves `sidebar.width_state` through P1-29's settings table, and start-up restores it, keeping wide when the value is missing or unreadable. | P1-29 | Done | |
+| DW-1 | Unify the bookmark parser's address check with navigation's `web_address` (`crates/syrinx-app/src/navigation.rs`) through one shared function in `syrinx-core`; the owner approved `syrinx-core` using `url` for this on 2026-10-12. Until then the parser uses a stricter syntactic copy, and the import commit step must re-check every address with navigation's rule and report failures as skipped. P1-22 is not complete until this is done. **Done 2026-10-12** on `claude/p1-22-import-commit`: `syrinx_core::web_address` is the one rule; navigation and the parser call it, the parser's copy is deleted, and the commit step re-checks with it. | P1-22 | Done | |
+| DW-2 | Persist the sidebar's settled width state (wide, favicon-only or hidden) across restart. P1-08's drag works, but `syrinx-store` has no settings table, so the state lives in `BrowserView` memory and resets to wide on restart; adding a settings table is a schema migration that belongs with P1-29's appearance settings. The marker is where the sidebar settles in `crates/syrinx-app/src/ui/sidebar_view.rs`; see `docs/p1-08-sidebar-states.md`. Done at the 2026-10-12 integration merge: a drag release or key step that changes the state saves `sidebar.width_state` through P1-29's settings table, and start-up restores it, keeping wide when the value is missing or unreadable. | P1-29 | Done | |
 | DW-3 | Ctrl Alt S now toggles hidden and the last visible sidebar width through both GPUI and the page-focused WebView2 accelerator path. P1-17 coordinates it with the owned peek popup and persists the last visible width; see `docs/p1-17-peek.md`. | P1-17 | Done | |
-| DW-4 | Bound browsing history before D48's 100,000-row scale. P1-20 keeps every visit and loads every remembered address into the tier-1 catalogue at start-up (`Worker::restore` in `crates/atlas-app/src/session.rs`), so both the database and start-up cost grow without limit. Add a retention policy (an owner decision on age or count) and pruning that removes visits, then addresses left without visits, and keeps the catalogue in step, using the same participant as D47 clearing (`Store::apply_history_deletions`). Deferred because P1-20 only had to make history durable and searchable, and pruning shares its machinery with clearing. P1-27 (2026-10-12) built that machinery but left the policy open: the choice of maximum age or row count, and its value, is the owner's (recommended: 90 days). Once chosen, pruning is a range clear through `Store::apply_history_deletions` at start-up and daily, with the catalogue following as `crates/atlas-app/src/session/deletions.rs` does. Done on `claude/p1-27-clear-data` (2026-10-12) after the owner chose 90 days: start-up expires visits older than 90 days before the catalogue loads, and the idle check repeats it at most once a day. Each expiry is a journaled D47 range clear `[0, end)`, so a restored backup loses the expired visits too, and it removes at most 2,000 visits, continuing a larger backlog on later idle checks. The cutoff never passes 90 days before the newest stored visit and moves at most two days past the last applied cutoff per run, so a wrong clock, even with visits recorded under it, cannot expire recent browsing in one step; a start within a day of the last expiry skips it. See `docs/p1-27-clear-data.md`, "History retention". | P1-27 follow-up | Done | |
-| DW-5 | Bound the palette's command ranking before plugins can register commands. P1-30 ranks registry commands on the UI thread (`crates/atlas-app/src/palette/commands.rs`), because enablement depends on what the window shows; with ten built-in commands each keystroke ranks a handful of rows, but nothing limits how many a plugin may add. Either cap the registry's size or move command ranking off the UI thread with enablement passed in, before Plan 2's host accepts plugin commands. | Plan 2, phase 1 | Open | |
-| DW-7 | Let the owner remove a remembered site permission. P1-12 stores explicit allow/deny choices per origin and kind (`crates/atlas-store/src/permissions.rs`, schema version 6) but has no control to forget one, so a remembered choice can only change when the site asks again and the owner picks differently. Add a settings action that removes a saved origin/kind choice so the next request asks again, with storage and UI regression coverage. Deferred because the natural home is P1-29's settings surface, which the permissions slice did not own; the owner requested the `TODO(DW-7)` marker on 2026-10-12. Moved here from a duplicate register at the P1-11–P1-16 integration. | P1-29 settings, or a P1-12 follow-up | Open | |
-| DW-30 | Pin the owner's release public key in `PRODUCTION_KEYS` (`crates/atlas-update/src/keys.rs`). P1-38 built and tested the update verifier with keys generated in-process, but the production key must be created by the owner outside the repository and outside any agent session, and its identifier recorded separately so the pinned copy can be checked independently (`docs/p1-38-update-format.md`, "Keys"). Until then the set is empty and every package is refused as signed by an unknown key, so the verifier fails closed. Deferred because only the owner can create the key and P1-39 is the first slice that uses it. | P1-39 | Open | |
-| DW-60 | Announce the palette's moving selection to screen readers. P1-36 names every result row (`crates/atlas-app/src/palette/render.rs`, `row_frame`) and marks the selected one, but the arrow keys move the selection while keyboard focus stays in the query field. GPUI 0.3.8 honours `aria_active_descendant` only when the focused node is an ancestor of the claiming row (`gpui-pre-0.3.8/src/window/a11y.rs`, `set_active_descendant`, around line 258), and the query field is the rows' sibling, so NVDA reads the field but not the row. Fix by moving focus to a list container that owns the query input, or by an input-side active-descendant API in GPUI (a vendored GPUI change needs its own owner approval). Deferred because both routes change either the palette's focus model or the pinned toolkit. See `docs/p1-36-accessibility.md`. | P1-36 follow-up, before P1-40 | Open | |
-| DW-61 | Give the sidebar tree one Tab stop with arrow-key movement. P1-36 makes every saved, open and folder row its own Tab stop (`crates/atlas-app/src/ui/sidebar_view.rs`, `row_frame`), which works but means many Tab presses through a long sidebar, and F6 lands on the sidebar's first control (Search) rather than the active row. The ARIA tree pattern expects one stop, Up and Down between rows, Left and Right to collapse and expand folders, and focus returning to the active row. Deferred because it needs a roving-focus model shared with the peek popup, which renders the same rows in another window. | P1-36 follow-up | Open | |
-| DW-62 | Show the focus ring only after keyboard input. P1-36 draws the ring on any focus (`crates/atlas-app/src/controls.rs`, `focus_ring`), so a mouse click on a chrome button leaves a ring until focus moves on. GPUI's `focus_visible` would hide it after a click, but GPUI decides keyboard use from its own key events and never sees the F6 or Tab that arrives through WebView2's accelerator path, so a ring would be missing exactly when F6 leaves a page. Needs a public way to mark keyboard modality (a vendored GPUI change, owner approval) or the owner's acceptance of the current behaviour. | P1-36 follow-up | Open | |
-| DW-90 | Open the palette within one frame. P1-33's acceptance runs (`docs/p1-33-palette-acceptance.md`) measured about 0.5 s from the Ctrl K action to the palette's first presented frame (p95 525 ms at 60 Hz in run `1791855053`). On that busy machine, with Atlas never in the foreground, almost all of it fell between the call into GPUI's `open_window` and the window's creation. That attribution is provisional until the owner's foreground run. `BrowserView::open_palette` (`crates/atlas-app/src/ui.rs`) creates a new owned popup window for every Ctrl K and `PaletteView::finish` removes it. Create the owned, non-topmost popup once, keep it hidden, and show, refocus and reset it on Ctrl K, keeping P1-10's stale-popup guards and the Home palette intent correct; then rerun `cargo xtask palette-acceptance`. The owner approved this approach on 2026-10-12 (`docs/decisions.md`) as its own slice with its own review, after P1-33 merges. **Done 2026-10-12** on `claude/dw-90-palette-reuse`: the popup is created hidden once, after the first session state; each Ctrl K resets it as a new entry and shows it from a task outside GPUI's update; Esc, Enter and commands hide it. P1-33's harness measured an opening p95 of 5.9 ms (run `1791860299`) against 556.5 ms before (`1791858770`), with every focus and stacking check passing, one native popup across 20 openings and no renders while hidden. The same slice diagnosed and fixed Esc's focus return: GPUI's `activate_window` set focus to the main window from a task after the page was focused (`docs/p1-33-palette-acceptance.md`). Its review removed every foreground grab, following the owner's 2026-10-12 decision that Atlas never takes the foreground from another application, and stopped the hidden popup's caret blink from waking Atlas. | P1-33 follow-up, before P1-40 | Done | |
+| DW-4 | Bound browsing history before D48's 100,000-row scale. P1-20 keeps every visit and loads every remembered address into the tier-1 catalogue at start-up (`Worker::restore` in `crates/syrinx-app/src/session.rs`), so both the database and start-up cost grow without limit. Add a retention policy (an owner decision on age or count) and pruning that removes visits, then addresses left without visits, and keeps the catalogue in step, using the same participant as D47 clearing (`Store::apply_history_deletions`). Deferred because P1-20 only had to make history durable and searchable, and pruning shares its machinery with clearing. P1-27 (2026-10-12) built that machinery but left the policy open: the choice of maximum age or row count, and its value, is the owner's (recommended: 90 days). Once chosen, pruning is a range clear through `Store::apply_history_deletions` at start-up and daily, with the catalogue following as `crates/syrinx-app/src/session/deletions.rs` does. Done on `claude/p1-27-clear-data` (2026-10-12) after the owner chose 90 days: start-up expires visits older than 90 days before the catalogue loads, and the idle check repeats it at most once a day. Each expiry is a journaled D47 range clear `[0, end)`, so a restored backup loses the expired visits too, and it removes at most 2,000 visits, continuing a larger backlog on later idle checks. The cutoff never passes 90 days before the newest stored visit and moves at most two days past the last applied cutoff per run, so a wrong clock, even with visits recorded under it, cannot expire recent browsing in one step; a start within a day of the last expiry skips it. See `docs/p1-27-clear-data.md`, "History retention". | P1-27 follow-up | Done | |
+| DW-5 | Bound the palette's command ranking before plugins can register commands. P1-30 ranks registry commands on the UI thread (`crates/syrinx-app/src/palette/commands.rs`), because enablement depends on what the window shows; with ten built-in commands each keystroke ranks a handful of rows, but nothing limits how many a plugin may add. Either cap the registry's size or move command ranking off the UI thread with enablement passed in, before Plan 2's host accepts plugin commands. | Plan 2, phase 1 | Open | |
+| DW-7 | Let the owner remove a remembered site permission. P1-12 stores explicit allow/deny choices per origin and kind (`crates/syrinx-store/src/permissions.rs`, schema version 6) but has no control to forget one, so a remembered choice can only change when the site asks again and the owner picks differently. Add a settings action that removes a saved origin/kind choice so the next request asks again, with storage and UI regression coverage. Deferred because the natural home is P1-29's settings surface, which the permissions slice did not own; the owner requested the `TODO(DW-7)` marker on 2026-10-12. Moved here from a duplicate register at the P1-11–P1-16 integration. | P1-29 settings, or a P1-12 follow-up | Open | |
+| DW-30 | Pin the owner's release public key in `PRODUCTION_KEYS` (`crates/syrinx-update/src/keys.rs`). P1-38 built and tested the update verifier with keys generated in-process, but the production key must be created by the owner outside the repository and outside any agent session, and its identifier recorded separately so the pinned copy can be checked independently (`docs/p1-38-update-format.md`, "Keys"). Until then the set is empty and every package is refused as signed by an unknown key, so the verifier fails closed. Deferred because only the owner can create the key and P1-39 is the first slice that uses it. | P1-39 | Open | |
+| DW-60 | Announce the palette's moving selection to screen readers. P1-36 names every result row (`crates/syrinx-app/src/palette/render.rs`, `row_frame`) and marks the selected one, but the arrow keys move the selection while keyboard focus stays in the query field. GPUI 0.3.8 honours `aria_active_descendant` only when the focused node is an ancestor of the claiming row (`gpui-pre-0.3.8/src/window/a11y.rs`, `set_active_descendant`, around line 258), and the query field is the rows' sibling, so NVDA reads the field but not the row. Fix by moving focus to a list container that owns the query input, or by an input-side active-descendant API in GPUI (a vendored GPUI change needs its own owner approval). Deferred because both routes change either the palette's focus model or the pinned toolkit. See `docs/p1-36-accessibility.md`. | P1-36 follow-up, before P1-40 | Open | |
+| DW-61 | Give the sidebar tree one Tab stop with arrow-key movement. P1-36 makes every saved, open and folder row its own Tab stop (`crates/syrinx-app/src/ui/sidebar_view.rs`, `row_frame`), which works but means many Tab presses through a long sidebar, and F6 lands on the sidebar's first control (Search) rather than the active row. The ARIA tree pattern expects one stop, Up and Down between rows, Left and Right to collapse and expand folders, and focus returning to the active row. Deferred because it needs a roving-focus model shared with the peek popup, which renders the same rows in another window. | P1-36 follow-up | Open | |
+| DW-62 | Show the focus ring only after keyboard input. P1-36 draws the ring on any focus (`crates/syrinx-app/src/controls.rs`, `focus_ring`), so a mouse click on a chrome button leaves a ring until focus moves on. GPUI's `focus_visible` would hide it after a click, but GPUI decides keyboard use from its own key events and never sees the F6 or Tab that arrives through WebView2's accelerator path, so a ring would be missing exactly when F6 leaves a page. Needs a public way to mark keyboard modality (a vendored GPUI change, owner approval) or the owner's acceptance of the current behaviour. | P1-36 follow-up | Open | |
+| DW-90 | Open the palette within one frame. P1-33's acceptance runs (`docs/p1-33-palette-acceptance.md`) measured about 0.5 s from the Ctrl K action to the palette's first presented frame (p95 525 ms at 60 Hz in run `1791855053`). On that busy machine, with Syrinx never in the foreground, almost all of it fell between the call into GPUI's `open_window` and the window's creation. That attribution is provisional until the owner's foreground run. `BrowserView::open_palette` (`crates/syrinx-app/src/ui.rs`) creates a new owned popup window for every Ctrl K and `PaletteView::finish` removes it. Create the owned, non-topmost popup once, keep it hidden, and show, refocus and reset it on Ctrl K, keeping P1-10's stale-popup guards and the Home palette intent correct; then rerun `cargo xtask palette-acceptance`. The owner approved this approach on 2026-10-12 (`docs/decisions.md`) as its own slice with its own review, after P1-33 merges. **Done 2026-10-12** on `claude/dw-90-palette-reuse`: the popup is created hidden once, after the first session state; each Ctrl K resets it as a new entry and shows it from a task outside GPUI's update; Esc, Enter and commands hide it. P1-33's harness measured an opening p95 of 5.9 ms (run `1791860299`) against 556.5 ms before (`1791858770`), with every focus and stacking check passing, one native popup across 20 openings and no renders while hidden. The same slice diagnosed and fixed Esc's focus return: GPUI's `activate_window` set focus to the main window from a task after the page was focused (`docs/p1-33-palette-acceptance.md`). Its review removed every foreground grab, following the owner's 2026-10-12 decision that Syrinx never takes the foreground from another application, and stopped the hidden popup's caret blink from waking Syrinx. | P1-33 follow-up, before P1-40 | Done | |
 
 ## Issue map
 
 Approved by the owner on 2026-10-10 (D41). The following table is copied from
-`docs/plans/Atlas v1 — Readiness and implementation breakdown.md`; P1 labels
+`docs/plans/Syrinx v1 — Readiness and implementation breakdown.md`; P1 labels
 identify local slices, not published GitHub issues. Each phase is a future
 milestone, with one branch, independent review and owner-approved merge per
 slice. Q1–Q4 are resolved by D39–D41; the planning baseline is preserved in
@@ -986,51 +986,51 @@ approved rows until the owner approves the added slice boundaries.
 | ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
 |---|---|---|---|
 | P1-01 | A reproducible local build prevents later work resting on an unusable toolchain. Create the minimal Cargo workspace, dependency-boundary check, passing test and runnable app; document and execute the D38 gate. Audit maintenance, security and licences for the resolved graph before adding dependencies, here and in every later slice. Record the approved local workflow. Do not define the future Plugin trait early. | `Cargo.toml`, `crates/xtask`, `docs/LOCAL-DEV.md`, `CLAUDE.md`, `AGENTS.md`; D16/D38. | Q3/Q4, a preserved planning baseline and the dependency pre-add audit. |
-| P1-02 | One model prevents sidebar/palette disagreement and replacing temporary pins later. Implement live tab identity/kinds, a flat saved-page lifecycle with independent saved identity and live association, selection/order, save/unpin, unload/open-or-focus and a 20-entry closure stack for ordinary and saved web instances. Test D42/D43 without a window; folders and plugin registration remain later work. | `crates/atlas-core`; S3, D42/D43. | P1-01. |
-| P1-03 | Saved destinations must survive independently of live pages. Open a local unsynced store, migrate it and persist/reload flat saved entries plus live-tab snapshots and their associations through a serialized writer. Prove rollback, unloaded-entry preservation and errors on disposable databases. | `crates/atlas-store`, core persistence boundary, filesystem-only `atlas-platform` directory guard; D13/D43. | P1-02; Q2 for durable/cache separation. |
-| P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and an owner-confirmed recovery path; interruption leaves the last valid copy usable. Define and test the local deletion-journal contract so later history clearing survives restoring older snapshots. | `crates/atlas-store`, filesystem lifecycle in `atlas-platform`; D13/D46/D47. | P1-03; approved SQLite maintenance prerequisite, now verified. |
-| P1-05 | The palette needs fast local ranking before UI work. Add the tier 1 catalogue, boosts, counts and match positions with incremental updates and a reproducible 100,000-row benchmark. | `crates/atlas-search`, `crates/xtask`; D9/D48. | P1-04. |
+| P1-02 | One model prevents sidebar/palette disagreement and replacing temporary pins later. Implement live tab identity/kinds, a flat saved-page lifecycle with independent saved identity and live association, selection/order, save/unpin, unload/open-or-focus and a 20-entry closure stack for ordinary and saved web instances. Test D42/D43 without a window; folders and plugin registration remain later work. | `crates/syrinx-core`; S3, D42/D43. | P1-01. |
+| P1-03 | Saved destinations must survive independently of live pages. Open a local unsynced store, migrate it and persist/reload flat saved entries plus live-tab snapshots and their associations through a serialized writer. Prove rollback, unloaded-entry preservation and errors on disposable databases. | `crates/syrinx-store`, core persistence boundary, filesystem-only `syrinx-platform` directory guard; D13/D43. | P1-02; Q2 for durable/cache separation. |
+| P1-04 | A bad backup must not replace a good one. Add idle daily snapshots, seven-copy rotation, clean-shutdown checking and an owner-confirmed recovery path; interruption leaves the last valid copy usable. Define and test the local deletion-journal contract so later history clearing survives restoring older snapshots. | `crates/syrinx-store`, filesystem lifecycle in `syrinx-platform`; D13/D46/D47. | P1-03; approved SQLite maintenance prerequisite, now verified. |
+| P1-05 | The palette needs fast local ranking before UI work. Add the tier 1 catalogue, boosts, counts and match positions with incremental updates and a reproducible 100,000-row benchmark. | `crates/syrinx-search`, `crates/xtask`; D9/D48. | P1-04. |
 | P1-06 | Continuous repainting defeats the performance goal. Implement the small pinned GPUI idle patch, add focused regression evidence and remeasure eight suspended tabs and equivalent first-page startup in both throwaway candidates using fresh synthetic profiles. Prepare a reviewable upstream patch. | Pinned GPUI patch and measurement report; D37/D12. | P1-05; passing measurements. Public offer requires separate owner approval. |
-| P1-07 | Shared tokens and width states keep the shell consistent. Render the five palettes, accent and transparency fallback with wide, favicon-only, hidden and peek sidebar samples. Review D44 drag thresholds with the owner and inspect contrast against the authorized design direction. | `crates/atlas-ui`; S10/D44, `design/README.md`. | P1-06; live-canvas comparison or owner-approved snapshot, with D43–D45 amendments. |
+| P1-07 | Shared tokens and width states keep the shell consistent. Render the five palettes, accent and transparency fallback with wide, favicon-only, hidden and peek sidebar samples. Review D44 drag thresholds with the owner and inspect contrast against the authorized design direction. | `crates/syrinx-ui`; S10/D44, `design/README.md`. | P1-06; live-canvas comparison or owner-approved snapshot, with D43–D45 amendments. |
 
 ### Phase 2 milestone: browser shell
 
 | ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
 |---|---|---|---|
-| P1-08 | Browsing needs a safe engine boundary that follows sidebar size. Create the shared environment and one page in a GPUI card; wire smooth drag transitions through wide, favicon-only and hidden states, including reverse drag, resize and DPI changes. Verify page guardrails, runtime detection and approved privacy disclosure; retain native permission prompts and disable clipboard auto-grant. | `crates/atlas-platform`, `crates/atlas-app`; D3/D11/D44, Q1. | P1-07; Q1. |
-| P1-09 | One sidebar must represent saved rows and live pages without duplicates. Wire flat saved and ordinary rows to D42/D43 creation, save/unpin, unload/open-or-focus, ordering and close/reopen. Render wide/compact states, retain hidden-state selection, and prove repeated lifecycle changes create no duplicate or leaked views. Full folders remain P1-21. | `atlas-core`, `atlas-app`, `atlas-ui`; D42–D44. | P1-08. |
-| P1-10 | Navigation must work from a focused page in every sidebar width state. Wire live address/title updates without rewriting saved targets, back/forward/reload, the owned address-entry popup and native shortcut router. Ctrl L/K opens entry; Ctrl T/W/Tab/Shift T follows D42/D43. Test focus through drag/hidden transitions; Phase 4 extends this same popup. | `atlas-core`, `atlas-platform`, `atlas-app`; D8/D9/D42–D44. | P1-09. |
-| P1-11 | OAuth popups require an opener relationship. Adopt new-window requests as tabs without previous navigation; synthetic opener/focus tests pass. | `atlas-platform`, `atlas-app`; page rules. | P1-10. |
-| P1-12 | Sites need usable permission prompts without automatic grants. Integrate engine permission and notification UI; test decisions and persistence using disposable profiles. | `atlas-platform`; privacy guardrails. | P1-11. |
-| P1-13 | Browser essentials must be reachable. Wire find, downloads, print, context menu and zoom controls, including explicit Ctrl J routing and focused-page tests. | `atlas-platform`, command registry; note 02 Musts. | P1-12. |
-| P1-14 | The address display must not misstate security. Implement a truthful scheme/status display and native certificate-error behavior; verify invalid certificates never silently succeed. | `atlas-platform`, `atlas-ui`; note 02 Musts. | P1-13; supported native security-state approach. |
-| P1-15 | Streaming and long-lived tabs need correct lifecycle handling. Add fullscreen and hidden-tab suspension with late-callback guards; test video layout and resume. | `atlas-platform`, `atlas-app`; D6. | P1-14. |
-| P1-16 | Losing one process must not lose the session model. Recover renderer and shared-browser-process failures distinctly; synthetic fault checks prove no duplicate recovery or missing tabs. | `atlas-platform`, `atlas-app`; crash recovery. | P1-15. |
-| P1-17 | Dragging the sidebar hidden must preserve access over live pages. Add the owned hover-peek popup and Ctrl Alt S sidebar pinning, integrated with D44 width states, without resizing the page during peek. Test focus, stacking, Alt Tab and window lifecycle; move navigation/address controls to the title bar while hidden. | `atlas-ui`, `atlas-platform`, `atlas-app`; D7/D8/D44, `design/README.md`. | P1-16. |
+| P1-08 | Browsing needs a safe engine boundary that follows sidebar size. Create the shared environment and one page in a GPUI card; wire smooth drag transitions through wide, favicon-only and hidden states, including reverse drag, resize and DPI changes. Verify page guardrails, runtime detection and approved privacy disclosure; retain native permission prompts and disable clipboard auto-grant. | `crates/syrinx-platform`, `crates/syrinx-app`; D3/D11/D44, Q1. | P1-07; Q1. |
+| P1-09 | One sidebar must represent saved rows and live pages without duplicates. Wire flat saved and ordinary rows to D42/D43 creation, save/unpin, unload/open-or-focus, ordering and close/reopen. Render wide/compact states, retain hidden-state selection, and prove repeated lifecycle changes create no duplicate or leaked views. Full folders remain P1-21. | `syrinx-core`, `syrinx-app`, `syrinx-ui`; D42–D44. | P1-08. |
+| P1-10 | Navigation must work from a focused page in every sidebar width state. Wire live address/title updates without rewriting saved targets, back/forward/reload, the owned address-entry popup and native shortcut router. Ctrl L/K opens entry; Ctrl T/W/Tab/Shift T follows D42/D43. Test focus through drag/hidden transitions; Phase 4 extends this same popup. | `syrinx-core`, `syrinx-platform`, `syrinx-app`; D8/D9/D42–D44. | P1-09. |
+| P1-11 | OAuth popups require an opener relationship. Adopt new-window requests as tabs without previous navigation; synthetic opener/focus tests pass. | `syrinx-platform`, `syrinx-app`; page rules. | P1-10. |
+| P1-12 | Sites need usable permission prompts without automatic grants. Integrate engine permission and notification UI; test decisions and persistence using disposable profiles. | `syrinx-platform`; privacy guardrails. | P1-11. |
+| P1-13 | Browser essentials must be reachable. Wire find, downloads, print, context menu and zoom controls, including explicit Ctrl J routing and focused-page tests. | `syrinx-platform`, command registry; note 02 Musts. | P1-12. |
+| P1-14 | The address display must not misstate security. Implement a truthful scheme/status display and native certificate-error behavior; verify invalid certificates never silently succeed. | `syrinx-platform`, `syrinx-ui`; note 02 Musts. | P1-13; supported native security-state approach. |
+| P1-15 | Streaming and long-lived tabs need correct lifecycle handling. Add fullscreen and hidden-tab suspension with late-callback guards; test video layout and resume. | `syrinx-platform`, `syrinx-app`; D6. | P1-14. |
+| P1-16 | Losing one process must not lose the session model. Recover renderer and shared-browser-process failures distinctly; synthetic fault checks prove no duplicate recovery or missing tabs. | `syrinx-platform`, `syrinx-app`; crash recovery. | P1-15. |
+| P1-17 | Dragging the sidebar hidden must preserve access over live pages. Add the owned hover-peek popup and Ctrl Alt S sidebar pinning, integrated with D44 width states, without resizing the page during peek. Test focus, stacking, Alt Tab and window lifecycle; move navigation/address controls to the title bar while hidden. | `syrinx-ui`, `syrinx-platform`, `syrinx-app`; D7/D8/D44, `design/README.md`. | P1-16. |
 | P1-18 | The Phase 0 conditions must hold in the product. Record shell idle/startup checks and the owner's remaining site/sign-in tests plus one day of browsing. This is an evidence/report slice; failures return to their owning implementation slice. | Phase 2 acceptance report; D6/D21/D22/D37. | P1-17; owner account tests and day of use. |
 
 ### Phase 3 milestone: browser memory and home
 
 | ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
 |---|---|---|---|
-| P1-19 | Session recovery must not load every saved destination. Restore committed live-tab addresses/titles/order and saved associations, preserving saved rows that were unloaded. Retain D42's in-session reopen behavior and prove crash/restart recovery on disposable data. Back/forward lists are not promised. | `atlas-core`, `atlas-store`, `atlas-app`; D13/D42/D43. | P1-18. |
-| P1-20 | Navigation must become searchable memory. Persist history events and update tier 1 incrementally, with a usable history list and no duplicate entries from stale events. | `atlas-store`, `atlas-search`, `atlas-ui`; D10. | P1-19. |
-| P1-21 | Saved destinations need inline organization without a second bookmark model. Extend the flat D43 foundation with folder and saved-page creation, editing, moves, ordering and removal through core/UI/store/search. Review compact-folder controls, and prove lifecycle, hierarchy and restart consistency. | `atlas-core`, `atlas-store`, `atlas-search`, `atlas-ui`; D43/D44. | P1-20. |
+| P1-19 | Session recovery must not load every saved destination. Restore committed live-tab addresses/titles/order and saved associations, preserving saved rows that were unloaded. Retain D42's in-session reopen behavior and prove crash/restart recovery on disposable data. Back/forward lists are not promised. | `syrinx-core`, `syrinx-store`, `syrinx-app`; D13/D42/D43. | P1-18. |
+| P1-20 | Navigation must become searchable memory. Persist history events and update tier 1 incrementally, with a usable history list and no duplicate entries from stale events. | `syrinx-store`, `syrinx-search`, `syrinx-ui`; D10. | P1-19. |
+| P1-21 | Saved destinations need inline organization without a second bookmark model. Extend the flat D43 foundation with folder and saved-page creation, editing, moves, ordering and removal through core/UI/store/search. Review compact-folder controls, and prove lifecycle, hierarchy and restart consistency. | `syrinx-core`, `syrinx-store`, `syrinx-search`, `syrinx-ui`; D43/D44. | P1-20. |
 | P1-22 | Imported bookmarks must join the same inline saved-page model without opening every page. Parse bounded HTML exports, preview/confirm and preserve folder hierarchy/order as unloaded saved entries. Test synthetic Chrome/Edge/Firefox-shaped exports, nested folders and malformed input; read no browser profile. | Saved-page import and UI; D14/D15/D43. | P1-21. |
 | P1-23 | Full-text selection needs evidence. Run the FTS5/Tantivy bake-off on one synthetic corpus, including update/delete/expiry and recovery costs. Deliver the benchmark and reasoned choice for review before production integration. | Benchmark harness/report; D18. | P1-22; candidate dependency audits. |
-| P1-24 | Search needs a tested implementation of the chosen store. Implement the `FullText` adapter and durable recovery against synthetic documents; interrupted writes, deletions and replay preserve the intended results. | `atlas-search`; reviewed P1-23 choice. | P1-23. |
+| P1-24 | Search needs a tested implementation of the chosen store. Implement the `FullText` adapter and durable recovery against synthetic documents; interrupted writes, deletions and replay preserve the intended results. | `syrinx-search`; reviewed P1-23 choice. | P1-23. |
 | P1-25 | Capture must be safe before real browsing can enable it. Prepare the concrete page-access method for owner approval before any guarded page API use; then prove eligibility/extraction on synthetic pages, redirects, frames and `no-store`. Deliver evidence and the production recommendation. | Synthetic feasibility harness/report; D18/D35. | P1-24; owner approval of the concrete page-access method before prototype use. |
-| P1-26 | Page recall needs bounded, expiring data. Integrate the proven extraction path with the page-text cache/index, disable setting, expiry and restart/restore rules; excluded content never enters storage. | `atlas-platform`, `atlas-search`, cache store; D18/D35, Q2. | P1-25 and review of its evidence; Q2. |
-| P1-27 | Clearing browsing data must include Atlas's copies. Add explicit kind/time choices and coordinated WebView2/history/search clearing; partial failures remain visible, and replay/restore does not silently resurrect cleared entries. | `atlas-platform`, `atlas-store`, `atlas-search`, settings UI. | P1-26; retention-aware backup/recovery design. |
-| P1-28 | Quick destinations need one truthful action path. Build the canvas home page, editable Quick access tiles and separate square sidebar Favorites, with durable ordering/labels. Favorites can target websites, plugin pages or other supported Atlas destinations. Plugin targets retain their unavailable indication until the normal plugin lifecycle exists; add no early host. | `atlas-app`, `atlas-ui`, `atlas-store`; D45, spec home/sidebar. | P1-27. |
-| P1-29 | Appearance and sidebar space should remain as chosen. Persist Customize palette/accent, Reduce transparency and sidebar width/presentation state. Inspect all five palettes and wide/compact/hidden restoration across restart without changing hover-peek behavior. | `atlas-ui`, settings; S10/D44. | P1-28. |
+| P1-26 | Page recall needs bounded, expiring data. Integrate the proven extraction path with the page-text cache/index, disable setting, expiry and restart/restore rules; excluded content never enters storage. | `syrinx-platform`, `syrinx-search`, cache store; D18/D35, Q2. | P1-25 and review of its evidence; Q2. |
+| P1-27 | Clearing browsing data must include Syrinx's copies. Add explicit kind/time choices and coordinated WebView2/history/search clearing; partial failures remain visible, and replay/restore does not silently resurrect cleared entries. | `syrinx-platform`, `syrinx-store`, `syrinx-search`, settings UI. | P1-26; retention-aware backup/recovery design. |
+| P1-28 | Quick destinations need one truthful action path. Build the canvas home page, editable Quick access tiles and separate square sidebar Favorites, with durable ordering/labels. Favorites can target websites, plugin pages or other supported Syrinx destinations. Plugin targets retain their unavailable indication until the normal plugin lifecycle exists; add no early host. | `syrinx-app`, `syrinx-ui`, `syrinx-store`; D45, spec home/sidebar. | P1-27. |
+| P1-29 | Appearance and sidebar space should remain as chosen. Persist Customize palette/accent, Reduce transparency and sidebar width/presentation state. Inspect all five palettes and wide/compact/hidden restoration across restart without changing hover-peek behavior. | `syrinx-ui`, settings; S10/D44. | P1-28. |
 
 ### Phase 4 milestone: command palette
 
 | ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
 |---|---|---|---|
-| P1-30 | Ctrl K needs one command source and predictable focus. Extend P1-10's live owned entry popup into the full command palette with registry-backed rows, keyboard selection, Esc and focus restoration. Do not create a second overlay mechanism. | `atlas-core`, `atlas-ui`, `atlas-platform`; S5/D7. | P1-29. |
-| P1-31 | Search and sidebar must act on the same destinations. Add scope counts, highlights and bounded previews across tier 1/tier 2. Shared stable targets open/focus saved rows, live tabs and supported Favorite destinations through the same actions; stale results cannot replace newer queries or duplicate a saved row's open instance. | `atlas-search`, `atlas-core`, palette UI; D43/D45. | P1-30. |
+| P1-30 | Ctrl K needs one command source and predictable focus. Extend P1-10's live owned entry popup into the full command palette with registry-backed rows, keyboard selection, Esc and focus restoration. Do not create a second overlay mechanism. | `syrinx-core`, `syrinx-ui`, `syrinx-platform`; S5/D7. | P1-29. |
+| P1-31 | Search and sidebar must act on the same destinations. Add scope counts, highlights and bounded previews across tier 1/tier 2. Shared stable targets open/focus saved rows, live tabs and supported Favorite destinations through the same actions; stale results cannot replace newer queries or duplicate a saved row's open instance. | `syrinx-search`, `syrinx-core`, palette UI; D43/D45. | P1-30. |
 | P1-32 | The palette is also the address bar. Add explicit URL navigation, command prefixes and Google Search the web via Alt Enter; verify typing sends no suggestion requests. | Command parsing and palette actions; D9. | P1-31. |
 | P1-33 | Central UI speed must be measured after composition. Verify one-frame opening, complete ranking latency and live-overlay focus/stacking regressions. Record methodology and failures without hiding slow cases. | Palette performance/acceptance report; D6/D7. | P1-32; measured budgets pass. |
 
@@ -1038,9 +1038,9 @@ approved rows until the owner approves the added slice boundaries.
 
 | ID | Why this slice exists; deliverable and done condition | Main files / decisions | Blocked by |
 |---|---|---|---|
-| P1-34 | External links must reach one running Atlas. Implement single-instance forwarding with validated URL arguments and startup-race tests. | `atlas-platform`, `atlas-app`; external links. | P1-33. |
-| P1-35 | Evergreen changes can affect sign-in. Store the last observed runtime version, show D36's notice on change and provide the explicit open-in-Edge action; no sign-in canary. | `atlas-store`, `atlas-app`, `atlas-ui`; D22/D36. | P1-34. |
-| P1-36 | Compact or hidden chrome must remain usable without dragging or reading an icon alone. Implement F6 traversal, accessible names/states and keyboard access across wide/compact/hidden/peek modes, inline folders and Favorites. Record an NVDA pass across the chrome. | `atlas-ui`, `atlas-platform`; accessibility Musts, D43–D45. | P1-35; owner authorization if software installation is required. |
+| P1-34 | External links must reach one running Syrinx. Implement single-instance forwarding with validated URL arguments and startup-race tests. | `syrinx-platform`, `syrinx-app`; external links. | P1-33. |
+| P1-35 | Evergreen changes can affect sign-in. Store the last observed runtime version, show D36's notice on change and provide the explicit open-in-Edge action; no sign-in canary. | `syrinx-store`, `syrinx-app`, `syrinx-ui`; D22/D36. | P1-34. |
+| P1-36 | Compact or hidden chrome must remain usable without dragging or reading an icon alone. Implement F6 traversal, accessible names/states and keyboard access across wide/compact/hidden/peek modes, inline folders and Favorites. Record an NVDA pass across the chrome. | `syrinx-ui`, `syrinx-platform`; accessibility Musts, D43–D45. | P1-35; owner authorization if software installation is required. |
 | P1-37 | Installation must be reproducible without secretly changing Windows. Prepare and validate the installer and registration path; owner performs/approves installation and default-browser selection. Preserve data on upgrade. | Packaging, installation documentation; S8. | P1-36; packaging/policy feasibility and owner operator actions. |
 | P1-38 | Updates must reject tampering. Implement local signed-package verification and failure handling first, using synthetic packages and an independently pinned verification key. | Updater core/tests; signed updates. | P1-37; reviewed format and key-handling design. |
 | P1-39 | Delivery needs explicit network and restart behavior. Connect the verifier to the owner-approved host/check/install policy; prove failed download, invalid signature and interrupted install preserve the working version. | Updater delivery/UI. | P1-38; owner approval of host, network calls and install/restart behavior. |
@@ -1070,7 +1070,7 @@ gates: 2026-10-10 owner approved D43–D45 and the revised 40-slice map; P1-02 i
 gates: 2026-10-10 P1-02 passed the full local gate (31 tests and console launch), independent code review and documentation/map audit
 gates: 2026-10-10 owner explicitly requested the P1-02 commit and approved its local merge into claude/plan-atlas-v1; this authorization covers P1-02 and its documentation only
 gates: 2026-10-10 P1-02 committed as 892d3bc and fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
-gates: 2026-10-10 P1-03 core snapshots passed the full local gate with 37 tests before platform dependencies were introduced; owner approved Unicode-3.0 for unicode-ident 1.0.26 and Zlib for foldhash 0.2.0; these allowances do not select Atlas's own licence
+gates: 2026-10-10 P1-03 core snapshots passed the full local gate with 37 tests before platform dependencies were introduced; owner approved Unicode-3.0 for unicode-ident 1.0.26 and Zlib for foldhash 0.2.0; these allowances do not select Syrinx's own licence
 gates: 2026-10-10 final P1-03 cargo xtask check passed all 77 tests, formatting, Clippy, dependency boundaries and console launch; independent reviews passed; no production database or Windows setting was changed
 gates: 2026-10-10 owner requested the P1-03 commit and approved its local merge; c4a6631 was fast-forward merged into claude/plan-atlas-v1; completion documentation records the resulting state
 gates: 2026-10-10 owner chose confirmation before restoring a damaged database (D46) and a local deletion record that prevents restored backups from resurrecting cleared history (D47)
@@ -1146,7 +1146,7 @@ current: D49 integrated browser preview remains in progress with uncommitted wor
   handoff to start P1-03 storage. No product source changed after the passing
   gate and review; the repository remains local.
 - **2026-10-10** — Implemented D42/D43 in the dependency-free
-  `crates/atlas-core`: distinct saved/live identities, one sidebar projection,
+  `crates/syrinx-core`: distinct saved/live identities, one sidebar projection,
   fixed saved destinations, unload/open-or-focus, unpin and bounded history.
   The full local gate passed 24 model tests and seven architecture tests,
   with formatting, Clippy and the console launch. Independent code and
@@ -1154,7 +1154,7 @@ current: D49 integrated browser preview remains in progress with uncommitted wor
   P1-02 remains uncommitted pending the owner's commit and merge approval.
 - **2026-10-10** — The owner approved Pin=Save with persistent inline rows
   and folders (D43), reversible sidebar width dragging (D44), and separate
-  Favorites for supported Atlas destinations (D45). Updated both copies of
+  Favorites for supported Syrinx destinations (D45). Updated both copies of
   the approved map without adding or reordering its 40 slices. Clarified
   that D42's 20-entry history includes saved-page web closures and resolves
   them through surviving saved rows without recreating removed records.
@@ -1233,7 +1233,7 @@ current: D49 integrated browser preview remains in progress with uncommitted wor
   design, phases 0–5 with exit criteria, what is not built and what is
   unproven were written (step 5).
 - **2026-10-09** — Page text is indexed with exclusions for Google, banking
-  and no-store pages (D35); Atlas notices WebView2 runtime changes and offers
+  and no-store pages (D35); Syrinx notices WebView2 runtime changes and offers
   Edge for Google if sign-in breaks (D36); `CLAUDE.md` updated with the
   owner's yes to describe WebView2, wry and GPUI and to point at
   `docs/decisions.md` and this plan.
@@ -1256,7 +1256,7 @@ current: D49 integrated browser preview remains in progress with uncommitted wor
   in CodeMirror 6 inside a local web view for v1 (D28).
 - **2026-10-09** — Google and Fledge round: Phase 0 proves every Google
   sign-in path the owner uses (D21) and stops for a decision if one fails
-  (D22); Atlas is an ordinary OAuth client of Fledge (D23); the real Fledge
+  (D22); Syrinx is an ordinary OAuth client of Fledge (D23); the real Fledge
   client waits for Stage C, after the Fledge redesign (D24).
 - **2026-10-09** — Research 07 and 08 reported (summarised under "What we
   found"). WebView2 ships Widevine, correcting notes 02 and 06; Google's
@@ -1264,13 +1264,13 @@ current: D49 integrated browser preview remains in progress with uncommitted wor
   and wry work together with raw Win32 and WebView2 calls, and the overlay
   fallback is not ready. Plan 2 round: no third-party plugins in v1 (D17);
   page text indexed locally for 7 days (D18); Fledge data local or live per
-  kind, by switch (D19); Atlas may do everything in Fledge and becomes its
+  kind, by switch (D19); Syrinx may do everything in Fledge and becomes its
   desktop app (D20).
-- **2026-10-09** — Licence left undecided until Atlas goes public. Atlas
+- **2026-10-09** — Licence left undecided until Syrinx goes public. Syrinx
   stays local: plan all four plans now, build once a repository exists (D16).
   A researcher was sent on GPUI and wry on Windows
   (`docs/research/08-gpui-and-wry-on-windows.md`).
-- **2026-10-09** — Import settled: Atlas reads the browser's HTML bookmarks
+- **2026-10-09** — Import settled: Syrinx reads the browser's HTML bookmarks
   export, replacing "CSV only" with the owner's yes (D14, `docs/decisions.md`
   updated), and v1 imports no passwords (D15).
 - **2026-10-09** — Round 3: no history import (D10); no Passwords button and
