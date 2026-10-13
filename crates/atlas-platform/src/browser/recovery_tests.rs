@@ -108,6 +108,7 @@ impl Fixture {
                     height: 600,
                 },
                 parent: parent.0 as isize,
+                page_text: page_text::TextContext::default(),
                 events: EventSink(events, None),
                 shortcuts: NativeSink {
                     send,
@@ -325,10 +326,10 @@ fn environment_and_controller_recovery_failures_keep_retryable_live_records() {
 
     let renderer = fixture.state().pages[&11].synthetic_failure(11, 1);
     fixture.state().native_event(renderer);
-    fixture
-        .state()
-        .unavailable
-        .insert(11, "invalid synthetic destination".into());
+    fixture.state().unavailable.insert(
+        11,
+        Unavailable::chosen("invalid synthetic destination".into()),
+    );
     assert_eq!(
         fixture.state().restore_page(11),
         Err(BrowserError::InvalidUrl)

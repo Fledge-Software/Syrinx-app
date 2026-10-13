@@ -538,3 +538,22 @@ so `atlas-update` is compiled against a `windows` build that also has
 without the check noticing. The check stops the verifier from asking for a
 networking or other namespace itself; review of its source is what keeps it
 to CNG.
+
+## P1-25: `serde_json` in `atlas-platform`, 2026-10-12
+
+P1-25 parses the JSON that WebView2 returns for the one approved DevTools
+call, `DOMSnapshot.captureSnapshot`. Writing a JSON parser for an
+attacker-influenced, multi-megabyte response would be riskier than reusing
+the parser the workspace already audited, so `atlas-platform` now declares
+`serde_json.workspace = true`: the P1-01 pin `=1.0.151`, default features
+off, `std` only. The approval proposal names this route
+(`docs/proposals/p1-25-page-text-extraction.md`, "Recommendation").
+
+No package enters the build. `serde_json 1.0.151` was already compiled into
+`atlas-app` through GPUI (`schemars` requests its `alloc` feature), as
+`cargo tree -p atlas-app -i serde_json` showed before the change, and its
+five-package closure is the one audited in the P1-01 section above. The only
+`Cargo.lock` change is the new `serde_json` line in `atlas-platform`'s own
+dependency list. `serde` derive is not enabled; the parser reads
+`serde_json::Value`, so the inactive derive closure and its Unicode-3.0
+licence remain out of the build.

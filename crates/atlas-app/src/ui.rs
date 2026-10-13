@@ -823,6 +823,8 @@ impl BrowserView {
             BrowserEvent::DataCleared { request, outcome } => {
                 self.browser_data_cleared(request, outcome);
             }
+            // The app never switches capture on before P1-26, so no capture reaches here.
+            BrowserEvent::PageText { .. } => {}
             BrowserEvent::Shortcut(shortcut) => self.shortcut(shortcut, window, cx),
             BrowserEvent::PageFocused { id } => self.page_took_focus(id, window, cx),
             BrowserEvent::PopupRequested { id, request, url } => {
