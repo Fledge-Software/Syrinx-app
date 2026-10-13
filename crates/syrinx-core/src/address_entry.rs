@@ -93,15 +93,14 @@ fn names_other_scheme(text: &str, scheme: &str, remainder: &str) -> bool {
 /// `url` parser actually found is loopback, so no hand-split text can choose plain `http`.
 fn https_or_loopback_http(candidate: &str) -> Result<String, EntryError> {
     let normalized = checked(&format!("https://{candidate}"))?;
-    let mut address =
+    let address =
         url::Url::parse(&normalized).map_err(|_| EntryError::Address(WebAddressError::Invalid))?;
     if !is_loopback(&address) {
         return Ok(normalized);
     }
-    address
-        .set_scheme("http")
-        .map_err(|()| EntryError::Address(WebAddressError::Invalid))?;
-    Ok(address.into())
+    // Parse the typed text again rather than switching schemes: `https` normalization has
+    // already dropped an explicit `:443`, which would silently become port 80.
+    checked(&format!("http://{candidate}"))
 }
 
 fn is_loopback(address: &url::Url) -> bool {
@@ -294,6 +293,15 @@ mod tests {
             ("evil.test\\127.0.0.1", "https://evil.test/127.0.0.1"),
             ("evil.test\\@localhost", "https://evil.test/@localhost"),
             ("localhost\\path", "http://localhost/path"),
+        ] {
+            assert_eq!(opens(input).as_deref(), Some(expected), "{input:?}");
+        }
+        // A typed port is kept, including `https`'s default 443 on a loopback host.
+        for (input, expected) in [
+            ("localhost:443", "http://localhost:443/"),
+            ("127.0.0.1:443/x", "http://127.0.0.1:443/x"),
+            ("[::1]:443", "http://[::1]:443/"),
+            ("localhost:80", "http://localhost/"),
         ] {
             assert_eq!(opens(input).as_deref(), Some(expected), "{input:?}");
         }
