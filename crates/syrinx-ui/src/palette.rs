@@ -375,6 +375,7 @@ fn haze(accent: Accent) -> Palette {
         input: Color::rgba(0, 0, 0, 0.28),
         input_line: white(0.12),
         scrim: Color::rgba(6, 7, 10, 0.5),
+        accent: AccentColors::see_through(accent),
         ..graphite(accent)
     }
 }
@@ -421,6 +422,7 @@ fn glass(accent: Accent) -> Palette {
             background: tile.background.with_alpha_byte(0xC7),
             ..tile
         }),
+        accent: AccentColors::see_through(accent),
         ..graphite(accent)
     }
 }

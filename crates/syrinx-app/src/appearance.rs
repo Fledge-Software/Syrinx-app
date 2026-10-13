@@ -18,7 +18,7 @@ pub struct Appearance {
 }
 
 impl Default for Appearance {
-    /// Graphite with the spec's accent, transparency allowed.
+    /// Graphite with the default accent (the logo's orange), transparency allowed.
     fn default() -> Self {
         Self {
             palette: PaletteId::Graphite,
@@ -152,6 +152,17 @@ mod tests {
             unreadable.0,
             [PALETTE_KEY, ACCENT_KEY, REDUCE_TRANSPARENCY_KEY]
         );
+    }
+
+    #[test]
+    fn a_saved_former_default_accent_is_kept_after_the_default_changed() {
+        // #FF8A65 was the default and a preset until 2026-10-13; whoever saved it keeps it.
+        let (appearance, unreadable) =
+            Appearance::from_settings(&stored(&[(ACCENT_KEY, "#FF8A65")]));
+        assert_eq!(unreadable, Unreadable::default());
+        assert_eq!(appearance.accent.fill(), Color::hex(0xFF8A65));
+        assert!(!appearance.uses_preset_accent());
+        assert_eq!(Appearance::default().accent.fill(), Color::hex(0xFF612E));
     }
 
     #[test]
