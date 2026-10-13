@@ -222,9 +222,13 @@ could not reopen the peek (check 9).
 `OwnerGeometry` (GPUI bounds, viewport size and scale) with the last value it
 saw, and retires only when one of them changed. A real move, resize, maximize
 or DPI change still closes the peek, and refocuses the page only when Atlas is
-active, as before. Minimizing and Alt Tab away still close it through the
-sampler, which finds Atlas inactive and never refocuses, so the queued-dismissal
-Alt Tab rule is unchanged. Ignoring activation-caused calls by tracking the
+active, as before. Minimizing also arrives here first: Windows moves the window
+to (-32000, -32000) while it is still active. So the refocus also requires the
+same native check that queued peek actions use (`owner_in_front`: the main
+window or its popup is in front and the main window is not iconic). A
+minimizing window closes the peek without taking the page's focus. Alt Tab away
+closes it through the sampler, which finds Atlas inactive and never refocuses,
+so the queued-dismissal Alt Tab rule is unchanged. Ignoring activation-caused calls by tracking the
 activation callback was rejected: GPUI gives the observer no cause, and
 comparing placement is what the watch is for. `owner_moved` is unit-tested with
 an activation repeat and a move, resize and rescale.
