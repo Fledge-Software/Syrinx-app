@@ -557,3 +557,13 @@ five-package closure is the one audited in the P1-01 section above. The only
 dependency list. `serde` derive is not enabled; the parser reads
 `serde_json::Value`, so the inactive derive closure and its Unicode-3.0
 licence remain out of the build.
+
+## Branding: one `windows` namespace feature, 2026-10-13
+
+`syrinx-platform` enables `Win32_System_LibraryLoader` on the existing
+`windows =0.62.2` pin, for `GetModuleHandleW` in `src/app_icon.rs` (loading
+the executable's own icon). GPUI already enables that feature on the same
+`windows` version, so feature unification compiled it before; no package,
+version, licence or `Cargo.lock` line changes. The icon itself is compiled by
+the Windows SDK's `rc.exe` from `crates/syrinx-app/build.rs`, which adds no
+Rust dependency (owner decision 2026-10-13; `embed-resource` was rejected).
