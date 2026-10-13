@@ -138,6 +138,9 @@ pub struct DocumentFacts<'a> {
     /// The document the navigation left, when Atlas did not start it (a link, a page script,
     /// a form, a popup, back, forward or reload).
     pub left: Option<LeftDocument<'a>>,
+    /// The document itself is known to be tainted: the tab committed this address before as a
+    /// tainted document (back, forward), or its earlier navigation facts could not be read.
+    pub tainted: bool,
     /// The tab's navigation generation when these facts were gathered.
     pub generation: u64,
 }
@@ -224,6 +227,9 @@ pub fn judge(
     policy.address_allowed(facts.address)?;
     policy.address_allowed(facts.document_address)?;
     redirects_allowed(policy, facts.redirects)?;
+    if facts.tainted {
+        return Err(Ineligible::LeftExcluded);
+    }
     left_allowed(policy, facts.left)?;
     no_form_post(facts.responses)?;
     response_allows_storing(facts.document_address, facts.responses)?;

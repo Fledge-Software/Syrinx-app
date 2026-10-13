@@ -1,7 +1,10 @@
 //! What one tab has observed about its current document, kept apart from WebView2 so the
 //! scheduling and exit rules can be tested without a window.
 
-use std::time::Instant;
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 use atlas_core::{
     DocumentFacts, EligibleDocument, Ineligible, LeftDocument, ObservedResponse, PageTextPolicy,
@@ -10,6 +13,11 @@ use atlas_core::{
 
 /// The most top-level responses remembered for one navigation.
 const RESPONSE_RECORDS: usize = 32;
+/// How long Atlas's own request may wait for its navigation to start; a later start for the
+/// same address (after a cancelled `beforeunload` prompt, say) is the page's, not Atlas's.
+pub(super) const ATLAS_START_LIMIT: Duration = Duration::from_secs(5);
+/// The most tainted document addresses one tab remembers for back and forward.
+const TAINTED_RECORDS: usize = 64;
 
 #[derive(Default)]
 pub(super) struct TextState {
@@ -26,12 +34,17 @@ pub(super) struct TextState {
     /// The address shown now; differs from `document` after a History API change.
     address: Option<String>,
     /// An address Atlas itself asked this tab to load, until its navigation starts.
-    atlas_requested: Option<String>,
+    atlas_requested: Option<AtlasRequest>,
+    /// When the current navigation began.
+    navigation_began: Option<Instant>,
     /// The document this navigation left, when Atlas did not start it.
     left: Option<Left>,
     /// The committed document was reached by leaving an excluded or tainted document; kept
     /// until Atlas itself navigates the tab, even while capture is off.
     tainted: bool,
+    /// Addresses (without fragment) this tab committed as tainted, so back or forward into
+    /// one stays tainted; the oldest is forgotten first.
+    tainted_documents: VecDeque<String>,
     loaded: bool,
     /// When a capture falls due, and the generation it was scheduled for.
     due: Option<(Instant, u64)>,
@@ -56,6 +69,12 @@ pub(super) struct Start {
     pub(super) navigation: u64,
     /// The web view's `Source()` as the navigation began: the document being left.
     pub(super) source: String,
+    pub(super) at: Instant,
+}
+
+struct AtlasRequest {
+    address: String,
+    at: Instant,
 }
 
 struct Left {
@@ -95,12 +114,16 @@ impl TextState {
     }
 
     /// Atlas asked the tab to load `address` (address bar, palette, bookmark, tile, Home).
-    pub(super) fn atlas_navigation(&mut self, address: &str) {
-        self.atlas_requested = Some(address.to_owned());
+    pub(super) fn atlas_navigation(&mut self, address: &str, now: Instant) {
+        self.atlas_requested = Some(AtlasRequest {
+            address: address.to_owned(),
+            at: now,
+        });
     }
 
-    /// WebView2 refused Atlas's request before starting it.
-    pub(super) fn atlas_navigation_refused(&mut self) {
+    /// Withdraws Atlas's request: WebView2 refused it, or Atlas went back, forward, reloaded
+    /// or stopped instead.
+    pub(super) fn atlas_navigation_cancelled(&mut self) {
         self.atlas_requested = None;
     }
 
@@ -121,14 +144,10 @@ impl TextState {
     /// A new navigation: a fresh chain, and the document left unless Atlas started it.
     fn begin_navigation(&mut self, start: &Start) {
         self.navigation = Some(start.navigation);
+        self.navigation_began = Some(start.at);
         self.redirects.clear();
         self.responses.clear();
-        let started_by_atlas = self
-            .atlas_requested
-            .as_deref()
-            .is_some_and(|requested| same_document_address(requested, &start.address));
-        if started_by_atlas {
-            self.atlas_requested = None;
+        if self.takes_atlas_request(start) {
             self.left = None;
             return;
         }
@@ -138,16 +157,34 @@ impl TextState {
         });
     }
 
-    /// Forgets the navigation when its facts could not be read, so nothing is judged readable.
-    /// The taint is kept: an unreadable start never clears it.
-    pub(super) fn forget_navigation(&mut self) -> bool {
+    /// Whether this start is Atlas's own request: the address it asked for, within the limit.
+    /// An expired request is dropped; a fresh one for another address waits.
+    fn takes_atlas_request(&mut self, start: &Start) -> bool {
+        let Some(request) = self.atlas_requested.take() else {
+            return false;
+        };
+        if start.at.saturating_duration_since(request.at) > ATLAS_START_LIMIT {
+            return false;
+        }
+        if same_document_address(&request.address, &start.address) {
+            return true;
+        }
+        self.atlas_requested = Some(request);
+        false
+    }
+
+    /// Forgets the navigation when its facts could not be read, so nothing is judged readable,
+    /// and taints the tab: what it left is unknown (fail closed).
+    pub(super) fn forget_navigation(&mut self, now: Instant) -> bool {
         let cancelled = self.navigation_started(Start {
             address: String::new(),
             redirected: false,
             navigation: u64::MAX,
             source: String::new(),
+            at: now,
         });
         self.requested = None;
+        self.tainted = true;
         cancelled
     }
 
@@ -178,7 +215,7 @@ impl TextState {
     ) -> bool {
         let cancelled = self.advance();
         if new_document {
-            self.commit(rules.policy);
+            self.commit(&source, rules.policy);
             self.document = Some(source.clone());
             self.address = Some(source);
             self.loaded = false;
@@ -192,13 +229,26 @@ impl TextState {
         cancelled
     }
 
-    /// A new document committed: it inherits the taint of what its navigation left.
-    fn commit(&mut self, policy: &PageTextPolicy) {
+    /// A new document committed: it inherits the taint of what its navigation left, and an
+    /// address committed tainted before stays tainted (back or forward into it).
+    fn commit(&mut self, source: &str, policy: &PageTextPolicy) {
         let left = self.left.as_ref().map(|left| LeftDocument {
             address: &left.address,
             tainted: left.tainted,
         });
-        self.tainted = policy.taints(left, &self.redirects);
+        let document = without_fragment(source);
+        let known = self.tainted_documents.iter().any(|known| known == document);
+        self.tainted = known || policy.taints(left, &self.redirects);
+        if self.tainted && !known {
+            self.remember_tainted(document.to_owned());
+        }
+    }
+
+    fn remember_tainted(&mut self, document: String) {
+        if self.tainted_documents.len() == TAINTED_RECORDS {
+            self.tainted_documents.pop_front();
+        }
+        self.tainted_documents.push_back(document);
     }
 
     pub(super) fn navigation_completed(
@@ -211,6 +261,9 @@ impl TextState {
         if self.navigation != Some(navigation) {
             return;
         }
+        if !success {
+            self.drop_request_older_than_this_navigation();
+        }
         // A reload or a visit to the same address raises no SourceChanged (F14 found this).
         // The guess is confirmed against the web view's Source before any call, and never
         // changes the taint, which only a real commit sets.
@@ -221,6 +274,19 @@ impl TextState {
         self.loaded = success && self.document.is_some();
         if rules.capture && self.loaded {
             self.due = Some((now + rules.policy.settle_delay(), self.generation));
+        }
+    }
+
+    /// A navigation that began after Atlas's request has failed or been cancelled, so that
+    /// request will not start now (a refused `beforeunload`, for instance).
+    fn drop_request_older_than_this_navigation(&mut self) {
+        let began = self.navigation_began;
+        let older = self
+            .atlas_requested
+            .as_ref()
+            .is_some_and(|request| began.is_some_and(|began| began >= request.at));
+        if older {
+            self.atlas_requested = None;
         }
     }
 
@@ -289,6 +355,7 @@ impl TextState {
                 address: &left.address,
                 tainted: left.tainted,
             }),
+            tainted: self.tainted,
             generation: scheduled,
         };
         judge(policy, facts, self.generation)
@@ -344,6 +411,7 @@ mod tests {
             redirected,
             navigation,
             source: from.to_owned(),
+            at: Instant::now(),
         }
     }
 
@@ -364,7 +432,7 @@ mod tests {
         navigation: u64,
         now: Instant,
     ) {
-        state.atlas_navigation(address);
+        state.atlas_navigation(address, now);
         visit(state, exit(from, address, navigation, false), now);
     }
 
@@ -500,10 +568,18 @@ mod tests {
         visit(&mut state, exit(PAGE, START, 3, false), now);
         assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
         // Only a navigation Atlas starts clears the taint.
-        atlas_visit(&mut state, START, PAGE, 4, now);
+        let clean = "https://plain.example.test/clean";
+        atlas_visit(&mut state, START, clean, 4, now);
         assert_eq!(verdict(&mut state, now), Ok(()));
-        visit(&mut state, exit(PAGE, START, 5, false), now);
+        visit(
+            &mut state,
+            exit(clean, "https://plain.example.test/next", 5, false),
+            now,
+        );
         assert_eq!(verdict(&mut state, now), Ok(()));
+        // An address committed tainted stays tainted, even when Atlas loads it again.
+        atlas_visit(&mut state, clean, PAGE, 6, now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
     }
 
     #[test]
@@ -522,7 +598,7 @@ mod tests {
         let mut state = TextState::default();
         atlas_visit(&mut state, "about:blank", BANK, 1, now);
         // A page script's navigation that starts before Atlas's own does not consume it.
-        state.atlas_navigation(PAGE);
+        state.atlas_navigation(PAGE, now);
         visit(&mut state, exit(BANK, START, 2, false), now);
         assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
         visit(
@@ -537,7 +613,7 @@ mod tests {
     fn a_redirect_through_an_excluded_site_taints_the_next_exit() {
         let now = Instant::now();
         let mut state = TextState::default();
-        state.atlas_navigation(START);
+        state.atlas_navigation(START, now);
         state.navigation_started(start(START, false, 1));
         state.navigation_started(start("https://accounts.google.com/o", true, 1));
         state.navigation_started(start(PAGE, true, 1));
@@ -621,10 +697,86 @@ mod tests {
     }
 
     #[test]
+    fn an_atlas_request_that_never_started_does_not_clear_taint_later() {
+        let now = Instant::now();
+        let mut state = TextState::default();
+        atlas_visit(&mut state, "about:blank", BANK, 1, now);
+        visit(&mut state, exit(BANK, PAGE, 2, false), now);
+        // Atlas asks for START, but the owner cancels the page's beforeunload prompt.
+        state.atlas_navigation(START, now);
+        // Past the limit, the page's own script goes to the same address.
+        let late = Start {
+            at: now + ATLAS_START_LIMIT + Duration::from_secs(1),
+            ..exit(PAGE, START, 3, false)
+        };
+        visit(&mut state, late, now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+    }
+
+    #[test]
+    fn a_cancelled_navigation_or_another_atlas_action_withdraws_the_request() {
+        let now = Instant::now();
+        let mut state = TextState::default();
+        atlas_visit(&mut state, "about:blank", BANK, 1, now);
+        visit(&mut state, exit(BANK, PAGE, 2, false), now);
+        state.atlas_navigation(START, now);
+        // A navigation that began after the request fails (the request's own, refused).
+        state.navigation_started(exit(PAGE, "https://plain.example.test/other", 3, false));
+        state.navigation_completed(3, false, on(&policy()), now);
+        visit(&mut state, exit(PAGE, START, 4, false), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+        // Atlas went back instead of loading its request.
+        state.atlas_navigation(START, now);
+        state.atlas_navigation_cancelled();
+        visit(&mut state, exit(START, START, 5, false), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+    }
+
+    #[test]
+    fn back_into_a_tainted_document_stays_tainted() {
+        let now = Instant::now();
+        let mut state = TextState::default();
+        let token = "https://shop.example.test/return?token=synthetic";
+        atlas_visit(&mut state, "about:blank", BANK, 1, now);
+        visit(&mut state, exit(BANK, token, 2, false), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+        atlas_visit(&mut state, token, PAGE, 3, now);
+        assert_eq!(verdict(&mut state, now), Ok(()));
+        // Back: WebView2 reports a navigation Atlas did not start, out of a clean page.
+        visit(
+            &mut state,
+            exit(PAGE, &format!("{token}#again"), 4, false),
+            now,
+        );
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+    }
+
+    #[test]
+    fn a_seeded_taint_survives_until_atlas_navigates() {
+        let now = Instant::now();
+        // A rebuilt page after a crash carries its predecessor's taint into the reload.
+        let mut state = TextState::seeded(true);
+        visit(&mut state, start(PAGE, false, 1), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+        atlas_visit(&mut state, PAGE, START, 2, now);
+        assert_eq!(verdict(&mut state, now), Ok(()));
+    }
+
+    #[test]
+    fn unreadable_navigation_facts_taint_the_tab() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.forget_navigation(now);
+        assert!(state.tainted());
+        visit(&mut state, start(START, false, 9), now);
+        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+    }
+
+    #[test]
     fn unreadable_navigation_facts_leave_nothing_readable() {
         let now = Instant::now();
         let mut state = loaded(now);
-        state.forget_navigation();
+        state.forget_navigation(now);
         state.navigation_completed(u64::MAX, true, on(&policy()), now);
         assert_eq!(state.due(), None);
         assert!(!state.wants_response(PAGE));

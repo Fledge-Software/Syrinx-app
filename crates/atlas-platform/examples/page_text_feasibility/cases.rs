@@ -66,7 +66,7 @@ fn main_run(
         browser.wait_finals(quiet, 1, OUTCOME_TIMEOUT)?;
         let listening_before = listening_ports(browser)?;
         type Case = fn(&mut Browser, &Server) -> Result<CaseResult, String>;
-        let cases: [(&str, Case); 22] = [
+        let cases: [(&str, Case); 23] = [
             ("F1", f1),
             ("F2", f2),
             ("F3", f3),
@@ -88,6 +88,7 @@ fn main_run(
             ("F25", f25),
             ("F26", f26),
             ("F27", f27),
+            ("F28", f28),
             ("F13", f13),
         ];
         for (name, case) in cases {
@@ -562,6 +563,38 @@ fn f27(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
         details.push(format!("from {}: {}", role.name(), describe(&seen)));
     }
     Ok(CaseResult::new("F27", passed, details.join("; ")))
+}
+
+/// F28: the bank's script reaches a plain page (tainted); an Atlas navigation clears the
+/// tab; Back into the tainted entry is still not read.
+fn f28(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
+    let id = browser.open(&server.sites.url(Role::Bank, "/signin/script"), true)?;
+    browser.pump_for(Duration::from_secs(6))?;
+    let finals = browser.log.finals(id);
+    browser.navigate(id, &server.sites.url(Role::Plain, "/landing?via=atlas"))?;
+    let cleared = browser.wait_finals(id, finals + 1, OUTCOME_TIMEOUT);
+    let known = browser.log.outcomes(id).len();
+    browser.send(BrowserCommand::Back { id })?;
+    browser.pump_for(Duration::from_secs(6))?;
+    let back = browser.log.outcomes(id)[known..].to_vec();
+    let shown = browser.log.urls.get(&id).cloned().unwrap_or_default();
+    let all = browser.log.outcomes(id);
+    browser.close(id)?;
+    let passed = cleared.is_ok()
+        && captured(&all[..known]).is_some()
+        && path_of(&shown).starts_with("landing?via=script")
+        && !requested(&back)
+        && has_ineligible(&back, &[Ineligible::LeftExcluded]);
+    Ok(CaseResult::new(
+        "F28",
+        passed,
+        format!(
+            "before Back: {}; after Back: {}; tab shows {}",
+            describe(&all[..known]),
+            describe(&back),
+            path_of(&shown)
+        ),
+    ))
 }
 
 /// Waits for `opener`'s popup request and adopts it as a new shown tab, as Atlas does.

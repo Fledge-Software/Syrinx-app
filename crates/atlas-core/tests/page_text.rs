@@ -40,6 +40,7 @@ fn facts<'a>(
         redirects,
         responses,
         left: None,
+        tainted: false,
         generation: 4,
     }
 }
@@ -210,6 +211,15 @@ fn every_exit_from_an_excluded_site_that_atlas_did_not_start_is_never_read() {
     assert_eq!(judged(left("https://other.example.test/", false)), Ok(()));
     assert_eq!(judged(left("about:blank", false)), Ok(()));
     assert_eq!(judged(None), Ok(()));
+    // A document the tab already knows is tainted (back or forward into it) stays skipped.
+    let known = DocumentFacts {
+        tainted: true,
+        ..facts(PAGE, &[], &responses)
+    };
+    assert_eq!(
+        judge(Some(&policy()), known, 4).map(|_| ()),
+        Err(Ineligible::LeftExcluded)
+    );
 }
 
 // U4: the taint the platform carries forward uses the same rule, plus excluded redirect hops.

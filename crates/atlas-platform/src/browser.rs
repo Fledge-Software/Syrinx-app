@@ -722,7 +722,7 @@ struct BrowserState {
     popups: popups::PopupRequests,
     environment: Option<ICoreWebView2Environment>,
     profile: PathBuf,
-    unavailable: HashMap<u64, String>,
+    unavailable: HashMap<u64, recovery::Unavailable>,
     active: Option<u64>,
     recovery_sequence: u64,
     recovery: recovery::RecoveryBudget,
@@ -735,21 +735,21 @@ struct BrowserState {
 
 impl BrowserState {
     fn new_page(&self, id: u64) -> Result<Page, BrowserError> {
-        self.new_popup(id, false)
+        self.new_page_with_taint(id, false)
     }
 
     /// A new page; an adopted popup inherits its opener's page-text taint.
-    fn new_popup(&self, id: u64, opener_tainted: bool) -> Result<Page, BrowserError> {
+    fn new_page_with_taint(&self, id: u64, starts_tainted: bool) -> Result<Page, BrowserError> {
         if id == 0 {
             return Err(BrowserError::InvalidTab);
         }
         if self.pages.contains_key(&id) || self.unavailable.contains_key(&id) {
             return Err(BrowserError::DuplicateTab);
         }
-        self.build_page(id, opener_tainted)
+        self.build_page(id, starts_tainted)
     }
 
-    fn build_page(&self, id: u64, opener_tainted: bool) -> Result<Page, BrowserError> {
+    fn build_page(&self, id: u64, starts_tainted: bool) -> Result<Page, BrowserError> {
         Page::new(
             id,
             self.parent,
@@ -760,7 +760,7 @@ impl BrowserState {
                 shortcuts: self.shortcuts.clone(),
                 popups: self.popups.clone(),
                 text: self.page_text.clone(),
-                opener_tainted,
+                starts_tainted,
             },
         )
     }
@@ -776,12 +776,12 @@ impl BrowserState {
             BrowserCommand::AdoptPopup { request, id } => {
                 let pending = self.popups.take(request).ok_or(BrowserError::Popup)?;
                 // Every page uses this environment and the default profile; do not navigate the target.
-                let opener_tainted = self
+                let starts_tainted = self
                     .pages
                     .get(&pending.opener)
                     .ok_or(BrowserError::UnknownTab)?
                     .popup_tainted();
-                let page = self.new_popup(id, opener_tainted)?;
+                let page = self.new_page_with_taint(id, starts_tainted)?;
                 pending.adopt(&page.webview())?;
                 self.pages.insert(id, page);
             }
@@ -841,7 +841,9 @@ impl BrowserState {
             }
             BrowserCommand::Navigate { id, url } if self.unavailable.contains_key(&id) => {
                 page::validate_url(&url)?;
-                self.unavailable.insert(id, url);
+                // The owner's own navigation: Atlas chose the address, so no taint carries.
+                self.unavailable
+                    .insert(id, recovery::Unavailable::chosen(url));
                 self.retry_unavailable(id)?;
             }
             BrowserCommand::Focus { id } if self.unavailable.contains_key(&id) => {}
