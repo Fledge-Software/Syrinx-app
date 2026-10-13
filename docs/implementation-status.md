@@ -4,7 +4,46 @@ This ledger prevents tested foundations from being mistaken for a finished brows
 
 The product was renamed from Atlas to Syrinx on 2026-10-12. Evidence recorded before then keeps its original file names: executables such as `target/local/atlas-app.exe` and logs under `target/` are named as they were built, and their hashes belong to those files. The executable is now `target/local/syrinx.exe`.
 
-## Current checkpoint — 2026-10-11
+## Current checkpoint — 2026-10-13
+
+**Where main is.** `main` is at `1bb3795`. Plan 1's reviewed slices reached it
+through the integration-branch merge `da2e192` (2026-10-12); since then the
+peek fixes, DW-90's single palette popup, the Syrinx rename (`2cee23d`), the
+branding (`63f6844`), P1-05's partitioned complete queries (`20179d2`) and
+P1-23's full-text bake-off harness (`0a83c76`) have merged. Some rows in the
+Plan 1 table below still describe those slices as they stood on their branches.
+
+**How work reaches main now.** Each slice is built on its own branch in a local
+worktree and merges to `main` with `--no-ff` once an independent review
+approves it and `cargo xtask check` passes after the merge (`docs/decisions.md`,
+2026-10-12). The integration branch `codex/integrated-browser-preview` is no
+longer the route. Since 2026-10-13 the repository is on GitHub at
+`Fledge-Software/Syrinx-app`; an agent pushes only its assigned branch, and
+publication, the licence and moving the registers into issues stay the owner's.
+
+**Latest recorded gate.** The last recorded full gate passed 1,014 tests and
+application smoke, after the branding review. No gate count is recorded for
+`main` after the P1-05 and P1-23 merges; the next agent should run
+`cargo xtask check` on `main` and record it here.
+
+**Open Plan 1 work.** Nothing below is finished, so Phase 1 stays open.
+- *Blocked on P1-23's quiet-machine runs and review:* P1-24 (the full-text
+  adapter), P1-26 (the page-text cache) and P1-27's full-text participants all
+  wait for the measured engine choice, which also has to resolve the lru advisory.
+- *Owner checks and quiet-machine runs:* D48's three fresh-process runs for
+  P1-05; P1-06's quiet idle reruns and eight-suspended-tab measurement; P1-23's
+  three runs per engine and corpus; P1-33's three foreground palette-acceptance
+  runs; and the manual window checks listed in each slice's row.
+- *Owner-only slices:* P1-18 (site and sign-in acceptance, a crash-free day) and
+  P1-40 (a default-browser week with memory and start-up evidence).
+- *Owner decisions:* P1-39's update host, network and install policy.
+- *Analytics:* AN-01/AN-02's schema and slice proposal is not yet approved.
+- *Undiagnosed:* the intermittent permission and certificate fixture timeouts
+  (5 of 15 untraced runs, P1-11 row); a passing run is not a diagnosis.
+- *Deferred rows still open:* DW-5, DW-7, DW-30, DW-60, DW-61 and DW-62 in the
+  plan's "Deferred work" register.
+
+## Checkpoint — 2026-10-11 (historical)
 
 The atomic startup and retained-handle correction now pass the complete
 normal-desktop gate: 436 tests, dependency boundaries, formatting, Clippy,
@@ -637,17 +676,14 @@ additional dependency-patch authorization and does not diagnose the breakpoint.
 
 ## Shortest next step
 
-The latest product gate passes all 376 tests and application smoke. The owner
-reports that `about:blank` appears while typing, its Go to row stays selected
-after two seconds, and Enter closes the palette. Continue the approved fresh-
-window inspection. The owner also confirms one local-fixture page-typing,
-page-focused Ctrl K, palette-typing and Escape focus-return cycle. Remaining
-checks include repeated focus reliability, Enter focus return in other
-destinations, other page-focused shortcuts, saved-target independence, unload/reopen, resize,
-persisted restart and shutdown. Preserve older windows and all native failures;
-the original breakpoint remains unresolved, and the page-host prototype is
-unpromoted. The narrowed ASCII projection is implemented, but only 10/26 D48
-cases pass; do not promote the test-only index or relax D48. Re-run the required
-gate after implementation changes and retain independent review before any
-requested commit or approved merge. This narrow manual pass does not complete
-browser acceptance or a later plan.
+For an agent: run `cargo xtask check` on `main` and record the count, since none
+is recorded after the P1-05 and P1-23 merges. Then take the earliest open Plan 1
+work that does not wait on the owner, such as diagnosing the permission and
+certificate fixture timeouts or one of the open deferred rows, on its own
+branch with an independent review. P1-24 and P1-26 cannot start until P1-23's
+engine choice is measured and reviewed.
+
+For the owner: the quiet-machine runs that unblock that work, P1-23's bake-off
+first, then D48's runs for P1-05, P1-06's idle reruns and P1-33's palette runs,
+followed by the manual window checks in each slice's row. These runs decide
+whether the search and idle targets pass; a passing gate cannot.
