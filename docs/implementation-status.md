@@ -30,7 +30,7 @@ application smoke, after the branding review. No gate count is recorded for
   adapter) and P1-27's full-text participants wait for the measured engine
   choice, which also has to resolve the lru advisory. P1-26 (the page-text
   cache) is blocked by the plan on P1-25 (merged as `45d194c`), the review of
-  its evidence and the plan's open question Q2; it also writes into the index
+  its evidence (its Q2 dependency is settled by D40); it also writes into the index
   P1-24 builds, so in practice it waits for P1-24 too.
 - *Owner checks and quiet-machine runs:* D48's three fresh-process runs for
   P1-05; P1-06's quiet idle reruns and eight-suspended-tab measurement; P1-23's
@@ -685,8 +685,8 @@ is recorded after the P1-05 and P1-23 merges. Then take the earliest open Plan 1
 work that does not wait on the owner, such as diagnosing the permission and
 certificate fixture timeouts or one of the open deferred rows, on its own
 branch with an independent review. P1-24 cannot start until P1-23's engine
-choice is measured and reviewed; P1-26 also needs P1-25's evidence reviewed and
-Q2 answered.
+choice is measured and reviewed; P1-26 also needs P1-25's evidence reviewed
+(Q2 is already settled by D40).
 
 For the owner: the quiet-machine runs that unblock that work, P1-23's bake-off
 first, then D48's runs for P1-05, P1-06's idle reruns and P1-33's palette runs,
