@@ -13,8 +13,11 @@ pub const ACCENT_PRESETS: [Color; 4] = [
     Color::hex(0xE8C16A),
 ];
 
-/// The lowest accent-ink lightness, in percent, on the see-through Haze and Glass palettes.
-const SEE_THROUGH_INK_LIGHTNESS: f64 = 70.;
+/// The default until 2026-10-13. A stored copy now loads as `DEFAULT_ACCENT` (owner decision).
+pub const FORMER_DEFAULT_ACCENT: Color = Color::hex(0xFF8A65);
+
+/// Lighter ink tones tried, in order, when an accent fails on Haze or Glass (percent lightness).
+const LIFTED_INK_LIGHTNESS: [f64; 11] = [70., 72., 74., 76., 78., 80., 82., 84., 86., 88., 90.];
 
 /// Dark text on accent-filled badges (the canvas's `badgeText`).
 pub const BADGE_TEXT: Color = Color::hex(0x1F120D);
@@ -87,23 +90,18 @@ impl AccentColors {
         }
     }
 
-    /// Haze and Glass: as dark, but ink is lifted to at least 70% lightness in the accent's hue.
+    /// Lighter inks in the accent's hue, lightest last, for an accent that fails on Haze or
+    /// Glass. Only tones lighter than the accent itself are offered, so ink never darkens.
     ///
-    /// Their see-through grounds are lighter than Graphite's, and the logo orange `#FF612E`
-    /// (59% lightness) fell below 4.5:1 as text on Haze and Glass's selected palette rows and
-    /// below 3:1 as a mark on Glass. 70% rounds the former default `#FF8A65`'s 69.8%, which
-    /// passed; accents at least that light keep their own colour (2026-10-13 decision).
-    pub fn see_through(accent: Accent) -> Self {
-        let fill = accent.fill();
-        let ink = if fill.lightness_percent() >= SEE_THROUGH_INK_LIGHTNESS {
-            fill
-        } else {
-            accent.tone(100., SEE_THROUGH_INK_LIGHTNESS)
-        };
-        Self {
-            ink,
-            ..Self::dark(accent)
-        }
+    /// The palette keeps the accent's own ink unless the contrast audit fails, then takes the
+    /// first tone that passes (owner decision B, 2026-10-13). The logo orange `#FF612E` needs
+    /// 70%; the green and gold presets already pass and keep their own colour.
+    pub fn lifted_inks(accent: Accent) -> impl Iterator<Item = Color> {
+        let own = accent.fill().lightness_percent();
+        LIFTED_INK_LIGHTNESS
+            .into_iter()
+            .filter(move |lightness| *lightness > own)
+            .map(move |lightness| accent.tone(100., lightness))
     }
 
     /// Paper's derivation: ink becomes `hsl(h, min(85, s)%, 36%)` and the wash `hex + 24`.
@@ -137,19 +135,18 @@ mod tests {
     }
 
     #[test]
-    fn see_through_ink_lifts_only_dark_accents() {
-        let lifted = AccentColors::see_through(Accent::default());
-        assert_eq!(lifted.ink, Color::hsl(15., 100., 70.));
-        assert_eq!(lifted.fill, DEFAULT_ACCENT);
-        assert_eq!(
-            lifted,
-            AccentColors {
-                ink: lifted.ink,
-                ..AccentColors::dark(Accent::default())
-            }
-        );
+    fn lifted_inks_only_get_lighter_in_the_accents_hue() {
+        let orange: Vec<_> = AccentColors::lifted_inks(Accent::default()).collect();
+        assert_eq!(orange.first(), Some(&Color::hsl(15., 100., 70.)));
+        assert_eq!(orange.last(), Some(&Color::hsl(15., 100., 90.)));
+        // #6EA8FF is 71.6% light, so its first candidate is 72%.
         let blue = Accent::new(Color::hex(0x6EA8FF));
-        assert_eq!(AccentColors::see_through(blue), AccentColors::dark(blue));
+        let first = AccentColors::lifted_inks(blue)
+            .next()
+            .expect("a lighter tone");
+        assert!(first.lightness_percent() > blue.fill().lightness_percent());
+        let white = Accent::new(Color::hex(0xFFFFFF));
+        assert_eq!(AccentColors::lifted_inks(white).count(), 0);
     }
 
     #[test]

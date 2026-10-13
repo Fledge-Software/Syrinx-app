@@ -92,20 +92,26 @@ them again requires the owner's approval.
 - **The default accent is the logo's orange, `#FF612E`** (owner decision
   2026-10-13), replacing the spec's `#FF8A65` and the canvas's default. It is
   still customisable, and it replaces `#FF8A65` as the first Customize
-  swatch. Someone who saved `#FF8A65` keeps it, shown as a custom accent;
-  only people who never chose an accent see the change. The orange is darker
+  swatch. A saved `#FF8A65` is read as the default, so it becomes `#FF612E`
+  too (owner decision 2026-10-13); any other saved colour stays as chosen.
+  The orange is darker
   than the old default, so its contrast was rechecked in all five palettes
   (`crates/syrinx-ui/src/contrast.rs`). Dark badge text on it measures 6.08:1
   everywhere. As accent text on palette rows it measures, at worst (the
   selected row), 4.67:1 on Graphite, 4.63:1 on Tint and 5.58:1 on Paper, whose
   ink is already a darker tone. On Haze and Glass it fell to 4.37:1 and
   4.38:1, and as a selection mark on Glass to 2.37:1 against the 3:1 minimum.
-  **Haze and Glass therefore draw accent text and marks (the accent "ink") in
-  the accent's hue lifted to at least 70% lightness**; for the default that
-  is about `#FF8C66`, close to the old default. Badges, fills and washes keep
-  the chosen colour, and accents already that light are unchanged. With it,
-  Haze measures 5.74:1 and Glass 5.76:1 on selected rows, and Glass's marks
-  3.11:1 at worst.
+  **On Haze and Glass, an accent whose ink (accent text and marks) fails
+  4.5:1 as text or 3:1 as a mark is drawn in a lighter tone of its own hue,
+  the first of 70%, 72% … 90% lightness that passes** (owner decision
+  2026-10-13). An accent that passes keeps its own colour, as the green and
+  gold presets do everywhere. For the default the lifted ink is 70%, about
+  `#FF8C66`, close to the old default: Haze then measures 5.74:1 and Glass
+  5.76:1 on selected rows, and Glass's marks 3.11:1 at worst. The blue preset
+  failed only as a mark on Glass's card (2.94:1); on Glass it becomes
+  `#7AAFFF` (3.18:1), which resolves that recorded P1-07 failure. Badges,
+  filled buttons and washes always keep the chosen colour, with dark badge
+  text on it.
 - **Open question:** the Passwords button has nothing behind it in v1, because
   password-manager support is out of scope. The recommendation is to drop it
   until it does.

@@ -173,6 +173,15 @@ fn tile_checks(palette: &Palette) -> Vec<ContrastCheck> {
         .collect()
 }
 
+/// Whether the accent ink meets 4.5:1 as text and 3:1 as a mark on this palette's surfaces.
+pub fn accent_ink_passes(palette: &Palette) -> bool {
+    let backgrounds = text_backgrounds(palette);
+    accent_checks(palette, &backgrounds)
+        .iter()
+        .filter(|check| check.foreground != "accent_on_fill")
+        .all(ContrastCheck::passes)
+}
+
 fn accent_checks(
     palette: &Palette,
     backgrounds: &[(&'static str, Vec<Color>)],
@@ -262,7 +271,6 @@ mod tests {
     /// Pairs below their WCAG minimum in the canvas values, recorded for the owner's review in
     /// `docs/p1-07-design-tokens.md` rather than silently retuned. Any change here is a design change.
     const RECORDED_FAILURES: &[&str] = &[
-        "glass/6ea8ff/accent_ink/card",
         "glass/6ea8ff/text_muted/card",
         "glass/6ea8ff/text_muted/field",
         "glass/6ea8ff/text_muted/ground",

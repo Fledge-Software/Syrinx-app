@@ -99,7 +99,7 @@ The settings keys this slice owns:
 | Key | Values | Default |
 | --- | --- | --- |
 | `appearance.palette` | `graphite`, `haze`, `glass`, `tint`, `paper` | `graphite` |
-| `appearance.accent` | `#RRGGBB` (opaque) | `#FF612E` (`#FF8A65` before 2026-10-13; a saved value is kept) |
+| `appearance.accent` | `#RRGGBB` (opaque) | `#FF612E` (`#FF8A65` before 2026-10-13; a stored `#FF8A65` now loads as `#FF612E`, any other stored colour is kept) |
 | `appearance.reduce_transparency` | `true`, `false` | `false` |
 
 P1-29 also provides the storage for the sidebar presentation, which the plan
