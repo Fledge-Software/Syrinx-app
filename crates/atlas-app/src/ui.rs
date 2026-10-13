@@ -409,7 +409,12 @@ impl BrowserView {
     }
 
     fn start_session(&mut self, directory: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let (session, mut events) = match session::spawn(directory) {
+        let started = if self.acceptance.is_some() {
+            session::spawn_acceptance(directory)
+        } else {
+            session::spawn(directory)
+        };
+        let (session, mut events) = match started {
             Ok(started) => started,
             Err(error) => {
                 self.fail(error.to_string());
@@ -1132,6 +1137,9 @@ impl BrowserView {
             ),
             size(px(width), px(560.)),
         );
+        if let Some(probe) = &probe {
+            probe.window_requested(std::time::Instant::now());
+        }
         let popup = cx.open_window(
             WindowOptions {
                 kind: WindowKind::PopUp,

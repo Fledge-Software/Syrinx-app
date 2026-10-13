@@ -6,7 +6,10 @@ mod report;
 use std::path::PathBuf;
 
 pub use probe::PresentProbe;
-pub use report::{KeySample, OpenSample, Report, SizeResult};
+pub use report::{BurstSample, KeySample, OpenSample, Report, SizeResult};
+
+/// Back-to-back typing posts one key this often without waiting for its rows.
+pub const BURST_CADENCE: std::time::Duration = std::time::Duration::from_millis(80);
 
 /// What `--test-palette-acceptance <report.json> <page base>` asked for.
 #[derive(Clone, Debug, PartialEq)]

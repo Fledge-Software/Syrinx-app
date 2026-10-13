@@ -188,6 +188,9 @@ fn render_summary(report: &Value) -> String {
             milliseconds(&display["interval_ms"])
         ),
     ];
+    if let Some(problem) = display["problem"].as_str() {
+        lines.push(format!("\nThe refresh interval was not read: {problem}"));
+    }
     if let Some(aborted) = report["aborted"].as_str() {
         lines.push(format!("\nThe run stopped early: {aborted}"));
     }
@@ -211,9 +214,10 @@ fn render_summary(report: &Value) -> String {
 fn opening_lines(lines: &mut Vec<String>, open: &Value) {
     lines.push("\n## Opening (Ctrl K action to first presented frame)\n".to_owned());
     lines.push(TABLE_HEADER.to_owned());
-    lines.push(stats_row("presented", &open["presented"]));
+    lines.push(stats_row("open_window called", &open["open_window_called"]));
     lines.push(stats_row("window created", &open["window_created"]));
     lines.push(stats_row("first render", &open["first_render"]));
+    lines.push(stats_row("presented", &open["presented"]));
     lines.push(format!(
         "\nBudget: {} ({} ms): **{}**.",
         text(&open["budget"]),
@@ -234,13 +238,27 @@ fn ranking_lines(lines: &mut Vec<String>, size: &Value) {
     lines.push(stats_row("key to rows frame", &size["composed"]));
     lines.push(format!(
         "\nKeystrokes {}, timeouts {}, superseded {}. D48 (5 ms p95, worker): **{}**. \
-         Proposed composed budget ({} ms): **{}** (proposed, not approved).",
+         Composed budget ({} ms at p95): **{}**.",
         size["keystrokes"],
         size["timeouts"],
         size["superseded"],
         verdict(&size["d48_passed"]),
-        milliseconds(&size["proposed_composed_budget_ms"]),
-        verdict(&size["proposed_composed_passed"])
+        milliseconds(&size["composed_budget_ms"]),
+        verdict(&size["composed_passed"])
+    ));
+    let burst = &size["burst"];
+    lines.push(format!(
+        "\nBack-to-back typing at one key per {} ms ({} words, no budget): last key to rows \
+         p50 {} ms, p95 {} ms, max {} ms; {} of {} requests superseded; {} words without \
+         final rows.",
+        milliseconds(&burst["cadence_ms"]),
+        burst["words"],
+        milliseconds(&burst["final_rows"]["p50_ms"]),
+        milliseconds(&burst["final_rows"]["p95_ms"]),
+        milliseconds(&burst["final_rows"]["max_ms"]),
+        burst["superseded"],
+        burst["queries"],
+        burst["missing_final_rows"]
     ));
 }
 

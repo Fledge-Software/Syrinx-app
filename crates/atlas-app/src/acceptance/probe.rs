@@ -13,6 +13,8 @@ use std::{
 /// One palette opening: from the open action to its first presented frame.
 #[derive(Clone, Copy, Debug)]
 pub struct OpenTiming {
+    /// When `open_palette` called GPUI's `open_window`, after its own preparation.
+    pub requested: Option<Instant>,
     /// When the native popup window existed and its view was about to be built.
     pub created: Option<Instant>,
     /// The first render, inside window creation, before anything is presented.
@@ -35,8 +37,10 @@ pub struct KeyTiming {
     pub replied: Option<Instant>,
     /// The frame that first showed the reply's rows.
     pub presented: Option<Instant>,
-    /// A model refresh replaced this key's request before its reply arrived.
+    /// A newer request replaced this key's request before its reply arrived.
     pub superseded: bool,
+    /// A burst follows the newest request to its rows instead of the first one.
+    follow_latest: bool,
 }
 
 /// Shared between the browser view and its palette; cloning shares the same state.
@@ -50,6 +54,9 @@ struct ProbeState {
     armed: Stamps,
     /// Stamps whose frame has rendered and now waits for its present.
     pending: Stamps,
+    /// Every palette request started, and every reply the palette accepted.
+    queries: u64,
+    replies: u64,
 }
 
 /// Which measurements the next presented frame completes.
@@ -71,12 +78,20 @@ impl PresentProbe {
     pub fn begin_open(&self) {
         let mut state = self.0.borrow_mut();
         state.open = Some(OpenTiming {
+            requested: None,
             created: None,
             rendered: None,
             presented: None,
         });
         state.armed = Stamps::default();
         state.pending = Stamps::default();
+    }
+
+    /// Called just before `open_palette` calls GPUI's `open_window`.
+    pub fn window_requested(&self, at: Instant) {
+        if let Some(open) = self.0.borrow_mut().open.as_mut() {
+            open.requested.get_or_insert(at);
+        }
     }
 
     /// Called once the native popup exists, before its view is built.
@@ -97,6 +112,15 @@ impl PresentProbe {
 
     /// Starts timing a keystroke just before it is posted to the palette window.
     pub fn begin_key(&self) {
+        self.start_key(false);
+    }
+
+    /// Starts a burst: whichever request is newest when the typing stops is the one timed.
+    pub fn begin_burst(&self) {
+        self.start_key(true);
+    }
+
+    fn start_key(&self, follow_latest: bool) {
         let mut state = self.0.borrow_mut();
         state.key = Some(KeyTiming {
             request: None,
@@ -106,9 +130,16 @@ impl PresentProbe {
             replied: None,
             presented: None,
             superseded: false,
+            follow_latest,
         });
         state.armed = Stamps::default();
         state.pending = Stamps::default();
+    }
+
+    /// Requests started and replies accepted so far, for counting superseded requests.
+    pub fn counts(&self) -> (u64, u64) {
+        let state = self.0.borrow();
+        (state.queries, state.replies)
     }
 
     pub fn key(&self) -> Option<KeyTiming> {
@@ -126,9 +157,22 @@ impl PresentProbe {
     /// The palette started request `request`; a later one before the reply supersedes it.
     pub fn queried(&self, request: u64) {
         let mut state = self.0.borrow_mut();
+        state.queries += 1;
         let Some(key) = state.key.as_mut() else {
             return;
         };
+        if key.follow_latest {
+            // Anything already measured belonged to an older request.
+            key.superseded |= key.request.is_some();
+            key.request = Some(request);
+            key.sent = None;
+            key.worker = None;
+            key.replied = None;
+            key.presented = None;
+            state.armed.rows = false;
+            state.pending.rows = false;
+            return;
+        }
         if key.replied.is_some() {
             return;
         }
@@ -150,6 +194,7 @@ impl PresentProbe {
     /// The palette accepted the reply for `request`; its next presented frame shows the rows.
     pub fn replied(&self, request: u64, at: Instant) {
         let mut state = self.0.borrow_mut();
+        state.replies += 1;
         let Some(key) = state.key.as_mut() else {
             return;
         };
@@ -218,6 +263,7 @@ mod tests {
         let probe = PresentProbe::default();
         let start = Instant::now();
         probe.begin_open();
+        probe.window_requested(later(start, 1));
         probe.window_created(later(start, 2));
         // Window creation renders without presenting, so nothing is pending yet.
         assert!(!probe.rendered(later(start, 3)));
@@ -228,6 +274,7 @@ mod tests {
         assert!(probe.rendered(later(start, 10)));
         probe.presented(later(start, 12));
         let open = probe.open().expect("opening");
+        assert_eq!(open.requested, Some(later(start, 1)));
         assert_eq!(open.created, Some(later(start, 2)));
         assert_eq!(open.rendered, Some(later(start, 3)));
         assert_eq!(open.presented, Some(later(start, 12)));
@@ -270,6 +317,29 @@ mod tests {
         let key = probe.key().expect("key");
         assert!(key.superseded);
         assert_eq!(key.replied, Some(later(start, 6)));
+    }
+
+    #[test]
+    fn a_burst_times_only_the_newest_request_and_counts_the_replaced_ones() {
+        let probe = PresentProbe::default();
+        let start = Instant::now();
+        probe.begin_burst();
+        probe.queried(1);
+        probe.replied(1, later(start, 5));
+        assert!(probe.rendered(later(start, 6)));
+        probe.queried(2);
+        // The older request's frame presents after the newer query; it must not count.
+        probe.presented(later(start, 8));
+        assert!(probe.key().expect("burst").presented.is_none());
+        probe.queried(3);
+        probe.replied(3, later(start, 20));
+        assert!(probe.rendered(later(start, 21)));
+        probe.presented(later(start, 22));
+        let key = probe.key().expect("burst");
+        assert_eq!(key.request, Some(3));
+        assert_eq!(key.presented, Some(later(start, 22)));
+        assert!(key.superseded);
+        assert_eq!(probe.counts(), (3, 2));
     }
 
     #[test]

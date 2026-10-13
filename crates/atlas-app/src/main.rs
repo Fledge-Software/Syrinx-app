@@ -58,18 +58,20 @@ fn main() -> ExitCode {
         }
     };
     // A second launch on this profile hands its link to the running Atlas and exits.
+    // Unattended runs keep reporting on stderr only, past argument parsing too.
+    let unattended = options.smoke || options.acceptance.is_some();
     let mut instance = match claim_profile(&options) {
         Ok(Some(instance)) => instance,
         Ok(None) => return ExitCode::SUCCESS,
         Err(error) => {
-            report_startup_problem(&error.to_string(), options.smoke);
+            report_startup_problem(&error.to_string(), unattended);
             return ExitCode::FAILURE;
         }
     };
     let links = match instance.take_feed(options.link.clone()) {
         Ok(links) => links,
         Err(error) => {
-            report_startup_problem(&error.to_string(), options.smoke);
+            report_startup_problem(&error.to_string(), unattended);
             return ExitCode::FAILURE;
         }
     };
@@ -93,7 +95,6 @@ fn main() -> ExitCode {
     let outcome = Arc::new(AtomicU8::new(0));
     let result = outcome.clone();
     // Smoke and acceptance runs succeed only when they report success themselves.
-    let unattended = options.smoke || options.acceptance.is_some();
     let mut links = Some(links);
     gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);

@@ -206,6 +206,16 @@ impl PaletteView {
         self.choices.selected_hit().map(|hit| hit.target)
     }
 
+    /// The typed text, for P1-33's acceptance run.
+    pub fn input_text(&self, cx: &App) -> String {
+        self.input.read(cx).value().to_string()
+    }
+
+    /// The newest request identity, for P1-33's acceptance run.
+    pub fn current_request(&self) -> u64 {
+        self.choices.request_id
+    }
+
     fn emit(&mut self, event: PaletteEvent) {
         if self.events.unbounded_send(event).is_err() {
             self.choices.status = "The browser window is no longer available.".to_owned();

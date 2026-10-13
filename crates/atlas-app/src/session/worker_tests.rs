@@ -42,6 +42,10 @@ impl Fixture {
         spawn(self.0.clone()).expect("start synthetic session worker")
     }
 
+    fn start_acceptance(&self) -> (SessionHandle, UnboundedReceiver<SessionEvent>) {
+        spawn_acceptance(self.0.clone()).expect("start acceptance session worker")
+    }
+
     fn cleanup(self) {
         assert_eq!(self.0.parent(), Some(self.1.as_path()));
         assert_eq!(self.0, self.1.join("State"));
@@ -1687,15 +1691,26 @@ fn popup_allocation_is_durable_correlated_and_refuses_a_closed_opener() {
 #[test]
 fn synthetic_catalogue_is_searchable_timed_and_never_persisted() {
     let fixture = Fixture::new();
+    // An ordinary worker neither times queries nor accepts synthetic rows.
     let (handle, mut events) = fixture.start();
     let initial = state(&mut events);
-
-    // Ordinary queries are not timed until an acceptance run grows the catalogue.
     send(&handle, synthetic_query(70));
     assert!(matches!(
         next_event(&mut events),
         SessionEvent::Search { request_id: 70, .. }
     ));
+    send(
+        &handle,
+        SessionCommand::GrowSyntheticCatalogue { total: 1_000 },
+    );
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::SyntheticCatalogue(Err(SessionError::AcceptanceOnly))
+    ));
+    stop(handle, &mut events);
+
+    let (handle, mut events) = fixture.start_acceptance();
+    state(&mut events);
     send(
         &handle,
         SessionCommand::GrowSyntheticCatalogue { total: 1_000 },
