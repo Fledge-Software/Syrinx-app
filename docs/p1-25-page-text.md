@@ -62,7 +62,8 @@ the same day); all are recorded in `docs/decisions.md`. The independent review's
   It is tracked with the last exclusion lists even after capture is
   switched off, for pages that were observed. Each tab also remembers up to
   64 addresses (without fragment) it committed tainted, so back or forward
-  into one stays tainted, even if Atlas cleared the tab in between; an
+  into one stays tainted, even if Atlas cleared the tab in between (Atlas
+  loading that address itself is read, as the owner decided); an
   unreadable navigation start taints the tab; a tab rebuilt after a crash
   keeps its taint. An adopted popup starts with
   its opener's taint, and with taint when its opener was not observed. The
@@ -153,7 +154,7 @@ capture is off, popup seeding, a posted document and a `POST` redirect whose
 response arrives after the next hop; snapshot reading has 9 tests on
 synthetic DevTools responses. `cargo xtask check` passed on 2026-10-12 with
 all 972 workspace tests and the application smoke run
-(`target/p125-gate-4.log`).
+(`target/p125-gate-5.log`).
 
 | # | Result | What happened |
 |---|---|---|

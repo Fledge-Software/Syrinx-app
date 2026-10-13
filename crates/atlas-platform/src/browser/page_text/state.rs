@@ -229,15 +229,17 @@ impl TextState {
         cancelled
     }
 
-    /// A new document committed: it inherits the taint of what its navigation left, and an
-    /// address committed tainted before stays tainted (back or forward into it).
+    /// A new document committed: it inherits the taint of what its navigation left, and a
+    /// navigation Atlas did not start (back or forward) into an address committed tainted
+    /// before stays tainted. Atlas's own navigation clears the taint, as the owner decided.
     fn commit(&mut self, source: &str, policy: &PageTextPolicy) {
         let left = self.left.as_ref().map(|left| LeftDocument {
             address: &left.address,
             tainted: left.tainted,
         });
         let document = without_fragment(source);
-        let known = self.tainted_documents.iter().any(|known| known == document);
+        let known =
+            self.left.is_some() && self.tainted_documents.iter().any(|known| known == document);
         self.tainted = known || policy.taints(left, &self.redirects);
         if self.tainted && !known {
             self.remember_tainted(document.to_owned());
@@ -577,9 +579,9 @@ mod tests {
             now,
         );
         assert_eq!(verdict(&mut state, now), Ok(()));
-        // An address committed tainted stays tainted, even when Atlas loads it again.
+        // An address committed tainted is readable when Atlas itself loads it again.
         atlas_visit(&mut state, clean, PAGE, 6, now);
-        assert_eq!(verdict(&mut state, now), Err(Ineligible::LeftExcluded));
+        assert_eq!(verdict(&mut state, now), Ok(()));
     }
 
     #[test]
