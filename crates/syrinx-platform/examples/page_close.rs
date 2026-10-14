@@ -28,7 +28,7 @@ use std::{
     path::PathBuf,
     process::ExitCode,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -64,6 +64,8 @@ const DEADLINE: Duration = Duration::from_secs(45);
 /// Longer than the platform's five-second grace before an idle hidden page is suspended.
 const STALL_PAST_SUSPENSION_GRACE: Duration = Duration::from_secs(6);
 static TRACE: AtomicBool = AtomicBool::new(false);
+/// Every synthetic directory this run created, in creation order.
+static RESERVED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Synthetic close fixture</title>\
     <link rel=icon href=data:,><p>Synthetic close fixture</p>\
     <script>addEventListener('load',()=>setTimeout(()=>window.close(),100));</script>";
@@ -78,6 +80,7 @@ fn main() -> ExitCode {
                 Ok(()) => {}
                 Err(error) => {
                     eprintln!("Synthetic page-close harness deadline failed: {error}.");
+                    report_kept();
                     std::process::exit(1);
                 }
             },
@@ -93,6 +96,7 @@ fn main() -> ExitCode {
     let watchdog_failed = watchdog.join().is_err();
     if cancellation_failed || watchdog_failed {
         eprintln!("Synthetic harness deadline cleanup failed.");
+        report_kept();
         return ExitCode::FAILURE;
     }
     match result {
@@ -100,10 +104,12 @@ fn main() -> ExitCode {
             println!(
                 "Selected synthetic native suites passed; the reported WebView2 crash is not diagnosed."
             );
+            remove_reserved();
             ExitCode::SUCCESS
         }
         Err(error) => {
             eprintln!("{error}");
+            report_kept();
             ExitCode::FAILURE
         }
     }
@@ -177,7 +183,68 @@ fn reserve_profile() -> Result<PathBuf, String> {
     ));
     fs::create_dir(&profile).map_err(|error| io_error("reserve synthetic profile", error))?;
     // Runtime files remain in this exclusively created synthetic directory; no owner profile is read.
+    match RESERVED.lock() {
+        Ok(mut reserved) => reserved.push(profile.clone()),
+        // Still record the directory, so the failure report lists it as kept.
+        Err(poisoned) => {
+            poisoned.into_inner().push(profile);
+            return Err("Synthetic profile register is poisoned.".into());
+        }
+    }
     Ok(profile)
+}
+
+/// Takes the directories this run created, so cleanup can never reach another run's.
+fn take_reserved() -> Vec<PathBuf> {
+    match RESERVED.lock() {
+        Ok(mut reserved) => std::mem::take(&mut *reserved),
+        Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+    }
+}
+
+/// Deletes this run's synthetic directories after every suite passed; a failure only warns.
+fn remove_reserved() {
+    let temp = std::env::temp_dir();
+    for directory in take_reserved() {
+        // The registry holds only what this run's create_dir made; this is a cheap invariant check.
+        if directory.parent() != Some(temp.as_path()) {
+            eprintln!(
+                "Warning: kept synthetic directory outside TEMP: {}.",
+                directory.display()
+            );
+            continue;
+        }
+        if let Err(error) = remove_with_retry(&directory) {
+            eprintln!(
+                "Warning: could not delete synthetic directory {}: {}",
+                directory.display(),
+                io_error("delete synthetic directory", error)
+            );
+        }
+    }
+}
+
+/// Retries briefly, since WebView2's child processes can hold files for a moment after shutdown.
+fn remove_with_retry(directory: &std::path::Path) -> Result<(), io::Error> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match fs::remove_dir_all(directory) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if Instant::now() >= deadline => return Err(error),
+            Err(_) => thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
+/// Names the directories kept after a failure, so their evidence is easy to find.
+fn report_kept() {
+    for directory in take_reserved() {
+        eprintln!(
+            "Kept synthetic directory for diagnosis: {}",
+            directory.display()
+        );
+    }
 }
 
 fn run_browser(profile: PathBuf, url: &str, exercise: Exercise) -> Result<(), String> {
