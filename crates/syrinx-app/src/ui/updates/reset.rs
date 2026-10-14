@@ -17,6 +17,12 @@ use crate::controls::control;
 use crate::theme::rgba;
 use crate::updates::{RECORDS_UNREADABLE, reset_explanation, reset_message};
 
+/// What the reset thread answers.
+type ResetResult = Result<StateReset, InstallError>;
+
+/// Shown in place of the button while the reset runs.
+const RESETTING: &str = "Resetting the update records…";
+
 impl UpdatePanel {
     /// The owner pressed "Reset update records…": show the explanation, or say why not now.
     fn ask_to_reset(&mut self) -> Option<String> {
@@ -44,22 +50,24 @@ impl UpdatePanel {
     /// The owner confirmed: `Ok` when the reset may start on its thread.
     fn begin_reset(&mut self) -> Result<(), String> {
         let confirmed = std::mem::take(&mut self.confirming_reset);
-        if !confirmed || !self.records_unreadable {
-            return Err("Nothing was reset.".into());
-        }
+        // Checked first, so a second click during a reset says it is still running.
         if let Some(refusal) = self.reset_refusal() {
             return Err(refusal);
+        }
+        if !confirmed || !self.records_unreadable {
+            return Err("Nothing was reset.".into());
         }
         self.stage = Stage::ResettingRecords;
         Ok(())
     }
 
-    /// Apply the reset's result; returns what to tell the owner.
-    fn finish_reset(&mut self, result: Option<Result<StateReset, InstallError>>) -> String {
+    /// Apply the reset thread's answer, or `Canceled` when it ended without one; returns what
+    /// to tell the owner.
+    fn finish_reset(&mut self, answer: Result<ResetResult, oneshot::Canceled>) -> String {
         if self.stage == Stage::ResettingRecords {
             self.stage = Stage::Idle;
         }
-        let Some(result) = result else {
+        let Ok(result) = answer else {
             return "Resetting the update records stopped unexpectedly.".into();
         };
         if result.is_ok() {
@@ -95,18 +103,19 @@ impl BrowserView {
                 }
             });
         if spawned.is_err() {
-            let status = self.updates.finish_reset(None);
+            let status = self.updates.finish_reset(Err(oneshot::Canceled));
             self.show_update_status(status);
             return;
         }
         cx.spawn_in(window, async move |view, cx| {
-            let result = receiver.await.ok();
+            // A thread that ended without answering arrives as `Canceled`, which is reported.
+            let answer = receiver.await;
             if view
                 .update(cx, |view, cx| {
-                    if let Some(Err(error)) = &result {
+                    if let Ok(Err(error)) = &answer {
                         eprintln!("update records reset refused: {error}");
                     }
-                    let status = view.updates.finish_reset(result);
+                    let status = view.updates.finish_reset(answer);
                     view.show_update_status(status);
                     cx.notify();
                 })
@@ -122,6 +131,14 @@ impl BrowserView {
     pub(super) fn reset_row(&self, palette: &Palette, cx: &mut Context<Self>) -> Option<Div> {
         if !self.updates.records_unreadable {
             return None;
+        }
+        if self.updates.stage == Stage::ResettingRecords {
+            return Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(row_text(RESETTING.to_owned())),
+            );
         }
         if self.updates.confirming_reset {
             return Some(self.reset_confirmation(palette, cx));
@@ -239,7 +256,11 @@ mod tests {
         assert_eq!(panel.stage, Stage::ResettingRecords);
         assert!(!panel.confirming_reset);
         assert!(!panel.can_check(), "nothing else starts during the reset");
-        let status = panel.finish_reset(Some(Ok(StateReset::Reset)));
+        let busy = reset_message(&Err(InstallError::Busy));
+        assert_eq!(panel.begin_reset(), Err(busy.clone()), "a second click");
+        assert_eq!(panel.ask_to_reset(), Some(busy));
+        assert_eq!(panel.stage, Stage::ResettingRecords);
+        let status = panel.finish_reset(Ok(Ok(StateReset::Reset)));
         assert!(status.starts_with("Update records reset."), "{status}");
         assert_eq!(panel.stage, Stage::Idle);
         assert!(!panel.records_unreadable, "the action disappears");
@@ -272,11 +293,15 @@ mod tests {
         let mut panel = panel(true);
         panel.confirming_reset = true;
         panel.begin_reset().expect("start");
-        let status = panel.finish_reset(Some(Err(InstallError::Busy)));
+        let status = panel.finish_reset(Ok(Err(InstallError::Busy)));
         assert!(status.contains("not reset"), "{status}");
         assert!(panel.records_unreadable);
         assert_eq!(panel.stage, Stage::Idle);
-        assert!(panel.finish_reset(None).contains("unexpectedly"));
+        assert!(
+            panel
+                .finish_reset(Err(oneshot::Canceled))
+                .contains("unexpectedly")
+        );
         assert!(panel.records_unreadable);
     }
 }

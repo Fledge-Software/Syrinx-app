@@ -87,7 +87,7 @@ fn a_reset_sets_the_damaged_record_aside_and_touches_nothing_else() {
 }
 
 #[test]
-fn a_reset_waits_for_any_update_step_holding_the_lock() {
+fn a_reset_refuses_while_another_update_step_holds_the_lock() {
     let sandbox = Sandbox::new();
     damage_state(&sandbox);
     let held = ApplyLock::try_acquire(&sandbox.layout)
@@ -122,6 +122,41 @@ fn a_reset_refuses_while_a_staged_update_waits() {
         "Syrinx.new kept"
     );
     assert!(sandbox.layout.pending().exists());
+}
+
+#[test]
+fn start_up_discards_a_staged_update_beside_an_unreadable_record() {
+    // Owner, 2026-10-14: without the record, start-up cannot tell whether the waiting version
+    // was rolled back, so it removes it and leaves the reset available.
+    let (sandbox, keys) = packaged();
+    stage(&sandbox, &keys.pinned).expect("stage");
+    damage_state(&sandbox);
+    let recovery = recover(&sandbox.layout, OLD).expect("recover");
+    assert!(recovery.discarded_for_unreadable_state);
+    assert_eq!(recovery.staged, None);
+    assert_untouched(&sandbox);
+    assert!(!sandbox.layout.apply_folder().exists(), "helper removed");
+    assert!(!sandbox.layout.staging_marker().exists());
+    assert_eq!(fs::read(sandbox.layout.state()).expect("state"), DAMAGED);
+    assert_eq!(state_is_unreadable(&sandbox.layout), Ok(true));
+
+    assert_eq!(
+        reset_unreadable_state(&sandbox.layout),
+        Ok(StateReset::Reset)
+    );
+    assert_untouched(&sandbox);
+    let again = recover(&sandbox.layout, OLD).expect("recover again");
+    assert!(!again.discarded_for_unreadable_state);
+}
+
+#[test]
+fn start_up_keeps_a_staged_update_beside_a_readable_record() {
+    let (sandbox, keys) = packaged();
+    stage(&sandbox, &keys.pinned).expect("stage");
+    let recovery = recover(&sandbox.layout, OLD).expect("recover");
+    assert!(!recovery.discarded_for_unreadable_state);
+    assert_eq!(recovery.staged, Some(NEW));
+    assert_eq!(read_tree(&sandbox.layout.staged()), program_files(NEW));
 }
 
 #[test]

@@ -1,16 +1,17 @@
 //! "Reset update records" (DW-66): the owner's way out of an unreadable `Updates\state`,
 //! which P1-39b's staging and P1-39c's check refuse to work past.
 
-use std::fs;
+use std::time::Duration;
 
-use super::error::io_error;
-use super::files::entry_present;
+use super::files::{entry_present, rename_patiently};
 use super::lock::ApplyLock;
 use super::records::{STATE_RECORD, UpdateState};
 use super::{InstallError, UpdateLayout};
 
 /// The name the unreadable record is kept under, beside `state`, as evidence.
 pub const SET_ASIDE_STATE: &str = "state.unreadable";
+/// How long the rename is retried while another program, such as a virus scanner, holds `state`.
+const RENAME_PATIENCE: Duration = Duration::from_secs(5);
 
 /// How a reset ended when nothing was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +54,11 @@ pub fn reset_unreadable_state(layout: &UpdateLayout) -> Result<StateReset, Insta
     }
     let set_aside = layout.updates().join(SET_ASIDE_STATE);
     // Replaces an older set-aside copy, so the evidence kept stays one small file.
-    fs::rename(layout.state(), set_aside).map_err(io_error("setting the update record aside"))?;
+    rename_patiently(
+        &layout.state(),
+        &set_aside,
+        RENAME_PATIENCE,
+        "setting the update record aside",
+    )?;
     Ok(StateReset::Reset)
 }

@@ -801,7 +801,8 @@ regenerated for the new file list. The only lockfile change is
   rename is documented under "Limits" above.
 - **An unreadable `Updates\state` refuses staging:** kept. A "Reset update
   records" action was deferred as DW-66 and is now built (see "DW-66"
-  below).
+  below). Start-up now discards a staged update found beside an unreadable
+  `state` (owner, 2026-10-14).
 - **The pre-update snapshot counts within D13's seven copies:** confirmed,
   with the one-hour skip described above.
 - **Later is armed only for the current session:** kept; after a crash the
@@ -1027,10 +1028,11 @@ replacing a newer one; the installed program, data and settings are not
 touched. Only **Reset** acts. A staging or check refused for this reason
 also says to use the reset, and shows the action if start-up had not.
 
-Whether the record is unreadable is read at start-up
-(`UpdateContext::recover`, beside P1-39b's recovery) and updated by each
-staging, download or check result: a refusal for this reason shows the
-action, and a result that read the record successfully hides it. A missing
+Whether the record is unreadable is read at start-up, after P1-39b's
+recovery (`UpdateContext::recover`), and read again on the worker thread
+after every staging, download and check, whatever its result (a cancelled
+check and a refusal for another reason included), so the action follows the
+file rather than guessing from the error. A missing
 record is a fresh install, not damage, and an I/O failure while looking
 (for example a file another program holds) is logged and offers nothing,
 so the action never appears for a readable record.
@@ -1048,7 +1050,11 @@ so the action never appears for a readable record.
 3. refuses (`UpdateWaiting`) while `pending` exists, so a staged update is
    never left beside records that no longer describe it;
 4. renames `state` to `state.unreadable` in one step, replacing an older
-   set-aside copy.
+   set-aside copy, retrying for up to 5 s while another program (such as a
+   virus scanner) briefly holds the file, as the helper's renames do.
+
+While it runs, the line says "Resetting the update records…" in place of the
+button, and a second click is answered with the busy sentence.
 
 The rename is the whole change, so the reset is atomic: either the damaged
 record is still `state` or it is `state.unreadable` and no `state` exists,
@@ -1107,13 +1113,25 @@ line and reported "Update records reset…". With no `state`, and with a
 readable one, UI Automation found no reset control. This is an agent's
 observation, not the owner's visual acceptance.
 
-### Limit
+### A staged update beside an unreadable record
 
-If `state` becomes unreadable while a staged update waits, the reset refuses
-(step 3), and P1-39b's start-up recovery also stops, because it reads the
-state to tell whether the waiting version was rolled back; the owner's way
-out is then still by hand. This needs damage at a precise moment and is
-raised with the owner rather than changed here.
+Start-up recovery reads the state to tell whether a waiting version was
+rolled back, so before this change a `pending` beside an unreadable `state`
+stopped recovery, and the reset also refused it (step 3): the owner could
+only fix it by hand. The owner decided on 2026-10-14, in chat, that start-up
+discards the staged update in that case. `recover` now checks, under the
+update lock and before settling `pending`, whether `pending` exists and
+`state` is unreadable; if so it calls `discard_staged`, the same removal a
+suspected rollback uses (`pending`, `Syrinx.new` only if Syrinx made it,
+`Updates\apply`, `incoming` and the staging mark), and reports
+`discarded_for_unreadable_state`. The installed `Programs\Syrinx` is not
+touched, the damaged `state` is left for the reset, and the owner is told
+once: "Syrinx couldn't read its update records, so it removed the update
+that was waiting to install. Reset update records in Customize, then check
+for updates again." The action is then shown and works, since no `pending`
+remains. Tests: `start_up_discards_a_staged_update_beside_an_unreadable_record`
+and `start_up_keeps_a_staged_update_beside_a_readable_record`
+(`tests_reset.rs`), and the start-up test in `syrinx-app`'s `updates.rs`.
 
 ## What P1-39 needs from the owner
 

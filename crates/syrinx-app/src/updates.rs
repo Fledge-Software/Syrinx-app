@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use syrinx_update::install::{
     ApplyMode, Checked, FolderSource, Handoff, InstallError, Outcome, PackageSource, Pending,
-    SET_ASIDE_STATE, StageTerms, Staged, StateReset, TransferProblem, UpdateLayout, UpdateResult,
-    check_source, is_unreadable_state, prepare_handoff, record_started, recover,
+    Recovery, SET_ASIDE_STATE, StageTerms, Staged, StateReset, TransferProblem, UpdateLayout,
+    UpdateResult, check_source, is_unreadable_state, prepare_handoff, record_started, recover,
     reset_unreadable_state, stage_from_source, state_is_unreadable,
 };
 use syrinx_update::{KeySet, Timestamp, UpdateError, Version};
@@ -92,10 +92,12 @@ impl UpdateContext {
         let (Ok(layout), Some(running)) = (&self.layout, self.running) else {
             return StartupUpdates::default();
         };
-        let records_unreadable = records_unreadable(layout);
-        match recover(layout, running) {
+        let recovered = recover(layout, running);
+        // Read after recovery, which may have removed a staged update beside a damaged record.
+        let records_unreadable = read_records_unreadable(layout);
+        match recovered {
             Ok(recovery) => StartupUpdates {
-                notice: recovery.outcome.as_ref().and_then(outcome_message),
+                notice: recovery_notice(&recovery),
                 staged: recovery.staged,
                 records_unreadable,
             },
@@ -115,6 +117,12 @@ impl UpdateContext {
     pub fn reset_records(&self) -> Result<StateReset, InstallError> {
         let layout = self.layout.as_ref().map_err(Clone::clone)?;
         reset_unreadable_state(layout)
+    }
+
+    /// Whether `Updates\state` is unreadable now; reads a small file, so call it off the
+    /// interface thread. A copy that cannot install has no records to reset.
+    pub fn records_unreadable(&self) -> bool {
+        self.layout.as_ref().is_ok_and(read_records_unreadable)
     }
 
     /// The complete staged version waiting for this Syrinx, if any; reads a small file.
@@ -252,7 +260,7 @@ pub struct StartupUpdates {
 }
 
 /// Whether the state record is damaged; a failure to look is logged and offers no reset.
-fn records_unreadable(layout: &UpdateLayout) -> bool {
+fn read_records_unreadable(layout: &UpdateLayout) -> bool {
     state_is_unreadable(layout).unwrap_or_else(|error| {
         eprintln!("update records: {error}");
         false
@@ -421,6 +429,22 @@ fn verifier_message(error: &UpdateError) -> String {
     }
 }
 
+/// What start-up recovery tells the owner once: the helper's outcome, and a removed update.
+fn recovery_notice(recovery: &Recovery) -> Option<String> {
+    let outcome = recovery.outcome.as_ref().and_then(outcome_message);
+    if !recovery.discarded_for_unreadable_state {
+        return outcome;
+    }
+    Some(match outcome {
+        Some(outcome) => format!("{outcome} {DISCARDED_FOR_UNREADABLE_RECORDS}"),
+        None => DISCARDED_FOR_UNREADABLE_RECORDS.to_owned(),
+    })
+}
+
+/// Start-up removed a staged update because its records could not be read (owner, 2026-10-14).
+pub const DISCARDED_FOR_UNREADABLE_RECORDS: &str = "Syrinx couldn't read its update records, so it removed the update that was waiting to \
+     install. Reset update records in Customize, then check for updates again.";
+
 /// What the helper did, told once at the next start; `None` when nothing needs saying.
 pub fn outcome_message(outcome: &Outcome) -> Option<String> {
     let Outcome {
@@ -570,6 +594,19 @@ mod tests {
         assert!(!context.recover().records_unreadable);
         assert!(layout.updates().join(SET_ASIDE_STATE).is_file());
         assert_eq!(context.reset_records(), Ok(StateReset::AlreadyReadable));
+        assert!(!context.records_unreadable());
+
+        // A staged update beside damaged records is removed at start-up and the owner told.
+        std::fs::write(layout.pending(), b"synthetic pending\n").expect("synthetic pending");
+        std::fs::write(layout.state(), b"synthetic damage\n").expect("damaged state");
+        let startup = context.recover();
+        assert_eq!(
+            startup.notice.as_deref(),
+            Some(DISCARDED_FOR_UNREADABLE_RECORDS)
+        );
+        assert!(startup.records_unreadable, "the reset stays available");
+        assert!(!layout.pending().exists());
+        assert!(context.records_unreadable());
         std::fs::remove_dir_all(&root).expect("remove the test's own folder");
     }
 

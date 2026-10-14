@@ -16,7 +16,7 @@ use syrinx_platform::file_dialog::choose_folder;
 use syrinx_ui::Palette;
 use syrinx_ui::metrics::text;
 use syrinx_update::Version;
-use syrinx_update::install::{ApplyMode, InstallError, Staged, is_unreadable_state};
+use syrinx_update::install::{ApplyMode, InstallError, Staged};
 use syrinx_update_net::{Cancel, RemotePackage};
 
 use super::BrowserView;
@@ -198,7 +198,7 @@ impl BrowserView {
             let staged = receiver.await.unwrap_or(StagingResult::Failed {
                 reason: "Staging stopped unexpectedly.".into(),
                 still_staged: None,
-                records_unreadable: false,
+                records_unreadable: None,
             });
             if view
                 .update(cx, |view, cx| {
@@ -226,7 +226,9 @@ impl BrowserView {
             } => {
                 // A refusal after staging began has also removed the earlier staged copy.
                 self.updates.stage = still_staged.map_or(Stage::Idle, Stage::Ready);
-                self.updates.records_unreadable |= records_unreadable;
+                if let Some(unreadable) = records_unreadable {
+                    self.updates.records_unreadable = unreadable;
+                }
                 self.show_update_status(reason);
             }
             StagingResult::Staged(staged) => {
@@ -444,8 +446,9 @@ enum StagingResult {
         reason: String,
         /// The earlier staged version, if a refusal left it in place.
         still_staged: Option<Version>,
-        /// The refusal was an unreadable `Updates\state`, so the reset is offered (DW-66).
-        records_unreadable: bool,
+        /// Whether `Updates\state` was unreadable once the worker finished (DW-66); `None`
+        /// when it was not looked at, which leaves the action as it was.
+        records_unreadable: Option<bool>,
     },
     Staged(Staged),
 }
@@ -456,7 +459,7 @@ impl StagingResult {
         Self::Failed {
             reason: refusal_message(error),
             still_staged: context.staged(),
-            records_unreadable: is_unreadable_state(error),
+            records_unreadable: Some(context.records_unreadable()),
         }
     }
 }
@@ -470,7 +473,7 @@ fn choose_and_stage(context: &UpdateContext, owner: isize) -> StagingResult {
             return StagingResult::Failed {
                 reason: format!("{error}."),
                 still_staged: context.staged(),
-                records_unreadable: false,
+                records_unreadable: None,
             };
         }
     };
