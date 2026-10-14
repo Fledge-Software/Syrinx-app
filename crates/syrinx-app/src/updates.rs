@@ -145,6 +145,7 @@ impl UpdateContext {
         let installed = self.running.ok_or(InstallError::NotInstalled)?;
         // Only the keys compiled into Syrinx are trusted; there is no other route (P1-38).
         let keys = KeySet::production()?;
+        require_release_keys(&keys)?;
         let terms = StageTerms {
             keys: &keys,
             installed,
@@ -197,6 +198,15 @@ impl UpdateContext {
             .map_err(|error| error.kind().to_string())?;
         Ok(handoff)
     }
+}
+
+/// Refuse before reading any package, or contacting the host, while no release key is pinned:
+/// nothing could be verified until the owner's keys exist (DW-30, P1-39d).
+fn require_release_keys(keys: &KeySet) -> Result<(), InstallError> {
+    if keys.is_empty() {
+        return Err(InstallError::NoReleaseKeys);
+    }
+    Ok(())
 }
 
 /// The helper's command line, run from `Updates`: Windows refuses to rename a folder that is
@@ -276,6 +286,11 @@ pub fn refusal_message(error: &InstallError) -> String {
     match error {
         InstallError::Update(error) => verifier_message(error),
         InstallError::Transfer(problem) => transfer_message(*problem),
+        InstallError::NoReleaseKeys => {
+            "Updates aren't set up yet: this Syrinx has no release keys to check them with, so \
+             nothing was downloaded or installed."
+                .into()
+        }
         InstallError::NotInstalled | InstallError::Layout => {
             "Updates install only into a copy installed with install-syrinx.ps1.".into()
         }
@@ -430,6 +445,38 @@ mod tests {
             ));
         }
         assert_eq!(host.requests.get(), 0);
+    }
+
+    #[test]
+    fn without_release_keys_nothing_is_read_or_requested() {
+        // An installed copy before DW-30: the layout exists but no key is pinned. The
+        // synthetic folders are never touched, because the keys are checked first.
+        assert!(
+            syrinx_update::PRODUCTION_KEYS.is_empty(),
+            "DW-30 pinned keys: give this test a temporary layout before it can reach staging"
+        );
+        assert_eq!(
+            require_release_keys(&KeySet::new(&[]).expect("empty set")),
+            Err(InstallError::NoReleaseKeys)
+        );
+        let layout = UpdateLayout::new(
+            PathBuf::from(r"C:\Synthetic\Programs"),
+            PathBuf::from(r"C:\Synthetic\data"),
+        )
+        .expect("synthetic layout");
+        let context = UpdateContext {
+            layout: Ok(layout),
+            running: Some(CURRENT),
+            ..UpdateContext::disabled()
+        };
+        let host = CountingHost::default();
+        assert_eq!(context.check(&host), Err(InstallError::NoReleaseKeys));
+        assert!(matches!(
+            context.stage_from(&host),
+            Err(InstallError::NoReleaseKeys)
+        ));
+        assert_eq!(host.requests.get(), 0);
+        assert!(refusal_message(&InstallError::NoReleaseKeys).starts_with("Updates aren't set up"));
     }
 
     #[test]

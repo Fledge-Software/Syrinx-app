@@ -1,11 +1,12 @@
 //! The update host as a `PackageSource`: fixed paths under the compiled-in base, size bounds on
-//! every body, and cancellation between reads.
+//! every body, an overall deadline per file, and cancellation between reads.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use syrinx_update::install::{InstallError, PackageSource, SignedFile, TransferProblem};
 use syrinx_update::{FileEntry, Version};
@@ -16,6 +17,46 @@ use crate::winhttp::{Body, Transport, WinHttp};
 /// Bytes asked of WinHTTP per read.
 const READ_CHUNK: usize = 64 * 1024;
 
+/// How long one file may take in all, so a host trickling a byte just inside each 60 s
+/// receive bound cannot hold a download open for ever.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Pace {
+    /// Time allowed whatever the size: connecting, the response and a slow start.
+    pub(crate) allowance: Duration,
+    /// The slowest average rate accepted beyond the allowance.
+    pub(crate) bytes_per_second: u64,
+}
+
+/// Two minutes plus 32 KiB/s: a 38 MB package may take about 22 minutes.
+const PRODUCTION_PACE: Pace = Pace {
+    allowance: Duration::from_secs(120),
+    bytes_per_second: 32 * 1024,
+};
+
+impl Pace {
+    /// When a file of ytes must have finished arriving.
+    fn deadline(self, bytes: u64) -> Instant {
+        let transfer = Duration::from_secs(bytes / self.bytes_per_second.max(1));
+        Instant::now() + self.allowance + transfer
+    }
+}
+
+/// What may stop a read: the owner's Cancel, or the file's overall deadline.
+struct Watch {
+    cancel: Cancel,
+    deadline: Instant,
+}
+
+impl Watch {
+    fn check(&self) -> Result<(), TransferProblem> {
+        self.cancel.check()?;
+        if Instant::now() >= self.deadline {
+            return Err(TransferProblem::TimedOut);
+        }
+        Ok(())
+    }
+}
+
 /// Stops a check or download at its next read; shared with the owner's Cancel button.
 #[derive(Clone, Debug, Default)]
 pub struct Cancel(Arc<AtomicBool>);
@@ -23,6 +64,11 @@ pub struct Cancel(Arc<AtomicBool>);
 impl Cancel {
     pub fn cancel(&self) {
         self.0.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether the owner pressed Cancel, even after the last read finished.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
     }
 
     fn check(&self) -> Result<(), TransferProblem> {
@@ -41,6 +87,7 @@ pub struct RemotePackage {
     transport: Box<dyn Transport>,
     host: &'static str,
     cancel: Cancel,
+    pace: Pace,
     fetched: RefCell<BTreeMap<SignedFile, Vec<u8>>>,
 }
 
@@ -57,6 +104,7 @@ impl RemotePackage {
             transport,
             host,
             cancel: Cancel::default(),
+            pace: PRODUCTION_PACE,
             fetched: RefCell::new(BTreeMap::new()),
         }
     }
@@ -71,9 +119,31 @@ impl RemotePackage {
         self.cancel.clone()
     }
 
+    /// Start the download with a new Cancel, so a press during the check cannot stop it
+    /// after staging has begun replacing an earlier staged copy.
+    pub fn renew_canceller(&mut self) -> Cancel {
+        self.cancel = Cancel::default();
+        self.cancel.clone()
+    }
+
+    /// A slower overall pace, so a test can trickle a body past its deadline quickly.
+    #[cfg(test)]
+    pub(crate) fn with_pace(mut self, pace: Pace) -> Self {
+        self.pace = pace;
+        self
+    }
+
+    fn watch(&self, bytes: u64) -> Watch {
+        Watch {
+            cancel: self.cancel.clone(),
+            deadline: self.pace.deadline(bytes),
+        }
+    }
+
     /// Fetch a small file whole, refusing a body longer than `limit`.
     fn fetch(&self, path: &str, limit: usize) -> Result<Vec<u8>, TransferProblem> {
-        self.cancel.check()?;
+        let watch = self.watch(limit as u64);
+        watch.check()?;
         let mut body = self.transport.get(path)?;
         if body.length().is_some_and(|length| length > limit as u64) {
             return Err(TransferProblem::TooLong);
@@ -81,7 +151,7 @@ impl RemotePackage {
         let mut bytes = Vec::new();
         let mut chunk = vec![0; READ_CHUNK];
         loop {
-            self.cancel.check()?;
+            watch.check()?;
             let read = body.read(&mut chunk)?;
             if read == 0 {
                 break;
@@ -134,12 +204,13 @@ impl PackageSource for RemotePackage {
         entry: &FileEntry,
     ) -> Result<Box<dyn Read + '_>, InstallError> {
         let refused = InstallError::Transfer;
-        self.cancel.check().map_err(refused)?;
+        let expected = entry.size();
+        let watch = self.watch(expected);
+        watch.check().map_err(refused)?;
         let body = self
             .transport
             .get(&payload_path(version, entry))
             .map_err(refused)?;
-        let expected = entry.size();
         match body.length() {
             Some(length) if length > expected => return Err(refused(TransferProblem::TooLong)),
             Some(length) if length < expected => {
@@ -150,7 +221,7 @@ impl PackageSource for RemotePackage {
         Ok(Box::new(Download {
             body,
             remaining: expected,
-            cancel: self.cancel.clone(),
+            watch,
         }))
     }
 }
@@ -159,12 +230,12 @@ impl PackageSource for RemotePackage {
 struct Download<'a> {
     body: Box<dyn Body + 'a>,
     remaining: u64,
-    cancel: Cancel,
+    watch: Watch,
 }
 
 impl Download<'_> {
     fn read_body(&mut self, buffer: &mut [u8]) -> Result<usize, TransferProblem> {
-        self.cancel.check()?;
+        self.watch.check()?;
         if self.remaining == 0 {
             // One more read tells a finished body from a longer one.
             let mut probe = [0u8; 1];

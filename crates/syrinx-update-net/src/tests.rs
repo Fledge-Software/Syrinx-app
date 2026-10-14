@@ -490,6 +490,53 @@ impl Transport for Chunks {
     }
 }
 
+/// A host that sends one byte every 20 ms, each well inside any receive bound.
+struct Trickle;
+
+struct TrickleBody;
+
+impl Body for TrickleBody {
+    fn length(&self) -> Option<u64> {
+        None
+    }
+
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TransferProblem> {
+        thread::sleep(Duration::from_millis(20));
+        buffer[0] = 1;
+        Ok(1)
+    }
+}
+
+impl Transport for Trickle {
+    fn get(&self, _path: &str) -> Result<Box<dyn Body + '_>, TransferProblem> {
+        Ok(Box::new(TrickleBody))
+    }
+}
+
+#[test]
+fn a_trickling_host_runs_out_of_time_for_the_whole_file() {
+    let pace = crate::remote::Pace {
+        allowance: Duration::from_millis(200),
+        bytes_per_second: 1024 * 1024,
+    };
+    let package =
+        RemotePackage::with_transport(Box::new(Trickle), "synthetic.invalid").with_pace(pace);
+    let started = Instant::now();
+    assert_eq!(
+        transfer(package.read_signed(SignedFile::Statement, 4096)),
+        TransferProblem::TimedOut
+    );
+    assert_eq!(
+        transfer(download(&package, &entry("syrinx.exe", 1000))),
+        TransferProblem::TimedOut
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
 #[test]
 fn cancelling_stops_at_the_next_read_and_prevents_new_requests() {
     let requests = Arc::new(AtomicUsize::new(0));

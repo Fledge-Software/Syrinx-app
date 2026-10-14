@@ -42,9 +42,16 @@ impl UpdatePanel {
         checked: Option<Result<Checked, InstallError>>,
         remote: Option<RemotePackage>,
     ) -> String {
-        self.cancel = None;
+        let cancelled = self
+            .cancel
+            .take()
+            .is_some_and(|cancel| cancel.is_cancelled());
         let resume = self.before_check;
         self.stage = resume;
+        // A Cancel pressed after the last read still means no offer.
+        if cancelled && matches!(checked, Some(Ok(Checked::Available { .. }))) {
+            return "Update check cancelled; nothing was downloaded.".into();
+        }
         match checked {
             None => "The update check stopped unexpectedly.".into(),
             Some(Ok(Checked::UpToDate(version))) => format!("Syrinx {version} is up to date."),
@@ -71,11 +78,11 @@ impl UpdatePanel {
         let Stage::Available { version, .. } = self.stage else {
             return None;
         };
-        let Some(remote) = self.remote.take() else {
+        let Some(mut remote) = self.remote.take() else {
             self.stage = self.before_check;
             return None;
         };
-        self.cancel = Some(remote.canceller());
+        self.cancel = Some(remote.renew_canceller());
         self.stage = Stage::Downloading(version);
         Some((version, remote))
     }
@@ -363,6 +370,48 @@ mod tests {
         assert_eq!(panel.stage, Stage::Downloading(OFFERED));
         assert!(panel.remote.is_none(), "the host moved to the download");
         assert!(panel.cancel_transfer(), "the download can be cancelled");
+    }
+
+    #[test]
+    fn a_cancel_after_the_last_read_offers_nothing_and_keeps_the_staged_copy() {
+        let staged = Version::new(1, 3, 5);
+        let mut panel = panel();
+        panel.stage = Stage::Ready(staged);
+        let remote = unused_host();
+        panel.begin_check(&remote);
+        assert!(panel.cancel_transfer());
+        let available = Checked::Available {
+            version: OFFERED,
+            bytes: BYTES,
+        };
+        let status = panel.finish_check(Some(Ok(available)), Some(remote));
+        assert_eq!(status, "Update check cancelled; nothing was downloaded.");
+        assert_eq!(panel.stage, Stage::Ready(staged));
+        assert!(panel.remote.is_none() && panel.cancel.is_none());
+        assert!(panel.accept_download().is_none(), "no download can start");
+    }
+
+    #[test]
+    fn a_download_starts_with_a_fresh_cancel() {
+        let mut panel = panel();
+        let remote = unused_host();
+        let earlier = remote.canceller();
+        panel.begin_check(&remote);
+        let available = Checked::Available {
+            version: OFFERED,
+            bytes: BYTES,
+        };
+        panel.finish_check(Some(Ok(available)), Some(remote));
+        // A stale handle from the check cannot reach the download.
+        earlier.cancel();
+        let (_, remote) = panel.accept_download().expect("download");
+        assert!(!remote.canceller().is_cancelled());
+        assert!(
+            panel
+                .cancel
+                .as_ref()
+                .is_some_and(|cancel| !cancel.is_cancelled())
+        );
     }
 
     #[test]
