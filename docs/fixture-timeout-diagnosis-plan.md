@@ -237,7 +237,10 @@ listener as soon as its first connection ended. Two runs on `main` both
 exited 1 with every other suite passing. The certificate suite timed out
 after 46.6–46.7 s with last state `Https/Failed`, `failed=true` and
 `rejected=false`: once at "attempt 1 rejection", as predicted, and once at
-"attempt 0 rejection". In both runs the server accepted exactly one
+"attempt 0 rejection". In both runs the new timer then suspended tab 4000
+five seconds after its failed completion, as designed (33354 → 38368 ms and
+32634 → 37643 ms in the two rings), so with the listener closed no
+certificate event could follow. In both runs the server accepted exactly one
 connection, which ended in `SSLError` (the client refusing the certificate,
 as in a passing run), before the listener closed. Why one run still got a
 certificate event from that single connection and the other did not is not
@@ -370,7 +373,11 @@ in `docs/p1-11-popups.md` (5 of 15 untraced runs at `bbe59d3`) were caused by
 the hidden-page suspension timer as it was before `82c8111`, which issued
 `TrySuspend` five seconds after a hidden page's navigation *began*. Tab 2003
 in the permission suite and tab 4000 in the certificate suite are the only
-fixture pages that are never shown. Whenever their load, or the HTTPS
+never-shown fixture pages whose suites must wait on their events. Other pages
+are never shown either: tab 1000, the popup opener (`popups.rs:63-97`), sits
+in a suite that finishes in under a second, and the suspension suite hides
+its slow page and tabs 1501–1507 on purpose (`suspension.rs:54`, `:98-126`).
+Whenever the load of tab 2003 or 4000, or the HTTPS
 handshake queued behind the serial Python server, took longer than five
 seconds, the page was frozen mid-load: the permission request was never
 raised, or the HTTPS attempt failed without its certificate event, and the
@@ -412,7 +419,15 @@ thing to rebuild in that case.
    with a message that names the attempt, the state and the server log.
    This makes the harness stricter and faster, not looser, but it changes a
    wait, so it needs the owner's yes.
+   **Owner's answer (2026-10-13/14, in chat): yes.** Wait at most 5 s after
+   `Failed` for the certificate event, then fail with a message naming the
+   attempt, the state and the server log; the 45 s suite deadline is
+   unchanged. Recorded as DW-64 in the plan's "Deferred work" register and
+   not built on this docs-only branch.
 2. *Should a fully passing fixture run delete its synthetic directories?*
    Each run keeps about 61 MB in seven directories so a failure's evidence
    survives. Recommendation: delete them only after every suite passes,
    and keep them on any failure.
+   **Owner's answer (2026-10-13/14, in chat): yes.** Delete the seven
+   synthetic profile directories only after every suite passes, and keep
+   everything on any failure. Recorded as DW-65 and not built here.

@@ -94,24 +94,19 @@ you found it in the commit message, not here.
   Diagnosed on 2026-10-12: its hidden close page was suspended mid-load (see
   the `TrySuspend` trap below). A passing run never established a fix; a
   deliberately held response did. Preserve the suite's assertions and
-  deadlines, and keep any new timeout separate from this one until it is
-  diagnosed the same way. Sources: `docs/p1-11-popups.md` and
-  `docs/fixture-transport-timing-review.md`.
-- **The permission or certificate suite ends with a bare "Synthetic native
-  event deadline expired" and no pass line.** At `bbe59d3` this was the old
-  suspension timer freezing the pages those suites never show (tab 2003, and
-  tab 4000 with its hidden parent) when a load or a TLS handshake took over
-  five seconds: no permission request came, or the HTTPS attempt failed with
-  no certificate event. The completion-based timer (`82c8111`) removed it;
-  keep that timer, and remember a never-shown page is still suspended five
-  seconds after its load finishes, so show any fixture page whose script or
-  events must arrive later than that. A refused or reset HTTPS connection
-  gives the same bare timeout with last state `Https/Failed`, so read the
-  certificate suite's `server.log` before blaming suspension. Source:
-  `docs/fixture-timeout-diagnosis-plan.md`, where a 6 s hold failed both
-  suites 3/3 on the old timer and passed 3/3 on `6a23836`, and 20 plain runs
-  on `main` passed (observed; high on the mechanism, inferred for the
-  untraced original failures).
+  deadlines. The permission and certificate suites' bare timeouts were
+  diagnosed the same way on 2026-10-13: the old timer froze tabs 2003 and
+  4000, which those suites never show, mid-load. A never-shown page is still
+  suspended five seconds after its load completes, so show any fixture page
+  whose script or events must arrive later than that. A refused or reset
+  HTTPS connection also ends the certificate suite with only the bare
+  deadline (the disposable instrumentation showed last state `Https/Failed`
+  there, against `Https/Loading` under suspension; the committed fixture
+  prints no state), so check that suite's `server.log` for a traceback or an
+  early stop before blaming suspension. Sources: `docs/p1-11-popups.md`,
+  `docs/fixture-transport-timing-review.md` and
+  `docs/fixture-timeout-diagnosis-plan.md` (observed; high on the mechanism,
+  inferred for the untraced original failures).
 
 - **A native fixture rejects popup focus before trying it.** Windows may
   deny `SetForegroundWindow` for a background process even though WebView2's

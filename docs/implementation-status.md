@@ -58,8 +58,11 @@ passed 1,014 tests after the branding review.
   timeouts (5 of 15 untraced runs) were diagnosed on 2026-10-13 as the old
   hidden-page suspension timer; see the P1-11 row.
 - *Deferred rows still open:* DW-5, DW-30, DW-60, DW-61 (wired; awaiting
-  only the owner's NVDA check), DW-62 and DW-63 (an Unload page shortcut on
-  a focused sidebar row) in the plan's "Deferred work" register. DW-7
+  only the owner's NVDA check), DW-62, DW-63 (an Unload page shortcut on
+  a focused sidebar row), DW-64 (a fail-fast certificate wait in the native
+  fixture) and DW-65 (deleting the fixture's synthetic profiles after a fully
+  passing run), both owner-approved on 2026-10-13/14, in the plan's
+  "Deferred work" register. DW-7
   (forgetting a remembered site permission from Customize) is merged to
   `main`; see the P1-12 row.
 
