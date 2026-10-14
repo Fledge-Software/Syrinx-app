@@ -109,7 +109,7 @@ store and the certificate suite) and never deletes them, so a failed run's
 evidence, including `server.log`, survives. The cost is that repeated runs
 fill `target/session-temp`; whoever runs a series should clear it between
 series. Deleting them only after a fully passing run would keep the evidence
-and save the space; that is a small owner question, not a defect.
+and save the space; that is a small owner question (answered: DW-65), not a defect.
 
 ## Shared instrumentation: say which wait expired
 

@@ -90,7 +90,7 @@ you found it in the commit message, not here.
   Source: P1-12 independent review, stale-action regression and native fixture
   in `docs/p1-12-permissions.md`.
 
-- **The original lifecycle fixture sometimes timed out during navigation.**
+- **The native fixture's lifecycle, permission or certificate suite sometimes timed out.**
   Diagnosed on 2026-10-12: its hidden close page was suspended mid-load (see
   the `TrySuspend` trap below). A passing run never established a fix; a
   deliberately held response did. Preserve the suite's assertions and
