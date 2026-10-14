@@ -63,9 +63,15 @@ fn settle_pending(
         clear_unfinished(layout)?;
         return Ok(None);
     };
+    if rollback_began(layout, &pending, running)? {
+        // A rollback the helper could not finish: never offer or record the failed build.
+        discard_staged(layout)?;
+        return Ok(None);
+    }
     if pending.version == running {
         // The swap finished but its records were not cleared.
         remove_file_if_present(&layout.pending(), "removing the pending record")?;
+        remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")?;
         let mut state = UpdateState::read(layout)?;
         state.result = Some(UpdateResult::Installed);
         state.version = Some(running);
@@ -79,6 +85,24 @@ fn settle_pending(
         return Ok(None);
     }
     Ok(Some(pending.version))
+}
+
+/// Whether the helper began rolling `pending` back: the state says so, or the version is the
+/// running one while the staging mark is set (the helper clears a stale mark before swapping).
+fn rollback_began(
+    layout: &UpdateLayout,
+    pending: &Pending,
+    running: Version,
+) -> Result<bool, InstallError> {
+    if pending.version == running && layout.staging_marker().exists() {
+        return Ok(true);
+    }
+    let state = UpdateState::read(layout)?;
+    let rolled_back = matches!(
+        state.result,
+        Some(UpdateResult::ApplyRolledBack | UpdateResult::RollbackFailed)
+    );
+    Ok(rolled_back && state.version == Some(pending.version))
 }
 
 /// Remove a `Syrinx.new` that staging or a rollback left unfinished, recognised by the

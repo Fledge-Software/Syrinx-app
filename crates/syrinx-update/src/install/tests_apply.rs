@@ -46,6 +46,8 @@ struct FakeLauncher {
     stopped: Rc<RefCell<bool>>,
     /// Real processes pinning a folder, stopped when the test ends.
     pinning: Vec<Pinned>,
+    /// Put a folder where the staging mark goes once the update starts, so marking fails.
+    block_mark: bool,
 }
 
 impl FakeLauncher {
@@ -56,6 +58,7 @@ impl FakeLauncher {
             launched: Vec::new(),
             stopped: Rc::new(RefCell::new(false)),
             pinning: Vec::new(),
+            block_mark: false,
         }
     }
 
@@ -100,6 +103,9 @@ impl Launcher for FakeLauncher {
         let folder = executable.parent().expect("program folder");
         let record = fs::read(folder.join(PACKAGE_RECORD))?;
         self.launched.push((record.clone(), arguments.to_vec()));
+        if self.block_mark && self.launched.len() == 1 {
+            fs::create_dir(self.layout.staging_marker())?;
+        }
         if self.start == Start::HangsInItsFolder && self.launched.len() == 1 {
             self.pinning.push(pin_folder(folder));
         }
@@ -506,6 +512,10 @@ fn a_process_working_in_the_program_folder_stops_the_swap_but_not_elsewhere() {
     drop(pinned);
     assert_eq!(applied, Ok(Applied::NotSwapped(NEW)));
     assert_eq!(read_tree(&sandbox.layout.program()), program_files(OLD));
+    assert!(
+        !sandbox.layout.staged().exists(),
+        "the unswapped copy is removed"
+    );
     assert_eq!(
         launcher.versions(),
         [record(OLD)],
@@ -573,4 +583,76 @@ fn a_new_version_that_cannot_be_watched_is_stopped_and_rolled_back() {
     assert_untouched(&sandbox);
     let outcome = Outcome::take(&sandbox.layout).expect("read").expect("told");
     assert_eq!(outcome.result, UpdateResult::ApplyRolledBack);
+}
+
+#[test]
+fn a_rollback_that_cannot_record_still_restarts_and_never_offers_the_failed_build() {
+    // Hold `pending` so it cannot be removed, as a failing disk or a scanner might.
+    let (sandbox, keys) = staged_sandbox();
+    let held = std::os::windows::fs::OpenOptionsExt::share_mode(
+        fs::OpenOptions::new().read(true),
+        0x0000_0001,
+    )
+    .open(sandbox.layout.pending())
+    .expect("hold the pending record");
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Hangs);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Restart),
+        &mut launcher,
+    );
+    assert!(
+        matches!(applied, Err(InstallError::AfterSwap(_))),
+        "{applied:?}"
+    );
+    // The previous version is back and was started despite the failed record.
+    assert_eq!(launcher.versions(), [record(NEW), record(OLD)]);
+    assert_eq!(read_tree(&sandbox.layout.program()), program_files(OLD));
+    drop(held);
+
+    // The record survived, but the state names the rollback: nothing is offered again.
+    assert!(sandbox.layout.pending().exists());
+    let recovery = recover(&sandbox.layout, OLD).expect("next start");
+    assert_eq!(recovery.staged, None);
+    assert_untouched(&sandbox);
+}
+
+#[test]
+fn a_rollback_continues_when_the_staging_mark_cannot_be_written() {
+    let (sandbox, keys) = staged_sandbox();
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Hangs);
+    // A folder in the mark's place, created once the update starts, makes writing it fail.
+    launcher.block_mark = true;
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Restart),
+        &mut launcher,
+    );
+    assert_eq!(
+        applied,
+        Ok(Applied::RolledBack {
+            attempted: NEW,
+            current: OLD
+        })
+    );
+    assert_eq!(launcher.versions(), [record(NEW), record(OLD)]);
+    assert_eq!(read_tree(&sandbox.layout.program()), program_files(OLD));
+}
+
+#[test]
+fn consuming_pending_clears_a_stale_staging_mark() {
+    // A staging interrupted after `pending` but before clearing its mark leaves both.
+    let (sandbox, keys) = staged_sandbox();
+    fs::write(sandbox.layout.staging_marker(), b"staging\n").expect("stale mark");
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Quit),
+        &mut launcher,
+    );
+    assert_eq!(applied, Ok(Applied::Installed(NEW)));
+    assert!(!sandbox.layout.staging_marker().exists());
+
+    // A later `install-syrinx.ps1` copy is therefore left alone at start-up.
+    write_tree(&sandbox.layout.staged(), &program_files(NEW));
+    let recovery = recover(&sandbox.layout, NEW).expect("next start");
+    assert_eq!(recovery.staged, None);
+    assert_eq!(read_tree(&sandbox.layout.staged()), program_files(NEW));
 }

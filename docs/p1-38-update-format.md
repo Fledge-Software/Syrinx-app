@@ -673,6 +673,22 @@ by the next start if Windows still holds it. If either rollback rename fails
 build may still be the installed one; the next start tells the owner that
 the previous version waits in `Syrinx.previous` and how to swap it back.
 
+Before renaming, a rollback leaves three independent signs that it began:
+the state names the attempted version as rolled back, the staging mark is
+set, and `pending` is removed. Each is attempted even if another fails, so
+no single failed write lets a later start offer the failed build again or
+record it as installed: start-up discards a `pending` whose version the
+state records as rolled back, or that names the running version while the
+mark is set. If the previous version is back but writing the outcome fails,
+the helper still starts it and reports the error.
+
+The staging mark is cleared wherever `pending` is consumed: the helper
+clears a mark left by an interrupted staging as soon as it reads `pending`,
+and start-up clears it when it finishes a swap's records, so a stale mark
+can never later remove an installer-owned `Syrinx.new`. After a failed swap
+the helper removes the unswapped `Syrinx.new` at once, or marks it for the
+next start if Windows still holds it.
+
 ### What a start does
 
 Before the window opens, `recover` takes the lock (and does nothing if the

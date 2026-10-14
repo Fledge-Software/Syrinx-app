@@ -207,6 +207,8 @@ fn apply_locked(
     let lock = ApplyLock::wait(layout, timing.exit_wait, timing.poll)?;
     checkpoint(Step::ExitObserved)?;
     let pending = Pending::read(layout)?.ok_or(InstallError::NothingStaged)?;
+    // `pending` owns `Syrinx.new` now; a mark left by an interrupted staging is stale.
+    remove_file_if_present(&layout.staging_marker(), "clearing a stale staging mark")?;
     if let Err(refusal) = reverify(layout, request.keys, &pending) {
         discard_refused(layout)?;
         let result = UpdateResult::VerificationFailed;
@@ -223,6 +225,7 @@ fn apply_locked(
             pending.from,
             true,
         )?;
+        discard_unswapped(layout);
         return Ok(Applied::NotSwapped(pending.version));
     }
     checkpoint(Step::Swapped)?;
@@ -439,14 +442,7 @@ fn roll_back(
     lock: ApplyLock,
 ) -> Result<Applied, InstallError> {
     let layout = request.layout;
-    // Without `pending` but with the staging mark, a crash part-way leaves the failed copy for
-    // the next start to remove.
-    write_atomically(
-        &layout.staging_marker(),
-        b"rollback\n",
-        "marking the rollback",
-    )?;
-    remove_file_if_present(&layout.pending(), "removing the pending record")?;
+    note_rollback(layout, pending);
     if let Err(error) = restore_previous(layout, request.timing.rename_patience) {
         #[cfg(test)]
         if matches!(error, InstallError::Interrupted(_)) {
@@ -462,13 +458,6 @@ fn roll_back(
             current: pending.from,
         });
     }
-    finish(
-        layout,
-        pending,
-        UpdateResult::ApplyRolledBack,
-        pending.from,
-        true,
-    )?;
     // The failed copy keeps the staging mark, so the next start removes it if this cannot.
     let removed = remove_program_folder(&layout.staged(), "Syrinx.new").and_then(|()| {
         remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")
@@ -476,13 +465,59 @@ fn roll_back(
     if let Err(error) = removed {
         eprintln!("the failed version stays for the next start to remove: {error}");
     }
-    // The previous Syrinx must find the lock free to read its outcome.
+    let recorded = finish(
+        layout,
+        pending,
+        UpdateResult::ApplyRolledBack,
+        pending.from,
+        true,
+    );
+    // The previous version is back, so it is started even if recording failed; the previous
+    // Syrinx must find the lock free to read its outcome.
     drop(lock);
     start_installed(request, launcher);
-    Ok(Applied::RolledBack {
+    recorded.map(|()| Applied::RolledBack {
         attempted: pending.version,
         current: pending.from,
     })
+}
+
+/// Leave three independent signs that a rollback began, so no single failed write lets the
+/// next start take the failed build for an installed update: the state names it rolled back,
+/// the staging mark is set, and `pending` is gone. Each is reported if it fails.
+fn note_rollback(layout: &UpdateLayout, pending: &Pending) {
+    let noted = UpdateState::read(layout).and_then(|mut state| {
+        state.result = Some(UpdateResult::ApplyRolledBack);
+        state.version = Some(pending.version);
+        state.write(layout)
+    });
+    if let Err(error) = noted {
+        eprintln!("the rollback could not be recorded in the state: {error}");
+    }
+    let marked = write_atomically(
+        &layout.staging_marker(),
+        b"rollback\n",
+        "marking the rollback",
+    );
+    if let Err(error) = marked {
+        eprintln!("the rollback could not be marked: {error}");
+    }
+    if let Err(error) = remove_file_if_present(&layout.pending(), "removing the pending record") {
+        eprintln!("the pending record could not be removed: {error}");
+    }
+}
+
+/// After a failed swap, remove the staged copy, or mark it for the next start to remove.
+fn discard_unswapped(layout: &UpdateLayout) {
+    let removed = remove_program_folder(&layout.staged(), "Syrinx.new");
+    let Err(error) = removed else {
+        return;
+    };
+    eprintln!("the unswapped copy stays for the next start to remove: {error}");
+    let marked = write_atomically(&layout.staging_marker(), b"unswapped\n", "marking the copy");
+    if let Err(error) = marked {
+        eprintln!("the unswapped copy could not be marked: {error}");
+    }
 }
 
 /// Move the failed `Syrinx` aside to `Syrinx.new`, then `Syrinx.previous` back into place.
@@ -512,6 +547,7 @@ fn relaunch(request: &ApplyRequest<'_>) -> Vec<OsString> {
 fn discard_refused(layout: &UpdateLayout) -> Result<(), InstallError> {
     remove_file_if_present(&layout.pending(), "removing the pending record")?;
     remove_program_folder(&layout.staged(), "Syrinx.new")?;
+    remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")?;
     remove_file_if_present(&layout.apply_manifest(), "removing the kept manifest")?;
     remove_file_if_present(&layout.apply_signature(), "removing the kept manifest")
 }
