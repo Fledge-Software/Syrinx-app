@@ -79,8 +79,10 @@ cargo xtask check-deps
 cargo xtask check-deferred
 cargo xtask check-packaging
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --features syrinx-update/release-tool --profile local --offline --locked -- -D warnings
-cargo test --workspace --features syrinx-update/release-tool --profile local --offline --locked
+cargo clippy --workspace --all-targets --profile local --offline --locked -- -D warnings
+cargo test --workspace --profile local --offline --locked
+cargo clippy --package syrinx-update --features release-tool --all-targets --profile local --offline --locked -- -D warnings
+cargo test --package syrinx-update --features release-tool --profile local --offline --locked
 cargo run --package syrinx-app --profile local --offline --locked -- --smoke
 ```
 
@@ -413,9 +415,20 @@ Since P1-39a the package folder also holds P1-38's unsigned update
 (`cargo run --package syrinx-update --bin syrinx-update-tool --features
 release-tool`), because `check-deps` still forbids xtask from linking the
 verifier. The zip is built before any signing, so it contains the unsigned
-`manifest` but no `manifest.sig`, `latest` or `latest.sig`. The gate's
-Clippy and test steps pass `--features syrinx-update/release-tool` so the
-release tool is still checked.
+`manifest` but no `manifest.sig`, `latest` or `latest.sig`. Since P1-39b the
+gate's workspace Clippy and test steps are featureless, so Syrinx is checked
+as it ships, and two separate `--package syrinx-update --features
+release-tool` steps check the release tool; `check-deps` refuses any
+dependency that enables that feature.
+
+Since P1-39b the package also holds `syrinx-apply.exe`, the update helper,
+built from `syrinx-update` without the release tool. "Install update from
+file…" (Customize and the palette) works only in an `installed` build
+running from a folder named `Syrinx`; a development build says so and
+touches nothing. With `PRODUCTION_KEYS` still empty (DW-30), an installed
+build refuses every package as signed by an unknown key. The staging and
+recovery tests write only under `target\syrinx-update-tests`. See
+`docs/p1-38-update-format.md`, "P1-39b".
 
 ## Signing an update (P1-39a, owner only)
 

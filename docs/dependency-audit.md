@@ -523,8 +523,9 @@ does not call them.
 
 The dependency check (`crates/xtask/src/dependency_policy.rs`) still allows
 only `syrinx-platform` to use WebView2, wry and `windows-sys`; `syrinx-update`
-is the single other crate allowed `windows`, and every workspace crate is
-refused a dependency on `syrinx-update` until P1-39 is approved.
+is the single other crate allowed `windows`, and every workspace crate was
+refused a dependency on `syrinx-update` until P1-39 was approved (since
+P1-39b, `syrinx-app` alone may depend on it).
 `syrinx-update` may request only the `windows` features `Win32_Foundation`
 and `Win32_Security_Cryptography`, with default features disabled; any other
 feature, including a networking namespace, fails the check. The
@@ -538,6 +539,20 @@ so `syrinx-update` is compiled against a `windows` build that also has
 without the check noticing. The check stops the verifier from asking for a
 networking or other namespace itself; review of its source is what keeps it
 to CNG.
+
+## P1-39b: `syrinx-app` uses the update verifier, 2026-10-14
+
+No package was added and no feature changed. `syrinx-app` now declares the
+workspace's own `syrinx-update` (P1-39's approved `check-deps` change 1), so
+the only lockfile change is one line in `syrinx-app`'s dependency list.
+`syrinx-update` gained a second executable, `syrinx-apply`, and an install
+module; both use only `std` and the existing CNG bindings, so its `windows`
+features stay `Win32_Foundation` and `Win32_Security_Cryptography`.
+`syrinx-platform`'s new free-space query (`GetDiskFreeSpaceExW`) and folder
+picker (`FOS_PICKFOLDERS`) are in namespaces it already enables
+(`Win32_Storage_FileSystem`, `Win32_UI_Shell`). `check-deps` refuses every
+crate other than `syrinx-app` depending on `syrinx-update`, and any
+dependency on it that enables `release-tool`.
 
 ## P1-25: `serde_json` in `syrinx-platform`, 2026-10-12
 
