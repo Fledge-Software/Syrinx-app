@@ -593,14 +593,29 @@ and **Later**. Nothing is replaced until one of them leads to a clean exit:
 
 The snapshot is an ordinary validated `VACUUM INTO` copy taken outside the
 daily schedule, and D13's rotation still keeps seven, so the oldest copy may
-rotate out. If the snapshot fails, nothing installs: Restart now stays open
+rotate out (owner, 2026-10-14). It is skipped when any valid copy, daily or
+pre-update, is less than an hour old: otherwise each retried update would
+evict one more daily copy, and a few retries could replace the whole
+seven-day window. If the snapshot fails, nothing installs: Restart now stays open
 and says why; a quit closes without installing and the update stays staged.
 After a successful snapshot, `main` waits for the window, the store and the
 page host to close and P1-34's single-instance claim to be released, then
 `prepare_handoff` takes the update lock, rechecks `Updates\apply\syrinx-apply.exe`
 against the kept, signed manifest and holds it open so nothing can replace it
-before Windows starts it, and starts the helper. Syrinx keeps the lock until
-its process ends.
+before Windows starts it, and starts the helper with `Updates` as its
+working folder. Syrinx keeps the lock until its process ends, so any notice
+that waits on the owner (such as the dropped-link message box) is shown
+before the lock is taken.
+
+**Working folders.** Windows refuses to rename a folder that is any
+process's current folder, and the Start menu shortcut starts Syrinx in
+`Programs\Syrinx` (`packaging/register-syrinx.ps1`). A helper inheriting
+that folder could never move the installed version aside. So Syrinx starts
+the helper in `Updates`, the helper also sets its own current folder there
+before taking the lock, and every program the helper starts runs in
+`Updates` too; tests check each command's working folder, and a test with
+real processes shows a process working in `Programs\Syrinx` stopping the
+swap while one working in `Updates` does not.
 
 ### The helper's protocol
 
@@ -610,6 +625,9 @@ its process ends.
 1. It waits up to 60 s for the update lock, which Syrinx holds until its
    process has ended; this is how it learns the old process is gone without
    any Windows process API, which the verifier's feature list does not allow.
+   If the wait times out, or any later step stops unexpectedly, the helper
+   records `apply_failed` with an outcome for the next start, and the update
+   stays staged.
 2. It reads `pending`, requires the kept manifest's SHA-256 to match it,
    reverifies the manifest (rollback rule against the from-version) and
    runs `verify_payload` on `Syrinx.new`. A failure removes the staged copy,
@@ -617,7 +635,8 @@ its process ends.
 3. It removes an older `Syrinx.previous` (only if Syrinx made it), renames
    `Syrinx` to `Syrinx.previous` and `Syrinx.new` to `Syrinx`, retrying for
    up to 30 s while a just-closed program still holds the folder. If the
-   second rename fails, it renames the first back and records `apply_failed`.
+   first rename fails nothing has changed; if the second fails, it renames
+   the first back. Either way it records `apply_failed` with an outcome.
 4. **Quit (Later):** it records `installed` and leaves an outcome, so the
    next start says "Syrinx was updated to 1.4.0." It starts nothing.
 5. **Restart now:** it starts `Programs\Syrinx\syrinx.exe --after-update`
@@ -627,6 +646,11 @@ its process ends.
    has loaded and the window has drawn it. On success the helper records
    `installed`.
 
+On Restart now the helper always starts whichever version is installed when
+it finishes: after a refused reverification, a failed swap, a timed-out wait
+or an unexpected stop it starts the version that stayed, so the owner is
+never left without Syrinx. The one exception is a failed rollback, below.
+
 **The rollback trigger** is the new version not writing `started` within
 60 s, exiting first, or failing to launch at all. The helper then stops it,
 removes `pending` (so a crash part-way never offers the failed version
@@ -634,7 +658,11 @@ again), renames the failed `Syrinx` to `Syrinx.new` and `Syrinx.previous`
 back to `Syrinx`, records `apply_rolled_back` with an outcome, releases the
 lock and starts the previous version, which tells the owner "The update to
 1.4.0 didn't start; you are on 1.3.0." The failed copy is removed then, or
-by the next start if Windows still holds it.
+by the next start if Windows still holds it. If either rollback rename fails
+(for example, the failed version cannot be stopped), the helper records
+`apply_rollback_failed` with an outcome and starts nothing, since the failed
+build may still be the installed one; the next start tells the owner that
+the previous version waits in `Syrinx.previous` and how to swap it back.
 
 ### What a start does
 
@@ -666,10 +694,16 @@ lock wait; a `Syrinx.previous` Syrinx did not make; reverification refusing
 a changed file, an added file and a changed kept manifest; installing on
 quit; Restart now with a clean start; rollback for a hung start, an
 immediate exit and a failed launch; the helper stopped before the swap,
-after it, after launching and part-way through a rollback; and the handoff
-refusing a replaced helper while blocking writes to the checked one. A
-further test proves Windows still starts an executable held open the way
-the handoff holds the helper.
+after it, after launching and part-way through a rollback; the handoff
+refusing a replaced helper while blocking writes to the checked one; the
+helper's and the launcher's working folders; a real process working in the
+program folder stopping the swap (recorded as `apply_failed`, with the
+installed version started again) while one in `Updates` does not; Restart
+now starting the installed version after a refused reverification and a
+timed-out wait; a rollback that cannot move the failed version; and repeated
+pre-update snapshots within an hour keeping the daily copies. A further test
+proves Windows still starts an executable held open the way the handoff
+holds the helper.
 
 One case cannot be automated, as the proposal says: a stop between the two
 renames leaves no `Programs\Syrinx` until the owner renames
@@ -681,7 +715,9 @@ rename and shows the next start then finds the update still staged.
 `cargo xtask check-deps` now allows `syrinx-app`, and only `syrinx-app`, to
 depend on `syrinx-update` (change 1; P1-39c adds `syrinx-update-net` in its
 own slice), and refuses any dependency on `syrinx-update`, of any kind, that
-enables `release-tool`. As the P1-39a note required, the gate's workspace
+enables `release-tool`, whether in the dependency declaration or through the
+package's own `[features]` table (`sign = ["syrinx-update/release-tool"]`,
+`syrinx-update?/release-tool`, or a renamed import). As the P1-39a note required, the gate's workspace
 Clippy and test steps are featureless again, so the app is linted and tested
 as it ships, and two separate steps cover the release tool:
 `cargo clippy --package syrinx-update --features release-tool --all-targets`
@@ -705,9 +741,17 @@ regenerated for the new file list. The only lockfile change is
   before renaming, because Windows cannot rename a folder whose files are
   open.
 - **Rollback covers Restart now only.** With Later, the helper does not
-  start Syrinx, so nothing watches the next start; if it fails, the owner
-  renames `Syrinx.previous` back by hand. This follows the proposal's step 4;
-  whether the next start should also be watched is a question for the owner.
+  start Syrinx, so nothing watches the next start. If the new version then
+  fails to start, the owner closes it if it is running, renames
+  `Programs\Syrinx` to `Syrinx.failed` and `Programs\Syrinx.previous` to
+  `Syrinx`, and starts Syrinx again. The owner kept this for v1 (2026-10-14).
+- **A manual install and Syrinx must not overlap.** `install-syrinx.ps1`
+  stages its copy in the same `Programs\Syrinx.new`, with the same
+  `syrinx-package.json`. A Syrinx started while the script is copying finds
+  a `Syrinx.new` with no `pending` and removes it as an unfinished update.
+  Syrinx cannot tell the two apart without changing the scripts, so the
+  owner's checklist says not to start Syrinx during a manual install
+  (`docs/p1-37-installer-design.md`, "Upgrade").
 - **The foreground behaviour of a relaunched Syrinx** (question 6) is
   implemented as the proposal specifies and was checked only with a
   development build started with `--after-update` from an agent's shell
@@ -715,6 +759,17 @@ regenerated for the new file list. The only lockfile change is
   that application, so a screenshot cannot tell whether it took activation;
   this does not settle question 6. A real update needs the owner's keys
   (P1-39d), and the owner's check then is the evidence.
+
+### The owner's answers (2026-10-14)
+
+- **Later is not watched for a failed start:** kept for v1; the manual
+  rename is documented under "Limits" above.
+- **An unreadable `Updates\state` refuses staging:** kept. A "Reset update
+  records" action is deferred as DW-66 in the plan's register.
+- **The pre-update snapshot counts within D13's seven copies:** confirmed,
+  with the one-hour skip described above.
+- **Later is armed only for the current session:** kept; after a crash the
+  next start shows the update as ready and asks again.
 
 ## What P1-39 needs from the owner
 
