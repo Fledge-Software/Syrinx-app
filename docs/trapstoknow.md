@@ -90,13 +90,23 @@ you found it in the commit message, not here.
   Source: P1-12 independent review, stale-action regression and native fixture
   in `docs/p1-12-permissions.md`.
 
-- **The original lifecycle fixture sometimes timed out during navigation.**
+- **The native fixture's lifecycle, permission or certificate suite sometimes timed out.**
   Diagnosed on 2026-10-12: its hidden close page was suspended mid-load (see
   the `TrySuspend` trap below). A passing run never established a fix; a
   deliberately held response did. Preserve the suite's assertions and
-  deadlines, and keep any new timeout separate from this one until it is
-  diagnosed the same way. Sources: `docs/p1-11-popups.md` and
-  `docs/fixture-transport-timing-review.md`.
+  deadlines. The permission and certificate suites' bare timeouts were
+  diagnosed the same way on 2026-10-13: the old timer froze tabs 2003 and
+  4000, which those suites never show, mid-load. A never-shown page is still
+  suspended five seconds after its load completes, so show any fixture page
+  whose script or events must arrive later than that. A refused or reset
+  HTTPS connection also ends the certificate suite with only the bare
+  deadline (the disposable instrumentation showed last state `Https/Failed`
+  there, against `Https/Loading` under suspension; the committed fixture
+  prints no state), so check that suite's `server.log` for a traceback or an
+  early stop before blaming suspension. Sources: `docs/p1-11-popups.md`,
+  `docs/fixture-transport-timing-review.md` and
+  `docs/fixture-timeout-diagnosis-plan.md` (observed; high on the mechanism,
+  inferred for the untraced original failures).
 
 - **A native fixture rejects popup focus before trying it.** Windows may
   deny `SetForegroundWindow` for a background process even though WebView2's
