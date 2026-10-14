@@ -468,7 +468,7 @@ Both P1-39b items below are done; see "P1-39b" further on.
   `crates/xtask/src/dependency_policy.rs`, with a test, refusing any
   dependency on `syrinx-update` that enables `release-tool`.
 - P1-39c fetches `latest`, `latest.sig` and the package from
-  `https://syrinxapp.dev/updates/v1/`.
+  `https://syrinxapp.dev/updates/v1/` (done; see "P1-39c" below).
 - P1-39d is the owner's key ceremony, the pinning of both public keys
   (DW-30) and the first real `sign-update`.
 
@@ -805,6 +805,162 @@ regenerated for the new file list. The only lockfile change is
   with the one-hour skip described above.
 - **Later is armed only for the current session:** kept; after a crash the
   next start shows the update as ready and asks again.
+
+## P1-39c: "Check for updates"
+
+P1-39c is the third slice of the approved delivery design. It gives the
+owner one button, in Customize's Updates section and as the palette command
+"Check for updates", that asks the approved host what the newest release is
+and, after the owner's yes, downloads it into P1-39b's staging. Without it
+every update would still mean copying a package folder by hand. It is the
+only place Syrinx makes a network call of its own, which the owner approved
+on 2026-10-13 as the one exception to D9 (`docs/decisions.md`). Production
+use still waits on P1-39d: `PRODUCTION_KEYS` is empty (DW-30) and the host
+is not set up, so today a real check fails closed.
+
+### When Syrinx contacts the host
+
+Only when the owner presses the button or runs the command. Nothing checks
+at start-up, on a timer or in the background, and no setting turns that on.
+A copy that cannot install updates, which is every development build, the
+gate and the smoke run (P1-39b's `UpdateLayout` exists only in an
+`installed` build running from `Programs\Syrinx`), refuses the press before
+any request is made; a test proves the source is never read.
+
+One press reads four small files and stops: `latest`, `latest.sig`, then the
+stated version's `manifest` and `manifest.sig`. The owner then sees
+"Syrinx 1.4.0 is available (38 MB). Download and verify it?" with
+**Download** and **Not now**. The size can only come from the signed
+manifest, which the statement binds by its SHA-256, so the manifest is read
+before asking; the proposal's "nothing larger than the statement" is read
+here as "nothing larger than these four signed files" (owner question 1 of
+the P1-39c report). Only Download fetches the payload files, one by one
+under `<version>/files/`, straight into `Updates\incoming\<version>\`, and
+then P1-39b's staging verifies and stages them exactly as it does a folder:
+the statement and manifest are checked again, the payload is verified and
+installed from its verified handles, and Customize offers Restart now and
+Later. Check and download each run on their own thread with a **Cancel**
+button. A statement naming the installed version says "Syrinx 1.3.0 is up to
+date." and stores its serial, as staging does; an offer stores only the
+`available` category, and the serial is stored once the download is staged.
+
+### The code
+
+- `crates/syrinx-update/src/install/source.rs` adds `PackageSource`, which
+  staging reads through: `FolderSource` for "Install update from file…" and
+  the host for this slice. Staging trusts no source.
+  `install/check.rs` is the check (`check_source`); `stage_from_source` is
+  the staging P1-39b already had, now source-agnostic.
+- `crates/syrinx-update-net` is the new crate. `endpoint.rs` compiles in the
+  base URL; `winhttp.rs` makes the requests; `remote.rs` is
+  `RemotePackage`, the host as a `PackageSource`.
+- `crates/syrinx-app/src/ui/updates/check.rs` is the button, the offer,
+  Download, Not now and Cancel; `src/updates.rs` gives the owner's
+  messages; `syrinx-core`'s command registry adds `browser.check-updates`.
+
+### The requests
+
+- **One host, compiled in.** `Endpoint::production()` is `syrinxapp.dev`,
+  port 443, prefix `/updates/v1/`, HTTPS. There is no setting, environment
+  variable or Cargo feature that changes it: the crate reads no environment,
+  has no `[features]` table (`check-deps` refuses one), and its only other
+  endpoint, a loopback server, exists under `cfg(test)`, which a dependent
+  crate's build never enables. A test reads the crate's own source to keep
+  it that way.
+- **Paths from verified data only.** A URL is the base plus a fixed name, or
+  the verified version plus a manifest path that passed P1-38's path rules.
+  No URL is taken from a downloaded file.
+- **What is sent.** `GET`, HTTP/1.1, the `Host` header, `Connection` and
+  the agent string `Syrinx-Update`. WinHTTP's cookies, authentication,
+  automatic logon and redirects are switched off on every request; no query
+  string, identifier or version number is sent. A loopback test pins the
+  exact header set.
+- **TLS.** TLS 1.2 or 1.3. The certificate is validated by Windows (WinHTTP
+  over Schannel): chain to a trusted root, name and dates. Nothing relaxes
+  that; no `SECURITY_FLAG_IGNORE_*` flag is set anywhere. Revocation
+  checking is WinHTTP's default, off: turning it on would make Windows fetch
+  revocation lists or OCSP answers from the certificate authority's hosts,
+  which the proposal does not cover, and integrity rests on the signature
+  anyway. This is owner question 2 of the P1-39c report.
+- **Redirects** are never followed: the redirect policy is "never" and any
+  3xx answer is refused as `Redirected`; a test shows the target is never
+  contacted. Any status other than 200 is refused.
+- **Bounds.** `latest` at most 4 KiB, a signature 76 bytes, a manifest
+  2 MiB, each refused past its limit, with a declared `Content-Length`
+  checked before the body is read. A payload file must be exactly its
+  listed size: a longer declared length is refused, a body that runs past
+  its size is refused one read later, and one that ends early is refused.
+  Free space is checked before the first payload byte, as for a folder.
+- **Timeouts.** 30 s to resolve the name and 30 s to connect; 60 s waiting
+  for the response and 60 s between body reads. On this machine WinHTTP
+  reported a stalled response about 3 s after its configured bound (1 s gave
+  about 4 s, 5 s about 8 s), so a real stall ends after about a minute.
+- **Proxy.** Windows' own proxy settings apply (WinHTTP's automatic proxy),
+  as for the browser. This machine has no proxy, no script and automatic
+  detection on; so a check here connects directly, after Windows' usual
+  automatic-detection lookup. Whether a configured corporate proxy behaves
+  as the browser's does is not tested, because no such proxy exists here.
+- **Cancellation.** Cancel stops the work at its next read and refuses new
+  requests. A read waiting on a silent host returns only when data arrives
+  or its 60 s bound passes, so a cancel during a stall can take that long;
+  the owner sees "Cancelling the update…" meanwhile. Quitting cancels too.
+
+### Errors
+
+A failure is a fixed `TransferProblem` with no address or header in it:
+`Unreachable`, `Certificate`, `TimedOut`, `Redirected`, `Status(code)`,
+`TooLong`, `Truncated`, `Cancelled` or `Failed(WinHTTP code)`. `Updates\state`
+records `network_failed` (or `cancelled`), and staging removes what it
+wrote, so the installed version and `incoming` are always left clean. The
+owner sees one sentence naming the host, for example "Syrinx couldn't reach
+syrinxapp.dev. Check your connection and try again." Verifier refusals keep
+P1-39b's messages, so today's empty key set reads "This update isn't signed
+by a key this Syrinx trusts, so nothing was installed."
+
+### `check-deps`
+
+P1-39's changes 2 and 3 (`crates/xtask/src/dependency_policy.rs`):
+`syrinx-update-net` may depend on the verifier and on `windows`, with
+exactly `Win32_Networking_WinHttp` and default features off; it alone may
+use that namespace; only `syrinx-app` may depend on it, in any kind of
+dependency; it may define no features; and it is checked like the headless
+crates, so it cannot reach the shell or, even transitively, a network client
+crate. Because Cargo unifies features, WinHTTP's bindings now compile into
+the one `windows` build every crate shares, so `check-deps` also reads
+source (`crates/xtask/src/network_sources.rs`): no other crate except the
+`xtask` tooling may name `Networking::WinHttp`, `WinHttpOpen` or
+`winhttp.dll`.
+
+### Tests, and how they avoid the network
+
+No test resolves a name or reaches another machine.
+
+- `syrinx-update`'s `install/tests_source.rs` runs the check and the
+  download against an in-process fake host serving signed synthetic
+  packages, with in-memory CNG keys: up to date, an offer, production keys
+  refusing, every request failing, a body breaking, stalling, being
+  cancelled or never ending, a full disk before any payload request, and a
+  replayed statement. Each failure leaves the installed version and
+  `incoming` clean.
+- `syrinx-update-net`'s tests run WinHTTP against plain-HTTP servers on
+  127.0.0.1, with proxy detection off so no WPAD lookup leaves the machine:
+  the request shape, redirects, statuses, bounds, short and endless bodies,
+  stalls, an unreachable port, an HTTPS request to a plain-HTTP server, and
+  cancellation. An untrusted certificate is refused before any request,
+  against P1-14's standard-library Python fixture with a fresh self-signed
+  certificate for 127.0.0.1 that is never installed; this test needs
+  `python.exe` on the path. A successful TLS download happens only in the
+  owner's own check against the real host (P1-39d).
+- `syrinx-app`'s tests drive the offer, Download, Not now and Cancel
+  without a request, and prove a development build never reads its source.
+
+### Not in this slice
+
+- The proposal's "Last checked 47 days ago" line in Settings is deferred as
+  DW-67: it needs the day of the last check in `Updates\state`, a format
+  change of its own.
+- P1-39d: the release keys (DW-30), the host set-up and the first real
+  update by the owner.
 
 ## What P1-39 needs from the owner
 

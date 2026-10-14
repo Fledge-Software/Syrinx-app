@@ -554,6 +554,36 @@ picker (`FOS_PICKFOLDERS`) are in namespaces it already enables
 crate other than `syrinx-app` depending on `syrinx-update`, and any
 dependency on it that enables `release-tool`.
 
+## P1-39c: WinHTTP in `syrinx-update-net`, 2026-10-14
+
+The owner approved one network exception to D9 on 2026-10-13: the
+owner-pressed update check, through WinHTTP (`winhttp.dll`, part of
+Windows) and the `windows =0.62.2` bindings P1-03 audited. `reqwest` with
+`rustls` was rejected so no TLS stack or `tokio` becomes Syrinx code
+(`docs/proposals/p1-39-update-delivery.md`). The new crate
+`crates/syrinx-update-net` declares:
+
+```toml
+syrinx-update = { path = "../syrinx-update" }
+windows = { workspace = true, features = ["Win32_Networking_WinHttp"] }
+```
+
+`Win32_Networking_WinHttp` enables only `Win32_Networking` and `Win32`
+inside the `windows` package and activates no optional dependency. The
+lockfile diff is the new member's entry (`syrinx-update-net 0.1.0`,
+depending on `syrinx-update` and `windows 0.62.2`) and one line in
+`syrinx-app`'s dependency list. No package was added, removed or moved, so
+the licences, maintenance and advisory findings above are unchanged.
+
+Cargo unifies features, so every crate that uses `windows` now compiles
+WinHTTP's bindings too. `check-deps` limits who declares the feature
+(`syrinx-update-net` alone, with exactly that feature list, no
+`[features]` table of its own, and only `syrinx-app` depending on it), and
+`crates/xtask/src/network_sources.rs` reads every other crate's source for
+`Networking::WinHttp`, `WinHttpOpen` and `winhttp.dll`, so another crate
+cannot call it unnoticed. The `xtask` tooling, which never ships, is
+excluded because its checks name those strings.
+
 ## P1-25: `serde_json` in `syrinx-platform`, 2026-10-12
 
 P1-25 parses the JSON that WebView2 returns for the one approved DevTools

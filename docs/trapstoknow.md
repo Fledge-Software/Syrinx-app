@@ -399,6 +399,29 @@ you found it in the commit message, not here.
   and test a release zip on a machine other than the one that built it.
   Source: `vendor/gpui-pre-windows-0.3.8.provenance.md` (observed; high).
 
+## Update downloads: WinHTTP
+
+- **A loopback test through WinHTTP's automatic proxy can leave the
+  machine.** `WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY` follows Windows' proxy
+  settings, and on this machine automatic detection is on, which can mean a
+  WPAD lookup on the network before the request. `syrinx-update-net`'s
+  test-only loopback endpoint opens its session with
+  `WINHTTP_ACCESS_TYPE_NO_PROXY`; keep it so, and keep the production
+  endpoint on the automatic proxy. Source: `crates/syrinx-update-net/src/endpoint.rs`
+  and the machine's `DefaultConnectionSettings` flags (observed 2026-10-14).
+- **WinHTTP reports a receive timeout about 3 s after its bound.** A 1 s
+  bound ended a silent loopback response after about 4 s and a 5 s bound
+  after about 8 s, with or without a proxy. A stall test must hold its
+  server well past the bound and must not assert the bound itself; a held
+  single-threaded server also delays the next connection, so answer each
+  connection on its own thread. Source: P1-39c's
+  `a_stalled_host_times_out` (observed on this machine).
+- **An HTTPS request to a plain-HTTP server times out rather than failing
+  the handshake** when the server waits for a full request head, because
+  neither side speaks first. Treat `TimedOut` as a refusal there too, and
+  assert that no plaintext request reached the server. Source: P1-39c's
+  `a_secure_request_never_speaks_plain_http` (observed).
+
 ## Local search
 
 - **Tantivy prefix matches can produce empty native snippets.** In 0.26.2,
