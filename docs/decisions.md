@@ -12,6 +12,23 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-14
 
+- **The focus ring shows only after keyboard input, decided by Syrinx's own
+  keyboard-or-pointer flag (DW-62).** P1-36 drew the ring on any focus, so
+  a chrome button clicked with the mouse kept a ring until focus moved on.
+  GPUI's built-in `focus_visible` cannot fix that: it judges keyboard use
+  from the keys GPUI itself receives, so it never sees the F6 or Tab that
+  leaves a web page through WebView2, and the ring would vanish exactly
+  when a keyboard user leaves a page; it also counts a bare mouse move as
+  pointer use. P1-36 recommended accepting the ring after clicks for v1,
+  since that errs toward keyboard users; the other alternative was a
+  vendored GPUI patch exposing a way to mark keyboard use, which would be a
+  further change to the pinned toolkit. The owner chose, in chat, neither:
+  Syrinx keeps its own flag, set to pointer by a mouse press in any Syrinx
+  window and to keyboard by any key Syrinx's windows receive and by every
+  key a focused page hands over (F6, Tab out of the page and the other
+  shortcuts), and draws the ring only in keyboard mode. This needs no GPUI
+  change and keeps the ring visible after F6 from a page. See
+  `docs/p1-36-accessibility.md`, "DW-62".
 - **Where Windows cannot list sync roots, Syrinx treats the machine as
   having none (narrows D13).** D13 keeps the database out of OneDrive and
   similar synced folders; the storage guard

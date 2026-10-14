@@ -78,7 +78,7 @@ use syrinx_platform::instance::LinkFeed;
 use syrinx_search::{BlankQuery, BoostWeights, Scope, SearchPolicy, Target};
 use syrinx_ui::{
     SidebarSizing,
-    focus::{Direction, Pane},
+    focus::{Direction, ModalityInput, Pane},
     metrics::chrome::TITLE_BAR_HEIGHT,
 };
 use title_bar::title_bar;
@@ -888,7 +888,11 @@ impl BrowserView {
             }
             // The app never switches capture on before P1-26, so no capture reaches here.
             BrowserEvent::PageText { .. } => {}
-            BrowserEvent::Shortcut(shortcut) => self.shortcut(shortcut, window, cx),
+            // Every page shortcut is a key the page handed over, so the ring may show (DW-62).
+            BrowserEvent::Shortcut(shortcut) => {
+                crate::controls::note_input(ModalityInput::PageKey, window, cx);
+                self.shortcut(shortcut, window, cx);
+            }
             BrowserEvent::PageFocused { id } => self.page_took_focus(id, window, cx),
             BrowserEvent::PopupRequested { id, request, url } => {
                 self.request_popup(id, request, url);
@@ -1545,7 +1549,7 @@ impl BrowserView {
 impl Render for BrowserView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.session_revision.is_none() {
-            return div()
+            return crate::controls::watch_pointer(div())
                 .size_full()
                 .flex()
                 .flex_col()
@@ -1592,7 +1596,7 @@ impl Render for BrowserView {
             div().flex_1().h_full()
         };
         let sidebar = self.sidebar(window, cx);
-        let chrome = div()
+        let chrome = crate::controls::watch_pointer(div())
             .size_full()
             .key_context("Syrinx")
             .bg(theme::window_fill())

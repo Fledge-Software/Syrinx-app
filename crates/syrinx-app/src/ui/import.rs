@@ -554,7 +554,7 @@ impl Render for ImportPreview {
                     .child("There is nothing to import."),
             );
         }
-        let frame = div()
+        let frame = crate::controls::watch_pointer(div())
             .key_context(PREVIEW_CONTEXT)
             .on_action(cx.listener(|this, _: &ConfirmImport, window, _| {
                 // Enter on a focused Cancel cancels; anywhere else it confirms.

@@ -189,6 +189,74 @@ ground, panel and card, with a 1 px inner line in the accent's on-fill colour
 so the ring still reads on accent-filled controls (a new test checks 3:1
 against every accent fill). `crates/syrinx-app/src/controls.rs` draws it as an
 inset shadow, so it never moves layout and a scrolling sidebar cannot clip it.
+Since DW-62 it shows only after keyboard use (next section).
+
+## DW-62: the ring only after keys
+
+Added on 2026-10-14 on `claude/dw-62-keyboard-focus-ring`, by the route the
+owner chose in chat that day: Syrinx keeps its own keyboard-or-pointer flag,
+with no GPUI change. Before it, the ring showed on any focus, so a clicked
+chrome button kept a ring until focus moved on. GPUI's `focus_visible` could
+not be used: it decides from the keys GPUI itself sees, so it misses the F6
+or Tab that leaves a page through WebView2, and it switches to pointer mode
+on a bare mouse move, which would hide the ring while the owner tabs with
+the mouse resting over the window.
+
+- **The rule** is `syrinx_ui::focus::Modality` (window-independent, four
+  tests): a mouse press means pointer; any key means keyboard; a modifier
+  pressed on its own changes nothing; the starting mode is keyboard, so the
+  ring errs toward showing. `shows_focus_ring` is true only in keyboard mode.
+- **Keys GPUI sees** are recorded by `controls::watch_keys`, an
+  `intercept_keystrokes` subscription made once at start-up. It runs before
+  any handler, so arrow keys on a sidebar row or the resize edge, which their
+  own key handlers consume, still count.
+- **Keys a page hands over** arrive as `BrowserEvent::Shortcut` from the
+  post-only `AcceleratorKeyPressed` and `MoveFocusRequested` handlers (F6,
+  Shift F6, Tab past the page's last element, Shift Tab before its first,
+  Esc for the peek and the Ctrl shortcuts). `ui.rs` marks each one as a key
+  before acting on it, so F6 from a page shows the ring on the address
+  field. The page handlers are unchanged.
+- **Mouse presses** are recorded by `controls::watch_pointer`, a
+  capture-phase window listener (`Window::on_mouse_event`, registered by a
+  zero-size canvas) added to the root of each Syrinx window that draws the
+  ring: the main window (and its start-up panel), the palette, the peek and
+  the import preview. Capture runs before the pressed control takes focus.
+  An element's own `capture_any_mouse_down` was tried first and missed
+  presses on the toolbar (see the new trap).
+  A press inside a web page is not seen, which is harmless: the page draws
+  its own focus.
+- **The ring** (`controls::focus_ring`) returns the style unchanged in
+  pointer mode, so every control, the address field, sidebar rows and the
+  resize edge follow the flag (the edge and rows keep their focused
+  background). A change of mode redraws the window it happened in at once,
+  and every other open Syrinx window from a deferred callback
+  (`refresh_every_window`), so a ring left in another window appears or
+  goes without waiting for an unrelated redraw.
+- The flag is one static for the whole app, because there is one owner with
+  one keyboard and one mouse.
+- A modifier pressed alone counts for nothing. GPUI reports a lone Shift,
+  Ctrl, Alt, Windows or Fn key as a keystroke when it is released; Caps Lock
+  only changes its modifier state and never becomes a keystroke, so it is
+  not in the list. The owner's decision is recorded in `docs/decisions.md`
+  (2026-10-14).
+
+No role, element id or focus handle changed, so the full UI Automation
+probe was not rerun. **Visual probe.** The gate's `local` build was launched
+visibly on fresh synthetic profiles `target\dw-62-probe-*`; a script posted
+a left-button press and Tab only to Syrinx's window, only while a Syrinx
+window was in the foreground, and screenshotted the toolbar. A press on
+"Reset zoom" focused it with no ring; Tab moved focus to "Zoom in" with the
+ring; a second press on "Reset zoom" focused it with no ring again. The first
+build, which used the root's own mouse listener, still drew the ring after
+the press; that is how the trap below was found. After the review fixes
+(redrawing every window, dropping Caps Lock) the probe was rerun on
+`target\dw-62-probe-3` with the same three results. No probe covered a ring
+in a second window being redrawn.
+
+**Not verified by an agent:** F6 and Tab out of a real web page (the page
+path is unit-tested in `syrinx_ui::focus` and the event wiring is one line in
+`ui.rs`, but no page was loaded), the palette, peek and import windows, and
+modifier-only presses. These are in owner check 12.
 
 **Focus returns predictably.** Closing the palette, peek or import preview
 still calls `focus_page`, which now also clears GPUI's focus to the window
@@ -459,7 +527,12 @@ portable copy also works). Then record pass/fail for each:
     report any such stop with its message.
 12. **Ring visibility.** In each of the five palettes, the focus ring is
     visible on the toolbar, a sidebar row, an accent-filled button (Save in a
-    tile form) and the selected time-range chip.
+    tile form) and the selected time-range chip. Since DW-62, also check
+    that it shows only after keys: click a toolbar button (no ring), press
+    Tab (ring on the next control), click again (ring gone); click into a
+    web page, press F6 (ring on the address field) and Shift F6 (ring on the
+    sidebar's active row); in the palette, click a scope chip (no ring) and
+    press Tab (ring). Holding Ctrl or Shift alone must not bring it back.
 13. **Sidebar tree keys (DW-61).** With a few saved pages, a folder holding
     a page and a sub-folder, and some open tabs: F6 to the sidebar lands on
     the active row and NVDA reads it as a tree item, selected, with its
@@ -481,7 +554,9 @@ portable copy also works). Then record pass/fail for each:
    so a clicked chrome button keeps a ring until focus moves. Hiding it after
    clicks needs a GPUI change, because GPUI cannot see the F6 that leaves a
    page. Recommendation: accept the current behaviour for v1; it errs toward
-   keyboard users.
+   keyboard users. **Answered 2026-10-14, in chat:** hide it after clicks,
+   by a Syrinx-side flag rather than a GPUI change. Done the same day (see
+   "DW-62: the ring only after keys" above).
 2. **Sidebar keyboard model (DW-61).** Done on 2026-10-13: the tree has
    one Tab stop and arrow keys (see "DW-61: one Tab stop for the sidebar
    tree" above). One consequence to confirm: the rows' small buttons

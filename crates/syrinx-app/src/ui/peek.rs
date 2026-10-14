@@ -40,7 +40,7 @@ impl Render for PeekView {
             Ok(content) => content,
             Err(_) => div(), // The owner has gone; native ownership also tears down this window.
         };
-        div()
+        crate::controls::watch_pointer(div())
             .key_context("SyrinxPeek")
             .size_full()
             .text_color(theme::text())
