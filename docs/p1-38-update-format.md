@@ -1122,8 +1122,8 @@ only fix it by hand. The owner decided on 2026-10-14, in chat, that start-up
 discards the staged update in that case. `recover` now checks, under the
 update lock and before settling `pending`, whether `pending` exists and
 `state` is unreadable; if so it calls `discard_staged`, the same removal a
-suspected rollback uses (`pending`, `Syrinx.new` only if Syrinx made it,
-`Updates\apply`, `incoming` and the staging mark), and reports
+suspected rollback uses (`pending`, `Syrinx.new`, which a `pending` proves
+Syrinx made, `Updates\apply`, `incoming` and the staging mark), and reports
 `discarded_for_unreadable_state`. The installed `Programs\Syrinx` is not
 touched, the damaged `state` is left for the reset, and the owner is told
 once: "Syrinx couldn't read its update records, so it removed the update
