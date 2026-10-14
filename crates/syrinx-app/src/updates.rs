@@ -29,8 +29,18 @@ pub struct UpdateContext {
 impl UpdateContext {
     /// `data` is the profile folder; `test_data` is set only by `--test-data-dir`.
     pub fn new(data: &Path, test_data: Option<&Path>, after_update: bool) -> Self {
-        let layout = installed_layout(data);
-        let relaunch_data = test_data.and_then(|folder| std::path::absolute(folder).ok());
+        // Without the test folder's full path a relaunch would open the real profile instead,
+        // so a failure to resolve it disables updating rather than being dropped.
+        let (layout, relaunch_data) = match test_data.map(std::path::absolute).transpose() {
+            Ok(relaunch_data) => (installed_layout(data), relaunch_data),
+            Err(error) => {
+                let refused = InstallError::Io {
+                    step: "finding the test data folder",
+                    kind: error.kind(),
+                };
+                (Err(refused), None)
+            }
+        };
         Self {
             layout,
             running: Version::parse(env!("CARGO_PKG_VERSION")),
@@ -155,18 +165,7 @@ impl UpdateContext {
         let keys = KeySet::production().map_err(|error| error.to_string())?;
         let handoff = prepare_handoff(layout, &keys).map_err(|error| error.to_string())?;
         let log = File::create(layout.log()).map_err(|error| error.kind().to_string())?;
-        let mut command = Command::new(layout.helper());
-        command
-            .arg("--programs")
-            .arg(layout.programs())
-            .arg("--data")
-            .arg(layout.data())
-            .arg("--mode")
-            .arg(mode.as_str());
-        if let Some(folder) = &self.relaunch_data {
-            command.arg("--relaunch-data-dir").arg(folder);
-        }
-        command
+        helper_command(layout, mode, self.relaunch_data.as_deref())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log)
@@ -174,6 +173,24 @@ impl UpdateContext {
             .map_err(|error| error.kind().to_string())?;
         Ok(handoff)
     }
+}
+
+/// The helper's command line, run from `Updates`: Windows refuses to rename a folder that is
+/// any process's current one, and Syrinx itself may run from `Programs\Syrinx`.
+fn helper_command(layout: &UpdateLayout, mode: ApplyMode, relaunch_data: Option<&Path>) -> Command {
+    let mut command = Command::new(layout.helper());
+    command
+        .current_dir(layout.updates())
+        .arg("--programs")
+        .arg(layout.programs())
+        .arg("--data")
+        .arg(layout.data())
+        .arg("--mode")
+        .arg(mode.as_str());
+    if let Some(folder) = relaunch_data {
+        command.arg("--relaunch-data-dir").arg(folder);
+    }
+    command
 }
 
 /// What start-up found: something to tell the owner once, and a staged version.
@@ -265,6 +282,11 @@ pub fn outcome_message(outcome: &Outcome) -> Option<String> {
             "The update to {attempted} failed its final check, so it was removed and Syrinx \
              stayed on {current}."
         ),
+        UpdateResult::RollbackFailed => format!(
+            "The update to {attempted} didn't start, and Syrinx couldn't put {current} back. \
+             {current} is kept in Syrinx.previous beside the program: to return to it, close \
+             Syrinx, rename Syrinx to Syrinx.failed and Syrinx.previous to Syrinx."
+        ),
         UpdateResult::ApplyFailed => format!(
             "The update to {attempted} could not replace the installed copy, so Syrinx stayed \
              on {current}."
@@ -292,6 +314,20 @@ mod tests {
         ));
         assert!(context.hand_off(ApplyMode::Restart).is_err());
         assert!(UpdateContext::disabled().clean_start_job().is_none());
+    }
+
+    #[test]
+    fn the_helper_never_works_from_a_folder_it_renames() {
+        let layout = UpdateLayout::new(
+            PathBuf::from(r"C:\Synthetic\Programs"),
+            PathBuf::from(r"C:\Synthetic\data"),
+        )
+        .expect("synthetic layout");
+        let command = helper_command(&layout, ApplyMode::Restart, None);
+        assert_eq!(command.get_current_dir(), Some(layout.updates().as_path()));
+        for renamed in [layout.program(), layout.staged(), layout.previous()] {
+            assert!(!layout.updates().starts_with(renamed));
+        }
     }
 
     #[test]

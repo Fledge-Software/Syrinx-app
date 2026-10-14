@@ -28,9 +28,11 @@ pub enum UpdateResult {
     StagingFailed,
     ApplyFailed,
     ApplyRolledBack,
+    /// The new version did not start and the previous one could not be put back.
+    RollbackFailed,
 }
 
-const RESULTS: [(UpdateResult, &str); 8] = [
+const RESULTS: [(UpdateResult, &str); 9] = [
     (UpdateResult::UpToDate, "up_to_date"),
     (UpdateResult::Staged, "staged"),
     (UpdateResult::Installed, "installed"),
@@ -39,6 +41,7 @@ const RESULTS: [(UpdateResult, &str); 8] = [
     (UpdateResult::StagingFailed, "staging_failed"),
     (UpdateResult::ApplyFailed, "apply_failed"),
     (UpdateResult::ApplyRolledBack, "apply_rolled_back"),
+    (UpdateResult::RollbackFailed, "apply_rollback_failed"),
 ];
 
 impl UpdateResult {

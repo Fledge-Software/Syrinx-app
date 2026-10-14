@@ -2,7 +2,7 @@
 
 use std::ffi::OsString;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -82,8 +82,30 @@ pub trait LaunchedProgram {
     fn stop(&mut self) -> io::Result<()>;
 }
 
-/// Starts real processes, detached from the helper's own standard streams.
-pub struct ProcessLauncher;
+/// Starts real processes, detached from the helper's standard streams and in a working folder
+/// that no update renames: Windows refuses to rename a folder that is a process's current one.
+pub struct ProcessLauncher {
+    working_directory: PathBuf,
+}
+
+impl ProcessLauncher {
+    /// `working_directory` must be a folder no update renames, such as `Updates`.
+    pub fn new(working_directory: PathBuf) -> Self {
+        Self { working_directory }
+    }
+
+    /// The command `launch` runs.
+    pub fn command(&self, executable: &Path, arguments: &[OsString]) -> Command {
+        let mut command = Command::new(executable);
+        command
+            .args(arguments)
+            .current_dir(&self.working_directory)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
+    }
+}
 
 impl Launcher for ProcessLauncher {
     fn launch(
@@ -91,12 +113,7 @@ impl Launcher for ProcessLauncher {
         executable: &Path,
         arguments: &[OsString],
     ) -> io::Result<Box<dyn LaunchedProgram>> {
-        let child = Command::new(executable)
-            .args(arguments)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+        let child = self.command(executable, arguments).spawn()?;
         Ok(Box::new(ChildProgram(child)))
     }
 }
@@ -142,10 +159,39 @@ pub enum Applied {
         attempted: Version,
         current: Version,
     },
+    /// The new version did not start and the previous one could not be put back; it waits in
+    /// `Syrinx.previous` for the owner, who is told at the next start.
+    RollbackFailed {
+        attempted: Version,
+        current: Version,
+    },
 }
 
-/// Apply the staged update after the old Syrinx exits.
+/// Apply the staged update after the old Syrinx exits. On Restart now, whichever version is
+/// installed at the end is started, on every path.
 pub fn apply_update(
+    request: &ApplyRequest<'_>,
+    launcher: &mut dyn Launcher,
+) -> Result<Applied, InstallError> {
+    let applied = apply_locked(request, launcher);
+    #[cfg(test)]
+    if matches!(applied, Err(InstallError::Interrupted(_))) {
+        // A fault hook stands in for a crash, which records and starts nothing.
+        return applied;
+    }
+    let applied = applied.map_err(|error| record_unfinished(request.layout, error));
+    let started = matches!(
+        applied,
+        Ok(Applied::Installed(_) | Applied::RolledBack { .. } | Applied::RollbackFailed { .. })
+    );
+    if request.mode == ApplyMode::Restart && !started {
+        start_installed(request, launcher);
+    }
+    applied
+}
+
+/// Every step that needs the lock, which is released when this returns.
+fn apply_locked(
     request: &ApplyRequest<'_>,
     launcher: &mut dyn Launcher,
 ) -> Result<Applied, InstallError> {
@@ -156,13 +202,8 @@ pub fn apply_update(
     let pending = Pending::read(layout)?.ok_or(InstallError::NothingStaged)?;
     if let Err(refusal) = reverify(layout, request.keys, &pending) {
         discard_refused(layout)?;
-        finish(
-            layout,
-            &pending,
-            UpdateResult::VerificationFailed,
-            pending.from,
-            true,
-        )?;
+        let result = UpdateResult::VerificationFailed;
+        finish(layout, &pending, result, pending.from, true)?;
         eprintln!("reverification refused the staged update: {refusal}");
         return Ok(Applied::Discarded(pending.version));
     }
@@ -193,6 +234,44 @@ pub fn apply_update(
     }
 }
 
+/// Record an unexpected stop, so the next start tells the owner; the update stays staged.
+fn record_unfinished(layout: &UpdateLayout, error: InstallError) -> InstallError {
+    eprintln!("the update stopped: {error}");
+    let recorded = Pending::read(layout).and_then(|pending| {
+        let Some(pending) = pending else {
+            return Ok(());
+        };
+        let mut state = UpdateState::read(layout)?;
+        state.result = Some(UpdateResult::ApplyFailed);
+        state.version = Some(pending.version);
+        state.write(layout)?;
+        let outcome = Outcome {
+            result: UpdateResult::ApplyFailed,
+            attempted: pending.version,
+            current: pending.from,
+        };
+        outcome.write(layout)
+    });
+    match recorded {
+        Ok(()) => error,
+        Err(cleanup) => InstallError::Incomplete {
+            primary: Box::new(error),
+            cleanup: Box::new(cleanup),
+        },
+    }
+}
+
+/// Start whatever is installed, so Restart now never leaves the owner without Syrinx.
+fn start_installed(request: &ApplyRequest<'_>, launcher: &mut dyn Launcher) {
+    let executable = request.layout.executable();
+    if let Err(error) = launcher.launch(&executable, &relaunch(request)) {
+        eprintln!(
+            "the installed version could not be started: {}",
+            error.kind()
+        );
+    }
+}
+
 /// Recheck `Syrinx.new` against the kept, signed manifest, as staging checked `incoming`.
 fn reverify(layout: &UpdateLayout, keys: &KeySet, pending: &Pending) -> Result<(), InstallError> {
     const WHAT: &str = "reading the kept manifest";
@@ -218,17 +297,22 @@ fn reverify(layout: &UpdateLayout, keys: &KeySet, pending: &Pending) -> Result<(
     Ok(())
 }
 
-/// `Syrinx` becomes `Syrinx.previous`, then `Syrinx.new` becomes `Syrinx`; on a failed second
-/// rename the first is undone. `false` means the installed version stayed.
+/// `Syrinx` becomes `Syrinx.previous`, then `Syrinx.new` becomes `Syrinx`. A failed first
+/// rename changes nothing, and a failed second one is undone; either way `false` means the
+/// installed version stayed.
 fn swap(layout: &UpdateLayout, timing: ApplyTiming) -> Result<bool, InstallError> {
     remove_program_folder(&layout.previous(), "Syrinx.previous")?;
     checkpoint(Step::PreviousRemoved)?;
-    rename_patiently(
+    let aside = rename_patiently(
         &layout.program(),
         &layout.previous(),
         timing.rename_patience,
         "moving the installed version aside",
-    )?;
+    );
+    if let Err(error) = aside {
+        eprintln!("the installed version could not be moved aside: {error}");
+        return Ok(false);
+    }
     checkpoint(Step::ProgramMovedAside)?;
     let installed = rename_patiently(
         &layout.staged(),
@@ -317,22 +401,23 @@ fn roll_back(
     lock: ApplyLock,
 ) -> Result<Applied, InstallError> {
     let layout = request.layout;
-    let patience = request.timing.rename_patience;
     // Without `pending`, a crash part-way leaves the failed copy for the next start to remove.
     remove_file_if_present(&layout.pending(), "removing the pending record")?;
-    rename_patiently(
-        &layout.program(),
-        &layout.staged(),
-        patience,
-        "moving the failed version aside",
-    )?;
-    checkpoint(Step::FailedMovedAside)?;
-    rename_patiently(
-        &layout.previous(),
-        &layout.program(),
-        patience,
-        "restoring the previous version",
-    )?;
+    if let Err(error) = restore_previous(layout, request.timing.rename_patience) {
+        #[cfg(test)]
+        if matches!(error, InstallError::Interrupted(_)) {
+            return Err(error);
+        }
+        // The owner is told at the next start; nothing is started, as the failed build may
+        // still be the installed one.
+        eprintln!("the previous version could not be restored: {error}");
+        let result = UpdateResult::RollbackFailed;
+        finish(layout, pending, result, pending.from, true)?;
+        return Ok(Applied::RollbackFailed {
+            attempted: pending.version,
+            current: pending.from,
+        });
+    }
     finish(
         layout,
         pending,
@@ -346,16 +431,28 @@ fn roll_back(
     }
     // The previous Syrinx must find the lock free to read its outcome.
     drop(lock);
-    if let Err(error) = launcher.launch(&layout.executable(), &relaunch(request)) {
-        eprintln!(
-            "the previous version could not be restarted: {}",
-            error.kind()
-        );
-    }
+    start_installed(request, launcher);
     Ok(Applied::RolledBack {
         attempted: pending.version,
         current: pending.from,
     })
+}
+
+/// Move the failed `Syrinx` aside to `Syrinx.new`, then `Syrinx.previous` back into place.
+fn restore_previous(layout: &UpdateLayout, patience: Duration) -> Result<(), InstallError> {
+    rename_patiently(
+        &layout.program(),
+        &layout.staged(),
+        patience,
+        "moving the failed version aside",
+    )?;
+    checkpoint(Step::FailedMovedAside)?;
+    rename_patiently(
+        &layout.previous(),
+        &layout.program(),
+        patience,
+        "restoring the previous version",
+    )
 }
 
 fn relaunch(request: &ApplyRequest<'_>) -> Vec<OsString> {

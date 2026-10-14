@@ -30,6 +30,10 @@ fn main() -> ExitCode {
 fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<Applied, String> {
     let options = parse(arguments)?;
     let layout = UpdateLayout::new(options.programs, options.data).map_err(|e| e.to_string())?;
+    // Windows refuses to rename a folder that is any process's current one, and Syrinx may
+    // have been started from `Programs\Syrinx`; work from `Updates`, which is never renamed.
+    std::env::set_current_dir(layout.updates())
+        .map_err(|error| format!("cannot work from the Updates folder: {}", error.kind()))?;
     // Only the keys compiled into this executable are trusted (P1-38).
     let keys = KeySet::production().map_err(|error| error.to_string())?;
     let request = ApplyRequest {
@@ -39,7 +43,8 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<Applied, String>
         relaunch_arguments: relaunch_arguments(options.relaunch_data),
         timing: ApplyTiming::PRODUCTION,
     };
-    apply_update(&request, &mut ProcessLauncher).map_err(|error| error.to_string())
+    let mut launcher = ProcessLauncher::new(layout.updates());
+    apply_update(&request, &mut launcher).map_err(|error| error.to_string())
 }
 
 /// What the helper was asked to do.
@@ -92,6 +97,9 @@ fn describe(applied: &Applied) -> String {
         Applied::NotSwapped(version) => format!("apply_failed {version}"),
         Applied::RolledBack { attempted, current } => {
             format!("apply_rolled_back {attempted}, running {current}")
+        }
+        Applied::RollbackFailed { attempted, current } => {
+            format!("apply_rollback_failed {attempted}, {current} kept aside")
         }
     }
 }

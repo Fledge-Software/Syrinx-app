@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
@@ -32,6 +32,8 @@ enum Start {
     Hangs,
     ExitsAtOnce,
     CannotLaunch,
+    /// Hangs with a process whose current folder is the program folder, so it cannot be renamed.
+    HangsInItsFolder,
 }
 
 /// Records what was started; a clean start writes the start record as Syrinx would.
@@ -40,6 +42,16 @@ struct FakeLauncher {
     start: Start,
     launched: Vec<(Vec<u8>, Vec<OsString>)>,
     stopped: Rc<RefCell<bool>>,
+    /// Real processes pinning a folder, stopped when the test ends.
+    pinning: Vec<Child>,
+}
+
+impl Drop for FakeLauncher {
+    fn drop(&mut self) {
+        for child in &mut self.pinning {
+            stop_pinning(child);
+        }
+    }
 }
 
 impl FakeLauncher {
@@ -49,6 +61,7 @@ impl FakeLauncher {
             start,
             launched: Vec::new(),
             stopped: Rc::new(RefCell::new(false)),
+            pinning: Vec::new(),
         }
     }
 
@@ -89,6 +102,9 @@ impl Launcher for FakeLauncher {
         let folder = executable.parent().expect("program folder");
         let record = fs::read(folder.join(PACKAGE_RECORD))?;
         self.launched.push((record.clone(), arguments.to_vec()));
+        if self.start == Start::HangsInItsFolder && self.launched.len() == 1 {
+            self.pinning.push(pin_folder(folder));
+        }
         // Only the first launch is the update under test; a relaunched previous version is fine.
         if self.start == Start::Cleanly || self.launched.len() > 1 {
             let version = String::from_utf8(record).expect("synthetic record");
@@ -104,6 +120,33 @@ impl Launcher for FakeLauncher {
             exited: self.start == Start::ExitsAtOnce,
             stopped: Rc::clone(&self.stopped),
         }))
+    }
+}
+
+/// Start a real, harmless Windows process whose current folder is `folder`, and wait until it
+/// has started: a new process takes its current folder only as it initialises.
+fn pin_folder(folder: &Path) -> Child {
+    let system = std::env::var_os("SystemRoot").expect("SystemRoot");
+    let mut child = Command::new(Path::new(&system).join(r"System32\PING.EXE"))
+        .args(["-n", "30", "127.0.0.1"])
+        .current_dir(folder)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start a process in the folder");
+    let mut output = std::io::BufReader::new(child.stdout.take().expect("piped output"));
+    let mut first_line = String::new();
+    std::io::BufRead::read_line(&mut output, &mut first_line)
+        .expect("the process prints once running");
+    // Keep the pipe open, so the process never stops early on a failed write.
+    child.stdout = Some(output.into_inner());
+    child
+}
+
+fn stop_pinning(child: &mut Child) {
+    if let Err(error) = child.kill().and_then(|()| child.wait().map(drop))
+        && !thread::panicking()
+    {
+        panic!("stop the test's own process: {error}");
     }
 }
 
@@ -231,7 +274,8 @@ fn a_staged_copy_changed_after_staging_fails_its_second_check() {
             &mut launcher,
         );
         assert_eq!(applied, Ok(Applied::Discarded(NEW)), "{name}");
-        assert!(launcher.launched.is_empty());
+        // Restart now still starts the version that stayed installed.
+        assert_eq!(launcher.versions(), [record(OLD)], "{name}");
         assert_untouched(&sandbox);
         assert!(
             !sandbox.layout.previous().exists(),
@@ -259,6 +303,11 @@ fn the_helper_waits_for_syrinx_to_exit() {
         })
     );
     assert_eq!(read_tree(&sandbox.layout.program()), program_files(OLD));
+    assert!(
+        sandbox.layout.outcome().exists(),
+        "the stop is told at the next start"
+    );
+    assert!(sandbox.layout.pending().exists(), "the update stays staged");
     assert_eq!(
         recover(&sandbox.layout, OLD).map(|r| r.helper_running),
         Ok(true)
@@ -424,4 +473,72 @@ fn windows_starts_a_helper_held_against_changes() {
         .expect("start the held copy");
     assert!(status.success());
     drop(held);
+}
+
+#[test]
+fn the_helper_starts_programs_outside_every_folder_it_renames() {
+    let sandbox = Sandbox::new();
+    let launcher = ProcessLauncher::new(sandbox.layout.updates());
+    let command = launcher.command(&sandbox.layout.executable(), &[]);
+    assert_eq!(
+        command.get_current_dir(),
+        Some(sandbox.layout.updates().as_path())
+    );
+}
+
+#[test]
+fn a_process_working_in_the_program_folder_stops_the_swap_but_not_elsewhere() {
+    // Reproduces the review's finding with real processes: Windows refuses to rename a folder
+    // that is a process's current one, and a process working in `Updates` does not matter.
+    let (sandbox, keys) = staged_sandbox();
+    let mut pinned = pin_folder(&sandbox.layout.program());
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Restart),
+        &mut launcher,
+    );
+    stop_pinning(&mut pinned);
+    assert_eq!(applied, Ok(Applied::NotSwapped(NEW)));
+    assert_eq!(read_tree(&sandbox.layout.program()), program_files(OLD));
+    assert_eq!(
+        launcher.versions(),
+        [record(OLD)],
+        "the installed version is started"
+    );
+    let outcome = Outcome::take(&sandbox.layout).expect("read").expect("told");
+    assert_eq!(outcome.result, UpdateResult::ApplyFailed);
+
+    let (sandbox, keys) = staged_sandbox();
+    let mut elsewhere = pin_folder(&sandbox.layout.updates());
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Quit),
+        &mut launcher,
+    );
+    stop_pinning(&mut elsewhere);
+    assert_eq!(applied, Ok(Applied::Installed(NEW)));
+}
+
+#[test]
+fn a_rollback_that_cannot_move_the_failed_version_tells_the_owner() {
+    let (sandbox, keys) = staged_sandbox();
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::HangsInItsFolder);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Restart),
+        &mut launcher,
+    );
+    assert_eq!(
+        applied,
+        Ok(Applied::RollbackFailed {
+            attempted: NEW,
+            current: OLD
+        })
+    );
+    // Nothing more is started: the failed build may still be the installed one.
+    assert_eq!(launcher.versions(), [record(NEW)]);
+    assert_eq!(read_tree(&sandbox.layout.previous()), program_files(OLD));
+    assert!(!sandbox.layout.pending().exists());
+    drop(launcher);
+    let outcome = Outcome::take(&sandbox.layout).expect("read").expect("told");
+    assert_eq!(outcome.result, UpdateResult::RollbackFailed);
 }
