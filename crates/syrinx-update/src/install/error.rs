@@ -1,0 +1,106 @@
+//! Why staging, applying or recovering an update stopped; no variant carries a path.
+
+use std::fmt;
+use std::io;
+
+use crate::error::UpdateError;
+use crate::version::Version;
+
+#[cfg(test)]
+use super::fault::Step;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallError {
+    /// The package, statement or signature was refused by the verifier.
+    Update(UpdateError),
+    /// A file operation failed; `step` names what Syrinx was doing.
+    Io {
+        step: &'static str,
+        kind: io::ErrorKind,
+    },
+    /// The program and data folders are not absolute or overlap.
+    Layout,
+    /// This Syrinx does not run from an installed `Programs\Syrinx` folder.
+    NotInstalled,
+    /// The chosen folder lacks the signed files of an update package.
+    NotAPackage,
+    /// Another update step holds the update lock.
+    Busy,
+    /// Waited too long for `what`.
+    TimedOut { what: &'static str },
+    /// A folder or file Syrinx would replace is not one Syrinx made, or is a link.
+    UnexpectedEntry { what: &'static str },
+    /// A local update record is malformed.
+    Record { what: &'static str },
+    /// The package does not list a file every installation needs.
+    MissingProgramFile { name: &'static str },
+    /// The disks lack room for two copies of the package and a margin.
+    NotEnoughSpace { needed: u64, available: u64 },
+    /// The staged copy's recorded manifest is not the one that was verified.
+    StagedManifestChanged,
+    /// The staged copy is for a different version from the one recorded as pending.
+    StagedVersionMismatch { pending: Version, manifest: Version },
+    /// Nothing is staged.
+    NothingStaged,
+    /// A step failed and cleaning up after it also failed.
+    Incomplete {
+        primary: Box<InstallError>,
+        cleanup: Box<InstallError>,
+    },
+    /// A test's fault hook stopped the work here, as a crash would.
+    #[cfg(test)]
+    Interrupted(Step),
+}
+
+impl From<UpdateError> for InstallError {
+    fn from(error: UpdateError) -> Self {
+        Self::Update(error)
+    }
+}
+
+/// Wraps an I/O failure with the step that hit it.
+pub(crate) fn io_error(step: &'static str) -> impl Fn(io::Error) -> InstallError {
+    move |error| InstallError::Io {
+        step,
+        kind: error.kind(),
+    }
+}
+
+impl fmt::Display for InstallError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Update(error) => write!(formatter, "verification refused the update: {error}"),
+            Self::Io { step, kind } => write!(formatter, "{step} failed: {kind}"),
+            Self::Layout => formatter.write_str("the program and data folders overlap"),
+            Self::NotInstalled => formatter.write_str("this Syrinx is not an installed copy"),
+            Self::NotAPackage => formatter.write_str("the folder is not a signed update package"),
+            Self::Busy => formatter.write_str("another update step is in progress"),
+            Self::TimedOut { what } => write!(formatter, "timed out waiting for {what}"),
+            Self::UnexpectedEntry { what } => {
+                write!(formatter, "{what} is not a folder Syrinx made")
+            }
+            Self::Record { what } => write!(formatter, "the {what} record is malformed"),
+            Self::MissingProgramFile { name } => write!(formatter, "the package lacks {name}"),
+            Self::NotEnoughSpace { needed, available } => {
+                write!(formatter, "{needed} bytes needed but {available} free")
+            }
+            Self::StagedManifestChanged => {
+                formatter.write_str("the staged manifest differs from the verified one")
+            }
+            Self::StagedVersionMismatch { pending, manifest } => {
+                write!(
+                    formatter,
+                    "pending {pending} but the manifest installs {manifest}"
+                )
+            }
+            Self::NothingStaged => formatter.write_str("no update is staged"),
+            Self::Incomplete { primary, cleanup } => {
+                write!(formatter, "{primary}; cleaning up also failed: {cleanup}")
+            }
+            #[cfg(test)]
+            Self::Interrupted(step) => write!(formatter, "interrupted at {step:?}"),
+        }
+    }
+}
+
+impl std::error::Error for InstallError {}

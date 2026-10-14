@@ -125,7 +125,7 @@ fn verify_file<P: Payload>(
 }
 
 /// Hash up to `limit + 1` bytes, returning how many were read.
-fn hash_bounded(
+pub(crate) fn hash_bounded(
     file: &mut impl Read,
     limit: u64,
     path: &str,

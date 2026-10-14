@@ -15,6 +15,11 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security_Cr
 # Opens Windows key storage to sign releases; only the release tool enables it, never Syrinx itself.
 release-tool = []
 
+# Swaps a staged update into place after Syrinx exits (P1-39b); ships in every package.
+[[bin]]
+name = "syrinx-apply"
+path = "src/bin/syrinx-apply.rs"
+
 [[bin]]
 name = "syrinx-update-tool"
 path = "src/bin/syrinx-update-tool.rs"
