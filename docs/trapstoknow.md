@@ -452,6 +452,15 @@ you found it in the commit message, not here.
   installed copy. Source: the pinned SQLite Windows open path and P1-04's
   native recovery implementation.
 
+- **`GetCurrentSyncRoots` crashes the process on Windows Server instead of
+  failing.** GitHub's Windows runner returned a sync-root factory whose
+  method pointer was invalid, so the storage guard died with
+  `STATUS_ACCESS_VIOLATION` before any error could be handled; the same
+  test passes on Windows 11. Call `StorageProviderSyncRootManager::IsSupported()`
+  first and treat "unsupported" as no registered roots (owner decision,
+  2026-10-14). Source: weekly-release run 4's cdb stack, faulting in
+  `windows::Storage::Provider::GetCurrentSyncRoots` called from
+  `registered_roots` (observed).
 - **SQLite's write-ahead log breaks in a synced folder.** In OneDrive or a
   network folder the `-wal` file separates from the database. Keep the
   database in the local, not roaming, app-data folder. Source:
