@@ -130,6 +130,12 @@ impl UpdateLayout {
         self.updates().join("outcome")
     }
 
+    /// Present while `Syrinx.new` is Syrinx's own unfinished work; without it and without
+    /// `pending`, a `Syrinx.new` may be `install-syrinx.ps1`'s copy and is left alone.
+    pub fn staging_marker(&self) -> PathBuf {
+        self.updates().join("staging")
+    }
+
     /// Written by a relaunched Syrinx once it has started cleanly.
     pub fn started(&self) -> PathBuf {
         self.updates().join("started")

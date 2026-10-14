@@ -519,6 +519,7 @@ data\Updates\pending             written last: version, from-version, manifest h
 data\Updates\state               the accepted statement serial, its hash and expiry,
                                  and the last result as a fixed category
 data\Updates\outcome             what the helper did, shown once by the next start
+data\Updates\staging             present while Syrinx.new is Syrinx's unfinished work
 data\Updates\started             written by a relaunched Syrinx after a clean start
 data\Updates\apply.lock          held by whichever process changes update files
 data\Updates\apply.log           the helper's standard error: categories, no paths
@@ -648,8 +649,16 @@ swap while one working in `Updates` does not.
 
 On Restart now the helper always starts whichever version is installed when
 it finishes: after a refused reverification, a failed swap, a timed-out wait
-or an unexpected stop it starts the version that stayed, so the owner is
-never left without Syrinx. The one exception is a failed rollback, below.
+or an unexpected stop before the swap it starts the version that stayed, so
+the owner is never left without Syrinx. Once the folders are swapped, an
+unexpected error while starting or watching the new version (the start
+record cannot be cleared or read, or Windows cannot report on the process)
+stops that version and rolls back like a failed start: an unconfirmed build
+is never left running unwatched, nor recorded as the old version. An error
+after the swap that leaves the new version in place, such as failing to
+write its records, is reported as it is and relaunches nothing; the next
+start of the new version finishes its records. The one exception to the
+relaunch rule is a failed rollback, below.
 
 **The rollback trigger** is the new version not writing `started` within
 60 s, exiting first, or failing to launch at all. The helper then stops it,
@@ -671,9 +680,14 @@ helper still holds it), removes any `incoming`, reads and removes the
 outcome, and settles `pending`: a `pending` naming the running version means
 the swap finished but its records were not cleared, so it is cleared and
 recorded as `installed`; a `pending` staged by another version, or with no
-`Syrinx.new`, is discarded; and a `Syrinx.new` with no `pending` is an
-unfinished copy and is removed. A complete staged copy is kept and shown as
-ready again.
+`Syrinx.new`, is discarded; and a `Syrinx.new` with no `pending` is removed
+only while `Updates\staging` exists. Staging writes that mark before it
+creates `Syrinx.new` and removes it once `pending` is written, and a rollback
+writes it before moving the failed version aside, so the mark means "this
+`Syrinx.new` is Syrinx's own unfinished work". Without the mark a
+`Syrinx.new` is left alone: it may be `install-syrinx.ps1`'s copy in
+progress, which holds the same `syrinx-package.json`. A complete staged copy
+is kept and shown as ready again.
 
 ### Recovery tests
 
@@ -700,7 +714,9 @@ helper's and the launcher's working folders; a real process working in the
 program folder stopping the swap (recorded as `apply_failed`, with the
 installed version started again) while one in `Updates` does not; Restart
 now starting the installed version after a refused reverification and a
-timed-out wait; a rollback that cannot move the failed version; and repeated
+timed-out wait; a new version that cannot be watched being stopped and
+rolled back; a `Syrinx.new` without the staging mark left alone at start-up;
+a rollback that cannot move the failed version; and repeated
 pre-update snapshots within an hour keeping the daily copies. A further test
 proves Windows still starts an executable held open the way the handoff
 holds the helper.
@@ -745,13 +761,16 @@ regenerated for the new file list. The only lockfile change is
   fails to start, the owner closes it if it is running, renames
   `Programs\Syrinx` to `Syrinx.failed` and `Programs\Syrinx.previous` to
   `Syrinx`, and starts Syrinx again. The owner kept this for v1 (2026-10-14).
-- **A manual install and Syrinx must not overlap.** `install-syrinx.ps1`
-  stages its copy in the same `Programs\Syrinx.new`, with the same
-  `syrinx-package.json`. A Syrinx started while the script is copying finds
-  a `Syrinx.new` with no `pending` and removes it as an unfinished update.
-  Syrinx cannot tell the two apart without changing the scripts, so the
-  owner's checklist says not to start Syrinx during a manual install
-  (`docs/p1-37-installer-design.md`, "Upgrade").
+- **A manual install and a Syrinx update must not overlap.**
+  `install-syrinx.ps1` stages its copy in the same `Programs\Syrinx.new`.
+  A Syrinx that merely starts during the script leaves that folder alone,
+  because only the `Updates\staging` mark lets start-up remove a
+  `Syrinx.new` (the first review's suggestion, adopted instead of only
+  documenting the risk). But choosing "Install update from file…" or
+  quitting with an update armed while the script runs would replace the
+  script's folder, so the checklist still says not to use Syrinx's update
+  commands during a manual install (`docs/p1-37-installer-design.md`,
+  "Upgrade").
 - **The foreground behaviour of a relaunched Syrinx** (question 6) is
   implemented as the proposal specifies and was checked only with a
   development build started with `--after-update` from an agent's shell

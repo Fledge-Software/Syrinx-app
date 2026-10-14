@@ -60,8 +60,7 @@ fn settle_pending(
     running: Version,
 ) -> Result<Option<Version>, InstallError> {
     let Some(pending) = Pending::read(layout)? else {
-        // A staged copy without its record is unfinished.
-        remove_program_folder(&layout.staged(), "Syrinx.new")?;
+        clear_unfinished(layout)?;
         return Ok(None);
     };
     if pending.version == running {
@@ -80,6 +79,16 @@ fn settle_pending(
         return Ok(None);
     }
     Ok(Some(pending.version))
+}
+
+/// Remove a `Syrinx.new` that staging or a rollback left unfinished, recognised by the
+/// staging mark. Without the mark it may be `install-syrinx.ps1`'s copy in progress, so it stays.
+fn clear_unfinished(layout: &UpdateLayout) -> Result<(), InstallError> {
+    if !layout.staging_marker().exists() {
+        return Ok(());
+    }
+    remove_program_folder(&layout.staged(), "Syrinx.new")?;
+    remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")
 }
 
 /// Record that this Syrinx, started by the helper, restored its session and drew a frame.

@@ -519,16 +519,29 @@ fn a_start_keeps_a_complete_staged_copy_and_refuses_strangers() {
     assert_eq!(recovery.staged, None);
     assert!(!sandbox.layout.staged().exists());
 
-    // A `Syrinx.new` that Syrinx did not make is never removed.
+    // A `Syrinx.new` without Syrinx's staging mark is left alone: it may be the owner's own
+    // folder, or `install-syrinx.ps1`'s copy in progress, which holds the same package record.
+    write_tree(&sandbox.layout.staged(), &program_files(NEW));
     write_tree(
         &sandbox.layout.staged(),
         &BTreeMap::from([("owner-file.txt".to_owned(), b"keep".to_vec())]),
     );
-    assert_eq!(
-        recover(&sandbox.layout, OLD),
-        Err(InstallError::UnexpectedEntry { what: "Syrinx.new" })
-    );
+    let recovery = recover(&sandbox.layout, OLD).expect("start");
+    assert_eq!(recovery.staged, None);
     assert!(sandbox.layout.staged().join("owner-file.txt").exists());
+    assert!(sandbox.layout.staged().join(PACKAGE_RECORD).exists());
+}
+
+#[test]
+fn a_staged_copy_without_its_record_or_the_staging_mark_is_left_alone() {
+    // Staging leaves its mark only until `pending` is written.
+    let (sandbox, keys) = packaged();
+    stage(&sandbox, &keys.pinned).expect("stage");
+    assert!(!sandbox.layout.staging_marker().exists());
+    fs::remove_file(sandbox.layout.pending()).expect("simulate a lost record");
+    let recovery = recover(&sandbox.layout, OLD).expect("start");
+    assert_eq!(recovery.staged, None);
+    assert!(sandbox.layout.staged().exists(), "unmarked, so left alone");
 }
 
 #[test]

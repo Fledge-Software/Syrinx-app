@@ -321,11 +321,13 @@ kept simple and shared through `packaging/syrinx-common.ps1`:
    links keep working without re-registering. Re-running
    `register-syrinx.ps1` only refreshes the version in Installed apps.
 
-Do not start Syrinx while `install-syrinx.ps1` is running. Since P1-39b an
-installed Syrinx uses the same `Programs\Syrinx.new` folder for its own
-updates, and at start-up it removes a `Syrinx.new` that has no pending
-update record, which would remove the script's half-copied folder. Rerunning
-the script recovers (`docs/p1-38-update-format.md`, "P1-39b").
+Do not use Syrinx's own update commands ("Install update from file…", or
+quitting with an update set to install) while `install-syrinx.ps1` is
+running. Since P1-39b an installed Syrinx uses the same `Programs\Syrinx.new`
+folder for its own updates and would replace the script's half-copied
+folder. Merely starting Syrinx is safe: start-up removes a `Syrinx.new` only
+when Syrinx's own `Updates\staging` mark says it made it. Rerunning the
+script recovers (`docs/p1-38-update-format.md`, "P1-39b").
 
 Data is preserved because nothing in this path knows where data lives
 except to refuse overlapping it. The store's own upgrade rules still apply

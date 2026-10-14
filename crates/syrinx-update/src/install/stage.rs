@@ -8,7 +8,7 @@ use super::error::io_error;
 use super::fault::{Step, checkpoint};
 use super::files::{
     copy_exact, ensure_plain_directory, prepare_destination, remove_file_if_present,
-    remove_program_folder, remove_update_folder, write_new,
+    remove_program_folder, remove_update_folder, write_atomically, write_new,
 };
 use super::layout::{APPLY_HELPER, PACKAGE_RECORD, REQUIRED_PROGRAM_FILES};
 use super::lock::ApplyLock;
@@ -98,6 +98,12 @@ fn stage_locked(
     check_space(layout, bytes, free_space)?;
 
     discard_staged(layout)?;
+    // Marks `Syrinx.new` as Syrinx's own until `pending` takes over.
+    write_atomically(
+        &layout.staging_marker(),
+        b"staging\n",
+        "marking the staging",
+    )?;
     checkpoint(Step::StagingCleared)?;
     let manifest = SignedManifest {
         verified: &verified,
@@ -113,7 +119,8 @@ fn stage_locked(
             from: request.installed,
             manifest_sha256: cng::sha256(&manifest_bytes)?,
         };
-        pending.write(layout)
+        pending.write(layout)?;
+        remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")
     });
     if let Err(primary) = finished {
         return Err(cleaned_up(primary, layout));
@@ -201,7 +208,8 @@ pub(crate) fn discard_staged(layout: &UpdateLayout) -> Result<(), InstallError> 
     remove_file_if_present(&layout.pending(), "removing the pending record")?;
     remove_program_folder(&layout.staged(), "Syrinx.new")?;
     remove_update_folder(&layout.apply_folder(), "the apply folder")?;
-    remove_update_folder(&layout.incoming(), "the incoming folder")
+    remove_update_folder(&layout.incoming(), "the incoming folder")?;
+    remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")
 }
 
 /// The verified manifest with the exact bytes and signature that were checked.
