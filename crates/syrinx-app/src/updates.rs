@@ -404,6 +404,7 @@ mod tests {
             context.stage(Path::new(r"C:\Synthetic\package")),
             Err(InstallError::NotInstalled)
         ));
+        assert!(context.hand_off(ApplyMode::Restart).is_err());
         assert!(UpdateContext::disabled().clean_start_job().is_none());
     }
 
