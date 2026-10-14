@@ -21,14 +21,16 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   Server machines GitHub uses to build releases, that call jumps to an
   invalid address and crashes the process (weekly-release run 4 captured
   the native stack), so the release gate could never pass there. The owner
-  chose, over building releases on their own PC, to have Syrinx first ask
+  chose, over building releases on their own PC, to have the check cope
+  without that API. The first attempt asked
   `StorageProviderSyncRootManager::IsSupported()`, Microsoft's documented
-  check, and treat an unsupported system as having no registered sync
-  roots. On Windows 11, Syrinx's only supported system (D2), the check
-  reports support and nothing changes. On a system without the feature,
-  Syrinx no longer refuses a synced folder; the rejected alternative was to
-  fail closed there, which would keep every storage test failing on the
-  release runner.
+  check, first; run 5 showed that call crashes the same way. Syrinx
+  therefore asks Windows whether it is a server edition (`IsOS(OS_ANYSERVER)`
+  in shlwapi, which makes no WinRT call) and, if so, treats the machine as
+  having no registered sync roots. On Windows 11, Syrinx's only supported
+  system (D2), nothing changes. On Windows Server, Syrinx no longer refuses
+  a synced folder; the rejected alternative was to fail closed there, which
+  would keep every storage test failing on the release runner.
 
 ## 2026-10-13
 

@@ -32,9 +32,9 @@ use windows::{
     },
     Win32::{
         Foundation::{
-            E_NOINTERFACE, ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND,
-            ERROR_SHARING_VIOLATION, GENERIC_READ, GENERIC_WRITE, HANDLE, OBJ_CASE_INSENSITIVE,
-            OBJ_DONT_REPARSE, RtlNtStatusToDosError, STATUS_SUCCESS, UNICODE_STRING,
+            ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SHARING_VIOLATION,
+            GENERIC_READ, GENERIC_WRITE, HANDLE, OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE,
+            RtlNtStatusToDosError, STATUS_SUCCESS, UNICODE_STRING,
         },
         Storage::FileSystem::{
             CREATE_NEW, CreateFileW, FILE_ACCESS_RIGHTS, FILE_ATTRIBUTE_NORMAL,
@@ -53,7 +53,9 @@ use windows::{
             WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize},
             WindowsProgramming::FILE_CREATED,
         },
-        UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath},
+        UI::Shell::{
+            FOLDERID_LocalAppData, IsOS, KF_FLAG_DEFAULT, OS_ANYSERVER, SHGetKnownFolderPath,
+        },
     },
     core::{HRESULT, PCWSTR, PWSTR},
 };
@@ -454,13 +456,13 @@ fn wide_file_path(path: &Path) -> Vec<u16> {
 }
 
 fn registered_roots() -> Result<Vec<PathBuf>, LocationError> {
-    // Declare the apartment first so every WinRT object is released before it.
-    let _apartment = RuntimeApartment::initialize()?;
-    // Without sync-root support there are no registered roots to refuse (owner, 2026-10-14);
-    // calling GetCurrentSyncRoots there crashed on Windows Server instead of failing.
-    if !sync_roots_supported()? {
+    // Windows Server is treated as having no sync roots (owner, 2026-10-14): both
+    // GetCurrentSyncRoots and IsSupported crashed there instead of failing.
+    if is_server_edition() {
         return Ok(Vec::new());
     }
+    // Declare the apartment first so every WinRT object is released before it.
+    let _apartment = RuntimeApartment::initialize()?;
     let roots = StorageProviderSyncRootManager::GetCurrentSyncRoots()
         .map_err(|error| os_error(LocationOperation::EnumerateSyncRoots, error))?;
     let length = roots
@@ -482,13 +484,9 @@ fn registered_roots() -> Result<Vec<PathBuf>, LocationError> {
     Ok(paths)
 }
 
-/// Asks Windows whether the sync-root API works here; older systems lack the query itself.
-fn sync_roots_supported() -> Result<bool, LocationError> {
-    match StorageProviderSyncRootManager::IsSupported() {
-        Ok(supported) => Ok(supported),
-        Err(error) if error.code() == E_NOINTERFACE => Ok(false),
-        Err(error) => Err(os_error(LocationOperation::EnumerateSyncRoots, error)),
-    }
+/// Reports a Windows Server edition, such as a hosted build runner; Syrinx targets client Windows.
+fn is_server_edition() -> bool {
+    unsafe { IsOS(OS_ANYSERVER) }.as_bool()
 }
 
 fn os_error(operation: LocationOperation, error: windows::core::Error) -> LocationError {

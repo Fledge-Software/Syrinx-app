@@ -456,10 +456,12 @@ you found it in the commit message, not here.
   failing.** GitHub's Windows runner returned a sync-root factory whose
   method pointer was invalid, so the storage guard died with
   `STATUS_ACCESS_VIOLATION` before any error could be handled; the same
-  test passes on Windows 11. Call `StorageProviderSyncRootManager::IsSupported()`
-  first and treat "unsupported" as no registered roots (owner decision,
-  2026-10-14). Source: weekly-release run 4's cdb stack, faulting in
-  `windows::Storage::Provider::GetCurrentSyncRoots` called from
+  test passes on Windows 11. `StorageProviderSyncRootManager::IsSupported()`
+  crashes the same way (run 5), so it cannot be the guard. Check
+  `IsOS(OS_ANYSERVER)` before any WinRT call and treat a server edition as
+  having no registered roots (owner decision, 2026-10-14). Source:
+  weekly-release runs 4 and 5, whose cdb stacks fault in
+  `GetCurrentSyncRoots` and then `IsSupported`, both called from
   `registered_roots` (observed).
 - **SQLite's write-ahead log breaks in a synced folder.** In OneDrive or a
   network folder the `-wal` file separates from the database. Keep the
