@@ -1,0 +1,39 @@
+# Runs the full gate on every push to main and every pull request, so a release never meets a red main.
+name: Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    # Seconds on Linux, so a formatting slip is reported long before the Windows gate finishes.
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting with the pinned toolchain
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+          cargo +1.97.1 fmt --all -- --check
+
+  gate:
+    name: cargo xtask check (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - name: Run the gate
+        shell: bash
+        run: .github/scripts/run-gate.sh

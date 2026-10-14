@@ -3,6 +3,12 @@
 set -euo pipefail
 log=$1
 
+# A rerun in which every test passed reproduced no crash, so there is no test to debug.
+if ! grep -q 'STATUS_[A-Z_]*' "$log"; then
+  echo "::warning::The one-at-a-time rerun did not crash; the gate's crash did not reproduce."
+  exit 0
+fi
+
 # The last test line printed before the crash is the crashing test.
 name=$(grep -o '^test [^ ]* \.\.\. ' "$log" | tail -n 1 | cut -d' ' -f2)
 if [ -z "$name" ]; then
