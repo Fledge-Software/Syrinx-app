@@ -327,10 +327,25 @@ never the focused node" above), so UI Automation reported the palette window.
   which is still only the field's. The DW-90 reuse is unchanged: each frame
   asks the current input for its handle, so the fresh field made at each
   close is tracked without further work.
-- The container's copy of the handle is marked as no Tab stop
-  (`shared_query_focus`). Otherwise the same handle would appear twice in Tab
-  order, and Shift Tab from the field would "move" to its own handle and stay
-  there.
+- The container's copy of the handle is no Tab stop. Otherwise the same
+  handle would appear twice in Tab order, and Shift Tab from the field would
+  "move" to its own handle and stay there. It is made with GPUI's
+  `FocusHandle::tab_stop(false)`, which writes a flag shared by every handle
+  for that focus id; `FocusHandle::clone` reads that flag, and `track_focus`
+  stores a clone. So `query_container` restores the flag to true right after
+  the container takes its clone, before the field's own view renders and
+  takes its clone; otherwise the field would leave Tab order too. (The first
+  commit set the struct field instead, which the clone inside `track_focus`
+  silently discarded; review caught it, and the probe's forward Tab could
+  not, because only Shift Tab is affected.)
+- While a UI Automation client is attached, GPUI logs an info-level line,
+  "focused element ... has no accessibility node", once each time focus
+  enters the field (`gpui-pre-0.3.8/src/window/a11y.rs`, lines 193–201 and
+  245), because `input-state` still registers the focused handle without a
+  role. It is harmless and accepted: the container carries the node, and
+  the line is not written without a log subscriber. The combo box's value is
+  also built only while a client is attached (`Window::is_a11y_active`), so
+  typing does not copy the query for nobody.
 - Once the owner moves the selection (arrow keys, or a click on a row), the
   selected row claims the active descendant, so a screen reader reads the
   row's name, its kind and address, "selected" and its place ("2 of 7").
@@ -360,7 +375,11 @@ had been moved); Esc closed the palette; a second opening of the reused popup
 started empty on the combo box, and Down then Enter opened the moved row.
 Syrinx stayed up with an empty stderr, so the tree built with debug
 assertions on and no doubled focus or active-descendant claim. A screenshot
-of the palette over Home showed the same layout as before.
+of the palette over Home showed the same layout as before. After the review
+fixes (the Tab-stop flag and the value guard) the probe was rerun on
+`target\dw-60-uia-5` (log `target\dw-60-uia-probe-5.log`) with identical
+results, including Tab from "Search the web" back into the field, which
+shows the field is still a Tab stop.
 
 **Not verified by an agent.** What NVDA actually says (owner check 7), Shift
 Tab (a posted key cannot carry Shift), IME composition (no IME was used; the
@@ -416,7 +435,12 @@ portable copy also works). Then record pass/fail for each:
    and Up read each row in turn: its title, "selected", its kind and address
    and its place ("2 of 5"). Typing again returns to the combo box, and
    characters are still echoed. Record what NVDA actually says, and whether
-   anything is read twice or not at all.
+   anything is read twice or not at all. Two behaviours to judge (owner
+   question 3): a row is announced only after you move the selection, not
+   while you type; and after Down, Tab through the chips and back into the
+   field, NVDA reads the still-selected row rather than the field, because
+   the moved selection keeps its claim until you type. Say if either should
+   change.
 8. **Permission bar.** On a synthetic page that asks for the camera (any test
    page you trust), NVDA reads the question when you F6 to the bar;
    "Remember for this site" reads as a checkbox with its state.
@@ -473,11 +497,14 @@ portable copy also works). Then record pass/fail for each:
 3. **Palette announcements (DW-60).** Recommendation: change the palette so
    its list container owns focus and the query field (no GPUI patch), as a
    follow-up slice; the alternative is asking for a vendored GPUI change.
-   **Done 2026-10-14** that way (see "DW-60" above). One choice to confirm
-   in check 7: a row is announced only after you move the selection, not
-   while you type, as the ARIA combo box pattern does, so typing is not
-   interrupted by a new row name at every key. The alternative is to
-   announce the top row after each query; say if you prefer it.
+   **Built 2026-10-14** that way (see "DW-60" above); DW-60 stays open until
+   check 7 passes. Two choices to confirm in check 7: a row is announced
+   only after you move the selection, not while you type, as the ARIA combo
+   box pattern does, so typing is not interrupted by a new row name at every
+   key (the alternative is to announce the top row after each query); and
+   Tab back into the field after a move reads the selected row, not the
+   field (the alternative is to drop the claim whenever focus leaves the
+   field). Recommendation: keep both as built.
 4. **Installing NVDA.** The checks above need NVDA on your machine; agents
    do not install software. Narrator, which ships with Windows, is an
    acceptable first pass if you prefer not to install NVDA yet.

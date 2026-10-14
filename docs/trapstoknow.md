@@ -341,9 +341,12 @@ you found it in the commit message, not here.
   and ignores any `aria_active_descendant` below. To give a field a focused
   node, track *the field's own handle* on a role-bearing ancestor, as the
   palette's `palette-query` does (DW-60): only the node with a role claims,
-  keys still go to the field because it registers the handle last, and a
-  copy with `tab_stop = false` keeps the handle from appearing twice in Tab
-  order (twice, Shift Tab from the field lands on itself). Source:
+  keys still go to the field because it registers the handle last, and the
+  container's copy must not be a Tab stop (twice in Tab order, Shift Tab
+  from the field lands on itself). Setting the copy's `tab_stop` field does
+  nothing: `track_focus` clones, and `FocusHandle::clone` rereads the flag
+  shared by the focus id, which `tab_stop(false)` writes for every holder,
+  so restore it to true before the field renders (`query_container`). Source:
   `gpui-base-0.7.1/src/input/base/state.rs`, line 4464,
   `gpui-pre-0.3.8/src/window/a11y.rs`, `set_focus`, and DW-60's probe in
   `docs/p1-36-accessibility.md` (source-confirmed and probed).

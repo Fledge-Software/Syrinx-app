@@ -12,7 +12,7 @@ use futures::channel::mpsc::UnboundedSender;
 use gpui::{
     App, AppContext, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
     KeyBinding, ParentElement, Render, ScrollHandle, Stateful, StatefulInteractiveElement, Styled,
-    Subscription, Window, actions, div, px,
+    Subscription, Window, actions, div, prelude::FluentBuilder, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
 use syrinx_core::{CommandAction, CommandContext, CommandRegistry};
@@ -500,7 +500,7 @@ impl Render for PaletteView {
             .on_action(|_: &ui::FocusNextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &ui::FocusPreviousControl, window, cx| window.focus_prev(cx))
             .child(
-                self.query_container(cx)
+                self.query_container(window, cx)
                     .child(
                         div()
                             .h(px(56.))
@@ -526,26 +526,33 @@ impl PaletteView {
     /// The combo box that holds the query field and the rows (DW-60). It tracks the query
     /// field's own focus handle, so while the owner types it is the node a screen reader
     /// hears as focused, and the announced row below it can claim that focus.
-    fn query_container(&self, cx: &App) -> Stateful<Div> {
+    fn query_container(&self, window: &Window, cx: &App) -> Stateful<Div> {
         let query = self.input.read(cx);
-        div()
+        let handle = query.focus_handle(cx);
+        let container = div()
             .id("palette-query")
             .role(gpui::Role::EditableComboBox)
             .aria_label("Search or command")
-            .aria_value(query.value().to_string())
-            .track_focus(&shared_query_focus(query.focus_handle(cx)))
+            .when(window.is_a11y_active(), |container| {
+                container.aria_value(query.value().to_string())
+            })
+            // The field is already a Tab stop; a second stop for the same handle would trap
+            // Shift Tab on the field. `track_focus` keeps a clone, which reads the shared flag.
+            .track_focus(&handle.clone().tab_stop(false))
             .flex()
             .flex_col()
             .flex_1()
-            .min_h_0()
+            .min_h_0();
+        // `tab_stop` writes state every later clone reads, so restore it before the field
+        // draws, or the field itself would leave Tab order.
+        restore_tab_stop(handle);
+        container
     }
 }
 
-/// The query field's focus handle, made no Tab stop: the field itself already is one, and a
-/// second stop for the same handle would trap Shift Tab on the field.
-fn shared_query_focus(mut handle: FocusHandle) -> FocusHandle {
-    handle.tab_stop = false;
-    handle
+/// Makes the query field's handle a Tab stop again for every clone made from now on.
+fn restore_tab_stop(handle: FocusHandle) {
+    drop(handle.tab_stop(true));
 }
 
 #[cfg(test)]
