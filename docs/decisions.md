@@ -40,12 +40,17 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   What is enforced, exactly: because `windows 0.62.2` is the build
   `syrinx-platform` and `syrinx-app` also use, its WinSock bindings compile
   in those crates. The source scan in `crates/xtask/src/network_sources.rs`
-  refuses `WinSock`, `NetworkManagement`, any `WSA` name and the
-  `ws2_32.dll` and `iphlpapi.dll` libraries in every Syrinx crate except
-  the xtask tooling, and WinHTTP in every crate but the update download; the
-  declaration rules keep Syrinx's own manifests from asking for any of them.
-  These are text and manifest checks, not a sandbox: a raw `#[link]` or
-  `windows-link` extern is invisible to a feature check.
+  refuses `WinSock`, `NetworkManagement`, any `WSA`-prefixed name (as a
+  token) and the `ws2_32`, `wsock32`, `mswsock` and `iphlpapi` libraries
+  (in any letter case, with or without `.dll`) in every Syrinx crate except
+  the xtask tooling, and WinHTTP in every crate but the update download.
+  Manifests are checked twice. The declaration rule refuses a Syrinx crate
+  that asks `windows` or `windows-sys` for a networking feature. A Syrinx
+  crate asking `winapi` for a network module is refused by the
+  resolved-feature check instead, because no approved entry names it.
+  These are text and manifest checks, not a sandbox: a feature check cannot
+  see a raw `#[link]` or `windows-link` extern at all, and the source scan
+  sees one only when it names one of those libraries.
 
   `winapi 0.3.9` also resolves `inaddr` and `in6addr` (requested by
   `ntapi 0.4.3`). These modules define only the IPv4 and IPv6 address

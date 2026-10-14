@@ -42,12 +42,16 @@ const WINHTTP_IDENTIFIER: &str = "WinHttp";
 const WINHTTP_LIBRARY: &str = "winhttp.dll";
 
 /// Socket and network-management bindings, which GPUI's stack switches on in the `windows`
-/// builds Syrinx shares (DW-68): `Networking::WinSock` in any import form, `NetworkManagement`
-/// and every `WSA` function or error name. No Syrinx crate may name them.
-const SOCKET_IDENTIFIERS: [&str; 3] = ["WinSock", "NetworkManagement", "WSA"];
+/// builds Syrinx shares (DW-68): `Networking::WinSock` in any import form and
+/// `NetworkManagement`. Every `WSA` function or error name is matched as a token instead.
+const SOCKET_IDENTIFIERS: [&str; 2] = ["WinSock", "NetworkManagement"];
 
-/// The socket and IP-helper libraries, which Windows names in any letter case.
-const SOCKET_LIBRARIES: [&str; 2] = ["ws2_32.dll", "iphlpapi.dll"];
+/// The prefix of every Winsock function, type and error name, such as `WSAStartup`.
+const WSA_PREFIX: &str = "WSA";
+
+/// The socket and IP-helper libraries, as stems so `#[link(name = "ws2_32")]` and a
+/// `LoadLibraryW` without `.dll` count too; Windows names them in any letter case.
+const SOCKET_LIBRARIES: [&str; 4] = ["ws2_32", "wsock32", "mswsock", "iphlpapi"];
 
 /// Returns one violation per file and name found on the query path, per other crate that
 /// names WinHTTP, and per crate that names a socket binding. Cargo unifies features, so every
@@ -128,13 +132,27 @@ fn socket_violations(path: &str, text: &str) -> Vec<String> {
     let identifiers = SOCKET_IDENTIFIERS
         .into_iter()
         .filter(|name| text.contains(name));
+    let wsa = has_wsa_token(text).then_some(WSA_PREFIX);
     let libraries = SOCKET_LIBRARIES
         .into_iter()
         .filter(|library| lowercase.contains(library));
     identifiers
+        .chain(wsa)
         .chain(libraries)
         .map(|name| format!("{path}: {name}: no Syrinx crate may use Windows sockets (D9, DW-68)"))
         .collect()
+}
+
+/// `WSA` starting a word and followed by an uppercase letter, as in `WSAStartup` or
+/// `WSAEWOULDBLOCK`, but not inside another name such as `AWSAccess`.
+fn has_wsa_token(text: &str) -> bool {
+    text.match_indices(WSA_PREFIX).any(|(start, _)| {
+        let before = text[..start].chars().next_back();
+        let after = text[start + WSA_PREFIX.len()..].chars().next();
+        let starts_word =
+            !before.is_some_and(|character| character.is_alphanumeric() || character == '_');
+        starts_word && after.is_some_and(|character| character.is_ascii_uppercase())
+    })
 }
 
 fn file_violations(path: &str, text: &str) -> Vec<String> {
@@ -171,7 +189,11 @@ fn rust_files(path: &Path) -> Result<Vec<PathBuf>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_violations, socket_violations, winhttp_violations};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{check_crate_confinement, file_violations, socket_violations, winhttp_violations};
 
     #[test]
     fn no_crate_may_name_a_socket_binding() {
@@ -181,16 +203,78 @@ mod tests {
             "use windows::Win32::Networking::{WinSock::socket};",
             "use windows::Win32::NetworkManagement::IpHelper::GetAdaptersAddresses;",
             "let code = WSAGetLastError();",
+            "if error == WSAEWOULDBLOCK {",
             r#"windows_link::link!("WS2_32.dll" "system" fn closesocket());"#,
             r#"windows_link::link!("iphlpapi.dll" "system" fn GetIfTable());"#,
+            r#"#[link(name = "ws2_32")] extern "system" {}"#,
+            r#"#[link(name = "Wsock32")] extern "system" {}"#,
+            r#"let module = LoadLibraryW(w!("mswsock"));"#,
         ] {
             let violations = socket_violations("crates/syrinx-platform/src/synthetic.rs", source);
             assert!(!violations.is_empty(), "{source}");
             assert!(violations[0].contains("no Syrinx crate may use Windows sockets"));
         }
-        // Prose and address types are not socket calls.
-        assert!(socket_violations("synthetic.rs", "// Winsock is not used here").is_empty());
-        assert!(socket_violations("synthetic.rs", "use std::net::Ipv4Addr;").is_empty());
+        // Prose, address types and `WSA` inside another name are not socket calls.
+        for source in [
+            "// Winsock is not used here",
+            "use std::net::Ipv4Addr;",
+            "let policy = AWSAccessPolicy::new();",
+            "const MY_WSA_LIKE: u8 = 0;",
+            "// WSA is an acronym",
+        ] {
+            assert!(
+                socket_violations("synthetic.rs", source).is_empty(),
+                "{source}"
+            );
+        }
+    }
+
+    /// A fresh synthetic workspace under the system temporary folder, removed by the caller.
+    fn synthetic_workspace(files: &[(&str, &str)]) -> Result<PathBuf, String> {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("clock before 1970: {error}"))?
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "syrinx-network-sources-{}-{nanos}",
+            std::process::id()
+        ));
+        for (path, text) in files {
+            let file = root.join(path);
+            let folder = file.parent().ok_or("synthetic file has no folder")?;
+            fs::create_dir_all(folder)
+                .map_err(|error| format!("Could not create {}: {error}", folder.display()))?;
+            fs::write(&file, text)
+                .map_err(|error| format!("Could not write {}: {error}", file.display()))?;
+        }
+        Ok(root)
+    }
+
+    fn remove_workspace(root: &Path) -> Result<(), String> {
+        fs::remove_dir_all(root)
+            .map_err(|error| format!("Could not remove {}: {error}", root.display()))
+    }
+
+    #[test]
+    fn the_tooling_is_exempt_and_the_download_is_scanned_for_sockets() -> Result<(), String> {
+        // xtask names these APIs in its own checks; the download may call WinHTTP, not sockets.
+        let root = synthetic_workspace(&[
+            (
+                "crates/xtask/src/main.rs",
+                "const NAMES: [&str; 2] = [\"WinSock\", \"WSAStartup\"];",
+            ),
+            (
+                "crates/syrinx-update-net/src/lib.rs",
+                "use windows::Win32::Networking::WinHttp::WinHttpOpen;\nlet code = WSAGetLastError();",
+            ),
+        ])?;
+        let violations = check_crate_confinement(&root);
+        remove_workspace(&root)?;
+        let violations = violations?;
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].contains("syrinx-update-net"));
+        assert!(violations[0].contains("WSA: no Syrinx crate may use Windows sockets"));
+        Ok(())
     }
 
     #[test]

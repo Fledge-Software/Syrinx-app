@@ -19,10 +19,11 @@ const BINDING_CRATES: [&str; 3] = ["windows", "windows-sys", "winapi"];
 /// features are module names, not namespaces. `inaddr` and `in6addr` are left out: they define
 /// only the IPv4 and IPv6 address structs and declare no functions, like std's `Ipv4Addr`
 /// (the agent's classification, 2026-10-14, after the owner deferred it).
-const WINAPI_NETWORK_MODULES: [&str; 20] = [
-    "httpapi", "iphlpapi", "ipexport", "iptypes", "mstcpip", "mswsock", "netioapi", "rpc",
-    "rpcdce", "rpcndr", "urlmon", "winhttp", "wininet", "winnetwk", "winsock2", "ws2def",
-    "ws2ipdef", "ws2spi", "ws2tcpip", "wsipv6ok",
+const WINAPI_NETWORK_MODULES: [&str; 26] = [
+    "httpapi", "iphlpapi", "ipexport", "iptypes", "lmserver", "lmshare", "lmuse", "lmwksta",
+    "mstcpip", "mswsock", "netioapi", "nspapi", "rpc", "rpcdce", "rpcndr", "urlmon", "windns",
+    "winhttp", "wininet", "winnetwk", "winsock2", "ws2def", "ws2ipdef", "ws2spi", "ws2tcpip",
+    "wsipv6ok",
 ];
 
 /// One third-party networking feature the owner approved on 2026-10-14 (`docs/decisions.md`):

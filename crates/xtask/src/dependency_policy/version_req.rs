@@ -1,11 +1,13 @@
 //! Matches a Cargo version requirement against a resolved version, so a package that declares
 //! one binding twice is credited only for the declaration Cargo resolved to that version.
+//! It is not full Cargo semver: pre-release and build tags are refused, never guessed at.
 
-/// A version as three numbers; a pre-release or build suffix is ignored.
+/// A release version as three numbers.
 type Version = (u64, u64, u64);
 
 /// Whether `version` satisfies every comma-separated comparator of `requirement`, read as
-/// Cargo reads them (`^` by default). An unreadable requirement is an error, never a match.
+/// Cargo reads them (`^` by default). An unreadable requirement or version, including one with
+/// a pre-release or build tag, is an error, never a match.
 pub(super) fn matches(requirement: &str, version: &str) -> Result<bool, String> {
     let resolved =
         parse_version(version).ok_or_else(|| format!("unreadable resolved version: {version}"))?;
@@ -20,10 +22,17 @@ pub(super) fn matches(requirement: &str, version: &str) -> Result<bool, String> 
 }
 
 fn parse_version(version: &str) -> Option<Version> {
-    let core = version.split(['-', '+']).next()?;
-    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
+    if has_tag(version) {
+        return None;
+    }
+    let mut parts = version.split('.').map(|part| part.parse::<u64>().ok());
     let version = (parts.next()??, parts.next()??, parts.next()??);
     parts.next().is_none().then_some(version)
+}
+
+/// A pre-release (`-rc.1`) or build (`+meta`) tag, which this matcher does not interpret.
+fn has_tag(text: &str) -> bool {
+    text.contains(['-', '+'])
 }
 
 /// One comparator as a half-open range: an inclusive lower bound and an exclusive upper one.
@@ -32,10 +41,16 @@ fn comparator_range(comparator: &str) -> Option<(Version, Option<Version>)> {
     if is_wildcard(rest.trim()) {
         return Some(((0, 0, 0), None));
     }
-    let partial = parse_partial(rest.trim())?;
+    let (partial, wildcard) = parse_partial(rest.trim())?;
+    // With no operator, `1.2.*` means exactly the 1.2 series, as `=1.2` does.
+    let operator = if wildcard && operator.is_empty() {
+        "="
+    } else {
+        operator
+    };
     let floor = (partial.0, partial.1.unwrap_or(0), partial.2.unwrap_or(0));
     match operator {
-        "^" => Some((floor, Some(caret_ceiling(partial)))),
+        "^" | "" => Some((floor, Some(caret_ceiling(partial)))),
         "~" => Some((floor, Some(next_unspecified(partial, 1)))),
         "=" => Some((floor, Some(next_unspecified(partial, 2)))),
         ">=" => Some((floor, None)),
@@ -46,13 +61,14 @@ fn comparator_range(comparator: &str) -> Option<(Version, Option<Version>)> {
     }
 }
 
+/// The comparator's operator, or an empty one when it has none (Cargo's default caret).
 fn split_operator(comparator: &str) -> (&str, &str) {
     for operator in [">=", "<=", "^", "~", "=", ">", "<"] {
         if let Some(rest) = comparator.strip_prefix(operator) {
             return (operator, rest);
         }
     }
-    ("^", comparator)
+    ("", comparator)
 }
 
 /// `1`, `1.2` or `1.2.3`; a `*` or `x` part ends the version as a wildcard.
@@ -62,21 +78,27 @@ fn is_wildcard(part: &str) -> bool {
     matches!(part, "*" | "x" | "X")
 }
 
-fn parse_partial(text: &str) -> Option<Partial> {
-    let core = text.split(['-', '+']).next()?;
+/// The numbers given and whether a wildcard part ended them; a tag makes it unreadable.
+fn parse_partial(text: &str) -> Option<(Partial, bool)> {
+    if has_tag(text) {
+        return None;
+    }
     let mut numbers = Vec::new();
-    for part in core.split('.') {
+    let mut wildcard = false;
+    for part in text.split('.') {
         if is_wildcard(part) {
+            wildcard = true;
             break;
         }
         numbers.push(part.parse::<u64>().ok()?);
     }
-    match numbers.as_slice() {
-        [major] => Some((*major, None, None)),
-        [major, minor] => Some((*major, Some(*minor), None)),
-        [major, minor, patch] => Some((*major, Some(*minor), Some(*patch))),
-        _ => None,
-    }
+    let partial = match numbers.as_slice() {
+        [major] => (*major, None, None),
+        [major, minor] => (*major, Some(*minor), None),
+        [major, minor, patch] => (*major, Some(*minor), Some(*patch)),
+        _ => return None,
+    };
+    Some((partial, wildcard))
 }
 
 /// Cargo's caret: the left-most nonzero part given may not change.
@@ -125,6 +147,25 @@ mod tests {
             ("*", "0.57.0", true),
             ("0.62.*", "0.62.9", true),
             ("^0.0.3", "0.0.4", false),
+            // Caret on a bare zero major or minor.
+            ("^0", "0.9.0", true),
+            ("^0", "1.0.0", false),
+            ("^0.0", "0.0.9", true),
+            ("^0.0", "0.1.0", false),
+            // `>` and `<=` with partial versions step past the whole series named.
+            (">0.62", "0.62.9", false),
+            (">0.62", "0.63.0", true),
+            (">1", "2.0.0", true),
+            ("<=1", "1.9.9", true),
+            ("<=1", "2.0.0", false),
+            ("<=1.2", "1.2.9", true),
+            ("<=1.2", "1.3.0", false),
+            // A wildcard with no operator pins the series it names.
+            ("1.2.*", "1.2.5", true),
+            ("1.2.*", "1.9.0", false),
+            ("1.2.x", "1.9.0", false),
+            ("1.x", "1.9.0", true),
+            ("1.x", "2.0.0", false),
         ];
         for (requirement, version, expected) in cases {
             assert_eq!(
@@ -135,6 +176,10 @@ mod tests {
         }
         assert!(matches("~>1", "1.0.0").is_err());
         assert!(matches("^0.62", "zero").is_err());
+        // Pre-release and build tags are refused rather than read as the release.
+        assert!(matches("=0.62.0-rc.1", "0.62.0").is_err());
+        assert!(matches("^0.62+build", "0.62.0").is_err());
+        assert!(matches("^0.62", "0.62.0-rc.1").is_err());
         Ok(())
     }
 }
