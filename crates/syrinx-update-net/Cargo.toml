@@ -1,0 +1,18 @@
+# Fetches update files from the one compiled-in host, only when the owner asks (P1-39c).
+[package]
+name = "syrinx-update-net"
+description = "Syrinx's owner-pressed update download over WinHTTP"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The one exception to D9's no-network rule; `cargo xtask check-deps` allows exactly this
+# feature list here and nowhere else, and no `[features]` table, so no build can redirect it.
+[dependencies]
+syrinx-update = { path = "../syrinx-update" }
+windows = { workspace = true, features = ["Win32_Networking_WinHttp"] }
+
+[lints]
+workspace = true

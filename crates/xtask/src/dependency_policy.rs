@@ -9,6 +9,8 @@ struct Package {
     declarations: Vec<Declaration>,
     /// Every entry of the package's own `[features]` table, such as `dep/feature`.
     feature_entries: Vec<String>,
+    /// The names that table defines.
+    feature_names: Vec<String>,
 }
 
 /// One dependency declaration's requested features, kept for feature-restricted packages.
@@ -29,7 +31,8 @@ pub fn check_metadata(metadata: &Value) -> Result<Vec<String>, String> {
     let mut violations = BTreeSet::new();
     for (name, package) in &workspace {
         check_direct_dependencies(name, package, &workspace, &mut violations);
-        check_update_verifier_features(name, package, &mut violations);
+        check_windows_feature_lists(name, package, &mut violations);
+        check_update_net_features(name, package, &mut violations);
         check_release_tool_feature(name, package, &mut violations);
         check_shell_paths(name, &workspace, &mut violations);
         check_network_declarations(name, package, &mut violations);
@@ -91,11 +94,12 @@ fn insert_package(workspace: &mut Workspace, package: &Value) -> Result<(), Stri
         .iter()
         .map(|declaration| declaration.name.clone())
         .collect();
-    let feature_entries = read_feature_entries(package, &name)?;
+    let (feature_names, feature_entries) = read_feature_table(package, &name)?;
     let package = Package {
         dependencies,
         declarations,
         feature_entries,
+        feature_names,
     };
     if workspace.insert(name.clone(), package).is_some() {
         return Err(format!("ambiguous workspace package name: {name}"));
@@ -103,14 +107,15 @@ fn insert_package(workspace: &mut Workspace, package: &Value) -> Result<(), Stri
     Ok(())
 }
 
-/// The entries of a package's `[features]` table; a missing table means none.
-fn read_feature_entries(package: &Value, name: &str) -> Result<Vec<String>, String> {
+/// The names and entries of a package's `[features]` table; a missing table means none.
+fn read_feature_table(package: &Value, name: &str) -> Result<(Vec<String>, Vec<String>), String> {
     let Some(features) = package.get("features") else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let table = features
         .as_object()
         .ok_or_else(|| format!("{name}.features must be an object"))?;
+    let names = table.keys().cloned().collect();
     let mut entries = Vec::new();
     for (feature, enabled) in table {
         let list = enabled
@@ -123,7 +128,7 @@ fn read_feature_entries(package: &Value, name: &str) -> Result<Vec<String>, Stri
             entries.push(entry.to_owned());
         }
     }
-    Ok(entries)
+    Ok((names, entries))
 }
 
 fn read_declaration(dependency: &Value, package: &str) -> Result<Declaration, String> {
@@ -208,7 +213,12 @@ fn check_direct_dependencies(
         }
         if dependency == UPDATE_VERIFIER && !UPDATE_VERIFIER_USERS.contains(&name) {
             violations.insert(format!(
-                "{name} -> {dependency}: only syrinx-app may use the update verifier (P1-39b)"
+                "{name} -> {dependency}: only syrinx-app and syrinx-update-net may use the update verifier (P1-39)"
+            ));
+        }
+        if dependency == UPDATE_NET && name != "syrinx-app" {
+            violations.insert(format!(
+                "{name} -> {dependency}: only syrinx-app may use the update download (P1-39c)"
             ));
         }
         check_fulltext_quarantine(name, dependency, violations);
@@ -273,9 +283,11 @@ fn is_platform_library(name: &str) -> bool {
 /// The P1-38 update verifier and P1-39b's installer.
 const UPDATE_VERIFIER: &str = "syrinx-update";
 
-/// The crates that may depend on the verifier: P1-39's change 1, for P1-39b. P1-39c adds
-/// `syrinx-update-net` in its own slice.
-const UPDATE_VERIFIER_USERS: [&str; 1] = ["syrinx-app"];
+/// P1-39c's owner-pressed update download, the one crate that may make a network call.
+const UPDATE_NET: &str = "syrinx-update-net";
+
+/// The crates that may depend on the verifier: P1-39's change 1.
+const UPDATE_VERIFIER_USERS: [&str; 2] = ["syrinx-app", UPDATE_NET];
 
 /// The verifier's feature that links Windows key storage for the release tool only.
 const RELEASE_TOOL_FEATURE: &str = "release-tool";
@@ -284,15 +296,34 @@ const RELEASE_TOOL_FEATURE: &str = "release-tool";
 const UPDATE_VERIFIER_WINDOWS_FEATURES: [&str; 2] =
     ["Win32_Foundation", "Win32_Security_Cryptography"];
 
-fn check_update_verifier_features(
-    name: &str,
-    package: &Package,
-    violations: &mut BTreeSet<String>,
-) {
-    // Keep the verifier to cryptography: no default features, no networking or other namespaces.
-    if name != UPDATE_VERIFIER {
+/// WinHTTP, the one exception to D9's no-network rule (P1-39's change 3).
+const WINHTTP_FEATURE: &str = "Win32_Networking_WinHttp";
+
+/// The only `windows` features the update download may request (P1-39's change 2).
+const UPDATE_NET_WINDOWS_FEATURES: [&str; 1] = [WINHTTP_FEATURE];
+
+/// Each crate besides `syrinx-platform` that may use `windows`, with its exact feature list.
+const WINDOWS_FEATURE_ALLOWLISTS: [(&str, &str, &[&str]); 2] = [
+    (
+        UPDATE_VERIFIER,
+        "the update verifier",
+        &UPDATE_VERIFIER_WINDOWS_FEATURES,
+    ),
+    (
+        UPDATE_NET,
+        "the update download",
+        &UPDATE_NET_WINDOWS_FEATURES,
+    ),
+];
+
+fn check_windows_feature_lists(name: &str, package: &Package, violations: &mut BTreeSet<String>) {
+    // Keep each update crate to its own namespaces, with the default features off.
+    let Some((_, role, allowed)) = WINDOWS_FEATURE_ALLOWLISTS
+        .iter()
+        .find(|(crate_name, _, _)| *crate_name == name)
+    else {
         return;
-    }
+    };
     for declaration in package
         .declarations
         .iter()
@@ -304,12 +335,22 @@ fn check_update_verifier_features(
             ));
         }
         for feature in &declaration.features {
-            if !UPDATE_VERIFIER_WINDOWS_FEATURES.contains(&feature.as_str()) {
+            if !allowed.contains(&feature.as_str()) {
                 violations.insert(format!(
-                    "{name} -> windows: feature {feature} is not allowed for the update verifier"
+                    "{name} -> windows: feature {feature} is not allowed for {role}"
                 ));
             }
         }
+    }
+}
+
+/// The update download has no `[features]` table, so no build can switch on another endpoint.
+fn check_update_net_features(name: &str, package: &Package, violations: &mut BTreeSet<String>) {
+    if name == UPDATE_NET && !package.feature_names.is_empty() {
+        violations.insert(format!(
+            "{name}: the update download may not define features ({})",
+            package.feature_names.join(", ")
+        ));
     }
 }
 
@@ -349,9 +390,11 @@ fn enables_release_tool(entry: &str, imported_as: &BTreeSet<String>) -> bool {
     feature == RELEASE_TOOL_FEATURE && imported_as.contains(&normalize_name(dependency))
 }
 
-/// The platform crate owns Win32; the update verifier may also call CNG through `windows`.
+/// The platform crate owns Win32; the update crates may also use `windows`, each with its own
+/// feature list.
 fn may_use_platform_library(name: &str, dependency: &str) -> bool {
-    name == "syrinx-platform" || (name == UPDATE_VERIFIER && dependency == "windows")
+    name == "syrinx-platform"
+        || (matches!(name, UPDATE_VERIFIER | UPDATE_NET) && dependency == "windows")
 }
 
 fn is_syrinx_dependency(name: &str, workspace: &Workspace) -> bool {
@@ -364,7 +407,12 @@ fn is_syrinx_dependency(name: &str, workspace: &Workspace) -> bool {
 fn needs_shell_isolation(name: &str) -> bool {
     matches!(
         name,
-        "syrinx-core" | "syrinx-store" | "syrinx-search" | "syrinx-plugin-api" | "syrinx-update"
+        "syrinx-core"
+            | "syrinx-store"
+            | "syrinx-search"
+            | "syrinx-plugin-api"
+            | "syrinx-update"
+            | UPDATE_NET
     ) || name.starts_with("plugin-")
 }
 
@@ -465,6 +513,7 @@ fn check_network_declarations(name: &str, package: &Package, violations: &mut BT
             .features
             .iter()
             .filter(|feature| is_network_feature(feature))
+            .filter(|feature| !is_approved_network_feature(name, &declaration.name, feature))
         {
             violations.insert(format!(
                 "{name} -> {}: feature {feature} exposes Windows networking (D9)",
@@ -472,6 +521,11 @@ fn check_network_declarations(name: &str, package: &Package, violations: &mut BT
             ));
         }
     }
+}
+
+/// D9's one exception: WinHTTP through `windows`, in the update download alone (owner, 2026-10-13).
+fn is_approved_network_feature(name: &str, dependency: &str, feature: &str) -> bool {
+    name == UPDATE_NET && dependency == "windows" && feature == WINHTTP_FEATURE
 }
 
 fn is_network_feature(feature: &str) -> bool {
@@ -846,6 +900,146 @@ mod tests {
                 .iter()
                 .any(|message| message.contains("default features must be disabled"))
         );
+        Ok(())
+    }
+
+    fn update_net(dependencies: Value) -> Value {
+        package("syrinx-update-net", dependencies)
+    }
+
+    fn winhttp(features: Value) -> Value {
+        json!({"name": "windows", "uses_default_features": false, "features": features})
+    }
+
+    #[test]
+    fn permits_the_update_download_its_one_network_feature() -> Result<(), String> {
+        // P1-39's changes 1 to 3: the verifier, `windows` and WinHTTP, for the app alone to use.
+        let input = metadata(vec![
+            update_net(json!([
+                {"name": "syrinx-update"},
+                winhttp(json!(["Win32_Networking_WinHttp"]))
+            ])),
+            package(
+                "syrinx-app",
+                json!([{"name": "syrinx-update-net"}, {"name": "syrinx-update"}]),
+            ),
+            package("syrinx-update", json!([])),
+        ]);
+        assert!(check_metadata(&input)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn confines_winhttp_to_the_update_download() -> Result<(), String> {
+        // No other crate gets WinHTTP, and the download gets nothing else.
+        let input = metadata(vec![
+            package(
+                "syrinx-platform",
+                json!([{"name": "windows", "features": ["Win32_Networking_WinHttp"]}]),
+            ),
+            package(
+                "syrinx-app",
+                json!([{"name": "windows-sys", "features": ["Win32_Networking_WinHttp"]}]),
+            ),
+            update_net(json!([
+                winhttp(json!([
+                    "Win32_Networking_WinHttp",
+                    "Win32_Networking_WinSock",
+                    "Win32_Foundation"
+                ])),
+                {"name": "windows", "kind": "dev"},
+                {"name": "reqwest"}
+            ])),
+        ]);
+        let violations = check_metadata(&input)?;
+        let expected = [
+            "syrinx-platform -> windows: feature Win32_Networking_WinHttp exposes Windows networking (D9)",
+            "syrinx-app -> windows-sys: only syrinx-platform may directly depend",
+            "syrinx-app -> windows-sys: feature Win32_Networking_WinHttp exposes Windows networking (D9)",
+            "syrinx-update-net -> windows: feature Win32_Networking_WinSock is not allowed for the update download",
+            "syrinx-update-net -> windows: feature Win32_Networking_WinSock exposes Windows networking (D9)",
+            "syrinx-update-net -> windows: feature Win32_Foundation is not allowed for the update download",
+            "syrinx-update-net -> windows: default features must be disabled",
+            "syrinx-update-net -> reqwest: Syrinx's crates may not use a network client (D9)",
+        ];
+        for message in expected {
+            assert!(
+                violations.iter().any(|found| found.starts_with(message)),
+                "{message}: {violations:?}"
+            );
+        }
+        assert_eq!(violations.len(), expected.len(), "{violations:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn only_the_app_may_use_the_update_download() -> Result<(), String> {
+        // In every dependency kind, so not even a test or a build tool can make the calls.
+        let input = metadata(vec![
+            update_net(json!([])),
+            package(
+                "syrinx-ui",
+                json!([{"name": "syrinx-update-net", "kind": "dev"}]),
+            ),
+            package(
+                "xtask",
+                json!([{"name": "syrinx_update_net", "kind": "build"}]),
+            ),
+            package("syrinx-update", json!([{"name": "syrinx-update-net"}])),
+        ]);
+        let violations = check_metadata(&input)?;
+        for user in ["syrinx-ui", "xtask", "syrinx-update"] {
+            assert!(
+                violations.iter().any(|message| message
+                    .starts_with(&format!("{user} -> syrinx-update-net: only syrinx-app"))),
+                "{user}: {violations:?}"
+            );
+        }
+        assert_eq!(violations.len(), 3, "{violations:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn the_update_download_defines_no_features() -> Result<(), String> {
+        // A feature could otherwise switch on another endpoint in a shipped build.
+        let mut download = update_net(json!([]));
+        download["features"] = json!({"test-endpoint": []});
+        let violations = check_metadata(&metadata(vec![download]))?;
+        assert_eq!(
+            violations,
+            ["syrinx-update-net: the update download may not define features (test-endpoint)"]
+        );
+        let mut empty = update_net(json!([]));
+        empty["features"] = json!({});
+        assert!(check_metadata(&metadata(vec![empty]))?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn the_update_download_stays_headless() -> Result<(), String> {
+        // It cannot reach the shell, nor any network client through a third-party library.
+        let mut input = metadata(vec![
+            update_net(json!([{"name": "syrinx-platform"}, {"name": "helper"}])),
+            package("syrinx-platform", json!([])),
+        ]);
+        input["packages"]
+            .as_array_mut()
+            .ok_or("synthetic packages")?
+            .extend([package("helper", json!([])), package("hyper", json!([]))]);
+        input["resolve"]["nodes"] = json!([
+            node("syrinx-update-net", &["syrinx-platform", "helper"]),
+            node("syrinx-platform", &[]),
+            node("helper", &["hyper"]),
+            node("hyper", &[]),
+        ]);
+        let violations = check_metadata(&input)?;
+        assert_eq!(violations.len(), 2, "{violations:?}");
+        assert!(violations.iter().any(|message| message.contains(
+            "syrinx-update-net -> syrinx-platform: core and plugin crates must not reach the shell"
+        )));
+        assert!(violations.iter().any(|message| message.contains(
+            "syrinx-update-net -> helper -> hyper: a headless crate reaches a network client"
+        )));
         Ok(())
     }
 
