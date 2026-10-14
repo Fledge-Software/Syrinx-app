@@ -117,6 +117,7 @@ fn main() -> ExitCode {
         gpui_component::init(cx);
         theme::apply_component_theme(cx);
         ui::bind_keys(cx);
+        controls::watch_keys(cx);
         let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(

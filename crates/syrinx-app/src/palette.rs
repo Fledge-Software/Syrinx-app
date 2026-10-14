@@ -432,7 +432,7 @@ impl Render for PaletteView {
         if wide {
             body = body.child(render::preview(self.preview()));
         }
-        div()
+        crate::controls::watch_pointer(div())
             .id("palette")
             .role(gpui::Role::Dialog)
             .aria_label("Command palette")

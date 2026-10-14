@@ -251,6 +251,15 @@ you found it in the commit message, not here.
   `cx.defer` (or a task) outside every update, and recheck that the request is
   still wanted when it runs. Source: `gpui-pre-0.3.8/src/app.rs`, lines
   1431–1455, and the fix in `ui/peek.rs` (`docs/p1-17-peek.md`).
+- **A root element's mouse listener misses presses on occluding children and
+  right after a key.** GPUI runs an element's `capture_any_mouse_down` only
+  while its hitbox counts as hovered, which an `.occlude()` child (the
+  toolbar) prevents, and `is_hovered` is false whenever the last input was a
+  key. DW-62's first build therefore never saw a press on a toolbar button.
+  To see every press in a window, register `Window::on_mouse_event` from a
+  canvas's paint, as `controls::watch_pointer` does. Source:
+  `gpui-pre-0.3.8/src/window.rs`, `HitboxId::is_hovered` (line 782), and
+  DW-62's visual probe (observed).
 - **A bounds observer fires on every activation change, not only on a move.**
   GPUI's activation callback calls `bounds_changed`, which runs every
   `observe_window_bounds` observer. The peek's watch closed the peek when it was
