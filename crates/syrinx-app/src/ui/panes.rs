@@ -173,6 +173,10 @@ impl BrowserView {
             window.focus(&field, cx);
             return;
         };
+        // The sidebar tree has one Tab stop; F6 lands on its active row (DW-61).
+        if pane == Pane::Sidebar && entry == Entry::First && self.focus_active_row(window, cx) {
+            return;
+        }
         let region = self.panes.handle(pane).clone();
         match entry {
             Entry::First => focus_first_control(&region, window, cx),

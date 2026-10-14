@@ -55,7 +55,7 @@ impl BrowserView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if Window::window_handle(window) != self.main_window {
+        if !self.is_main_window(window) {
             self.queue_peek_action(peek::PeekAction::Palette(address), window, cx);
             return;
         }

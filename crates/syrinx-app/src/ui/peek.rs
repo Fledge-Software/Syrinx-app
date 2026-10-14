@@ -31,12 +31,12 @@ struct PeekView {
 }
 
 impl Render for PeekView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Never drawn inside a browser update: the popup opens from `open_requested_peek`.
-        let content = match self
-            .browser
-            .update(cx, |browser, cx| browser.sidebar_at(PEEK_WIDTH, true, cx))
-        {
+        // The rows take their focus handles from the peek's own tree, not the docked one's.
+        let content = match self.browser.update(cx, |browser, cx| {
+            browser.sidebar_at(PEEK_WIDTH, true, window, cx)
+        }) {
             Ok(content) => content,
             Err(_) => div(), // The owner has gone; native ownership also tears down this window.
         };
@@ -366,7 +366,8 @@ impl BrowserView {
         }
     }
 
-    /// Whether `window` is the open peek popup rather than the main window.
+    /// Whether `window` is the open peek popup. Unlike `!is_main_window`, it is false while a
+    /// peek is still opening or already retired, when no peek action should be queued.
     pub(super) fn is_peek_window(&self, window: &Window) -> bool {
         self.peek
             .as_ref()
