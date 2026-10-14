@@ -33,6 +33,7 @@ mod saved_moves;
 mod security;
 mod sidebar_rows;
 mod sidebar_view;
+mod site_permissions;
 mod suspended_fixture;
 mod tile_editor;
 mod tiles;
@@ -655,6 +656,12 @@ impl BrowserView {
             SessionEvent::HistoryCleared { request_id, result } => {
                 self.history_cleared(request_id, result);
             }
+            SessionEvent::RememberedPermissions { request_id, result } => {
+                self.site_permissions_listed(request_id, result);
+            }
+            SessionEvent::PermissionForgotten { request_id, result } => {
+                self.site_permission_forgotten(request_id, result);
+            }
             SessionEvent::Failure { error, fatal } => {
                 if self.smoke {
                     self.outcome.store(2, Ordering::Release);
@@ -662,6 +669,7 @@ impl BrowserView {
                 // A stopped session cannot persist pages, so the page host stops with it.
                 if fatal {
                     self.page_command(BrowserCommand::Shutdown);
+                    self.home.site_permissions.session_lost();
                 }
                 if fatal && self.abandon_import_write() {
                     self.fail(format!(
@@ -676,6 +684,7 @@ impl BrowserView {
             }
             SessionEvent::Stopped => {
                 self.abandon_import_write();
+                self.home.site_permissions.session_lost();
                 if !self.closing && self.failure.is_none() {
                     self.fail("Local storage stopped. Restart Syrinx before continuing.");
                 }

@@ -1784,3 +1784,6 @@ mod import_tests;
 
 #[path = "folder_tests.rs"]
 mod folder_tests;
+
+#[path = "permission_tests.rs"]
+mod permission_tests;

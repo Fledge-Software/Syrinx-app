@@ -12,6 +12,7 @@ use syrinx_ui::{Color, Palette};
 
 use super::BrowserView;
 use super::customize::CustomAccent;
+use super::site_permissions::SitePermissions;
 use super::tile_editor::TileEditor;
 use super::tiles::{self, TileAction};
 use crate::appearance::Appearance;
@@ -35,6 +36,8 @@ pub(super) struct HomeState {
     pub(super) editing: Option<DestinationSurface>,
     pub(super) editor: Option<TileEditor>,
     pub(super) custom_accent: Option<CustomAccent>,
+    /// Customize's list of remembered site permissions (DW-7).
+    pub(super) site_permissions: SitePermissions,
 }
 
 impl BrowserView {
@@ -139,8 +142,11 @@ impl BrowserView {
                     .cursor_pointer()
                     .child("Customize")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.home.customize_open = !this.home.customize_open;
-                        this.home.custom_accent = None;
+                        if this.home.customize_open {
+                            this.close_customize();
+                        } else {
+                            this.home.customize_open = true;
+                        }
                         cx.notify();
                     })),
             )

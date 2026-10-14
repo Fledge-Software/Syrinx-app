@@ -127,3 +127,16 @@ held one. The prompt's height now feeds `page_card_bounds` in
 `crates/syrinx-app/src/ui/page_card.rs`, so the page card starts below it.
 Clearing browsing data (P1-27) does not touch remembered permissions; DW-7
 still owns their removal.
+
+## Forgetting a remembered choice (DW-7), 2026-10-13
+
+Customize on Home now has a "Site permissions" section. Its Manage button
+lists every remembered choice, read on the session worker through
+`Store::remembered_permissions`, and each row's Forget button removes that
+one choice so the site asks again (`crates/syrinx-app/src/ui/site_permissions.rs`).
+Following the consent-prompt trap in `docs/trapstoknow.md`, a button carries
+the row as drawn and the read that drew it, its element id changes with each
+read, and the store deletes the choice only while it still holds the listed
+allow/deny value (`Store::forget_listed_permission`). A site that asked again
+after the list was drawn therefore keeps the newer answer, and the panel says
+nothing was removed.

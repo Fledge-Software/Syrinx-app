@@ -21,6 +21,6 @@ pub use history::{HistoryDeletion, HistoryEntry, HistoryVisit, RecordedVisit};
 pub use location::{
     DirectoryLease, LocationError, LocationOperation, SessionControl, ShutdownState, StorageSession,
 };
-pub use permissions::PermissionKind;
+pub use permissions::{PermissionKind, RememberedPermission};
 pub use preferences::{MAX_SETTING_KEY_BYTES, MAX_SETTING_VALUE_BYTES, StoredPreferences};
 pub use replay::replay_history_deletions;

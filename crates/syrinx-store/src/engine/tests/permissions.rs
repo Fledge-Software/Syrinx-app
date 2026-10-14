@@ -327,8 +327,9 @@ fn forget_deletes_only_the_matching_row_on_a_plain_connection() {
     save("https://row.example.test", PermissionKind::Camera);
     save("https://row.example.test", PermissionKind::Fonts);
     save("https://other.example.test", PermissionKind::Camera);
-    let forget =
-        |origin: &str, kind: PermissionKind| crate::permissions::forget(&connection, origin, kind);
+    let forget = |origin: &str, kind: PermissionKind| {
+        crate::permissions::forget(&connection, origin, kind, None)
+    };
     assert_eq!(
         forget("https://row.example.test", PermissionKind::Camera),
         Ok(true)
@@ -494,4 +495,135 @@ fn forgotten_choice_stays_forgotten_after_restart() {
     );
     store.shutdown().expect("close reopened store");
     directory.cleanup();
+}
+
+fn listed(origin: &str, kind: PermissionKind, allowed: bool) -> crate::RememberedPermission {
+    crate::RememberedPermission {
+        origin: origin.to_owned(),
+        kind,
+        allowed,
+    }
+}
+
+#[test]
+fn remembered_choices_list_in_origin_and_kind_order() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    assert_eq!(store.remembered_permissions(), Ok(Vec::new()));
+    remember(
+        &store,
+        "https://zulu.example.test",
+        PermissionKind::Camera,
+        true,
+    );
+    remember(
+        &store,
+        "https://alpha.example.test",
+        PermissionKind::Notifications,
+        false,
+    );
+    remember(
+        &store,
+        "https://alpha.example.test",
+        PermissionKind::Microphone,
+        true,
+    );
+    assert_eq!(
+        store.remembered_permissions(),
+        Ok(vec![
+            listed(
+                "https://alpha.example.test",
+                PermissionKind::Microphone,
+                true
+            ),
+            listed(
+                "https://alpha.example.test",
+                PermissionKind::Notifications,
+                false
+            ),
+            listed("https://zulu.example.test", PermissionKind::Camera, true),
+        ])
+    );
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn a_damaged_remembered_row_refuses_the_list_instead_of_showing_a_guess() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    remember(
+        &store,
+        "https://damaged.example.test",
+        PermissionKind::Camera,
+        false,
+    );
+    let connection = directory.connection();
+    connection
+        .execute_batch(
+            "PRAGMA ignore_check_constraints = ON; UPDATE site_permissions SET kind = 99;",
+        )
+        .expect("damage synthetic kind");
+    close(connection);
+    assert_eq!(
+        store.remembered_permissions(),
+        Err(StoreError::InvalidEncoding(EncodingField::Permission))
+    );
+    store.shutdown().expect("close damaged synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn forgetting_a_listed_choice_skips_one_that_changed_since_it_was_listed() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    remember(
+        &store,
+        "https://stale.example.test",
+        PermissionKind::Location,
+        false,
+    );
+    let shown = listed(
+        "https://stale.example.test",
+        PermissionKind::Location,
+        false,
+    );
+    assert_eq!(store.remembered_permissions(), Ok(vec![shown.clone()]));
+
+    // The site asked again and the owner allowed it after the list was drawn.
+    remember(
+        &store,
+        "https://stale.example.test",
+        PermissionKind::Location,
+        true,
+    );
+    assert_eq!(store.forget_listed_permission(shown.clone()), Ok(false));
+    assert_eq!(
+        store.permission("https://stale.example.test", PermissionKind::Location),
+        Ok(Some(true)),
+        "the newer choice the owner never saw listed is kept"
+    );
+
+    let current = listed("https://stale.example.test", PermissionKind::Location, true);
+    assert_eq!(store.forget_listed_permission(current.clone()), Ok(true));
+    assert_eq!(store.forget_listed_permission(current), Ok(false));
+    assert_eq!(store.remembered_permissions(), Ok(Vec::new()));
+    assert_eq!(
+        store.forget_listed_permission(listed(
+            "https://stale.example.test/private",
+            PermissionKind::Location,
+            true
+        )),
+        Err(StoreError::InvalidEncoding(EncodingField::Permission))
+    );
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn listed_choices_keep_their_origin_out_of_debug_output() {
+    let shown = listed("https://private.example.test", PermissionKind::Camera, true);
+    let printed = format!("{shown:?}");
+    assert!(!printed.contains("private.example.test"));
+    assert!(printed.contains("Camera"));
 }

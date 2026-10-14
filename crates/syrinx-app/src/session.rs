@@ -60,6 +60,15 @@ pub enum SessionCommand {
         kind: syrinx_store::PermissionKind,
         allowed: bool,
     },
+    /// Reads every remembered site permission for the settings list (DW-7).
+    RememberedPermissions {
+        request_id: u64,
+    },
+    /// Forgets one listed choice, only while it is still saved as listed (DW-7).
+    ForgetPermission {
+        request_id: u64,
+        listed: syrinx_store::RememberedPermission,
+    },
     ConfirmRecovery {
         offer_id: u64,
     },
@@ -177,6 +186,16 @@ pub enum SessionEvent {
         id: u64,
         request: u64,
         result: Result<Option<bool>, StoreError>,
+    },
+    /// The answer to `RememberedPermissions`.
+    RememberedPermissions {
+        request_id: u64,
+        result: Result<Vec<syrinx_store::RememberedPermission>, SessionError>,
+    },
+    /// The answer to `ForgetPermission`: `false` when the choice had changed or was gone.
+    PermissionForgotten {
+        request_id: u64,
+        result: Result<bool, SessionError>,
     },
     RecoveryOffered(RecoveryPrompt),
     /// The deletion journal cannot be trusted; continuing needs the owner to clear all history.
@@ -691,6 +710,22 @@ impl Worker {
                     .map(|()| Some(allowed));
                 return emit_permission(events, id, request, result);
             }
+            SessionCommand::RememberedPermissions { request_id } => {
+                let result = store.remembered_permissions().map_err(SessionError::Store);
+                return emit(
+                    events,
+                    SessionEvent::RememberedPermissions { request_id, result },
+                );
+            }
+            SessionCommand::ForgetPermission { request_id, listed } => {
+                let result = store
+                    .forget_listed_permission(listed)
+                    .map_err(SessionError::Store);
+                return emit(
+                    events,
+                    SessionEvent::PermissionForgotten { request_id, result },
+                );
+            }
             command => command,
         };
         let Some(command) = preferences::intercept(store, &mut self.destinations, command, events)?
@@ -1078,6 +1113,8 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         SessionCommand::Query { .. }
         | SessionCommand::CheckPermission { .. }
         | SessionCommand::RememberPermission { .. }
+        | SessionCommand::RememberedPermissions { .. }
+        | SessionCommand::ForgetPermission { .. }
         | SessionCommand::ImportBookmarks { .. }
         | SessionCommand::RecentHistory { .. }
         | SessionCommand::ClearHistory { .. }

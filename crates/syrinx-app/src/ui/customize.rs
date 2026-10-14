@@ -73,33 +73,51 @@ impl BrowserView {
         window.refresh();
     }
 
-    pub(super) fn customize_panel(
-        &self,
-        palette: &Palette,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        div()
+    pub(super) fn customize_panel(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
+        let contents = div().flex().flex_col().gap(px(16.));
+        // Managing site permissions replaces the appearance choices, so the panel stays short.
+        let contents = if self.home.site_permissions.is_open() {
+            contents.child(self.site_permissions_view(palette, cx))
+        } else {
+            contents
+                .child(self.customize_title(palette, cx))
+                .child(self.palette_choices(palette, cx))
+                .child(self.accent_choices(palette, cx))
+                .child(self.transparency_switch(palette, cx))
+                .child(self.site_permissions_entry(palette, cx))
+        };
+        let panel = div()
             .id("customize-panel")
             .role(Role::Dialog)
             .aria_label("Customize")
             .occlude()
-            .absolute()
-            .top(px(60.))
-            .right(px(56.))
-            .w(px(420.))
+            .max_h_full()
+            .overflow_y_scroll()
             .rounded(px(16.))
             .bg(rgba(palette.panel))
             .border_1()
             .border_color(rgba(palette.panel_line))
             .p(px(16.))
+            .text_color(rgba(palette.text))
+            .child(contents);
+        // The frame spans the card's height, so a short window scrolls the panel instead of
+        // clipping it; the frame has no handlers, so clicks beside the panel reach Home.
+        div()
+            .absolute()
+            .top(px(60.))
+            .bottom(px(16.))
+            .right(px(56.))
+            .w(px(420.))
             .flex()
             .flex_col()
-            .gap(px(16.))
-            .text_color(rgba(palette.text))
-            .child(self.customize_title(palette, cx))
-            .child(self.palette_choices(palette, cx))
-            .child(self.accent_choices(palette, cx))
-            .child(self.transparency_switch(palette, cx))
+            .child(panel)
+    }
+
+    /// Closes the panel, dropping an unfinished custom accent and the permissions view.
+    pub(super) fn close_customize(&mut self) {
+        self.home.customize_open = false;
+        self.home.custom_accent = None;
+        self.home.site_permissions.close();
     }
 
     fn customize_title(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
@@ -113,22 +131,27 @@ impl BrowserView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("Customize"),
             )
-            .child(
-                control(div().id("customize-close"), Role::Button, "Close Customize")
-                    .size(px(28.))
-                    .rounded(px(7.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(rgba(palette.icon_dim))
-                    .cursor_pointer()
-                    .child("×")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.home.customize_open = false;
-                        this.home.custom_accent = None;
-                        cx.notify();
-                    })),
-            )
+            .child(self.customize_close_button(palette, cx))
+    }
+
+    pub(super) fn customize_close_button(
+        &self,
+        palette: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        control(div().id("customize-close"), Role::Button, "Close Customize")
+            .size(px(28.))
+            .rounded(px(7.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(rgba(palette.icon_dim))
+            .cursor_pointer()
+            .child("×")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.close_customize();
+                cx.notify();
+            }))
     }
 
     fn palette_choices(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {

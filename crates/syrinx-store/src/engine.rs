@@ -196,6 +196,24 @@ impl Store {
         origin: String,
         kind: crate::PermissionKind,
     ) -> Result<bool, StoreError> {
+        self.forget(origin, kind, None)
+    }
+
+    /// Forgets a choice the owner saw listed, only while it is still saved as `allowed`, so a
+    /// stale click never removes a choice that changed since. `false` when nothing matched.
+    pub fn forget_listed_permission(
+        &self,
+        listed: crate::RememberedPermission,
+    ) -> Result<bool, StoreError> {
+        self.forget(listed.origin, listed.kind, Some(listed.allowed))
+    }
+
+    fn forget(
+        &self,
+        origin: String,
+        kind: crate::PermissionKind,
+        expected: Option<bool>,
+    ) -> Result<bool, StoreError> {
         crate::permissions::validate_origin(&origin)?;
         let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
         let (reply, result) = mpsc::sync_channel(1);
@@ -204,10 +222,16 @@ impl Store {
             .send(WriterRequest::ForgetPermission {
                 origin,
                 kind,
+                expected,
                 reply,
             })
             .map_err(|_| StoreError::WorkerUnavailable)?;
         result.recv().map_err(|_| StoreError::WorkerUnavailable)?
+    }
+
+    /// Every remembered site permission, ordered by origin and kind, for the settings list.
+    pub fn remembered_permissions(&self) -> Result<Vec<crate::RememberedPermission>, StoreError> {
+        self.read(|connection| crate::permissions::list(connection))
     }
 
     /// Creates a daily validated backup only while idle. This blocks on the existing writer queue.
@@ -382,6 +406,8 @@ enum WriterRequest {
     ForgetPermission {
         origin: String,
         kind: crate::PermissionKind,
+        /// Removes the choice only while it is still saved as this value.
+        expected: Option<bool>,
         reply: mpsc::SyncSender<Result<bool, StoreError>>,
     },
     Save(SaveRequest),
@@ -490,9 +516,11 @@ fn serve_writes(
             WriterRequest::ForgetPermission {
                 origin,
                 kind,
+                expected,
                 reply,
             } => {
-                let result = crate::permissions::forget(&writer.connection, &origin, kind);
+                let result =
+                    crate::permissions::forget(&writer.connection, &origin, kind, expected);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
             WriterRequest::Save(request) => {
