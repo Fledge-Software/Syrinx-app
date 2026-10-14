@@ -22,5 +22,10 @@ serde_json.workspace = true
 [dev-dependencies]
 rusqlite.workspace = true
 
+# Lets the gate run and lint the native fixture's unit tests; they never start WebView2.
+[[example]]
+name = "page_close"
+test = true
+
 [lints]
 workspace = true

@@ -80,6 +80,7 @@ fn main() -> ExitCode {
                 Ok(()) => {}
                 Err(error) => {
                     eprintln!("Synthetic page-close harness deadline failed: {error}.");
+                    report_kept();
                     std::process::exit(1);
                 }
             },
@@ -95,6 +96,7 @@ fn main() -> ExitCode {
     let watchdog_failed = watchdog.join().is_err();
     if cancellation_failed || watchdog_failed {
         eprintln!("Synthetic harness deadline cleanup failed.");
+        report_kept();
         return ExitCode::FAILURE;
     }
     match result {
@@ -181,10 +183,14 @@ fn reserve_profile() -> Result<PathBuf, String> {
     ));
     fs::create_dir(&profile).map_err(|error| io_error("reserve synthetic profile", error))?;
     // Runtime files remain in this exclusively created synthetic directory; no owner profile is read.
-    RESERVED
-        .lock()
-        .map_err(|_| "Synthetic profile register is poisoned.".to_owned())?
-        .push(profile.clone());
+    match RESERVED.lock() {
+        Ok(mut reserved) => reserved.push(profile.clone()),
+        // Still record the directory, so the failure report lists it as kept.
+        Err(poisoned) => {
+            poisoned.into_inner().push(profile);
+            return Err("Synthetic profile register is poisoned.".into());
+        }
+    }
     Ok(profile)
 }
 
@@ -200,7 +206,7 @@ fn take_reserved() -> Vec<PathBuf> {
 fn remove_reserved() {
     let temp = std::env::temp_dir();
     for directory in take_reserved() {
-        // Only a direct child of TEMP that this run created is ever removed.
+        // The registry holds only what this run's create_dir made; this is a cheap invariant check.
         if directory.parent() != Some(temp.as_path()) {
             eprintln!(
                 "Warning: kept synthetic directory outside TEMP: {}.",

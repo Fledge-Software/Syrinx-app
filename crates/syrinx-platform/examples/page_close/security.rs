@@ -200,8 +200,8 @@ fn wait_recovery(
 enum RejectionWait {
     /// Both the failed completion and the certificate event have arrived.
     Complete,
-    /// Keep waiting until `until`; `grace` means a `Failed` state started a short wait.
-    Waiting { until: Instant, grace: bool },
+    /// Keep waiting until `until`; `after_failed` means a `Failed` state lacks its certificate event.
+    Waiting { until: Instant, after_failed: bool },
 }
 
 /// Decides how long to keep waiting, given when the attempt first reported `Failed`.
@@ -214,24 +214,29 @@ fn rejection_wait(
     if rejected && failed {
         return RejectionWait::Complete;
     }
-    let grace_end = failed_state_at
-        .filter(|_| !rejected)
-        .map(|at| at + CERTIFICATE_EVENT_GRACE)
-        .filter(|end| *end < suite_deadline);
-    match grace_end {
-        Some(until) => RejectionWait::Waiting { until, grace: true },
-        None => RejectionWait::Waiting {
+    let Some(failed_at) = failed_state_at.filter(|_| !rejected) else {
+        return RejectionWait::Waiting {
             until: suite_deadline,
-            grace: false,
-        },
+            after_failed: false,
+        };
+    };
+    RejectionWait::Waiting {
+        until: (failed_at + CERTIFICATE_EVENT_GRACE).min(suite_deadline),
+        after_failed: true,
     }
 }
 
-fn missing_certificate_event(attempt: usize, state: Option<ConnectionState>, log: &str) -> String {
+/// Names the attempt, its last connection state, the server log and the wait's own error.
+fn missing_certificate_event(
+    attempt: usize,
+    state: Option<ConnectionState>,
+    log: &str,
+    error: &str,
+) -> String {
     format!(
         "Synthetic invalid certificate attempt {attempt} failed without a certificate event \
-         within {}s of its Failed state (last connection state {state:?}); inspect the \
-         synthetic TLS server log at {log}.",
+         within {}s of its Failed state or before the suite deadline (last connection state \
+         {state:?}); inspect the synthetic TLS server log at {log}. Wait error: {error}",
         CERTIFICATE_EVENT_GRACE.as_secs()
     )
 }
@@ -247,15 +252,19 @@ fn wait_rejection(
     let mut failed_state_at = None;
     let mut last_state = None;
     loop {
-        let (until, grace) = match rejection_wait(failed_state_at, rejected, failed, deadline) {
-            RejectionWait::Complete => break,
-            RejectionWait::Waiting { until, grace } => (until, grace),
-        };
+        let (until, after_failed) =
+            match rejection_wait(failed_state_at, rejected, failed, deadline) {
+                RejectionWait::Complete => break,
+                RejectionWait::Waiting {
+                    until,
+                    after_failed,
+                } => (until, after_failed),
+            };
         let event = match next_event(events, until) {
             Ok(event) => event,
-            // The grace expired: name what was seen instead of the generic deadline message.
-            Err(_) if grace && Instant::now() >= until => {
-                return Err(missing_certificate_event(attempt, last_state, log));
+            // The wait expired after `Failed`: name what was seen and keep the original error.
+            Err(error) if after_failed && Instant::now() >= until => {
+                return Err(missing_certificate_event(attempt, last_state, log, &error));
             }
             Err(error) => return Err(error),
         };
@@ -316,7 +325,7 @@ mod tests {
         let suite = Instant::now() + Duration::from_secs(45);
         let waiting = RejectionWait::Waiting {
             until: suite,
-            grace: false,
+            after_failed: false,
         };
         assert_eq!(rejection_wait(None, false, false, suite), waiting);
         // A failed completion alone, or a certificate event alone, keeps the old wait.
@@ -333,7 +342,7 @@ mod tests {
             rejection_wait(Some(failed_at), false, true, suite),
             RejectionWait::Waiting {
                 until: failed_at + CERTIFICATE_EVENT_GRACE,
-                grace: true,
+                after_failed: true,
             }
         );
         assert!(CERTIFICATE_EVENT_GRACE >= Duration::from_secs(5));
@@ -347,7 +356,7 @@ mod tests {
             rejection_wait(Some(failed_at), true, false, suite),
             RejectionWait::Waiting {
                 until: suite,
-                grace: false,
+                after_failed: false,
             }
         );
         assert_eq!(
@@ -360,11 +369,12 @@ mod tests {
     fn the_grace_never_extends_the_suite_deadline() {
         let failed_at = Instant::now();
         let suite = failed_at + Duration::from_secs(2);
+        // Expiring at the suite deadline still reports the missing certificate event.
         assert_eq!(
             rejection_wait(Some(failed_at), false, true, suite),
             RejectionWait::Waiting {
                 until: suite,
-                grace: false,
+                after_failed: true,
             }
         );
     }
@@ -375,10 +385,17 @@ mod tests {
             scheme: ConnectionScheme::Https,
             status: ConnectionStatus::Failed,
         };
-        let message = missing_certificate_event(2, Some(state), r"C:\synthetic\server.log");
+        let message = missing_certificate_event(
+            2,
+            Some(state),
+            r"C:\synthetic\server.log",
+            "Synthetic browser event channel closed.",
+        );
         assert!(message.contains("attempt 2"), "{message}");
         assert!(message.contains("Https"), "{message}");
         assert!(message.contains("Failed"), "{message}");
         assert!(message.contains(r"C:\synthetic\server.log"), "{message}");
+        // The original wait error survives, so a closed channel is not mislabelled.
+        assert!(message.contains("event channel closed"), "{message}");
     }
 }

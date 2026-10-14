@@ -102,10 +102,10 @@ you found it in the commit message, not here.
   HTTPS connection now fails the certificate suite about 5 s after its
   `Failed` state, naming the attempt, the last connection state and the
   path of that suite's `server.log` (DW-64); read that log for a traceback
-  or an early stop. A bare deadline in that suite now means no `Failed` state
-  arrived at least 5 s before the deadline (under suspension the attempt
-  stayed `Https/Loading`), so suspect suspension first there. A failing run keeps every synthetic directory and
-  lists them; a fully passing run deletes them (DW-65), so evidence exists
+  or an early stop. A bare deadline during a rejection wait now means the
+  attempt never reported `Failed` (under suspension it stayed
+  `Https/Loading`), so suspect suspension first there. A failing run keeps
+  every synthetic directory and lists them; a fully passing run deletes them (DW-65), so evidence exists
   only for failures. Sources: `docs/p1-11-popups.md`,
   `docs/fixture-transport-timing-review.md` and
   `docs/fixture-timeout-diagnosis-plan.md` (observed; high on the mechanism,
