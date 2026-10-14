@@ -49,6 +49,18 @@ To release outside the schedule, run the workflow from the Actions tab
 ("Run workflow"). Tick **force** to release even when `main` has not
 changed.
 
+## Keeping main releasable
+
+`.github/workflows/gate.yml` runs the same `cargo xtask check` on every push
+to `main` and every pull request, with a formatting check on Linux that
+reports within a minute or two. It exists because run 8 of the release
+failed on a rustfmt slip that had merged unnoticed. Before running a release
+by hand, check that the Gate workflow is green on the commit it will build.
+Both workflows run the gate through `.github/scripts/run-gate.sh`, which puts
+the end of the log in the run summary. The one-at-a-time rerun and the
+debugger stack run only when a test process actually crashed (a Windows
+`STATUS_` code in the log), not on a formatting or Clippy failure.
+
 ## What it does not do
 
 - **It does not sign anything.** Syrinx has no code-signing certificate

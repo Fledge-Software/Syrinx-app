@@ -71,23 +71,7 @@ jobs:
           ref: ${{ needs.plan.outputs.source }}
           fetch-depth: 0
 
-      - name: Install the pinned Rust toolchain
-        shell: bash
-        run: |
-          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
-          rustup default 1.97.1
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: cargo-registry-${{ hashFiles('Cargo.lock') }}
-
-      # The xtask alias builds offline, so fetch the locked dependencies first.
-      - name: Fetch locked dependencies
-        shell: bash
-        run: cargo fetch --locked
+      - uses: ./.github/actions/setup-rust
 
       - name: Make the release commit
         shell: bash
@@ -95,17 +79,18 @@ jobs:
 
       - name: Run the gate
         id: gate
-        run: cargo xtask check
+        shell: bash
+        run: .github/scripts/run-gate.sh
 
       # A test that crashes the process hides its own name; one at a time, the last line names it.
       - name: On a test crash, rerun the app's tests one at a time
-        if: failure() && steps.gate.outcome == 'failure'
+        if: failure() && steps.gate.outputs.crashed == 'true'
         shell: bash
         run: cargo test --workspace --bin syrinx --profile local --offline --locked -- --test-threads=1 2>&1 | tee target/one-at-a-time.log | tail -n 60
 
       # A native crash has no Rust message; the debugger's call stack names the failing function.
       - name: On a test crash, print the crashing test's native call stack
-        if: failure() && steps.gate.outcome == 'failure'
+        if: failure() && steps.gate.outputs.crashed == 'true'
         shell: bash
         run: .github/scripts/native-stack.sh target/one-at-a-time.log
 

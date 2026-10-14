@@ -1,0 +1,23 @@
+# Installs the pinned Rust toolchain and the locked dependencies, the same way for every workflow.
+name: Set up Rust for the gate
+description: Pinned toolchain, cached registry and the locked dependencies fetched for offline builds.
+runs:
+  using: composite
+  steps:
+    - name: Install the pinned Rust toolchain
+      shell: bash
+      run: |
+        rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+        rustup default 1.97.1
+
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+        key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+    # The xtask alias builds offline, so fetch the locked dependencies first.
+    - name: Fetch locked dependencies
+      shell: bash
+      run: cargo fetch --locked
