@@ -213,10 +213,17 @@ the mouse resting over the window.
 - **The ring** (`controls::focus_ring`) returns the style unchanged in
   pointer mode, so every control, the address field, sidebar rows and the
   resize edge follow the flag (the edge and rows keep their focused
-  background). A change of mode redraws the window it happened in.
+  background). A change of mode redraws the window it happened in at once,
+  and every other open Syrinx window from a deferred callback
+  (`refresh_every_window`), so a ring left in another window appears or
+  goes without waiting for an unrelated redraw.
 - The flag is one static for the whole app, because there is one owner with
-  one keyboard and one mouse; a key in the palette shows the ring in the main
-  window too once it next draws.
+  one keyboard and one mouse.
+- A modifier pressed alone counts for nothing. GPUI reports a lone Shift,
+  Ctrl, Alt, Windows or Fn key as a keystroke when it is released; Caps Lock
+  only changes its modifier state and never becomes a keystroke, so it is
+  not in the list. The owner's decision is recorded in `docs/decisions.md`
+  (2026-10-14).
 
 No role, element id or focus handle changed, so the full UI Automation
 probe was not rerun. **Visual probe.** The gate's `local` build was launched
@@ -226,7 +233,10 @@ window was in the foreground, and screenshotted the toolbar. A press on
 "Reset zoom" focused it with no ring; Tab moved focus to "Zoom in" with the
 ring; a second press on "Reset zoom" focused it with no ring again. The first
 build, which used the root's own mouse listener, still drew the ring after
-the press; that is how the trap below was found.
+the press; that is how the trap below was found. After the review fixes
+(redrawing every window, dropping Caps Lock) the probe was rerun on
+`target\dw-62-probe-3` with the same three results. No probe covered a ring
+in a second window being redrawn.
 
 **Not verified by an agent:** F6 and Tab out of a real web page (the page
 path is unit-tested in `syrinx_ui::focus` and the event wiring is one line in

@@ -225,12 +225,10 @@ impl Modality {
     }
 }
 
-/// Whether GPUI's key name is a modifier pressed on its own.
+/// Whether GPUI's key name is a modifier pressed on its own: the names GPUI gives the
+/// keystroke it reports when a lone modifier is released (Caps Lock never becomes one).
 pub fn is_modifier_key(key: &str) -> bool {
-    matches!(
-        key,
-        "shift" | "control" | "alt" | "platform" | "function" | "capslock"
-    )
+    matches!(key, "shift" | "control" | "alt" | "platform" | "function")
 }
 
 #[cfg(test)]
@@ -447,9 +445,7 @@ mod tests {
 
     #[test]
     fn a_modifier_alone_keeps_whatever_came_before() {
-        for key in [
-            "shift", "control", "alt", "platform", "function", "capslock",
-        ] {
+        for key in ["shift", "control", "alt", "platform", "function"] {
             assert!(is_modifier_key(key), "{key}");
             for modality in [Modality::Keyboard, Modality::Pointer] {
                 assert_eq!(modality.after(ModalityInput::Key(key)), modality, "{key}");

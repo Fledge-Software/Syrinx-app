@@ -890,7 +890,7 @@ impl BrowserView {
             BrowserEvent::PageText { .. } => {}
             // Every page shortcut is a key the page handed over, so the ring may show (DW-62).
             BrowserEvent::Shortcut(shortcut) => {
-                crate::controls::note_input(ModalityInput::PageKey, window);
+                crate::controls::note_input(ModalityInput::PageKey, window, cx);
                 self.shortcut(shortcut, window, cx);
             }
             BrowserEvent::PageFocused { id } => self.page_took_focus(id, window, cx),

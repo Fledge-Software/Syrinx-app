@@ -23,8 +23,9 @@ fn modality() -> Modality {
     }
 }
 
-/// Records what the owner did and redraws `window` when that shows or hides the ring.
-pub(crate) fn note_input(input: ModalityInput<'_>, window: &mut Window) {
+/// Records what the owner did and, when that shows or hides the ring, redraws `window` now
+/// and every other open Syrinx window once the current update ends.
+pub(crate) fn note_input(input: ModalityInput<'_>, window: &mut Window, cx: &mut App) {
     let before = modality();
     let after = before.after(input);
     if after == before {
@@ -32,13 +33,24 @@ pub(crate) fn note_input(input: ModalityInput<'_>, window: &mut Window) {
     }
     KEYBOARD_MODALITY.store(after == Modality::Keyboard, Ordering::Relaxed);
     window.refresh();
+    // Other windows are redrawn from a deferred callback, outside this window's update.
+    cx.defer(refresh_every_window);
+}
+
+/// Redraws every open window, so a ring elsewhere does not wait for an unrelated redraw.
+fn refresh_every_window(cx: &mut App) {
+    for handle in cx.windows() {
+        if let Err(error) = handle.update(cx, |_, window, _| window.refresh()) {
+            eprintln!("Cannot redraw a window for the focus ring: {error}");
+        }
+    }
 }
 
 /// Watches every key a Syrinx window receives, before any handler can consume it. Keys a
 /// focused page hands over arrive as browser shortcuts instead (`ui.rs`).
 pub(crate) fn watch_keys(cx: &mut App) {
-    cx.intercept_keystrokes(|event, window, _| {
-        note_input(ModalityInput::Key(&event.keystroke.key), window);
+    cx.intercept_keystrokes(|event, window, cx| {
+        note_input(ModalityInput::Key(&event.keystroke.key), window, cx);
     })
     .detach();
 }
@@ -51,9 +63,9 @@ pub(crate) fn watch_pointer<E: ParentElement>(root: E) -> E {
         canvas(
             |_, _, _| {},
             |_, _, window, _| {
-                window.on_mouse_event(|_: &MouseDownEvent, phase, window, _| {
+                window.on_mouse_event(|_: &MouseDownEvent, phase, window, cx| {
                     if phase == DispatchPhase::Capture {
-                        note_input(ModalityInput::PointerPress, window);
+                        note_input(ModalityInput::PointerPress, window, cx);
                     }
                 });
             },
