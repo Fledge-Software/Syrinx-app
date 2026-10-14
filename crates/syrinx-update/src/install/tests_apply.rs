@@ -34,6 +34,8 @@ enum Start {
     CannotLaunch,
     /// Hangs with a process whose current folder is the program folder, so it cannot be renamed.
     HangsInItsFolder,
+    /// Starts, but watching it fails, as if Windows refused to report on the process.
+    CannotBeWatched,
 }
 
 /// Records what was started; a clean start writes the start record as Syrinx would.
@@ -43,15 +45,7 @@ struct FakeLauncher {
     launched: Vec<(Vec<u8>, Vec<OsString>)>,
     stopped: Rc<RefCell<bool>>,
     /// Real processes pinning a folder, stopped when the test ends.
-    pinning: Vec<Child>,
-}
-
-impl Drop for FakeLauncher {
-    fn drop(&mut self) {
-        for child in &mut self.pinning {
-            stop_pinning(child);
-        }
-    }
+    pinning: Vec<Pinned>,
 }
 
 impl FakeLauncher {
@@ -76,11 +70,15 @@ impl FakeLauncher {
 
 struct FakeProgram {
     exited: bool,
+    unwatchable: bool,
     stopped: Rc<RefCell<bool>>,
 }
 
 impl LaunchedProgram for FakeProgram {
     fn has_exited(&mut self) -> io::Result<bool> {
+        if self.unwatchable {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
         Ok(self.exited)
     }
 
@@ -118,36 +116,44 @@ impl Launcher for FakeLauncher {
         }
         Ok(Box::new(FakeProgram {
             exited: self.start == Start::ExitsAtOnce,
+            unwatchable: self.start == Start::CannotBeWatched && self.launched.len() == 1,
             stopped: Rc::clone(&self.stopped),
         }))
     }
 }
 
-/// Start a real, harmless Windows process whose current folder is `folder`, and wait until it
-/// has started: a new process takes its current folder only as it initialises.
-fn pin_folder(folder: &Path) -> Child {
+/// A real, harmless Windows process whose current folder is pinned; stopped when dropped,
+/// even if the test panics.
+struct Pinned(Child);
+
+impl Drop for Pinned {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.kill().and_then(|()| self.0.wait().map(drop))
+            && !thread::panicking()
+        {
+            panic!("stop the test's own process: {error}");
+        }
+    }
+}
+
+/// Start a process whose current folder is `folder`, and wait until it has started: a new
+/// process takes its current folder only as it initialises.
+fn pin_folder(folder: &Path) -> Pinned {
     let system = std::env::var_os("SystemRoot").expect("SystemRoot");
-    let mut child = Command::new(Path::new(&system).join(r"System32\PING.EXE"))
+    let child = Command::new(Path::new(&system).join(r"System32\PING.EXE"))
         .args(["-n", "30", "127.0.0.1"])
         .current_dir(folder)
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("start a process in the folder");
-    let mut output = std::io::BufReader::new(child.stdout.take().expect("piped output"));
+    let mut pinned = Pinned(child);
+    let mut output = std::io::BufReader::new(pinned.0.stdout.take().expect("piped output"));
     let mut first_line = String::new();
     std::io::BufRead::read_line(&mut output, &mut first_line)
         .expect("the process prints once running");
     // Keep the pipe open, so the process never stops early on a failed write.
-    child.stdout = Some(output.into_inner());
-    child
-}
-
-fn stop_pinning(child: &mut Child) {
-    if let Err(error) = child.kill().and_then(|()| child.wait().map(drop))
-        && !thread::panicking()
-    {
-        panic!("stop the test's own process: {error}");
-    }
+    pinned.0.stdout = Some(output.into_inner());
+    pinned
 }
 
 fn record(version: Version) -> Vec<u8> {
@@ -491,13 +497,13 @@ fn a_process_working_in_the_program_folder_stops_the_swap_but_not_elsewhere() {
     // Reproduces the review's finding with real processes: Windows refuses to rename a folder
     // that is a process's current one, and a process working in `Updates` does not matter.
     let (sandbox, keys) = staged_sandbox();
-    let mut pinned = pin_folder(&sandbox.layout.program());
+    let pinned = pin_folder(&sandbox.layout.program());
     let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
     let applied = apply_update(
         &request(&sandbox.layout, &keys.pinned, ApplyMode::Restart),
         &mut launcher,
     );
-    stop_pinning(&mut pinned);
+    drop(pinned);
     assert_eq!(applied, Ok(Applied::NotSwapped(NEW)));
     assert_eq!(read_tree(&sandbox.layout.program()), program_files(OLD));
     assert_eq!(
@@ -509,13 +515,13 @@ fn a_process_working_in_the_program_folder_stops_the_swap_but_not_elsewhere() {
     assert_eq!(outcome.result, UpdateResult::ApplyFailed);
 
     let (sandbox, keys) = staged_sandbox();
-    let mut elsewhere = pin_folder(&sandbox.layout.updates());
+    let elsewhere = pin_folder(&sandbox.layout.updates());
     let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
     let applied = apply_update(
         &request(&sandbox.layout, &keys.pinned, ApplyMode::Quit),
         &mut launcher,
     );
-    stop_pinning(&mut elsewhere);
+    drop(elsewhere);
     assert_eq!(applied, Ok(Applied::Installed(NEW)));
 }
 
@@ -541,4 +547,30 @@ fn a_rollback_that_cannot_move_the_failed_version_tells_the_owner() {
     drop(launcher);
     let outcome = Outcome::take(&sandbox.layout).expect("read").expect("told");
     assert_eq!(outcome.result, UpdateResult::RollbackFailed);
+}
+
+#[test]
+fn a_new_version_that_cannot_be_watched_is_stopped_and_rolled_back() {
+    // An unconfirmed build must never be left running unwatched, nor recorded as the old one.
+    let (sandbox, keys) = staged_sandbox();
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::CannotBeWatched);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Restart),
+        &mut launcher,
+    );
+    assert_eq!(
+        applied,
+        Ok(Applied::RolledBack {
+            attempted: NEW,
+            current: OLD
+        })
+    );
+    assert!(
+        *launcher.stopped.borrow(),
+        "the unwatched version was stopped"
+    );
+    assert_eq!(launcher.versions(), [record(NEW), record(OLD)]);
+    assert_untouched(&sandbox);
+    let outcome = Outcome::take(&sandbox.layout).expect("read").expect("told");
+    assert_eq!(outcome.result, UpdateResult::ApplyRolledBack);
 }

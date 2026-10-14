@@ -42,6 +42,8 @@ pub enum InstallError {
     StagedVersionMismatch { pending: Version, manifest: Version },
     /// Nothing is staged.
     NothingStaged,
+    /// A step failed after the new version was moved into place; its own records cover it.
+    AfterSwap(Box<InstallError>),
     /// A step failed and cleaning up after it also failed.
     Incomplete {
         primary: Box<InstallError>,
@@ -94,6 +96,7 @@ impl fmt::Display for InstallError {
                 )
             }
             Self::NothingStaged => formatter.write_str("no update is staged"),
+            Self::AfterSwap(error) => write!(formatter, "after the swap: {error}"),
             Self::Incomplete { primary, cleanup } => {
                 write!(formatter, "{primary}; cleaning up also failed: {cleanup}")
             }

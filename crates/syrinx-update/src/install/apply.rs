@@ -8,7 +8,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::fault::{Step, checkpoint};
-use super::files::{read_small, remove_file_if_present, remove_program_folder, rename_patiently};
+use super::files::{
+    read_small, remove_file_if_present, remove_program_folder, rename_patiently, write_atomically,
+};
 use super::lock::ApplyLock;
 use super::records::{Outcome, Pending, UpdateResult, UpdateState};
 use super::{InstallError, UpdateLayout};
@@ -179,6 +181,11 @@ pub fn apply_update(
         // A fault hook stands in for a crash, which records and starts nothing.
         return applied;
     }
+    // After the swap the new version's own records apply; recording "stayed on the old
+    // version" or relaunching unwatched would both be wrong.
+    if matches!(applied, Err(InstallError::AfterSwap(_))) {
+        return applied;
+    }
     let applied = applied.map_err(|error| record_unfinished(request.layout, error));
     let started = matches!(
         applied,
@@ -219,19 +226,27 @@ fn apply_locked(
         return Ok(Applied::NotSwapped(pending.version));
     }
     checkpoint(Step::Swapped)?;
-    match request.mode {
-        ApplyMode::Quit => {
-            finish(
-                layout,
-                &pending,
-                UpdateResult::Installed,
-                pending.version,
-                true,
-            )?;
-            Ok(Applied::Installed(pending.version))
-        }
+    let applied = match request.mode {
+        ApplyMode::Quit => finish(
+            layout,
+            &pending,
+            UpdateResult::Installed,
+            pending.version,
+            true,
+        )
+        .map(|()| Applied::Installed(pending.version)),
         ApplyMode::Restart => restart(request, launcher, &pending, lock),
+    };
+    applied.map_err(after_swap)
+}
+
+/// Mark an error as happening once the new version is in place.
+fn after_swap(error: InstallError) -> InstallError {
+    #[cfg(test)]
+    if matches!(error, InstallError::Interrupted(_)) {
+        return error;
     }
+    InstallError::AfterSwap(Box::new(error))
 }
 
 /// Record an unexpected stop, so the next start tells the owner; the update stays staged.
@@ -341,14 +356,13 @@ fn restart(
     lock: ApplyLock,
 ) -> Result<Applied, InstallError> {
     let layout = request.layout;
-    remove_file_if_present(&layout.started(), "clearing the start record")?;
-    let started = match launcher.launch(&layout.executable(), &relaunch(request)) {
-        Ok(program) => {
-            checkpoint(Step::Launched)?;
-            wait_for_clean_start(layout, program, pending.version, request.timing)?
-        }
+    let started = match start_and_watch(request, launcher, pending) {
+        Ok(started) => started,
+        #[cfg(test)]
+        Err(InstallError::Interrupted(step)) => return Err(InstallError::Interrupted(step)),
+        // An unconfirmed new version is never left running unwatched: roll back instead.
         Err(error) => {
-            eprintln!("the new version could not be started: {}", error.kind());
+            eprintln!("watching the new version failed: {error}");
             false
         }
     };
@@ -367,10 +381,38 @@ fn restart(
     roll_back(request, launcher, pending, lock)
 }
 
-/// `true` once the new Syrinx records a clean start for `version`; stops it otherwise.
+/// Start the new Syrinx and report whether it recorded a clean start.
+fn start_and_watch(
+    request: &ApplyRequest<'_>,
+    launcher: &mut dyn Launcher,
+    pending: &Pending,
+) -> Result<bool, InstallError> {
+    let layout = request.layout;
+    remove_file_if_present(&layout.started(), "clearing the start record")?;
+    let mut program = match launcher.launch(&layout.executable(), &relaunch(request)) {
+        Ok(program) => program,
+        Err(error) => {
+            eprintln!("the new version could not be started: {}", error.kind());
+            return Ok(false);
+        }
+    };
+    checkpoint(Step::Launched)?;
+    let watched = wait_for_clean_start(layout, program.as_mut(), pending.version, request.timing);
+    if matches!(watched, Ok(true)) {
+        return watched;
+    }
+    // Not confirmed, or watching failed: stop it before rolling back.
+    program
+        .stop()
+        .map_err(super::error::io_error("stopping the new version"))?;
+    watched
+}
+
+/// `true` once the new Syrinx records a clean start for `version`, `false` when it exits
+/// first or the wait runs out.
 fn wait_for_clean_start(
     layout: &UpdateLayout,
-    mut program: Box<dyn LaunchedProgram>,
+    program: &mut dyn LaunchedProgram,
     version: Version,
     timing: ApplyTiming,
 ) -> Result<bool, InstallError> {
@@ -383,14 +425,10 @@ fn wait_for_clean_start(
             .has_exited()
             .map_err(super::error::io_error("watching the new version"))?;
         if exited || Instant::now() >= deadline {
-            break;
+            return Ok(false);
         }
         thread::sleep(timing.poll);
     }
-    program
-        .stop()
-        .map_err(super::error::io_error("stopping the new version"))?;
-    Ok(false)
 }
 
 /// Put `Syrinx.previous` back, tell the owner once, and start the previous version.
@@ -401,7 +439,13 @@ fn roll_back(
     lock: ApplyLock,
 ) -> Result<Applied, InstallError> {
     let layout = request.layout;
-    // Without `pending`, a crash part-way leaves the failed copy for the next start to remove.
+    // Without `pending` but with the staging mark, a crash part-way leaves the failed copy for
+    // the next start to remove.
+    write_atomically(
+        &layout.staging_marker(),
+        b"rollback\n",
+        "marking the rollback",
+    )?;
     remove_file_if_present(&layout.pending(), "removing the pending record")?;
     if let Err(error) = restore_previous(layout, request.timing.rename_patience) {
         #[cfg(test)]
@@ -425,8 +469,11 @@ fn roll_back(
         pending.from,
         true,
     )?;
-    // The failed copy has no `pending`, so the next start removes it if this cannot.
-    if let Err(error) = remove_program_folder(&layout.staged(), "Syrinx.new") {
+    // The failed copy keeps the staging mark, so the next start removes it if this cannot.
+    let removed = remove_program_folder(&layout.staged(), "Syrinx.new").and_then(|()| {
+        remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")
+    });
+    if let Err(error) = removed {
         eprintln!("the failed version stays for the next start to remove: {error}");
     }
     // The previous Syrinx must find the lock free to read its outcome.
