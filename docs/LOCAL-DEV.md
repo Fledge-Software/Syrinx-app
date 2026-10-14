@@ -184,15 +184,30 @@ declarations all count, and so do entries in a crate's own `[features]` table.
   which only `syrinx-app` may use (P1-39c). The headless crates, the update
   download included, must not reach a network client even through a
   third-party library in the resolved graph.
-- Every resolved `windows` and `windows-sys` build may carry no networking
-  feature except WinHTTP on the build `syrinx-update-net` uses and the
-  third-party entries the owner approved on 2026-10-14 (DW-68,
+- Every resolved `windows`, `windows-sys` and `winapi` build may carry no
+  networking feature except WinHTTP on the build `syrinx-update-net` uses
+  and the third-party entries the owner approved on 2026-10-14 (DW-68,
   `THIRD_PARTY_NETWORK_FEATURES` in
   `crates/xtask/src/dependency_policy/resolved_windows.rs`), each pinned to
-  its requesting crates and versions. A new requester, version, feature or
-  namespace fails, and so does an approved entry that no longer matches.
-  Cargo's metadata unifies features across every target platform, so this
-  can report a Linux-only crate's request (zbus) as well as Windows ones.
+  the crates whose manifest activates it: a declaration whose version
+  requirement matches that build, or a `[features]` entry whose own feature
+  is switched on. A new requester, version, feature or namespace fails, and
+  so does an approved entry that no longer matches. Networking here means
+  the Win32 networking, network-management, web, URL-moniker, RPC and WinRM
+  namespaces, WinRT's `Networking`, `Web` and web-authentication broker,
+  and winapi's socket, HTTP, IP-helper, URL-moniker and RPC modules.
+  WinHTTP is approved per build: a third party asking for it on the
+  download's build passes, since Cargo switches it on there anyway. Cargo's
+  metadata unifies features across every target platform, so this can
+  report a Linux-only crate's request (zbus) as well as Windows ones.
+- Syrinx's source may not name a socket binding: `crates/xtask/src/network_sources.rs`
+  refuses `WinSock`, `NetworkManagement`, any `WSA` name and the
+  `ws2_32.dll` and `iphlpapi.dll` libraries in every crate except xtask,
+  and WinHTTP in every crate but `syrinx-update-net`. The approved
+  third-party features compile in the shell crates that share those builds,
+  so this scan, not the feature check, is what keeps Syrinx from calling
+  them. A raw `#[link]` or `windows-link` extern under another name is
+  invisible to a feature check and to this name list.
 
 This is a manifest architecture check, not a runtime sandbox or complete
 third-party dependency audit. Internal routes are matched by normalized

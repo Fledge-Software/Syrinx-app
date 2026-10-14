@@ -12,28 +12,47 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-14
 
-- **GPUI's existing Windows socket features are approved, pinned to the
-  crates that ask for them (DW-68; narrows D9's check, not D9).** D9 keeps
-  typing on the machine, and P1-39c made WinHTTP in `syrinx-update-net` the
-  one exception (2026-10-13, question 8). `cargo xtask check-deps` checked
-  only what Syrinx's own crates declare, so a third-party crate could switch
-  on another `windows` networking namespace and Cargo would unify it into
-  the build every crate shares. DW-68 now reads the features Cargo actually
-  resolves on every `windows` and `windows-sys` version, and found that
-  GPUI's own stack already turns on Windows sockets: `Win32_Networking_WinSock`
-  on the pinned `windows 0.62.2`, requested by `gpui-pre` and
-  `gpui-pre-windows` 0.3.8; `sysinfo 0.31.4`'s IpHelper, Ndis,
-  NetManagement and WinSock features on `windows 0.57.0`, reached through
-  GPUI's `zed-scap`; and on `windows-sys 0.61.2`, WinSock from mio, polling,
-  quinn-udp, rustix, socket2, uds_windows and zbus, and IpHelper from zbus.
-  These are bindings the shell may already link; no Syrinx crate calls
-  them, which the source scan in `crates/xtask/src/network_sources.rs` and
-  the declaration rules still enforce. The owner approved exactly those
-  entries, each with its requesting crates and versions, in
-  `THIRD_PARTY_NETWORK_FEATURES`
-  (`crates/xtask/src/dependency_policy/resolved_windows.rs`). Any new
-  requester, version, feature or namespace fails the check, and so does an
-  entry that no longer matches, so the list cannot outlive its reason.
+- **GPUI's existing Windows network and remote-call features are approved,
+  pinned to the crates that ask for them (DW-68; narrows D9's check, not
+  D9).** D9 keeps typing on the machine, and P1-39c made WinHTTP in
+  `syrinx-update-net` the one exception (2026-10-13, question 8).
+  `cargo xtask check-deps` checked only what Syrinx's own crates declare, so
+  a third-party crate could switch on another networking namespace and Cargo
+  would unify it into the build every crate shares. DW-68 now reads the
+  features Cargo actually resolves on every `windows`, `windows-sys` and
+  `winapi` version, and found that GPUI's own stack already turns some on:
+  - `Win32_Networking_WinSock` on the pinned `windows 0.62.2`, requested by
+    `gpui-pre` and `gpui-pre-windows` 0.3.8;
+  - on `windows 0.57.0`, `sysinfo 0.31.4`'s IpHelper, Ndis, NetManagement
+    and WinSock features and `Win32_System_Rpc` (used by its WMI sensor
+    reading), reached through GPUI's `zed-scap`;
+  - on `windows-sys 0.61.2`, WinSock from mio, polling, quinn-udp, rustix,
+    socket2, uds_windows and zbus, and IpHelper from zbus.
+
+  The owner approved exactly those eight entries, each with its requesting
+  crates and versions, in `THIRD_PARTY_NETWORK_FEATURES`
+  (`crates/xtask/src/dependency_policy/resolved_windows.rs`); RPC was
+  approved as the eighth after a review widened the namespaces checked.
+  Any new requester, version, feature or namespace fails the check, and so
+  does an entry that no longer matches or lists a crate that stopped asking,
+  so the list cannot outlive its reason.
+
+  What is enforced, exactly: because `windows 0.62.2` is the build
+  `syrinx-platform` and `syrinx-app` also use, its WinSock bindings compile
+  in those crates. The source scan in `crates/xtask/src/network_sources.rs`
+  refuses `WinSock`, `NetworkManagement`, any `WSA` name and the
+  `ws2_32.dll` and `iphlpapi.dll` libraries in every Syrinx crate except
+  the xtask tooling, and WinHTTP in every crate but the update download; the
+  declaration rules keep Syrinx's own manifests from asking for any of them.
+  These are text and manifest checks, not a sandbox: a raw `#[link]` or
+  `windows-link` extern is invisible to a feature check.
+
+  `winapi 0.3.9` also resolves `inaddr` and `in6addr` (requested by
+  `ntapi 0.4.3`). These modules define only the IPv4 and IPv6 address
+  structs and declare no functions, like std's `Ipv4Addr`, so they are not
+  on winapi's network list. The owner deferred this classification; it was
+  the agent's call, recorded here so it can be revisited.
+
   Rejected: patching GPUI's vendored manifest to drop WinSock, a new vendor
   patch that would not reach `sysinfo` through `zed-scap` and risks GPUI's
   own socket use; and closing DW-68 as a known limit, which would leave a

@@ -1,5 +1,5 @@
-//! Checks the `windows` features Cargo resolves, so no third-party crate can widen the shared
-//! bindings' networking beyond the update download's WinHTTP (D9, DW-68).
+//! Checks the Windows binding features Cargo resolves, so no third-party crate can widen the
+//! shared bindings' networking beyond the update download's WinHTTP (D9, DW-68).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -7,13 +7,23 @@ use serde_json::Value;
 
 use super::{
     ResolvedGraph, UPDATE_NET, WINHTTP_FEATURE, apply_feature_table, is_network_feature,
-    normalize_name, read_declaration, read_feature_table, read_packages, required_array,
-    required_string,
+    normalize_name, read_declaration, read_feature_lists, read_packages, required_array,
+    required_string, version_req,
 };
 
 /// The binding crates whose every resolved version is read. Each version is a separate build,
 /// and any crate that depends on it can call whatever namespace another crate switched on.
-const BINDING_CRATES: [&str; 2] = ["windows", "windows-sys"];
+const BINDING_CRATES: [&str; 3] = ["windows", "windows-sys", "winapi"];
+
+/// winapi's modules that declare networking, HTTP, URL-download or remote-call functions. Its
+/// features are module names, not namespaces. `inaddr` and `in6addr` are left out: they define
+/// only the IPv4 and IPv6 address structs and declare no functions, like std's `Ipv4Addr`
+/// (the agent's classification, 2026-10-14, after the owner deferred it).
+const WINAPI_NETWORK_MODULES: [&str; 20] = [
+    "httpapi", "iphlpapi", "ipexport", "iptypes", "mstcpip", "mswsock", "netioapi", "rpc",
+    "rpcdce", "rpcndr", "urlmon", "winhttp", "wininet", "winnetwk", "winsock2", "ws2def",
+    "ws2ipdef", "ws2spi", "ws2tcpip", "wsipv6ok",
+];
 
 /// One third-party networking feature the owner approved on 2026-10-14 (`docs/decisions.md`):
 /// the binding build, the feature, and the only crates that may request it there.
@@ -25,7 +35,7 @@ pub(super) struct AllowedFeature {
 
 /// GPUI's socket and system-information stack, exactly as resolved when DW-68 was built.
 /// Each entry must still match, so the list cannot outlive the crates that needed it.
-pub(super) const THIRD_PARTY_NETWORK_FEATURES: [AllowedFeature; 7] = [
+pub(super) const THIRD_PARTY_NETWORK_FEATURES: [AllowedFeature; 8] = [
     AllowedFeature {
         binding: "windows 0.62.2",
         feature: "Win32_Networking_WinSock",
@@ -52,6 +62,11 @@ pub(super) const THIRD_PARTY_NETWORK_FEATURES: [AllowedFeature; 7] = [
         requesters: &["sysinfo 0.31.4"],
     },
     AllowedFeature {
+        binding: "windows 0.57.0",
+        feature: "Win32_System_Rpc",
+        requesters: &["sysinfo 0.31.4"],
+    },
+    AllowedFeature {
         binding: "windows-sys 0.61.2",
         feature: "Win32_NetworkManagement_IpHelper",
         requesters: &["zbus 5.19.0"],
@@ -73,7 +88,8 @@ pub(super) const THIRD_PARTY_NETWORK_FEATURES: [AllowedFeature; 7] = [
 
 /// Refuses each Windows networking feature resolved on any binding package, except WinHTTP on
 /// the `windows` build the update download itself uses and the `allowed` third-party entries,
-/// naming the crates that request it. An allowed entry that no longer matches is refused too.
+/// naming the crates whose manifest activates it. An allowed entry that no longer matches is
+/// refused too.
 pub(super) fn check(
     metadata: &Value,
     graph: &ResolvedGraph,
@@ -87,12 +103,15 @@ pub(super) fn check(
         if !BINDING_CRATES.contains(&name.as_str()) {
             continue;
         }
-        let Some(features) = graph.features.get(id) else {
-            continue;
-        };
+        let features = graph
+            .features
+            .get(id)
+            .ok_or_else(|| format!("binding package has no resolve node: {id}"))?;
+        // WinHTTP is approved per build, not per requester: once the download asks for it,
+        // Cargo switches it on for every crate sharing that build, whoever else asks.
         let approved = name == "windows" && winhttp_builds.contains(id);
         let binding = package_label(id, &packages)?;
-        for feature in refused_features(features, approved) {
+        for feature in refused_features(name, features, approved) {
             let requesters = requesters(id, name, &feature, graph, &packages)?;
             let entry = allowed
                 .iter()
@@ -188,27 +207,44 @@ fn winhttp_builds(metadata: &Value, graph: &ResolvedGraph) -> Result<BTreeSet<St
     Ok(builds)
 }
 
-/// The networking features to refuse on one build. A namespace parent such as
+/// The networking features to refuse on one build. A Win32 namespace parent such as
 /// `Win32_Networking` is passed when an enabled child implies it; the child is judged instead.
-fn refused_features(features: &BTreeSet<String>, winhttp_approved: bool) -> Vec<String> {
+fn refused_features(
+    binding_name: &str,
+    features: &BTreeSet<String>,
+    winhttp_approved: bool,
+) -> Vec<String> {
     features
         .iter()
-        .filter(|feature| is_network_feature(feature))
+        .filter(|feature| is_binding_network_feature(binding_name, feature))
         .filter(|feature| !(winhttp_approved && feature.as_str() == WINHTTP_FEATURE))
         .filter(|feature| !is_implied_parent(feature, features))
         .cloned()
         .collect()
 }
 
+/// `windows` and `windows-sys` name namespaces; winapi names modules.
+fn is_binding_network_feature(binding_name: &str, feature: &str) -> bool {
+    if binding_name == "winapi" {
+        return WINAPI_NETWORK_MODULES.contains(&feature);
+    }
+    is_network_feature(feature)
+}
+
+/// Only Win32 parents hold nothing but child namespaces; WinRT's `Networking` and `Web`
+/// declare types of their own, so they are judged even when a child is on.
 fn is_implied_parent(feature: &str, features: &BTreeSet<String>) -> bool {
+    if !feature.starts_with("Win32_") {
+        return false;
+    }
     let child_prefix = format!("{feature}_");
     features
         .iter()
         .any(|other| other.starts_with(&child_prefix))
 }
 
-/// The packages with a resolved edge to this build whose declaration or `[features]` table
-/// names the feature, each as `name version`; Cargo's metadata records nothing more direct.
+/// The packages with a resolved edge to this build whose manifest activates the feature, each
+/// as `name version`; Cargo's metadata records nothing more direct.
 fn requesters(
     binding_id: &str,
     binding_name: &str,
@@ -216,6 +252,7 @@ fn requesters(
     graph: &ResolvedGraph,
     packages: &BTreeMap<&str, &Value>,
 ) -> Result<BTreeSet<String>, String> {
+    let binding_version = package_version(binding_id, packages)?;
     let mut found = BTreeSet::new();
     for (id, dependencies) in &graph.edges {
         if !dependencies
@@ -224,29 +261,66 @@ fn requesters(
         {
             continue;
         }
-        let Some(package) = packages.get(id.as_str()) else {
-            continue;
+        let package = packages
+            .get(id.as_str())
+            .ok_or_else(|| format!("resolve node has no package: {id}"))?;
+        let switched_on = graph
+            .features
+            .get(id)
+            .ok_or_else(|| format!("package has no resolve node: {id}"))?;
+        let binding = Binding {
+            name: binding_name,
+            version: binding_version,
         };
-        if requests_feature(package, binding_name, feature)? {
+        if activates_feature(package, switched_on, &binding, feature)? {
             found.insert(package_label(id, packages)?);
         }
     }
     Ok(found)
 }
 
-/// Whether one package's declarations of the binding, or its own feature table, ask for it.
-fn requests_feature(package: &Value, binding_name: &str, feature: &str) -> Result<bool, String> {
+/// One resolved binding package, as its requesters' declarations must match it.
+struct Binding<'a> {
+    name: &'a str,
+    version: &'a str,
+}
+
+/// Whether a package asks for the feature through a declaration that resolved to this binding
+/// version, or through an entry of its `[features]` table that its own build switched on.
+fn activates_feature(
+    package: &Value,
+    switched_on: &BTreeSet<String>,
+    binding: &Binding,
+    feature: &str,
+) -> Result<bool, String> {
     let name = normalize_name(required_string(package, "name", "package")?);
-    let mut declarations = required_array(package, "dependencies", &name)?
-        .iter()
-        .map(|dependency| read_declaration(dependency, &name))
-        .collect::<Result<Vec<_>, _>>()?;
-    let (_, entries) = read_feature_table(package, &name)?;
+    let mut declarations = Vec::new();
+    for dependency in required_array(package, "dependencies", &name)? {
+        let declaration = read_declaration(dependency, &name)?;
+        if declaration.name != binding.name {
+            continue;
+        }
+        let requirement = required_string(dependency, "req", &format!("dependency of {name}"))?;
+        if version_req::matches(requirement, binding.version)? {
+            declarations.push(declaration);
+        }
+    }
+    let entries: Vec<String> = read_feature_lists(package, &name)?
+        .into_iter()
+        .filter(|(table_feature, _)| switched_on.contains(table_feature))
+        .flat_map(|(_, entries)| entries)
+        .collect();
     apply_feature_table(&mut declarations, &entries);
     Ok(declarations
         .iter()
-        .filter(|declaration| declaration.name == binding_name)
         .any(|declaration| declaration.features.contains(feature)))
+}
+
+fn package_version<'a>(id: &str, packages: &BTreeMap<&str, &'a Value>) -> Result<&'a str, String> {
+    let package = packages
+        .get(id)
+        .ok_or_else(|| format!("resolve node has no package: {id}"))?;
+    required_string(package, "version", id)
 }
 
 /// `name version`, so an error points at the exact package among several versions.
