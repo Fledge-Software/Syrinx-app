@@ -57,7 +57,16 @@ Known limits of that provider, each checked in source:
   `set_active_descendant` (`gpui-pre-0.3.8/src/window/a11y.rs`, line 258)
   ignores the claim unless the focused node is an ancestor of the row. The
   palette keeps focus in its query field, which is the rows' sibling, so NVDA
-  cannot hear the arrow keys move the selection. Recorded as **DW-60**.
+  cannot hear the arrow keys move the selection. Recorded as **DW-60**, and
+  fixed on 2026-10-14 without a GPUI change (see "DW-60" below).
+- **A gpui-component text field is never the focused node.** The field's
+  frame (`Role::TextInput`) tracks a frame handle of its own, while the
+  element that tracks the field's focus handle (gpui-base's `input-state`,
+  `gpui-base-0.7.1/src/input/base/state.rs`, line 4464) has an id but no
+  role, so GPUI logs "focused element has no accessibility node" and UI
+  Automation reports the window as focused while the owner types. DW-60's
+  container gives the palette's field a focused node; the find bar, the
+  folder and tile forms and Customize's colour field still report the window.
 - **Plain text is not in the tree.** Text without an id is not reported, so
   Syrinx names the parts a screen reader must read (the permission question,
   the runtime notice, the status line) with labelled nodes.
@@ -92,9 +101,15 @@ claims in a frame need one handle tracked by two elements in that frame.
   root or the chrome root, which are alternative early returns; the import
   preview tracks its `focus` on the Import button or on the frame, never both
   (`import.rs`); peek, recovery and the palette are separate windows with
-  their own trees.
-- **Active descendant is not used.** DW-60 removed it, so the two panics
-  around it cannot trigger.
+  their own trees. One deliberate exception since DW-60: the palette's
+  query handle is tracked by the `palette-query` container and by the
+  field's own `input-state` element. That is still one claim, because
+  `input-state` has no role and so no node to claim with; only the
+  container calls the node builder's `set_focus`.
+- **Active descendant has one claimant.** Since DW-60 only the palette's
+  announced row claims it, at most one row per frame, and only while drawn
+  (so it is always in the tree); GPUI ignores the claim unless the container
+  is focused, so a chip or "Search the web" with focus is safe.
 - **A GPUI-level unit test is not possible without a dependency change.**
   `A11yNodeBuilder` is `pub(crate)` and GPUI's test harness needs its
   `test-support` feature, which would change the lockfile; the builder's own
@@ -286,6 +301,72 @@ code path, but nothing drove it); nested folders and saved pages natively
 (covered by the unit tests in `syrinx_ui::tree_focus` and
 `ui/sidebar_tree.rs`); and anything a screen reader says (owner check 13).
 
+## DW-60: the palette announces its moving selection
+
+Added on 2026-10-14 on `claude/dw-60-palette-active-descendant`. Before it,
+Up and Down moved the palette's highlighted row while keyboard focus stayed
+in the query field, and a screen reader heard nothing: GPUI lets a row claim
+the screen reader's focus (`aria_active_descendant`) only while a focused
+node is the row's ancestor, and the field was the rows' sibling. Worse, the
+field itself was never the focused node (see "A gpui-component text field is
+never the focused node" above), so UI Automation reported the palette window.
+
+**What changed** (`crates/syrinx-app/src/palette.rs` and
+`palette/render.rs`; no GPUI, gpui-base or gpui-component change):
+
+- A container, `palette-query`, now holds the query field, the scope chips
+  and the results. It is an editable combo box named "Search or command",
+  with the typed text as its value, and it tracks **the query field's own
+  focus handle** (`PaletteView::query_container`). While the owner types, it
+  is therefore the node a screen reader hears as focused, and the rows are
+  its descendants.
+- Typing is untouched. GPUI sends keys along the dispatch path of whichever
+  element registered the handle last, and the field registers after its
+  ancestor, so the field still receives every key, Enter and Esc; text and
+  IME input go to whichever input handler is painted with the focused handle,
+  which is still only the field's. The DW-90 reuse is unchanged: each frame
+  asks the current input for its handle, so the fresh field made at each
+  close is tracked without further work.
+- The container's copy of the handle is marked as no Tab stop
+  (`shared_query_focus`). Otherwise the same handle would appear twice in Tab
+  order, and Shift Tab from the field would "move" to its own handle and stay
+  there.
+- Once the owner moves the selection (arrow keys, or a click on a row), the
+  selected row claims the active descendant, so a screen reader reads the
+  row's name, its kind and address, "selected" and its place ("2 of 7").
+  Typing a new query withdraws the claim and focus is the field again; a
+  model refresh keeps the claim on the same destination. The rule is
+  `PaletteChoices::announced_row` with two tests.
+- A mouse press anywhere in the container that no inner control takes
+  focuses the query field (GPUI does this for any element that tracks a
+  handle). The field already had the focus while the palette was open, so
+  only a press after Tab moved focus to a chip behaves differently: it
+  returns focus to the field.
+
+**Probe, rerun for DW-60.** The same kind of UI Automation client as above,
+extended to check that a Syrinx window (by process id) is in the foreground
+before posting each key, drove the gate's `local` build launched visibly on
+fresh synthetic profiles `target\dw-60-uia-*` (log
+`target\dw-60-uia-probe-4.log`; runs 1 to 3 stopped on script errors before
+sending palette keys). It made three blank tabs with the New tab button,
+opened the palette with the sidebar's Search button and posted keys only to
+the palette window. Results: on opening, UIA focus was the combo box "Search
+or command" with an empty value; typing "blank" left it there with value
+"blank"; Down, Down and Up each moved focus to a list item reported selected;
+typing "x" returned focus to the combo box (value "blankx") and Backspace
+kept it there; Tab then went through the five chips and "Search the web" and
+back to the query (reported as the still-selected row, since the selection
+had been moved); Esc closed the palette; a second opening of the reused popup
+started empty on the combo box, and Down then Enter opened the moved row.
+Syrinx stayed up with an empty stderr, so the tree built with debug
+assertions on and no doubled focus or active-descendant claim. A screenshot
+of the palette over Home showed the same layout as before.
+
+**Not verified by an agent.** What NVDA actually says (owner check 7), Shift
+Tab (a posted key cannot carry Shift), IME composition (no IME was used; the
+input handler path is unchanged), and the rows' "2 of 7", which UIA reported
+but no screen reader read.
+
 ## Owner checks with NVDA
 
 An agent cannot judge speech output, so these are the owner's. Use a fresh
@@ -330,8 +411,12 @@ portable copy also works). Then record pass/fail for each:
    count and whether it is selected) and "Search the web", and Shift Tab
    returns to the field. This is deliberate: the palette has no inline forms
    yet, so Tab has nothing else to do there; when plan 2 adds forms, Tab will
-   be scoped to the form's fields. Known gap DW-60: arrowing through results
-   is probably not announced. Record what NVDA actually says.
+   be scoped to the form's fields. Since DW-60: on opening and while typing,
+   NVDA reads the combo box "Search or command" (with what you typed). Down
+   and Up read each row in turn: its title, "selected", its kind and address
+   and its place ("2 of 5"). Typing again returns to the combo box, and
+   characters are still echoed. Record what NVDA actually says, and whether
+   anything is read twice or not at all.
 8. **Permission bar.** On a synthetic page that asks for the camera (any test
    page you trust), NVDA reads the question when you F6 to the bar;
    "Remember for this site" reads as a checkbox with its state.
@@ -388,6 +473,11 @@ portable copy also works). Then record pass/fail for each:
 3. **Palette announcements (DW-60).** Recommendation: change the palette so
    its list container owns focus and the query field (no GPUI patch), as a
    follow-up slice; the alternative is asking for a vendored GPUI change.
+   **Done 2026-10-14** that way (see "DW-60" above). One choice to confirm
+   in check 7: a row is announced only after you move the selection, not
+   while you type, as the ARIA combo box pattern does, so typing is not
+   interrupted by a new row name at every key. The alternative is to
+   announce the top row after each query; say if you prefer it.
 4. **Installing NVDA.** The checks above need NVDA on your machine; agents
    do not install software. Narrator, which ships with Windows, is an
    acceptable first pass if you prefer not to install NVDA yet.

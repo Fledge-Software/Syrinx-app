@@ -3,7 +3,7 @@
 use gpui::{
     AnyElement, Context, Div, FontWeight, HighlightStyle, Hsla, InteractiveElement, IntoElement,
     ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, StyledText, Toggled, div,
-    px,
+    prelude::FluentBuilder, px,
 };
 use syrinx_search::{SearchHit, Target};
 use syrinx_ui::metrics::{radius, text};
@@ -139,7 +139,7 @@ fn address_row(view: &PaletteView, address: &str, cx: &mut Context<PaletteView>)
     row_frame(
         "go-to-address".into(),
         title.text.clone(),
-        view.choices.selected == Some(0),
+        RowState::of(&view.choices, 0),
     )
     .on_click(cx.listener(move |this, _, window, cx| {
         if this.choices.request_id != request_id {
@@ -161,7 +161,7 @@ fn result_row(
 ) -> AnyElement {
     let target = hit.target;
     let request_id = view.choices.request_id;
-    let selected = Some(index + view.choices.address_rows()) == view.choices.selected;
+    let row = RowState::of(&view.choices, index + view.choices.address_rows());
     let trailing = match view.commands.command(target) {
         Some(command) => command
             .shortcut
@@ -170,7 +170,7 @@ fn result_row(
         None => (!hit.title.is_empty()).then(|| trailing_address(hit).into_any_element()),
     };
     let title = row_title(hit, ROW_TEXT_LIMIT);
-    row_frame(("result", index).into(), title.text.clone(), selected)
+    row_frame(("result", index).into(), title.text.clone(), row)
         .aria_description(format!("{} {}", target_kind(target), hit.address))
         .on_click(cx.listener(move |this, _, window, cx| {
             let Some(event) = this.choices.activation(request_id, target) else {
@@ -184,17 +184,41 @@ fn result_row(
         .into_any_element()
 }
 
+/// What a screen reader learns about one row besides its name.
+#[derive(Clone, Copy)]
+struct RowState {
+    selected: bool,
+    /// The row claims the screen reader's focus, so moving the selection is announced.
+    announced: bool,
+    /// One-based place among `count` selectable rows, read as "2 of 7".
+    position: usize,
+    count: usize,
+}
+
+impl RowState {
+    fn of(choices: &PaletteChoices, row: usize) -> Self {
+        Self {
+            selected: choices.selected == Some(row),
+            announced: choices.announced_row() == Some(row),
+            position: row + 1,
+            count: choices.row_count(),
+        }
+    }
+}
+
 /// A result row, named and marked selected for screen readers. Arrow keys move the
-/// selection while focus stays in the query field, so rows take no Tab stop.
-// TODO(DW-60): announce the moving selection; GPUI honours an active descendant only
-// under the focused node, and the query field is the rows' sibling.
-fn row_frame(id: gpui::ElementId, name: String, selected: bool) -> Stateful<Div> {
+/// selection while keys stay in the query field, so rows take no Tab stop; the announced
+/// row is the active descendant of the focused query container (DW-60).
+fn row_frame(id: gpui::ElementId, name: String, state: RowState) -> Stateful<Div> {
     let tokens = theme::current();
     let row = div()
         .id(id)
         .role(Role::ListBoxOption)
         .aria_label(name)
-        .aria_selected(selected)
+        .aria_selected(state.selected)
+        .aria_position_in_set(state.position)
+        .aria_size_of_set(state.count)
+        .when(state.announced, |row| row.aria_active_descendant())
         .h(px(ROW_HEIGHT))
         .flex_shrink_0()
         .px(px(10.))
@@ -204,7 +228,7 @@ fn row_frame(id: gpui::ElementId, name: String, selected: bool) -> Stateful<Div>
         .gap_3()
         .text_size(px(text::PALETTE_ROW))
         .cursor_pointer();
-    if selected {
+    if state.selected {
         row.bg(rgba(tokens.accent.soft))
             .text_color(rgba(tokens.text_strong))
             .font_weight(FontWeight::MEDIUM)

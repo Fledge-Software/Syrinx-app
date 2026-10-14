@@ -10,9 +10,9 @@ use std::{rc::Rc, time::Instant};
 
 use futures::channel::mpsc::UnboundedSender;
 use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, ParentElement,
-    Render, ScrollHandle, StatefulInteractiveElement, Styled, Subscription, Window, actions, div,
-    px,
+    App, AppContext, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    KeyBinding, ParentElement, Render, ScrollHandle, Stateful, StatefulInteractiveElement, Styled,
+    Subscription, Window, actions, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
 use syrinx_core::{CommandAction, CommandContext, CommandRegistry};
@@ -500,23 +500,52 @@ impl Render for PaletteView {
             .on_action(|_: &ui::FocusNextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &ui::FocusPreviousControl, window, cx| window.focus_prev(cx))
             .child(
-                div()
-                    .h(px(56.))
-                    .px_4()
-                    .flex()
-                    .items_center()
-                    .gap_3()
+                self.query_container(cx)
                     .child(
                         div()
-                            .flex_1()
-                            .child(Input::new(&self.input).aria_label("Search or command")),
+                            .h(px(56.))
+                            .px_4()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Input::new(&self.input).aria_label("Search or command")),
+                            )
+                            .child(render::key_hint("Esc")),
                     )
-                    .child(render::key_hint("Esc")),
+                    .child(render::chips(self, cx))
+                    .child(body),
             )
-            .child(render::chips(self, cx))
-            .child(body)
             .child(render::footer(&self.choices.status))
     }
+}
+
+impl PaletteView {
+    /// The combo box that holds the query field and the rows (DW-60). It tracks the query
+    /// field's own focus handle, so while the owner types it is the node a screen reader
+    /// hears as focused, and the announced row below it can claim that focus.
+    fn query_container(&self, cx: &App) -> Stateful<Div> {
+        let query = self.input.read(cx);
+        div()
+            .id("palette-query")
+            .role(gpui::Role::EditableComboBox)
+            .aria_label("Search or command")
+            .aria_value(query.value().to_string())
+            .track_focus(&shared_query_focus(query.focus_handle(cx)))
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+    }
+}
+
+/// The query field's focus handle, made no Tab stop: the field itself already is one, and a
+/// second stop for the same handle would trap Shift Tab on the field.
+fn shared_query_focus(mut handle: FocusHandle) -> FocusHandle {
+    handle.tab_stop = false;
+    handle
 }
 
 #[cfg(test)]
