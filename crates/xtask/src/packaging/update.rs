@@ -5,16 +5,24 @@ use super::manifest::{MANIFEST, layout};
 /// P1-38's signed manifest, written beside `syrinx-package.json`.
 pub const UPDATE_MANIFEST: &str = "manifest";
 
+/// The `syrinx-update` feature that builds the release tool and its key-storage signer.
+pub const RELEASE_TOOL_FEATURE: &str = "release-tool";
+
+/// The same feature as the gate names it, so Clippy and the tests still cover the release tool.
+pub const GATE_FEATURE: &str = "syrinx-update/release-tool";
+
 /// Oldest installed version allowed to apply a package; no release yet needs an earlier migration.
 pub const MINIMUM_VERSION: &str = "0.0.0";
 
 /// The release tool's package and binary, run with D38's `local` profile.
-const TOOL: [&str; 9] = [
+const TOOL: [&str; 11] = [
     "run",
     "--package",
     "syrinx-update",
     "--bin",
     "syrinx-update-tool",
+    "--features",
+    RELEASE_TOOL_FEATURE,
     "--profile",
     "local",
     "--offline",
@@ -108,6 +116,14 @@ mod tests {
             ]
         );
         assert_eq!(listed_files(&command), update_files());
+    }
+
+    #[test]
+    fn the_gate_builds_the_release_tool_feature() {
+        assert_eq!(
+            GATE_FEATURE.split_once('/'),
+            Some(("syrinx-update", RELEASE_TOOL_FEATURE))
+        );
     }
 
     #[test]

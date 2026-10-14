@@ -261,16 +261,20 @@ fn check_serial_advances(package: &Path, serial: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Replace the three signed files one at a time, `latest` last.
+///
+/// A failure part-way never leaves a new `latest` beside an old `latest.sig`, and the
+/// folder's serial check still sees the previous statement.
 fn write_release(package: &Path, release: &SignedRelease) -> Result<(), String> {
     write_replacing(
         &package.join(MANIFEST_SIGNATURE),
         &release.manifest_signature,
     )?;
-    write_replacing(&package.join(STATEMENT), &release.statement)?;
     write_replacing(
         &package.join(STATEMENT_SIGNATURE),
         &release.statement_signature,
-    )
+    )?;
+    write_replacing(&package.join(STATEMENT), &release.statement)
 }
 
 fn read_file(path: &Path, limit: usize, what: &'static str) -> Result<Vec<u8>, String> {
@@ -290,8 +294,40 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("Could not write {}: {error}", path.display()))
 }
 
+/// Write a temporary file beside `path`, flush it, then rename it over `path`.
 fn write_replacing(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    fs::write(path, bytes).map_err(|error| format!("Could not write {}: {error}", path.display()))
+    let temporary = partial_path(path)?;
+    let written = write_new(&temporary, bytes).and_then(|()| {
+        fs::rename(&temporary, path).map_err(|error| {
+            format!(
+                "Could not move {} to {}: {error}",
+                temporary.display(),
+                path.display()
+            )
+        })
+    });
+    let Err(message) = written else {
+        return Ok(());
+    };
+
+    // Remove the partial file, reporting a removal failure alongside the original one.
+    match fs::remove_file(&temporary) {
+        Ok(()) => Err(message),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(message),
+        Err(error) => Err(format!(
+            "{message} Also could not remove {}: {error}",
+            temporary.display()
+        )),
+    }
+}
+
+/// `<name>.partial` in the same folder, so the final rename stays on one volume.
+fn partial_path(path: &Path) -> Result<PathBuf, String> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("{} has no file name.", path.display()))?;
+    Ok(path.with_file_name(format!("{name}.partial")))
 }
 
 fn describe(error: syrinx_update::UpdateError) -> String {
@@ -305,6 +341,8 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    use syrinx_update::{KeyId, SIGNATURE_BYTES};
 
     use super::*;
 
@@ -545,6 +583,56 @@ mod tests {
 
         let last = Timestamp::parse("9999-12-31T00:00:00Z").expect("canonical");
         assert!(statement_terms(&request, last).is_err());
+    }
+
+    fn synthetic_release(fill: u8) -> SignedRelease {
+        SignedRelease {
+            manifest_signature: [fill; SIGNATURE_BYTES],
+            statement: vec![fill; 10],
+            statement_signature: [fill; SIGNATURE_BYTES],
+            key_id: KeyId([fill; 8]),
+        }
+    }
+
+    fn leftover_partials(scratch: &Scratch) -> Vec<String> {
+        fs::read_dir(&scratch.root)
+            .expect("the synthetic folder is listable")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.ends_with(".partial"))
+            .collect()
+    }
+
+    #[test]
+    fn a_release_replaces_each_file_and_leaves_no_partials() {
+        let scratch = Scratch::new();
+        write_release(&scratch.root, &synthetic_release(1)).expect("the first release");
+        write_release(&scratch.root, &synthetic_release(2)).expect("the second release");
+        let read = |name: &str| fs::read(scratch.root.join(name)).expect("a written file");
+        assert_eq!(read(MANIFEST_SIGNATURE), [2; SIGNATURE_BYTES]);
+        assert_eq!(read(STATEMENT_SIGNATURE), [2; SIGNATURE_BYTES]);
+        assert_eq!(read(STATEMENT), [2; 10]);
+        assert!(leftover_partials(&scratch).is_empty());
+    }
+
+    #[test]
+    fn a_failed_signature_write_keeps_the_old_statement() {
+        let scratch = Scratch::new();
+        scratch.write(STATEMENT, b"old statement");
+        // A folder where `latest.sig` belongs makes its rename fail.
+        fs::create_dir(scratch.root.join(STATEMENT_SIGNATURE)).expect("a blocking folder");
+
+        assert!(write_release(&scratch.root, &synthetic_release(3)).is_err());
+        assert_eq!(
+            fs::read(scratch.root.join(STATEMENT)).expect("the old statement"),
+            b"old statement"
+        );
+        assert!(leftover_partials(&scratch).is_empty());
     }
 
     #[test]

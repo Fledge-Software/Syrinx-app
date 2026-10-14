@@ -151,6 +151,8 @@ fn check_workspace(root: &Path) -> Result<(), String> {
             "clippy",
             "--workspace",
             "--all-targets",
+            "--features",
+            packaging::GATE_FEATURE,
             "--profile",
             "local",
             "--offline",
@@ -165,6 +167,8 @@ fn check_workspace(root: &Path) -> Result<(), String> {
         &[
             "test",
             "--workspace",
+            "--features",
+            packaging::GATE_FEATURE,
             "--profile",
             "local",
             "--offline",

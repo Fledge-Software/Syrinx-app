@@ -341,10 +341,21 @@ byte.
 `latest.sig` uses the 76-byte layout of `manifest.sig` with a different
 magic, `ALS1` (Syrinx latest statement, format 1), in place of `AUS1`. The
 signature is over SHA-256 of the statement's exact bytes, with the same
-ECDSA P-256 key set. Because the magic differs, a manifest signature can
-never be presented as a statement signature or the other way round, even
-though the same key signs both. In v1 one key signs both; a separate
-statement-only key was deferred (proposal, "The release key").
+ECDSA P-256 key set, exactly as P1-38 signs a manifest. In v1 one key signs
+both; a separate statement-only key was deferred (proposal, "The release
+key").
+
+The magic is not what keeps the two kinds of file apart. It sits outside
+the signed digest, so anyone can relabel an `AUS1` signature as `ALS1`; it
+only catches a misplaced file early, with a clear error. The separation
+rests on the signed bytes themselves: a statement's first line must be
+exactly `syrinx-update-latest 1` and a manifest's exactly
+`syrinx-update-manifest 1`, each parser requires its own header, and both
+require the byte-exact canonical reparse. A manifest signature relabelled
+as a statement signature therefore verifies over bytes the statement
+parser refuses, and the reverse. Any future change must keep both header
+checks exact and the canonical reparse in place: loosening either would
+let one signed file be read as the other.
 
 ### How a statement is accepted
 
@@ -363,9 +374,15 @@ previous)` runs, in order:
 4. **Freshness:** refuse it if `expires` is at or before `now`, the local
    clock. Expiry is exclusive: at the stated second it has already expired.
    Also refuse it if `issued` is more than one day (86,400 seconds) after
-   `now`, so a slow clock still accepts a fresh statement but a clock set
-   far back cannot revive an old one. A clock outside 1970 to 9999 is an
-   error, not a guess.
+   `now`: a slow clock still accepts a fresh statement, but a statement
+   newer than the local clock allows is refused. This does not stop an old
+   statement on a clock set back into that statement's window. With no
+   `previous` record (a fresh install, or lost state), a genuine old
+   statement then passes the freshness check; only the serial rule below
+   stops it, and P1-38's rollback check still refuses a manifest that is
+   not newer than the installed version. Freeze resistance therefore
+   assumes a roughly correct clock and a kept serial record. A clock
+   outside 1970 to 9999 is an error, not a guess.
 5. **Replay:** given the last accepted statement (`AcceptedStatement`: its
    serial and the SHA-256 of its bytes), refuse a lower serial, and refuse
    an equal serial whose bytes differ.
@@ -387,7 +404,9 @@ anything.
 ### Writing a release: `cargo xtask package` and `cargo xtask sign-update`
 
 `cargo xtask package` now also writes P1-38's `manifest` into the package
-folder, beside `syrinx-package.json`. It lists every program file the
+folder, beside `syrinx-package.json`. The package's `Syrinx-*.zip` is built
+at the same time, before any signing, so it holds the unsigned `manifest`
+but no `manifest.sig`, `latest` or `latest.sig`. It lists every program file the
 install script copies (`syrinx.exe`, `syrinx-package.json` and the five
 scripts), with `minimum-version 0.0.0` because no release yet needs an
 earlier migration. The manifest is unsigned. Writing it needs the
@@ -401,7 +420,9 @@ refuses to replace an existing `manifest`.
 `cargo xtask sign-update --package <folder> --storage <software|smart-card>
 --key <name> --serial <n> --days <1-60>` signs that folder's `manifest` and
 a fresh statement with the owner's stored key, and writes `manifest.sig`,
-`latest` and `latest.sig` beside it. It opens the key by its name in
+`latest.sig` and then `latest` beside it, each through a temporary file
+renamed into place, so a failure part-way never leaves a new `latest` next
+to an old signature. It opens the key by its name in
 Windows' software key storage or smart-card key storage through NCrypt
 (Windows' key-storage interface) and asks Windows to sign; it reads only the
 public half, never the private key. The statement is issued at the current
@@ -412,8 +433,12 @@ that is not pinned. Because `PRODUCTION_KEYS` is empty until DW-30, the
 command refuses every key today; that is intended, as it fails closed until
 the owner's keys exist.
 
-The signing logic (`sign_release`) is tested only with in-memory CNG keys
-created fresh by each test. No test opens Windows key storage, and the
+The key-storage signer and `sign_release` sit behind the update crate's
+non-default `release-tool` feature, which only the release tool requires,
+so Syrinx itself never links code that opens Windows key storage. The gate
+builds and tests that feature (`--features syrinx-update/release-tool`), so
+the tool stays covered by Clippy and the tests. The signing logic is tested
+only with in-memory CNG keys created fresh by each test. No test opens Windows key storage, and the
 repository holds no key.
 
 ### What remains for P1-39b to P1-39d

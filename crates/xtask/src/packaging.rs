@@ -5,6 +5,8 @@ mod registration;
 mod sha256;
 mod update;
 
+pub use update::GATE_FEATURE;
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};

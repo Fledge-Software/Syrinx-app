@@ -79,8 +79,8 @@ cargo xtask check-deps
 cargo xtask check-deferred
 cargo xtask check-packaging
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --profile local --offline --locked -- -D warnings
-cargo test --workspace --profile local --offline --locked
+cargo clippy --workspace --all-targets --features syrinx-update/release-tool --profile local --offline --locked -- -D warnings
+cargo test --workspace --features syrinx-update/release-tool --profile local --offline --locked
 cargo run --package syrinx-app --profile local --offline --locked -- --smoke
 ```
 
@@ -410,8 +410,12 @@ choosing the default browser are the owner's. See
 
 Since P1-39a the package folder also holds P1-38's unsigned update
 `manifest`, written by the update crate's release tool
-(`cargo run --package syrinx-update --bin syrinx-update-tool`), because
-`check-deps` still forbids xtask from linking the verifier.
+(`cargo run --package syrinx-update --bin syrinx-update-tool --features
+release-tool`), because `check-deps` still forbids xtask from linking the
+verifier. The zip is built before any signing, so it contains the unsigned
+`manifest` but no `manifest.sig`, `latest` or `latest.sig`. The gate's
+Clippy and test steps pass `--features syrinx-update/release-tool` so the
+release tool is still checked.
 
 ## Signing an update (P1-39a, owner only)
 
@@ -424,7 +428,10 @@ owner's release key, named in Windows' software or smart-card key storage,
 and writes `manifest.sig`, `latest` and `latest.sig` into the folder.
 Windows may ask for the key's PIN or password; the command never reads the
 private key. `--serial` must exceed the serial of any `latest` already in
-the folder, and `--days` is the statement's lifetime, capped at 60. The
+the folder, and `--days` is the statement's lifetime, capped at 60. That
+serial check sees only the same package folder, so the owner must track the
+highest serial they have issued outside the repository; installed copies
+refuse a reused serial whose statement differs, and a lower one. The
 command verifies what it signed against `PRODUCTION_KEYS` before writing,
 so until the owner's keys are pinned (DW-30) it refuses every key. Only the
 owner runs it; agents never create, open or name a release key. Its tests

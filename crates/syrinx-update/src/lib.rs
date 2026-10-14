@@ -8,9 +8,11 @@ mod error;
 mod keys;
 mod latest;
 mod manifest;
+#[cfg(feature = "release-tool")]
 mod ncrypt;
 mod path;
 mod payload;
+#[cfg(any(test, feature = "release-tool"))]
 mod sign;
 mod signature;
 mod statement;
@@ -33,9 +35,11 @@ pub use latest::{
 pub use manifest::{
     FileEntry, MAX_FILE_BYTES, MAX_FILES, MAX_MANIFEST_BYTES, MAX_TOTAL_BYTES, Manifest,
 };
+#[cfg(feature = "release-tool")]
 pub use ncrypt::{KeyStorage, StoredKey};
 pub use path::{MAX_COMPONENT_BYTES, MAX_COMPONENTS, MAX_PATH_BYTES, PackagePath};
 pub use payload::{Payload, VerifiedFile, VerifiedPayload, read_bounded};
+#[cfg(any(test, feature = "release-tool"))]
 pub use sign::{SignedRelease, Signer, StatementTerms, sign_release};
 pub use signature::{DetachedSignature, SIGNATURE_BYTES, SignatureKind};
 pub use statement::{MAX_STATEMENT_BYTES, MAX_STATEMENT_LIFETIME_SECONDS, Statement};
