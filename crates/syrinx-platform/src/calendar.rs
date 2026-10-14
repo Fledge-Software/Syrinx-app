@@ -1,4 +1,5 @@
-//! Reads today's date in the owner's own time zone and language for the home page header (P1-28).
+//! Reads today's date in the owner's own time zone, for the home page header (P1-28) and the
+//! day usage counting keeps (AN-01).
 
 use windows::Win32::Globalization::{ENUM_DATE_FORMATS_FLAGS, GetDateFormatEx};
 use windows::core::{PCWSTR, w};
@@ -9,9 +10,18 @@ use windows::core::{PCWSTR, w};
 /// Windows supplies the local calendar date; Rust's standard library knows only UTC, which would
 /// show tomorrow's date every evening west of Greenwich.
 pub fn local_date_heading() -> windows::core::Result<String> {
-    // A null locale name means the owner's default; no date means today in local time.
-    let locale = PCWSTR::null();
-    let picture = w!("dddd, MMMM d");
+    // A null locale name means the owner's default.
+    format_today(PCWSTR::null(), w!("dddd, MMMM d"))
+}
+
+/// Today's local calendar date as `YYYY-MM-DD`, the day usage counting keeps (AN-01).
+pub fn local_iso_date() -> windows::core::Result<String> {
+    // The invariant locale (an empty name) always writes Gregorian ASCII digits.
+    format_today(w!(""), w!("yyyy'-'MM'-'dd"))
+}
+
+/// Formats today's local date; no date argument means today in local time.
+fn format_today(locale: PCWSTR, picture: PCWSTR) -> windows::core::Result<String> {
     let mut buffer = [0u16; 128];
     // SAFETY: the picture is a static wide string and the buffer's length is passed with it.
     let written = unsafe {
@@ -37,7 +47,19 @@ pub fn local_date_heading() -> windows::core::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::local_date_heading;
+    use super::{local_date_heading, local_iso_date};
+
+    #[test]
+    fn the_usage_date_is_iso_digits() {
+        let date = local_iso_date().expect("Windows formats the local date");
+        let bytes = date.as_bytes();
+        assert_eq!(bytes.len(), 10, "{date}");
+        assert_eq!((bytes[4], bytes[7]), (b'-', b'-'), "{date}");
+        assert!(
+            syrinx_core::usage::UsageDate::parse(&date).is_some(),
+            "{date}"
+        );
+    }
 
     #[test]
     fn the_heading_names_a_weekday_and_day_of_month() {

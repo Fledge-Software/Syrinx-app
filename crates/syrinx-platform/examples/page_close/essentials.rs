@@ -50,6 +50,7 @@ pub(super) fn exercise(
             BrowserEvent::NavigationCompleted {
                 id: 3000,
                 success: true,
+                ..
             } => navigated = true,
             _ => {}
         }

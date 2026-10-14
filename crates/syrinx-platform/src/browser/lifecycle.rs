@@ -431,6 +431,7 @@ mod tests {
         events.emit(BrowserEvent::NavigationCompleted {
             id: 7,
             success: true,
+            cancelled: false,
         });
         life.suspend();
         assert!(

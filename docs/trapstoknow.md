@@ -573,6 +573,13 @@ you found it in the commit message, not here.
   not match and a P1-14 label regression failed. Use direct patches for Unicode
   text, or ASCII script literals with Unicode escapes; UTF-8 file reads alone
   do not control the shell's pipe encoding.
+- **A PowerShell double-quoted string silently drops Markdown backticks.**
+  The backtick is PowerShell's escape character, so `` "`None`" `` becomes
+  `None` with no error: a scripted replacement whose search text held a
+  backticked doc comment matched nothing, and one whose replacement held
+  them wrote doc comments without their code spans. Edit such text with the
+  Edit tool, or use single-quoted PowerShell strings, and check the result.
+  Source: AN-01's doc-comment edits (observed 2026-10-14).
 - **Files on disk have CRLF line endings; git stores LF.** This machine's
   system git config sets `core.autocrlf=true` and `.gitattributes` sets
   `* text=auto`, so `git ls-files --eol` shows `i/lf w/crlf` for most text

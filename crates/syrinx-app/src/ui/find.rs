@@ -38,6 +38,7 @@ impl BrowserView {
             });
             return;
         }
+        self.count(Feature::FindOpened);
         self.find_sequence += 1;
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
         input.update(cx, |input, cx| input.focus(window, cx));

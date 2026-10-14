@@ -81,6 +81,24 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   own socket use; and closing DW-68 as a known limit, which would leave a
   third-party crate free to add networking unseen.
 
+- **AN-01 starts before P1-39d, an exception to the plan's order.** The
+  approved analytics proposal put AN-01 after P1-39. P1-39d needs the
+  owner's release keys and update host, which are not ready, while AN-01's
+  local collector needs neither, so the owner told the session to start
+  AN-01 now rather than wait. Only the order changes: AN-02 still precedes
+  P1-40.
+- **AN-01's frozen command list is approved as built.** The proposal made the
+  owner's review of the 20 built-in command counters plus `command.other`
+  (listed in `docs/an-01-local-analytics.md`) a done condition; the owner
+  approved them unchanged. A new built-in command still needs a new schema
+  version and the owner's approval.
+- **The usage switch's note is shortened until AN-02.** The approved note
+  says the counts can be viewed, exported or deleted, but viewing and
+  exporting arrive only with AN-02. Until then Customize says "Nothing is
+  sent anywhere. You can delete the counts at any time."; AN-02 restores
+  the approved sentence when it adds the preview and export. Showing a
+  promise the build cannot keep was the rejected alternative.
+
 - **Where Windows cannot list sync roots, Syrinx treats the machine as
   having none (narrows D13).** D13 keeps the database out of OneDrive and
   similar synced folders; the storage guard

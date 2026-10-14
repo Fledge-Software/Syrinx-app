@@ -40,6 +40,7 @@ mod tile_editor;
 mod tiles;
 mod title_bar;
 mod updates;
+mod usage_report;
 
 #[cfg(test)]
 mod shutdown_tests;
@@ -54,6 +55,7 @@ use std::{
         Arc,
         atomic::{AtomicU8, Ordering},
     },
+    time::Instant,
 };
 
 use futures::{StreamExt, channel::mpsc::unbounded};
@@ -67,6 +69,7 @@ use gpui::{
 };
 use gpui_component::Root;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use syrinx_core::usage::{ErrorCategory, Feature, UsageRecorder};
 use syrinx_core::{
     ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry, Route,
     SavedFolderId, TabId, TabModelSnapshot, route,
@@ -243,6 +246,8 @@ pub struct LaunchChecks {
         crate::updates::UpdateContext,
         crate::updates::StartupUpdates,
     ),
+    /// AN-01's shared counters, off until the owner switches them on, and when `main` began.
+    pub usage: (Arc<UsageRecorder>, Instant),
 }
 
 pub struct BrowserView {
@@ -325,6 +330,8 @@ pub struct BrowserView {
     acceptance: Option<palette_acceptance::Acceptance>,
     /// Customize's Updates section and the staged update's handover (P1-39b).
     updates: updates::UpdatePanel,
+    /// Customize's Usage report section and the window's own measurements (AN-01).
+    usage: usage_report::UsageState,
     outcome: Arc<AtomicU8>,
 }
 
@@ -342,6 +349,7 @@ impl BrowserView {
             suspended_tabs,
             acceptance,
             updates: (update_context, startup_updates),
+            usage: (usage, launched),
         } = checks;
         let mut view = Self {
             fullscreen: None,
@@ -426,6 +434,7 @@ impl BrowserView {
             smoke_waiting: false,
             acceptance: acceptance.map(palette_acceptance::Acceptance::new),
             updates: updates::UpdatePanel::new(update_context, startup_updates),
+            usage: usage_report::UsageState::new(usage, launched),
             outcome,
         };
         window.focus(&view.focus, cx);
@@ -439,7 +448,7 @@ impl BrowserView {
                 return view;
             }
         }
-        view.start_session(data_dir.join("State"), window, cx);
+        view.start_session(data_dir.join(session::STATE_FOLDER), window, cx);
         view.start_browser(data_dir.join("WebView2"), window, cx);
         if let Some(links) = links {
             view.start_link_feed(links, window, cx);
@@ -449,10 +458,11 @@ impl BrowserView {
     }
 
     fn start_session(&mut self, directory: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let usage = self.usage.recorder.clone();
         let started = if self.acceptance.is_some() {
-            session::spawn_acceptance(directory)
+            session::spawn_acceptance(directory, usage)
         } else {
-            session::spawn(directory)
+            session::spawn(directory, usage)
         };
         let (session, mut events) = match started {
             Ok(started) => started,
@@ -524,6 +534,8 @@ impl BrowserView {
     fn session_event(&mut self, event: SessionEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
             SessionEvent::RecoveryOffered(prompt) => {
+                // Start-up then waited on the owner, so its timings would measure the owner.
+                self.usage.startup_waited();
                 if !self.closing {
                     self.recovery = Some(recovery::RecoveryCard::new(prompt));
                     self.message =
@@ -532,6 +544,7 @@ impl BrowserView {
                 }
             }
             SessionEvent::HistoryRepairOffered(prompt) => {
+                self.usage.startup_waited();
                 if !self.closing {
                     self.recovery = None;
                     self.history_repair = Some(history_repair::HistoryRepairCard::new(prompt));
@@ -577,6 +590,12 @@ impl BrowserView {
                     self.clear_data.close();
                 }
                 self.model = snapshot.model;
+                if initial {
+                    self.usage.session_restored();
+                }
+                // Home shows no page, so a selection that ends there has nothing to time.
+                let home = self.active_address().is_empty();
+                self.usage.state_arrived(self.model.active_id, home);
                 self.save_folder_expansion();
                 self.crashes.retain(&self.model);
                 self.zoom_levels
@@ -711,6 +730,9 @@ impl BrowserView {
                 }
             }
             SessionEvent::UpdateSnapshot(result) => self.update_snapshot_taken(result, cx),
+            SessionEvent::Usage { status, problem } => {
+                self.usage_status_received(status, problem);
+            }
             SessionEvent::Stopped => {
                 self.update_snapshot_lost();
                 self.abandon_import_write();
@@ -752,6 +774,7 @@ impl BrowserView {
         }
         match event {
             BrowserEvent::PageCrashed { id } => {
+                self.usage.recorder.error(ErrorCategory::RendererFailed);
                 self.page_crashed(id, window);
                 self.recovery_focus(window, cx);
             }
@@ -826,6 +849,7 @@ impl BrowserView {
                 }
             }
             BrowserEvent::CreationFailed { id, error } => {
+                self.usage.recorder.error(ErrorCategory::WebviewCreation);
                 let active = self.active_page_feedback(id);
                 let mut popup_failed = false;
                 if let Ok(id) = TabId::new(id) {
@@ -844,7 +868,15 @@ impl BrowserView {
                     self.request_close(cx);
                 }
             }
-            BrowserEvent::NavigationCompleted { id, success } => {
+            BrowserEvent::NavigationCompleted {
+                id,
+                success,
+                cancelled,
+            } => {
+                // A stopped or replaced navigation is not a failure to count.
+                if !success && !cancelled {
+                    self.usage.recorder.error(ErrorCategory::NavigationFailed);
+                }
                 // History retracts a visit whose navigation failed.
                 if let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id) {
                     self.command(SessionCommand::ObserveNavigation {
@@ -1054,6 +1086,9 @@ impl BrowserView {
             if let Some(previous) = self.shown {
                 self.forget_find(previous.get(), true);
             }
+            if let Some(id) = next {
+                self.usage.page_shown(id);
+            }
             self.shown = next;
             if self.palette.is_none()
                 && self.peek.is_none()
@@ -1094,7 +1129,13 @@ impl BrowserView {
         }
     }
 
-    fn switch_tab(&mut self, backwards: bool) {
+    /// Ctrl Tab or Ctrl Shift Tab (`by_key`), or the palette's Next and Previous tab commands.
+    fn switch_tab(&mut self, backwards: bool, by_key: bool) {
+        // The palette counts its own commands; a single tab has nowhere to switch to.
+        if by_key && self.model.tabs.len() > 1 {
+            self.count(Feature::TabSwitchedKeyboard);
+        }
+        self.usage.switch_requested(self.model.active_id, None);
         self.command(SessionCommand::CycleActive { backwards });
     }
 
@@ -1114,6 +1155,18 @@ impl BrowserView {
     }
 
     fn shortcut(&mut self, shortcut: BrowserShortcut, window: &mut Window, cx: &mut Context<Self>) {
+        self.browser_action(shortcut, true, window, cx);
+    }
+
+    /// Runs a browser shortcut from a key (`by_key`) or a palette command; only keys count as
+    /// keyboard use (AN-01).
+    fn browser_action(
+        &mut self,
+        shortcut: BrowserShortcut,
+        by_key: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.closing {
             return;
         }
@@ -1139,27 +1192,90 @@ impl BrowserView {
                 address: "about:blank".to_owned(),
             }),
             BrowserShortcut::CloseTab => self.close_tab(),
+            BrowserShortcut::Address if by_key => self.palette_key(true, window, cx),
+            BrowserShortcut::Palette if by_key => self.palette_key(false, window, cx),
             BrowserShortcut::Address => self.open_palette(true, window, cx),
             BrowserShortcut::Palette => self.open_palette(false, window, cx),
-            BrowserShortcut::NextTab => self.switch_tab(false),
-            BrowserShortcut::PreviousTab => self.switch_tab(true),
+            BrowserShortcut::NextTab => self.switch_tab(false, by_key),
+            BrowserShortcut::PreviousTab => self.switch_tab(true, by_key),
             BrowserShortcut::ReopenTab => self.command(SessionCommand::ReopenClosed),
             BrowserShortcut::SavePage => self.command(SessionCommand::SaveActive),
             BrowserShortcut::Back => {
-                if let Some(id) = self.shown {
-                    self.page_command(BrowserCommand::Back { id: id.get() });
-                }
+                self.shown_page_action(Feature::NavBack, |id| BrowserCommand::Back { id });
             }
             BrowserShortcut::Forward => {
-                if let Some(id) = self.shown {
-                    self.page_command(BrowserCommand::Forward { id: id.get() });
-                }
+                self.shown_page_action(Feature::NavForward, |id| BrowserCommand::Forward { id });
             }
             BrowserShortcut::Reload => {
-                if let Some(id) = self.shown {
-                    self.page_command(BrowserCommand::Reload { id: id.get() });
+                self.shown_page_action(Feature::NavReload, |id| BrowserCommand::Reload { id });
+            }
+        }
+    }
+
+    /// Ctrl L (`address`) or Ctrl K: counts which key opened the palette, then opens it.
+    fn palette_key(&mut self, address: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // A key that only puts focus back in the open palette did not open it; a key in the
+        // peek is counted once its request reaches the main window.
+        if self.palette.is_none() && self.is_main_window(window) {
+            self.count(if address {
+                Feature::PaletteOpenedCtrlL
+            } else {
+                Feature::PaletteOpenedCtrlK
+            });
+        }
+        self.open_palette(address, window, cx);
+    }
+
+    /// Back, Forward or Reload on the shown page, counted once whichever control asked (AN-01).
+    fn shown_page_action(&mut self, feature: Feature, command: fn(u64) -> BrowserCommand) {
+        let Some(id) = self.shown else {
+            return;
+        };
+        self.count(feature);
+        self.page_command(command(id.get()));
+    }
+
+    /// Counts how a palette entry ended: which kind of row was chosen, or none (AN-01).
+    fn count_palette_outcome(&self, event: &PaletteEvent) {
+        let usage = &self.usage.recorder;
+        match event {
+            PaletteEvent::Submit {
+                text,
+                force_search: false,
+            } if import::is_import_command(text) => {
+                // Not a registry command, so it is counted only as "other", never by name.
+                usage.count(Feature::PaletteChoseCommand);
+                usage.other_command();
+            }
+            PaletteEvent::Submit {
+                force_search: true, ..
+            } => usage.count(Feature::PaletteChoseWebSearch),
+            // Plain Enter counts by where the text goes: an address, or a web search.
+            PaletteEvent::Submit { text, .. } => {
+                let goes = navigation::destination(text, false);
+                match (goes, navigation::recognized_address(text)) {
+                    (Ok(_), Ok(Some(_))) => usage.count(Feature::PaletteChoseAddress),
+                    (Ok(_), Ok(None)) => usage.count(Feature::PaletteChoseWebSearch),
+                    // A refused entry navigates nowhere, so nothing was chosen.
+                    (Err(_), _) | (_, Err(_)) => {}
                 }
             }
+            PaletteEvent::Activate(Target::Tab(_)) => usage.count(Feature::PaletteChoseTab),
+            PaletteEvent::Activate(Target::Saved(_)) => usage.count(Feature::PaletteChoseSaved),
+            PaletteEvent::Activate(Target::History(_)) => {
+                usage.count(Feature::PaletteChoseHistory);
+            }
+            PaletteEvent::Run(action) => {
+                usage.count(Feature::PaletteChoseCommand);
+                match action {
+                    CommandAction::Browser(action) => usage.command(*action),
+                    CommandAction::Plugin { .. } => usage.other_command(),
+                }
+            }
+            PaletteEvent::Closed => usage.count(Feature::PaletteDismissed),
+            PaletteEvent::Activate(Target::Command(_))
+            | PaletteEvent::Query { .. }
+            | PaletteEvent::Shortcut(_) => {}
         }
     }
 
@@ -1167,6 +1283,7 @@ impl BrowserView {
         if self.closing {
             return;
         }
+        self.count_palette_outcome(&event);
         let finishes_entry = event.finishes_entry();
         if finishes_entry {
             self.pending_query = None;
@@ -1243,7 +1360,15 @@ impl BrowserView {
     fn activate(&mut self, target: ActivationTarget) {
         let command = activation_command(&self.model, target);
         match command {
-            Some(command) => self.command(command),
+            Some(command) => {
+                // A saved page may open as a new tab, so its target is learned from the state.
+                let target = match target {
+                    ActivationTarget::Tab(id) => Some(id),
+                    ActivationTarget::Saved(_) => None,
+                };
+                self.usage.switch_requested(self.model.active_id, target);
+                self.command(command);
+            }
             None => self.message = "That tab is no longer open.".to_owned(),
         }
     }
@@ -1260,7 +1385,7 @@ impl BrowserView {
             self.activate_main_now();
         }
         match browser_shortcut(action) {
-            Some(shortcut) => self.shortcut(shortcut, window, cx),
+            Some(shortcut) => self.browser_action(shortcut, false, window, cx),
             None if action == BrowserAction::ClearBrowsingData => self.open_clear_data(),
             None if action == BrowserAction::InstallUpdateFromFile => {
                 self.install_update_from_file(window, cx);
@@ -1472,9 +1597,7 @@ impl BrowserView {
                     .aria_label("Back")
                     .aria_keyshortcuts("Alt+ArrowLeft")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(id) = this.shown {
-                            this.page_command(BrowserCommand::Back { id: id.get() });
-                        }
+                        this.shown_page_action(Feature::NavBack, |id| BrowserCommand::Back { id });
                         cx.notify();
                     })),
             )
@@ -1483,9 +1606,9 @@ impl BrowserView {
                     .aria_label("Forward")
                     .aria_keyshortcuts("Alt+ArrowRight")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(id) = this.shown {
-                            this.page_command(BrowserCommand::Forward { id: id.get() });
-                        }
+                        this.shown_page_action(Feature::NavForward, |id| BrowserCommand::Forward {
+                            id,
+                        });
                         cx.notify();
                     })),
             )
@@ -1494,9 +1617,9 @@ impl BrowserView {
                     .aria_label("Reload")
                     .aria_keyshortcuts("Control+R")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(id) = this.shown {
-                            this.page_command(BrowserCommand::Reload { id: id.get() });
-                        }
+                        this.shown_page_action(Feature::NavReload, |id| BrowserCommand::Reload {
+                            id,
+                        });
                         cx.notify();
                     })),
             )
@@ -1548,6 +1671,7 @@ impl BrowserView {
 
 impl Render for BrowserView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.usage.frame_drawn();
         if self.session_revision.is_none() {
             return crate::controls::watch_pointer(div())
                 .size_full()
@@ -1646,17 +1770,17 @@ impl Render for BrowserView {
                 cx.notify();
             }))
             .on_action(
-                cx.listener(|this, _: &Address, window, cx| this.open_palette(true, window, cx)),
+                cx.listener(|this, _: &Address, window, cx| this.palette_key(true, window, cx)),
             )
             .on_action(
-                cx.listener(|this, _: &Palette, window, cx| this.open_palette(false, window, cx)),
+                cx.listener(|this, _: &Palette, window, cx| this.palette_key(false, window, cx)),
             )
             .on_action(cx.listener(|this, _: &NextTab, _, cx| {
-                this.switch_tab(false);
+                this.switch_tab(false, true);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| {
-                this.switch_tab(true);
+                this.switch_tab(true, true);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ReopenTab, _, cx| {
@@ -1668,19 +1792,13 @@ impl Render for BrowserView {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Back, _, _| {
-                if let Some(id) = this.shown {
-                    this.page_command(BrowserCommand::Back { id: id.get() });
-                }
+                this.shown_page_action(Feature::NavBack, |id| BrowserCommand::Back { id });
             }))
             .on_action(cx.listener(|this, _: &Forward, _, _| {
-                if let Some(id) = this.shown {
-                    this.page_command(BrowserCommand::Forward { id: id.get() });
-                }
+                this.shown_page_action(Feature::NavForward, |id| BrowserCommand::Forward { id });
             }))
             .on_action(cx.listener(|this, _: &Reload, _, _| {
-                if let Some(id) = this.shown {
-                    this.page_command(BrowserCommand::Reload { id: id.get() });
-                }
+                this.shown_page_action(Feature::NavReload, |id| BrowserCommand::Reload { id });
             }))
             .on_action(cx.listener(|this, _: &ShowHistory, _, cx| {
                 this.toggle_history();
