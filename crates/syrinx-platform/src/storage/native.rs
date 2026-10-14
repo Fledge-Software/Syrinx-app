@@ -32,9 +32,9 @@ use windows::{
     },
     Win32::{
         Foundation::{
-            ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SHARING_VIOLATION,
-            GENERIC_READ, GENERIC_WRITE, HANDLE, OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE,
-            RtlNtStatusToDosError, STATUS_SUCCESS, UNICODE_STRING,
+            E_NOINTERFACE, ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND,
+            ERROR_SHARING_VIOLATION, GENERIC_READ, GENERIC_WRITE, HANDLE, OBJ_CASE_INSENSITIVE,
+            OBJ_DONT_REPARSE, RtlNtStatusToDosError, STATUS_SUCCESS, UNICODE_STRING,
         },
         Storage::FileSystem::{
             CREATE_NEW, CreateFileW, FILE_ACCESS_RIGHTS, FILE_ATTRIBUTE_NORMAL,
@@ -456,6 +456,11 @@ fn wide_file_path(path: &Path) -> Vec<u16> {
 fn registered_roots() -> Result<Vec<PathBuf>, LocationError> {
     // Declare the apartment first so every WinRT object is released before it.
     let _apartment = RuntimeApartment::initialize()?;
+    // Without sync-root support there are no registered roots to refuse (owner, 2026-10-14);
+    // calling GetCurrentSyncRoots there crashed on Windows Server instead of failing.
+    if !sync_roots_supported()? {
+        return Ok(Vec::new());
+    }
     let roots = StorageProviderSyncRootManager::GetCurrentSyncRoots()
         .map_err(|error| os_error(LocationOperation::EnumerateSyncRoots, error))?;
     let length = roots
@@ -475,6 +480,15 @@ fn registered_roots() -> Result<Vec<PathBuf>, LocationError> {
         paths.push(PathBuf::from(OsString::from_wide(&path)));
     }
     Ok(paths)
+}
+
+/// Asks Windows whether the sync-root API works here; older systems lack the query itself.
+fn sync_roots_supported() -> Result<bool, LocationError> {
+    match StorageProviderSyncRootManager::IsSupported() {
+        Ok(supported) => Ok(supported),
+        Err(error) if error.code() == E_NOINTERFACE => Ok(false),
+        Err(error) => Err(os_error(LocationOperation::EnumerateSyncRoots, error)),
+    }
 }
 
 fn os_error(operation: LocationOperation, error: windows::core::Error) -> LocationError {
