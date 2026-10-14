@@ -1,29 +1,45 @@
-//! Local verification of signed update packages (P1-38): no download, install or UI.
+//! Local verification of signed update packages and latest statements: no download, install or UI.
 //!
-//! The format and key handling are in `docs/p1-38-update-format.md`.
+//! The formats and key handling are in `docs/p1-38-update-format.md`.
 
 mod cng;
 mod directory;
 mod error;
 mod keys;
+mod latest;
 mod manifest;
+mod ncrypt;
 mod path;
 mod payload;
+mod sign;
 mod signature;
+mod statement;
+mod time;
 mod version;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_statement;
 
+/// SHA-256 through Windows CNG, for the release tool's file listing.
+pub use cng::sha256;
 pub use directory::DirectoryPayload;
-pub use error::{ManifestProblem, PathProblem, UpdateError};
+pub use error::{ManifestProblem, PathProblem, StatementProblem, UpdateError};
 pub use keys::{KeyId, KeySet, PRODUCTION_KEYS, PinnedKey};
+pub use latest::{
+    AcceptedStatement, MAX_ISSUED_AHEAD_SECONDS, VerifiedStatement, verify_statement,
+};
 pub use manifest::{
     FileEntry, MAX_FILE_BYTES, MAX_FILES, MAX_MANIFEST_BYTES, MAX_TOTAL_BYTES, Manifest,
 };
+pub use ncrypt::{KeyStorage, StoredKey};
 pub use path::{MAX_COMPONENT_BYTES, MAX_COMPONENTS, MAX_PATH_BYTES, PackagePath};
 pub use payload::{Payload, VerifiedFile, VerifiedPayload, read_bounded};
-pub use signature::{DetachedSignature, SIGNATURE_BYTES};
+pub use sign::{SignedRelease, Signer, StatementTerms, sign_release};
+pub use signature::{DetachedSignature, SIGNATURE_BYTES, SignatureKind};
+pub use statement::{MAX_STATEMENT_BYTES, MAX_STATEMENT_LIFETIME_SECONDS, Statement};
+pub use time::{SECONDS_PER_DAY, Timestamp};
 pub use version::Version;
 
 /// A manifest whose signature, form and version have all been accepted.
@@ -67,7 +83,7 @@ pub fn verify_manifest(
             limit: MAX_MANIFEST_BYTES as u64,
         });
     }
-    let signature = DetachedSignature::parse(signature_bytes)?;
+    let signature = DetachedSignature::parse(signature_bytes, SignatureKind::Manifest)?;
     let key = keys
         .find(signature.key_id())
         .ok_or(UpdateError::UnknownKey)?;
@@ -82,13 +98,13 @@ pub fn verify_manifest(
     })
 }
 
-/// Hash the raw manifest bytes and verify them against the named pinned key.
-fn check_signature(
+/// Hash the raw signed bytes and verify them against the named pinned key.
+pub(crate) fn check_signature(
     key: &PinnedKey,
-    manifest_bytes: &[u8],
+    signed_bytes: &[u8],
     signature: &DetachedSignature,
 ) -> Result<(), UpdateError> {
-    let digest = cng::sha256(manifest_bytes)?;
+    let digest = cng::sha256(signed_bytes)?;
     if !cng::verify_signature(key.point(), &digest, signature.value())? {
         return Err(UpdateError::BadSignature);
     }

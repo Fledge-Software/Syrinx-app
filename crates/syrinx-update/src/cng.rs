@@ -84,11 +84,13 @@ impl Drop for HashObject {
 /// A drop cannot return the failure; releasing a handle Syrinx created fails only on a bug.
 fn report_release_failure(status: NTSTATUS, operation: &str) {
     if status.is_err() {
-        eprintln!(
-            "syrinx-update: {operation} failed with status {:#010x}",
-            status.0
-        );
+        report_release_code(status.0, operation);
     }
+}
+
+/// Write a failed release's status code to standard error.
+pub(crate) fn report_release_code(code: i32, operation: &str) {
+    eprintln!("syrinx-update: {operation} failed with status {code:#010x}");
 }
 
 /// An incremental SHA-256 computation.
@@ -126,7 +128,7 @@ impl Sha256 {
 }
 
 /// SHA-256 of one in-memory buffer.
-pub(crate) fn sha256(data: &[u8]) -> Result<[u8; 32], UpdateError> {
+pub fn sha256(data: &[u8]) -> Result<[u8; 32], UpdateError> {
     let mut hash = Sha256::new()?;
     hash.update(data)?;
     hash.finish()
@@ -202,6 +204,7 @@ pub(crate) mod test_keys {
 
     use super::{Key, Provider, check};
     use crate::error::UpdateError;
+    use crate::sign::Signer;
 
     /// An ephemeral P-256 key pair; the private half never leaves CNG's memory.
     pub(crate) struct TestKeyPair {
@@ -274,6 +277,16 @@ pub(crate) mod test_keys {
                 });
             }
             Ok(signature)
+        }
+    }
+
+    impl Signer for TestKeyPair {
+        fn public_point(&self) -> Result<[u8; 64], UpdateError> {
+            TestKeyPair::public_point(self)
+        }
+
+        fn sign_digest(&self, digest: &[u8; 32]) -> Result<[u8; 64], UpdateError> {
+            self.sign(digest)
         }
     }
 }

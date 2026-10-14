@@ -408,6 +408,29 @@ Agents never run the packaging scripts; installation, registration and
 choosing the default browser are the owner's. See
 `docs/p1-37-installer-design.md`.
 
+Since P1-39a the package folder also holds P1-38's unsigned update
+`manifest`, written by the update crate's release tool
+(`cargo run --package syrinx-update --bin syrinx-update-tool`), because
+`check-deps` still forbids xtask from linking the verifier.
+
+## Signing an update (P1-39a, owner only)
+
+```powershell
+cargo xtask sign-update --package <package folder> --storage <software|smart-card> --key <key name> --serial <n> --days <1-60>
+```
+
+signs the folder's `manifest` and a fresh latest-version statement with the
+owner's release key, named in Windows' software or smart-card key storage,
+and writes `manifest.sig`, `latest` and `latest.sig` into the folder.
+Windows may ask for the key's PIN or password; the command never reads the
+private key. `--serial` must exceed the serial of any `latest` already in
+the folder, and `--days` is the statement's lifetime, capped at 60. The
+command verifies what it signed against `PRODUCTION_KEYS` before writing,
+so until the owner's keys are pinned (DW-30) it refuses every key. Only the
+owner runs it; agents never create, open or name a release key. Its tests
+use in-memory keys only. Format and checks:
+`docs/p1-38-update-format.md`, "P1-39a: the latest-version statement".
+
 ## Data and artifacts
 
 The scaffold opens no database, browser profile, account, note vault or

@@ -8,13 +8,14 @@ mod packaging;
 mod palette_acceptance;
 
 use std::env;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 #[cfg(not(target_os = "windows"))]
 compile_error!("Syrinx's development gate supports Windows 11 only.");
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | bench | palette-acceptance>";
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.
@@ -33,11 +34,16 @@ fn run() -> Result<(), String> {
     let Some(command) = arguments.next() else {
         return Err(USAGE.to_owned());
     };
-    if arguments.next().is_some() {
+    let rest: Vec<_> = arguments.collect();
+    let root = workspace_root()?;
+
+    // Only `sign-update` takes options, which the release tool itself checks.
+    if command == "sign-update" {
+        return packaging::sign_update(&root, &unicode_arguments(rest)?);
+    }
+    if !rest.is_empty() {
         return Err(USAGE.to_owned());
     }
-
-    let root = workspace_root()?;
     match command.to_str() {
         Some("check") => check_workspace(&root),
         Some("check-deps") => check_dependencies(&root),
@@ -53,6 +59,17 @@ fn run() -> Result<(), String> {
         }
         _ => Err(USAGE.to_owned()),
     }
+}
+
+fn unicode_arguments(arguments: Vec<OsString>) -> Result<Vec<String>, String> {
+    arguments
+        .into_iter()
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "Arguments must be Unicode.".to_owned())
+        })
+        .collect()
 }
 
 fn workspace_root() -> Result<PathBuf, String> {

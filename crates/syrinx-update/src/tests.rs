@@ -13,7 +13,7 @@ use crate::cng::test_keys::TestKeyPair;
 use crate::error::{ManifestProblem, PathProblem, UpdateError};
 use crate::{
     DetachedSignature, DirectoryPayload, FileEntry, KeyId, KeySet, MAX_FILE_BYTES, MAX_FILES,
-    MAX_MANIFEST_BYTES, Manifest, PackagePath, Payload, PinnedKey, SIGNATURE_BYTES,
+    MAX_MANIFEST_BYTES, Manifest, PackagePath, Payload, PinnedKey, SIGNATURE_BYTES, SignatureKind,
     VerifiedManifest, Version, read_bounded, verify_manifest,
 };
 
@@ -88,9 +88,11 @@ fn entries_for(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<FileEntry>, Upda
 fn sign(signer: &TestKeyPair, manifest: &[u8]) -> Result<Vec<u8>, UpdateError> {
     let point = signer.public_point()?;
     let value = signer.sign(&cng::sha256(manifest)?)?;
-    Ok(DetachedSignature::new(KeyId::of(&point)?, value)
-        .to_bytes()
-        .to_vec())
+    Ok(
+        DetachedSignature::new(SignatureKind::Manifest, KeyId::of(&point)?, value)
+            .to_bytes()
+            .to_vec(),
+    )
 }
 
 fn package_with(
@@ -221,6 +223,7 @@ fn a_key_that_is_not_pinned_is_refused() -> Result<(), UpdateError> {
 
     // The signature claims the pinned key's identifier but was made by another key.
     let forged = DetachedSignature::new(
+        SignatureKind::Manifest,
         KeyId::of(&other_point)?,
         package.signer.sign(&cng::sha256(&package.manifest)?)?,
     );
@@ -649,6 +652,7 @@ fn a_signature_by_one_pinned_key_cannot_claim_another() -> Result<(), UpdateErro
 
     // The signer's signature relabelled with the other key's identifier fails.
     let forged = DetachedSignature::new(
+        SignatureKind::Manifest,
         KeyId::of(&other_point)?,
         package.signer.sign(&cng::sha256(&package.manifest)?)?,
     );
