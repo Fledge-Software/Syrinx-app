@@ -125,7 +125,10 @@ jobs:
       - name: Tag and publish the GitHub release
         shell: bash
         run: |
-          git tag -a "$TAG" -m "Syrinx $VERSION preview" -m "Source: $SOURCE"
+          # An annotated tag needs a tagger; the runner has no git identity of its own.
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            tag -a "$TAG" -m "Syrinx $VERSION preview" -m "Source: $SOURCE"
           git push origin "refs/tags/$TAG"
           gh release create "$TAG" \
             "target/package/${{ steps.package.outputs.asset }}" target/package/SHA256SUMS.txt \
