@@ -209,8 +209,11 @@ permission or certificate suites, whose pass lines were missing. The
 lifecycle suite printed no pass line in those builds, so they do not prove
 it passed, but each run's error count and duration fit one or two late
 suites, not a lifecycle failure. Those permission and certificate timeouts
-were not reproduced under `--trace` and remain undiagnosed. The lifecycle
-suite now prints its own pass line.
+were not reproduced under `--trace` and remained undiagnosed until
+2026-10-13, when they were traced to the same old suspension timer acting on
+the two pages those suites never show; see
+`docs/fixture-timeout-diagnosis-plan.md`. The lifecycle suite now prints its
+own pass line.
 
 The owner then decided (2026-10-12) that a hidden page's suspension countdown
 starts when its navigation finishes, so a loading page is no longer frozen.
