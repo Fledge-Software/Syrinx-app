@@ -417,8 +417,10 @@ you found it in the commit message, not here.
   connection on its own thread. Source: P1-39c's
   `a_stalled_host_times_out` (observed on this machine).
 - **An HTTPS request to a plain-HTTP server times out rather than failing
-  the handshake** when the server waits for a full request head, because
-  neither side speaks first. Treat `TimedOut` as a refusal there too, and
+  the handshake** when the server waits for a full request head. The client
+  sends its TLS ClientHello; the plain-HTTP server reads it as the start of
+  a request and waits for a header end that never comes, while the client
+  waits for a ServerHello. Treat `TimedOut` as a refusal there too, and
   assert that no plaintext request reached the server. Source: P1-39c's
   `a_secure_request_never_speaks_plain_http` (observed).
 

@@ -825,7 +825,11 @@ at start-up, on a timer or in the background, and no setting turns that on.
 A copy that cannot install updates, which is every development build, the
 gate and the smoke run (P1-39b's `UpdateLayout` exists only in an
 `installed` build running from `Programs\Syrinx`), refuses the press before
-any request is made; a test proves the source is never read.
+any request is made; a test proves the source is never read. So does an
+installed copy while `PRODUCTION_KEYS` is empty: nothing it fetched could be
+verified, so it says "Updates aren't set up yet: this Syrinx has no release
+keys to check them with" and contacts nobody (the same refusal now covers
+"Install update from file…"). A test proves no request is made.
 
 One press reads four small files and stops: `latest`, `latest.sig`, then the
 stated version's `manifest` and `manifest.sig`. The owner then sees
@@ -833,8 +837,9 @@ stated version's `manifest` and `manifest.sig`. The owner then sees
 **Download** and **Not now**. The size can only come from the signed
 manifest, which the statement binds by its SHA-256, so the manifest is read
 before asking; the proposal's "nothing larger than the statement" is read
-here as "nothing larger than these four signed files" (owner question 1 of
-the P1-39c report). Only Download fetches the payload files, one by one
+here as "nothing larger than these four signed files". The owner approved
+that reading on 2026-10-14, so the confirmation shows a verified size.
+Only Download fetches the payload files, one by one
 under `<version>/files/`, straight into `Updates\incoming\<version>\`, and
 then P1-39b's staging verifies and stages them exactly as it does a folder:
 the statement and manifest are checked again, the payload is verified and
@@ -881,7 +886,14 @@ date." and stores its serial, as staging does; an offer stores only the
   checking is WinHTTP's default, off: turning it on would make Windows fetch
   revocation lists or OCSP answers from the certificate authority's hosts,
   which the proposal does not cover, and integrity rests on the signature
-  anyway. This is owner question 2 of the P1-39c report.
+  anyway. The owner decided on 2026-10-14 that it stays off.
+  Windows' validation can still reach other hosts on its own: if the host
+  sends an incomplete chain, CryptoAPI may fetch the missing intermediate
+  certificate from the address in the certificate (AIA), and Windows'
+  automatic root-certificate updates may contact Windows Update for a root
+  it lacks. Neither carries anything of Syrinx's, but both are network
+  contacts this check can cause. Serving the host's full certificate chain
+  avoids the first, and is a P1-39d host task.
 - **Redirects** are never followed: the redirect policy is "never" and any
   3xx answer is refused as `Redirected`; a test shows the target is never
   contacted. Any status other than 200 is refused.
@@ -895,15 +907,28 @@ date." and stores its serial, as staging does; an offer stores only the
   for the response and 60 s between body reads. On this machine WinHTTP
   reported a stalled response about 3 s after its configured bound (1 s gave
   about 4 s, 5 s about 8 s), so a real stall ends after about a minute.
+  Because that bound is per read, a host trickling a byte just inside it
+  could hold a file open for ever, so each file also has an overall
+  deadline: two minutes plus its size at 32 KiB/s (about 22 minutes for
+  38 MB; two minutes for the small signed files). It is checked before
+  every read, so it can be overrun by at most one receive bound.
 - **Proxy.** Windows' own proxy settings apply (WinHTTP's automatic proxy),
-  as for the browser. This machine has no proxy, no script and automatic
-  detection on; so a check here connects directly, after Windows' usual
-  automatic-detection lookup. Whether a configured corporate proxy behaves
+  as for the browser. During a request WinHTTP may therefore discover a
+  proxy through WPAD (a DHCP or DNS lookup for `wpad` on the local network)
+  and fetch a PAC script from wherever that points: network contacts other
+  than the update host, which the browser makes too. This machine has no
+  proxy, no script and automatic detection on, so a check here connects
+  directly after that lookup. Whether a configured corporate proxy behaves
   as the browser's does is not tested, because no such proxy exists here.
 - **Cancellation.** Cancel stops the work at its next read and refuses new
   requests. A read waiting on a silent host returns only when data arrives
-  or its 60 s bound passes, so a cancel during a stall can take that long;
+  or its 60 s bound passes (Syrinx does not close the request from another
+  thread to abort it), so a cancel during a stall can take about a minute;
   the owner sees "Cancelling the update…" meanwhile. Quitting cancels too.
+  A Cancel pressed after the check's last read still cancels: no offer is
+  shown. A download starts with a fresh Cancel, so a press during the check
+  can never stop the download after staging has removed an earlier staged
+  copy.
 
 ### Errors
 
@@ -914,8 +939,7 @@ records `network_failed` (or `cancelled`), and staging removes what it
 wrote, so the installed version and `incoming` are always left clean. The
 owner sees one sentence naming the host, for example "Syrinx couldn't reach
 syrinxapp.dev. Check your connection and try again." Verifier refusals keep
-P1-39b's messages, so today's empty key set reads "This update isn't signed
-by a key this Syrinx trusts, so nothing was installed."
+P1-39b's messages; an empty key set is refused before any of them, as above.
 
 ### `check-deps`
 
@@ -928,8 +952,12 @@ crates, so it cannot reach the shell or, even transitively, a network client
 crate. Because Cargo unifies features, WinHTTP's bindings now compile into
 the one `windows` build every crate shares, so `check-deps` also reads
 source (`crates/xtask/src/network_sources.rs`): no other crate except the
-`xtask` tooling may name `Networking::WinHttp`, `WinHttpOpen` or
-`winhttp.dll`.
+`xtask` tooling may contain the identifier prefix `WinHttp` (case-sensitive,
+so every binding and import form, including brace groups) or name
+`winhttp.dll` in any letter case. Features a crate's own `[features]` table
+switches on (`windows/…`, `windows?/…`, under a rename too) count as if its
+declaration requested them, so they meet the same allowlists and the D9
+networking check.
 
 ### Tests, and how they avoid the network
 
@@ -958,9 +986,19 @@ No test resolves a name or reaches another machine.
 
 - The proposal's "Last checked 47 days ago" line in Settings is deferred as
   DW-67: it needs the day of the last check in `Updates\state`, a format
-  change of its own.
+  change of its own. The owner confirmed on 2026-10-14 that it stays
+  deferred and is not needed before P1-40.
 - P1-39d: the release keys (DW-30), the host set-up and the first real
-  update by the owner.
+  update by the owner. The host must serve its full certificate chain, so
+  Windows never has to fetch a missing intermediate (see "TLS" above).
+
+### The owner's answers (2026-10-14)
+
+- Fetching the four small signed files before asking is approved, so the
+  confirmation can show a verified size.
+- Certificate revocation checking stays off.
+- DW-67, the "Last checked" line, stays deferred and is not needed before
+  P1-40.
 
 ## What P1-39 needs from the owner
 
