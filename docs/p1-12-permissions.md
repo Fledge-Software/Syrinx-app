@@ -144,8 +144,16 @@ nothing was removed.
 Keyboard focus survives the view's changes: Manage moves focus to Back, Back
 returns it to Manage, and after a forget the reread list focuses the row that
 took the forgotten row's place (or Back once the list is empty). The panel,
-not the list, scrolls. An open list rereads after any page permission check
-or remembered choice, and a stopped session leaves no live Forget buttons.
+not the list, scrolls, and a stopped session leaves no live Forget buttons.
+
+An open list rereads in the background when a page prompt saves a remembered
+choice; a page's ordinary permission lookup does not trigger it. The rows
+already drawn stay on screen until the answer arrives, and only the awaited
+read's answer replaces them. Each row's Forget button keeps its own focus
+handle, keyed by the choice it shows (origin and kind), so focus stays on the
+same choice across a reread; if that choice is gone, its handle goes with it
+and focus is cleared rather than landing on a different choice. A forget
+answered after the owner left the list and came back moves no focus.
 
 **Known limit (owner's call later).** One damaged row hides the whole list:
 `Store::remembered_permissions` refuses every row rather than show a guess,

@@ -622,10 +622,7 @@ impl BrowserView {
                 id,
                 request,
                 result,
-            } => {
-                self.permission_result(id, request, result);
-                self.site_permissions_changed();
-            }
+            } => self.permission_result(id, request, result),
             SessionEvent::PopupRejected { request } => {
                 self.page_command(BrowserCommand::CancelPopup { request });
             }
