@@ -12,6 +12,7 @@
 # Preserve the approved GPUI Windows baseline and idle-repaint patch byte for byte.
 /vendor/gpui-pre-windows-0.3.8/** -text
 /vendor/gpui-pre-windows-0.3.8.idle.patch -text
+/vendor/gpui-pre-windows-0.3.8.embedded-shaders.patch -text
 # Brand rasters and icons are binary; never convert their line endings.
 *.png binary
 *.ico binary

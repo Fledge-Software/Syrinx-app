@@ -23,7 +23,7 @@ use std::{
     process::ExitCode,
     sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -49,6 +49,9 @@ fn main() -> ExitCode {
     let smoke_requested = arguments
         .iter()
         .any(|argument| argument == "--smoke" || argument == ACCEPTANCE_FLAG);
+    if !smoke_requested {
+        show_panics_in_a_message_box();
+    }
     let mut options = match parse_arguments(arguments).and_then(run_mode) {
         Ok(RunMode::Browser(options)) => options,
         Ok(RunMode::PaletteSample) => return run_palette_sample(),
@@ -232,6 +235,20 @@ fn report_startup_problem(message: &str, smoke: bool) {
     if !smoke {
         notice::show_warning(message);
     }
+}
+
+/// A panic otherwise ends a launch from Windows without a word, because there is no console.
+fn show_panics_in_a_message_box() {
+    // Keep the standard stderr report, then show the first panic once; later ones repeat it.
+    let shown = AtomicBool::new(false);
+    let standard_report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        standard_report(info);
+        if shown.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        notice::show_warning(&format!("Syrinx stopped because of an internal error.\n\n{info}"));
+    }));
 }
 
 /// What the command line asked for, before a profile is chosen.
