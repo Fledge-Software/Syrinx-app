@@ -449,6 +449,21 @@ repository holds no key.
   `DirectoryPayload` refuses unlisted entries. P1-39b's "Install update from
   file…" must therefore read the payload from a folder holding only the
   listed files, as the host's `files/` layout does.
+- P1-39b must also move the gate's `release-tool` coverage out of the
+  workspace steps. Today `check_workspace` (`crates/xtask/src/main.rs`)
+  passes `--features syrinx-update/release-tool` to the workspace Clippy
+  and test steps so the signing tool stays covered; that is harmless while
+  no crate depends on `syrinx-update`. Once `syrinx-app` does, Cargo builds
+  one copy of `syrinx-update` with the feature on for the whole workspace,
+  so the gate would lint and test `syrinx-app` with the key-storage signer
+  linked in, unlike the shipped build and the smoke run, and nothing would
+  enforce that Syrinx never links it. In the slice that lifts the verifier
+  quarantine for `syrinx-app`, make the workspace steps featureless again,
+  add separate `cargo clippy -p syrinx-update --all-targets --features
+  release-tool -- -D warnings` and `cargo test -p syrinx-update --features
+  release-tool` steps, and add a `check-deps` rule in
+  `crates/xtask/src/dependency_policy.rs`, with a test, refusing any
+  dependency on `syrinx-update` that enables `release-tool`.
 - P1-39c fetches `latest`, `latest.sig` and the package from
   `https://syrinxapp.dev/updates/v1/`.
 - P1-39d is the owner's key ceremony, the pinning of both public keys
