@@ -140,3 +140,17 @@ read, and the store deletes the choice only while it still holds the listed
 allow/deny value (`Store::forget_listed_permission`). A site that asked again
 after the list was drawn therefore keeps the newer answer, and the panel says
 nothing was removed.
+
+Keyboard focus survives the view's changes: Manage moves focus to Back, Back
+returns it to Manage, and after a forget the reread list focuses the row that
+took the forgotten row's place (or Back once the list is empty). The panel,
+not the list, scrolls. An open list rereads after any page permission check
+or remembered choice, and a stopped session leaves no live Forget buttons.
+
+**Known limit (owner's call later).** One damaged row hides the whole list:
+`Store::remembered_permissions` refuses every row rather than show a guess,
+the same fail-closed rule the prompt's own lookup follows, so the panel shows
+"Remembered permissions could not be read" and nothing can be forgotten from
+it until the damage is repaired. Showing the readable rows and naming the
+damaged one is possible, but changes how damage is surfaced, so it waits for
+the owner's decision.

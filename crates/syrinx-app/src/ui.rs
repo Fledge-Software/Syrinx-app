@@ -293,6 +293,8 @@ pub struct BrowserView {
     home_palette: HomePaletteIntent,
     importer: import::BookmarkImporter,
     home: home::HomeState,
+    /// Keeps keyboard focus as Customize's permission list opens, closes and rereads (DW-7).
+    site_permission_focus: site_permissions::PermissionFocus,
     incoming: incoming_links::IncomingLinks,
     runtime: runtime_notice::RuntimeNotice,
     parent_hwnd: isize,
@@ -392,6 +394,7 @@ impl BrowserView {
             home_palette: HomePaletteIntent::default(),
             importer: import::BookmarkImporter::default(),
             home: home::HomeState::default(),
+            site_permission_focus: site_permissions::PermissionFocus::new(cx),
             incoming: incoming_links::IncomingLinks::default(),
             runtime: runtime_notice::RuntimeNotice::default(),
             parent_hwnd: 0,
@@ -619,7 +622,10 @@ impl BrowserView {
                 id,
                 request,
                 result,
-            } => self.permission_result(id, request, result),
+            } => {
+                self.permission_result(id, request, result);
+                self.site_permissions_changed();
+            }
             SessionEvent::PopupRejected { request } => {
                 self.page_command(BrowserCommand::CancelPopup { request });
             }
@@ -657,7 +663,7 @@ impl BrowserView {
                 self.history_cleared(request_id, result);
             }
             SessionEvent::RememberedPermissions { request_id, result } => {
-                self.site_permissions_listed(request_id, result);
+                self.site_permissions_listed(request_id, result, window, cx);
             }
             SessionEvent::PermissionForgotten { request_id, result } => {
                 self.site_permission_forgotten(request_id, result);

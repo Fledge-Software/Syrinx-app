@@ -1,8 +1,10 @@
 //! Lists remembered site permissions in Customize and forgets the one the owner picks (DW-7).
 
+use std::fmt;
+
 use gpui::{
-    Context, Div, FontWeight, InteractiveElement, ParentElement, Role, SharedString,
-    StatefulInteractiveElement, Styled, div, px,
+    App, Context, Div, FocusHandle, FontWeight, InteractiveElement, ParentElement, Role,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use syrinx_store::{PermissionKind, RememberedPermission};
 use syrinx_ui::Palette;
@@ -13,11 +15,10 @@ use crate::controls::control;
 use crate::session::{SessionCommand, SessionError};
 use crate::theme::rgba;
 
-const LIST_MAX_HEIGHT: f32 = 360.;
 const ROW_HEIGHT: f32 = 52.;
 
 /// What the list shows: nothing yet, a read in flight, the rows of one read, or why it failed.
-#[derive(Debug, Default)]
+#[derive(Default)]
 enum Listing {
     #[default]
     Idle,
@@ -37,15 +38,81 @@ pub(super) struct ListedRow {
     listed: RememberedPermission,
 }
 
+/// Where keyboard focus goes after the view changes under the focused control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FocusTarget {
+    Back,
+    Manage,
+    Row(usize),
+}
+
+/// After a forget's reread: the row that took the forgotten row's place, else the
+/// previous one, else Back when the list is empty.
+fn focus_after_reread(forgotten: usize, rows: usize) -> FocusTarget {
+    match rows.checked_sub(1) {
+        Some(last) => FocusTarget::Row(forgotten.min(last)),
+        None => FocusTarget::Back,
+    }
+}
+
+/// The handles that keep keyboard focus when the view switches or rows are read again.
+/// Each is tracked by at most one element per frame (the accessibility-tree trap).
+pub(super) struct PermissionFocus {
+    manage: FocusHandle,
+    back: FocusHandle,
+    /// Tracked by the Forget button of `SitePermissions::focus_row` only.
+    row: FocusHandle,
+}
+
+impl PermissionFocus {
+    pub(super) fn new(cx: &mut App) -> Self {
+        // Explicit handles start out of Tab order unless made Tab stops (the `tab_stop` trap).
+        Self {
+            manage: cx.focus_handle().tab_stop(true),
+            back: cx.focus_handle().tab_stop(true),
+            row: cx.focus_handle().tab_stop(true),
+        }
+    }
+
+    fn handle(&self, target: FocusTarget) -> &FocusHandle {
+        match target {
+            FocusTarget::Back => &self.back,
+            FocusTarget::Manage => &self.manage,
+            FocusTarget::Row(_) => &self.row,
+        }
+    }
+}
+
 /// The site-permissions view inside Customize, with at most one read and one forget in flight.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(super) struct SitePermissions {
     open: bool,
     sequence: u64,
     listing: Listing,
-    /// The forget in flight and the listed choice it removes, so its outcome can name it.
-    forgetting: Option<(u64, RememberedPermission)>,
+    /// The forget in flight, the listed choice it removes and that choice's row.
+    forgetting: Option<(u64, RememberedPermission, usize)>,
+    /// The forgotten row whose place takes focus once the reread lands.
+    refocus: Option<usize>,
+    /// The row whose Forget button carries the row focus handle.
+    focus_row: Option<usize>,
     status: Option<String>,
+}
+
+// Hand-written so origins in the rows and status never reach a log or panic message.
+impl fmt::Debug for SitePermissions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let rows = match &self.listing {
+            Listing::Loaded { rows, .. } => Some(rows.len()),
+            _ => None,
+        };
+        formatter
+            .debug_struct("SitePermissions")
+            .field("open", &self.open)
+            .field("rows", &rows)
+            .field("forgetting", &self.forgetting.is_some())
+            .field("status", &self.status.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl SitePermissions {
@@ -57,6 +124,8 @@ impl SitePermissions {
     fn open(&mut self) -> SessionCommand {
         self.open = true;
         self.status = None;
+        self.refocus = None;
+        self.focus_row = None;
         self.reload()
     }
 
@@ -65,6 +134,8 @@ impl SitePermissions {
         self.open = false;
         self.listing = Listing::Idle;
         self.status = None;
+        self.refocus = None;
+        self.focus_row = None;
     }
 
     fn reload(&mut self) -> SessionCommand {
@@ -78,20 +149,37 @@ impl SitePermissions {
         self.sequence
     }
 
-    /// Takes a read's rows if it is the read the view is waiting for.
-    fn listed(&mut self, request_id: u64, result: Result<Vec<RememberedPermission>, SessionError>) {
+    /// Takes a read's rows if it is the read the view is waiting for, and says where focus
+    /// goes when the read follows a forget.
+    fn listed(
+        &mut self,
+        request_id: u64,
+        result: Result<Vec<RememberedPermission>, SessionError>,
+    ) -> Option<FocusTarget> {
         if !matches!(self.listing, Listing::Loading(waiting) if waiting == request_id) {
-            return;
+            return None;
         }
-        self.listing = match result {
-            Ok(rows) => Listing::Loaded {
-                generation: request_id,
-                rows,
-            },
+        let refocus = self.refocus.take();
+        let rows = match result {
+            Ok(rows) => rows,
             Err(error) => {
-                Listing::Failed(format!("Remembered permissions could not be read: {error}"))
+                self.listing =
+                    Listing::Failed(format!("Remembered permissions could not be read: {error}"));
+                self.focus_row = None;
+                return refocus.map(|_| FocusTarget::Back);
             }
         };
+        let target = refocus.map(|forgotten| focus_after_reread(forgotten, rows.len()));
+        self.focus_row = match target {
+            Some(FocusTarget::Row(index)) => Some(index),
+            Some(_) => None,
+            None => self.focus_row.filter(|index| *index < rows.len()),
+        };
+        self.listing = Listing::Loaded {
+            generation: request_id,
+            rows,
+        };
+        target
     }
 
     /// Starts forgetting `row` if it is still listed exactly as drawn; `None` refuses the click.
@@ -102,13 +190,14 @@ impl SitePermissions {
         let Listing::Loaded { generation, rows } = &self.listing else {
             return None;
         };
-        if *generation != row.generation || !rows.contains(&row.listed) {
+        let index = rows.iter().position(|listed| *listed == row.listed);
+        let Some(index) = index.filter(|_| *generation == row.generation) else {
             self.status =
                 Some("The list changed before that click, so nothing was forgotten.".to_owned());
             return None;
-        }
+        };
         let request_id = self.next_request();
-        self.forgetting = Some((request_id, row.listed.clone()));
+        self.forgetting = Some((request_id, row.listed.clone(), index));
         self.status = None;
         Some(SessionCommand::ForgetPermission {
             request_id,
@@ -123,24 +212,51 @@ impl SitePermissions {
         request_id: u64,
         result: Result<bool, SessionError>,
     ) -> Option<(String, Option<SessionCommand>)> {
-        let (_, listed) = self
+        let (_, listed, index) = self
             .forgetting
-            .take_if(|(waiting, _)| *waiting == request_id)?;
+            .take_if(|(waiting, _, _)| *waiting == request_id)?;
         let message = forget_message(&listed, result);
         if !self.open {
             return Some((message, None));
         }
         self.status = Some(message.clone());
+        self.refocus = Some(index);
         Some((message, Some(self.reload())))
     }
 
-    /// The session stopped or refused a request, so nothing in flight can answer any more.
-    pub(super) fn session_lost(&mut self) {
-        if matches!(self.listing, Listing::Loading(_)) {
-            self.listing = Listing::Failed(format!(
-                "Remembered permissions could not be read: {}",
+    /// A remembered choice may have changed elsewhere, so an open view reads the list again.
+    /// A forget in flight rereads anyway once it is answered.
+    fn choices_changed(&mut self) -> Option<SessionCommand> {
+        if !self.open || self.forgetting.is_some() {
+            return None;
+        }
+        Some(self.reload())
+    }
+
+    /// A list read could not be queued.
+    fn read_not_sent(&mut self) {
+        self.refocus = None;
+        self.focus_row = None;
+        self.listing = Listing::Failed(format!(
+            "Remembered permissions could not be read: {}",
+            SessionError::StorageUnavailable
+        ));
+    }
+
+    /// A forget could not be queued, so nothing was asked of storage.
+    fn forget_not_sent(&mut self) {
+        if self.forgetting.take().is_some() {
+            self.status = Some(format!(
+                "That choice was not forgotten: {}",
                 SessionError::StorageUnavailable
             ));
+        }
+    }
+
+    /// The session stopped: nothing in flight can answer and no button may start more work.
+    pub(super) fn session_lost(&mut self) {
+        if self.open {
+            self.read_not_sent();
         }
         if self.forgetting.take().is_some() {
             self.status = Some(
@@ -192,15 +308,25 @@ fn decision(allowed: bool) -> &'static str {
 }
 
 impl BrowserView {
-    fn open_site_permissions(&mut self) {
+    fn open_site_permissions(&mut self, window: &mut Window, cx: &mut App) {
         let read = self.home.site_permissions.open();
-        self.request_site_permissions(read);
+        self.request_permission_list(read);
+        self.focus_site_permissions(FocusTarget::Back, window, cx);
     }
 
-    /// Queues a list or forget request; one the session cannot take ends its wait at once.
-    fn request_site_permissions(&mut self, command: SessionCommand) {
-        if !self.try_command(command) {
-            self.home.site_permissions.session_lost();
+    fn close_site_permissions(&mut self, window: &mut Window, cx: &mut App) {
+        self.home.site_permissions.close();
+        self.focus_site_permissions(FocusTarget::Manage, window, cx);
+    }
+
+    fn focus_site_permissions(&self, target: FocusTarget, window: &mut Window, cx: &mut App) {
+        window.focus(self.site_permission_focus.handle(target), cx);
+    }
+
+    /// Queues a list read; one the session cannot take fails the list at once.
+    fn request_permission_list(&mut self, read: SessionCommand) {
+        if !self.try_command(read) {
+            self.home.site_permissions.read_not_sent();
         }
     }
 
@@ -208,15 +334,21 @@ impl BrowserView {
         let Some(forget) = self.home.site_permissions.forget(row) else {
             return;
         };
-        self.request_site_permissions(forget);
+        if !self.try_command(forget) {
+            self.home.site_permissions.forget_not_sent();
+        }
     }
 
     pub(super) fn site_permissions_listed(
         &mut self,
         request_id: u64,
         result: Result<Vec<RememberedPermission>, SessionError>,
+        window: &mut Window,
+        cx: &mut App,
     ) {
-        self.home.site_permissions.listed(request_id, result);
+        if let Some(target) = self.home.site_permissions.listed(request_id, result) {
+            self.focus_site_permissions(target, window, cx);
+        }
     }
 
     pub(super) fn site_permission_forgotten(
@@ -229,8 +361,15 @@ impl BrowserView {
             return;
         };
         match reload {
-            Some(read) => self.request_site_permissions(read),
+            Some(read) => self.request_permission_list(read),
             None => self.message = message,
+        }
+    }
+
+    /// A page's permission was checked or remembered; an open list may now be out of date.
+    pub(super) fn site_permissions_changed(&mut self) {
+        if let Some(read) = self.home.site_permissions.choices_changed() {
+            self.request_permission_list(read);
         }
     }
 
@@ -241,6 +380,7 @@ impl BrowserView {
             Role::Button,
             "Manage site permissions",
         )
+        .track_focus(&self.site_permission_focus.manage)
         .h(px(28.))
         .px(px(12.))
         .flex_none()
@@ -253,8 +393,8 @@ impl BrowserView {
         .items_center()
         .cursor_pointer()
         .child("Manage")
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.open_site_permissions();
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.open_site_permissions(window, cx);
             cx.notify();
         }));
         div()
@@ -302,7 +442,7 @@ impl BrowserView {
                          site asks again the next time it wants that permission.",
                     ),
             )
-            .child(listing(state, palette, cx));
+            .child(self.permission_listing(palette, cx));
         if let Some(status) = &state.status {
             view = view.child(status_line(palette, status));
         }
@@ -315,6 +455,7 @@ impl BrowserView {
             Role::Button,
             "Back to Customize",
         )
+        .track_focus(&self.site_permission_focus.back)
         .size(px(28.))
         .rounded(px(7.))
         .flex()
@@ -323,8 +464,8 @@ impl BrowserView {
         .text_color(rgba(palette.icon_dim))
         .cursor_pointer()
         .child("‹")
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.home.site_permissions.close();
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.close_site_permissions(window, cx);
             cx.notify();
         }));
         div()
@@ -341,37 +482,33 @@ impl BrowserView {
             )
             .child(self.customize_close_button(palette, cx))
     }
-}
 
-/// The list itself, or a line saying why there is none.
-fn listing(state: &SitePermissions, palette: &Palette, cx: &mut Context<BrowserView>) -> Div {
-    let (generation, rows) = match &state.listing {
-        Listing::Idle | Listing::Loading(_) => return note(palette, "Reading…"),
-        Listing::Failed(error) => return note(palette, error),
-        Listing::Loaded { generation, rows } => (*generation, rows),
-    };
-    if rows.is_empty() {
-        return note(
-            palette,
-            "No choices are remembered. When a site asks, tick Remember for this site to keep \
-             your answer.",
-        );
-    }
-    let mut list = div()
-        .id("site-permission-list")
-        .max_h(px(LIST_MAX_HEIGHT))
-        .overflow_y_scroll()
-        .flex()
-        .flex_col()
-        .gap(px(8.));
-    for (index, listed) in rows.iter().enumerate() {
-        let row = ListedRow {
-            generation,
-            listed: listed.clone(),
+    /// The list itself, or a line saying why there is none. The panel scrolls, not the list.
+    fn permission_listing(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
+        let state = &self.home.site_permissions;
+        let (generation, rows) = match &state.listing {
+            Listing::Idle | Listing::Loading(_) => return note(palette, "Reading…"),
+            Listing::Failed(error) => return note(palette, error),
+            Listing::Loaded { generation, rows } => (*generation, rows),
         };
-        list = list.child(permission_row(palette, row, index, state.busy(), cx));
+        if rows.is_empty() {
+            return note(
+                palette,
+                "No choices are remembered. When a site asks, tick Remember for this site to \
+                 keep your answer.",
+            );
+        }
+        let mut list = div().flex().flex_col().gap(px(8.));
+        for (index, listed) in rows.iter().enumerate() {
+            let row = ListedRow {
+                generation,
+                listed: listed.clone(),
+            };
+            let focus = (state.focus_row == Some(index)).then_some(&self.site_permission_focus.row);
+            list = list.child(permission_row(palette, row, index, state.busy(), focus, cx));
+        }
+        list
     }
-    div().child(list)
 }
 
 /// One remembered choice: origin, kind and decision, and the button that forgets it.
@@ -380,6 +517,7 @@ fn permission_row(
     row: ListedRow,
     index: usize,
     busy: bool,
+    focus: Option<&FocusHandle>,
     cx: &mut Context<BrowserView>,
 ) -> Div {
     let listed = &row.listed;
@@ -394,7 +532,11 @@ fn permission_row(
     let origin = listed.origin.clone();
     // A fresh id per read, so a click begun on an old row never lands on its replacement.
     let id = SharedString::from(format!("forget-permission-{}-{index}", row.generation));
-    let mut forget = control(div().id(id), Role::Button, button_name)
+    let mut forget = control(div().id(id), Role::Button, button_name);
+    if let Some(focus) = focus {
+        forget = forget.track_focus(focus);
+    }
+    let mut forget = forget
         .h(px(28.))
         .px(px(12.))
         .flex_none()
@@ -491,12 +633,13 @@ mod tests {
     /// Opens the view and answers its read with `rows`, returning the rows as drawn.
     fn loaded(state: &mut SitePermissions, rows: Vec<RememberedPermission>) -> Vec<ListedRow> {
         let request_id = read_id(state.open());
-        state.listed(request_id, Ok(rows.clone()));
+        assert_eq!(state.listed(request_id, Ok(rows.clone())), None);
+        drawn(request_id, rows)
+    }
+
+    fn drawn(generation: u64, rows: Vec<RememberedPermission>) -> Vec<ListedRow> {
         rows.into_iter()
-            .map(|listed| ListedRow {
-                generation: request_id,
-                listed,
-            })
+            .map(|listed| ListedRow { generation, listed })
             .collect()
     }
 
@@ -505,6 +648,18 @@ mod tests {
             panic!("expected a forget request");
         };
         (request_id, listed)
+    }
+
+    fn origins(count: usize) -> Vec<RememberedPermission> {
+        (0..count)
+            .map(|index| {
+                choice(
+                    &format!("https://row{index}.example.test"),
+                    PermissionKind::Camera,
+                    true,
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -534,6 +689,46 @@ mod tests {
         let reread = read_id(reload.expect("an open view rereads the list"));
         assert!(matches!(state.listing, Listing::Loading(waiting) if waiting == reread));
         assert!(!state.busy());
+    }
+
+    #[test]
+    fn focus_after_a_forget_goes_to_the_next_row_then_the_previous_then_back() {
+        assert_eq!(focus_after_reread(0, 2), FocusTarget::Row(0));
+        assert_eq!(focus_after_reread(2, 2), FocusTarget::Row(1));
+        assert_eq!(focus_after_reread(0, 0), FocusTarget::Back);
+    }
+
+    #[test]
+    fn the_reread_after_a_forget_moves_focus_and_only_that_reread_does() {
+        let mut state = SitePermissions::default();
+        let rows = loaded(&mut state, origins(3));
+        let (request_id, _) = forget_id(state.forget(&rows[1]));
+        let (_, reload) = state.forgotten(request_id, Ok(true)).expect("answered");
+        let reread = read_id(reload.expect("rereads"));
+        let mut remaining = origins(3);
+        remaining.remove(1);
+        assert_eq!(
+            state.listed(reread, Ok(remaining.clone())),
+            Some(FocusTarget::Row(1))
+        );
+        assert_eq!(state.focus_row, Some(1));
+
+        // A later reread for another reason leaves focus where it is.
+        let again = read_id(state.choices_changed().expect("an open view rereads"));
+        assert_eq!(state.listed(again, Ok(remaining)), None);
+        assert_eq!(state.focus_row, Some(1));
+
+        // Forgetting the only row sends focus to Back.
+        let mut state = SitePermissions::default();
+        let rows = loaded(&mut state, origins(1));
+        let (request_id, _) = forget_id(state.forget(&rows[0]));
+        let (_, reload) = state.forgotten(request_id, Ok(true)).expect("answered");
+        let reread = read_id(reload.expect("rereads"));
+        assert_eq!(
+            state.listed(reread, Ok(Vec::new())),
+            Some(FocusTarget::Back)
+        );
+        assert_eq!(state.focus_row, None);
     }
 
     #[test]
@@ -572,14 +767,12 @@ mod tests {
     #[test]
     fn already_gone_and_failed_forgets_say_so_and_stale_answers_are_ignored() {
         let mut state = SitePermissions::default();
-        let rows = loaded(
-            &mut state,
-            vec![choice(
-                "https://gone.example.test",
-                PermissionKind::Midi,
-                true,
-            )],
-        );
+        let gone = vec![choice(
+            "https://gone.example.test",
+            PermissionKind::Midi,
+            true,
+        )];
+        let rows = loaded(&mut state, gone.clone());
         let (request_id, _) = forget_id(state.forget(&rows[0]));
         assert!(state.forgotten(request_id + 100, Ok(true)).is_none());
         let (message, _) = state.forgotten(request_id, Ok(false)).expect("answered");
@@ -588,14 +781,7 @@ mod tests {
             "That choice had already changed or been forgotten, so nothing was removed."
         );
 
-        let rows = loaded(
-            &mut state,
-            vec![choice(
-                "https://gone.example.test",
-                PermissionKind::Midi,
-                true,
-            )],
-        );
+        let rows = loaded(&mut state, gone);
         let (request_id, _) = forget_id(state.forget(&rows[0]));
         let (message, _) = state
             .forgotten(request_id, Err(SessionError::StorageUnavailable))
@@ -661,6 +847,70 @@ mod tests {
     }
 
     #[test]
+    fn a_lost_session_leaves_no_live_forget_buttons() {
+        let mut state = SitePermissions::default();
+        let rows = loaded(
+            &mut state,
+            vec![choice(
+                "https://idle.example.test",
+                PermissionKind::Camera,
+                true,
+            )],
+        );
+        state.session_lost();
+        assert!(
+            matches!(state.listing, Listing::Failed(_)),
+            "no rows are drawn"
+        );
+        assert!(state.forget(&rows[0]).is_none());
+        assert_eq!(
+            state.status, None,
+            "nothing was in flight, so nothing is reported"
+        );
+    }
+
+    #[test]
+    fn a_forget_that_could_not_be_queued_says_it_was_not_sent() {
+        let mut state = SitePermissions::default();
+        let rows = loaded(
+            &mut state,
+            vec![choice(
+                "https://unsent.example.test",
+                PermissionKind::Camera,
+                true,
+            )],
+        );
+        forget_id(state.forget(&rows[0]));
+        state.forget_not_sent();
+        assert!(!state.busy());
+        assert_eq!(
+            state.status.as_deref(),
+            Some("That choice was not forgotten: Local storage is unavailable")
+        );
+        state.read_not_sent();
+        assert!(matches!(state.listing, Listing::Failed(_)));
+    }
+
+    #[test]
+    fn a_changed_choice_rereads_an_open_list_but_not_a_closed_or_busy_one() {
+        let mut state = SitePermissions::default();
+        assert!(
+            state.choices_changed().is_none(),
+            "a closed view reads nothing"
+        );
+        loaded(&mut state, origins(1));
+        let reread = read_id(state.choices_changed().expect("an open view rereads"));
+        assert!(matches!(state.listing, Listing::Loading(waiting) if waiting == reread));
+        state.listed(reread, Ok(origins(2)));
+        let rows = drawn(reread, origins(2));
+        forget_id(state.forget(&rows[0]));
+        assert!(
+            state.choices_changed().is_none(),
+            "the forget's own answer rereads"
+        );
+    }
+
+    #[test]
     fn a_failed_read_names_its_cause() {
         let mut state = SitePermissions::default();
         let request_id = read_id(state.open());
@@ -669,5 +919,28 @@ mod tests {
             &state.listing,
             Listing::Failed(message) if message.ends_with("Local storage is unavailable")
         ));
+    }
+
+    #[test]
+    fn debug_output_names_no_origin() {
+        let mut state = SitePermissions::default();
+        let rows = loaded(
+            &mut state,
+            vec![choice(
+                "https://private.example.test",
+                PermissionKind::Camera,
+                true,
+            )],
+        );
+        let (request_id, _) = forget_id(state.forget(&rows[0]));
+        state.forgotten(request_id, Ok(true));
+        assert!(
+            state
+                .status
+                .as_deref()
+                .is_some_and(|status| status.contains("private.example.test"))
+        );
+        let printed = format!("{state:?}");
+        assert!(!printed.contains("private.example.test"), "{printed}");
     }
 }

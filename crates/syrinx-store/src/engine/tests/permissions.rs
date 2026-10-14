@@ -627,3 +627,39 @@ fn listed_choices_keep_their_origin_out_of_debug_output() {
     assert!(!printed.contains("private.example.test"));
     assert!(printed.contains("Camera"));
 }
+
+/// Walks every kind in declaration order. The match is exhaustive, so a new variant does
+/// not compile until it is chained in here, and the test then requires it in `ALL`.
+fn next_kind(kind: PermissionKind) -> Option<PermissionKind> {
+    match kind {
+        PermissionKind::Microphone => Some(PermissionKind::Camera),
+        PermissionKind::Camera => Some(PermissionKind::Location),
+        PermissionKind::Location => Some(PermissionKind::Notifications),
+        PermissionKind::Notifications => Some(PermissionKind::Clipboard),
+        PermissionKind::Clipboard => Some(PermissionKind::Sensors),
+        PermissionKind::Sensors => Some(PermissionKind::Midi),
+        PermissionKind::Midi => Some(PermissionKind::Downloads),
+        PermissionKind::Downloads => Some(PermissionKind::FileSystem),
+        PermissionKind::FileSystem => Some(PermissionKind::Autoplay),
+        PermissionKind::Autoplay => Some(PermissionKind::Fonts),
+        PermissionKind::Fonts => Some(PermissionKind::WindowManagement),
+        PermissionKind::WindowManagement => None,
+    }
+}
+
+#[test]
+fn every_kind_reads_back_from_its_stored_value() {
+    let walked: Vec<_> =
+        std::iter::successors(Some(PermissionKind::Microphone), |kind| next_kind(*kind)).collect();
+    assert_eq!(
+        walked,
+        PermissionKind::ALL,
+        "ALL lists every kind once, in order"
+    );
+    for kind in walked {
+        assert_eq!(PermissionKind::from_stored(kind as i32), Some(kind));
+    }
+    assert_eq!(PermissionKind::from_stored(0), None);
+    let past_last = PermissionKind::WindowManagement as i32 + 1;
+    assert_eq!(PermissionKind::from_stored(past_last), None);
+}

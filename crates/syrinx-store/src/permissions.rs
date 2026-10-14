@@ -32,7 +32,8 @@ pub enum PermissionKind {
 }
 
 impl PermissionKind {
-    const ALL: [Self; 12] = [
+    /// Every kind; a test's exhaustive match fails to compile when a variant is missing here.
+    pub(crate) const ALL: [Self; 12] = [
         Self::Microphone,
         Self::Camera,
         Self::Location,
@@ -48,7 +49,7 @@ impl PermissionKind {
     ];
 
     /// The kind a stored identifier names, or `None` for a value Syrinx never writes.
-    fn from_stored(value: i32) -> Option<Self> {
+    pub(crate) fn from_stored(value: i32) -> Option<Self> {
         Self::ALL.into_iter().find(|kind| *kind as i32 == value)
     }
 
