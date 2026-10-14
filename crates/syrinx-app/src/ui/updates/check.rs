@@ -21,11 +21,13 @@ use crate::updates::{available_message, refusal_message, size_text, update_host}
 struct CheckResult {
     checked: Result<Checked, InstallError>,
     remote: RemotePackage,
+    /// Whether `Updates\state` was unreadable once the check finished (DW-66).
+    records_unreadable: bool,
 }
 
 impl UpdatePanel {
     /// Whether a check may start now: not while another update step is under way.
-    fn can_check(&self) -> bool {
+    pub(super) fn can_check(&self) -> bool {
         matches!(self.stage, Stage::Idle | Stage::Ready(_))
     }
 
@@ -137,7 +139,13 @@ impl BrowserView {
             .name("syrinx-update-check".to_owned())
             .spawn(move || {
                 let checked = context.check(&remote);
-                if sender.send(CheckResult { checked, remote }).is_err() {
+                let records_unreadable = context.records_unreadable();
+                let result = CheckResult {
+                    checked,
+                    remote,
+                    records_unreadable,
+                };
+                if sender.send(result).is_err() {
                     eprintln!("The update check finished after its window closed.");
                 }
             });
@@ -164,7 +172,15 @@ impl BrowserView {
 
     fn update_checked(&mut self, result: Option<CheckResult>) {
         let (checked, remote) = match result {
-            Some(CheckResult { checked, remote }) => (Some(checked), Some(remote)),
+            Some(CheckResult {
+                checked,
+                remote,
+                records_unreadable,
+            }) => {
+                // The worker reread the record, so the reset follows it whatever the result.
+                self.updates.records_unreadable = records_unreadable;
+                (Some(checked), Some(remote))
+            }
             None => (None, None),
         };
         let status = self.updates.finish_check(checked, remote);
@@ -195,10 +211,7 @@ impl BrowserView {
                     Ok(staged) => StagingResult::Staged(staged),
                     Err(error) => {
                         eprintln!("update download refused: {error}");
-                        StagingResult::Failed {
-                            reason: refusal_message(&error),
-                            still_staged: context.staged(),
-                        }
+                        StagingResult::refused(&context, &error)
                     }
                 };
                 if sender.send(result).is_err() {
@@ -216,6 +229,7 @@ impl BrowserView {
             let staged = receiver.await.unwrap_or(StagingResult::Failed {
                 reason: "The download stopped unexpectedly.".into(),
                 still_staged: None,
+                records_unreadable: None,
             });
             if view
                 .update(cx, |view, cx| {

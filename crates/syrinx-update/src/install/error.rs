@@ -42,6 +42,8 @@ pub enum InstallError {
     StagedVersionMismatch { pending: Version, manifest: Version },
     /// Nothing is staged.
     NothingStaged,
+    /// A staged update is waiting, so its records are not reset under it (DW-66).
+    UpdateWaiting,
     /// A step failed after the new version was moved into place; its own records cover it.
     AfterSwap(Box<InstallError>),
     /// Fetching a file from the update host failed (P1-39c).
@@ -156,6 +158,7 @@ impl fmt::Display for InstallError {
                 )
             }
             Self::NothingStaged => formatter.write_str("no update is staged"),
+            Self::UpdateWaiting => formatter.write_str("a staged update is waiting"),
             Self::AfterSwap(error) => write!(formatter, "after the swap: {error}"),
             Self::NoReleaseKeys => formatter.write_str("no release key is pinned"),
             Self::Transfer(problem) => {

@@ -800,7 +800,9 @@ regenerated for the new file list. The only lockfile change is
 - **Later is not watched for a failed start:** kept for v1; the manual
   rename is documented under "Limits" above.
 - **An unreadable `Updates\state` refuses staging:** kept. A "Reset update
-  records" action is deferred as DW-66 in the plan's register.
+  records" action was deferred as DW-66 and is now built (see "DW-66"
+  below). Start-up now discards a staged update found beside an unreadable
+  `state` (owner, 2026-10-14).
 - **The pre-update snapshot counts within D13's seven copies:** confirmed,
   with the one-hour skip described above.
 - **Later is armed only for the current session:** kept; after a crash the
@@ -1002,6 +1004,134 @@ No test resolves a name or reaches another machine.
 - Certificate revocation checking stays off.
 - DW-67, the "Last checked" line, stays deferred and is not needed before
   P1-40.
+
+## DW-66: "Reset update records"
+
+P1-39b refuses to stage, and P1-39c to check, while `Updates\state` cannot
+be read: forgetting the accepted statement serial silently would let an
+old, replayed latest-version statement pass as new. The owner kept that
+refusal on 2026-10-14 and asked for a way out that does not mean deleting
+the file by hand. Without it, a damaged record (a disk error, a stray edit)
+stops updates for good with no explanation of what to do.
+
+### What the owner sees
+
+Customize's Updates section shows, only while the record is unreadable,
+"Syrinx can't read its update records, so it won't check for or install
+updates." with a **Reset update records…** button. Pressing it replaces the
+line's button with an explanation and **Reset** and **Cancel**: resetting
+keeps the unreadable record as `Updates\state.unreadable`, starts a fresh
+one, and forgets which update information was last accepted, so the next
+signed statement is accepted as on a new install even if it is older than
+what Syrinx saw before; P1-38's rollback rule still stops an older version
+replacing a newer one; the installed program, data and settings are not
+touched. Only **Reset** acts. A staging or check refused for this reason
+also says to use the reset, and shows the action if start-up had not.
+
+Whether the record is unreadable is read at start-up, after P1-39b's
+recovery (`UpdateContext::recover`), and read again on the worker thread
+after every staging, download and check, whatever its result (a cancelled
+check and a refusal for another reason included), so the action follows the
+file rather than guessing from the error. A missing
+record is a fresh install, not damage, and an I/O failure while looking
+(for example a file another program holds) is logged and offers nothing,
+so the action never appears for a readable record.
+
+### What the reset does
+
+`syrinx_update::install::reset_unreadable_state`
+(`crates/syrinx-update/src/install/reset.rs`), on its own thread:
+
+1. takes the update lock without waiting, and refuses (`Busy`) if staging,
+   a check, a download, the handover or the helper holds it, so it cannot
+   race any of them;
+2. reads `state` again under the lock and does nothing if it is now
+   readable or absent (the click may follow a repair or another reset);
+3. refuses (`UpdateWaiting`) while `pending` exists, so a staged update is
+   never left beside records that no longer describe it;
+4. renames `state` to `state.unreadable` in one step, replacing an older
+   set-aside copy, retrying for up to 5 s while another program (such as a
+   virus scanner) briefly holds the file, as the helper's renames do.
+
+While it runs, the line says "Resetting the update records…" in place of the
+button, and a second click is answered with the busy sentence.
+
+The rename is the whole change, so the reset is atomic: either the damaged
+record is still `state` or it is `state.unreadable` and no `state` exists,
+which `UpdateState::read` already treats as a fresh install (no accepted
+serial). The next statement accepted by "Install update from file…" or
+"Check for updates" writes a new `state`, exactly as on a first update.
+Nothing under `Programs`, the database, the snapshots or the WebView2 data
+is touched, and no release key is needed, since nothing is verified or
+fetched.
+
+The interface refuses earlier with the same sentences: while a check,
+staging, download, reset or handover is under way, and while a staged update
+waits for Restart now or Later.
+
+### Why the damaged file is kept, not deleted
+
+Renaming is as cheap and as atomic as deleting, and keeps the only evidence
+of what went wrong, which a later bug report may need (a record at most
+1 KiB, holding a serial, a hash, a date and a category, nothing personal).
+Only one copy is kept, so repeated damage cannot pile files up. Nothing
+reads `state.unreadable`; the owner may delete it.
+
+### The palette
+
+There is no palette command. The update commands in the palette come from
+`syrinx-core`'s fixed command registry and are listed in every build, while
+this action must never appear for a readable record; a command that is
+usually refused would also put a destructive-sounding entry in front of the
+owner every day. The action lives in Customize, where its explanation and
+confirmation are shown.
+
+### Tests
+
+`crates/syrinx-update/src/install/tests_reset.rs` covers only malformed or
+oversized records counting as unreadable; a readable or missing record
+never reset; the damaged bytes kept as `state.unreadable` and replaced by a
+second reset; `Syrinx.previous`, the installed copy and `incoming` left
+alone; a refusal while another holder has the lock, then success once it is
+released; a refusal while a staged update waits, keeping `Syrinx.new`,
+`pending` and the damaged record; and the serial floor resetting, so a
+validly signed statement with a lower serial than the one accepted before
+the damage stages afterwards. `syrinx-app`'s tests drive start-up's flag and
+the reset through `UpdateContext` on a synthetic installation, the messages,
+and the panel: no offer for a readable record, nothing before the owner
+confirms, refusals in every running or waiting stage, and the action kept
+after a refused reset.
+
+The window was checked on 2026-10-14 with an `installed` build copied to a
+synthetic `Programs\Syrinx` folder in a scratch directory and fresh
+`--test-data-dir` profiles, the window confirmed in the foreground by
+process id before each click. With a deliberately damaged synthetic
+`Updates\state`, Customize's Updates section showed the line and **Reset
+update records…**; pressing it showed the explanation with **Reset** and
+**Cancel**; **Reset** renamed the record to `state.unreadable`, removed the
+line and reported "Update records reset…". With no `state`, and with a
+readable one, UI Automation found no reset control. This is an agent's
+observation, not the owner's visual acceptance.
+
+### A staged update beside an unreadable record
+
+Start-up recovery reads the state to tell whether a waiting version was
+rolled back, so before this change a `pending` beside an unreadable `state`
+stopped recovery, and the reset also refused it (step 3): the owner could
+only fix it by hand. The owner decided on 2026-10-14, in chat, that start-up
+discards the staged update in that case. `recover` now checks, under the
+update lock and before settling `pending`, whether `pending` exists and
+`state` is unreadable; if so it calls `discard_staged`, the same removal a
+suspected rollback uses (`pending`, `Syrinx.new`, which a `pending` proves
+Syrinx made, `Updates\apply`, `incoming` and the staging mark), and reports
+`discarded_for_unreadable_state`. The installed `Programs\Syrinx` is not
+touched, the damaged `state` is left for the reset, and the owner is told
+once: "Syrinx couldn't read its update records, so it removed the update
+that was waiting to install. Reset update records in Customize, then check
+for updates again." The action is then shown and works, since no `pending`
+remains. Tests: `start_up_discards_a_staged_update_beside_an_unreadable_record`
+and `start_up_keeps_a_staged_update_beside_a_readable_record`
+(`tests_reset.rs`), and the start-up test in `syrinx-app`'s `updates.rs`.
 
 ## What P1-39 needs from the owner
 
