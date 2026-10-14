@@ -127,17 +127,18 @@ pub struct AcceptedRecord {
     pub expires: Timestamp,
 }
 
+/// The name an unreadable state record is refused under.
+pub(crate) const STATE_RECORD: &str = "update state";
 const STATE_HEADER: &str = "syrinx-update-state 1";
 const STATE_FIELDS: [&str; 5] = ["serial", "statement-sha256", "expires", "result", "version"];
 
 impl UpdateState {
     /// The stored state; an unreadable record is refused, so a lost serial never passes as new.
     pub fn read(layout: &UpdateLayout) -> Result<Self, InstallError> {
-        const WHAT: &str = "update state";
-        let Some(bytes) = read_small(&layout.state(), RECORD_LIMIT, WHAT)? else {
+        let Some(bytes) = read_small(&layout.state(), RECORD_LIMIT, STATE_RECORD)? else {
             return Ok(Self::default());
         };
-        let malformed = InstallError::Record { what: WHAT };
+        let malformed = InstallError::Record { what: STATE_RECORD };
         let values = parse(&bytes, STATE_HEADER, &STATE_FIELDS).ok_or(malformed.clone())?;
         Ok(Self {
             accepted: accepted_fields(values[0], values[1], values[2]).ok_or(malformed.clone())?,

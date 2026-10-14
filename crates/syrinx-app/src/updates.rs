@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use syrinx_update::install::{
     ApplyMode, Checked, FolderSource, Handoff, InstallError, Outcome, PackageSource, Pending,
-    StageTerms, Staged, TransferProblem, UpdateLayout, UpdateResult, check_source, prepare_handoff,
-    record_started, recover, stage_from_source,
+    SET_ASIDE_STATE, StageTerms, Staged, StateReset, TransferProblem, UpdateLayout, UpdateResult,
+    check_source, is_unreadable_state, prepare_handoff, record_started, recover,
+    reset_unreadable_state, stage_from_source, state_is_unreadable,
 };
 use syrinx_update::{KeySet, Timestamp, UpdateError, Version};
 use syrinx_update_net::Endpoint;
@@ -91,19 +92,29 @@ impl UpdateContext {
         let (Ok(layout), Some(running)) = (&self.layout, self.running) else {
             return StartupUpdates::default();
         };
+        let records_unreadable = records_unreadable(layout);
         match recover(layout, running) {
             Ok(recovery) => StartupUpdates {
                 notice: recovery.outcome.as_ref().and_then(outcome_message),
                 staged: recovery.staged,
+                records_unreadable,
             },
             Err(error) => {
                 eprintln!("update recovery: {error}");
                 StartupUpdates {
                     notice: Some(format!("Syrinx couldn't tidy its update files: {error}.")),
                     staged: None,
+                    records_unreadable,
                 }
             }
         }
+    }
+
+    /// Set an unreadable `Updates\state` aside (DW-66); blocks, so call it off the interface
+    /// thread. Needs no release key: it reads no package and contacts nobody.
+    pub fn reset_records(&self) -> Result<StateReset, InstallError> {
+        let layout = self.layout.as_ref().map_err(Clone::clone)?;
+        reset_unreadable_state(layout)
     }
 
     /// The complete staged version waiting for this Syrinx, if any; reads a small file.
@@ -236,6 +247,16 @@ fn helper_command(layout: &UpdateLayout, mode: ApplyMode, relaunch_data: Option<
 pub struct StartupUpdates {
     pub notice: Option<String>,
     pub staged: Option<Version>,
+    /// `Updates\state` cannot be read, so Customize offers "Reset update records" (DW-66).
+    pub records_unreadable: bool,
+}
+
+/// Whether the state record is damaged; a failure to look is logged and offers no reset.
+fn records_unreadable(layout: &UpdateLayout) -> bool {
+    state_is_unreadable(layout).unwrap_or_else(|error| {
+        eprintln!("update records: {error}");
+        false
+    })
 }
 
 /// The installed copy's folders: only an `installed` build running from `Programs\Syrinx`.
@@ -287,6 +308,11 @@ pub fn size_text(bytes: u64) -> String {
 
 /// Why nothing was installed, in the owner's terms; no path appears.
 pub fn refusal_message(error: &InstallError) -> String {
+    if is_unreadable_state(error) {
+        return format!(
+            "{RECORDS_UNREADABLE} Reset update records in Customize to start them again."
+        );
+    }
     match error {
         InstallError::Update(error) => verifier_message(error),
         InstallError::Transfer(problem) => transfer_message(*problem),
@@ -307,6 +333,43 @@ pub fn refusal_message(error: &InstallError) -> String {
             "That package is incomplete, so nothing was installed.".into()
         }
         other => format!("Syrinx couldn't stage the update ({other}), so nothing was installed."),
+    }
+}
+
+/// Customize's line while `Updates\state` cannot be read (DW-66).
+pub const RECORDS_UNREADABLE: &str =
+    "Syrinx can't read its update records, so it won't check for or install updates.";
+
+/// What "Reset update records" will do, shown before the owner confirms it.
+pub fn reset_explanation() -> String {
+    format!(
+        "Resetting keeps the unreadable record as Updates\\{SET_ASIDE_STATE} and starts a \
+         fresh one. Syrinx then forgets which update information it last accepted, so the next \
+         signed update information is accepted as on a new install, even if it is older than \
+         what Syrinx saw before; an older version still can't replace a newer one. Your \
+         installed Syrinx, your data and your settings are not touched."
+    )
+}
+
+/// What a reset did, or why nothing was changed.
+pub fn reset_message(result: &Result<StateReset, InstallError>) -> String {
+    match result {
+        Ok(StateReset::Reset) => "Update records reset. Check for updates and Install from file \
+                                  now work as on a new install."
+            .into(),
+        Ok(StateReset::AlreadyReadable) => {
+            "The update records can be read again, so nothing was reset.".into()
+        }
+        Err(InstallError::Busy) => {
+            "Another update step is still running, so the update records were not reset. Try \
+             again once it finishes."
+                .into()
+        }
+        Err(InstallError::UpdateWaiting) => {
+            "A downloaded update is waiting to install, so the update records were not reset."
+                .into()
+        }
+        Err(error) => format!("Syrinx couldn't reset its update records ({error})."),
     }
 }
 
@@ -479,6 +542,57 @@ mod tests {
         assert_eq!(host.requests.get(), 0);
         assert!(!never_created.exists(), "nothing was created");
         assert!(refusal_message(&InstallError::NoReleaseKeys).starts_with("Updates aren't set up"));
+    }
+
+    #[test]
+    fn start_up_offers_the_reset_only_for_an_unreadable_record() {
+        // A fresh synthetic installation under `target`, removed at the end; no keys are needed.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after 1970")
+            .as_nanos();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(r"..\..\target\syrinx-app-update-tests")
+            .join(format!("reset-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(root.join("Programs")).expect("synthetic programs");
+        std::fs::create_dir_all(root.join(r"data\Updates")).expect("synthetic data");
+        let layout = UpdateLayout::new(root.join("Programs"), root.join("data")).expect("layout");
+        let context = UpdateContext {
+            layout: Ok(layout.clone()),
+            running: Some(CURRENT),
+            ..UpdateContext::disabled()
+        };
+        assert!(!context.recover().records_unreadable, "no record yet");
+
+        std::fs::write(layout.state(), b"synthetic damage\n").expect("damaged state");
+        assert!(context.recover().records_unreadable);
+        assert_eq!(context.reset_records(), Ok(StateReset::Reset));
+        assert!(!context.recover().records_unreadable);
+        assert!(layout.updates().join(SET_ASIDE_STATE).is_file());
+        assert_eq!(context.reset_records(), Ok(StateReset::AlreadyReadable));
+        std::fs::remove_dir_all(&root).expect("remove the test's own folder");
+    }
+
+    #[test]
+    fn the_reset_explains_itself_without_naming_full_paths() {
+        assert!(
+            refusal_message(&InstallError::Record {
+                what: "update state"
+            })
+            .contains("Reset update records")
+        );
+        assert!(reset_explanation().contains(r"Updates\state.unreadable"));
+        assert!(reset_explanation().contains("forgets"));
+        let failed = reset_message(&Err(InstallError::Io {
+            step: "setting the update record aside",
+            kind: std::io::ErrorKind::PermissionDenied,
+        }));
+        assert!(failed.starts_with("Syrinx couldn't reset"), "{failed}");
+        assert!(!failed.contains(":\\"));
+        assert!(
+            UpdateContext::disabled().reset_records().is_err(),
+            "a development build has no records to reset"
+        );
     }
 
     #[test]

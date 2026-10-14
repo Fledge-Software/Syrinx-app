@@ -10,7 +10,7 @@ use gpui::{
 };
 use syrinx_ui::Palette;
 use syrinx_update::Version;
-use syrinx_update::install::{Checked, InstallError};
+use syrinx_update::install::{Checked, InstallError, is_unreadable_state};
 use syrinx_update_net::RemotePackage;
 
 use super::{BrowserView, Stage, StagingResult, UpdatePanel, pill};
@@ -25,7 +25,7 @@ struct CheckResult {
 
 impl UpdatePanel {
     /// Whether a check may start now: not while another update step is under way.
-    fn can_check(&self) -> bool {
+    pub(super) fn can_check(&self) -> bool {
         matches!(self.stage, Stage::Idle | Stage::Ready(_))
     }
 
@@ -52,6 +52,10 @@ impl UpdatePanel {
         if cancelled && matches!(checked, Some(Ok(Checked::Available { .. }))) {
             return "Update check cancelled; nothing was downloaded.".into();
         }
+        // A check that verified anything read the state record, so it is readable again.
+        if matches!(checked, Some(Ok(_))) {
+            self.records_unreadable = false;
+        }
         match checked {
             None => "The update check stopped unexpectedly.".into(),
             Some(Ok(Checked::UpToDate(version))) => format!("Syrinx {version} is up to date."),
@@ -68,6 +72,7 @@ impl UpdatePanel {
             }
             Some(Err(error)) => {
                 eprintln!("update check refused: {error}");
+                self.records_unreadable |= is_unreadable_state(&error);
                 refusal_message(&error)
             }
         }
@@ -195,10 +200,7 @@ impl BrowserView {
                     Ok(staged) => StagingResult::Staged(staged),
                     Err(error) => {
                         eprintln!("update download refused: {error}");
-                        StagingResult::Failed {
-                            reason: refusal_message(&error),
-                            still_staged: context.staged(),
-                        }
+                        StagingResult::refused(&context, &error)
                     }
                 };
                 if sender.send(result).is_err() {
@@ -216,6 +218,7 @@ impl BrowserView {
             let staged = receiver.await.unwrap_or(StagingResult::Failed {
                 reason: "The download stopped unexpectedly.".into(),
                 still_staged: None,
+                records_unreadable: false,
             });
             if view
                 .update(cx, |view, cx| {

@@ -11,6 +11,7 @@ mod files;
 mod layout;
 mod lock;
 mod records;
+mod reset;
 mod source;
 mod stage;
 mod startup;
@@ -19,6 +20,8 @@ mod startup;
 mod tests;
 #[cfg(test)]
 mod tests_apply;
+#[cfg(test)]
+mod tests_reset;
 #[cfg(test)]
 mod tests_source;
 
@@ -35,6 +38,9 @@ pub use layout::{
 };
 pub use lock::ApplyLock;
 pub use records::{AcceptedRecord, Outcome, Pending, UpdateResult, UpdateState};
+pub use reset::{
+    SET_ASIDE_STATE, StateReset, is_unreadable_state, reset_unreadable_state, state_is_unreadable,
+};
 pub use source::{FolderSource, PackageSource, SignedFile};
 pub use stage::{
     SPACE_MARGIN_BYTES, StageRequest, StageTerms, Staged, stage_from_folder, stage_from_source,
