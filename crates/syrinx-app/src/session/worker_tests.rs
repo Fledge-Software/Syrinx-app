@@ -1773,6 +1773,28 @@ fn synthetic_query(request_id: u64) -> SessionCommand {
 #[path = "crash_restart_tests.rs"]
 mod crash_restart;
 
+#[test]
+fn an_update_snapshot_is_taken_on_request_and_reported() {
+    // P1-39b's pre-update copy, outside the daily schedule, before the window hands over.
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, SessionCommand::SnapshotBeforeUpdate);
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::UpdateSnapshot(Ok(()))
+    ));
+    stop(handle, &mut events);
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic storage");
+    let archive = lease.backup_archive().expect("native backup archive");
+    let backups = archive.candidates().expect("enumerate synthetic backups");
+    assert!(!backups.is_empty(), "the update snapshot was published");
+    drop(backups);
+    drop(archive);
+    drop(lease);
+    fixture.cleanup();
+}
+
 #[path = "history_tests.rs"]
 mod history_recording;
 
