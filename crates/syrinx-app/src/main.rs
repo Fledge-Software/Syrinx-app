@@ -187,13 +187,15 @@ fn main() -> ExitCode {
     // Release the profile only now, after the store and pages have shut down.
     let links_dropped = instance.links_dropped();
     drop(instance);
-    // Held until this process ends, which is how the helper knows Syrinx has exited.
-    let _handoff = hand_off_update(&update_context, unattended);
+    // A message box blocks until dismissed, so it comes before the update lock is taken.
     if links_dropped && !unattended {
         notice::show_warning(
             "Syrinx was closing when a link arrived, so the link was not opened. Open it again.",
         );
     }
+    // Held until this process ends, which is how the helper knows Syrinx has exited; nothing
+    // after this may wait on the owner.
+    let _handoff = hand_off_update(&update_context, unattended);
     if let Some(watchdog) = watchdog
         && let Err(error) = watchdog.cancel()
     {
