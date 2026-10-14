@@ -910,7 +910,10 @@ date." and stores its serial, as staging does; an offer stores only the
   Because that bound is per read, a host trickling a byte just inside it
   could hold a file open for ever, so each file also has an overall
   deadline: two minutes plus its size at 32 KiB/s (about 22 minutes for
-  38 MB; two minutes for the small signed files). It is checked before
+  38 MB). A signed file's size is not known in advance, so its deadline is
+  two minutes plus its size limit at that rate: just over two minutes for
+  `latest` and the signatures, about three for the 2 MiB manifest cap.
+  It is checked before
   every read, so it can be overrun by at most one receive bound.
 - **Proxy.** Windows' own proxy settings apply (WinHTTP's automatic proxy),
   as for the browser. During a request WinHTTP may therefore discover a

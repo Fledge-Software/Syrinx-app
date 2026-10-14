@@ -140,7 +140,7 @@ fn answer(mut stream: TcpStream, reply: Reply, requests: &Mutex<Vec<String>>) {
     }
 }
 
-/// Write ytes; alse once the client has closed, which several tests make it do.
+/// Write `bytes`; `false` once the client has closed, which several tests make it do.
 fn send(stream: &mut TcpStream, bytes: &[u8]) -> bool {
     match stream.write_all(bytes) {
         Ok(()) => true,

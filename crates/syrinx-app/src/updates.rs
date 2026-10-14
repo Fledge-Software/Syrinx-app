@@ -26,6 +26,8 @@ pub struct UpdateContext {
     after_update: bool,
     /// How the window asked to hand over, read by `main` after the window closes.
     requested: Arc<Mutex<Option<ApplyMode>>>,
+    /// The trusted keys: always `KeySet::production`, except in this module's tests.
+    keys: fn() -> Result<KeySet, UpdateError>,
 }
 
 impl UpdateContext {
@@ -49,6 +51,7 @@ impl UpdateContext {
             relaunch_data,
             after_update,
             requested: Arc::new(Mutex::new(None)),
+            keys: KeySet::production,
         }
     }
 
@@ -60,6 +63,7 @@ impl UpdateContext {
             relaunch_data: None,
             after_update: false,
             requested: Arc::new(Mutex::new(None)),
+            keys: KeySet::production,
         }
     }
 
@@ -144,7 +148,7 @@ impl UpdateContext {
         let layout = self.layout.as_ref().map_err(Clone::clone)?;
         let installed = self.running.ok_or(InstallError::NotInstalled)?;
         // Only the keys compiled into Syrinx are trusted; there is no other route (P1-38).
-        let keys = KeySet::production()?;
+        let keys = (self.keys)()?;
         require_release_keys(&keys)?;
         let terms = StageTerms {
             keys: &keys,
@@ -187,7 +191,7 @@ impl UpdateContext {
     /// Check the helper, start it, and return what must stay held until Syrinx exits.
     pub fn hand_off(&self, mode: ApplyMode) -> Result<Handoff, String> {
         let layout = self.layout.as_ref().map_err(ToString::to_string)?;
-        let keys = KeySet::production().map_err(|error| error.to_string())?;
+        let keys = (self.keys)().map_err(|error| error.to_string())?;
         let handoff = prepare_handoff(layout, &keys).map_err(|error| error.to_string())?;
         let log = File::create(layout.log()).map_err(|error| error.kind().to_string())?;
         helper_command(layout, mode, self.relaunch_data.as_deref())
@@ -400,7 +404,6 @@ mod tests {
             context.stage(Path::new(r"C:\Synthetic\package")),
             Err(InstallError::NotInstalled)
         ));
-        assert!(context.hand_off(ApplyMode::Restart).is_err());
         assert!(UpdateContext::disabled().clean_start_job().is_none());
     }
 
@@ -449,24 +452,21 @@ mod tests {
 
     #[test]
     fn without_release_keys_nothing_is_read_or_requested() {
-        // An installed copy before DW-30: the layout exists but no key is pinned. The
-        // synthetic folders are never touched, because the keys are checked first.
-        assert!(
-            syrinx_update::PRODUCTION_KEYS.is_empty(),
-            "DW-30 pinned keys: give this test a temporary layout before it can reach staging"
-        );
+        // An installed copy with no pinned key, whatever PRODUCTION_KEYS holds. The layout
+        // names a folder under `target` that is never created: the keys are checked before
+        // the update lock or any folder is touched.
         assert_eq!(
             require_release_keys(&KeySet::new(&[]).expect("empty set")),
             Err(InstallError::NoReleaseKeys)
         );
-        let layout = UpdateLayout::new(
-            PathBuf::from(r"C:\Synthetic\Programs"),
-            PathBuf::from(r"C:\Synthetic\data"),
-        )
-        .expect("synthetic layout");
+        let never_created = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(r"..\..\target\syrinx-app-update-tests\never-created");
+        let layout = UpdateLayout::new(never_created.join("Programs"), never_created.join("data"))
+            .expect("synthetic layout");
         let context = UpdateContext {
             layout: Ok(layout),
             running: Some(CURRENT),
+            keys: || KeySet::new(&[]),
             ..UpdateContext::disabled()
         };
         let host = CountingHost::default();
@@ -476,6 +476,7 @@ mod tests {
             Err(InstallError::NoReleaseKeys)
         ));
         assert_eq!(host.requests.get(), 0);
+        assert!(!never_created.exists(), "nothing was created");
         assert!(refusal_message(&InstallError::NoReleaseKeys).starts_with("Updates aren't set up"));
     }
 

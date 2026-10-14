@@ -27,14 +27,16 @@ pub(crate) struct Pace {
     pub(crate) bytes_per_second: u64,
 }
 
-/// Two minutes plus 32 KiB/s: a 38 MB package may take about 22 minutes.
+/// Two minutes plus 32 KiB/s: a 38 MB package file may take about 22 minutes, and a signed
+/// file two minutes plus its limit (about three minutes for the 2 MiB manifest cap).
 const PRODUCTION_PACE: Pace = Pace {
     allowance: Duration::from_secs(120),
     bytes_per_second: 32 * 1024,
 };
 
 impl Pace {
-    /// When a file of ytes must have finished arriving.
+    /// When a file of `bytes` must have finished arriving: the allowance plus `bytes` at the
+    /// slowest accepted rate. A signed file passes its size limit, a payload its listed size.
     fn deadline(self, bytes: u64) -> Instant {
         let transfer = Duration::from_secs(bytes / self.bytes_per_second.max(1));
         Instant::now() + self.allowance + transfer

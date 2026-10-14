@@ -60,8 +60,9 @@ passed 1,014 tests after the branding review.
 - *Deferred rows still open:* DW-5, DW-30, DW-60, DW-61 (wired; awaiting
   only the owner's NVDA check), DW-62, DW-63 (an Unload page shortcut on
   a focused sidebar row), DW-66 (a "Reset update records" action for an
-  unreadable `Updates\state`) and DW-67 (the "Last checked" line), in the
-  plan's "Deferred work" register. DW-64 (a
+  unreadable `Updates\state`), DW-67 (the "Last checked" line) and DW-68
+  (checking the resolved `windows` features for networking), in the plan's
+  "Deferred work" register. DW-64 (a
   fail-fast certificate wait in the native fixture) and DW-65 (deleting the
   fixture's synthetic profiles after a fully passing run) are done on
   `claude/dw-64-65-fixture-failfast-cleanup`; see the P1-11 row. DW-7
