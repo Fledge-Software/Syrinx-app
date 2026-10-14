@@ -213,8 +213,8 @@ route these messages to Syrinx's own logging once it connects the verifier.
 What rollback protection does not cover: an attacker who can serve old but
 still newer packages can hold Syrinx at, say, 1.2 when 1.5 exists (a "freeze"
 attack). Defending against that needs a signed, expiring statement of the
-latest version, which only makes sense alongside the update host. It is
-listed for P1-39.
+latest version, which only makes sense alongside the update host. P1-39a
+adds it; see "P1-39a: the latest-version statement" below.
 
 ## Keys
 
@@ -283,6 +283,192 @@ on `syrinx-update` until P1-39 is approved. It also lists the exact
 networking namespace such as `Win32_Networking_WinHttp` fails
 `cargo xtask check-deps`.
 
+## P1-39a: the latest-version statement
+
+The owner approved P1-39's update delivery on 2026-10-13
+(`docs/decisions.md`; the design is
+`docs/proposals/p1-39-update-delivery.md`). P1-39a is its first slice. It
+adds no network call, install step or interface; it adds the signed file
+that tells Syrinx what the newest release is, the code that checks it, and
+the release tool that writes it.
+
+### Why a statement is needed
+
+Rollback protection refuses a package that is not newer than the installed
+one, but it cannot tell Syrinx that something newer exists. Someone who
+controls the host or the connection could keep serving last month's genuine
+package, or nothing at all, and Syrinx would believe it was current (the
+freeze attack described above). The statement closes that gap: the owner
+signs "the newest version is X, its manifest hashes to H, and this expires
+on D", and Syrinx refuses to act on a statement that has expired. A frozen
+host can then hold Syrinx back for at most the statement's lifetime, which
+the owner capped at 60 days.
+
+### The format
+
+`latest` is UTF-8 text with LF line endings, at most 4 KiB, in exactly this
+shape:
+
+```text
+syrinx-update-latest 1
+serial 12
+version 1.4.0
+manifest-sha256 9a1b…(64 lowercase hex digits)
+issued 2026-11-02T10:00:00Z
+expires 2027-01-01T10:00:00Z
+```
+
+- The first line names the format and its version, and differs from the
+  manifest's first line, so neither file parses as the other.
+- `serial` is a decimal number from 0 to 2^64 − 1 without leading zeros. The
+  owner raises it with every statement they sign; Syrinx keeps the highest
+  one it has accepted (P1-39b stores it) and refuses a lower one.
+- `version` is the newest released version, in the manifest's
+  `MAJOR.MINOR.PATCH` form.
+- `manifest-sha256` is SHA-256 of that version's exact `manifest` bytes, in
+  lowercase hex.
+- `issued` and `expires` are UTC instants spelled exactly
+  `YYYY-MM-DDTHH:MM:SSZ`: four-digit year from 1970 to 9999, a real calendar
+  date, upper-case `T` and `Z`, no fractions and no offsets. `expires` must
+  be later than `issued` and at most 60 days (5,184,000 seconds) after it.
+
+The canonical-form rule is the manifest's: single spaces, no blank lines, no
+carriage returns, no byte-order mark, one final newline, the fields in this
+order, and nothing after `expires`. After parsing, the verifier writes the
+statement back out and requires the result to equal the input byte for
+byte.
+
+`latest.sig` uses the 76-byte layout of `manifest.sig` with a different
+magic, `ALS1` (Syrinx latest statement, format 1), in place of `AUS1`. The
+signature is over SHA-256 of the statement's exact bytes, with the same
+ECDSA P-256 key set, exactly as P1-38 signs a manifest. In v1 one key signs
+both; a separate statement-only key was deferred (proposal, "The release
+key").
+
+The magic is not what keeps the two kinds of file apart. It sits outside
+the signed digest, so anyone can relabel an `AUS1` signature as `ALS1`; it
+only catches a misplaced file early, with a clear error. The separation
+rests on the signed bytes themselves: a statement's first line must be
+exactly `syrinx-update-latest 1` and a manifest's exactly
+`syrinx-update-manifest 1`, each parser requires its own header, and both
+require the byte-exact canonical reparse. A manifest signature relabelled
+as a statement signature therefore verifies over bytes the statement
+parser refuses, and the reverse. Any future change must keep both header
+checks exact and the canonical reparse in place: loosening either would
+let one signed file be read as the other.
+
+### How a statement is accepted
+
+`syrinx_update::verify_statement(statement, signature, keys, now,
+previous)` runs, in order:
+
+1. Bound the statement to 4 KiB and require a 76-byte signature with the
+   `ALS1` magic.
+2. Find the pinned key the signature names, refusing an unknown identifier,
+   and verify the signature with CNG. Any pinned key is accepted, which is
+   how the backup key keeps installed copies updatable if the primary is
+   lost (DW-30).
+3. Only then parse the statement strictly and require its canonical form,
+   including the 60-day cap. A statement signed with a longer lifetime is
+   still refused.
+4. **Freshness:** refuse it if `expires` is at or before `now`, the local
+   clock. Expiry is exclusive: at the stated second it has already expired.
+   Also refuse it if `issued` is more than one day (86,400 seconds) after
+   `now`: a slow clock still accepts a fresh statement, but a statement
+   newer than the local clock allows is refused. This does not stop an old
+   statement on a clock set back into that statement's window. With no
+   `previous` record (a fresh install, or lost state), a genuine old
+   statement then passes the freshness check; only the serial rule below
+   stops it, and P1-38's rollback check still refuses a manifest that is
+   not newer than the installed version. Freeze resistance therefore
+   assumes a roughly correct clock and a kept serial record. A clock
+   outside 1970 to 9999 is an error, not a guess.
+5. **Replay:** given the last accepted statement (`AcceptedStatement`: its
+   serial and the SHA-256 of its bytes), refuse a lower serial, and refuse
+   an equal serial whose bytes differ.
+
+The result, `VerifiedStatement`, then checks the manifest it names through
+`VerifiedStatement::verify_manifest`: the manifest's SHA-256 must equal
+`manifest-sha256` (checked before the manifest's own signature), P1-38's
+`verify_manifest` must accept it with its rollback and minimum-version
+rules, and the manifest's `version` must equal the statement's. So a
+statement cannot be paired with a manifest for another version, and a
+genuine manifest cannot be paired with a statement that names a different
+one.
+
+`verify_statement` does not decide whether the statement names the
+installed version ("Syrinx is up to date"); P1-39b compares
+`statement().version()` with the installed version before downloading
+anything.
+
+### Writing a release: `cargo xtask package` and `cargo xtask sign-update`
+
+`cargo xtask package` now also writes P1-38's `manifest` into the package
+folder, beside `syrinx-package.json`. The package's `Syrinx-*.zip` is built
+at the same time, before any signing, so it holds the unsigned `manifest`
+but no `manifest.sig`, `latest` or `latest.sig`. It lists every program file the
+install script copies (`syrinx.exe`, `syrinx-package.json` and the five
+scripts), with `minimum-version 0.0.0` because no release yet needs an
+earlier migration. The manifest is unsigned. Writing it needs the
+verifier's own parser, and `cargo xtask check-deps` still forbids any crate,
+xtask included, from linking `syrinx-update` until P1-39b. So xtask runs a
+small release tool inside the update crate,
+`crates/syrinx-update/src/bin/syrinx-update-tool.rs`, through
+`cargo run --package syrinx-update --bin syrinx-update-tool`. The tool
+refuses to replace an existing `manifest`.
+
+`cargo xtask sign-update --package <folder> --storage <software|smart-card>
+--key <name> --serial <n> --days <1-60>` signs that folder's `manifest` and
+a fresh statement with the owner's stored key, and writes `manifest.sig`,
+`latest.sig` and then `latest` beside it, each through a temporary file
+renamed into place, so a failure part-way never leaves a new `latest` next
+to an old signature. It opens the key by its name in
+Windows' software key storage or smart-card key storage through NCrypt
+(Windows' key-storage interface) and asks Windows to sign; it reads only the
+public half, never the private key. The statement is issued at the current
+time and expires `--days` later. The serial must be higher than one already
+in the folder's `latest`. Before writing, the tool verifies both signatures
+as an installed copy would, against `PRODUCTION_KEYS`, so it refuses a key
+that is not pinned. Because `PRODUCTION_KEYS` is empty until DW-30, the
+command refuses every key today; that is intended, as it fails closed until
+the owner's keys exist.
+
+The key-storage signer and `sign_release` sit behind the update crate's
+non-default `release-tool` feature, which only the release tool requires,
+so Syrinx itself never links code that opens Windows key storage. The gate
+builds and tests that feature (`--features syrinx-update/release-tool`), so
+the tool stays covered by Clippy and the tests. The signing logic is tested
+only with in-memory CNG keys created fresh by each test. No test opens Windows key storage, and the
+repository holds no key.
+
+### What remains for P1-39b to P1-39d
+
+- P1-39b stores the accepted serial, stages a package and installs it.
+  The package folder `cargo xtask package` writes holds `manifest`,
+  `manifest.sig`, `latest` and `latest.sig` next to the payload files, and
+  `DirectoryPayload` refuses unlisted entries. P1-39b's "Install update from
+  file…" must therefore read the payload from a folder holding only the
+  listed files, as the host's `files/` layout does.
+- P1-39b must also move the gate's `release-tool` coverage out of the
+  workspace steps. Today `check_workspace` (`crates/xtask/src/main.rs`)
+  passes `--features syrinx-update/release-tool` to the workspace Clippy
+  and test steps so the signing tool stays covered; that is harmless while
+  no crate depends on `syrinx-update`. Once `syrinx-app` does, Cargo builds
+  one copy of `syrinx-update` with the feature on for the whole workspace,
+  so the gate would lint and test `syrinx-app` with the key-storage signer
+  linked in, unlike the shipped build and the smoke run, and nothing would
+  enforce that Syrinx never links it. In the slice that lifts the verifier
+  quarantine for `syrinx-app`, make the workspace steps featureless again,
+  add separate `cargo clippy -p syrinx-update --all-targets --features
+  release-tool -- -D warnings` and `cargo test -p syrinx-update --features
+  release-tool` steps, and add a `check-deps` rule in
+  `crates/xtask/src/dependency_policy.rs`, with a test, refusing any
+  dependency on `syrinx-update` that enables `release-tool`.
+- P1-39c fetches `latest`, `latest.sig` and the package from
+  `https://syrinxapp.dev/updates/v1/`.
+- P1-39d is the owner's key ceremony, the pinning of both public keys
+  (DW-30) and the first real `sign-update`.
+
 ## What P1-39 needs from the owner
 
 - The update host, how and when Syrinx contacts it, and what it may send.
@@ -291,5 +477,6 @@ networking namespace such as `Win32_Networking_WinHttp` fails
 - The release key pair, generated by the owner outside the repository, and
   its public point and separately recorded identifier for `PRODUCTION_KEYS`
   (DW-30).
-- Whether to add a signed, expiring latest-version statement against freeze
-  attacks.
+
+The owner answered the first two and the statement question on 2026-10-13
+(`docs/decisions.md`); the keys remain theirs to create in P1-39d.

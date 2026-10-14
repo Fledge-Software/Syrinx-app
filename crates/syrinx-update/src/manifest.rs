@@ -140,13 +140,31 @@ impl Manifest {
 
 /// Decode the text and strip its single required final newline.
 fn manifest_body(bytes: &[u8]) -> Result<&str, UpdateError> {
-    let text =
-        std::str::from_utf8(bytes).map_err(|_| manifest_error(0, ManifestProblem::Encoding))?;
+    text_body(bytes).map_err(|fault| {
+        let problem = match fault {
+            TextFault::Encoding => ManifestProblem::Encoding,
+            TextFault::MissingFinalNewline => ManifestProblem::MissingFinalNewline,
+        };
+        manifest_error(0, problem)
+    })
+}
+
+/// Why signed text failed before its lines were read.
+pub(crate) enum TextFault {
+    /// Not UTF-8, or holds a carriage return or NUL.
+    Encoding,
+    /// The text does not end with exactly one newline.
+    MissingFinalNewline,
+}
+
+/// Decode signed LF text and strip its single required final newline.
+pub(crate) fn text_body(bytes: &[u8]) -> Result<&str, TextFault> {
+    let text = std::str::from_utf8(bytes).map_err(|_| TextFault::Encoding)?;
     if text.contains(['\r', '\0']) {
-        return Err(manifest_error(0, ManifestProblem::Encoding));
+        return Err(TextFault::Encoding);
     }
     text.strip_suffix('\n')
-        .ok_or(manifest_error(0, ManifestProblem::MissingFinalNewline))
+        .ok_or(TextFault::MissingFinalNewline)
 }
 
 /// Read one `name value` version line at its expected position.
@@ -253,7 +271,7 @@ fn check_order(previous: Option<&FileEntry>, entry: &FileEntry) -> Result<(), Ma
 }
 
 /// Decode exactly 64 lowercase hex digits.
-fn parse_hash(text: &str) -> Option<[u8; 32]> {
+pub(crate) fn parse_hash(text: &str) -> Option<[u8; 32]> {
     if text.len() != HASH_HEX_DIGITS {
         return None;
     }

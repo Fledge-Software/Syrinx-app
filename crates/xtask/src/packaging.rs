@@ -3,6 +3,9 @@
 mod manifest;
 mod registration;
 mod sha256;
+mod update;
+
+pub use update::GATE_FEATURE;
 
 use std::env;
 use std::fs;
@@ -48,12 +51,39 @@ pub fn package(root: &Path) -> Result<(), String> {
     let files = copy_package_files(root, &folder)?;
     fs::write(folder.join(MANIFEST), manifest::render(&identity, &files)?)
         .map_err(|error| format!("Could not write {MANIFEST}: {error}"))?;
+    write_update_manifest(root, &folder, &identity)?;
     let archive = zip_package(&output, &name)?;
 
     println!("Package folder: {}", folder.display());
+    println!(
+        "Update manifest: {} (unsigned; see cargo xtask sign-update)",
+        folder.join(update::UPDATE_MANIFEST).display()
+    );
     println!("Package zip:    {}", archive.display());
     println!("Nothing was installed or registered. See docs/p1-37-installer-design.md.");
     Ok(())
+}
+
+/// Write P1-38's `manifest` over the program files, through the update crate's release tool.
+fn write_update_manifest(
+    root: &Path,
+    folder: &Path,
+    identity: &BuildIdentity,
+) -> Result<(), String> {
+    let folder = folder
+        .to_str()
+        .ok_or_else(|| format!("{} is not a Unicode path.", folder.display()))?;
+    run_tool(root, &update::manifest_command(folder, &identity.version))
+}
+
+/// Sign a package's `manifest` and a fresh latest statement with the owner's stored key.
+pub fn sign_update(root: &Path, options: &[String]) -> Result<(), String> {
+    run_tool(root, &update::sign_command(options))
+}
+
+fn run_tool(root: &Path, command: &[String]) -> Result<(), String> {
+    let arguments: Vec<&str> = command.iter().map(String::as_str).collect();
+    crate::run_cargo(root, &arguments)
 }
 
 /// Design doc whose registry table is rendered from the same Rust table.
