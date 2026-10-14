@@ -4,12 +4,14 @@
 use std::collections::BTreeMap;
 
 use gpui::{
-    App, AppContext, ClickEvent, Context, Div, ElementId, FocusHandle, InteractiveElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Role, Stateful,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight,
+    InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement,
+    Role, Stateful, StatefulInteractiveElement, Styled, WeakEntity, Window, div,
+    prelude::FluentBuilder, px,
 };
 use syrinx_core::{
-    ActivationTarget, SavedEntryId, SavedFolderSnapshot, SavedPageSnapshot, TabId, TabSnapshot,
+    ActivationTarget, BuiltInPlugin, DestinationTarget, SavedEntryId, SavedFolderSnapshot,
+    SavedPageSnapshot, TabId, TabSnapshot,
 };
 use syrinx_ui::{
     SIDEBAR_WIDTH_STATE_KEY, SidebarWidthState,
@@ -19,18 +21,20 @@ use syrinx_ui::{
     sidebar_setting,
 };
 
-use crate::controls::control;
+use crate::controls::{control, glyph, icon_button};
 
 use super::{
-    BrowserView, button,
+    BrowserView,
+    favorites::{DraggedFavorite, FavoriteSource},
     folder_editor::{
         DeleteFolderContents, DraggedRow, MoveRowDown, MoveRowIn, MoveRowOut, MoveRowUp,
         ROW_CONTEXT, RemoveRow, RenameRow,
     },
+    menus::MenuKind,
     page_card::edge_strip,
     saved_moves::{DropTarget, Step},
     sidebar_tree::{SidebarEntry, TreeId, active_tree_id, sidebar_entries},
-    tiles::monogram,
+    tiles::{self, monogram},
 };
 use crate::{session::SessionCommand, theme};
 
@@ -38,7 +42,6 @@ const ROW_HEIGHT: f32 = 36.;
 /// How far each folder level indents its contents in the wide sidebar.
 const FOLDER_INDENT: f32 = 12.;
 const MONOGRAM_SIZE: f32 = 20.;
-const PLUGINS: [&str; 3] = ["Forge", "Notes", "Fledge"];
 const LAST_VISIBLE_KEY: &str = "sidebar.last_visible_state";
 
 /// What a row shows: its icon letter, title and selection, and how deep it is nested.
@@ -82,28 +85,100 @@ impl BrowserView {
             return frame;
         }
         let rows = self.rows(labels, window, cx);
+        // The main window's title bar draws the address unless the sidebar is wide.
+        let address = labels.then(|| self.address_field(true, !self.draws_peek_tree(window), cx));
         frame
-            .pt_3()
-            .pb_3()
+            .pt_1()
+            .pb_2()
             .pl(px(SIDEBAR_PADDING_LEFT))
             .pr(px(SIDEBAR_PADDING_RIGHT))
             .flex()
             .flex_col()
             .gap_3()
-            .children(labels.then(|| {
-                div()
-                    .px_2()
-                    .text_lg()
-                    .text_color(theme::accent())
-                    .child("Syrinx")
-            }))
-            .child(search_button(labels, cx))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.open_menu_at(MenuKind::Sidebar, event, window, cx);
+                }),
+            )
+            .children(address)
             .child(self.favorites(labels, cx))
-            .child(plugin_section(labels))
-            .child(div().h(px(1.)).bg(theme::line()))
-            .child(tabs_header(labels, cx))
             .children(labels.then(|| self.folder_editor_view(cx)).flatten())
-            .child(rows)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(self.plugin_rows(labels, cx))
+                    .child(rows)
+                    .child(new_tab_row(labels, cx)),
+            )
+            .child(library_row(labels, cx))
+    }
+
+    /// The built-in plugins, inline above the tabs as the canvas draws them: a coloured icon
+    /// and the name, dimmed until the plugin runtime exists. Each can be dragged to Favorites.
+    fn plugin_rows(&self, labels: bool, cx: &mut Context<Self>) -> Div {
+        let palette = theme::current();
+        let mut rows = div().flex_none().flex().flex_col().gap_1();
+        for plugin in BuiltInPlugin::ALL {
+            let colors = tiles::tile_colors(&palette, &DestinationTarget::Plugin(plugin));
+            let icon = div()
+                .size(px(22.))
+                .flex_none()
+                .rounded(px(7.))
+                .bg(theme::rgba(colors.background))
+                .text_color(theme::rgba(colors.foreground))
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(monogram(plugin.name()));
+            let dragged = DraggedFavorite {
+                title: plugin.name().to_owned(),
+                source: FavoriteSource::Plugin(plugin),
+            };
+            let row = control(
+                div().id(plugin.id()),
+                Role::Button,
+                format!("{} · not available yet", plugin.name()),
+            )
+            .h(px(34.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .rounded(px(9.))
+            .opacity(0.7)
+            .cursor_pointer()
+            .text_color(theme::rgba(palette.text_secondary))
+            .hover(move |style| style.bg(theme::rgba(palette.row_selected)))
+            .on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.message = tiles::unavailable_message(plugin);
+                cx.notify();
+            }))
+            .child(icon);
+            rows = rows.child(if labels {
+                row.px(px(8.)).child(plugin.name())
+            } else {
+                row.w(px(ICON_BUTTON)).justify_center()
+            });
+        }
+        rows
+    }
+
+    /// The address an open tab shows, for dragging it to Favorites.
+    fn tab_address(&self, id: TabId) -> String {
+        self.model
+            .tabs
+            .iter()
+            .find(|tab| tab.id == id)
+            .map(|tab| tab.metadata.address.clone())
+            .unwrap_or_default()
     }
 
     /// The strip between the sidebar and the page card that the owner drags. It also takes
@@ -264,7 +339,9 @@ impl BrowserView {
             .id("sidebar-rows")
             .role(Role::Tree)
             .aria_label("Saved and open tabs")
-            .flex_1()
+            // Shrinks and scrolls when long, but does not grow, so New tab follows the last tab.
+            .flex_shrink(1.)
+            .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&prepared.scroll)
             .flex()
@@ -366,7 +443,16 @@ impl BrowserView {
             saved: false,
         };
         let target = ActivationTarget::Tab(id);
+        let dragged = DraggedFavorite {
+            title: look.title.clone(),
+            source: FavoriteSource::Address(self.tab_address(id)),
+        };
+        let view = cx.entity().downgrade();
         let row = row_frame(("tab", id.get()), look, labels)
+            .on_drag(dragged, move |dragged, _, window, cx| {
+                release_on_drag(&view, window, cx);
+                cx.new(|_| dragged.clone())
+            })
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.activate_row(target, window, cx);
             }))
@@ -596,108 +682,106 @@ fn without_mouse_focus(element: Stateful<Div>) -> Stateful<Div> {
     element.on_any_mouse_down(|_, window, _| window.prevent_default())
 }
 
-/// Opens the palette: a labelled button when wide, an icon button otherwise.
-fn search_button(labels: bool, cx: &mut Context<BrowserView>) -> Stateful<Div> {
-    let open = cx.listener(|this, _, window, cx| this.open_palette(false, window, cx));
-    if labels {
-        return button("palette", "Search · Ctrl K").on_click(open);
-    }
-    icon_button("palette", "⌕", "Search · Ctrl K").on_click(open)
-}
-
-/// The plugin placeholders: names when wide, letters with the same names otherwise.
-fn plugin_section(labels: bool) -> Div {
-    let section = div().flex().flex_col().gap_1();
-    if labels {
-        return section
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme::icon_dim())
-                    .px_2()
-                    .child("PLUGINS"),
-            )
-            .children(PLUGINS.map(|name| {
-                // Not yet a control: screen readers read it as a label until plugins exist.
-                div()
-                    .id(name)
-                    .role(Role::Label)
-                    .aria_label(format!("{name} · coming soon"))
-                    .px_2()
-                    .py_1()
-                    .text_color(theme::icon_dim())
-                    .child(format!("{name} · coming soon"))
-            }));
-    }
-    section.children(PLUGINS.map(|name| {
-        div()
-            .id(name)
-            .role(Role::Label)
-            .aria_label(format!("{name} · coming soon"))
-            .w(px(ICON_BUTTON))
-            .h(px(ICON_BUTTON))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(theme::icon_dim())
-            .child(monogram(name))
-    }))
-}
-
-/// The tab section's header with its new-folder and new-tab buttons. A row dropped on it
-/// moves to the end of the top level, out of any folder.
-fn tabs_header(labels: bool, cx: &mut Context<BrowserView>) -> Div {
-    let new_tab = cx.listener(|this, _, window, cx| {
-        this.command(SessionCommand::NewTab {
-            address: "about:blank".to_owned(),
-        });
-        this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
-        cx.notify();
-    });
-    let header = div()
+/// The quiet row under the tabs: New tab, and the ⋯ menu with New folder and editing
+/// Favorites. A row dropped on it moves to the end of the top level, out of any folder.
+fn new_tab_row(labels: bool, cx: &mut Context<BrowserView>) -> Stateful<Div> {
+    let palette = theme::current();
+    let row = control(div().id("new-tab"), Role::Button, "New tab")
+        .aria_keyshortcuts("Control+T")
+        .h(px(34.))
+        .flex_none()
         .flex()
         .items_center()
-        .rounded_md()
+        .gap(px(10.))
+        .rounded(px(9.))
+        .cursor_pointer()
+        .text_color(theme::rgba(palette.text_muted))
+        .hover(move |style| style.bg(theme::rgba(palette.row_selected)))
         .drag_over::<DraggedRow>(|style, _, _, _| style.bg(theme::preview_row_selected()))
         .on_drop(cx.listener(|this, dragged: &DraggedRow, _, cx| {
             this.drop_saved_row(dragged.entry, DropTarget::TopLevel);
             cx.notify();
+        }))
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.command(SessionCommand::NewTab {
+                address: "about:blank".to_owned(),
+            });
+            this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
+            cx.notify();
         }));
-    if !labels {
-        return header.child(icon_button("new-tab", "+", "New tab").on_click(new_tab));
-    }
-    header
-        .child(
-            div()
-                .flex_1()
-                .px_2()
-                .text_xs()
-                .text_color(theme::icon_dim())
-                .child("SAVED & OPEN TABS"),
-        )
-        .child(
-            button("new-folder", "New folder")
-                .on_click(cx.listener(|this, _, window, cx| this.start_new_folder(window, cx))),
-        )
-        .child(
-            button("new-tab", "+")
-                .aria_label("New tab")
-                .on_click(new_tab),
-        )
-}
-
-/// A square icon button the width of the favicon-only column.
-fn icon_button(id: &'static str, glyph: &'static str, name: &'static str) -> Stateful<Div> {
-    control(div().id(id), Role::Button, name)
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
+    let plus = div()
+        .size(px(22.))
+        .flex_none()
+        .rounded(px(7.))
+        .border_1()
+        .border_dashed()
+        .border_color(theme::rgba(palette.dash))
         .flex()
         .items_center()
         .justify_center()
-        .rounded_md()
-        .bg(theme::line())
-        .cursor_pointer()
-        .child(glyph)
+        .font_family(glyph::FONT)
+        .text_size(px(10.))
+        .child(glyph::ADD);
+    if !labels {
+        return row.w(px(ICON_BUTTON)).justify_center().child(plus);
+    }
+    row.px(px(8.))
+        .pr_1()
+        .child(plus)
+        .child(div().flex_1().child("New tab"))
+        .child(
+            icon_button(div().id("sidebar-more"), glyph::MORE, "More")
+                .tab_stop(false)
+                .size(px(26.))
+                .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    let position = event.position();
+                    this.open_sidebar_menu(position, window, cx);
+                })),
+        )
+}
+
+/// The library row at the sidebar's foot, as the canvas draws it: History, Bookmarks,
+/// Passwords and Appearance. Bookmarks and Passwords say what is coming until they exist.
+fn library_row(labels: bool, cx: &mut Context<BrowserView>) -> Div {
+    let buttons = [
+        icon_button(div().id("library-history"), glyph::HISTORY, "History")
+            .aria_keyshortcuts("Control+H")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.toggle_history();
+                cx.notify();
+            })),
+        icon_button(div().id("library-bookmarks"), glyph::BOOKMARKS, "Bookmarks").on_click(
+            cx.listener(|this, _, _, cx| {
+                this.message =
+                    "Saved pages live in the sidebar; a bookmarks manager comes later.".to_owned();
+                cx.notify();
+            }),
+        ),
+        icon_button(div().id("library-passwords"), glyph::PASSWORDS, "Passwords").on_click(
+            cx.listener(|this, _, _, cx| {
+                this.message = "Password saving is not part of Syrinx v1.".to_owned();
+                cx.notify();
+            }),
+        ),
+        icon_button(
+            div().id("library-appearance"),
+            glyph::APPEARANCE,
+            "Appearance",
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.open_appearance();
+            cx.notify();
+        })),
+    ];
+    let row = div().flex_none().flex().text_color(theme::icon_dim());
+    if !labels {
+        return row.flex_col().gap_1().children(buttons);
+    }
+    row.items_center()
+        .justify_between()
+        .px_1()
+        .children(buttons)
 }
 
 /// The setting to save when the sidebar settles, or `None` when its state did not change.

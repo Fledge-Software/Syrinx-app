@@ -74,6 +74,18 @@ details are not a current API contract. D26 supersedes its statement that
 Company has no home. Nothing in this plan inspects Fledge repositories or
 depends on their current deployment state.
 
+## Queued owner request: customisable Home and widgets (2026-10-14)
+
+The owner asked for a customisable Home page and for widgets, including
+widgets that plugins provide, and decided it waits for this plan. **Before
+designing the Plugin trait, read
+[`docs/prompts/home-layout-and-widgets.md`](../prompts/home-layout-and-widgets.md)**:
+it records the request, the decisions already taken (split-pane layout saved
+locally; weather comes from a developer's plugin, never a Syrinx network
+request; plugin widgets come from a reviewed template repository) and the
+questions still open. The widget format is an open thread of this plan; it is
+not part of the approved slices until the owner approves a plan for it.
+
 ## Architecture and ownership
 
 ### One plugin boundary

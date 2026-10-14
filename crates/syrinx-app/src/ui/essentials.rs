@@ -59,50 +59,54 @@ impl BrowserView {
             }))
     }
 
+    /// The title bar's corner keeps only Downloads in view; Find, Print and zoom live in the
+    /// page menu and on their keys. The zoom level shows only away from 100%; a click resets it.
     pub(super) fn essential_controls(&self, cx: &mut Context<Self>) -> Div {
-        let mut controls = div().flex().items_center().gap_1();
-        for (id, label, name, shortcut) in [
-            ("find", "Find", "Find in page", BrowserShortcut::Find),
-            (
-                "downloads",
-                "Downloads",
-                "Downloads",
-                BrowserShortcut::Downloads,
-            ),
-            ("print", "Print", "Print", BrowserShortcut::Print),
-            ("zoom-out", "−", "Zoom out", BrowserShortcut::ZoomOut),
-        ] {
-            controls = controls.child(button(id, label).aria_label(name).on_click(cx.listener(
-                move |this, _, window, cx| {
-                    if shortcut == BrowserShortcut::Find {
-                        this.open_find(window, cx);
-                    } else {
-                        this.essential_shortcut(shortcut);
-                    }
-                    cx.notify();
-                },
-            )));
-        }
         let factor = self
             .shown
             .and_then(|id| self.zoom_levels.get(&id.get()).copied())
             .unwrap_or(1.);
-        controls
-            .child(
+        let downloads = crate::controls::icon_button(
+            div().id("downloads"),
+            crate::controls::glyph::DOWNLOADS,
+            "Downloads",
+        )
+        .aria_keyshortcuts("Control+J")
+        .occlude()
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.essential_shortcut(BrowserShortcut::Downloads);
+            cx.notify();
+        }));
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .children(zoom_label(factor).map(|label| {
                 crate::controls::push_button(div().id("zoom-reset"), "Reset zoom")
-                    .aria_value(format!("{:.0}%", factor * 100.))
+                    .aria_value(label.clone())
+                    .aria_keyshortcuts("Control+0")
+                    .occlude()
+                    .h(px(22.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .rounded(px(11.))
+                    .bg(theme::line())
+                    .text_size(px(syrinx_ui::metrics::text::SMALL))
                     .cursor_pointer()
-                    .px_1()
-                    .rounded_md()
-                    .child(format!("{:.0}%", factor * 100.))
+                    .child(label)
                     .on_click(cx.listener(|this, _, _, _| {
                         this.essential_shortcut(BrowserShortcut::ZoomReset)
-                    })),
-            )
-            .child(button("zoom-in", "+").aria_label("Zoom in").on_click(
-                cx.listener(|this, _, _, _| this.essential_shortcut(BrowserShortcut::ZoomIn)),
-            ))
+                    }))
+            }))
+            .child(downloads)
     }
+}
+
+/// The zoom level as a percentage, or `None` at 100%, where nothing needs showing.
+fn zoom_label(factor: f64) -> Option<String> {
+    let percent = (factor * 100.).round();
+    (percent != 100.).then(|| format!("{percent:.0}%"))
 }
 
 fn page_action(id: Option<u64>, shortcut: BrowserShortcut) -> Option<BrowserCommand> {
@@ -121,6 +125,14 @@ fn page_action(id: Option<u64>, shortcut: BrowserShortcut) -> Option<BrowserComm
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_zoom_level_shows_only_away_from_one_hundred_percent() {
+        assert_eq!(zoom_label(1.), None);
+        assert_eq!(zoom_label(1.000_4), None, "rounding noise");
+        assert_eq!(zoom_label(1.1), Some("110%".to_owned()));
+        assert_eq!(zoom_label(0.5), Some("50%".to_owned()));
+    }
 
     #[test]
     fn chrome_only_zoom_keys_never_shadow_a_registry_shortcut() {

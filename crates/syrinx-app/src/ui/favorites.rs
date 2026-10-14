@@ -1,17 +1,42 @@
-//! Draws the sidebar's square Favorites, separate from saved pages and Quick access (D45).
+//! Draws the sidebar's square Favorites, separate from saved pages and Quick access (D45),
+//! and adds a tab, saved page or plugin dragged onto them.
 
 use gpui::{
-    Context, Div, FontWeight, InteractiveElement, ParentElement, Role, Stateful,
-    StatefulInteractiveElement, Styled, div, px,
+    Context, Div, InteractiveElement, IntoElement, ParentElement, Render, Role, Stateful,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
-use syrinx_core::DestinationSurface;
+use syrinx_core::{
+    BuiltInPlugin, Destination, DestinationEdit, DestinationSurface, MAX_LABEL_CHARS, SavedEntryId,
+};
 use syrinx_ui::Palette;
-use syrinx_ui::metrics::{chrome::ICON_BUTTON, text};
+use syrinx_ui::metrics::chrome::ICON_BUTTON;
 
 use super::BrowserView;
+use super::folder_editor::{DraggedRow, drag_chip};
+use super::tile_editor::{TargetChoice, tile_from_form};
 use super::tiles;
 use crate::controls::control;
-use crate::theme::{self, rgba};
+use crate::theme;
+
+/// A tab or plugin being dragged towards Favorites, and the label that follows the pointer.
+#[derive(Clone)]
+pub(super) struct DraggedFavorite {
+    pub(super) title: String,
+    pub(super) source: FavoriteSource,
+}
+
+/// What a dropped favorite opens.
+#[derive(Clone)]
+pub(super) enum FavoriteSource {
+    Address(String),
+    Plugin(BuiltInPlugin),
+}
+
+impl Render for DraggedFavorite {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        drag_chip(&self.title)
+    }
+}
 
 /// The canvas sidebar's four-column grid of 46px-high tiles.
 const COLUMNS: u16 = 4;
@@ -26,13 +51,47 @@ impl BrowserView {
     /// Favorites at the sidebar's width: the full section when labels show, otherwise one
     /// column of icon tiles that fits the favicon-only sidebar.
     pub(super) fn favorites(&self, labels: bool, cx: &mut Context<Self>) -> Div {
-        if labels {
-            return self.favorites_section(cx);
-        }
-        self.favorites_column(cx)
+        let favorites = if labels {
+            self.favorites_section(cx)
+        } else {
+            self.favorites_column(cx)
+        };
+        favorites_drop_target(favorites, cx)
     }
 
-    /// The Favorites heading, grid and, while one is open, the Favorites tile form.
+    /// Adds a dropped tab or plugin as the last Favorite, or says why it cannot be one.
+    fn drop_favorite(&mut self, title: &str, source: &FavoriteSource) {
+        let tile = match favorite_tile(title, source) {
+            Ok(tile) => tile,
+            Err(message) => {
+                self.message = message;
+                return;
+            }
+        };
+        let surface = DestinationSurface::Favorites;
+        if is_favorite(self.home.destinations.list(surface), &tile) {
+            self.message = format!("{} is already a favorite.", tile.label);
+            return;
+        }
+        self.edit_tiles(surface, DestinationEdit::Add(tile));
+    }
+
+    /// A saved page dropped on Favorites becomes one; a folder cannot.
+    fn drop_saved_favorite(&mut self, entry: SavedEntryId) {
+        let SavedEntryId::Page(id) = entry else {
+            self.message = "A folder cannot be a favorite. Drag one of its pages.".to_owned();
+            return;
+        };
+        let Some(page) = self.model.saved_pages.iter().find(|page| page.id == id) else {
+            return;
+        };
+        let source = FavoriteSource::Address(page.metadata.address.clone());
+        let title = page.metadata.title.clone();
+        self.drop_favorite(&title, &source);
+    }
+
+    /// The Favorites grid and, while one is open, the Favorites tile form. Editing starts
+    /// from the sidebar's menu, so there is no heading.
     fn favorites_section(&self, cx: &mut Context<Self>) -> Div {
         let palette = theme::current();
         let surface = DestinationSurface::Favorites;
@@ -40,21 +99,6 @@ impl BrowserView {
             .flex()
             .flex_col()
             .gap(px(8.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .px_2()
-                            .text_size(px(text::CAPTION))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgba(palette.text_muted))
-                            .child("FAVORITES"),
-                    )
-                    .child(self.edit_toggle("favorites-edit", surface, &palette, cx)),
-            )
             .child(self.favorites_grid(&palette, cx));
         if let Some(editor) = self
             .home
@@ -144,5 +188,110 @@ impl BrowserView {
             );
         }
         column
+    }
+}
+
+/// Highlights Favorites while a tab, saved page or plugin is dragged over them and adds it on drop.
+fn favorites_drop_target(favorites: Div, cx: &mut Context<BrowserView>) -> Div {
+    favorites
+        .rounded(px(8.))
+        .drag_over::<DraggedFavorite>(|style, _, _, _| style.bg(theme::preview_row_selected()))
+        .drag_over::<DraggedRow>(|style, _, _, _| style.bg(theme::preview_row_selected()))
+        .on_drop(cx.listener(|this, dragged: &DraggedFavorite, _, cx| {
+            this.drop_favorite(&dragged.title, &dragged.source);
+            cx.notify();
+        }))
+        .on_drop(cx.listener(|this, dragged: &DraggedRow, _, cx| {
+            this.drop_saved_favorite(dragged.entry);
+            cx.notify();
+        }))
+}
+
+/// The tile a dropped tab or plugin becomes. A page's title is its name, cut to fit; an
+/// untitled page uses its address. Only websites qualify: not a blank tab or Syrinx's own pages.
+fn favorite_tile(title: &str, source: &FavoriteSource) -> Result<Destination, String> {
+    match source {
+        FavoriteSource::Plugin(plugin) => {
+            tile_from_form(plugin.name(), "", TargetChoice::Plugin(*plugin))
+        }
+        FavoriteSource::Address(address) => tile_from_form(
+            &favorite_label(title, address),
+            address,
+            TargetChoice::Website,
+        )
+        .map_err(|_| "Only a website can be a favorite.".to_owned()),
+    }
+}
+
+/// A short tile name: the title without control characters, or the address when it has none.
+fn favorite_label(title: &str, address: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect();
+    let name = if cleaned.trim().is_empty() {
+        address
+    } else {
+        cleaned.trim()
+    };
+    name.chars().take(MAX_LABEL_CHARS).collect()
+}
+
+/// Whether Favorites already open the same place, whatever its name.
+fn is_favorite(favorites: &[Destination], tile: &Destination) -> bool {
+    favorites
+        .iter()
+        .any(|favorite| favorite.target == tile.target)
+}
+
+#[cfg(test)]
+mod tests {
+    use syrinx_core::DestinationTarget;
+
+    use super::*;
+
+    #[test]
+    fn a_dragged_website_becomes_a_named_favorite() {
+        let source = FavoriteSource::Address("https://drag.example.test/page".to_owned());
+        let tile = favorite_tile("Synthetic page", &source).expect("a website qualifies");
+        assert_eq!(tile.label, "Synthetic page");
+        // Destinations have no Debug output (owner data), so compare without assert_eq.
+        assert!(tile.target == DestinationTarget::Web("https://drag.example.test/page".to_owned()));
+    }
+
+    #[test]
+    fn a_blank_tab_or_internal_page_cannot_be_a_favorite() {
+        for address in ["about:blank", "", "syrinx://home"] {
+            let source = FavoriteSource::Address(address.to_owned());
+            assert!(favorite_tile("Blank", &source).is_err(), "{address}");
+        }
+    }
+
+    #[test]
+    fn a_dragged_plugin_is_named_for_itself() {
+        let tile = favorite_tile("ignored", &FavoriteSource::Plugin(BuiltInPlugin::Notes))
+            .expect("plugins qualify");
+        assert_eq!(tile.label, "Notes");
+        assert!(tile.target == DestinationTarget::Plugin(BuiltInPlugin::Notes));
+    }
+
+    #[test]
+    fn long_or_missing_titles_still_make_a_valid_name() {
+        let long = "x".repeat(MAX_LABEL_CHARS + 20);
+        let address = "https://a.example.test/";
+        assert_eq!(
+            favorite_label(&long, address).chars().count(),
+            MAX_LABEL_CHARS
+        );
+        assert_eq!(favorite_label(" \t ", address), address);
+        assert_eq!(favorite_label("Tab\nname", address), "Tabname");
+    }
+
+    #[test]
+    fn the_same_place_is_not_added_twice() {
+        let target = DestinationTarget::Web("https://twice.example.test/".to_owned());
+        let existing = Destination::new("First name", target.clone()).expect("valid");
+        let again = Destination::new("Other name", target).expect("valid");
+        assert!(is_favorite(std::slice::from_ref(&existing), &again));
     }
 }

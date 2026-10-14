@@ -94,6 +94,11 @@ pub struct PaletteView {
     _input_events: Subscription,
     /// Counts the input's notifications for P1-33's acceptance run; `None` otherwise.
     _input_count: Option<Subscription>,
+    /// Whether the popup has been active during the open entry. GPUI reports activation from
+    /// a task, so a deactivation queued by the previous entry's close must not end this one.
+    active_this_entry: bool,
+    /// Ends the open entry when the popup loses activation: a click outside it, or Alt Tab.
+    _activation: Subscription,
 }
 
 pub fn bind_keys(cx: &mut App) {
@@ -140,6 +145,10 @@ impl PaletteView {
             probe,
             _input_events: input_events,
             _input_count: input_count,
+            active_this_entry: false,
+            _activation: cx.observe_window_activation(window, |this, popup, cx| {
+                this.activation_changed(popup.is_window_active(), popup, cx);
+            }),
         }
     }
 
@@ -147,6 +156,7 @@ impl PaletteView {
     /// fresh, and the first query goes out on the entry's own channel.
     pub fn begin(&mut self, entry: PaletteEntry, window: &mut Window, cx: &mut Context<Self>) {
         self.events = Some(entry.events);
+        self.active_this_entry = false;
         self.context = entry.context;
         self.choices.reset();
         self.chip = Chip::default();
@@ -176,6 +186,17 @@ impl PaletteView {
             self.emit(PaletteEvent::Closed);
         }
         self.close(window, cx);
+    }
+
+    /// A click outside the open popup, or switching away, ends the entry as Esc does.
+    fn activation_changed(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if active {
+            self.active_this_entry = true;
+            return;
+        }
+        if dismisses_on_deactivation(self.is_open(), self.active_this_entry) {
+            self.dismiss(window, cx);
+        }
     }
 
     /// Hides the popup and drops the entry's channel, which ends the browser's receiver.
@@ -389,6 +410,12 @@ impl PaletteView {
     }
 }
 
+/// Only an open entry whose popup was active ends on deactivation; a stale report from the
+/// previous entry's close arrives before this one's popup was ever active.
+fn dismisses_on_deactivation(open: bool, active_this_entry: bool) -> bool {
+    open && active_this_entry
+}
+
 /// The palette's search field, with its Change and Enter handlers.
 fn new_input(
     probe: Option<&PresentProbe>,
@@ -527,6 +554,16 @@ mod tests {
     use super::*;
 
     const ADDRESS: &str = "https://palette.example.test/Case?Key=Value";
+
+    #[test]
+    fn only_an_entry_that_was_active_closes_when_focus_leaves_it() {
+        assert!(dismisses_on_deactivation(true, true), "a click outside");
+        assert!(
+            !dismisses_on_deactivation(true, false),
+            "the previous entry's queued deactivation"
+        );
+        assert!(!dismisses_on_deactivation(false, true), "already closed");
+    }
 
     #[test]
     fn shortcut_stream_keeps_queries_until_submit_activation_run_or_close() {

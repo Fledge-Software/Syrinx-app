@@ -123,7 +123,7 @@ impl BrowserView {
         let scale = window.scale_factor();
         let y = pointer.y as f32 / scale;
         let edge = in_peek_zone(self.sidebar_sizing.state(), pointer.x as f32 / scale)
-            && (page_card::chrome_height(self.sidebar_sizing.width())
+            && (page_card::chrome_height()
                 ..f32::from(window.viewport_size().height) - FOOTER_HEIGHT)
                 .contains(&y);
         // A fullscreen page (P1-15) has no sidebar to peek at.
@@ -569,7 +569,7 @@ fn accepts_opened_peek(closing: bool, open: bool, awaited: Option<u64>, opened: 
 fn peek_anchor(main: Bounds<Pixels>, scale: f32) -> (i32, i32) {
     (
         ((f32::from(main.origin.x) + PEEK_EDGE_ZONE) * scale).round() as i32,
-        ((f32::from(main.origin.y) + page_card::chrome_height(0.)) * scale).round() as i32,
+        ((f32::from(main.origin.y) + page_card::chrome_height()) * scale).round() as i32,
     )
 }
 
@@ -582,7 +582,7 @@ fn peek_bounds(
 ) -> Bounds<Pixels> {
     let (anchor_x, anchor_y) = peek_anchor(main, scale);
     let width = (PEEK_WIDTH * monitor.scale).min((monitor.right - monitor.left) as f32);
-    let height = ((viewport_height - page_card::chrome_height(0.) - FOOTER_HEIGHT) * scale)
+    let height = ((viewport_height - page_card::chrome_height() - FOOTER_HEIGHT) * scale)
         .max(1.)
         .min((monitor.bottom - monitor.top) as f32);
     // GPUI recenters windows whose center misses the selected monitor. Clamp before creation.

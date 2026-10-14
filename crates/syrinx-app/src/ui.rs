@@ -15,6 +15,7 @@ mod home;
 mod home_palette;
 mod import;
 mod incoming_links;
+mod menus;
 mod navigation_intents;
 mod navigation_status;
 mod page_card;
@@ -58,12 +59,11 @@ use std::{
 
 use futures::{StreamExt, channel::mpsc::unbounded};
 use gpui::StatefulInteractiveElement;
-use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Bounds, Context, Div, Entity, FocusHandle, InteractiveElement, IntoElement,
-    KeyBinding, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Render, Stateful, Styled,
-    Subscription, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, div,
-    point, px, rgb, size,
+    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Render,
+    Stateful, Styled, Subscription, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    actions, div, point, px, rgb, size,
 };
 use gpui_component::Root;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -79,7 +79,8 @@ use syrinx_search::{BlankQuery, BoostWeights, Scope, SearchPolicy, Target};
 use syrinx_ui::{
     SidebarSizing,
     focus::{Direction, Pane},
-    metrics::chrome::TITLE_BAR_HEIGHT,
+    metrics::{chrome::TITLE_BAR_HEIGHT, radius},
+    sidebar::SIDEBAR_PADDING_RIGHT,
 };
 use title_bar::title_bar;
 
@@ -90,13 +91,13 @@ use navigation_intents::NavigationIntents;
 use navigation_status::NavigationStatus;
 
 use crate::{
+    controls::{glyph, icon_button},
     navigation,
     palette::{self, PaletteEvent, PaletteView},
     session::{self, SessionCommand, SessionEvent, SessionHandle},
     theme,
 };
 
-const TOOLBAR_HEIGHT: f32 = 48.;
 const FOOTER_HEIGHT: f32 = 28.;
 
 actions!(
@@ -290,6 +291,9 @@ pub struct BrowserView {
     focus: FocusHandle,
     /// The open palette entry; `None` while the kept popup is hidden.
     palette: Option<palette_popup::PalettePopup>,
+    /// The open drop-down menu, if any, and the focus that lets Escape close it.
+    menu: Option<menus::OpenMenu>,
+    menu_focus: FocusHandle,
     /// The palette popup, created once and kept hidden between entries (DW-90).
     kept_palette: Option<palette_popup::KeptPalette>,
     palette_entries: u64,
@@ -396,6 +400,8 @@ impl BrowserView {
             failure: None,
             focus: cx.focus_handle(),
             palette: None,
+            menu: None,
+            menu_focus: cx.focus_handle(),
             kept_palette: None,
             palette_entries: 0,
             page_focus_on_activation: false,
@@ -409,6 +415,7 @@ impl BrowserView {
             peek_owner_geometry: peek::OwnerGeometry::of(window),
             _peek_bounds_watch: cx.observe_window_bounds(window, |this, window, cx| {
                 this.owner_bounds_observed(window, cx);
+                this.follow_palette(window, cx);
                 this.refresh_icon_for_scale(window);
             }),
             home_palette: HomePaletteIntent::default(),
@@ -1443,102 +1450,194 @@ impl BrowserView {
         }
     }
 
-    /// The navigation toolbar: the address pane F6 visits first.
-    fn toolbar(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        // Shown and announced decoded where safe, host kept as punycode; Ctrl L edits the raw address.
-        let readable = syrinx_core::readable_address(&self.active_address());
-        let bar = div()
-            .w_full()
-            .min_w_0()
+    /// The title bar's contents: navigation above the sidebar, as the canvas draws it, or
+    /// with the address when the sidebar is narrow or hidden; Downloads and ☰ in the right
+    /// corner. A right-click on either group opens the page menu.
+    fn title_contents(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let corner = div()
             .flex_none()
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .h(px(if self.sidebar_sizing.width() == 0. {
-                TITLE_BAR_HEIGHT
-            } else {
-                TOOLBAR_HEIGHT
-            }))
-            .px_3()
             .flex()
             .items_center()
-            .gap_2()
-            .bg(theme::ground())
-            .child(
-                button("back", "‹")
-                    .aria_label("Back")
-                    .aria_keyshortcuts("Alt+ArrowLeft")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(id) = this.shown {
-                            this.page_command(BrowserCommand::Back { id: id.get() });
-                        }
-                        cx.notify();
-                    })),
-            )
-            .child(
-                button("forward", "›")
-                    .aria_label("Forward")
-                    .aria_keyshortcuts("Alt+ArrowRight")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(id) = this.shown {
-                            this.page_command(BrowserCommand::Forward { id: id.get() });
-                        }
-                        cx.notify();
-                    })),
-            )
-            .child(
-                button("reload", "↻")
-                    .aria_label("Reload")
-                    .aria_keyshortcuts("Control+R")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(id) = this.shown {
-                            this.page_command(BrowserCommand::Reload { id: id.get() });
-                        }
-                        cx.notify();
-                    })),
-            )
-            .child(self.connection_display())
-            .child(
-                div()
-                    .id("address")
-                    .role(gpui::Role::Button)
-                    .aria_label("Search or enter address")
-                    .aria_value(readable.clone())
-                    .aria_keyshortcuts("Control+L")
-                    .track_focus(self.address_field_focus())
-                    .focus(crate::controls::focus_ring)
-                    .min_w_0()
-                    .flex_1()
-                    .h(px(34.))
-                    .px_3()
-                    .rounded_md()
-                    .bg(theme::line())
-                    .flex()
-                    .items_center()
-                    .overflow_hidden()
-                    .cursor_pointer()
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_palette(true, window, cx)),
-                    )
-                    .child(if readable.is_empty() {
-                        "Search or enter address · Ctrl K".to_owned()
-                    } else {
-                        readable
-                    }),
-            )
+            .gap_1()
+            .on_mouse_down(MouseButton::Right, page_menu_listener(cx))
             .child(self.essential_controls(cx))
             .child(
-                button("save", "Save page").on_click(cx.listener(|this, _, _, cx| {
-                    this.command(SessionCommand::SaveActive);
-                    cx.notify();
-                })),
+                icon_button(div().id("page-menu"), glyph::MENU, "Page menu")
+                    .occlude()
+                    .on_click(cx.listener(|this, _, window, cx| this.open_page_menu(window, cx))),
+            );
+        div()
+            .size_full()
+            .min_w_0()
+            .pr_1()
+            .flex()
+            .items_center()
+            .child(
+                self.navigation(window, cx)
+                    .on_mouse_down(MouseButton::Right, page_menu_listener(cx)),
+            )
+            // Left empty so the window can still be dragged by its title bar.
+            .child(div().flex_1().min_w(px(64.)).h_full())
+            .child(corner)
+    }
+
+    /// The navigation group, the address pane F6 visits first: over a wide sidebar, the
+    /// canvas's window row (sidebar toggle, then back, forward and reload at the right);
+    /// otherwise those buttons followed by the address field.
+    fn navigation(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let toggle = icon_button(div().id("toggle-sidebar"), glyph::SIDEBAR, "Hide sidebar")
+            .aria_keyshortcuts("Control+Alt+S")
+            .occlude()
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
+        let buttons = [
+            self.navigation_button(
+                ("back", glyph::BACK, "Back", "Alt+ArrowLeft"),
+                |id| BrowserCommand::Back { id },
+                cx,
+            ),
+            self.navigation_button(
+                ("forward", glyph::FORWARD, "Forward", "Alt+ArrowRight"),
+                |id| BrowserCommand::Forward { id },
+                cx,
+            ),
+            self.navigation_button(
+                ("reload", glyph::RELOAD, "Reload", "Control+R"),
+                |id| BrowserCommand::Reload { id },
+                cx,
+            ),
+        ];
+        let row = div()
+            .h(px(TITLE_BAR_HEIGHT))
+            .flex()
+            .items_center()
+            .gap(px(2.));
+        let group = if self.sidebar_sizing.labels_visible() {
+            // The title bar pads 12 px, as the sidebar does, so the row spans the sidebar.
+            let width = self.sidebar_sizing.width() - 12. - SIDEBAR_PADDING_RIGHT;
+            row.w(px(width.max(0.)))
+                .flex_none()
+                .child(toggle)
+                .child(div().flex_1().h_full())
+                .children(buttons)
+        } else {
+            let width =
+                page_card::titlebar_navigation_width(f32::from(window.viewport_size().width));
+            row.max_w(px(width))
+                .flex_1()
+                .min_w_0()
+                .child(toggle)
+                .children(buttons)
+                .child(div().w(px(6.)).flex_none())
+                .child(self.address_field(false, true, cx))
+        };
+        self.as_pane(group, Pane::Address, gpui::Role::Toolbar)
+    }
+
+    /// Back, Forward or Reload: its id, glyph, name and keys, and the command it sends.
+    fn navigation_button(
+        &self,
+        (id, icon, name, keys): (&'static str, &'static str, &'static str, &'static str),
+        command: fn(u64) -> BrowserCommand,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        icon_button(div().id(id), icon, name)
+            .aria_keyshortcuts(keys)
+            .occlude()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(id) = this.shown {
+                    this.page_command(command(id.get()));
+                }
+                cx.notify();
+            }))
+    }
+
+    /// The address, which opens the palette to edit it; on a blank page, the canvas's hint
+    /// with its key. The sidebar draws the canvas's taller field. Only one drawing may track
+    /// the field's focus handle, so the peek's copy passes `track: false`.
+    pub(super) fn address_field(
+        &self,
+        in_sidebar: bool,
+        track: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        // Shown and announced decoded where safe, host kept as punycode; Ctrl L edits the raw address.
+        let readable = syrinx_core::readable_address(&self.active_address());
+        let palette = theme::current();
+        let (height, corner) = if in_sidebar {
+            (38., 10.)
+        } else {
+            (28., radius::CONTROL)
+        };
+        let mut field = div()
+            .id(if in_sidebar {
+                "sidebar-address"
+            } else {
+                "address"
+            })
+            .role(gpui::Role::Button)
+            .aria_label("Search or enter address")
+            .aria_value(readable.clone())
+            .aria_description(self.connection_description())
+            .aria_keyshortcuts("Control+L")
+            .occlude()
+            .min_w_0()
+            .flex_none()
+            .h(px(height))
+            .pl_3()
+            .pr_2()
+            .gap(px(10.))
+            .rounded(px(corner))
+            .bg(theme::rgba(palette.field))
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .cursor_text()
+            .text_size(px(syrinx_ui::metrics::text::BODY))
+            .on_click(cx.listener(|this, _, window, cx| this.open_palette(true, window, cx)));
+        // The title bar's field takes the row's free width; the sidebar's is a full-width row.
+        field = if in_sidebar {
+            field.w_full()
+        } else {
+            field.flex_1()
+        };
+        if track {
+            field = field
+                .track_focus(self.address_field_focus())
+                .focus(crate::controls::focus_ring);
+        }
+        if !readable.is_empty() {
+            return field
+                .children(self.connection_mark())
+                .child(div().min_w_0().truncate().child(readable));
+        }
+        field
+            .text_color(theme::rgba(palette.text_muted))
+            .child(
+                div()
+                    .flex_none()
+                    .font_family(glyph::FONT)
+                    .text_size(px(12.))
+                    .child(glyph::SEARCH),
             )
             .child(
-                button("history", "History").on_click(cx.listener(|this, _, _, cx| {
-                    this.toggle_history();
-                    cx.notify();
-                })),
-            );
-        self.as_pane(bar, Pane::Address, gpui::Role::Toolbar)
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child("Search or enter address"),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(5.))
+                    .rounded(px(radius::KEY_HINT))
+                    .border_1()
+                    .border_b_2()
+                    .border_color(theme::rgba(palette.key))
+                    .text_size(px(syrinx_ui::metrics::text::CAPTION))
+                    .text_color(theme::rgba(palette.icon_dim))
+                    .child("Ctrl K"),
+            )
     }
 }
 
@@ -1549,7 +1648,7 @@ impl Render for BrowserView {
                 .size_full()
                 .flex()
                 .flex_col()
-                .child(title_bar(div().child("Syrinx"), window.is_maximized()))
+                .child(title_bar(div(), window.is_maximized()))
                 .child(self.startup_panel(cx));
         }
         if self.browser_ready && !self.closing {
@@ -1625,6 +1724,10 @@ impl Render for BrowserView {
                 this.toggle_sidebar(window, cx);
             }))
             .on_action(cx.listener(|this, _: &DismissPeek, window, cx| {
+                // An open menu is the topmost thing Escape dismisses.
+                if this.close_menu_to_page(window, cx) {
+                    return;
+                }
                 if let Some(generation) = this.peek.as_ref().map(|peek| peek.generation) {
                     this.dismiss_peek(generation, window, cx);
                 } else {
@@ -1715,21 +1818,9 @@ impl Render for BrowserView {
                 }),
             )
             .child(title_bar(
-                if self.sidebar_sizing.width() == 0. {
-                    div()
-                        .w(px(page_card::titlebar_navigation_width(f32::from(
-                            window.viewport_size().width,
-                        ))))
-                        .min_w_0()
-                        .child(self.toolbar(cx))
-                } else {
-                    div().h_full().flex().items_center().child("Syrinx")
-                },
+                self.title_contents(window, cx),
                 window.is_maximized(),
             ))
-            .when(self.sidebar_sizing.width() > 0., |root| {
-                root.child(self.toolbar(cx))
-            })
             .children(self.bar_pane(
                 self.runtime_banner(cx),
                 Pane::RuntimeNotice,
@@ -1763,9 +1854,20 @@ impl Render for BrowserView {
                     .text_xs()
                     .text_color(theme::icon())
                     .child(self.failure.as_ref().unwrap_or(&self.message).clone()),
-            );
+            )
+            .children(self.menu_overlay(cx));
         self.essential_actions(chrome, cx)
     }
+}
+
+/// Opens the page menu where the owner right-clicks the title bar.
+fn page_menu_listener(
+    cx: &mut Context<BrowserView>,
+) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+    cx.listener(|this, event: &MouseDownEvent, window, cx| {
+        cx.stop_propagation();
+        this.open_menu_at(menus::MenuKind::Page, event, window, cx);
+    })
 }
 
 fn dispatch_palette_shortcut(
@@ -1826,15 +1928,7 @@ fn page_command_allowed(closing: bool, command: &BrowserCommand) -> bool {
 /// A labelled chrome button, reachable with Tab and named by its label; glyph buttons
 /// override the name with `aria_label`.
 fn button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
-    let frame = div()
-        .id(id)
-        .px_3()
-        .py_2()
-        .rounded_md()
-        .bg(theme::line())
-        .cursor_pointer()
-        .child(label);
-    crate::controls::push_button(frame, label)
+    crate::controls::text_button(div().id(id), label)
 }
 
 /// Whether a deferred page focus still applies on activation: only while GPUI focus is on
