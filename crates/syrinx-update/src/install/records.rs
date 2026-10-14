@@ -21,24 +21,33 @@ const NONE: &str = "none";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UpdateResult {
     UpToDate,
+    /// A check found a newer version and is waiting for the owner's yes (P1-39c).
+    Available,
     Staged,
     Installed,
     StatementExpired,
     VerificationFailed,
     StagingFailed,
+    /// A download from the update host failed (P1-39c).
+    NetworkFailed,
+    /// The owner cancelled a download (P1-39c).
+    Cancelled,
     ApplyFailed,
     ApplyRolledBack,
     /// The new version did not start and the previous one could not be put back.
     RollbackFailed,
 }
 
-const RESULTS: [(UpdateResult, &str); 9] = [
+const RESULTS: [(UpdateResult, &str); 12] = [
     (UpdateResult::UpToDate, "up_to_date"),
+    (UpdateResult::Available, "available"),
     (UpdateResult::Staged, "staged"),
     (UpdateResult::Installed, "installed"),
     (UpdateResult::StatementExpired, "statement_expired"),
     (UpdateResult::VerificationFailed, "verification_failed"),
     (UpdateResult::StagingFailed, "staging_failed"),
+    (UpdateResult::NetworkFailed, "network_failed"),
+    (UpdateResult::Cancelled, "cancelled"),
     (UpdateResult::ApplyFailed, "apply_failed"),
     (UpdateResult::ApplyRolledBack, "apply_rolled_back"),
     (UpdateResult::RollbackFailed, "apply_rollback_failed"),

@@ -116,6 +116,7 @@ actions!(
         ShowHistory,
         ClearBrowsingData,
         InstallUpdate,
+        CheckUpdates,
         ToggleSidebar,
         DismissPeek,
         Fullscreen
@@ -182,6 +183,7 @@ fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
         BrowserAction::ResetZoom => KeyBinding::new(keystroke, essentials::ZoomReset, None),
         BrowserAction::ClearBrowsingData => KeyBinding::new(keystroke, ClearBrowsingData, None),
         BrowserAction::InstallUpdateFromFile => KeyBinding::new(keystroke, InstallUpdate, None),
+        BrowserAction::CheckForUpdates => KeyBinding::new(keystroke, CheckUpdates, None),
     }
 }
 
@@ -203,7 +205,7 @@ fn activation_command(
 }
 
 /// Runs a browser command through the same handler as its keyboard shortcut; history, clear
-/// browsing data and installing an update have no native page shortcut, so they run directly.
+/// browsing data and the two update commands have no native page shortcut, so they run directly.
 fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
     Some(match action {
         BrowserAction::NewTab => BrowserShortcut::NewTab,
@@ -224,7 +226,8 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
         BrowserAction::ResetZoom => BrowserShortcut::ZoomReset,
         BrowserAction::ShowHistory
         | BrowserAction::ClearBrowsingData
-        | BrowserAction::InstallUpdateFromFile => return None,
+        | BrowserAction::InstallUpdateFromFile
+        | BrowserAction::CheckForUpdates => return None,
     })
 }
 
@@ -1258,6 +1261,7 @@ impl BrowserView {
             None if action == BrowserAction::InstallUpdateFromFile => {
                 self.install_update_from_file(window, cx);
             }
+            None if action == BrowserAction::CheckForUpdates => self.check_for_updates(window, cx),
             None => self.toggle_history(),
         }
         // Edit address reopens the palette and Find focuses its bar; the rest return to the page.
@@ -1686,6 +1690,10 @@ impl Render for BrowserView {
                 this.install_update_from_file(window, cx);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &CheckUpdates, window, cx| {
+                this.check_for_updates(window, cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &Fullscreen, window, cx| {
                 this.fullscreen_shortcut(window);
                 cx.notify();
@@ -1933,6 +1941,7 @@ mod palette_shortcut_tests {
                     BrowserAction::ShowHistory
                         | BrowserAction::ClearBrowsingData
                         | BrowserAction::InstallUpdateFromFile
+                        | BrowserAction::CheckForUpdates
                 ));
                 continue;
             };

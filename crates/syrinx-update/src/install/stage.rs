@@ -1,10 +1,10 @@
-//! Stages a package folder: verify it, copy it in, verify the copy, then place it beside the program.
+//! Stages a package: verify it, copy it in, verify the copy, then place it beside the program.
 
 use std::fs::{self, File};
 use std::io::{self, Seek, SeekFrom};
 use std::path::Path;
 
-use super::error::io_error;
+use super::error::{TransferProblem, io_error};
 use super::fault::{Step, checkpoint};
 use super::files::{
     copy_exact, ensure_plain_directory, prepare_destination, remove_file_if_present,
@@ -13,13 +13,14 @@ use super::files::{
 use super::layout::{APPLY_HELPER, PACKAGE_RECORD, REQUIRED_PROGRAM_FILES};
 use super::lock::ApplyLock;
 use super::records::{AcceptedRecord, Pending, UpdateResult, UpdateState};
+use super::source::{FolderSource, PackageSource, SignedFile};
 use super::{InstallError, UpdateLayout};
 use crate::directory::DirectoryPayload;
 use crate::error::UpdateError;
 use crate::keys::KeySet;
 use crate::latest::{VerifiedStatement, verify_statement};
 use crate::manifest::{FileEntry, MAX_MANIFEST_BYTES, Manifest};
-use crate::payload::{VerifiedPayload, read_bounded};
+use crate::payload::VerifiedPayload;
 use crate::signature::SIGNATURE_BYTES;
 use crate::statement::MAX_STATEMENT_BYTES;
 use crate::time::Timestamp;
@@ -39,6 +40,25 @@ pub struct StageRequest<'a> {
     pub now: Timestamp,
 }
 
+/// The trusted keys, the installed version and the clock, whatever the package's source.
+#[derive(Clone, Copy)]
+pub struct StageTerms<'a> {
+    /// Always `KeySet::production()` in Syrinx; tests pass in-memory keys.
+    pub keys: &'a KeySet,
+    pub installed: Version,
+    pub now: Timestamp,
+}
+
+impl<'a> StageRequest<'a> {
+    fn terms(&self) -> StageTerms<'a> {
+        StageTerms {
+            keys: self.keys,
+            installed: self.installed,
+            now: self.now,
+        }
+    }
+}
+
 /// How staging ended when nothing was refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Staged {
@@ -56,9 +76,22 @@ pub fn stage_from_folder(
     request: &StageRequest<'_>,
     free_space: &dyn Fn(&Path) -> io::Result<u64>,
 ) -> Result<Staged, InstallError> {
+    let source = FolderSource::new(request.source);
+    stage_from_source(layout, &source, &request.terms(), free_space)
+}
+
+/// Stage the package `source` provides, holding the update lock throughout.
+///
+/// Used for a folder and for the update host alike; `free_space` is as for `stage_from_folder`.
+pub fn stage_from_source(
+    layout: &UpdateLayout,
+    source: &dyn PackageSource,
+    terms: &StageTerms<'_>,
+    free_space: &dyn Fn(&Path) -> io::Result<u64>,
+) -> Result<Staged, InstallError> {
     let _lock = ApplyLock::try_acquire(layout)?.ok_or(InstallError::Busy)?;
     let mut state = UpdateState::read(layout)?;
-    let staged = stage_locked(layout, request, &mut state, free_space);
+    let staged = stage_locked(layout, source, terms, &mut state, free_space);
     match staged {
         Ok(staged) => Ok(staged),
         Err(error) => Err(record_failure(layout, state, error)),
@@ -68,32 +101,25 @@ pub fn stage_from_folder(
 /// The verification, copying and records, in the order that keeps every step recoverable.
 fn stage_locked(
     layout: &UpdateLayout,
-    request: &StageRequest<'_>,
+    source: &dyn PackageSource,
+    terms: &StageTerms<'_>,
     state: &mut UpdateState,
     free_space: &dyn Fn(&Path) -> io::Result<u64>,
 ) -> Result<Staged, InstallError> {
-    let statement = read_statement(request, state)?;
-    let accepted = AcceptedRecord {
-        statement: statement.accepted(),
-        expires: statement.statement().expires(),
-    };
+    let statement = read_statement(source, terms, state)?;
+    let accepted = accepted_record(&statement);
     let version = statement.statement().version();
-    if version == request.installed {
+    if version == terms.installed {
         *state = recorded(accepted, UpdateResult::UpToDate, version);
         state.write(layout)?;
         return Ok(Staged::UpToDate(version));
     }
 
     // Everything is checked before the first byte is written.
-    let manifest_bytes = read_package_file(request.source, "manifest", MAX_MANIFEST_BYTES)?;
-    let signature_bytes = read_package_file(request.source, "manifest.sig", SIGNATURE_BYTES)?;
-    let verified = statement.verify_manifest(
-        &manifest_bytes,
-        &signature_bytes,
-        request.keys,
-        request.installed,
-    )?;
-    require_program_files(verified.manifest())?;
+    let stated = read_stated_manifest(source, &statement, terms)?;
+    let verified = stated.verified;
+    let manifest_bytes = stated.bytes;
+    let signature_bytes = stated.signature;
     let bytes = package_bytes(verified.manifest());
     check_space(layout, bytes, free_space)?;
 
@@ -110,13 +136,13 @@ fn stage_locked(
         bytes: &manifest_bytes,
         signature: &signature_bytes,
     };
-    let finished = copy_and_install(layout, request.source, &manifest).and_then(|()| {
+    let finished = copy_and_install(layout, source, &manifest).and_then(|()| {
         // The serial is stored before `pending`, so a crash between them only repeats staging.
         *state = recorded(accepted, UpdateResult::Staged, version);
         state.write(layout)?;
         let pending = Pending {
             version,
-            from: request.installed,
+            from: terms.installed,
             manifest_sha256: cng::sha256(&manifest_bytes)?,
         };
         pending.write(layout)?;
@@ -128,7 +154,11 @@ fn stage_locked(
     Ok(Staged::Ready { version, bytes })
 }
 
-fn recorded(accepted: AcceptedRecord, result: UpdateResult, version: Version) -> UpdateState {
+pub(super) fn recorded(
+    accepted: AcceptedRecord,
+    result: UpdateResult,
+    version: Version,
+) -> UpdateState {
     UpdateState {
         accepted: Some(accepted),
         result: Some(result),
@@ -136,37 +166,54 @@ fn recorded(accepted: AcceptedRecord, result: UpdateResult, version: Version) ->
     }
 }
 
+pub(super) fn accepted_record(statement: &VerifiedStatement) -> AcceptedRecord {
+    AcceptedRecord {
+        statement: statement.accepted(),
+        expires: statement.statement().expires(),
+    }
+}
+
 /// Verify `latest` against the pinned keys, the clock and the last accepted serial.
-fn read_statement(
-    request: &StageRequest<'_>,
+pub(super) fn read_statement(
+    source: &dyn PackageSource,
+    terms: &StageTerms<'_>,
     state: &UpdateState,
 ) -> Result<VerifiedStatement, InstallError> {
-    let statement = read_package_file(request.source, "latest", MAX_STATEMENT_BYTES)?;
-    let signature = read_package_file(request.source, "latest.sig", SIGNATURE_BYTES)?;
+    let statement = source.read_signed(SignedFile::Statement, MAX_STATEMENT_BYTES)?;
+    let signature = source.read_signed(SignedFile::StatementSignature, SIGNATURE_BYTES)?;
     let previous = state.previous();
     Ok(verify_statement(
         &statement,
         &signature,
-        request.keys,
-        request.now,
+        terms.keys,
+        terms.now,
         previous.as_ref(),
     )?)
 }
 
-/// Read one of the package's signed files, at most `limit` bytes.
-fn read_package_file(
-    source: &Path,
-    name: &'static str,
-    limit: usize,
-) -> Result<Vec<u8>, InstallError> {
-    let file = match File::open(source.join(name)) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(InstallError::NotAPackage);
-        }
-        Err(error) => return Err(io_error("reading the update package")(error)),
-    };
-    Ok(read_bounded(file, limit, name)?)
+/// The stated version's manifest, verified, with the exact bytes and signature that were read.
+pub(super) struct StatedManifest {
+    pub(super) verified: VerifiedManifest,
+    pub(super) bytes: Vec<u8>,
+    pub(super) signature: Vec<u8>,
+}
+
+/// Read and verify the manifest the statement names, and require the program files.
+pub(super) fn read_stated_manifest(
+    source: &dyn PackageSource,
+    statement: &VerifiedStatement,
+    terms: &StageTerms<'_>,
+) -> Result<StatedManifest, InstallError> {
+    let version = statement.statement().version();
+    let bytes = source.read_signed(SignedFile::Manifest(version), MAX_MANIFEST_BYTES)?;
+    let signature = source.read_signed(SignedFile::ManifestSignature(version), SIGNATURE_BYTES)?;
+    let verified = statement.verify_manifest(&bytes, &signature, terms.keys, terms.installed)?;
+    require_program_files(verified.manifest())?;
+    Ok(StatedManifest {
+        verified,
+        bytes,
+        signature,
+    })
 }
 
 /// Refuse a package that could not start, swap itself in, or be recognised later.
@@ -183,7 +230,7 @@ fn require_program_files(manifest: &Manifest) -> Result<(), InstallError> {
     Ok(())
 }
 
-fn package_bytes(manifest: &Manifest) -> u64 {
+pub(super) fn package_bytes(manifest: &Manifest) -> u64 {
     manifest.files().iter().map(FileEntry::size).sum()
 }
 
@@ -222,14 +269,15 @@ struct SignedManifest<'a> {
 /// Copy the package into `incoming`, verify that copy, install from its handles, then drop it.
 fn copy_and_install(
     layout: &UpdateLayout,
-    source: &Path,
+    source: &dyn PackageSource,
     manifest: &SignedManifest<'_>,
 ) -> Result<(), InstallError> {
     let version = manifest.verified.manifest().version();
     ensure_plain_directory(&layout.incoming(), "the incoming folder")?;
     let incoming = layout.incoming().join(version.to_string());
     fs::create_dir(&incoming).map_err(io_error("creating the incoming folder"))?;
-    copy_to_incoming(source, &incoming, manifest.verified.manifest().files())?;
+    let files = manifest.verified.manifest().files();
+    copy_to_incoming(source, version, &incoming, files)?;
     checkpoint(Step::CopiedToIncoming)?;
 
     // From here only the verified handles are read; the folder is never listed again.
@@ -243,29 +291,17 @@ fn copy_and_install(
 
 /// Copy each listed file, and only those, refusing one longer or shorter than listed.
 fn copy_to_incoming(
-    source: &Path,
+    source: &dyn PackageSource,
+    version: Version,
     incoming: &Path,
     files: &[FileEntry],
 ) -> Result<(), InstallError> {
     for entry in files {
-        let path = entry.path().as_str();
-        let from = path
-            .split('/')
-            .fold(source.to_path_buf(), |joined, part| joined.join(part));
-        let mut reader = match File::open(&from) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Err(UpdateError::MissingFile {
-                    path: path.to_owned(),
-                }
-                .into());
-            }
-            Err(error) => return Err(io_error("reading the update package")(error)),
-        };
+        let mut reader = source.open_file(version, entry)?;
         let to = prepare_destination(incoming, entry.path(), "copying the update package")?;
         if !copy_exact(&mut reader, &to, entry.size(), "copying the update package")? {
             return Err(UpdateError::SizeMismatch {
-                path: path.to_owned(),
+                path: entry.path().as_str().to_owned(),
                 expected: entry.size(),
             }
             .into());
@@ -348,7 +384,7 @@ fn cleaned_up(primary: InstallError, layout: &UpdateLayout) -> InstallError {
 }
 
 /// Record the failure's category, keeping the accepted serial as it was.
-fn record_failure(
+pub(super) fn record_failure(
     layout: &UpdateLayout,
     mut state: UpdateState,
     error: InstallError,
@@ -374,6 +410,10 @@ fn failure_category(error: &InstallError) -> UpdateResult {
             UpdateResult::StatementExpired
         }
         InstallError::Update(_) | InstallError::NotAPackage => UpdateResult::VerificationFailed,
+        InstallError::Transfer(TransferProblem::Cancelled) => UpdateResult::Cancelled,
+        InstallError::Transfer(_) => UpdateResult::NetworkFailed,
+        // A failed cleanup does not hide why staging stopped.
+        InstallError::Incomplete { primary, .. } => failure_category(primary),
         _ => UpdateResult::StagingFailed,
     }
 }

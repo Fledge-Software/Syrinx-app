@@ -44,6 +44,10 @@ pub enum InstallError {
     NothingStaged,
     /// A step failed after the new version was moved into place; its own records cover it.
     AfterSwap(Box<InstallError>),
+    /// Fetching a file from the update host failed (P1-39c).
+    Transfer(TransferProblem),
+    /// No release key is pinned, so nothing could be verified (DW-30).
+    NoReleaseKeys,
     /// A step failed and cleaning up after it also failed.
     Incomplete {
         primary: Box<InstallError>,
@@ -60,13 +64,69 @@ impl From<UpdateError> for InstallError {
     }
 }
 
-/// Wraps an I/O failure with the step that hit it.
+/// Wraps an I/O failure with the step that hit it; a download's own failure keeps its category.
 pub(crate) fn io_error(step: &'static str) -> impl Fn(io::Error) -> InstallError {
-    move |error| InstallError::Io {
-        step,
-        kind: error.kind(),
+    move |error| match TransferProblem::carried_by(&error) {
+        Some(problem) => InstallError::Transfer(problem),
+        None => InstallError::Io {
+            step,
+            kind: error.kind(),
+        },
     }
 }
+
+/// Why a download from the update host stopped, as fixed categories with no address or header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferProblem {
+    /// The name did not resolve or the connection failed or dropped.
+    Unreachable,
+    /// The host's certificate or the TLS handshake was refused.
+    Certificate,
+    /// Connecting took over 30 s, or no bytes arrived for 60 s.
+    TimedOut,
+    /// The host answered with a redirect, which Syrinx never follows.
+    Redirected,
+    /// The host answered with a status other than 200.
+    Status(u16),
+    /// The body was longer than its limit or its listed size.
+    TooLong,
+    /// The body ended before its listed size.
+    Truncated,
+    /// The owner cancelled the download.
+    Cancelled,
+    /// WinHTTP failed in another way; the number is its Windows error code.
+    Failed(u32),
+}
+
+impl TransferProblem {
+    /// Wrap this problem in an `io::Error`, so a download reader can report it through `Read`.
+    pub fn into_io(self) -> io::Error {
+        io::Error::other(self)
+    }
+
+    /// The problem an `io::Error` from a download reader carries, if any.
+    pub fn carried_by(error: &io::Error) -> Option<Self> {
+        error.get_ref()?.downcast_ref::<Self>().copied()
+    }
+}
+
+impl fmt::Display for TransferProblem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unreachable => formatter.write_str("the update host could not be reached"),
+            Self::Certificate => formatter.write_str("the update host's certificate was refused"),
+            Self::TimedOut => formatter.write_str("the update host stopped responding"),
+            Self::Redirected => formatter.write_str("the update host answered with a redirect"),
+            Self::Status(status) => write!(formatter, "the update host answered {status}"),
+            Self::TooLong => formatter.write_str("a download was longer than allowed"),
+            Self::Truncated => formatter.write_str("a download ended early"),
+            Self::Cancelled => formatter.write_str("the download was cancelled"),
+            Self::Failed(code) => write!(formatter, "the download failed (WinHTTP error {code})"),
+        }
+    }
+}
+
+impl std::error::Error for TransferProblem {}
 
 impl fmt::Display for InstallError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -97,6 +157,10 @@ impl fmt::Display for InstallError {
             }
             Self::NothingStaged => formatter.write_str("no update is staged"),
             Self::AfterSwap(error) => write!(formatter, "after the swap: {error}"),
+            Self::NoReleaseKeys => formatter.write_str("no release key is pinned"),
+            Self::Transfer(problem) => {
+                write!(formatter, "downloading the update failed: {problem}")
+            }
             Self::Incomplete { primary, cleanup } => {
                 write!(formatter, "{primary}; cleaning up also failed: {cleanup}")
             }

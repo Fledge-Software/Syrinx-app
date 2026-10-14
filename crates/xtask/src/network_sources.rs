@@ -28,8 +28,28 @@ const NETWORK_NAMES: [&str; 8] = [
     "http_client",
 ];
 
-/// Returns one violation per file and name found on the query path.
+/// The one crate whose source may call WinHTTP: D9's one exception (P1-39c).
+const WINHTTP_CRATE: &str = "syrinx-update-net";
+
+/// Development tooling, which never ships, and names these APIs in its own checks.
+const TOOLING_CRATE: &str = "xtask";
+
+/// The prefix of every WinHTTP binding and module, in any import form (case-sensitive, so the
+/// product name `WinHTTP` in prose does not count).
+const WINHTTP_IDENTIFIER: &str = "WinHttp";
+
+/// The library itself, which Windows names in any letter case.
+const WINHTTP_LIBRARY: &str = "winhttp.dll";
+
+/// Returns one violation per file and name found on the query path, and per other crate
+/// that names WinHTTP. Cargo unifies features, so every crate could call it once one asks.
 pub fn check(root: &Path) -> Result<Vec<String>, String> {
+    let mut violations = check_query_path(root)?;
+    violations.extend(check_winhttp_confinement(root)?);
+    Ok(violations)
+}
+
+fn check_query_path(root: &Path) -> Result<Vec<String>, String> {
     let mut violations = Vec::new();
     for entry in QUERY_PATH {
         for file in rust_files(&root.join(entry))? {
@@ -44,6 +64,50 @@ pub fn check(root: &Path) -> Result<Vec<String>, String> {
         }
     }
     Ok(violations)
+}
+
+/// Every Rust file in the workspace's crates, except the download's and the tooling's, must not
+/// name WinHTTP.
+fn check_winhttp_confinement(root: &Path) -> Result<Vec<String>, String> {
+    let crates = root.join("crates");
+    let entries = fs::read_dir(&crates)
+        .map_err(|error| format!("Could not read {}: {error}", crates.display()))?;
+    let mut violations = Vec::new();
+    for entry in entries {
+        let folder = entry
+            .map_err(|error| format!("Could not read {}: {error}", crates.display()))?
+            .path();
+        let name = folder.file_name().and_then(|name| name.to_str());
+        if !folder.is_dir() || matches!(name, Some(WINHTTP_CRATE | TOOLING_CRATE)) {
+            continue;
+        }
+        for file in rust_files(&folder)? {
+            let text = fs::read_to_string(&file)
+                .map_err(|error| format!("Could not read {}: {error}", file.display()))?;
+            let relative = file
+                .strip_prefix(root)
+                .unwrap_or(&file)
+                .display()
+                .to_string();
+            violations.extend(winhttp_violations(&relative, &text));
+        }
+    }
+    Ok(violations)
+}
+
+fn winhttp_violations(path: &str, text: &str) -> Vec<String> {
+    let identifier = text
+        .contains(WINHTTP_IDENTIFIER)
+        .then_some(WINHTTP_IDENTIFIER);
+    let library = text
+        .to_ascii_lowercase()
+        .contains(WINHTTP_LIBRARY)
+        .then_some(WINHTTP_LIBRARY);
+    [identifier, library]
+        .into_iter()
+        .flatten()
+        .map(|name| format!("{path}: {name}: only {WINHTTP_CRATE} may call WinHTTP (P1-39c)"))
+        .collect()
 }
 
 fn file_violations(path: &str, text: &str) -> Vec<String> {
@@ -80,7 +144,28 @@ fn rust_files(path: &Path) -> Result<Vec<PathBuf>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::file_violations;
+    use super::{file_violations, winhttp_violations};
+
+    #[test]
+    fn only_the_update_download_may_name_winhttp() {
+        let calls = "use windows::Win32::Networking::WinHttp::WinHttpOpen;";
+        let violations = winhttp_violations("crates/syrinx-platform/src/synthetic.rs", calls);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].contains("only syrinx-update-net may call WinHTTP"));
+        // A brace-group import names no `Networking::WinHttp` path, but still the prefix.
+        let grouped = "use windows::Win32::Networking::{WinHttp::WinHttpDetectAutoProxyConfigUrl};";
+        assert_eq!(winhttp_violations("synthetic.rs", grouped).len(), 1);
+        for library in ["winhttp.dll", "WINHTTP.DLL", "WinHTTP.dll"] {
+            let linked = format!(r#"windows_core::link!("{library}" "system" fn Open());"#);
+            assert_eq!(
+                winhttp_violations("synthetic.rs", &linked).len(),
+                1,
+                "{library}"
+            );
+        }
+        // Naming the product in prose is not a call.
+        assert!(winhttp_violations("synthetic.rs", "// WinHTTP failed").is_empty());
+    }
 
     #[test]
     fn socket_and_http_names_are_reported_and_address_types_are_not() {

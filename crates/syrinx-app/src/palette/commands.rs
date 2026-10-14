@@ -209,12 +209,12 @@ mod tests {
             .matches("", View::Commands, PAGE)
             .expect("blank command query");
         // Eleven navigation and history commands, P1-13's six page essentials, P1-27's clear
-        // data and P1-39b's install update from file.
-        assert_eq!(all.hits.len(), 19);
+        // data, P1-39b's install update from file and P1-39c's check for updates.
+        assert_eq!(all.hits.len(), 20);
         assert_eq!(
             all.counts,
             CommandCounts {
-                browser: 19,
+                browser: 20,
                 plugin: 0
             }
         );
@@ -255,7 +255,7 @@ mod tests {
             .matches("", View::Everything, PAGE)
             .expect("blank query");
         assert!(blank.hits.is_empty());
-        assert_eq!(blank.counts.browser, 19);
+        assert_eq!(blank.counts.browser, 20);
 
         let tab = matcher
             .matches("tab", View::Everything, PAGE)

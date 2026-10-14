@@ -66,6 +66,11 @@ impl KeySet {
         Self::new(PRODUCTION_KEYS)
     }
 
+    /// Whether no key is pinned, so every package would be refused (DW-30).
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
     pub(crate) fn find(&self, id: KeyId) -> Option<&PinnedKey> {
         self.keys
             .iter()

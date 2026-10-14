@@ -100,6 +100,13 @@ The watchdog exits with code 124 on its deadline or 125 if its control channel
 disconnects. It performs no output before exiting, so a locked stderr stream
 cannot prevent termination. A subprocess regression verifies both exits while
 holding stderr locked; other smoke failures retain their existing diagnostics.
+Since P1-39c the workspace tests include `syrinx-update-net`'s untrusted
+certificate check, which starts `python.exe` from the path with P1-14's
+standard-library TLS fixture on 127.0.0.1 (a fresh self-signed certificate,
+never installed); building still runs no Python. No gate step contacts the
+update host or any machine other than this one: the update tests use an
+in-process fake host and loopback servers, and the development build's
+"Check for updates" refuses before any request.
 Normal `cargo syrinx` uses
 `%LOCALAPPDATA%\SyrinxProductPreview`, separate from the Phase 0 profiles;
 its State and WebView2 subfolders persist between launches. Before the

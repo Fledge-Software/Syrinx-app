@@ -6936,6 +6936,7 @@ dependencies = [
  "syrinx-store",
  "syrinx-ui",
  "syrinx-update",
+ "syrinx-update-net",
  "url",
 ]
 
@@ -6986,6 +6987,14 @@ version = "0.1.0"
 name = "syrinx-update"
 version = "0.1.0"
 dependencies = [
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "syrinx-update-net"
+version = "0.1.0"
+dependencies = [
+ "syrinx-update",
  "windows 0.62.2",
 ]
 
