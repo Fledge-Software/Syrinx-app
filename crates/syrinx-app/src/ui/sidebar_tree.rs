@@ -9,9 +9,7 @@ use syrinx_core::{
     SavedFolderId, SavedFolderSnapshot, SavedPageId, SavedPageSnapshot, TabId, TabModelSnapshot,
     TabSnapshot,
 };
-use syrinx_ui::tree_focus::{
-    FolderRequest, RowKind, TreeKey, TreeRow, focus_after_collapse, tab_stop, tree_key,
-};
+use syrinx_ui::tree_focus::{FolderRequest, RowKind, TreeKey, TreeRow, tab_stop, tree_key};
 
 use super::{
     BrowserView,
@@ -145,18 +143,89 @@ pub(super) fn tree_key_for(key: &str, modified: bool) -> Option<TreeKey> {
     }
 }
 
-/// Where focus goes after a redraw that removed the focused row (collapsed away, closed or
-/// deleted): the new Tab stop. `None` when the focused row is still drawn or none was focused.
-pub(super) fn refocus_after_redraw(
+/// A focused row that a redraw no longer contains (its tab closed, its saved page deleted,
+/// or its tab saved, which turns a tab row into a saved row), and where focus goes instead:
+/// the new Tab stop, or nowhere when the tree is now empty, so the row lets go of focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Refocus {
+    pub(super) lost: TreeId,
+    pub(super) target: Option<TreeId>,
+}
+
+/// What one frame of rows does with focus.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct FramePlan {
+    /// The one row reachable by Tab.
+    pub(super) stop: Option<TreeId>,
+    pub(super) refocus: Option<Refocus>,
+    /// The rows whose focus handles survive the frame: the drawn rows, and a vanished
+    /// focused row until its refocus has moved focus off it, so the window never holds a
+    /// released focus id.
+    pub(super) keep: HashSet<TreeId>,
+}
+
+/// Decides one frame: its Tab stop, any refocus, and which focus handles to keep.
+pub(super) fn plan_frame(
     rows: &[TreeRow<TreeId>],
     focused: Option<TreeId>,
     active: Option<TreeId>,
-) -> Option<TreeId> {
-    let focused = focused?;
-    if rows.iter().any(|row| row.id == focused) {
-        return None;
+) -> FramePlan {
+    let stop = tab_stop(rows, focused, active);
+    let refocus = focused
+        .filter(|focused| !rows.iter().any(|row| row.id == *focused))
+        .map(|lost| Refocus { lost, target: stop });
+    let keep = rows
+        .iter()
+        .map(|row| row.id)
+        .chain(refocus.map(|refocus| refocus.lost))
+        .collect();
+    FramePlan {
+        stop,
+        refocus,
+        keep,
     }
-    tab_stop(rows, Some(focused), active)
+}
+
+/// A folder change a tree key asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FolderChange {
+    Expand(SavedFolderId),
+    Collapse(SavedFolderId),
+}
+
+/// What a tree key on a focused row does: the row to focus and any folder change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct KeyStep {
+    pub(super) focus: Option<TreeId>,
+    pub(super) folder: Option<FolderChange>,
+}
+
+/// The key's step from `row`. `tree_key` only asks to collapse the focused row itself (an
+/// open folder), so focus never sits inside a folder this collapses and
+/// `focus_after_collapse` has nothing to do here.
+pub(super) fn key_step(
+    rows: &[TreeRow<TreeId>],
+    row: TreeId,
+    active: Option<TreeId>,
+    key: TreeKey,
+) -> KeyStep {
+    let step = tree_key(rows, Some(row), active, key);
+    // Only folder rows ask for a change, so any other request cannot arise.
+    let folder = match step.folder {
+        Some(FolderRequest::Expand(TreeId::Folder(id))) => Some(FolderChange::Expand(id)),
+        Some(FolderRequest::Collapse(TreeId::Folder(id))) => Some(FolderChange::Collapse(id)),
+        _ => None,
+    };
+    KeyStep {
+        focus: step.focus,
+        folder,
+    }
+}
+
+/// Where F6 lands in the sidebar: the active row, else the first. The row focused last does
+/// not count, because F6 always arrives from outside the tree.
+pub(super) fn f6_target(rows: &[TreeRow<TreeId>], active: Option<TreeId>) -> Option<TreeId> {
+    tab_stop(rows, None, active)
 }
 
 /// One window's tree: a focus handle per drawn row, the rows as last drawn, and the scroll
@@ -172,7 +241,7 @@ pub(super) struct WindowTree {
 /// move focus to because the focused one has gone.
 pub(super) struct PreparedRows {
     pub(super) handles: Vec<FocusHandle>,
-    pub(super) refocus: Option<(TreeId, TreeId)>,
+    pub(super) refocus: Option<Refocus>,
     pub(super) scroll: ScrollHandle,
 }
 
@@ -186,15 +255,8 @@ impl WindowTree {
         window: &Window,
         cx: &mut App,
     ) -> PreparedRows {
-        let focused = self.focused(window);
-        let stop = tab_stop(&rows, focused, active);
-        let refocus = refocus_after_redraw(&rows, focused, active)
-            .zip(focused)
-            .map(|(target, lost)| (lost, target));
-        // Keep a vanished focused row's handle until the refocus has run, so the window
-        // never holds a released focus id.
-        let drawn: HashSet<TreeId> = rows.iter().map(|row| row.id).chain(focused).collect();
-        self.handles.retain(|id, _| drawn.contains(id));
+        let plan = plan_frame(&rows, self.focused(window), active);
+        self.handles.retain(|id, _| plan.keep.contains(id));
         let handles = rows
             .iter()
             .map(|row| {
@@ -203,14 +265,14 @@ impl WindowTree {
                     .entry(row.id)
                     .or_insert_with(|| cx.focus_handle());
                 // A tracked handle decides its own Tab stop; `tab_index` would not.
-                *handle = handle.clone().tab_stop(Some(row.id) == stop);
+                *handle = handle.clone().tab_stop(Some(row.id) == plan.stop);
                 handle.clone()
             })
             .collect();
         self.rows = rows;
         PreparedRows {
             handles,
-            refocus,
+            refocus: plan.refocus,
             scroll: self.scroll.clone(),
         }
     }
@@ -265,18 +327,18 @@ impl SidebarTrees {
         cx: &mut Context<BrowserView>,
     ) -> PreparedRows {
         let prepared = self.window_mut(peek).prepare(rows, active, window, cx);
-        if let Some((lost, target)) = prepared.refocus {
-            schedule_refocus(lost, target, window, cx);
+        if let Some(refocus) = prepared.refocus {
+            schedule_refocus(refocus, window, cx);
         }
         prepared
     }
 }
 
 impl BrowserView {
-    /// Whether `window` draws the peek's tree: rows draw only there or in the main window,
-    /// and the peek's first frame comes before `self.peek` records its handle.
+    /// Whether `window` draws the peek's tree. Only the main window and the peek draw the
+    /// sidebar, and the peek's first frame comes before `self.peek` records its handle.
     pub(super) fn draws_peek_tree(&self, window: &Window) -> bool {
-        Window::window_handle(window) != self.main_window
+        !self.is_main_window(window)
     }
 
     /// Up, Down, Home, End, Left and Right on a focused row: move focus and expand or collapse
@@ -295,20 +357,13 @@ impl BrowserView {
         cx.stop_propagation();
         let peek = self.draws_peek_tree(window);
         let rows = &self.sidebar_trees.window(peek).rows;
-        let step = tree_key(rows, Some(row), active_tree_id(&self.model), key);
-        // A collapse brings focus from inside the folder to the folder itself.
-        let target = match step.folder {
-            Some(FolderRequest::Collapse(folder)) => {
-                focus_after_collapse(rows, Some(row), folder).or(step.focus)
-            }
-            _ => step.focus,
-        };
+        let step = key_step(rows, row, active_tree_id(&self.model), key);
         match step.folder {
-            Some(FolderRequest::Collapse(TreeId::Folder(folder))) => self.collapse_folder(folder),
-            Some(FolderRequest::Expand(TreeId::Folder(folder))) => self.expand_folder(folder),
-            _ => {}
+            Some(FolderChange::Collapse(folder)) => self.collapse_folder(folder),
+            Some(FolderChange::Expand(folder)) => self.expand_folder(folder),
+            None => {}
         }
-        if let Some(target) = target {
+        if let Some(target) = step.focus {
             self.sidebar_trees.window(peek).focus(target, window, cx);
         }
         cx.notify();
@@ -318,26 +373,25 @@ impl BrowserView {
     /// sidebar has no rows, so F6 falls back to its first control.
     pub(super) fn focus_active_row(&self, window: &mut Window, cx: &mut App) -> bool {
         let tree = self.sidebar_trees.window(false);
-        let Some(target) = tab_stop(&tree.rows, None, active_tree_id(&self.model)) else {
+        let Some(target) = f6_target(&tree.rows, active_tree_id(&self.model)) else {
             return false;
         };
         tree.focus(target, window, cx)
     }
 
     /// Moves focus from a row that vanished to the new Tab stop, unless focus has moved on.
-    fn refocus_lost_row(
-        &mut self,
-        lost: TreeId,
-        target: TreeId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// With no row left (or the target gone too), the row lets go of focus to the window
+    /// root, so the window's own keys (Ctrl T, Ctrl K, Tab, F6) keep working.
+    fn refocus_lost_row(&mut self, refocus: Refocus, window: &mut Window, cx: &mut Context<Self>) {
         let peek = self.draws_peek_tree(window);
         let tree = self.sidebar_trees.window(peek);
-        if tree.focused(window) != Some(lost) {
+        if tree.focused(window) != Some(refocus.lost) {
             return;
         }
-        if !tree.focus(target, window, cx) {
+        let moved = refocus
+            .target
+            .is_some_and(|target| tree.focus(target, window, cx));
+        if !moved {
             self.release_row_focus(window, cx);
         }
         cx.notify();
@@ -346,11 +400,11 @@ impl BrowserView {
 
 /// Runs the refocus after the current frame, in the window that drew it: focus cannot move
 /// during a draw, and the peek's rows belong to the peek's window, not the browser's.
-fn schedule_refocus(lost: TreeId, target: TreeId, window: &Window, cx: &mut Context<BrowserView>) {
+fn schedule_refocus(refocus: Refocus, window: &Window, cx: &mut Context<BrowserView>) {
     let view = cx.weak_entity();
     window.defer(cx, move |window, cx| {
         let updated = view.update(cx, |browser, cx| {
-            browser.refocus_lost_row(lost, target, window, cx);
+            browser.refocus_lost_row(refocus, window, cx);
         });
         // A browser already gone (Syrinx closing) leaves nothing to keep focused.
         if updated.is_err() {
@@ -498,22 +552,6 @@ mod tests {
     }
 
     #[test]
-    fn f6_lands_on_the_active_row_rather_than_the_first() {
-        let model = model();
-        let rows = tree(&model, &HashSet::new());
-        assert_eq!(
-            tab_stop(&rows, None, active_tree_id(&model)),
-            Some(TreeId::Page(page_id(1)))
-        );
-        let mut later = model.clone();
-        later.active_id = Some(tab_id(200));
-        assert_eq!(
-            tab_stop(&rows, None, active_tree_id(&later)),
-            Some(TreeId::Tab(tab_id(200)))
-        );
-    }
-
-    #[test]
     fn only_unmodified_navigation_keys_drive_the_tree() {
         let keys = [
             ("up", TreeKey::Up),
@@ -533,64 +571,176 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_focused_row_that_vanishes_hands_focus_to_the_new_tab_stop() {
-        let model = model();
-        let active = active_tree_id(&model);
-        let collapsed = HashSet::from([folder_id(10)]);
-        let rows = tree(&model, &collapsed);
-        // Page 2 held focus when its folder collapsed: focus goes to the active row.
-        assert_eq!(
-            refocus_after_redraw(&rows, Some(TreeId::Page(page_id(2))), active),
-            Some(TreeId::Page(page_id(1)))
-        );
-        // A closed tab with no active row hands focus to the first row.
-        assert_eq!(
-            refocus_after_redraw(&rows, Some(TreeId::Tab(tab_id(300))), None),
-            Some(TreeId::Page(page_id(1)))
-        );
+    fn ids(rows: &[TreeRow<TreeId>]) -> HashSet<TreeId> {
+        rows.iter().map(|row| row.id).collect()
     }
 
     #[test]
-    fn a_focused_row_that_is_still_drawn_or_no_focus_needs_no_refocus() {
+    fn f6_lands_on_the_active_row_else_the_first_else_nowhere() {
         let model = model();
         let rows = tree(&model, &HashSet::new());
-        let active = active_tree_id(&model);
         assert_eq!(
-            refocus_after_redraw(&rows, Some(TreeId::Page(page_id(2))), active),
-            None
+            f6_target(&rows, active_tree_id(&model)),
+            Some(TreeId::Page(page_id(1)))
         );
-        assert_eq!(refocus_after_redraw(&rows, None, active), None);
+        let mut later = model.clone();
+        later.active_id = Some(tab_id(200));
         assert_eq!(
-            refocus_after_redraw(&[], Some(TreeId::Page(page_id(2))), active),
-            None
+            f6_target(&rows, active_tree_id(&later)),
+            Some(TreeId::Tab(tab_id(200)))
         );
+        // The active page hidden inside a collapsed folder: the first row instead.
+        let collapsed = tree(&model, &HashSet::from([folder_id(10)]));
+        assert_eq!(
+            f6_target(&collapsed, Some(TreeId::Page(page_id(2)))),
+            Some(TreeId::Page(page_id(1)))
+        );
+        // An empty tree: F6 falls back to the sidebar's first control.
+        assert_eq!(f6_target(&[], active_tree_id(&model)), None);
     }
 
     #[test]
-    fn collapsing_a_folder_from_inside_it_by_key_focuses_the_folder() {
+    fn every_frame_has_exactly_one_tab_stop_among_its_drawn_rows() {
         let model = model();
         let rows = tree(&model, &HashSet::new());
-        // Left on page 2 moves to folder 10; Left again collapses it in place.
-        let step = tree_key(&rows, Some(TreeId::Page(page_id(2))), None, TreeKey::Left);
-        assert_eq!(step.focus, Some(TreeId::Folder(folder_id(10))));
-        let step = tree_key(
+        let active = active_tree_id(&model);
+        let vanished = Some(TreeId::Tab(tab_id(300)));
+        let focuses = rows.iter().map(|row| Some(row.id)).chain([None, vanished]);
+        for focused in focuses {
+            let plan = plan_frame(&rows, focused, active);
+            let stops = rows.iter().filter(|row| Some(row.id) == plan.stop).count();
+            assert_eq!(stops, 1, "{focused:?}");
+        }
+    }
+
+    #[test]
+    fn a_focused_row_still_drawn_keeps_the_stop_and_needs_no_refocus() {
+        let model = model();
+        let rows = tree(&model, &HashSet::new());
+        let plan = plan_frame(
             &rows,
-            Some(TreeId::Folder(folder_id(10))),
-            None,
-            TreeKey::Left,
+            Some(TreeId::Page(page_id(2))),
+            active_tree_id(&model),
+        );
+        assert_eq!(plan.stop, Some(TreeId::Page(page_id(2))));
+        assert_eq!(plan.refocus, None);
+        assert_eq!(plan.keep, ids(&rows));
+        // With nothing focused the active row is the stop.
+        let plan = plan_frame(&rows, None, active_tree_id(&model));
+        assert_eq!(plan.stop, Some(TreeId::Page(page_id(1))));
+        assert_eq!(plan.refocus, None);
+    }
+
+    #[test]
+    fn a_vanished_focused_row_keeps_its_handle_only_until_focus_moves_off_it() {
+        let model = model();
+        let active = active_tree_id(&model);
+        let rows = tree(&model, &HashSet::from([folder_id(10)]));
+        let lost = TreeId::Page(page_id(2));
+        let plan = plan_frame(&rows, Some(lost), active);
+        assert_eq!(
+            plan.refocus,
+            Some(Refocus {
+                lost,
+                target: Some(TreeId::Page(page_id(1)))
+            })
+        );
+        assert!(plan.keep.contains(&lost));
+        // Once the refocus has run, the next frame drops the vanished row's handle.
+        let next = plan_frame(&rows, Some(TreeId::Page(page_id(1))), active);
+        assert_eq!(next.refocus, None);
+        assert_eq!(next.keep, ids(&rows));
+    }
+
+    #[test]
+    fn rows_no_longer_drawn_lose_their_handles() {
+        let model = model();
+        let rows = tree(&model, &HashSet::from([folder_id(10)]));
+        let plan = plan_frame(
+            &rows,
+            Some(TreeId::Tab(tab_id(200))),
+            active_tree_id(&model),
+        );
+        assert!(!plan.keep.contains(&TreeId::Page(page_id(2))));
+        assert_eq!(plan.keep, ids(&rows));
+    }
+
+    #[test]
+    fn an_emptied_tree_releases_focus_instead_of_keeping_the_vanished_row() {
+        // The only open tab was focused and closed: no row is left to take focus.
+        let lost = TreeId::Tab(tab_id(200));
+        let plan = plan_frame(&[], Some(lost), None);
+        assert_eq!(plan.stop, None);
+        assert_eq!(plan.refocus, Some(Refocus { lost, target: None }));
+        assert_eq!(plan.keep, HashSet::from([lost]));
+        // After the release nothing is focused, and the handle goes.
+        let next = plan_frame(&[], None, None);
+        assert_eq!(next.refocus, None);
+        assert!(next.keep.is_empty());
+    }
+
+    #[test]
+    fn left_and_right_open_close_and_cross_folders() {
+        let model = model();
+        let active = active_tree_id(&model);
+        let rows = tree(&model, &HashSet::new());
+        let folder = TreeId::Folder(folder_id(10));
+        let inside = TreeId::Page(page_id(2));
+        let step = |rows: &[TreeRow<TreeId>], row, key| key_step(rows, row, active, key);
+        assert_eq!(
+            step(&rows, inside, TreeKey::Left),
+            KeyStep {
+                focus: Some(folder),
+                folder: None
+            }
         );
         assert_eq!(
-            step.folder,
-            Some(FolderRequest::Collapse(TreeId::Folder(folder_id(10))))
+            step(&rows, folder, TreeKey::Left),
+            KeyStep {
+                focus: Some(folder),
+                folder: Some(FolderChange::Collapse(folder_id(10)))
+            }
         );
         assert_eq!(
-            focus_after_collapse(
-                &rows,
-                Some(TreeId::Page(page_id(2))),
-                TreeId::Folder(folder_id(10))
-            ),
-            Some(TreeId::Folder(folder_id(10)))
+            step(&rows, folder, TreeKey::Right),
+            KeyStep {
+                focus: Some(inside),
+                folder: None
+            }
         );
+        let collapsed = tree(&model, &HashSet::from([folder_id(10)]));
+        assert_eq!(
+            step(&collapsed, folder, TreeKey::Right),
+            KeyStep {
+                focus: Some(folder),
+                folder: Some(FolderChange::Expand(folder_id(10)))
+            }
+        );
+    }
+
+    #[test]
+    fn keys_on_pages_and_tabs_move_focus_without_folder_changes() {
+        let model = model();
+        let active = active_tree_id(&model);
+        let rows = tree(&model, &HashSet::new());
+        let last = TreeId::Tab(tab_id(200));
+        let keys = [
+            (TreeKey::Up, TreeId::Page(page_id(2))),
+            (TreeKey::Down, last),
+            (TreeKey::Home, TreeId::Page(page_id(1))),
+            (TreeKey::End, last),
+            (TreeKey::Left, last),
+            (TreeKey::Right, last),
+        ];
+        for (key, focus) in keys {
+            assert_eq!(
+                key_step(&rows, last, active, key),
+                KeyStep {
+                    focus: Some(focus),
+                    folder: None
+                },
+                "{key:?}"
+            );
+        }
     }
 }

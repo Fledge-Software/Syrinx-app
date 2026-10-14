@@ -197,7 +197,7 @@ impl BrowserView {
     /// Takes keyboard focus off a sidebar row, back to the window's root (as `focus_page`
     /// does), so the row's own keys stop applying.
     pub(super) fn release_row_focus(&self, window: &mut Window, cx: &mut App) {
-        if Window::window_handle(window) == self.main_window {
+        if self.is_main_window(window) {
             window.focus(&self.focus, cx);
         } else {
             window.blur(cx);

@@ -366,7 +366,8 @@ impl BrowserView {
         }
     }
 
-    /// Whether `window` is the open peek popup rather than the main window.
+    /// Whether `window` is the open peek popup. Unlike `!is_main_window`, it is false while a
+    /// peek is still opening or already retired, when no peek action should be queued.
     pub(super) fn is_peek_window(&self, window: &Window) -> bool {
         self.peek
             .as_ref()

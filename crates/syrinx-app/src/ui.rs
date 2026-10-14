@@ -1243,11 +1243,16 @@ impl BrowserView {
         }
     }
 
+    /// Whether `window` is the browser's main window rather than one of its popups.
+    pub(super) fn is_main_window(&self, window: &Window) -> bool {
+        Window::window_handle(window) == self.main_window
+    }
+
     fn focus_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
             return;
         }
-        let main = Window::window_handle(window) == self.main_window;
+        let main = self.is_main_window(window);
         // Clear chrome focus so no control keeps its ring once keys go to the page.
         if main {
             window.focus(&self.focus, cx);

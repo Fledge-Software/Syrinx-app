@@ -225,18 +225,36 @@ is `crates/syrinx-app/src/ui/sidebar_tree.rs`:
   handle's own `tab_stop` flag is set every frame, because a tracked handle
   ignores `tab_index` (the `tab_stop(true)` trap).
 - Each row's key handler maps unmodified Up, Down, Home, End, Left and Right
-  to `tree_key`, applies any expand or collapse (a collapse goes through
-  `focus_after_collapse`), focuses the target and scrolls it into view (the
-  tree element is now its own scroll container, so its children are exactly
-  the rows). Alt arrows, Delete and F2 keep their existing row bindings.
-- When a redraw no longer contains the focused row (its folder collapsed by
-  a click, the tab closed, the row deleted), `refocus_after_redraw` picks the
-  new Tab stop and focus moves there after the frame, so keys are never left
-  on a row that is gone. The handle of the vanished row is kept until then,
-  so the window never holds a released focus id.
-- F6 and Shift F6 into the sidebar (`panes.rs`, `land_on`) focus the active
-  row, or the first row when the active tab is not visible, and fall back to
-  the first control when the tree is empty.
+  through `key_step` (which wraps `tree_key`), applies any expand or
+  collapse, focuses the target and scrolls it into view (the tree element is
+  now its own scroll container, so its children are exactly the rows). Alt
+  arrows, Delete and F2 keep their existing row bindings.
+  `focus_after_collapse` is not used: `tree_key` only asks to collapse the
+  focused row itself, so focus is never inside the folder it collapses, and
+  a mouse click never focuses a row (`without_mouse_focus`; folder clicks
+  also release focus).
+- When a redraw no longer contains the focused row (its tab closed with
+  Delete or Ctrl W, its saved page deleted elsewhere, or its tab saved,
+  which turns a tab row into a saved row with a new identity), `plan_frame`
+  picks the new Tab stop and focus moves there after the frame, so keys are
+  never left on a row that is gone. When no row is left, the row lets go of
+  focus to the window root instead (`release_row_focus`); without that, GPUI
+  kept focus on the undrawn row and the window's own keys (Ctrl T, Ctrl K,
+  Tab, F6) stopped working until a click. The vanished row's handle is kept
+  only until focus has moved off it, so the window never holds a released
+  focus id.
+- F6 and Shift F6 into the sidebar (`panes.rs`, `land_on`, choosing with
+  `f6_target`) focus the active row, or the first row when the active tab is
+  not visible, and fall back to the first control when the tree is empty.
+- The frame and key decisions are pure functions (`plan_frame`, `key_step`,
+  `f6_target`) with their own tests: exactly one Tab stop per frame, the
+  vanished row's handle kept until the refocus and then dropped, undrawn
+  rows' handles dropped, an emptied tree releasing focus, and each key's
+  focus target and folder change.
+- Whether a window is the main one is one helper, `is_main_window` (`ui.rs`),
+  used by the tree, `release_row_focus`, `focus_page` and the palette;
+  `is_peek_window` stays separate because it is false while a peek is still
+  opening or already retired.
 - The rows' small buttons are no longer Tab stops (owner question 2). Delete
   on an open tab closes it, matching its Close button.
 
@@ -255,7 +273,7 @@ walked the rows in order; Left on the open folder reported it collapsed and
 Right expanded again, a second Right stayed put (the folder is empty), and
 Down and Up moved between the folder and the next row. Run 2 also pressed
 Delete on an open tab that was not active: the tab closed and focus moved
-to the active row, as `refocus_after_redraw` intends. Syrinx stayed up with
+to the active row, as `plan_frame` intends. Syrinx stayed up with
 an empty stderr through 56–59 accessibility nodes, so the tree built with
 debug assertions on and no doubled focus claim. A screenshot of the window
 after run 1 showed the focus ring on the focused folder row and the active
@@ -362,7 +380,11 @@ portable copy also works). Then record pass/fail for each:
    no longer Tab stops. Delete, Shift Delete and F2 on the row do their
    work, and Delete on an open tab now closes it; only Unload page has no
    key of its own (Enter, then Ctrl W). Recommendation: accept this, as
-   the ARIA tree pattern expects.
+   the ARIA tree pattern expects. **Answered 2026-10-13: accepted as
+   built**, with a follow-up to give Unload page its own key on a focused
+   row, recorded as DW-63 in the plan's "Deferred work" register (the key
+   is still the owner's choice; the row proposes Ctrl W while a row has
+   focus).
 3. **Palette announcements (DW-60).** Recommendation: change the palette so
    its list container owns focus and the query field (no GPUI patch), as a
    follow-up slice; the alternative is asking for a vendored GPUI change.

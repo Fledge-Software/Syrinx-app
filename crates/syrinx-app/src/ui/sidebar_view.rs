@@ -63,7 +63,8 @@ impl BrowserView {
     }
 
     /// The popup and persistent sidebar share all content and listeners. `window` is the one
-    /// drawing it, so each window keeps its own row focus.
+    /// drawing it, so each window keeps its own row focus. Only the main window and the peek
+    /// may draw the sidebar: `draws_peek_tree` treats every other window as the peek.
     pub(super) fn sidebar_at(
         &mut self,
         width: f32,
