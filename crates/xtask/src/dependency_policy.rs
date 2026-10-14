@@ -26,6 +26,7 @@ pub fn check_metadata(metadata: &Value) -> Result<Vec<String>, String> {
     for (name, package) in &workspace {
         check_direct_dependencies(name, package, &workspace, &mut violations);
         check_update_verifier_features(name, package, &mut violations);
+        check_release_tool_feature(name, package, &mut violations);
         check_shell_paths(name, &workspace, &mut violations);
         check_network_declarations(name, package, &mut violations);
     }
@@ -166,9 +167,9 @@ fn check_direct_dependencies(
                 "{name} -> {dependency}: only syrinx-platform may directly depend on WebView2 or raw Win32"
             ));
         }
-        if dependency == UPDATE_VERIFIER {
+        if dependency == UPDATE_VERIFIER && !UPDATE_VERIFIER_USERS.contains(&name) {
             violations.insert(format!(
-                "{name} -> {dependency}: nothing may use the update verifier before P1-39 is approved"
+                "{name} -> {dependency}: only syrinx-app may use the update verifier (P1-39b)"
             ));
         }
         check_fulltext_quarantine(name, dependency, violations);
@@ -230,8 +231,15 @@ fn is_platform_library(name: &str) -> bool {
     )
 }
 
-/// The P1-38 update verifier, which no crate may use until P1-39's delivery is approved.
+/// The P1-38 update verifier and P1-39b's installer.
 const UPDATE_VERIFIER: &str = "syrinx-update";
+
+/// The crates that may depend on the verifier: P1-39's change 1, for P1-39b. P1-39c adds
+/// `syrinx-update-net` in its own slice.
+const UPDATE_VERIFIER_USERS: [&str; 1] = ["syrinx-app"];
+
+/// The verifier's feature that links Windows key storage for the release tool only.
+const RELEASE_TOOL_FEATURE: &str = "release-tool";
 
 /// The only `windows` features the update verifier may request: CNG and its NTSTATUS types.
 const UPDATE_VERIFIER_WINDOWS_FEATURES: [&str; 2] =
@@ -263,6 +271,19 @@ fn check_update_verifier_features(
                 ));
             }
         }
+    }
+}
+
+/// Refuse any dependency that turns on the release tool's key-storage signer: Syrinx itself
+/// must never link code that opens Windows key storage (`docs/p1-38-update-format.md`).
+fn check_release_tool_feature(name: &str, package: &Package, violations: &mut BTreeSet<String>) {
+    let enabled = package.declarations.iter().any(|declaration| {
+        declaration.name == UPDATE_VERIFIER && declaration.features.contains(RELEASE_TOOL_FEATURE)
+    });
+    if enabled {
+        violations.insert(format!(
+            "{name} -> {UPDATE_VERIFIER}: the {RELEASE_TOOL_FEATURE} feature is for the release tool alone"
+        ));
     }
 }
 
@@ -625,7 +646,7 @@ mod tests {
 
     #[test]
     fn confines_the_update_verifier() -> Result<(), String> {
-        // The verifier may call CNG through `windows`, but not WebView2, and nothing may use it yet.
+        // The verifier may call CNG through `windows`, but not WebView2; only the app may use it.
         let permitted = metadata(vec![package(
             "syrinx-update",
             json!([{
@@ -645,14 +666,15 @@ mod tests {
                     {"name": "syrinx-platform"}
                 ]),
             ),
+            package("syrinx-app", json!([{"name": "syrinx-update"}])),
             package(
-                "syrinx-app",
+                "syrinx-ui",
                 json!([{"name": "syrinx-update", "kind": "dev"}]),
             ),
             package("syrinx-platform", json!([])),
         ]);
         let violations = check_metadata(&input)?;
-        assert_eq!(violations.len(), 3);
+        assert_eq!(violations.len(), 3, "{violations:?}");
         assert!(
             violations
                 .iter()
@@ -661,13 +683,33 @@ mod tests {
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("syrinx-app -> syrinx-update"))
+                .any(|message| message.contains("syrinx-ui -> syrinx-update"))
         );
         assert!(
             violations
                 .iter()
                 .any(|message| message.contains("syrinx-update -> syrinx-platform"))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn no_dependency_may_enable_the_release_tool() -> Result<(), String> {
+        // Syrinx links the verifier without the key-storage signer, in every dependency kind.
+        let permitted = metadata(vec![package(
+            "syrinx-app",
+            json!([{"name": "syrinx-update", "features": []}]),
+        )]);
+        assert!(check_metadata(&permitted)?.is_empty());
+        for kind in [Value::Null, json!("dev"), json!("build")] {
+            let input = metadata(vec![package(
+                "syrinx-app",
+                json!([{"name": "syrinx-update", "kind": kind, "features": ["release-tool"]}]),
+            )]);
+            let violations = check_metadata(&input)?;
+            assert_eq!(violations.len(), 1, "{violations:?}");
+            assert!(violations[0].contains("release-tool feature is for the release tool alone"));
+        }
         Ok(())
     }
 

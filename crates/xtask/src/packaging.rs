@@ -5,14 +5,14 @@ mod registration;
 mod sha256;
 mod update;
 
-pub use update::GATE_FEATURE;
+pub use update::{RELEASE_TOOL_FEATURE, UPDATE_PACKAGE};
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use manifest::{BuildIdentity, MANIFEST, PackagedFile};
+use manifest::{APPLY_HELPER, BuildIdentity, MANIFEST, PackagedFile};
 use registration::{EXECUTABLE, GENERATED_SCRIPT};
 
 /// Repository folder holding the owner-run PowerShell scripts.
@@ -35,6 +35,23 @@ pub fn package(root: &Path) -> Result<(), String> {
             "syrinx-app",
             "--features",
             "installed",
+            "--profile",
+            "local",
+            "--target-dir",
+            PACKAGE_TARGET_DIR,
+            "--offline",
+            "--locked",
+        ],
+    )?;
+    // The update helper ships in every package; the release tool's feature stays off.
+    crate::run_cargo(
+        root,
+        &[
+            "build",
+            "--package",
+            UPDATE_PACKAGE,
+            "--bin",
+            "syrinx-apply",
             "--profile",
             "local",
             "--target-dir",
@@ -288,8 +305,8 @@ fn copy_package_files(root: &Path, folder: &Path) -> Result<Vec<PackagedFile>, S
 }
 
 fn package_source(root: &Path, name: &str) -> PathBuf {
-    if name == EXECUTABLE {
-        return root.join(PACKAGE_TARGET_DIR).join("local").join(EXECUTABLE);
+    if name == EXECUTABLE || name == APPLY_HELPER {
+        return root.join(PACKAGE_TARGET_DIR).join("local").join(name);
     }
     root.join(SCRIPT_FOLDER).join(name)
 }
@@ -410,6 +427,10 @@ mod tests {
         assert!(!packaged.starts_with(&development));
         assert!(!development.starts_with(Path::new(r"C:\repo").join(PACKAGE_TARGET_DIR)));
         assert_ne!(PACKAGE_TARGET_DIR, "target");
+        assert_eq!(
+            package_source(Path::new(r"C:\repo"), APPLY_HELPER),
+            Path::new(r"C:\repo\target\package-build\local\syrinx-apply.exe")
+        );
         assert_eq!(
             package_source(Path::new(r"C:\repo"), "register-syrinx.ps1"),
             Path::new(r"C:\repo\packaging\register-syrinx.ps1")
