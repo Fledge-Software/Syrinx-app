@@ -10,6 +10,28 @@ on 2026-10-12, it was called Atlas, so older entries say Atlas.
 Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 `docs/plans/Atlas … .md` is now `docs/plans/Syrinx … .md`.
 
+## 2026-10-14
+
+- **Where Windows cannot list sync roots, Syrinx treats the machine as
+  having none (narrows D13).** D13 keeps the database out of OneDrive and
+  similar synced folders; the storage guard
+  (`crates/syrinx-platform/src/storage/native.rs`, `registered_roots`) asks
+  Windows for its registered sync roots through
+  `StorageProviderSyncRootManager::GetCurrentSyncRoots`. On the Windows
+  Server machines GitHub uses to build releases, that call jumps to an
+  invalid address and crashes the process (weekly-release run 4 captured
+  the native stack), so the release gate could never pass there. The owner
+  chose, over building releases on their own PC, to have the check cope
+  without that API. The first attempt asked
+  `StorageProviderSyncRootManager::IsSupported()`, Microsoft's documented
+  check, first; run 5 showed that call crashes the same way. Syrinx
+  therefore asks Windows whether it is a server edition (`IsOS(OS_ANYSERVER)`
+  in shlwapi, which makes no WinRT call) and, if so, treats the machine as
+  having no registered sync roots. On Windows 11, Syrinx's only supported
+  system (D2), nothing changes. On Windows Server, Syrinx no longer refuses
+  a synced folder; the rejected alternative was to fail closed there, which
+  would keep every storage test failing on the release runner.
+
 ## 2026-10-13
 
 - **P1-39 update delivery is approved as proposed.** The owner answered yes

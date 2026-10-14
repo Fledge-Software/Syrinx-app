@@ -376,6 +376,15 @@ you found it in the commit message, not here.
   come weekly and may change the API; a `^` requirement has already moved apps
   onto a snapshot their components did not compile with. Pin with `=`.
   Source: note 08, section 1.2 (high).
+- **An exe built with debug assertions starts only on the machine that built
+  it.** Upstream GPUI then compiles its shaders at run time from
+  `CARGO_MANIFEST_DIR`, so `v0.1.0` from D38's `local` profile panicked
+  silently everywhere but the runner ("Recreating GPU state for DirectWrite:
+  The system cannot find the path specified", exit code 101). The runner's
+  own smoke run and screenshots passed because its source folder was there.
+  The 2026-10-14 vendor patch embeds the shaders in every profile; keep it,
+  and test a release zip on a machine other than the one that built it.
+  Source: `vendor/gpui-pre-windows-0.3.8.provenance.md` (observed; high).
 
 ## Local search
 
@@ -452,6 +461,17 @@ you found it in the commit message, not here.
   installed copy. Source: the pinned SQLite Windows open path and P1-04's
   native recovery implementation.
 
+- **`GetCurrentSyncRoots` crashes the process on Windows Server instead of
+  failing.** GitHub's Windows runner returned a sync-root factory whose
+  method pointer was invalid, so the storage guard died with
+  `STATUS_ACCESS_VIOLATION` before any error could be handled; the same
+  test passes on Windows 11. `StorageProviderSyncRootManager::IsSupported()`
+  crashes the same way (run 5), so it cannot be the guard. Check
+  `IsOS(OS_ANYSERVER)` before any WinRT call and treat a server edition as
+  having no registered roots (owner decision, 2026-10-14). Source:
+  weekly-release runs 4 and 5, whose cdb stacks fault in
+  `GetCurrentSyncRoots` and then `IsSupported`, both called from
+  `registered_roots` (observed).
 - **SQLite's write-ahead log breaks in a synced folder.** In OneDrive or a
   network folder the `-wal` file separates from the database. Keep the
   database in the local, not roaming, app-data folder. Source:

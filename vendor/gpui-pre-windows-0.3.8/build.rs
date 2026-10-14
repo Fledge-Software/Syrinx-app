@@ -3,13 +3,13 @@
 fn main() {
     #[cfg(target_os = "windows")]
     {
-        // Compile HLSL shaders
-        #[cfg(not(debug_assertions))]
+        // Compile HLSL shaders into the binary in every profile, so no executable
+        // reads shader sources from the machine that built it.
         compile_shaders();
     }
 }
 
-#[cfg(all(target_os = "windows", not(debug_assertions)))]
+#[cfg(target_os = "windows")]
 mod shader_compilation {
     use std::{
         fs,
@@ -238,5 +238,5 @@ mod shader_compilation {
     }
 }
 
-#[cfg(all(target_os = "windows", not(debug_assertions)))]
+#[cfg(target_os = "windows")]
 use shader_compilation::compile_shaders;

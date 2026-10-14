@@ -94,7 +94,20 @@ jobs:
         run: .github/scripts/set-version.sh "$VERSION"
 
       - name: Run the gate
+        id: gate
         run: cargo xtask check
+
+      # A test that crashes the process hides its own name; one at a time, the last line names it.
+      - name: On a test crash, rerun the app's tests one at a time
+        if: failure() && steps.gate.outcome == 'failure'
+        shell: bash
+        run: cargo test --workspace --bin syrinx --profile local --offline --locked -- --test-threads=1 2>&1 | tee target/one-at-a-time.log | tail -n 60
+
+      # A native crash has no Rust message; the debugger's call stack names the failing function.
+      - name: On a test crash, print the crashing test's native call stack
+        if: failure() && steps.gate.outcome == 'failure'
+        shell: bash
+        run: .github/scripts/native-stack.sh target/one-at-a-time.log
 
       - id: package
         name: Build the portable package
@@ -112,7 +125,10 @@ jobs:
       - name: Tag and publish the GitHub release
         shell: bash
         run: |
-          git tag -a "$TAG" -m "Syrinx $VERSION preview" -m "Source: $SOURCE"
+          # An annotated tag needs a tagger; the runner has no git identity of its own.
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            tag -a "$TAG" -m "Syrinx $VERSION preview" -m "Source: $SOURCE"
           git push origin "refs/tags/$TAG"
           gh release create "$TAG" \
             "target/package/${{ steps.package.outputs.asset }}" target/package/SHA256SUMS.txt \

@@ -87,14 +87,41 @@ the `source` and `checksum` lines of the `gpui-pre-windows` entry in
 `.gitattributes` disables text conversion for this directory and the patch
 file, preserving the hashes below across checkouts on this machine.
 
+## Embedded shaders patch (2026-10-14)
+
+The first preview release, `v0.1.0`, closed at start-up on every machine but
+the GitHub runner that built it: a GPUI panic, "Recreating GPU state for
+DirectWrite: The system cannot find the path specified". Upstream GPUI embeds
+precompiled shaders only when debug assertions are off. With them on, as in
+D38's `local` profile, `build.rs` skips `fxc.exe` and the renderer compiles
+`shaders.hlsl` and `color_text_raster.hlsl` at run time from
+`CARGO_MANIFEST_DIR`, the build machine's own source folder
+(`D:\a\Syrinx-app\...` on the runner). The owner approved this second patch
+on 2026-10-14 (`AGENTS.md`).
+
+- `build.rs` compiles the shaders with `fxc.exe` in every profile.
+- `src/directx_renderer.rs` always takes the embedded bytes; the run-time
+  `D3DCompileFromFile` path and its helpers are removed.
+
+Every executable is now independent of where it was built, and the gate tests
+the same shader bytes that ship. Building needs the Windows SDK's `fxc.exe`
+(found through `GPUI_FXC_PATH`, `PATH` or the newest installed SDK), which the
+GitHub Windows runner has. `vendor/gpui-pre-windows-0.3.8.embedded-shaders.patch`
+is the two-file unified diff against the idle-patched files, with
+package-relative paths. Its SHA-256 is
+`5c8384bcec08e66ff6b500568e0ea00f55093235faaad83bbf915b856ec46a13`
+(6,095 bytes). It adds no dependency or feature and changes no manifest. The
+package now holds 29 files and 658,607 bytes; the table below shows the
+final hashes after both patches.
+
 ## Complete baseline and final inventory
 
 Each SHA-256 covers the exact file bytes (all LF). Equal columns prove the
-retained files; the five changed rows and one added row are the patch.
+retained files; the seven changed rows and one added row are the two patches.
 
 | File | Bytes, baseline / final | Baseline SHA-256 | Final SHA-256 |
 | --- | ---: | --- | --- |
-| `build.rs` | 7683 / 7683 | `3192734d0448f3ec44525e3b55c025d30d9926edce6b24e5575ac27a1ab3ad06` | `3192734d0448f3ec44525e3b55c025d30d9926edce6b24e5575ac27a1ab3ad06` |
+| `build.rs` | 7683 / 7704 | `3192734d0448f3ec44525e3b55c025d30d9926edce6b24e5575ac27a1ab3ad06` | `e0e0f8d7a8523961cf03c61efa82b06a51d24ec3ef07d7229ac75e43138cc69b` |
 | `Cargo.lock` | 122892 / 122892 | `45b818c80b163e8837dafacbaa833ce6ff15b63c8f29083762f9d2b66a3cc7f2` | `45b818c80b163e8837dafacbaa833ce6ff15b63c8f29083762f9d2b66a3cc7f2` |
 | `Cargo.toml` | 5930 / 5930 | `7ea59094436bcb0d65f09922efcadff5f0d878486ee515ace03cf570b651971c` | `7ea59094436bcb0d65f09922efcadff5f0d878486ee515ace03cf570b651971c` |
 | `Cargo.toml.orig` | 1630 / 1630 | `71ad31ff7e524ed399091bb963d3bcfbc562dd3e59cae0b3a279e2733aab367f` | `71ad31ff7e524ed399091bb963d3bcfbc562dd3e59cae0b3a279e2733aab367f` |
@@ -108,7 +135,7 @@ retained files; the five changed rows and one added row are the patch.
 | `src/direct_write.rs` | 76544 / 76544 | `27ff8aa902705794c5b9c0405bb7c3063e4b63e0d3ac44d92148d9ed18ee866c` | `27ff8aa902705794c5b9c0405bb7c3063e4b63e0d3ac44d92148d9ed18ee866c` |
 | `src/directx_atlas.rs` | 14420 / 14420 | `eff897707e3b8b4e549cd247725a6cee9c14b6a8188e32d32ad6360d693ce455` | `eff897707e3b8b4e549cd247725a6cee9c14b6a8188e32d32ad6360d693ce455` |
 | `src/directx_devices.rs` | 6143 / 6143 | `83372170f6225db45033473d118fc43708942ec9687467de09e2b5215c835cf1` | `83372170f6225db45033473d118fc43708942ec9687467de09e2b5215c835cf1` |
-| `src/directx_renderer.rs` | 72814 / 72814 | `4f4e51ce4ff30b1884d01179873a17483440e205c420d981bb2a5fa2155fa7b0` | `4f4e51ce4ff30b1884d01179873a17483440e205c420d981bb2a5fa2155fa7b0` |
+| `src/directx_renderer.rs` | 72814 / 68759 | `4f4e51ce4ff30b1884d01179873a17483440e205c420d981bb2a5fa2155fa7b0` | `4435b7658cf177ed89202e9dd1d2f3c0c97f22ce9c8c81415044488edab67f17` |
 | `src/dispatcher.rs` | 7052 / 7052 | `a24daa0105ceadc2a4d50f0d1afab5a4af441a6a1254412d9811a04095f8cdd4` | `a24daa0105ceadc2a4d50f0d1afab5a4af441a6a1254412d9811a04095f8cdd4` |
 | `src/display.rs` | 6446 / 6446 | `763040fe7a9c29d78c46e42dd8c4ffaa8eb703d7cdba0748b709a8e76787f614` | `763040fe7a9c29d78c46e42dd8c4ffaa8eb703d7cdba0748b709a8e76787f614` |
 | `src/events.rs` | 66120 / 66854 | `dd12944e3a5ec5ed25faba1114d59ddd4438eca214b4841a5a53b538db0767af` | `e524bcec4d34f6d57c1bcf8a26175bf7d2e1b70e66a6f712b72376e3728da5cc` |

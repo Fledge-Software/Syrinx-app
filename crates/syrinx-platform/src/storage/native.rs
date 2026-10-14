@@ -53,7 +53,9 @@ use windows::{
             WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize},
             WindowsProgramming::FILE_CREATED,
         },
-        UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath},
+        UI::Shell::{
+            FOLDERID_LocalAppData, IsOS, KF_FLAG_DEFAULT, OS_ANYSERVER, SHGetKnownFolderPath,
+        },
     },
     core::{HRESULT, PCWSTR, PWSTR},
 };
@@ -454,6 +456,11 @@ fn wide_file_path(path: &Path) -> Vec<u16> {
 }
 
 fn registered_roots() -> Result<Vec<PathBuf>, LocationError> {
+    // Windows Server is treated as having no sync roots (owner, 2026-10-14): both
+    // GetCurrentSyncRoots and IsSupported crashed there instead of failing.
+    if is_server_edition() {
+        return Ok(Vec::new());
+    }
     // Declare the apartment first so every WinRT object is released before it.
     let _apartment = RuntimeApartment::initialize()?;
     let roots = StorageProviderSyncRootManager::GetCurrentSyncRoots()
@@ -475,6 +482,11 @@ fn registered_roots() -> Result<Vec<PathBuf>, LocationError> {
         paths.push(PathBuf::from(OsString::from_wide(&path)));
     }
     Ok(paths)
+}
+
+/// Reports a Windows Server edition, such as a hosted build runner; Syrinx targets client Windows.
+fn is_server_edition() -> bool {
+    unsafe { IsOS(OS_ANYSERVER) }.as_bool()
 }
 
 fn os_error(operation: LocationOperation, error: windows::core::Error) -> LocationError {
