@@ -325,7 +325,8 @@ fn check_release_tool_feature(name: &str, package: &Package, violations: &mut BT
     for declaration in verifier {
         enabled |= declaration.features.contains(RELEASE_TOOL_FEATURE);
         imported_as.insert(declaration.name.clone());
-        imported_as.extend(declaration.alias.clone());
+        // Cargo treats `-` and `_` alike in names, so both sides are compared normalised.
+        imported_as.extend(declaration.alias.as_deref().map(normalize_name));
     }
     // A package's own features can switch it on too: `dep/release-tool` or `dep?/release-tool`.
     enabled |= package
@@ -797,6 +798,15 @@ mod tests {
             (
                 json!({"sign": ["verifier/release-tool"]}),
                 json!("verifier"),
+            ),
+            // A rename with an underscore, written either way in the feature entry.
+            (
+                json!({"sign": ["my_verifier/release-tool"]}),
+                json!("my_verifier"),
+            ),
+            (
+                json!({"sign": ["my-verifier?/release-tool"]}),
+                json!("my_verifier"),
             ),
         ] {
             let violations = check_metadata(&with_features(features.clone(), rename))?;
