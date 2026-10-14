@@ -67,6 +67,10 @@ impl BrowserView {
         request: u64,
         result: Result<Option<bool>, StoreError>,
     ) {
+        // Only a save can change remembered choices; lookups leave Customize's list alone.
+        if answers_remember(&self.permissions, id, request) {
+            self.site_permissions_changed();
+        }
         let Some(command) = resolve_saved_choice(
             &mut self.permissions,
             &mut self.message,
@@ -242,6 +246,14 @@ fn resolve_saved_choice(
     })
 }
 
+/// Whether a session answer is to a remembered choice being saved. Remember can be ticked
+/// only on a shown prompt, so a lookup's answer never finds it set.
+fn answers_remember(prompts: &[Prompt], id: u64, request: u64) -> bool {
+    prompts
+        .iter()
+        .any(|prompt| prompt.id == id && prompt.request == request && prompt.remember)
+}
+
 fn matches_prompt(prompt: &Prompt, shown: Option<u64>, id: u64, request: u64) -> bool {
     shown == Some(id) && prompt.id == id && prompt.request == request && !prompt.waiting
 }
@@ -269,6 +281,16 @@ mod tests {
             remember: false,
             waiting: true,
         }
+    }
+
+    #[test]
+    fn only_a_remembered_save_counts_as_a_changed_choice() {
+        let mut prompts = vec![pending_prompt()];
+        assert!(!answers_remember(&prompts, 1, 2), "a lookup's answer");
+        prompts[0].remember = true;
+        assert!(answers_remember(&prompts, 1, 2), "the save's answer");
+        assert!(!answers_remember(&prompts, 1, 3), "another request");
+        assert!(!answers_remember(&prompts, 9, 2), "another page");
     }
 
     #[test]

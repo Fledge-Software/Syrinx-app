@@ -34,6 +34,7 @@ mod security;
 mod sidebar_rows;
 mod sidebar_tree;
 mod sidebar_view;
+mod site_permissions;
 mod suspended_fixture;
 mod tile_editor;
 mod tiles;
@@ -295,6 +296,8 @@ pub struct BrowserView {
     home_palette: HomePaletteIntent,
     importer: import::BookmarkImporter,
     home: home::HomeState,
+    /// Keeps keyboard focus as Customize's permission list opens, closes and rereads (DW-7).
+    site_permission_focus: site_permissions::PermissionFocus,
     incoming: incoming_links::IncomingLinks,
     runtime: runtime_notice::RuntimeNotice,
     parent_hwnd: isize,
@@ -395,6 +398,7 @@ impl BrowserView {
             home_palette: HomePaletteIntent::default(),
             importer: import::BookmarkImporter::default(),
             home: home::HomeState::default(),
+            site_permission_focus: site_permissions::PermissionFocus::new(cx),
             incoming: incoming_links::IncomingLinks::default(),
             runtime: runtime_notice::RuntimeNotice::default(),
             parent_hwnd: 0,
@@ -659,6 +663,12 @@ impl BrowserView {
             SessionEvent::HistoryCleared { request_id, result } => {
                 self.history_cleared(request_id, result);
             }
+            SessionEvent::RememberedPermissions { request_id, result } => {
+                self.site_permissions_listed(request_id, result, window, cx);
+            }
+            SessionEvent::PermissionForgotten { request_id, result } => {
+                self.site_permission_forgotten(request_id, result);
+            }
             SessionEvent::Failure { error, fatal } => {
                 if self.smoke {
                     self.outcome.store(2, Ordering::Release);
@@ -666,6 +676,7 @@ impl BrowserView {
                 // A stopped session cannot persist pages, so the page host stops with it.
                 if fatal {
                     self.page_command(BrowserCommand::Shutdown);
+                    self.home.site_permissions.session_lost();
                 }
                 if fatal && self.abandon_import_write() {
                     self.fail(format!(
@@ -680,6 +691,7 @@ impl BrowserView {
             }
             SessionEvent::Stopped => {
                 self.abandon_import_write();
+                self.home.site_permissions.session_lost();
                 if !self.closing && self.failure.is_none() {
                     self.fail("Local storage stopped. Restart Syrinx before continuing.");
                 }

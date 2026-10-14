@@ -58,7 +58,11 @@ window, because an agent cannot see it.
 - **The Customize panel** (`crates/syrinx-app/src/ui/customize.rs`): all five
   palettes with a miniature, name and description; the four accent presets
   plus a custom accent entered as `#RRGGBB`; and the Reduce transparency
-  switch.
+  switch. Since DW-7 (2026-10-13) it also has a Site permissions section
+  whose Manage button lists remembered permission choices and forgets one
+  (`ui/site_permissions.rs`, described in `docs/p1-12-permissions.md`), and
+  the panel scrolls inside the card when the window is too short to show it
+  whole.
 - **Live application.** Choosing anything replaces the palette that
   `theme.rs` hands to every render and asks Windows for the matching
   backdrop: Mica for Haze and Glass, opaque otherwise. The chrome redraws at
