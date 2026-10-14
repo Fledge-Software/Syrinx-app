@@ -1,5 +1,8 @@
-//! Customize's Updates section, "Install update from file…", and the handover on restart or
-//! quit (P1-39b). Nothing installs until Syrinx closes after a D13 snapshot.
+//! Customize's Updates section, "Install update from file…", "Check for updates" and the
+//! handover on restart or quit (P1-39b, P1-39c). Nothing installs until Syrinx closes after a
+//! D13 snapshot.
+
+mod check;
 
 use std::thread;
 
@@ -13,12 +16,13 @@ use syrinx_ui::Palette;
 use syrinx_ui::metrics::text;
 use syrinx_update::Version;
 use syrinx_update::install::{ApplyMode, InstallError, Staged};
+use syrinx_update_net::{Cancel, RemotePackage};
 
 use super::BrowserView;
 use crate::controls::control;
 use crate::session::{SessionCommand, SessionError};
 use crate::theme::rgba;
-use crate::updates::{StartupUpdates, UpdateContext, refusal_message, staged_message};
+use crate::updates::{StartupUpdates, UpdateContext, refusal_message, staged_message, update_host};
 
 /// Where the update is between choosing a package and handing over to the helper.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +30,15 @@ enum Stage {
     Idle,
     /// The folder dialog is open or the package is being verified and copied.
     Staging,
+    /// "Check for updates" is reading the statement and manifest from the host (P1-39c).
+    Checking,
+    /// The host offers this version; nothing larger is downloaded until the owner says yes.
+    Available {
+        version: Version,
+        bytes: u64,
+    },
+    /// The owner said yes: the package is downloading into staging.
+    Downloading(Version),
     /// Verified beside the program, waiting for Restart now or Later.
     Ready(Version),
     /// The owner chose Later: it installs when they quit.
@@ -57,6 +70,12 @@ pub(super) struct UpdatePanel {
     status: Option<String>,
     /// Shown once in the status line when the session first loads.
     startup_notice: Option<String>,
+    /// The checked host, kept between the owner's check and their yes (P1-39c).
+    remote: Option<RemotePackage>,
+    /// Cancels the check or download in progress.
+    cancel: Option<Cancel>,
+    /// Where a check returns to when it finds nothing or the owner declines.
+    before_check: Stage,
 }
 
 impl UpdatePanel {
@@ -72,6 +91,9 @@ impl UpdatePanel {
             stage,
             status,
             startup_notice: startup.notice,
+            remote: None,
+            cancel: None,
+            before_check: Stage::Idle,
         }
     }
 
@@ -237,6 +259,8 @@ impl BrowserView {
 
     /// Called first by `request_close`: `true` while closing waits for the update snapshot.
     pub(super) fn hold_close_for_update_snapshot(&mut self) -> bool {
+        // A check or download stops at its next read; staging removes what it wrote.
+        self.cancel_update_transfer();
         if matches!(self.updates.stage, Stage::Snapshotting { .. }) {
             return true;
         }
@@ -314,14 +338,19 @@ impl BrowserView {
             .flex()
             .flex_col()
             .gap(px(10.))
+            .child(section_text(palette, &running))
+            // The two actions get their own row, so the explanation keeps the panel's width.
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(12.))
-                    .child(section_text(palette, &running))
+                    .gap(px(8.))
+                    .child(self.check_button(palette, cx))
                     .child(self.install_from_file_button(palette, cx)),
             );
+        if let Some(row) = self.transfer_row(palette, cx) {
+            section = section.child(row);
+        }
         if let Some(version) = self.updates.waiting() {
             section = section.child(self.ready_row(palette, version, cx));
         }
@@ -446,8 +475,10 @@ fn section_text(palette: &Palette, running: &str) -> Div {
                 .text_size(px(text::SMALL))
                 .text_color(rgba(palette.text_muted))
                 .child(format!(
-                    "{running}. Install a signed update package you built or copied; nothing \
-                     changes until you restart or quit."
+                    "{running}. Check for updates contacts {} only when you press it, or \
+                     install a signed package you built or copied. Nothing changes until you \
+                     restart or quit.",
+                    update_host()
                 )),
         )
 }

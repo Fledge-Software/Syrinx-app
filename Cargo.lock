@@ -6936,6 +6936,7 @@ dependencies = [
  "syrinx-store",
  "syrinx-ui",
  "syrinx-update",
+ "syrinx-update-net",
  "url",
 ]
 

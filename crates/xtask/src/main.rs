@@ -115,7 +115,8 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
     let metadata = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("Cargo metadata could not be decoded: {error}"))?;
     let mut violations = dependency_policy::check_metadata(&metadata)?;
-    // Standard-library sockets need no dependency, so the typing path's source is read too.
+    // Standard-library sockets need no dependency and features unify, so source is read too:
+    // the typing path for any network name, every other crate for WinHTTP.
     violations.extend(network_sources::check(root)?);
     if !violations.is_empty() {
         return Err(violations.join("\n"));

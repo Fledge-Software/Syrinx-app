@@ -20,6 +20,8 @@ syrinx-store = { path = "../syrinx-store" }
 syrinx-ui = { path = "../syrinx-ui" }
 # P1-39b's installer; never with `release-tool`, which `cargo xtask check-deps` refuses.
 syrinx-update = { path = "../syrinx-update" }
+# P1-39c's owner-pressed download from the compiled-in host; nothing else may use it.
+syrinx-update-net = { path = "../syrinx-update-net" }
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component.workspace = true

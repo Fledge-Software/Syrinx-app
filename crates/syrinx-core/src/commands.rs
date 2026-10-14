@@ -98,6 +98,9 @@ pub enum BrowserAction {
     /// Asks for a signed update package folder and stages it (P1-39b); nothing installs until
     /// the owner restarts or quits.
     InstallUpdateFromFile,
+    /// Asks the update host what the newest release is (P1-39c); downloads only after the owner
+    /// confirms the version and size.
+    CheckForUpdates,
 }
 
 /// What running a command does.
@@ -502,6 +505,14 @@ fn browser_commands() -> Vec<Command> {
             InstallUpdateFromFile,
             None,
         ),
+        (
+            "browser.check-updates",
+            "Check for updates",
+            "latest upgrade new version",
+            Always,
+            CheckForUpdates,
+            None,
+        ),
     ]
     .into_iter()
     .map(
@@ -574,6 +585,7 @@ mod tests {
                 (browser(BrowserAction::ResetZoom), Some("ctrl-0")),
                 (browser(BrowserAction::ClearBrowsingData), None),
                 (browser(BrowserAction::InstallUpdateFromFile), None),
+                (browser(BrowserAction::CheckForUpdates), None),
             ]
         );
         // Keys follow registration order, so both the palette and search agree on them.
@@ -721,9 +733,9 @@ mod tests {
                 .filter(|(_, command)| command.is_enabled(context))
                 .count()
         };
-        // Always: new tab, reopen, edit address, history, clear browsing data and install update.
-        assert_eq!(enabled(empty), 6);
-        assert_eq!(enabled(home), 8);
+        // Always: new tab, reopen, edit address, history, clear browsing data and both updates.
+        assert_eq!(enabled(empty), 7);
+        assert_eq!(enabled(home), 9);
         assert_eq!(enabled(page), registry.len());
     }
 }
