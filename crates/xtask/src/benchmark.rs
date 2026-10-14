@@ -1,4 +1,5 @@
-//! Measures the complete tier-one search path against a reproducible synthetic catalogue.
+//! Measures the complete tier-one search path against a reproducible synthetic catalogue, and
+//! AN-01's usage recorder against its overhead budget.
 
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -13,6 +14,7 @@ use syrinx_search::{
     BlankQuery, BoostWeights, Catalogue, Entry, Scope, SearchPolicy, SearchResults, Target, Usage,
 };
 
+mod usage_overhead;
 mod workload;
 use workload::*;
 
@@ -31,6 +33,8 @@ struct Distribution {
 }
 
 pub fn run() -> Result<(), String> {
+    // AN-01's usage recorder first: it needs no catalogue.
+    let usage_passed = usage_overhead::run()?;
     // Construct all inputs before timing any complete query.
     let build_started = Instant::now();
     let mut catalogue = build_catalogue()?;
@@ -60,6 +64,9 @@ pub fn run() -> Result<(), String> {
         .map_err(|error| format!("Could not flush the synthetic benchmark report: {error}"))?;
     if !passed {
         return Err("Search benchmark failed: at least one case has p95 >= 5 ms.".to_owned());
+    }
+    if !usage_passed {
+        return Err("Usage benchmark failed: an update's p99 is 100 ns or more.".to_owned());
     }
     Ok(())
 }

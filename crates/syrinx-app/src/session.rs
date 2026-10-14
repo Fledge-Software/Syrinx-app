@@ -8,11 +8,13 @@ mod preferences;
 mod recovery;
 mod retention;
 mod synthetic;
+mod usage;
 
 pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
 pub use recovery::RecoveryPrompt;
 pub use synthetic::SyntheticCatalogue;
+pub use usage::{UsageControl, UsageError, UsageStatus};
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -26,6 +28,7 @@ use std::{
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use history::{HistoryRecorder, Observation};
+use syrinx_core::usage::{ErrorCategory, Feature, Timing, UsageDate, UsageRecorder};
 use syrinx_core::{
     Activation, BookmarkImport, DestinationEdit, DestinationError, DestinationSurface,
     ImportCommit, QuickDestinations, SavedPageId, SavedPageSnapshot, SnapshotError, TabError,
@@ -35,7 +38,8 @@ use syrinx_platform::{DeletionJournal, JournalError, StartupStorage, WindowsDire
 use syrinx_search::{
     Catalogue, Entry, Scope, SearchError, SearchPolicy, SearchResults, Target, Usage,
 };
-use syrinx_store::{HistoryVisit, LocationError, ShutdownState, Store, StoreError};
+use syrinx_store::{BackupOutcome, HistoryVisit, LocationError, ShutdownState, Store, StoreError};
+use usage::UsageCollector;
 
 const IDLE_DELAY: Duration = Duration::from_secs(5);
 const BACKUP_CHECK_INTERVAL: Duration = Duration::from_secs(60);
@@ -157,6 +161,8 @@ pub enum SessionCommand {
     },
     /// Takes D13's extra snapshot before an update installs (P1-39b), outside the daily schedule.
     SnapshotBeforeUpdate,
+    /// Turns usage counting on or off, or resets it (AN-01); answered with `Usage`.
+    Usage(UsageControl),
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -244,6 +250,8 @@ pub enum SessionEvent {
     },
     /// The answer to `SnapshotBeforeUpdate`; an update installs only after `Ok`.
     UpdateSnapshot(Result<(), SessionError>),
+    /// Whether usage counting is on: once at start-up, then after each `Usage` command.
+    Usage(Result<UsageStatus, SessionError>),
     /// Connections have closed before this event; joining the worker is now safe.
     Stopped,
 }
@@ -266,6 +274,8 @@ pub enum SessionError {
     Destination(DestinationError),
     /// The history-deletion journal refused or failed a record (D47).
     Deletion(JournalError),
+    /// The usage file could not be read, written or deleted (AN-01); never fatal.
+    Usage(UsageError),
     NoActiveTab,
     /// The session worker could not take a request, or stopped before answering it.
     StorageUnavailable,
@@ -303,6 +313,7 @@ impl fmt::Display for SessionError {
             Self::Search(error) => write!(formatter, "Local search failed: {error}"),
             Self::Destination(error) => write!(formatter, "Cannot change this tile: {error}"),
             Self::Deletion(error) => write!(formatter, "Cannot clear history safely: {error}"),
+            Self::Usage(error) => write!(formatter, "{error}"),
             Self::NoActiveTab => formatter.write_str("There is no active page to save"),
             Self::StorageUnavailable => formatter.write_str("Local storage is unavailable"),
             Self::HistoryUnavailable => {
@@ -356,29 +367,36 @@ impl SessionHandle {
 }
 
 /// Opens only the explicitly supplied directory, on the worker, with the platform guard.
+/// `usage` counts only if that directory holds a usage file (AN-01).
 pub fn spawn(
     data_dir: PathBuf,
+    usage: Arc<UsageRecorder>,
 ) -> Result<(SessionHandle, UnboundedReceiver<SessionEvent>), SessionError> {
-    spawn_worker(data_dir, false)
+    spawn_worker(data_dir, usage, false)
 }
 
 /// As `spawn`, for P1-33's acceptance run: only this worker accepts synthetic rows and
 /// reports each query's catalogue time.
 pub fn spawn_acceptance(
     data_dir: PathBuf,
+    usage: Arc<UsageRecorder>,
 ) -> Result<(SessionHandle, UnboundedReceiver<SessionEvent>), SessionError> {
-    spawn_worker(data_dir, true)
+    spawn_worker(data_dir, usage, true)
 }
 
 fn spawn_worker(
     data_dir: PathBuf,
+    usage: Arc<UsageRecorder>,
     acceptance: bool,
 ) -> Result<(SessionHandle, UnboundedReceiver<SessionEvent>), SessionError> {
     let (commands, receiver) = mpsc::channel();
     let (events, event_receiver) = unbounded();
     let worker = thread::Builder::new()
         .name("syrinx-session".to_owned())
-        .spawn(move || finish_worker(run(data_dir, acceptance, receiver, &events), &events))
+        .spawn(move || {
+            let result = run(data_dir, usage, acceptance, receiver, &events);
+            finish_worker(result, &events)
+        })
         .map_err(|error| SessionError::WorkerStart {
             code: error.raw_os_error(),
         })?;
@@ -408,22 +426,78 @@ fn finish_worker(
 
 fn run(
     data_dir: PathBuf,
+    usage: Arc<UsageRecorder>,
     acceptance: bool,
     commands: mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
-    let Some((store, mut worker)) = startup_session(&data_dir, &commands, events)? else {
+    let mut startup = StartupFacts::default();
+    let Some((store, mut worker)) = startup_session(&data_dir, &commands, events, &mut startup)?
+    else {
         return Ok(());
     };
     worker.acceptance = acceptance;
-    let result = worker.serve(&store, commands, events);
+    let mut collector = start_usage(&data_dir, &usage, &store, startup, events)?;
+    worker.usage = usage;
+    let result = worker.serve(&store, commands, events, &mut collector);
+    // Counts are saved even after a storage failure; a failed save is reported, not fatal.
+    let saved = collector.finish(Instant::now());
+    let result = match (result, saved) {
+        (Ok(()), Err(error)) => emit_recoverable(events, SessionError::Usage(error)),
+        (Err(primary), Err(error)) => {
+            // The storage failure is the one the window shows; this one is only logged.
+            eprintln!("{error}");
+            Err(primary)
+        }
+        (result, Ok(())) => result,
+    };
     finish_store(result, store.shutdown())
+}
+
+/// What happened while opening storage, counted once usage counting is known to be on.
+#[derive(Default)]
+struct StartupFacts {
+    storage_open_failed: bool,
+    recovery_offered: bool,
+}
+
+/// Loads the usage file beside the database, records start-up's facts and reports its status.
+fn start_usage(
+    data_dir: &std::path::Path,
+    usage: &Arc<UsageRecorder>,
+    store: &Store,
+    startup: StartupFacts,
+    events: &UnboundedSender<SessionEvent>,
+) -> Result<UsageCollector, SessionError> {
+    let (collector, problem) =
+        UsageCollector::load(usage.clone(), data_dir, local_today(), Instant::now());
+    if startup.storage_open_failed {
+        usage.error(ErrorCategory::StorageOpen);
+    }
+    if startup.recovery_offered {
+        usage.error(ErrorCategory::RecoveryOffered);
+    }
+    if store.previous_shutdown() == ShutdownState::Unclean {
+        usage.error(ErrorCategory::UncleanShutdown);
+    }
+    if let Some(problem) = problem {
+        emit_recoverable(events, SessionError::Usage(problem))?;
+    }
+    emit(events, SessionEvent::Usage(Ok(collector.status())))?;
+    Ok(collector)
+}
+
+/// Today's local date, or `None` when Windows cannot say, which leaves counting unchanged.
+fn local_today() -> Option<UsageDate> {
+    let text = syrinx_platform::calendar::local_iso_date().ok()?;
+    UsageDate::parse(&text)
 }
 
 fn startup_session(
     data_dir: &std::path::Path,
     commands: &mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
+    facts: &mut StartupFacts,
 ) -> Result<Option<(Store, Worker)>, SessionError> {
     // The guarded preflight retains either the existing primary or the exact recovery offer.
     let confirmed = match recovery::prepare_startup(data_dir)? {
@@ -432,10 +506,15 @@ fn startup_session(
             Err(error) if history_repair::repairable(&error).is_some() => {
                 return open_with_repair(data_dir, error, commands, events);
             }
-            Err(error) => recovery::confirm_failed_start(data_dir, error, commands, events)?,
+            Err(error) => {
+                facts.storage_open_failed = true;
+                recovery::confirm_failed_start(data_dir, error, commands, events)?
+            }
         },
         StartupStorage::Recovery(offer) => recovery::confirm_offer(offer, commands, events)?,
     };
+    // Both routes reach here only after offering a backup.
+    facts.recovery_offered = true;
     if !confirmed {
         return Ok(None);
     }
@@ -535,6 +614,8 @@ struct Worker {
     synthetic_rows: usize,
     /// Set only by `spawn_acceptance`: synthetic rows are accepted and queries are timed.
     acceptance: bool,
+    /// The shared usage counters (AN-01); they count only while the owner has them on.
+    usage: Arc<UsageRecorder>,
 }
 
 impl Worker {
@@ -575,6 +656,7 @@ impl Worker {
             startup_settings: stored_preferences.settings,
             synthetic_rows: 0,
             acceptance: false,
+            usage: Arc::default(),
         })
     }
 
@@ -583,6 +665,7 @@ impl Worker {
         store: &Store,
         commands: mpsc::Receiver<SessionCommand>,
         events: &UnboundedSender<SessionEvent>,
+        usage: &mut UsageCollector,
     ) -> Result<(), SessionError> {
         emit(
             events,
@@ -600,10 +683,21 @@ impl Worker {
             } else {
                 delay
             };
-            match commands.recv_timeout(wait) {
+            let received = commands.recv_timeout(wait);
+            // The worker's existing wake-ups carry the five-minute usage write; it adds none.
+            if let Err(error) = usage.write_if_due(Instant::now()) {
+                emit_recoverable(events, SessionError::Usage(error))?;
+            }
+            match received {
                 Ok(SessionCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     // A title still held at exit most likely names the tab's current page.
                     return self.settle_titles(store, true, events);
+                }
+                Ok(SessionCommand::Usage(control)) => {
+                    let result = usage
+                        .control(control, local_today(), Instant::now())
+                        .map_err(SessionError::Usage);
+                    emit(events, SessionEvent::Usage(result))?;
                 }
                 Ok(command) => {
                     self.handle(store, command, events)?;
@@ -619,7 +713,7 @@ impl Worker {
                         self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events)?;
                     }
                     // The store retains its daily due state; retries remain idle and bounded.
-                    backup_while_idle(store, now, events)?;
+                    backup_while_idle(store, now, &self.usage, events)?;
                     delay = BACKUP_CHECK_INTERVAL;
                 }
             }
@@ -764,6 +858,7 @@ impl Worker {
             SessionCommand::AdoptPopup { request, .. } => Some(*request),
             _ => None,
         };
+        let counted = counted_feature(&command);
         let before = self.model.snapshot();
         if let Err(error) = apply_model(&mut self.model, command) {
             // A refused popup must not leave its native request waiting for a tab.
@@ -783,9 +878,20 @@ impl Worker {
             .filter(|tab| tab.id.get() > before.last_tab_id)
             .map(|tab| tab.id)
             .collect();
+        self.count_change(counted, before != after, !created.is_empty());
         let navigate = if navigating { after.active_id } else { None };
         let popup = popup_request.map(|request| (request, created.first().copied()));
         self.publish(events, after, created, navigate, home_entry, popup)
+    }
+
+    /// Counts an accepted command (AN-01): a tab-opening one only if it opened a tab, any
+    /// other only if it changed the model.
+    fn count_change(&self, counted: Counted, changed: bool, created: bool) {
+        match counted {
+            Counted::IfCreated(feature) if created => self.usage.count(feature),
+            Counted::IfChanged(feature) if changed => self.usage.count(feature),
+            Counted::IfCreated(_) | Counted::IfChanged(_) | Counted::Nothing => {}
+        }
     }
 
     /// Saves the model if it changed since `before`, in one store transaction, then reindexes.
@@ -796,9 +902,16 @@ impl Worker {
     ) -> Result<TabModelSnapshot, SessionError> {
         let after = self.model.snapshot();
         if *before != after {
-            self.revision = store
-                .save(self.revision, after.clone())
-                .map_err(SessionError::Store)?;
+            // The clock is read only while the owner counts usage.
+            let started = self.usage.is_enabled().then(Instant::now);
+            let saved = store.save(self.revision, after.clone());
+            if saved.is_err() {
+                self.usage.error(ErrorCategory::StorageWrite);
+            }
+            self.revision = saved.map_err(SessionError::Store)?;
+            if let Some(started) = started {
+                self.usage.time(Timing::StoreSave, started.elapsed());
+            }
             sync_catalogue(&mut self.catalogue, before, &after)?;
         }
         Ok(after)
@@ -823,6 +936,7 @@ impl Worker {
             }
         };
         let after = self.persist(store, &before)?;
+        self.usage.count(Feature::ImportCompleted);
         let result = Ok(commit);
         emit(events, SessionEvent::Imported { request_id, result })?;
         self.publish(events, after, Vec::new(), None, None, None)
@@ -836,14 +950,17 @@ impl Worker {
         policy: SearchPolicy,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        // Ordinary runs read no clock here; only an acceptance worker times its queries.
-        let started = self.acceptance.then(Instant::now);
+        // Only an acceptance worker, or one counting usage, reads a clock here.
+        let started = (self.acceptance || self.usage.is_enabled()).then(Instant::now);
         let result = utc_seconds().and_then(|now| {
             self.catalogue
                 .query(text, scope, now, policy)
                 .map_err(SessionError::Search)
         });
         if let Some(started) = started {
+            self.usage.time(Timing::SearchTier1, started.elapsed());
+        }
+        if let Some(started) = started.filter(|_| self.acceptance) {
             let elapsed = started.elapsed();
             emit(
                 events,
@@ -994,14 +1111,22 @@ impl Worker {
 fn backup_while_idle(
     store: &Store,
     now: Result<i64, SessionError>,
+    usage: &UsageRecorder,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
-    if let Err(error) = now.and_then(|now| {
-        store
-            .backup_if_due(now, true)
-            .map(|_| ())
-            .map_err(SessionError::Store)
-    }) {
+    let started = usage.is_enabled().then(Instant::now);
+    let backup = now.and_then(|now| store.backup_if_due(now, true).map_err(SessionError::Store));
+    // Only a snapshot actually taken is timed; a clock failure is not a failed backup.
+    match &backup {
+        Ok(BackupOutcome::Created(_)) => {
+            if let Some(started) = started {
+                usage.time(Timing::BackupSnapshot, started.elapsed());
+            }
+        }
+        Err(SessionError::Store(_)) => usage.error(ErrorCategory::BackupFailed),
+        Ok(_) | Err(_) => {}
+    }
+    if let Err(error) = backup {
         emit(
             events,
             SessionEvent::Failure {
@@ -1011,6 +1136,52 @@ fn backup_while_idle(
         )?;
     }
     Ok(())
+}
+
+/// What an accepted tab command adds to the usage counts (AN-01).
+#[derive(Clone, Copy)]
+enum Counted {
+    /// Only when the command opened a new tab instance.
+    IfCreated(Feature),
+    /// Only when the command changed the model.
+    IfChanged(Feature),
+    Nothing,
+}
+
+/// The feature counter a tab command can count; switching by click is counted in the window.
+fn counted_feature(command: &SessionCommand) -> Counted {
+    use HomeEntryAction as Home;
+    match command {
+        SessionCommand::NewTab { .. }
+        | SessionCommand::AdoptPopup { .. }
+        | SessionCommand::HomeEntry {
+            action: Home::NewTab,
+            ..
+        } => Counted::IfCreated(Feature::TabCreated),
+        SessionCommand::ReopenClosed
+        | SessionCommand::HomeEntry {
+            action: Home::ReopenClosed,
+            ..
+        } => Counted::IfCreated(Feature::TabReopened),
+        SessionCommand::OpenSaved(_)
+        | SessionCommand::HomeEntry {
+            action: Home::OpenSaved(_),
+            ..
+        } => Counted::IfCreated(Feature::SavedOpenedUnloaded),
+        SessionCommand::CloseTab(_)
+        | SessionCommand::CloseActive
+        | SessionCommand::ObserveClosed(_) => Counted::IfChanged(Feature::TabClosed),
+        SessionCommand::CycleActive { .. } => Counted::IfChanged(Feature::TabSwitchedKeyboard),
+        SessionCommand::SaveActive => Counted::IfChanged(Feature::SavedSaved),
+        SessionCommand::Unsave(_) => Counted::IfChanged(Feature::SavedRemoved),
+        SessionCommand::Folder(FolderCommand::Create { .. }) => {
+            Counted::IfChanged(Feature::FolderCreated)
+        }
+        SessionCommand::Folder(
+            FolderCommand::Remove { .. } | FolderCommand::DeleteWithContents { .. },
+        ) => Counted::IfChanged(Feature::FolderRemoved),
+        _ => Counted::Nothing,
+    }
 }
 
 fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), SessionError> {
@@ -1137,6 +1308,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::EditDestinations { .. }
         | SessionCommand::GrowSyntheticCatalogue { .. }
         | SessionCommand::SnapshotBeforeUpdate
+        | SessionCommand::Usage(_)
         | SessionCommand::Shutdown => {}
     }
     Ok(())

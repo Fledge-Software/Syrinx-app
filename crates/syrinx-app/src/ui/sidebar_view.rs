@@ -8,6 +8,7 @@ use gpui::{
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Role, Stateful,
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
+use syrinx_core::usage::Feature;
 use syrinx_core::{
     ActivationTarget, SavedEntryId, SavedFolderSnapshot, SavedPageSnapshot, TabId, TabSnapshot,
 };
@@ -240,6 +241,11 @@ impl BrowserView {
             self.watch_peek(window, cx);
         }
         if let Some(setting) = settled_sidebar_setting(previous, self.sidebar_sizing.state()) {
+            self.count(match self.sidebar_sizing.state() {
+                SidebarWidthState::Wide => Feature::SidebarSetWide,
+                SidebarWidthState::Compact => Feature::SidebarSetCompact,
+                SidebarWidthState::Hidden => Feature::SidebarSetHidden,
+            });
             let (_, visible) = sidebar_setting(self.sidebar_sizing.last_visible());
             self.command(SessionCommand::SaveSettings(vec![
                 setting,

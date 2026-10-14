@@ -4,6 +4,7 @@ use gpui::{
     Context, Div, FontWeight, InteractiveElement, ParentElement, Role, Stateful,
     StatefulInteractiveElement, Styled, Toggled, div, px,
 };
+use syrinx_core::usage::Feature;
 use syrinx_core::{
     BuiltInPlugin, Destination, DestinationEdit, DestinationSurface, QuickDestinations,
 };
@@ -85,7 +86,11 @@ impl BrowserView {
     }
 
     /// Runs a tile's action: open its page, or say its plugin is not available yet.
-    pub(super) fn open_tile(&mut self, tile: &Destination) {
+    pub(super) fn open_tile(&mut self, surface: DestinationSurface, tile: &Destination) {
+        self.count(match surface {
+            DestinationSurface::QuickAccess => Feature::HomeTileOpened,
+            DestinationSurface::Favorites => Feature::FavoriteOpened,
+        });
         match tiles::open_action(tile, self.home_showing()) {
             TileAction::Session(command) => self.command(command),
             TileAction::Unavailable(plugin) => self.message = tiles::unavailable_message(plugin),
@@ -145,6 +150,7 @@ impl BrowserView {
                         if this.home.customize_open {
                             this.close_customize();
                         } else {
+                            this.count(Feature::SettingsOpened);
                             this.home.customize_open = true;
                         }
                         cx.notify();
@@ -283,7 +289,7 @@ impl BrowserView {
                 }));
         } else {
             cell = cell.on_click(cx.listener(move |this, _, _, cx| {
-                this.open_tile(&opened);
+                this.open_tile(surface, &opened);
                 cx.notify();
             }));
         }

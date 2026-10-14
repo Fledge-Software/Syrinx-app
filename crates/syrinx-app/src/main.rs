@@ -26,8 +26,9 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU8, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use syrinx_core::usage::UsageRecorder;
 use syrinx_platform::{
     instance::{self, Claim, LinkRequest, PrimaryInstance},
     notice,
@@ -45,6 +46,8 @@ const DATA_FOLDER: &str = if cfg!(feature = "installed") {
 };
 
 fn main() -> ExitCode {
+    // AN-01's start-up timings begin here, as close to process start as Syrinx can measure.
+    let launched = Instant::now();
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     // Unattended runs report startup problems on stderr only, never in an invisible message box.
     let smoke_requested = arguments
@@ -111,6 +114,11 @@ fn main() -> ExitCode {
     };
     let outcome = Arc::new(AtomicU8::new(0));
     let result = outcome.clone();
+    // Counts nothing unless the profile's usage file says the owner switched counting on.
+    let usage = Arc::new(UsageRecorder::new());
+    let window_usage = usage.clone();
+    let usage_file = options.directory.join("State").join("usage.json");
+    let options_smoke = options.smoke;
     // Smoke and acceptance runs succeed only when they report success themselves.
     let mut links = Some(links);
     gpui_platform::application().run(move |cx: &mut App| {
@@ -140,6 +148,7 @@ fn main() -> ExitCode {
                         suspended_tabs: options.suspended_tabs,
                         acceptance: options.acceptance.take(),
                         updates: (window_updates.clone(), startup_updates.clone()),
+                        usage: (window_usage.clone(), launched),
                     };
                     ui::BrowserView::new(
                         options.directory,
@@ -202,10 +211,33 @@ fn main() -> ExitCode {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
+    if options_smoke && !smoke_counted_nothing(&usage, &usage_file) {
+        return ExitCode::FAILURE;
+    }
     if outcome.load(Ordering::Acquire) == 2 || unattended && outcome.load(Ordering::Acquire) != 1 {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// A smoke run's fresh profile never switches counting on, so nothing may have been counted or
+/// written (AN-01).
+fn smoke_counted_nothing(usage: &UsageRecorder, usage_file: &Path) -> bool {
+    let written = match usage_file.try_exists() {
+        Ok(written) => written,
+        Err(error) => {
+            eprintln!(
+                "The smoke run could not check for a usage file: {:?}",
+                error.kind()
+            );
+            return false;
+        }
+    };
+    if usage.is_enabled() || usage.has_changes() || written {
+        eprintln!("The smoke run counted usage although counting was never switched on.");
+        return false;
+    }
+    true
 }
 
 /// Start the update helper if the window asked for Restart now or install on quit.

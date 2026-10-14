@@ -6,6 +6,7 @@ use gpui::{
     Styled, Subscription, Window, actions, div, px,
 };
 use gpui_component::input::{InputEvent, InputState};
+use syrinx_core::usage::Feature;
 use syrinx_core::{
     ActivationTarget, FolderContents, SavedEntryId, SavedFolderId, SavedPageId, TabId,
     TabModelSnapshot, saved_folder_contents,
@@ -177,6 +178,7 @@ impl BrowserView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.count(Feature::TabSwitchedSidebar);
         self.activate(target);
         match row_focus_after_activation(self.is_peek_window(window)) {
             RowFocus::DismissPeek => {

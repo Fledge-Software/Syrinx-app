@@ -1006,9 +1006,10 @@ later folders/import, Favorites and accessible compact/hidden states. Both
 copies below and in the readiness report use the same 40 IDs and order.
 This changes the approved deliverables, not the one-slice-at-a-time workflow.
 
-The proposed AN-01/AN-02 amendment is described in the readiness report's
-"Proposed analytics amendment (D39)" section. It is not part of these 40
-approved rows until the owner approves the added slice boundaries.
+The AN-01/AN-02 amendment, first sketched in the readiness report's
+"Proposed analytics amendment (D39)" section, was approved by the owner on
+2026-10-12 as `docs/proposals/an-01-02-local-analytics.md`. It adds two rows
+to the Phase 5 table without renumbering any P1 label.
 
 ### Phase 1 milestone: foundations
 
@@ -1076,7 +1077,9 @@ approved rows until the owner approves the added slice boundaries.
 | P1-39b | A failed update must never cost the working version. Add staging, "Install update from file…", `syrinx-apply.exe`, the pre-update snapshot, Restart now / next-quit install and rollback, with recovery tests at every step. `check-deps` lifts the verifier quarantine for `syrinx-app` only (change 1). No network. | `crates/syrinx-update`, `crates/syrinx-app`, `crates/xtask/src/dependency_policy.rs`; D13, the 2026-10-12 foreground rule. | P1-39a. |
 | P1-39c | The owner needs one button that checks the approved host. Add `syrinx-update-net` (WinHTTP) with its `check-deps` changes (it may depend on the verifier, use `windows` with its own feature allowlist, and alone use `Win32_Networking_WinHttp`), the Settings button and palette command, and the confirmation and ready messages. Network only when the owner presses the check. | `crates/syrinx-update-net`, `crates/syrinx-app`, `crates/xtask/src/dependency_policy.rs`; D9's one exception. | P1-39b; owner's host approval (given 2026-10-13). |
 | P1-39d | Real updates need the owner's keys and host. The owner's key ceremony and pinning (DW-30), host set-up (serving the full certificate chain, so Windows never fetches a missing intermediate) and the first real update run by the owner, recorded in a P1-39 note. | `crates/syrinx-update/src/keys.rs`; DW-30. | P1-39c. |
-| P1-40 | “Daily driver” needs evidence from use. Record one week as the owner's default browser and the product's D6 memory/startup results; reconcile failures before closing plan 1. | Final acceptance report; D6. | P1-39d; owner default-browser action and week of use. |
+| AN-01 | Counting how Syrinx is used must not decide privacy one call site at a time. Add the fixed version 1 usage schema and atomic recorder to `syrinx-core`, the `usage.json` file with two 30-day periods kept outside backups and written by the session worker, Customize's off-by-default switch and Reset, and the recording calls at the call sites that exist; prove that no private value can be recorded. The owner started it on 2026-10-14 ahead of P1-39d, which it does not need. | `crates/syrinx-core/src/usage*`, `crates/syrinx-app/src/session/usage.rs`, `docs/an-01-local-analytics.md`; D39, `docs/proposals/an-01-02-local-analytics.md`. | P1-39c (owner, 2026-10-14), the owner's approval of the proposal (2026-10-12) and the owner's review of the frozen command list. |
+| AN-02 | The owner must see exactly what a report contains before it leaves the machine. Add the report preview, Save report… and Copy report, the suggested prompt and `docs/usage-report.md`. | Customize's Usage report section; D39. | AN-01. |
+| P1-40 | “Daily driver” needs evidence from use. Record one week as the owner's default browser and the product's D6 memory/startup results; reconcile failures before closing plan 1. | Final acceptance report; D6. | P1-39d; AN-02 if the owner counts usage that week; owner default-browser action and week of use. |
 
 ## Super-Pass ledger
 

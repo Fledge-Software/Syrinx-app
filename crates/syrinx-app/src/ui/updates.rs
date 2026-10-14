@@ -484,7 +484,7 @@ fn section_text(palette: &Palette, running: &str) -> Div {
 }
 
 /// The small outlined button Customize uses for its section actions.
-fn pill(palette: &Palette, element: Stateful<Div>) -> Stateful<Div> {
+pub(super) fn pill(palette: &Palette, element: Stateful<Div>) -> Stateful<Div> {
     element
         .h(px(28.))
         .px(px(12.))
