@@ -32,6 +32,7 @@ mod runtime_notice;
 mod saved_moves;
 mod security;
 mod sidebar_rows;
+mod sidebar_tree;
 mod sidebar_view;
 mod suspended_fixture;
 mod tile_editor;
@@ -265,6 +266,8 @@ pub struct BrowserView {
     expanded_saved: BTreeSet<SavedFolderId>,
     folder_editor: Option<folder_editor::FolderEditor>,
     sidebar_edge_focus: FocusHandle,
+    /// Each window's sidebar row focus handles and drawn rows (DW-61).
+    sidebar_trees: sidebar_tree::SidebarTrees,
     panes: panes::PaneFocus,
     /// Ends a sidebar drag when the window deactivates; dropping it unsubscribes.
     _drag_activation_watch: Subscription,
@@ -356,6 +359,7 @@ impl BrowserView {
             folder_editor: None,
             // A tracked handle takes its Tab stop from the handle, not from `tab_index`.
             sidebar_edge_focus: cx.focus_handle().tab_stop(true),
+            sidebar_trees: sidebar_tree::SidebarTrees::default(),
             panes: panes::PaneFocus::new(cx),
             _drag_activation_watch: cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
@@ -1538,6 +1542,7 @@ impl Render for BrowserView {
         } else {
             div().flex_1().h_full()
         };
+        let sidebar = self.sidebar(window, cx);
         let chrome = div()
             .size_full()
             .key_context("Syrinx")
@@ -1680,7 +1685,7 @@ impl Render for BrowserView {
                     .flex_1()
                     .flex()
                     .min_h_0()
-                    .child(self.as_pane(self.sidebar(cx), Pane::Sidebar, gpui::Role::Navigation))
+                    .child(self.as_pane(sidebar, Pane::Sidebar, gpui::Role::Navigation))
                     .child(self.sidebar_edge(cx))
                     .child(self.as_pane(
                         div().flex_1().min_w_0().h_full().flex().child(page),

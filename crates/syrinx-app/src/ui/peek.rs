@@ -31,12 +31,12 @@ struct PeekView {
 }
 
 impl Render for PeekView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Never drawn inside a browser update: the popup opens from `open_requested_peek`.
-        let content = match self
-            .browser
-            .update(cx, |browser, cx| browser.sidebar_at(PEEK_WIDTH, true, cx))
-        {
+        // The rows take their focus handles from the peek's own tree, not the docked one's.
+        let content = match self.browser.update(cx, |browser, cx| {
+            browser.sidebar_at(PEEK_WIDTH, true, window, cx)
+        }) {
             Ok(content) => content,
             Err(_) => div(), // The owner has gone; native ownership also tears down this window.
         };

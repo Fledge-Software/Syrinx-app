@@ -197,6 +197,77 @@ the import preview now cancels instead of importing.
 script, request filter or header change; the two new WebView2 handlers are
 controller events like the existing accelerator handler.
 
+## DW-61: one Tab stop for the sidebar tree
+
+Added on 2026-10-13 on `claude/dw-61-roving-focus-wiring`. Before it, every
+saved, folder and open-tab row was its own Tab stop, so crossing a long
+imported folder took one Tab per row, and F6 landed on the sidebar's first
+control (Search) rather than on the tab the owner is in. The ARIA tree
+pattern asks for one Tab stop on the tree, arrow keys between its rows, and
+focus entering at the selected row; that is what the sidebar now does.
+
+**How it is built.** The rules are the window-independent
+`syrinx_ui::tree_focus` (DW-61's first half, with its own tests). The wiring
+is `crates/syrinx-app/src/ui/sidebar_tree.rs`:
+
+- `sidebar_entries` looks up every visible row once. The rows drawn and the
+  `TreeRow`s the rules see come from that one list, so a row whose lookup
+  fails is missing from both, never from only one.
+- Each window keeps its own `WindowTree`: one GPUI focus handle per row and
+  the rows as last drawn. The docked sidebar and the peek popup draw the
+  same rows through the same `sidebar_at`, but from separate handle maps, so
+  no handle is ever tracked in two windows (the accessibility-tree trap).
+  Which tree a frame uses is decided by comparing its window with the main
+  window, because the peek's first frame is drawn before `self.peek` knows
+  the peek's handle.
+- Each frame, `tab_stop` picks the one row whose handle is a Tab stop: the
+  focused row while it is drawn, else the active row, else the first. The
+  handle's own `tab_stop` flag is set every frame, because a tracked handle
+  ignores `tab_index` (the `tab_stop(true)` trap).
+- Each row's key handler maps unmodified Up, Down, Home, End, Left and Right
+  to `tree_key`, applies any expand or collapse (a collapse goes through
+  `focus_after_collapse`), focuses the target and scrolls it into view (the
+  tree element is now its own scroll container, so its children are exactly
+  the rows). Alt arrows, Delete and F2 keep their existing row bindings.
+- When a redraw no longer contains the focused row (its folder collapsed by
+  a click, the tab closed, the row deleted), `refocus_after_redraw` picks the
+  new Tab stop and focus moves there after the frame, so keys are never left
+  on a row that is gone. The handle of the vanished row is kept until then,
+  so the window never holds a released focus id.
+- F6 and Shift F6 into the sidebar (`panes.rs`, `land_on`) focus the active
+  row, or the first row when the active tab is not visible, and fall back to
+  the first control when the tree is empty.
+- The rows' small buttons are no longer Tab stops (owner question 2). Delete
+  on an open tab closes it, matching its Close button.
+
+**Probe, rerun for DW-61.** The same kind of UI Automation client as above
+(.NET `System.Windows.Automation` from Windows PowerShell; the script lives
+outside the repository for the reason given above) drove the gate's `local`
+build, launched visibly on fresh synthetic profiles `target\dw-61-uia-1`
+and `target\dw-61-uia-2` (logs `target\dw-61-uia-probe-1.log` and `-2.log`).
+It made three blank tabs and an empty folder named "Probe" through the New
+tab and New folder buttons (UIA focus, then a posted Enter), then posted
+keys to Syrinx's window only. Both runs: the tree had four items; from New
+tab, one Tab entered the tree on the active row and the next Tab left it for
+"Resize sidebar"; F6 from there went to the address field and the next F6
+to the active row (reported selected); Home, Down, Down, End, Up and Home
+walked the rows in order; Left on the open folder reported it collapsed and
+Right expanded again, a second Right stayed put (the folder is empty), and
+Down and Up moved between the folder and the next row. Run 2 also pressed
+Delete on an open tab that was not active: the tab closed and focus moved
+to the active row, as `refocus_after_redraw` intends. Syrinx stayed up with
+an empty stderr through 56–59 accessibility nodes, so the tree built with
+debug assertions on and no doubled focus claim. A screenshot of the window
+after run 1 showed the focus ring on the focused folder row and the active
+row's highlight on its own row.
+
+**Not verified by an agent.** Shift Tab back into the tree (a posted key
+cannot carry Shift, because GPUI reads the modifier state itself); the peek
+popup, which needs a real pointer at the window's edge (the peek shares the
+code path, but nothing drove it); nested folders and saved pages natively
+(covered by the unit tests in `syrinx_ui::tree_focus` and
+`ui/sidebar_tree.rs`); and anything a screen reader says (owner check 13).
+
 ## Owner checks with NVDA
 
 An agent cannot judge speech output, so these are the owner's. Use a fresh
@@ -221,10 +292,11 @@ portable copy also works). Then record pass/fail for each:
    the find bar after the toolbar. Shift F6 runs in reverse.
 3. **F6 from a page.** Open `https://example.com/`, click into the page,
    press F6: focus leaves the page for the address field and NVDA says so.
-   Shift F6 from the page goes to the sidebar's first control. Tab repeatedly
-   inside the page until past its last link: focus comes back to the address
-   field. Shift Tab from the page's first link lands on the sidebar's last
-   control (New tab).
+   Shift F6 from the page goes to the sidebar's active row (since DW-61; it
+   was the sidebar's first control, Search). Tab repeatedly inside the page
+   until past its last link: focus comes back to the address field. Shift
+   Tab from the page's first link lands on the sidebar's last control, which
+   since DW-61 is the tree's single Tab stop, the active row.
 4. **Page keys still the page's.** In a page, Ctrl F opens the page's find
    (or the engine's) as before, Ctrl P prints, and Ctrl plus or minus zooms;
    none of them is taken by Syrinx.
@@ -261,6 +333,20 @@ portable copy also works). Then record pass/fail for each:
 12. **Ring visibility.** In each of the five palettes, the focus ring is
     visible on the toolbar, a sidebar row, an accent-filled button (Save in a
     tile form) and the selected time-range chip.
+13. **Sidebar tree keys (DW-61).** With a few saved pages, a folder holding
+    a page and a sub-folder, and some open tabs: F6 to the sidebar lands on
+    the active row and NVDA reads it as a tree item, selected, with its
+    level. Up and Down read each row in turn; Home and End go to the first
+    and last row. On an open folder, Left collapses it (NVDA says
+    collapsed) and Right opens it again, then Right moves into its first
+    row; Left on a row inside a folder goes back to the folder. Tab from any
+    row leaves the tree in one press (to "Resize sidebar"), and Shift Tab
+    comes back to the active row. Delete on an open tab that is not active
+    closes it and NVDA reads the row focus moved to. Then repeat the arrow
+    keys in the peek: hide the sidebar (Ctrl Alt S), hover the left edge,
+    click the peek's "Syrinx" heading and Tab to the tree. The peek opens
+    without taking activation; no agent has checked that a click gives it
+    the keys, so record what happens.
 
 ## Owner questions
 
@@ -269,9 +355,14 @@ portable copy also works). Then record pass/fail for each:
    clicks needs a GPUI change, because GPUI cannot see the F6 that leaves a
    page. Recommendation: accept the current behaviour for v1; it errs toward
    keyboard users.
-2. **Sidebar keyboard model (DW-61).** Every row is a Tab stop today.
-   Recommendation: move to one Tab stop with arrow keys before the week of
-   use (P1-40), because a long imported folder makes Tab slow.
+2. **Sidebar keyboard model (DW-61).** Done on 2026-10-13: the tree has
+   one Tab stop and arrow keys (see "DW-61: one Tab stop for the sidebar
+   tree" above). One consequence to confirm: the rows' small buttons
+   (Close tab, Unload page, Remove saved page, Rename and Remove folder) are
+   no longer Tab stops. Delete, Shift Delete and F2 on the row do their
+   work, and Delete on an open tab now closes it; only Unload page has no
+   key of its own (Enter, then Ctrl W). Recommendation: accept this, as
+   the ARIA tree pattern expects.
 3. **Palette announcements (DW-60).** Recommendation: change the palette so
    its list container owns focus and the query field (no GPUI patch), as a
    follow-up slice; the alternative is asking for a vendored GPUI change.

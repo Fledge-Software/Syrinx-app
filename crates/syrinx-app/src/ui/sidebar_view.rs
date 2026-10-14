@@ -1,16 +1,15 @@
 //! Draws the sidebar at its current D44 width and lets the owner drag its edge (P1-08, P1-09),
 //! with the saved rows' folder controls (P1-21).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 
 use gpui::{
-    App, AppContext, ClickEvent, Context, Div, ElementId, InteractiveElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Role, Stateful,
+    App, AppContext, ClickEvent, Context, Div, ElementId, FocusHandle, InteractiveElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Role, Stateful,
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 use syrinx_core::{
-    ActivationTarget, SavedEntryId, SavedFolderId, SavedFolderSnapshot, SavedPageId,
-    SavedPageSnapshot, TabId, TabSnapshot,
+    ActivationTarget, SavedEntryId, SavedFolderSnapshot, SavedPageSnapshot, TabId, TabSnapshot,
 };
 use syrinx_ui::{
     SIDEBAR_WIDTH_STATE_KEY, SidebarWidthState,
@@ -30,7 +29,7 @@ use super::{
     },
     page_card::edge_strip,
     saved_moves::{DropTarget, Step},
-    sidebar_rows::{SavedRow, visible_saved_rows},
+    sidebar_tree::{SidebarEntry, TreeId, active_tree_id, sidebar_entries},
     tiles::monogram,
 };
 use crate::{session::SessionCommand, theme};
@@ -54,16 +53,24 @@ struct RowLook {
 impl BrowserView {
     /// The sidebar at the width the sizing reserves. Narrower than favicon-only (hidden, or
     /// mid-drag) it draws only its unpadded background, so it is exactly that wide.
-    pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.sidebar_at(
             self.sidebar_sizing.width(),
             self.sidebar_sizing.labels_visible(),
+            window,
             cx,
         )
     }
 
-    /// The popup and persistent sidebar share all content and listeners.
-    pub(super) fn sidebar_at(&self, width: f32, labels: bool, cx: &mut Context<Self>) -> Div {
+    /// The popup and persistent sidebar share all content and listeners. `window` is the one
+    /// drawing it, so each window keeps its own row focus.
+    pub(super) fn sidebar_at(
+        &mut self,
+        width: f32,
+        labels: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let frame = div()
             .w(px(width))
             .flex_none()
@@ -73,6 +80,7 @@ impl BrowserView {
         if !draws_content(width) {
             return frame;
         }
+        let rows = self.rows(labels, window, cx);
         frame
             .pt_3()
             .pb_3()
@@ -94,13 +102,7 @@ impl BrowserView {
             .child(div().h(px(1.)).bg(theme::line()))
             .child(tabs_header(labels, cx))
             .children(labels.then(|| self.folder_editor_view(cx)).flatten())
-            .child(
-                div()
-                    .id("tab-scroll")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .child(self.rows(labels, cx)),
-            )
+            .child(rows)
     }
 
     /// The strip between the sidebar and the page card that the owner drags. It also takes
@@ -246,60 +248,41 @@ impl BrowserView {
         cx.notify();
     }
 
-    /// Saved rows in layout order (skipping collapsed folders), then ordinary tabs.
-    fn rows(&self, labels: bool, cx: &mut Context<Self>) -> Stateful<Div> {
-        // Index only the visible rows: a large collapsed import must not cost a map per frame.
-        let visible = visible_saved_rows(&self.model.saved_layout, &self.collapsed_folders);
-        let visible_pages: HashSet<SavedPageId> = visible
-            .iter()
-            .filter_map(|row| match row {
-                SavedRow::Page { id, .. } => Some(*id),
-                SavedRow::Folder { .. } => None,
-            })
-            .collect();
-        let pages: HashMap<SavedPageId, &SavedPageSnapshot> = self
-            .model
-            .saved_pages
-            .iter()
-            .filter(|page| visible_pages.contains(&page.id))
-            .map(|page| (page.id, page))
-            .collect();
-        let folders: HashMap<SavedFolderId, &SavedFolderSnapshot> = self
-            .model
-            .saved_folders
-            .iter()
-            .map(|folder| (folder.id, folder))
-            .collect();
+    /// The tree of saved rows in layout order (skipping collapsed folders), then ordinary
+    /// tabs. It has one Tab stop, and arrows move between its rows (DW-61); it scrolls itself
+    /// so a row focused by an arrow key stays in view.
+    fn rows(&mut self, labels: bool, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let entries = sidebar_entries(&self.model, &self.collapsed_folders);
+        let tree_rows = entries.iter().map(SidebarEntry::tree_row).collect();
+        let peek = self.draws_peek_tree(window);
+        let active = active_tree_id(&self.model);
+        let prepared = self
+            .sidebar_trees
+            .prepare(peek, tree_rows, active, window, cx);
         let mut rows = div()
             .id("sidebar-rows")
             .role(Role::Tree)
             .aria_label("Saved and open tabs")
+            .flex_1()
+            .overflow_y_scroll()
+            .track_scroll(&prepared.scroll)
             .flex()
             .flex_col()
             .gap_1();
-        for row in visible {
-            let element = match row {
-                SavedRow::Folder {
-                    id,
+        for (entry, focus) in entries.iter().zip(prepared.handles) {
+            let row = match entry {
+                SidebarEntry::Folder {
+                    folder,
                     depth,
                     expanded,
-                } => folders
-                    .get(&id)
-                    .map(|folder| self.folder_row(folder, depth, expanded, labels, cx)),
-                SavedRow::Page { id, depth } => pages
-                    .get(&id)
-                    .map(|page| self.saved_row(page, depth, labels, cx)),
+                } => self.folder_row(folder, *depth, *expanded, labels, cx),
+                SidebarEntry::Page { page, depth } => self.saved_row(page, *depth, labels, cx),
+                SidebarEntry::Tab(tab) => {
+                    let title = ordinary_title(tab, self.popup_pages.contains(&tab.id));
+                    self.ordinary_row(tab.id, title, labels, cx)
+                }
             };
-            rows = rows.children(element);
-        }
-        for tab in self
-            .model
-            .tabs
-            .iter()
-            .filter(|tab| tab.saved_page_id.is_none())
-        {
-            let title = ordinary_title(tab, self.popup_pages.contains(&tab.id));
-            rows = rows.child(self.ordinary_row(tab.id, title, labels, cx));
+            rows = rows.child(tree_item(row, entry.tree_row().id, &focus, cx));
         }
         rows
     }
@@ -382,11 +365,15 @@ impl BrowserView {
             saved: false,
         };
         let target = ActivationTarget::Tab(id);
-        let row = row_frame(("tab", id.get()), look, labels).on_click(cx.listener(
-            move |this, _, window, cx| {
+        let row = row_frame(("tab", id.get()), look, labels)
+            .on_click(cx.listener(move |this, _, window, cx| {
                 this.activate_row(target, window, cx);
-            },
-        ));
+            }))
+            // Delete closes the tab, as its button does: the button is not a Tab stop (DW-61).
+            .on_action(cx.listener(move |this, _: &RemoveRow, _, cx| {
+                this.command(SessionCommand::CloseTab(id));
+                cx.notify();
+            }));
         if !labels {
             return row;
         }
@@ -519,12 +506,26 @@ fn release_on_drag(view: &WeakEntity<BrowserView>, window: &mut Window, cx: &mut
     }
 }
 
+/// Makes a drawn row a member of the tree's roving focus (DW-61): it tracks its own focus
+/// handle, which is a Tab stop only for the one row `syrinx_ui::tree_focus` picks, and its
+/// arrow keys move focus between rows.
+fn tree_item(
+    row: Stateful<Div>,
+    id: TreeId,
+    focus: &FocusHandle,
+    cx: &mut Context<BrowserView>,
+) -> Stateful<Div> {
+    row.track_focus(focus).on_key_down(cx.listener(
+        move |this, event: &KeyDownEvent, window, cx| {
+            this.tree_key_down(id, event, window, cx);
+        },
+    ))
+}
+
 /// The shared row shape: a titled row when labels show, a centred icon button otherwise.
 /// Every row is a tree item at its nesting level, keeping its title as the accessible name,
-/// and its own Tab stop with P1-36's focus ring: Enter or Space uses it (a keyboard click).
-// TODO(DW-61): one Tab stop for the tree with arrow keys between rows, Left and Right for
-// folders, and F6 landing on the active row, driven by `syrinx_ui::tree_focus` (see its
-// wiring cautions: build its rows in `rows()`'s loop and reset focus after row changes).
+/// with P1-36's focus ring: Enter or Space uses it (a keyboard click). `tree_item` decides
+/// whether it is the tree's Tab stop.
 fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<Div> {
     let row = without_mouse_focus(control(div().id(id), Role::TreeItem, look.title.clone()))
         .aria_level(look.depth + 1)
@@ -572,13 +573,16 @@ fn row_icon(letter: &str, saved: bool) -> Div {
         .child(letter.to_owned())
 }
 
-/// A small control at the end of a wide row, named for screen readers.
+/// A small control at the end of a wide row, named for screen readers. It is not a Tab stop,
+/// so the tree keeps one (DW-61). The row's Delete and F2 close, remove and rename; only
+/// unloading a saved page has no key of its own (Enter, then Ctrl W).
 fn row_action(id: impl Into<ElementId>, glyph: &'static str, name: &'static str) -> Stateful<Div> {
     without_mouse_focus(control(
         div().id(id).px_1().rounded_md(),
         Role::Button,
         name,
     ))
+    .tab_stop(false)
     .child(glyph)
 }
 

@@ -38,7 +38,14 @@ impl BrowserView {
         self.save_folder_expansion();
     }
 
-    /// Opens a folder so a row just moved into it stays in view.
+    /// Closes a folder from the keyboard (Left on an open folder, DW-61).
+    pub(super) fn collapse_folder(&mut self, id: SavedFolderId) {
+        if self.collapsed_folders.insert(id) {
+            self.save_folder_expansion();
+        }
+    }
+
+    /// Opens a folder: Right on a closed folder, or so a row just moved into it stays in view.
     pub(super) fn expand_folder(&mut self, id: SavedFolderId) {
         if self.collapsed_folders.remove(&id) {
             self.save_folder_expansion();

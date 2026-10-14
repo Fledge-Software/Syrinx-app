@@ -2,8 +2,8 @@
 //!
 //! Window-independent so the docked sidebar and the peek popup share one tested rule set.
 //!
-//! Wiring cautions: build the `TreeRow`s in the same loop that draws the rows (`rows()` in
-//! `syrinx-app`'s `ui/sidebar_view.rs` skips a row whose lookup fails), and after every row
+//! Wiring cautions: build the `TreeRow`s from the same list that draws the rows (`syrinx-app`'s
+//! `ui/sidebar_tree.rs`, `sidebar_entries`, drops a row whose lookup fails), and after every row
 //! change reset the focused id to `tab_stop(...)` (or `focus_after_collapse` for a collapse).
 
 /// What kind of row a tree row is. Only folders react to Left and Right.
