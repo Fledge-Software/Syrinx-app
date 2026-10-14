@@ -20,10 +20,15 @@ longer the route. Since 2026-10-13 the repository is on GitHub at
 `Fledge-Software/Syrinx-app`; an agent pushes only its assigned branch, and
 publication, the licence and moving the registers into issues stay the owner's.
 
-**Latest recorded gate.** The last recorded full gate passed 1,014 tests and
-application smoke, after the branding review. No gate count is recorded for
-`main` after the P1-05 and P1-23 merges; the next agent should run
-`cargo xtask check` on `main` and record it here.
+**Latest recorded gate.** On 2026-10-13 `cargo xtask check` passed on `main`
+at `9e22f9b`, after the P1-05, P1-23, P1-39-approval and licence merges and
+the owner's history rewrite: 1,050 tests passed, none failed or ignored, and
+the application smoke run passed. This is the first gate run on the second
+development machine (EZ-LAPTOP-01, Rust 1.97.1, Windows SDK 10.0.26100.0),
+from a clean `target/`. It is also the first run of DW-7's three Store-level
+tests in `crates/syrinx-store/src/engine/tests/permissions.rs`, which had
+been merged without the gate; all three pass. The previous recorded gate
+passed 1,014 tests after the branding review.
 
 **Open Plan 1 work.** Nothing below is finished, so Phase 1 stays open.
 - *Blocked on P1-23's quiet-machine runs and review:* P1-24 (the full-text
