@@ -335,6 +335,15 @@ style problem.
   archive inventory, exact diff and modified hashes, and validate the
   unchanged dependency graph. This approval covers neither another dependency
   patch nor commits, merges, pushes, publication or an upstream message.
+- **Approved narrow source patch, 2026-10-14:** the owner approved a second
+  patch to `vendor/gpui-pre-windows-0.3.8`, after the first preview release
+  would not start on any machine but the runner that built it. With debug
+  assertions on, as in D38's `local` profile, upstream GPUI compiles its
+  shaders at run time from the build machine's source folder. The patch
+  changes only `build.rs` and `src/directx_renderer.rs` so that every profile
+  embeds the precompiled shaders; building therefore needs the Windows SDK's
+  `fxc.exe`. It is recorded in `vendor/gpui-pre-windows-0.3.8.provenance.md`
+  with the same boundary as the approval above.
 - **Approved dependency, 2026-10-11:** the owner approved adding Tantivy
   for P1-23's full-text bake-off, and for P1-24 if the bake-off chooses it.
   Pin the exact audited version and record its audit, including every

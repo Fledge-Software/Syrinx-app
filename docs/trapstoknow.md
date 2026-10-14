@@ -376,6 +376,15 @@ you found it in the commit message, not here.
   come weekly and may change the API; a `^` requirement has already moved apps
   onto a snapshot their components did not compile with. Pin with `=`.
   Source: note 08, section 1.2 (high).
+- **An exe built with debug assertions starts only on the machine that built
+  it.** Upstream GPUI then compiles its shaders at run time from
+  `CARGO_MANIFEST_DIR`, so `v0.1.0` from D38's `local` profile panicked
+  silently everywhere but the runner ("Recreating GPU state for DirectWrite:
+  The system cannot find the path specified", exit code 101). The runner's
+  own smoke run and screenshots passed because its source folder was there.
+  The 2026-10-14 vendor patch embeds the shaders in every profile; keep it,
+  and test a release zip on a machine other than the one that built it.
+  Source: `vendor/gpui-pre-windows-0.3.8.provenance.md` (observed; high).
 
 ## Local search
 
