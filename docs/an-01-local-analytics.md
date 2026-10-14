@@ -55,6 +55,9 @@ and a later collector would be retrofitted into finished code.
   (`closed_on`, the first start on or after day 30) and reports that as its
   `period_end`, as the proposal says; the current period has none, because
   its end is the day of export.
+  Files written by the first AN-01 commit (5a44cd2), which had no
+  `closed_on`, are refused as damaged and started afresh. That is acceptable
+  because the format was never released and no real usage was collected.
 - `usage/codec.rs` writes `usage.json` and a report in one fixed JSON shape
   (UTF-8, LF, two-space indentation, final newline, every field present,
   zeros included) and reads back only that shape with a strict reader of its
@@ -77,7 +80,13 @@ and a later collector would be retrofitted into finished code.
   marker a failed delete would have left `usage.json` behind and counting
   would have resumed at the next start. Reset and switching on finish any
   such leftover deletion first; a Reset that cannot delete the old counts
-  leaves counting off rather than bringing them back.
+  leaves counting off rather than bringing them back. If even the marker
+  cannot be written and the deletion fails, the window says plainly that
+  counting may resume at the next start and asks the owner to switch it off
+  again; renaming the file aside is not tried, because on Windows a rename
+  needs the same delete access the failed deletion lacked. At every start
+  with no `usage.json`, leftover `usage.json.new` and `usage.json.damaged`
+  copies are deleted.
 - Only the session worker reads or writes it. Each write goes to
   `usage.json.new`, is flushed, then renamed over the file. Writes happen at
   most once every five minutes and only after a counter changed, on the
@@ -132,7 +141,7 @@ existing switch, now shared as `customize::switch_control`.
 | `startup.session_restored_ms` | `main` to the first session state reaching the window; skipped the same way |
 | `palette.open_to_paint_ms` | The palette entry starting to its first presented frame |
 | `search.tier1_ms`, `store.save_ms`, `backup.snapshot_ms` | The worker's query, durable save and daily snapshot |
-| `tab.switch_to_visible_ms` | A tab selection to the selected tab's page being shown. The timer keeps the tab it waits for (named by the request, or learned from the next state) and ignores other pages; a selection that changes nothing (the same tab, Ctrl Tab with one tab) or ends on Home is dropped |
+| `tab.switch_to_visible_ms` | A tab selection to the selected tab's page being shown. The timer keeps the tab it waits for (named by the request, or learned from the next state) and ignores other pages; a selection that changes nothing (the same tab, Ctrl Tab with one tab) or ends on Home is dropped. A state from an unrelated earlier command that arrives first also drops it, so this histogram can under-count but never over-count; that is accepted rather than correlating states with requests |
 | `error.storage_write`, `error.backup_failed` | A failed durable save or daily snapshot |
 | `error.renderer_failed`, `error.browser_process_exited`, `error.webview_creation`, `error.navigation_failed` | The page host's crash, engine-recovery, creation-failure and failed-navigation events; a navigation that failed only because it was stopped or replaced (WebView2's `OperationCanceled`, now reported as `cancelled` on `NavigationCompleted`) is not counted |
 | `error.import_refused` | A bookmark file the parser refused |
@@ -210,7 +219,8 @@ folders; no real usage was collected.
 ## Verification on this machine (2026-10-14)
 
 - `cargo xtask check` passed with 1,328 test results on the first commit and,
-  after the review fixes, with 1,336 (summed over every `test result` line,
+  after the review fixes, with 1,336, and after the re-review's minor fixes
+  with 1,338 (summed over every `test result` line,
   including the release-tool steps), none failed or ignored, and the smoke
   run passed with its new no-counting check.
 - After the review fixes, `cargo xtask bench` (busy machine; provisional

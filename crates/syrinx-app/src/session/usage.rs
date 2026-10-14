@@ -57,6 +57,9 @@ pub enum UsageError {
     Write,
     /// Counting is off, but some counts could not be deleted yet; the next start retries.
     Delete,
+    /// Neither the off marker nor the deletion succeeded, so nothing on disk records the
+    /// switch-off; the next start may count again.
+    NotStopped,
     /// The file was unreadable, so it was set aside and counting started afresh.
     Damaged,
     /// Today's date is unknown, so a period cannot start or close.
@@ -71,6 +74,10 @@ impl std::fmt::Display for UsageError {
             Self::Delete => {
                 "Counting is off, but Syrinx couldn't delete all its usage counts yet; it will \
                  finish when it next starts"
+            }
+            Self::NotStopped => {
+                "Counting is off for now, but Syrinx couldn't delete its usage counts or record \
+                 the switch-off, so it may count again when it next starts; switch it off again"
             }
             Self::Damaged => "Syrinx's usage counts were unreadable, so it started them afresh",
             Self::Clock => "Syrinx couldn't read today's date for its usage counts",
@@ -115,7 +122,8 @@ impl UsageCollector {
             return self.finish_off();
         }
         let Some(bytes) = read_bounded(&self.path(FILE_NAME)).map_err(|_| UsageError::Read)? else {
-            return Ok(());
+            // Off: copies a failed switch-off or reset could not delete go now.
+            return remove_leftovers(&self.directory);
         };
         let decoded = UsageFile::decode(&bytes);
         match (decoded, today) {
@@ -227,11 +235,13 @@ impl UsageCollector {
         self.unwritten = false;
         let marked = write_durably(&self.path(OFF_NAME), b"");
         let deleted = self.finish_off();
+        // Renaming the file aside is not tried: on Windows a rename needs the same delete
+        // access that the failed deletion lacked.
         match (marked, deleted) {
             (_, Ok(())) => Ok(()),
             // The marker keeps the next start off while the deletion waits.
             (Ok(()), Err(error)) => Err(error),
-            (Err(_), Err(_)) => Err(UsageError::Delete),
+            (Err(_), Err(_)) => Err(UsageError::NotStopped),
         }
     }
 
@@ -285,6 +295,14 @@ fn write_durably(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = File::create(path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+/// Deletes a replacement or damaged copy left beside an absent usage file.
+fn remove_leftovers(directory: &Path) -> Result<(), UsageError> {
+    for name in [REPLACEMENT_NAME, DAMAGED_NAME] {
+        remove_if_present(&directory.join(name))?;
+    }
+    Ok(())
 }
 
 fn remove_if_present(path: &Path) -> Result<(), UsageError> {
@@ -486,6 +504,63 @@ mod tests {
             "a reset that could not delete leaves counting off"
         );
         assert!(!recorder.is_enabled());
+        assert!(folder.has(OFF_NAME), "the switch-off is recorded");
+
+        // While the file is still held, the next start stays off.
+        let (collector, problem) =
+            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+        assert!(!collector.status().counting);
+        assert_eq!(problem, Some(UsageError::Delete));
+
+        // Once released, the next start finishes the deletion.
         drop(held);
+        let (collector, problem) =
+            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+        assert!(!collector.status().counting);
+        assert_eq!(problem, None);
+        assert!(!folder.has(FILE_NAME) && !folder.has(OFF_NAME));
+    }
+
+    #[test]
+    fn a_switch_off_that_cannot_record_or_delete_says_counting_may_resume() {
+        let folder = Folder::new();
+        let recorder = Arc::new(UsageRecorder::new());
+        let mut collector = counting(&folder, &recorder);
+        // A folder where the marker belongs makes writing the marker fail.
+        fs::create_dir(folder.0.join(OFF_NAME)).expect("block the synthetic marker");
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(folder.0.join(FILE_NAME))
+            .expect("hold the synthetic usage file");
+        let (status, problem) = collector.control(UsageControl::TurnOff, None, Instant::now());
+        assert!(!status.counting);
+        assert_eq!(problem, Some(UsageError::NotStopped));
+        assert!(!recorder.is_enabled());
+        assert!(
+            !UsageError::NotStopped.to_string().contains("finish when"),
+            "no retry is promised"
+        );
+        drop(held);
+        fs::remove_dir(folder.0.join(OFF_NAME)).expect("unblock the synthetic marker");
+
+        // As the message warned, nothing recorded the switch-off, so the file still counts.
+        let (collector, _) =
+            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+        assert!(collector.status().counting);
+    }
+
+    #[test]
+    fn leftover_copies_beside_an_absent_file_go_at_start_up() {
+        let folder = Folder::new();
+        for name in [REPLACEMENT_NAME, DAMAGED_NAME] {
+            fs::write(folder.0.join(name), b"synthetic leftover").expect("seed a leftover");
+        }
+        let recorder = Arc::new(UsageRecorder::new());
+        let (collector, problem) =
+            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+        assert_eq!(problem, None);
+        assert!(!collector.status().counting);
+        assert!(!folder.has(REPLACEMENT_NAME) && !folder.has(DAMAGED_NAME));
     }
 }
