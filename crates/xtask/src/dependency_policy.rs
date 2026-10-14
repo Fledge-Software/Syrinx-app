@@ -7,11 +7,15 @@ use serde_json::Value;
 struct Package {
     dependencies: BTreeSet<String>,
     declarations: Vec<Declaration>,
+    /// Every entry of the package's own `[features]` table, such as `dep/feature`.
+    feature_entries: Vec<String>,
 }
 
 /// One dependency declaration's requested features, kept for feature-restricted packages.
 struct Declaration {
     name: String,
+    /// The name the package imports it under, when renamed.
+    alias: Option<String>,
     features: BTreeSet<String>,
     default_features: bool,
 }
@@ -87,14 +91,39 @@ fn insert_package(workspace: &mut Workspace, package: &Value) -> Result<(), Stri
         .iter()
         .map(|declaration| declaration.name.clone())
         .collect();
+    let feature_entries = read_feature_entries(package, &name)?;
     let package = Package {
         dependencies,
         declarations,
+        feature_entries,
     };
     if workspace.insert(name.clone(), package).is_some() {
         return Err(format!("ambiguous workspace package name: {name}"));
     }
     Ok(())
+}
+
+/// The entries of a package's `[features]` table; a missing table means none.
+fn read_feature_entries(package: &Value, name: &str) -> Result<Vec<String>, String> {
+    let Some(features) = package.get("features") else {
+        return Ok(Vec::new());
+    };
+    let table = features
+        .as_object()
+        .ok_or_else(|| format!("{name}.features must be an object"))?;
+    let mut entries = Vec::new();
+    for (feature, enabled) in table {
+        let list = enabled
+            .as_array()
+            .ok_or_else(|| format!("{name}.features.{feature} must be an array"))?;
+        for entry in list {
+            let entry = entry
+                .as_str()
+                .ok_or_else(|| format!("{name}.features.{feature} must hold strings"))?;
+            entries.push(entry.to_owned());
+        }
+    }
+    Ok(entries)
 }
 
 fn read_declaration(dependency: &Value, package: &str) -> Result<Declaration, String> {
@@ -122,8 +151,18 @@ fn read_declaration(dependency: &Value, package: &str) -> Result<Declaration, St
             .as_bool()
             .ok_or_else(|| format!("{context}.uses_default_features must be a boolean"))?,
     };
+    let alias = match dependency.get("rename") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| format!("{context}.rename must be a string"))?
+                .to_owned(),
+        ),
+    };
     Ok(Declaration {
         name,
+        alias,
         features,
         default_features,
     })
@@ -277,14 +316,36 @@ fn check_update_verifier_features(
 /// Refuse any dependency that turns on the release tool's key-storage signer: Syrinx itself
 /// must never link code that opens Windows key storage (`docs/p1-38-update-format.md`).
 fn check_release_tool_feature(name: &str, package: &Package, violations: &mut BTreeSet<String>) {
-    let enabled = package.declarations.iter().any(|declaration| {
-        declaration.name == UPDATE_VERIFIER && declaration.features.contains(RELEASE_TOOL_FEATURE)
-    });
+    let verifier = package
+        .declarations
+        .iter()
+        .filter(|declaration| declaration.name == UPDATE_VERIFIER);
+    let mut imported_as = BTreeSet::new();
+    let mut enabled = false;
+    for declaration in verifier {
+        enabled |= declaration.features.contains(RELEASE_TOOL_FEATURE);
+        imported_as.insert(declaration.name.clone());
+        imported_as.extend(declaration.alias.clone());
+    }
+    // A package's own features can switch it on too: `dep/release-tool` or `dep?/release-tool`.
+    enabled |= package
+        .feature_entries
+        .iter()
+        .any(|entry| enables_release_tool(entry, &imported_as));
     if enabled {
         violations.insert(format!(
             "{name} -> {UPDATE_VERIFIER}: the {RELEASE_TOOL_FEATURE} feature is for the release tool alone"
         ));
     }
+}
+
+/// Whether a `[features]` entry turns on the verifier's release tool under any imported name.
+fn enables_release_tool(entry: &str, imported_as: &BTreeSet<String>) -> bool {
+    let Some((dependency, feature)) = entry.split_once('/') else {
+        return false;
+    };
+    let dependency = dependency.strip_suffix('?').unwrap_or(dependency);
+    feature == RELEASE_TOOL_FEATURE && imported_as.contains(&normalize_name(dependency))
 }
 
 /// The platform crate owns Win32; the update verifier may also call CNG through `windows`.
@@ -710,6 +771,40 @@ mod tests {
             assert_eq!(violations.len(), 1, "{violations:?}");
             assert!(violations[0].contains("release-tool feature is for the release tool alone"));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn no_feature_table_may_enable_the_release_tool() -> Result<(), String> {
+        // `sign = ["syrinx-update/release-tool"]` reaches the signer without a declared feature.
+        let with_features = |features: Value, rename: Value| {
+            let mut app = package(
+                "syrinx-app",
+                json!([{"name": "syrinx-update", "rename": rename}]),
+            );
+            app["features"] = features;
+            metadata(vec![app])
+        };
+        let harmless = with_features(json!({"sign": ["syrinx-update/other"]}), Value::Null);
+        assert!(check_metadata(&harmless)?.is_empty());
+        for (features, rename) in [
+            (json!({"sign": ["syrinx-update/release-tool"]}), Value::Null),
+            (
+                json!({"sign": ["syrinx-update?/release-tool"]}),
+                Value::Null,
+            ),
+            (json!({"sign": ["syrinx_update/release-tool"]}), Value::Null),
+            (
+                json!({"sign": ["verifier/release-tool"]}),
+                json!("verifier"),
+            ),
+        ] {
+            let violations = check_metadata(&with_features(features.clone(), rename))?;
+            assert_eq!(violations.len(), 1, "{features}: {violations:?}");
+            assert!(violations[0].contains("release-tool feature is for the release tool alone"));
+        }
+        let malformed = with_features(json!({"sign": "syrinx-update/release-tool"}), Value::Null);
+        assert!(check_metadata(&malformed).is_err());
         Ok(())
     }
 
