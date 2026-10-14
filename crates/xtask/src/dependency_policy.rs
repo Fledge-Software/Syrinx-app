@@ -86,7 +86,7 @@ fn read_packages(metadata: &Value) -> Result<BTreeMap<&str, &Value>, String> {
 fn insert_package(workspace: &mut Workspace, package: &Value) -> Result<(), String> {
     // Cargo reports the original package name even when an import is renamed.
     let name = normalize_name(required_string(package, "name", "workspace package")?);
-    let declarations = required_array(package, "dependencies", &name)?
+    let mut declarations = required_array(package, "dependencies", &name)?
         .iter()
         .map(|dependency| read_declaration(dependency, &name))
         .collect::<Result<Vec<_>, _>>()?;
@@ -95,6 +95,7 @@ fn insert_package(workspace: &mut Workspace, package: &Value) -> Result<(), Stri
         .map(|declaration| declaration.name.clone())
         .collect();
     let (feature_names, feature_entries) = read_feature_table(package, &name)?;
+    apply_feature_table(&mut declarations, &feature_entries);
     let package = Package {
         dependencies,
         declarations,
@@ -105,6 +106,32 @@ fn insert_package(workspace: &mut Workspace, package: &Value) -> Result<(), Stri
         return Err(format!("ambiguous workspace package name: {name}"));
     }
     Ok(())
+}
+
+/// Count a dependency feature the package's own `[features]` table can switch on, such as
+/// `windows/Win32_Networking_WinHttp` or `windows?/...`, as if its declaration requested it,
+/// so every feature rule sees it. Entries name a dependency by its imported name.
+fn apply_feature_table(declarations: &mut [Declaration], entries: &[String]) {
+    for entry in entries {
+        let Some((dependency, feature)) = entry.split_once('/') else {
+            continue;
+        };
+        let dependency = normalize_name(dependency.strip_suffix('?').unwrap_or(dependency));
+        for declaration in declarations
+            .iter_mut()
+            .filter(|declaration| imported_as(declaration).contains(&dependency))
+        {
+            declaration.features.insert(feature.to_owned());
+        }
+    }
+}
+
+/// The names a `[features]` entry may use for a dependency: its package name and any rename,
+/// both normalised, as the release-tool rule compares them.
+fn imported_as(declaration: &Declaration) -> Vec<String> {
+    let mut names = vec![declaration.name.clone()];
+    names.extend(declaration.alias.as_deref().map(normalize_name));
+    names
 }
 
 /// The names and entries of a package's `[features]` table; a missing table means none.
@@ -365,9 +392,8 @@ fn check_release_tool_feature(name: &str, package: &Package, violations: &mut BT
     let mut enabled = false;
     for declaration in verifier {
         enabled |= declaration.features.contains(RELEASE_TOOL_FEATURE);
-        imported_as.insert(declaration.name.clone());
         // Cargo treats `-` and `_` alike in names, so both sides are compared normalised.
-        imported_as.extend(declaration.alias.as_deref().map(normalize_name));
+        imported_as.extend(self::imported_as(declaration));
     }
     // A package's own features can switch it on too: `dep/release-tool` or `dep?/release-tool`.
     enabled |= package
@@ -1012,6 +1038,83 @@ mod tests {
         let mut empty = update_net(json!([]));
         empty["features"] = json!({});
         assert!(check_metadata(&metadata(vec![empty]))?.is_empty());
+        Ok(())
+    }
+
+    /// A package whose own `[features]` table is `features`.
+    fn with_features(name: &str, dependencies: Value, features: Value) -> Value {
+        let mut package = package(name, dependencies);
+        package["features"] = features;
+        package
+    }
+
+    #[test]
+    fn feature_tables_cannot_switch_on_networking_or_unlisted_features() -> Result<(), String> {
+        // `dep/feature` and `dep?/feature` reach a dependency without its declaration naming it.
+        let windows = json!([{"name": "windows", "uses_default_features": false}]);
+        let cases = [
+            (
+                with_features(
+                    "syrinx-update",
+                    windows.clone(),
+                    json!({"release-tool": ["windows/Win32_Networking_WinHttp"]}),
+                ),
+                vec![
+                    // Violations come back sorted.
+                    "syrinx-update -> windows: feature Win32_Networking_WinHttp exposes Windows networking (D9)",
+                    "syrinx-update -> windows: feature Win32_Networking_WinHttp is not allowed for the update verifier",
+                ],
+            ),
+            (
+                with_features(
+                    "syrinx-platform",
+                    json!([{"name": "windows", "optional": true}]),
+                    json!({"net": ["windows?/Win32_Networking_WinSock"]}),
+                ),
+                vec![
+                    "syrinx-platform -> windows: feature Win32_Networking_WinSock exposes Windows networking (D9)",
+                ],
+            ),
+            (
+                // A renamed import, written with `_` in the table and `-` in the rename.
+                with_features(
+                    "syrinx-platform",
+                    json!([{"name": "windows", "rename": "win-api"}]),
+                    json!({"net": ["win_api/Web_Http"]}),
+                ),
+                vec![
+                    "syrinx-platform -> windows: feature Web_Http exposes Windows networking (D9)",
+                ],
+            ),
+            (
+                with_features(
+                    "syrinx-update-net",
+                    json!([{"name": "windows", "uses_default_features": false, "features": ["Win32_Networking_WinHttp"]}]),
+                    json!({}),
+                ),
+                vec![],
+            ),
+        ];
+        for (input, expected) in cases {
+            let violations = check_metadata(&metadata(vec![input]))?;
+            assert_eq!(violations, expected, "{violations:?}");
+        }
+
+        // The download's own allowlist applies to its table too, which it may not have anyway.
+        let download = with_features(
+            "syrinx-update-net",
+            windows,
+            json!({"extra": ["windows/Win32_Foundation"]}),
+        );
+        let violations = check_metadata(&metadata(vec![download]))?;
+        assert!(violations.iter().any(|message| {
+            message.contains("feature Win32_Foundation is not allowed for the update download")
+        }));
+        assert!(
+            violations
+                .iter()
+                .any(|message| message.contains("may not define features"))
+        );
         Ok(())
     }
 

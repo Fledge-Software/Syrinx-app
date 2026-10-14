@@ -34,8 +34,12 @@ const WINHTTP_CRATE: &str = "syrinx-update-net";
 /// Development tooling, which never ships, and names these APIs in its own checks.
 const TOOLING_CRATE: &str = "xtask";
 
-/// How Rust code reaches WinHTTP: the `windows` module, its entry points or the library itself.
-const WINHTTP_NAMES: [&str; 3] = ["Networking::WinHttp", "WinHttpOpen", "winhttp.dll"];
+/// The prefix of every WinHTTP binding and module, in any import form (case-sensitive, so the
+/// product name `WinHTTP` in prose does not count).
+const WINHTTP_IDENTIFIER: &str = "WinHttp";
+
+/// The library itself, which Windows names in any letter case.
+const WINHTTP_LIBRARY: &str = "winhttp.dll";
 
 /// Returns one violation per file and name found on the query path, and per other crate
 /// that names WinHTTP. Cargo unifies features, so every crate could call it once one asks.
@@ -92,9 +96,16 @@ fn check_winhttp_confinement(root: &Path) -> Result<Vec<String>, String> {
 }
 
 fn winhttp_violations(path: &str, text: &str) -> Vec<String> {
-    WINHTTP_NAMES
-        .iter()
-        .filter(|name| text.contains(*name))
+    let identifier = text
+        .contains(WINHTTP_IDENTIFIER)
+        .then_some(WINHTTP_IDENTIFIER);
+    let library = text
+        .to_ascii_lowercase()
+        .contains(WINHTTP_LIBRARY)
+        .then_some(WINHTTP_LIBRARY);
+    [identifier, library]
+        .into_iter()
+        .flatten()
         .map(|name| format!("{path}: {name}: only {WINHTTP_CRATE} may call WinHTTP (P1-39c)"))
         .collect()
 }
@@ -139,10 +150,19 @@ mod tests {
     fn only_the_update_download_may_name_winhttp() {
         let calls = "use windows::Win32::Networking::WinHttp::WinHttpOpen;";
         let violations = winhttp_violations("crates/syrinx-platform/src/synthetic.rs", calls);
-        assert_eq!(violations.len(), 2, "{violations:?}");
+        assert_eq!(violations.len(), 1, "{violations:?}");
         assert!(violations[0].contains("only syrinx-update-net may call WinHTTP"));
-        let linked = r#"windows_core::link!("winhttp.dll" "system" fn Open());"#;
-        assert_eq!(winhttp_violations("synthetic.rs", linked).len(), 1);
+        // A brace-group import names no `Networking::WinHttp` path, but still the prefix.
+        let grouped = "use windows::Win32::Networking::{WinHttp::WinHttpDetectAutoProxyConfigUrl};";
+        assert_eq!(winhttp_violations("synthetic.rs", grouped).len(), 1);
+        for library in ["winhttp.dll", "WINHTTP.DLL", "WinHTTP.dll"] {
+            let linked = format!(r#"windows_core::link!("{library}" "system" fn Open());"#);
+            assert_eq!(
+                winhttp_violations("synthetic.rs", &linked).len(),
+                1,
+                "{library}"
+            );
+        }
         // Naming the product in prose is not a call.
         assert!(winhttp_violations("synthetic.rs", "// WinHTTP failed").is_empty());
     }
