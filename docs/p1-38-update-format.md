@@ -19,8 +19,8 @@ P1-38 is that check and nothing else. It has no download, network call,
 installer, restart or user interface; those belong to P1-39, which needs the
 owner's approval of the update host and network policy first (AGENTS.md, "Ask
 before proceeding": no network call Syrinx makes on its own). The verifier
-lives in `crates/syrinx-update` and no other crate depends on it yet;
-`cargo xtask check-deps` enforces that.
+lives in `crates/syrinx-update`. Until P1-39b no other crate depended on it;
+since P1-39b only `syrinx-app` may, which `cargo xtask check-deps` enforces.
 
 ## What a package is
 
@@ -149,7 +149,8 @@ signed.
 
 Every refusal is a typed `UpdateError`; the verifier does not panic on any
 input, and its tests feed it truncated, flipped, oversized, duplicated and
-traversing inputs. Nothing in `syrinx-update` writes to disk.
+traversing inputs. The verifier itself writes nothing to disk; P1-39b's
+install module beside it does, and is described below.
 
 ## Installing exactly the verified bytes
 
@@ -443,6 +444,8 @@ repository holds no key.
 
 ### What remains for P1-39b to P1-39d
 
+Both P1-39b items below are done; see "P1-39b" further on.
+
 - P1-39b stores the accepted serial, stages a package and installs it.
   The package folder `cargo xtask package` writes holds `manifest`,
   `manifest.sig`, `latest` and `latest.sig` next to the payload files, and
@@ -468,6 +471,340 @@ repository holds no key.
   `https://syrinxapp.dev/updates/v1/`.
 - P1-39d is the owner's key ceremony, the pinning of both public keys
   (DW-30) and the first real `sign-update`.
+
+## P1-39b: staging, "Install update from file…", the helper and rollback
+
+P1-39b is the second slice of the approved delivery design
+(`docs/proposals/p1-39-update-delivery.md`). It makes a verified package
+installable without any network: the owner picks a package folder, Syrinx
+checks and stages it beside the installed program, and a small helper swaps
+it in when Syrinx closes, keeping the previous version and putting it back if
+the new one does not start. Without this slice the verifier protects
+nothing, because no update passes through it, and every fix during the
+owner's default-browser week (P1-40) would mean rerunning
+`install-syrinx.ps1` by hand. It adds no network call, no WinHTTP and no
+key: `PRODUCTION_KEYS` is still empty (DW-30), so today every real install
+from a file is refused as signed by an unknown key, which is the intended
+fail-closed behaviour until P1-39d.
+
+### Where the code lives
+
+The staging, swap and recovery code sits in `crates/syrinx-update/src/install/`
+beside the verifier, and the helper is the crate's second executable,
+`src/bin/syrinx-apply.rs`. Keeping them in the verifier's crate means the
+helper needs no new crate and no dependency (a new crate depending on
+`syrinx-update` would also break `check-deps` change 1, which allows only
+`syrinx-app`), and the recovery tests can sign synthetic packages with the
+in-memory CNG keys that exist only in that crate's test build. The crate
+still requests only the `windows` features `Win32_Foundation` and
+`Win32_Security_Cryptography`; everything else is `std`. `syrinx-app` adds
+the Customize section, the palette command and the handover
+(`src/updates.rs`, `src/ui/updates.rs`), `syrinx-platform` adds a folder
+picker and a free-space query (`file_dialog::choose_folder`,
+`disk::free_bytes`), and `syrinx-store` adds the pre-update snapshot.
+
+### The folders
+
+`UpdateLayout` names every folder an update touches, and only those. In an
+installed copy the program folder is `%LOCALAPPDATA%\Programs\Syrinx` and
+the data folder is `%LOCALAPPDATA%\Syrinx\data` (P1-37):
+
+```text
+Programs\Syrinx\                 the installed version; renamed, never written into
+Programs\Syrinx.new\             the verified copy waiting to replace it
+Programs\Syrinx.previous\        the version an update replaced, kept for rollback
+data\Updates\incoming\<version>\ the package's listed files, copied for verification
+data\Updates\apply\              syrinx-apply.exe, manifest and manifest.sig
+data\Updates\pending             written last: version, from-version, manifest hash
+data\Updates\state               the accepted statement serial, its hash and expiry,
+                                 and the last result as a fixed category
+data\Updates\outcome             what the helper did, shown once by the next start
+data\Updates\staging             present while Syrinx.new is Syrinx's unfinished work
+data\Updates\started             written by a relaunched Syrinx after a clean start
+data\Updates\apply.lock          held by whichever process changes update files
+data\Updates\apply.log           the helper's standard error: categories, no paths
+```
+
+Only an `installed` build running from a folder named `Syrinx` has a layout
+(`UpdateLayout::for_running_program`); a development build, the gate and the
+smoke run never install anything, so nothing beside `target\local` can be
+renamed. The data folder may not sit inside a folder an update renames, nor
+the program folders inside the data folder. `Updates` is a sibling of the
+store's `State` folder, so P1-03's storage lease, which holds the data
+folder as an ancestor of `State`, keeps the folder above `Updates` from
+being swapped for a junction while Syrinx runs (P1-38's limit (b)). Syrinx
+creates `Updates`, `incoming` and `apply` itself and refuses any of them that
+is a link. A folder Syrinx would remove (`Syrinx.new`, `Syrinx.previous`) is
+removed only when it is empty or holds P1-37's `syrinx-package.json`, the
+same recognition rule the install scripts use; anything else stops the step
+and is left alone.
+
+### Staging: "Install update from file…"
+
+The command is in Customize's new Updates section ("Install from file…")
+and in the palette ("Install update from file…"). The owner picks the
+package folder that `cargo xtask package` and `cargo xtask sign-update`
+wrote. On its own thread, `stage_from_folder`:
+
+1. takes the update lock, and reads `state`; an unreadable `state` refuses
+   staging rather than forgetting the accepted serial;
+2. verifies `latest` and `latest.sig` with `verify_statement` against the
+   pinned keys, the clock and the stored serial; a statement naming the
+   running version records its serial and reports "up to date";
+3. verifies `manifest` and `manifest.sig` through the statement, so the
+   manifest's hash and version must be the stated ones, then P1-38's
+   rollback and minimum-version rules;
+4. refuses a package that does not list `syrinx.exe`, `syrinx-package.json`
+   and `syrinx-apply.exe`, and one the disks lack room for: twice the
+   package plus 256 MiB, on both the data and program volumes;
+5. only now writes: it removes an earlier staged copy (`pending` first),
+   copies each listed file, and nothing else, from the chosen folder into a
+   fresh `incoming\<version>` (refusing one longer or shorter than listed),
+   and runs `verify_payload` on a `DirectoryPayload` of that folder;
+6. copies from the verified handles, never by name, into `Syrinx.new`
+   (`syrinx-package.json` first, so an interrupted copy is still
+   recognisable) and the helper into `Updates\apply`, with the exact
+   manifest and signature bytes that were checked, flushing each file;
+7. removes `incoming`, stores the accepted serial in `state`, and writes
+   `pending` last.
+
+Because only listed files are copied into `incoming`, the extra files in a
+package folder (`manifest`, the signatures and the statement) never reach
+the payload check, which is how the P1-39a note's "a folder holding only
+the listed files" is met without a separate `files/` layout. The serial is
+stored only once a statement is acted on (up to date, or staged), before
+`pending`: a crash between the two only means staging repeats with the same
+statement, which an equal serial with identical bytes allows.
+
+Any refusal removes what staging wrote and leaves the installed version
+untouched. The owner sees one plain sentence (for example "This update isn't
+signed by a key this Syrinx trusts, so nothing was installed."), and the
+diagnostic line names only the fixed category and the verifier's reason.
+
+### Restart now, Later, and the pre-update snapshot
+
+Once staged, Customize shows "Syrinx 1.4.0 is ready" with **Restart now**
+and **Later**. Nothing is replaced until one of them leads to a clean exit:
+
+- **Restart now** asks the session worker for D13's extra snapshot
+  (`SessionCommand::SnapshotBeforeUpdate`, `Store::backup_before_update`),
+  then closes exactly as an ordinary quit does.
+- **Later** arms the install for the next quit; that close first takes the
+  same snapshot.
+
+The snapshot is an ordinary validated `VACUUM INTO` copy taken outside the
+daily schedule, and D13's rotation still keeps seven, so the oldest copy may
+rotate out (owner, 2026-10-14). It is skipped when any valid copy, daily or
+pre-update, is less than an hour old: otherwise each retried update would
+evict one more daily copy, and a few retries could replace the whole
+seven-day window. If the snapshot fails, nothing installs: Restart now stays open
+and says why; a quit closes without installing and the update stays staged.
+After a successful snapshot, `main` waits for the window, the store and the
+page host to close and P1-34's single-instance claim to be released, then
+`prepare_handoff` takes the update lock, rechecks `Updates\apply\syrinx-apply.exe`
+against the kept, signed manifest and holds it open so nothing can replace it
+before Windows starts it, and starts the helper with `Updates` as its
+working folder. Syrinx keeps the lock until its process ends, so any notice
+that waits on the owner (such as the dropped-link message box) is shown
+before the lock is taken.
+
+**Working folders.** Windows refuses to rename a folder that is any
+process's current folder, and the Start menu shortcut starts Syrinx in
+`Programs\Syrinx` (`packaging/register-syrinx.ps1`). A helper inheriting
+that folder could never move the installed version aside. So Syrinx starts
+the helper in `Updates`, the helper also sets its own current folder there
+before taking the lock, and every program the helper starts runs in
+`Updates` too; tests check each command's working folder, and a test with
+real processes shows a process working in `Programs\Syrinx` stopping the
+swap while one working in `Updates` does not.
+
+### The helper's protocol
+
+`syrinx-apply.exe --programs <folder> --data <folder> --mode <restart|quit>
+[--relaunch-data-dir <folder>]` trusts only `KeySet::production()`:
+
+1. It waits up to 60 s for the update lock, which Syrinx holds until its
+   process has ended; this is how it learns the old process is gone without
+   any Windows process API, which the verifier's feature list does not allow.
+   If the wait times out, or any later step stops unexpectedly, the helper
+   records `apply_failed` with an outcome for the next start, and the update
+   stays staged.
+2. It reads `pending`, requires the kept manifest's SHA-256 to match it,
+   reverifies the manifest (rollback rule against the from-version) and
+   runs `verify_payload` on `Syrinx.new`. A failure removes the staged copy,
+   records `verification_failed` and leaves the installed version alone.
+3. It removes an older `Syrinx.previous` (only if Syrinx made it), renames
+   `Syrinx` to `Syrinx.previous` and `Syrinx.new` to `Syrinx`, retrying for
+   up to 30 s while a just-closed program still holds the folder. If the
+   first rename fails nothing has changed; if the second fails, it renames
+   the first back. Either way it records `apply_failed` with an outcome.
+4. **Quit (Later):** it records `installed` and leaves an outcome, so the
+   next start says "Syrinx was updated to 1.4.0." It starts nothing.
+5. **Restart now:** it starts `Programs\Syrinx\syrinx.exe --after-update`
+   and waits up to 60 s for `Updates\started` to name the new version. The
+   relaunched Syrinx skips the launch activation (`cx.activate(true)`), so it
+   never forces itself to the front, and writes `started` once its session
+   has loaded and the window has drawn it. On success the helper records
+   `installed`.
+
+On Restart now the helper always starts whichever version is installed when
+it finishes: after a refused reverification, a failed swap, a timed-out wait
+or an unexpected stop before the swap it starts the version that stayed, so
+the owner is never left without Syrinx. Once the folders are swapped, an
+unexpected error while starting or watching the new version (the start
+record cannot be cleared or read, or Windows cannot report on the process)
+stops that version and rolls back like a failed start: an unconfirmed build
+is never left running unwatched, nor recorded as the old version. An error
+after the swap that leaves the new version in place, such as failing to
+write its records, is reported as it is and relaunches nothing; the next
+start of the new version finishes its records. The one exception to the
+relaunch rule is a failed rollback, below.
+
+**The rollback trigger** is the new version not writing `started` within
+60 s, exiting first, or failing to launch at all. The helper then stops it,
+removes `pending` (so a crash part-way never offers the failed version
+again), renames the failed `Syrinx` to `Syrinx.new` and `Syrinx.previous`
+back to `Syrinx`, records `apply_rolled_back` with an outcome, releases the
+lock and starts the previous version, which tells the owner "The update to
+1.4.0 didn't start; you are on 1.3.0." The failed copy is removed then, or
+by the next start if Windows still holds it. If either rollback rename fails
+(for example, the failed version cannot be stopped), the helper records
+`apply_rollback_failed` with an outcome and starts nothing, since the failed
+build may still be the installed one; the next start tells the owner that
+the previous version waits in `Syrinx.previous` and how to swap it back.
+
+Before renaming, a rollback leaves three independent signs that it began:
+the state names the attempted version as rolled back, the staging mark is
+set, and `pending` is removed. Each is attempted even if another fails, so
+no single failed write lets a later start offer the failed build again or
+record it as installed: start-up discards a `pending` whose version the
+state records as rolled back, or that names the running version while the
+mark is set. If the previous version is back but writing the outcome fails,
+the helper still starts it and reports the error.
+
+The staging mark is cleared wherever `pending` is consumed: the helper
+clears a mark left by an interrupted staging as soon as it reads `pending`,
+and start-up clears it when it finishes a swap's records, so a stale mark
+can never later remove an installer-owned `Syrinx.new`. After a failed swap
+the helper removes the unswapped `Syrinx.new` at once, or marks it for the
+next start if Windows still holds it.
+
+### What a start does
+
+Before the window opens, `recover` takes the lock (and does nothing if the
+helper still holds it), removes any `incoming`, reads and removes the
+outcome, and settles `pending`: a `pending` naming the running version means
+the swap finished but its records were not cleared, so it is cleared and
+recorded as `installed`; a `pending` staged by another version, or with no
+`Syrinx.new`, is discarded; and a `Syrinx.new` with no `pending` is removed
+only while `Updates\staging` exists. Staging writes that mark before it
+creates `Syrinx.new` and removes it once `pending` is written, and a rollback
+writes it before moving the failed version aside, so the mark means "this
+`Syrinx.new` is Syrinx's own unfinished work". Without the mark a
+`Syrinx.new` is left alone: it may be `install-syrinx.ps1`'s copy in
+progress, which holds the same `syrinx-package.json`. A complete staged copy
+is kept and shown as ready again.
+
+### Recovery tests
+
+`crates/syrinx-update/src/install/tests.rs` and `tests_apply.rs` build
+synthetic programs, packages and data folders in fresh folders under the
+workspace's `target\syrinx-update-tests`, sign them with in-memory CNG keys,
+and remove only their own folder. Fault hooks exist only in the test build
+(`install/fault.rs`): each named step can stop staging or the helper as a
+crash would, and the test then runs the next start and checks that a working
+program folder remains. They cover: a successful stage; production keys
+refusing every package; up to date; a bad statement or manifest signature,
+tampered manifest bytes, a wrong hash, a truncated, oversized or missing
+file, an unknown key, an expired statement, a lower serial, a reused serial
+with other bytes, a missing statement, a package lacking the helper, a full
+disk and an unreadable `state`, each leaving the installed version untouched
+and `incoming` gone; staging stopped at each of its six steps; the helper's
+lock wait; a `Syrinx.previous` Syrinx did not make; reverification refusing
+a changed file, an added file and a changed kept manifest; installing on
+quit; Restart now with a clean start; rollback for a hung start, an
+immediate exit and a failed launch; the helper stopped before the swap,
+after it, after launching and part-way through a rollback; the handoff
+refusing a replaced helper while blocking writes to the checked one; the
+helper's and the launcher's working folders; a real process working in the
+program folder stopping the swap (recorded as `apply_failed`, with the
+installed version started again) while one in `Updates` does not; Restart
+now starting the installed version after a refused reverification and a
+timed-out wait; a new version that cannot be watched being stopped and
+rolled back; a `Syrinx.new` without the staging mark left alone at start-up;
+a rollback that cannot move the failed version; and repeated
+pre-update snapshots within an hour keeping the daily copies. A further test
+proves Windows still starts an executable held open the way the handoff
+holds the helper.
+
+One case cannot be automated, as the proposal says: a stop between the two
+renames leaves no `Programs\Syrinx` until the owner renames
+`Syrinx.previous` back (P1-37's checklist). The test for it performs that
+rename and shows the next start then finds the update still staged.
+
+### `check-deps` and the gate
+
+`cargo xtask check-deps` now allows `syrinx-app`, and only `syrinx-app`, to
+depend on `syrinx-update` (change 1; P1-39c adds `syrinx-update-net` in its
+own slice), and refuses any dependency on `syrinx-update`, of any kind, that
+enables `release-tool`, whether in the dependency declaration or through the
+package's own `[features]` table (`sign = ["syrinx-update/release-tool"]`,
+`syrinx-update?/release-tool`, or a renamed import). As the P1-39a note required, the gate's workspace
+Clippy and test steps are featureless again, so the app is linted and tested
+as it ships, and two separate steps cover the release tool:
+`cargo clippy --package syrinx-update --features release-tool --all-targets`
+and `cargo test --package syrinx-update --features release-tool`. Tests in
+both `dependency_policy.rs` and `main.rs` pin these rules.
+
+### The package
+
+`cargo xtask package` now also builds `syrinx-apply.exe` (without the
+release tool's feature) into the same separate target directory and adds it
+to the fixed layout, so the update manifest lists it and
+`install-syrinx.ps1` installs it; `packaging/syrinx-registration.ps1` was
+regenerated for the new file list. The only lockfile change is
+`syrinx-app`'s new edge to the workspace's own `syrinx-update`.
+
+### Limits
+
+- **Malware running as the owner** can already write to the program and data
+  folders; the handle discipline narrows the windows but cannot close them
+  (the proposal's "honest limit"). The helper drops its verified handles
+  before renaming, because Windows cannot rename a folder whose files are
+  open.
+- **Rollback covers Restart now only.** With Later, the helper does not
+  start Syrinx, so nothing watches the next start. If the new version then
+  fails to start, the owner closes it if it is running, renames
+  `Programs\Syrinx` to `Syrinx.failed` and `Programs\Syrinx.previous` to
+  `Syrinx`, and starts Syrinx again. The owner kept this for v1 (2026-10-14).
+- **A manual install and a Syrinx update must not overlap.**
+  `install-syrinx.ps1` stages its copy in the same `Programs\Syrinx.new`.
+  A Syrinx that merely starts during the script leaves that folder alone,
+  because only the `Updates\staging` mark lets start-up remove a
+  `Syrinx.new` (the first review's suggestion, adopted instead of only
+  documenting the risk). But choosing "Install update from file…" or
+  quitting with an update armed while the script runs would replace the
+  script's folder, so the checklist still says not to use Syrinx's update
+  commands during a manual install (`docs/p1-37-installer-design.md`,
+  "Upgrade").
+- **The foreground behaviour of a relaunched Syrinx** (question 6) is
+  implemented as the proposal specifies and was checked only with a
+  development build started with `--after-update` from an agent's shell
+  while another application was in front. Its window still appeared above
+  that application, so a screenshot cannot tell whether it took activation;
+  this does not settle question 6. A real update needs the owner's keys
+  (P1-39d), and the owner's check then is the evidence.
+
+### The owner's answers (2026-10-14)
+
+- **Later is not watched for a failed start:** kept for v1; the manual
+  rename is documented under "Limits" above.
+- **An unreadable `Updates\state` refuses staging:** kept. A "Reset update
+  records" action is deferred as DW-66 in the plan's register.
+- **The pre-update snapshot counts within D13's seven copies:** confirmed,
+  with the one-hour skip described above.
+- **Later is armed only for the current session:** kept; after a crash the
+  next start shows the update as ready and asks again.
 
 ## What P1-39 needs from the owner
 

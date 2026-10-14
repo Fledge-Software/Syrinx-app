@@ -11,6 +11,7 @@ mod session;
 mod smoke_watchdog;
 mod theme;
 mod ui;
+mod updates;
 
 use gpui::{
     App, AppContext, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
@@ -78,6 +79,19 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Finish what an earlier update left before the window opens (P1-39b).
+    let update_context = if unattended {
+        updates::UpdateContext::disabled()
+    } else {
+        updates::UpdateContext::new(
+            &options.directory,
+            options.test_directory.as_deref(),
+            options.after_update,
+        )
+    };
+    let startup_updates = update_context.recover();
+    let after_update = update_context.after_update();
+    let window_updates = update_context.clone();
     // The GUI's orderly timeout cannot run while startup or its event thread is stalled.
     let watchdog = if options.smoke || options.acceptance.is_some() {
         let started = if options.smoke {
@@ -125,6 +139,7 @@ fn main() -> ExitCode {
                         smoke: options.smoke,
                         suspended_tabs: options.suspended_tabs,
                         acceptance: options.acceptance.take(),
+                        updates: (window_updates.clone(), startup_updates.clone()),
                     };
                     ui::BrowserView::new(
                         options.directory,
@@ -164,16 +179,23 @@ fn main() -> ExitCode {
             cx.quit();
             return;
         }
-        cx.activate(true);
+        // Relaunched by the update helper, Syrinx never forces itself to the front (P1-39).
+        if !after_update {
+            cx.activate(true);
+        }
     });
     // Release the profile only now, after the store and pages have shut down.
     let links_dropped = instance.links_dropped();
     drop(instance);
+    // A message box blocks until dismissed, so it comes before the update lock is taken.
     if links_dropped && !unattended {
         notice::show_warning(
             "Syrinx was closing when a link arrived, so the link was not opened. Open it again.",
         );
     }
+    // Held until this process ends, which is how the helper knows Syrinx has exited; nothing
+    // after this may wait on the owner.
+    let _handoff = hand_off_update(&update_context, unattended);
     if let Some(watchdog) = watchdog
         && let Err(error) = watchdog.cancel()
     {
@@ -184,6 +206,27 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// Start the update helper if the window asked for Restart now or install on quit.
+fn hand_off_update(
+    context: &updates::UpdateContext,
+    unattended: bool,
+) -> Option<syrinx_update::install::Handoff> {
+    let mode = context.requested()?;
+    match context.hand_off(mode) {
+        Ok(handoff) => Some(handoff),
+        Err(error) => {
+            eprintln!("The update helper could not start: {error}");
+            if !unattended {
+                notice::show_warning(
+                    "Syrinx couldn't start its updater, so the update was not installed. It \
+                     stays ready for the next time you restart or quit.",
+                );
+            }
+            None
+        }
+    }
 }
 
 fn run_palette_sample() -> ExitCode {
@@ -211,6 +254,10 @@ enum RunMode {
 
 struct Options {
     directory: PathBuf,
+    /// The `--test-data-dir` folder, reopened after an update; `None` for the real profile.
+    test_directory: Option<PathBuf>,
+    /// Started by the update helper (P1-39b).
+    after_update: bool,
     smoke: bool,
     /// A checked http(s) link to open, as Windows passes one when Syrinx opens a link.
     link: Option<LinkRequest>,
@@ -260,12 +307,13 @@ struct Arguments {
     link: Option<LinkRequest>,
     suspended_tabs: usize,
     acceptance: Option<acceptance::AcceptancePlan>,
+    after_update: bool,
 }
 
 const ACCEPTANCE_FLAG: &str = "--test-palette-acceptance";
 
 const USAGE: &str = "Syrinx accepts --smoke, --test-data-dir <directory>, --palette-sample, \
-                     --test-suspended-tabs <1-32>, \
+                     --after-update, --test-suspended-tabs <1-32>, \
                      --test-palette-acceptance <report.json> <http://127.0.0.1:port> \
                      or -- followed by one http(s) link.";
 
@@ -284,6 +332,8 @@ fn parse_arguments(
             parsed.palette_sample = true;
         } else if argument == "--smoke" {
             parsed.smoke = true;
+        } else if argument == syrinx_update::install::AFTER_UPDATE_FLAG {
+            parsed.after_update = true;
         } else if argument == "--test-suspended-tabs" {
             parsed.suspended_tabs = suspended_tab_count(arguments.next())?;
         } else if argument == ACCEPTANCE_FLAG {
@@ -302,6 +352,7 @@ fn parse_arguments(
     let other_than_sample = parsed.smoke
         || measuring
         || accepting
+        || parsed.after_update
         || parsed.test_directory.is_some()
         || parsed.link.is_some();
     if parsed.palette_sample && other_than_sample {
@@ -314,6 +365,10 @@ fn parse_arguments(
     let unattended = unattended_modes.contains(&true);
     if unattended && (parsed.test_directory.is_some() || parsed.link.is_some()) {
         return Err("The automatic smoke check always uses a fresh profile and no link.");
+    }
+    // The helper relaunches Syrinx with only its profile, never a link or a check.
+    if parsed.after_update && (unattended || parsed.link.is_some()) {
+        return Err("--after-update takes only --test-data-dir.");
     }
     Ok(parsed)
 }
@@ -366,6 +421,7 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
         link,
         suspended_tabs,
         acceptance,
+        after_update,
         ..
     } = arguments;
     // Smoke, measurement and acceptance runs always use a fresh synthetic profile.
@@ -379,7 +435,7 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
             "syrinx-window-smoke-{}-{nonce}",
             std::process::id()
         ))
-    } else if let Some(directory) = test_directory {
+    } else if let Some(directory) = test_directory.clone() {
         directory
     } else {
         PathBuf::from(
@@ -392,6 +448,8 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
     }
     Ok(RunMode::Browser(Options {
         directory,
+        test_directory,
+        after_update,
         smoke,
         link,
         suspended_tabs,
@@ -449,6 +507,27 @@ mod tests {
         assert_eq!(tested.test_directory, Some(PathBuf::from(r"C:\Synthetic")));
         assert!(tested.link.is_some());
         assert_eq!(parse(&["https://example.test/"]), Err(USAGE));
+    }
+
+    #[test]
+    fn the_update_helper_relaunches_with_only_its_profile() {
+        let parsed =
+            parse(&["--after-update", "--test-data-dir", r"C:\Synthetic"]).expect("relaunch");
+        assert!(parsed.after_update);
+        assert_eq!(parsed.test_directory, Some(PathBuf::from(r"C:\Synthetic")));
+        assert!(
+            parse(&["--after-update"])
+                .expect("installed relaunch")
+                .after_update
+        );
+        for refused in [
+            &["--after-update", "--smoke"][..],
+            &["--after-update", "--palette-sample"][..],
+            &["--after-update", "--", "https://example.test/"][..],
+            &["--after-update", "--test-suspended-tabs", "4"][..],
+        ] {
+            assert!(parse(refused).is_err(), "{refused:?}");
+        }
     }
 
     #[test]

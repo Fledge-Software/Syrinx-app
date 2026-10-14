@@ -7,11 +7,15 @@ use serde_json::Value;
 struct Package {
     dependencies: BTreeSet<String>,
     declarations: Vec<Declaration>,
+    /// Every entry of the package's own `[features]` table, such as `dep/feature`.
+    feature_entries: Vec<String>,
 }
 
 /// One dependency declaration's requested features, kept for feature-restricted packages.
 struct Declaration {
     name: String,
+    /// The name the package imports it under, when renamed.
+    alias: Option<String>,
     features: BTreeSet<String>,
     default_features: bool,
 }
@@ -26,6 +30,7 @@ pub fn check_metadata(metadata: &Value) -> Result<Vec<String>, String> {
     for (name, package) in &workspace {
         check_direct_dependencies(name, package, &workspace, &mut violations);
         check_update_verifier_features(name, package, &mut violations);
+        check_release_tool_feature(name, package, &mut violations);
         check_shell_paths(name, &workspace, &mut violations);
         check_network_declarations(name, package, &mut violations);
     }
@@ -86,14 +91,39 @@ fn insert_package(workspace: &mut Workspace, package: &Value) -> Result<(), Stri
         .iter()
         .map(|declaration| declaration.name.clone())
         .collect();
+    let feature_entries = read_feature_entries(package, &name)?;
     let package = Package {
         dependencies,
         declarations,
+        feature_entries,
     };
     if workspace.insert(name.clone(), package).is_some() {
         return Err(format!("ambiguous workspace package name: {name}"));
     }
     Ok(())
+}
+
+/// The entries of a package's `[features]` table; a missing table means none.
+fn read_feature_entries(package: &Value, name: &str) -> Result<Vec<String>, String> {
+    let Some(features) = package.get("features") else {
+        return Ok(Vec::new());
+    };
+    let table = features
+        .as_object()
+        .ok_or_else(|| format!("{name}.features must be an object"))?;
+    let mut entries = Vec::new();
+    for (feature, enabled) in table {
+        let list = enabled
+            .as_array()
+            .ok_or_else(|| format!("{name}.features.{feature} must be an array"))?;
+        for entry in list {
+            let entry = entry
+                .as_str()
+                .ok_or_else(|| format!("{name}.features.{feature} must hold strings"))?;
+            entries.push(entry.to_owned());
+        }
+    }
+    Ok(entries)
 }
 
 fn read_declaration(dependency: &Value, package: &str) -> Result<Declaration, String> {
@@ -121,8 +151,18 @@ fn read_declaration(dependency: &Value, package: &str) -> Result<Declaration, St
             .as_bool()
             .ok_or_else(|| format!("{context}.uses_default_features must be a boolean"))?,
     };
+    let alias = match dependency.get("rename") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| format!("{context}.rename must be a string"))?
+                .to_owned(),
+        ),
+    };
     Ok(Declaration {
         name,
+        alias,
         features,
         default_features,
     })
@@ -166,9 +206,9 @@ fn check_direct_dependencies(
                 "{name} -> {dependency}: only syrinx-platform may directly depend on WebView2 or raw Win32"
             ));
         }
-        if dependency == UPDATE_VERIFIER {
+        if dependency == UPDATE_VERIFIER && !UPDATE_VERIFIER_USERS.contains(&name) {
             violations.insert(format!(
-                "{name} -> {dependency}: nothing may use the update verifier before P1-39 is approved"
+                "{name} -> {dependency}: only syrinx-app may use the update verifier (P1-39b)"
             ));
         }
         check_fulltext_quarantine(name, dependency, violations);
@@ -230,8 +270,15 @@ fn is_platform_library(name: &str) -> bool {
     )
 }
 
-/// The P1-38 update verifier, which no crate may use until P1-39's delivery is approved.
+/// The P1-38 update verifier and P1-39b's installer.
 const UPDATE_VERIFIER: &str = "syrinx-update";
+
+/// The crates that may depend on the verifier: P1-39's change 1, for P1-39b. P1-39c adds
+/// `syrinx-update-net` in its own slice.
+const UPDATE_VERIFIER_USERS: [&str; 1] = ["syrinx-app"];
+
+/// The verifier's feature that links Windows key storage for the release tool only.
+const RELEASE_TOOL_FEATURE: &str = "release-tool";
 
 /// The only `windows` features the update verifier may request: CNG and its NTSTATUS types.
 const UPDATE_VERIFIER_WINDOWS_FEATURES: [&str; 2] =
@@ -264,6 +311,42 @@ fn check_update_verifier_features(
             }
         }
     }
+}
+
+/// Refuse any dependency that turns on the release tool's key-storage signer: Syrinx itself
+/// must never link code that opens Windows key storage (`docs/p1-38-update-format.md`).
+fn check_release_tool_feature(name: &str, package: &Package, violations: &mut BTreeSet<String>) {
+    let verifier = package
+        .declarations
+        .iter()
+        .filter(|declaration| declaration.name == UPDATE_VERIFIER);
+    let mut imported_as = BTreeSet::new();
+    let mut enabled = false;
+    for declaration in verifier {
+        enabled |= declaration.features.contains(RELEASE_TOOL_FEATURE);
+        imported_as.insert(declaration.name.clone());
+        // Cargo treats `-` and `_` alike in names, so both sides are compared normalised.
+        imported_as.extend(declaration.alias.as_deref().map(normalize_name));
+    }
+    // A package's own features can switch it on too: `dep/release-tool` or `dep?/release-tool`.
+    enabled |= package
+        .feature_entries
+        .iter()
+        .any(|entry| enables_release_tool(entry, &imported_as));
+    if enabled {
+        violations.insert(format!(
+            "{name} -> {UPDATE_VERIFIER}: the {RELEASE_TOOL_FEATURE} feature is for the release tool alone"
+        ));
+    }
+}
+
+/// Whether a `[features]` entry turns on the verifier's release tool under any imported name.
+fn enables_release_tool(entry: &str, imported_as: &BTreeSet<String>) -> bool {
+    let Some((dependency, feature)) = entry.split_once('/') else {
+        return false;
+    };
+    let dependency = dependency.strip_suffix('?').unwrap_or(dependency);
+    feature == RELEASE_TOOL_FEATURE && imported_as.contains(&normalize_name(dependency))
 }
 
 /// The platform crate owns Win32; the update verifier may also call CNG through `windows`.
@@ -625,7 +708,7 @@ mod tests {
 
     #[test]
     fn confines_the_update_verifier() -> Result<(), String> {
-        // The verifier may call CNG through `windows`, but not WebView2, and nothing may use it yet.
+        // The verifier may call CNG through `windows`, but not WebView2; only the app may use it.
         let permitted = metadata(vec![package(
             "syrinx-update",
             json!([{
@@ -645,14 +728,15 @@ mod tests {
                     {"name": "syrinx-platform"}
                 ]),
             ),
+            package("syrinx-app", json!([{"name": "syrinx-update"}])),
             package(
-                "syrinx-app",
+                "syrinx-ui",
                 json!([{"name": "syrinx-update", "kind": "dev"}]),
             ),
             package("syrinx-platform", json!([])),
         ]);
         let violations = check_metadata(&input)?;
-        assert_eq!(violations.len(), 3);
+        assert_eq!(violations.len(), 3, "{violations:?}");
         assert!(
             violations
                 .iter()
@@ -661,13 +745,76 @@ mod tests {
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("syrinx-app -> syrinx-update"))
+                .any(|message| message.contains("syrinx-ui -> syrinx-update"))
         );
         assert!(
             violations
                 .iter()
                 .any(|message| message.contains("syrinx-update -> syrinx-platform"))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn no_dependency_may_enable_the_release_tool() -> Result<(), String> {
+        // Syrinx links the verifier without the key-storage signer, in every dependency kind.
+        let permitted = metadata(vec![package(
+            "syrinx-app",
+            json!([{"name": "syrinx-update", "features": []}]),
+        )]);
+        assert!(check_metadata(&permitted)?.is_empty());
+        for kind in [Value::Null, json!("dev"), json!("build")] {
+            let input = metadata(vec![package(
+                "syrinx-app",
+                json!([{"name": "syrinx-update", "kind": kind, "features": ["release-tool"]}]),
+            )]);
+            let violations = check_metadata(&input)?;
+            assert_eq!(violations.len(), 1, "{violations:?}");
+            assert!(violations[0].contains("release-tool feature is for the release tool alone"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn no_feature_table_may_enable_the_release_tool() -> Result<(), String> {
+        // `sign = ["syrinx-update/release-tool"]` reaches the signer without a declared feature.
+        let with_features = |features: Value, rename: Value| {
+            let mut app = package(
+                "syrinx-app",
+                json!([{"name": "syrinx-update", "rename": rename}]),
+            );
+            app["features"] = features;
+            metadata(vec![app])
+        };
+        let harmless = with_features(json!({"sign": ["syrinx-update/other"]}), Value::Null);
+        assert!(check_metadata(&harmless)?.is_empty());
+        for (features, rename) in [
+            (json!({"sign": ["syrinx-update/release-tool"]}), Value::Null),
+            (
+                json!({"sign": ["syrinx-update?/release-tool"]}),
+                Value::Null,
+            ),
+            (json!({"sign": ["syrinx_update/release-tool"]}), Value::Null),
+            (
+                json!({"sign": ["verifier/release-tool"]}),
+                json!("verifier"),
+            ),
+            // A rename with an underscore, written either way in the feature entry.
+            (
+                json!({"sign": ["my_verifier/release-tool"]}),
+                json!("my_verifier"),
+            ),
+            (
+                json!({"sign": ["my-verifier?/release-tool"]}),
+                json!("my_verifier"),
+            ),
+        ] {
+            let violations = check_metadata(&with_features(features.clone(), rename))?;
+            assert_eq!(violations.len(), 1, "{features}: {violations:?}");
+            assert!(violations[0].contains("release-tool feature is for the release tool alone"));
+        }
+        let malformed = with_features(json!({"sign": "syrinx-update/release-tool"}), Value::Null);
+        assert!(check_metadata(&malformed).is_err());
         Ok(())
     }
 

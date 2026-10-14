@@ -145,36 +145,18 @@ fn check_workspace(root: &Path) -> Result<(), String> {
     check_deferred_work(root)?;
     packaging::check(root)?;
     run_cargo(root, &["fmt", "--all", "--", "--check"])?;
+    // The workspace builds as Syrinx ships: without the release tool's key-storage signer.
     run_cargo(
         root,
-        &[
-            "clippy",
-            "--workspace",
-            "--all-targets",
-            "--features",
-            packaging::GATE_FEATURE,
-            "--profile",
-            "local",
-            "--offline",
-            "--locked",
-            "--",
-            "-D",
-            "warnings",
-        ],
+        &workspace_step("clippy", &["--all-targets"], &["--", "-D", "warnings"]),
     )?;
+    run_cargo(root, &workspace_step("test", &[], &[]))?;
+    // The release tool is linted and tested on its own, so its feature never reaches the app.
     run_cargo(
         root,
-        &[
-            "test",
-            "--workspace",
-            "--features",
-            packaging::GATE_FEATURE,
-            "--profile",
-            "local",
-            "--offline",
-            "--locked",
-        ],
+        &release_tool_step("clippy", &["--all-targets"], &["--", "-D", "warnings"]),
     )?;
+    run_cargo(root, &release_tool_step("test", &[], &[]))?;
     run_cargo(
         root,
         &[
@@ -194,6 +176,33 @@ fn check_workspace(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The common gate options, D38's `local` profile and the locked offline graph.
+const GATE_OPTIONS: [&str; 4] = ["--profile", "local", "--offline", "--locked"];
+
+/// A featureless Cargo step over the whole workspace.
+fn workspace_step<'a>(command: &'a str, extra: &[&'a str], tail: &[&'a str]) -> Vec<&'a str> {
+    let mut arguments = vec![command, "--workspace"];
+    arguments.extend(extra);
+    arguments.extend(GATE_OPTIONS);
+    arguments.extend(tail);
+    arguments
+}
+
+/// A Cargo step over `syrinx-update` alone with its release-tool feature.
+fn release_tool_step<'a>(command: &'a str, extra: &[&'a str], tail: &[&'a str]) -> Vec<&'a str> {
+    let mut arguments = vec![
+        command,
+        "--package",
+        packaging::UPDATE_PACKAGE,
+        "--features",
+        packaging::RELEASE_TOOL_FEATURE,
+    ];
+    arguments.extend(extra);
+    arguments.extend(GATE_OPTIONS);
+    arguments.extend(tail);
+    arguments
+}
+
 fn run_cargo(root: &Path, arguments: &[&str]) -> Result<(), String> {
     // Inherit output so compiler and test failures remain visible to the caller.
     let status = cargo_command(root)
@@ -205,4 +214,40 @@ fn run_cargo(root: &Path, arguments: &[&str]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_workspace_steps_build_without_the_release_tool() {
+        // P1-39b: once the app links the verifier, a workspace-wide feature would reach it.
+        for step in [
+            workspace_step("clippy", &["--all-targets"], &["--", "-D", "warnings"]),
+            workspace_step("test", &[], &[]),
+        ] {
+            assert!(!step.contains(&"--features"), "{step:?}");
+            assert!(
+                !step
+                    .iter()
+                    .any(|argument| argument.contains("release-tool"))
+            );
+            assert!(step.contains(&"--workspace"));
+        }
+        let lint = release_tool_step("clippy", &["--all-targets"], &["--", "-D", "warnings"]);
+        assert_eq!(
+            &lint[..5],
+            [
+                "clippy",
+                "--package",
+                "syrinx-update",
+                "--features",
+                "release-tool"
+            ]
+        );
+        assert!(!lint.contains(&"--workspace"));
+        assert_eq!(&lint[lint.len() - 3..], ["--", "-D", "warnings"]);
+        assert!(release_tool_step("test", &[], &[]).ends_with(&GATE_OPTIONS));
+    }
 }

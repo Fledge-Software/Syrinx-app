@@ -1,10 +1,11 @@
-//! Confines Windows storage, page, single-instance, calendar, Edge and icon services to the
+//! Confines Windows storage, page, single-instance, calendar, Edge, icon and disk services to the
 //! platform boundary.
 
 pub mod acceptance;
 pub mod app_icon;
 pub mod browser;
 pub mod calendar;
+pub mod disk;
 pub mod edge;
 pub mod file_dialog;
 pub mod instance;

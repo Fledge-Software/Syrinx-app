@@ -18,6 +18,8 @@ syrinx-platform = { path = "../syrinx-platform" }
 syrinx-search = { path = "../syrinx-search" }
 syrinx-store = { path = "../syrinx-store" }
 syrinx-ui = { path = "../syrinx-ui" }
+# P1-39b's installer; never with `release-tool`, which `cargo xtask check-deps` refuses.
+syrinx-update = { path = "../syrinx-update" }
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component.workspace = true

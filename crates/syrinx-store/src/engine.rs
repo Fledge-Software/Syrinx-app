@@ -253,6 +253,21 @@ impl Store {
         result.recv().map_err(|_| StoreError::WorkerUnavailable)?
     }
 
+    /// Takes one validated backup before an update installs (P1-39b), outside the daily
+    /// schedule; `NotDue` when a valid copy is under an hour old. Blocks on the writer queue.
+    pub fn backup_before_update(&self, now_utc_seconds: i64) -> Result<BackupOutcome, StoreError> {
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::BackupNow {
+                now_utc_seconds,
+                reply,
+            })
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
+    }
+
     /// Records one visit (P1-20) at `visited_at` Unix seconds. An empty title keeps a known one.
     pub fn record_visit(
         &self,
@@ -418,6 +433,10 @@ enum WriterRequest {
         idle: bool,
         reply: mpsc::SyncSender<Result<BackupOutcome, StoreError>>,
     },
+    BackupNow {
+        now_utc_seconds: i64,
+        reply: mpsc::SyncSender<Result<BackupOutcome, StoreError>>,
+    },
     Preferences {
         change: PreferenceWrite,
         reply: mpsc::SyncSender<Result<(), StoreError>>,
@@ -578,6 +597,23 @@ fn serve_writes(
                             )
                         })
                 };
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::BackupNow {
+                now_utc_seconds,
+                reply,
+            } => {
+                let result = writer
+                    .lease
+                    .backup_archive()
+                    .ok_or(StoreError::BackupUnavailable)
+                    .and_then(|archive| {
+                        schedule.create_now(
+                            &mut writer.connection,
+                            archive.as_ref(),
+                            now_utc_seconds,
+                        )
+                    });
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
             WriterRequest::Preferences { change, reply } => {

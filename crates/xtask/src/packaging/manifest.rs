@@ -38,9 +38,12 @@ pub struct PackagedFile {
     pub sha256: String,
 }
 
+/// The helper that swaps a verified update into place after Syrinx exits (P1-39b).
+pub const APPLY_HELPER: &str = "syrinx-apply.exe";
+
 /// Every file in a package except the manifest, in the order the manifest lists them.
 pub fn layout() -> Vec<&'static str> {
-    let mut files = vec![EXECUTABLE];
+    let mut files = vec![EXECUTABLE, APPLY_HELPER];
     files.extend(SCRIPTS);
     files.sort_unstable();
     files
@@ -144,6 +147,7 @@ mod tests {
             [
                 "install-syrinx.ps1",
                 "register-syrinx.ps1",
+                "syrinx-apply.exe",
                 "syrinx-common.ps1",
                 "syrinx-registration.ps1",
                 "syrinx.exe",

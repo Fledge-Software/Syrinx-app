@@ -155,6 +155,8 @@ pub enum SessionCommand {
     GrowSyntheticCatalogue {
         total: usize,
     },
+    /// Takes D13's extra snapshot before an update installs (P1-39b), outside the daily schedule.
+    SnapshotBeforeUpdate,
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -240,6 +242,8 @@ pub enum SessionEvent {
         error: SessionError,
         fatal: bool,
     },
+    /// The answer to `SnapshotBeforeUpdate`; an update installs only after `Ok`.
+    UpdateSnapshot(Result<(), SessionError>),
     /// Connections have closed before this event; joining the worker is now safe.
     Stopped,
 }
@@ -674,6 +678,15 @@ impl Worker {
             SessionCommand::RecentHistory { request_id, limit } => {
                 let result = store.recent_visits(limit).map_err(SessionError::Store);
                 return emit(events, SessionEvent::History { request_id, result });
+            }
+            SessionCommand::SnapshotBeforeUpdate => {
+                let result = utc_seconds().and_then(|now| {
+                    store
+                        .backup_before_update(now)
+                        .map(drop)
+                        .map_err(SessionError::Store)
+                });
+                return emit(events, SessionEvent::UpdateSnapshot(result));
             }
             SessionCommand::ClearHistory {
                 request_id,
@@ -1123,6 +1136,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::SaveSettings(_)
         | SessionCommand::EditDestinations { .. }
         | SessionCommand::GrowSyntheticCatalogue { .. }
+        | SessionCommand::SnapshotBeforeUpdate
         | SessionCommand::Shutdown => {}
     }
     Ok(())

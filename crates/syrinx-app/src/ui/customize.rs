@@ -85,6 +85,7 @@ impl BrowserView {
                 .child(self.accent_choices(palette, cx))
                 .child(self.transparency_switch(palette, cx))
                 .child(self.site_permissions_entry(palette, cx))
+                .child(self.updates_section(palette, cx))
         };
         let panel = div()
             .id("customize-panel")

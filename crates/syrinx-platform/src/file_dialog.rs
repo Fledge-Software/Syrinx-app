@@ -1,4 +1,5 @@
-//! Shows Windows' own file-open dialog so the owner picks an exported bookmarks file (P1-22).
+//! Shows Windows' own open dialog so the owner picks an exported bookmarks file (P1-22) or an
+//! update package folder (P1-39b).
 
 use std::{ffi::OsString, fmt, os::windows::ffi::OsStringExt, path::PathBuf};
 
@@ -11,8 +12,8 @@ use windows::{
         },
         UI::{
             Shell::{
-                FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST, FileOpenDialog,
-                IFileOpenDialog, SIGDN_FILESYSPATH,
+                FILEOPENDIALOGOPTIONS, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST,
+                FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
             },
             WindowsAndMessaging::IsWindow,
         },
@@ -36,7 +37,7 @@ impl fmt::Display for FileDialogError {
         formatter.write_str(match self {
             Self::Apartment => "Windows could not prepare the file dialog",
             Self::Dialog => "Windows could not show the file dialog",
-            Self::NotAFile => "The chosen item is not a file on this computer",
+            Self::NotAFile => "The chosen item is not a file or folder on this computer",
         })
     }
 }
@@ -49,11 +50,25 @@ impl std::error::Error for FileDialogError {}
 /// interface thread; it starts and ends its own single-threaded COM apartment there.
 /// `owner` is the window the dialog stays above, or 0 for none.
 pub fn choose_file(title: &str, owner: isize) -> Result<Option<PathBuf>, FileDialogError> {
+    choose(title, owner, FOS_FILEMUSTEXIST)
+}
+
+/// Asks the owner for one existing folder, with the same threading rules as `choose_file`.
+pub fn choose_folder(title: &str, owner: isize) -> Result<Option<PathBuf>, FileDialogError> {
+    choose(title, owner, FOS_PICKFOLDERS)
+}
+
+/// Shows the dialog with `kind`'s options added to the file-system-only defaults.
+fn choose(
+    title: &str,
+    owner: isize,
+    kind: FILEOPENDIALOGOPTIONS,
+) -> Result<Option<PathBuf>, FileDialogError> {
     let _apartment = Apartment::new()?;
     let dialog: IFileOpenDialog =
         unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER) }
             .map_err(|_| FileDialogError::Dialog)?;
-    configure(&dialog, title)?;
+    configure(&dialog, title, kind)?;
     if let Err(error) = unsafe { dialog.Show(owner_window(owner)) } {
         if error.code() == ERROR_CANCELLED.to_hresult() {
             return Ok(None);
@@ -63,12 +78,16 @@ pub fn choose_file(title: &str, owner: isize) -> Result<Option<PathBuf>, FileDia
     chosen_path(&dialog).map(Some)
 }
 
-/// Only existing file-system files can be chosen.
-fn configure(dialog: &IFileOpenDialog, title: &str) -> Result<(), FileDialogError> {
+/// Only existing file-system items can be chosen.
+fn configure(
+    dialog: &IFileOpenDialog,
+    title: &str,
+    kind: FILEOPENDIALOGOPTIONS,
+) -> Result<(), FileDialogError> {
     unsafe {
         let options = dialog.GetOptions().map_err(|_| FileDialogError::Dialog)?;
         dialog
-            .SetOptions(options | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM)
+            .SetOptions(options | kind | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM)
             .map_err(|_| FileDialogError::Dialog)?;
         dialog
             .SetTitle(&HSTRING::from(title))

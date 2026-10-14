@@ -39,6 +39,7 @@ mod suspended_fixture;
 mod tile_editor;
 mod tiles;
 mod title_bar;
+mod updates;
 
 #[cfg(test)]
 mod shutdown_tests;
@@ -114,6 +115,7 @@ actions!(
         Reload,
         ShowHistory,
         ClearBrowsingData,
+        InstallUpdate,
         ToggleSidebar,
         DismissPeek,
         Fullscreen
@@ -179,6 +181,7 @@ fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
         BrowserAction::ZoomOut => KeyBinding::new(keystroke, essentials::ZoomOut, None),
         BrowserAction::ResetZoom => KeyBinding::new(keystroke, essentials::ZoomReset, None),
         BrowserAction::ClearBrowsingData => KeyBinding::new(keystroke, ClearBrowsingData, None),
+        BrowserAction::InstallUpdateFromFile => KeyBinding::new(keystroke, InstallUpdate, None),
     }
 }
 
@@ -199,8 +202,8 @@ fn activation_command(
     }
 }
 
-/// Runs a browser command through the same handler as its keyboard shortcut; history and clear
-/// browsing data have no native page shortcut, so they open their page-card views directly.
+/// Runs a browser command through the same handler as its keyboard shortcut; history, clear
+/// browsing data and installing an update have no native page shortcut, so they run directly.
 fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
     Some(match action {
         BrowserAction::NewTab => BrowserShortcut::NewTab,
@@ -219,7 +222,9 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
         BrowserAction::ZoomIn => BrowserShortcut::ZoomIn,
         BrowserAction::ZoomOut => BrowserShortcut::ZoomOut,
         BrowserAction::ResetZoom => BrowserShortcut::ZoomReset,
-        BrowserAction::ShowHistory | BrowserAction::ClearBrowsingData => return None,
+        BrowserAction::ShowHistory
+        | BrowserAction::ClearBrowsingData
+        | BrowserAction::InstallUpdateFromFile => return None,
     })
 }
 
@@ -230,6 +235,11 @@ pub struct LaunchChecks {
     pub suspended_tabs: usize,
     /// P1-33's palette acceptance run.
     pub acceptance: Option<crate::acceptance::AcceptancePlan>,
+    /// P1-39b: whether this copy can update, and what start-up found.
+    pub updates: (
+        crate::updates::UpdateContext,
+        crate::updates::StartupUpdates,
+    ),
 }
 
 pub struct BrowserView {
@@ -310,6 +320,8 @@ pub struct BrowserView {
     smoke_waiting: bool,
     /// P1-33's scripted palette acceptance run; `None` in every other launch.
     acceptance: Option<palette_acceptance::Acceptance>,
+    /// Customize's Updates section and the staged update's handover (P1-39b).
+    updates: updates::UpdatePanel,
     outcome: Arc<AtomicU8>,
 }
 
@@ -326,6 +338,7 @@ impl BrowserView {
             smoke,
             suspended_tabs,
             acceptance,
+            updates: (update_context, startup_updates),
         } = checks;
         let mut view = Self {
             fullscreen: None,
@@ -409,6 +422,7 @@ impl BrowserView {
             smoke_navigation: false,
             smoke_waiting: false,
             acceptance: acceptance.map(palette_acceptance::Acceptance::new),
+            updates: updates::UpdatePanel::new(update_context, startup_updates),
             outcome,
         };
         window.focus(&view.focus, cx);
@@ -574,6 +588,9 @@ impl BrowserView {
                         .active_message(&self.model)
                         .unwrap_or(saved_message)
                         .to_owned();
+                    if initial && let Some(notice) = self.updates.take_startup_notice() {
+                        self.message = notice;
+                    }
                 }
                 // After the status line, so a withdrawn removal card can explain itself.
                 self.follow_folder_editor();
@@ -591,6 +608,7 @@ impl BrowserView {
                 self.save_runtime_version();
                 self.restore_fullscreen_if_hidden(window, cx);
                 if initial {
+                    self.record_clean_start(cx);
                     self.seed_suspended_fixture();
                     // After this frame, so the window shows its tabs before the popup is built.
                     cx.spawn(async move |view, cx| {
@@ -689,7 +707,9 @@ impl BrowserView {
                     self.message = error.to_string();
                 }
             }
+            SessionEvent::UpdateSnapshot(result) => self.update_snapshot_taken(result, cx),
             SessionEvent::Stopped => {
+                self.update_snapshot_lost();
                 self.abandon_import_write();
                 self.home.site_permissions.session_lost();
                 if !self.closing && self.failure.is_none() {
@@ -1235,6 +1255,9 @@ impl BrowserView {
         match browser_shortcut(action) {
             Some(shortcut) => self.shortcut(shortcut, window, cx),
             None if action == BrowserAction::ClearBrowsingData => self.open_clear_data(),
+            None if action == BrowserAction::InstallUpdateFromFile => {
+                self.install_update_from_file(window, cx);
+            }
             None => self.toggle_history(),
         }
         // Edit address reopens the palette and Find focuses its bar; the rest return to the page.
@@ -1329,6 +1352,11 @@ impl BrowserView {
 
     pub fn request_close(&mut self, cx: &mut Context<Self>) {
         if self.closing {
+            return;
+        }
+        // An update installs only after its D13 snapshot, so closing waits for it.
+        if self.hold_close_for_update_snapshot() {
+            cx.notify();
             return;
         }
         self.closing = true;
@@ -1654,6 +1682,10 @@ impl Render for BrowserView {
                 this.open_clear_data();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &InstallUpdate, window, cx| {
+                this.install_update_from_file(window, cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &Fullscreen, window, cx| {
                 this.fullscreen_shortcut(window);
                 cx.notify();
@@ -1894,11 +1926,13 @@ mod palette_shortcut_tests {
             let CommandAction::Browser(action) = command.action else {
                 panic!("built-in commands are browser actions");
             };
-            // History and clear data open in the page card, not through a page shortcut.
+            // History, clear data and updates run directly, not through a page shortcut.
             let Some(shortcut) = browser_shortcut(action) else {
                 assert!(matches!(
                     action,
-                    BrowserAction::ShowHistory | BrowserAction::ClearBrowsingData
+                    BrowserAction::ShowHistory
+                        | BrowserAction::ClearBrowsingData
+                        | BrowserAction::InstallUpdateFromFile
                 ));
                 continue;
             };

@@ -452,3 +452,17 @@ Each is a yes or no. The recommendation is in brackets.
    to D9's no-network rule. *(Recommended: yes.)*
 9. Do you approve splitting P1-39 into P1-39a to P1-39d as above, with no
    other renumbering? *(Recommended: yes.)*
+
+### Answers to P1-39b's follow-up questions (owner, 2026-10-14)
+
+P1-39b raised four questions the proposal left open; the owner answered
+them in chat, and `docs/p1-38-update-format.md` ("P1-39b") records them:
+
+- A Later install is not watched for a failed start in v1; the manual
+  rename is documented.
+- An unreadable `Updates\state` keeps refusing staging; a "Reset update
+  records" action is deferred as DW-66.
+- The pre-update snapshot counts within D13's seven copies and is skipped
+  when a valid copy is under an hour old.
+- Later is armed only for the current session; after a crash Syrinx asks
+  again.

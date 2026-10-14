@@ -12,6 +12,9 @@ use crate::{
 
 const DAY_SECONDS: i64 = 86_400;
 const RETAINED_BACKUPS: usize = 7;
+/// An update snapshot is skipped when any valid copy is this recent, so retried updates
+/// cannot rotate the whole daily window out of the seven copies D13 keeps.
+const RECENT_SNAPSHOT_SECONDS: i64 = 3600;
 
 /// The host supplies idle state and UTC time; storage creates no timer or background poller.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,17 +77,56 @@ impl BackupSchedule {
         if !idle {
             return Ok(BackupOutcome::NotIdle);
         }
-        if !self.discovered {
-            let existing = valid_candidates(archive)?;
-            self.latest = existing.first().map(|entry| entry.metadata.created_at);
-            self.discovered = true;
-        }
+        self.discover(archive)?;
         if let Some(latest) = self.latest {
             // A backwards clock cannot advance the schedule; subtraction uses a wider representation.
             if i128::from(now_utc_seconds) - i128::from(latest) < i128::from(DAY_SECONDS) {
                 return Ok(BackupOutcome::NotDue);
             }
         }
+        self.create(connection, archive, now_utc_seconds)
+            .map(BackupOutcome::Created)
+    }
+
+    /// Takes one snapshot outside the daily schedule, as before an update installs (P1-39b),
+    /// unless a valid copy is less than an hour old. D13's rotation still keeps seven, so the
+    /// oldest valid copy may be removed.
+    pub(crate) fn create_now(
+        &mut self,
+        connection: &mut Connection,
+        archive: &dyn BackupArchive,
+        now_utc_seconds: i64,
+    ) -> Result<BackupOutcome, StoreError> {
+        self.discover(archive)?;
+        if let Some(latest) = self.latest {
+            // As in the daily check, a backwards clock counts as recent.
+            if i128::from(now_utc_seconds) - i128::from(latest)
+                < i128::from(RECENT_SNAPSHOT_SECONDS)
+            {
+                return Ok(BackupOutcome::NotDue);
+            }
+        }
+        self.create(connection, archive, now_utc_seconds)
+            .map(BackupOutcome::Created)
+    }
+
+    /// Learns the newest valid backup once, so the schedule survives a restart.
+    fn discover(&mut self, archive: &dyn BackupArchive) -> Result<(), StoreError> {
+        if !self.discovered {
+            let existing = valid_candidates(archive)?;
+            self.latest = existing.first().map(|entry| entry.metadata.created_at);
+            self.discovered = true;
+        }
+        Ok(())
+    }
+
+    /// Writes, validates and publishes one snapshot, then rotates older valid copies.
+    fn create(
+        &mut self,
+        connection: &mut Connection,
+        archive: &dyn BackupArchive,
+        now_utc_seconds: i64,
+    ) -> Result<BackupMetadata, StoreError> {
         // VACUUM INTO must run outside a transaction; the writer queue excludes concurrent saves.
         let file = archive.reserve()?;
         // A failed publication may already have written its marker; preserve the output on error.
@@ -100,7 +142,7 @@ impl BackupSchedule {
             entry.file.remove()?;
         }
         self.latest = Some(now_utc_seconds);
-        Ok(BackupOutcome::Created(metadata))
+        Ok(metadata)
     }
 }
 

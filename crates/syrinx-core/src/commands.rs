@@ -95,6 +95,9 @@ pub enum BrowserAction {
     ResetZoom,
     /// Opens P1-27's clear browsing data dialog; the dialog itself asks before deleting.
     ClearBrowsingData,
+    /// Asks for a signed update package folder and stages it (P1-39b); nothing installs until
+    /// the owner restarts or quits.
+    InstallUpdateFromFile,
 }
 
 /// What running a command does.
@@ -491,6 +494,14 @@ fn browser_commands() -> Vec<Command> {
             ClearBrowsingData,
             None,
         ),
+        (
+            "browser.install-update",
+            "Install update from file…",
+            "upgrade new version package",
+            Always,
+            InstallUpdateFromFile,
+            None,
+        ),
     ]
     .into_iter()
     .map(
@@ -562,6 +573,7 @@ mod tests {
                 (browser(BrowserAction::ZoomOut), None),
                 (browser(BrowserAction::ResetZoom), Some("ctrl-0")),
                 (browser(BrowserAction::ClearBrowsingData), None),
+                (browser(BrowserAction::InstallUpdateFromFile), None),
             ]
         );
         // Keys follow registration order, so both the palette and search agree on them.
@@ -709,9 +721,9 @@ mod tests {
                 .filter(|(_, command)| command.is_enabled(context))
                 .count()
         };
-        // Always: new tab, reopen, edit address, history and clear browsing data.
-        assert_eq!(enabled(empty), 5);
-        assert_eq!(enabled(home), 7);
+        // Always: new tab, reopen, edit address, history, clear browsing data and install update.
+        assert_eq!(enabled(empty), 6);
+        assert_eq!(enabled(home), 8);
         assert_eq!(enabled(page), registry.len());
     }
 }
