@@ -109,7 +109,8 @@ store and the certificate suite) and never deletes them, so a failed run's
 evidence, including `server.log`, survives. The cost is that repeated runs
 fill `target/session-temp`; whoever runs a series should clear it between
 series. Deleting them only after a fully passing run would keep the evidence
-and save the space; that is a small owner question (answered: DW-65), not a defect.
+and save the space; that is a small owner question (answered: DW-65, built
+2026-10-14), not a defect.
 
 ## Shared instrumentation: say which wait expired
 
@@ -397,7 +398,9 @@ original machine is also unknown; the reproduction forces it with a 6 s hold.
 Step 0's twenty passes were on a different machine, so they confirm that
 `main` is healthy here rather than measuring the old failure rate away.
 
-**Nothing in the product or the committed fixture changed.** The diagnosis
+**Nothing in the product or the committed fixture changed** in the diagnosis
+itself; the two owner-approved fixture changes below (DW-64 and DW-65) came
+afterwards on their own branch. The diagnosis
 needed no code change, because the owner's 2026-10-12 decision to start the
 countdown at navigation completion is what removed the cause. The
 instrumentation, the `--stall-hidden-pages` and `--close-tls-after-first`
@@ -424,6 +427,14 @@ thing to rebuild in that case.
    attempt, the state and the server log; the 45 s suite deadline is
    unchanged. Recorded as DW-64 in the plan's "Deferred work" register and
    not built on this docs-only branch.
+   **Built 2026-10-14** on `claude/dw-64-65-fixture-failfast-cleanup`:
+   `wait_rejection` starts a 5 s grace when the attempt's state first
+   becomes `Failed` and ends it when `CertificateRejected` arrives; the
+   decision is the tested pure function `rejection_wait`. Rerunning this
+   candidate's experiment (a disposable server copy that closes its listener
+   after the first connection) now fails at "attempt 1" with last state
+   `Https/Failed` and the `server.log` path, 5.0 s after `Failed` (32319 →
+   37320 ms in the traced run), instead of after 46.6 s.
 2. *Should a fully passing fixture run delete its synthetic directories?*
    Each run keeps about 61 MB in seven directories so a failure's evidence
    survives. Recommendation: delete them only after every suite passes,
@@ -431,3 +442,10 @@ thing to rebuild in that case.
    **Owner's answer (2026-10-13/14, in chat): yes.** Delete the seven
    synthetic profile directories only after every suite passes, and keep
    everything on any failure. Recorded as DW-65 and not built here.
+   **Built 2026-10-14** on the same branch: `reserve_profile` records each
+   directory it creates, a fully passing run deletes exactly those (a
+   deletion failure is a warning, not a failed run), and a failing run
+   deletes nothing and prints each kept directory. Three unchanged runs
+   passed and left no harness directory; the two experiment runs above kept
+   all seven. Clearing `target/session-temp` between series is now needed
+   only after failures.

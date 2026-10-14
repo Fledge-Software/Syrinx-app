@@ -5,12 +5,16 @@ use std::{
     os::windows::process::CommandExt,
     process::{Child, Command, Stdio},
 };
-use syrinx_platform::browser::{ConnectionScheme, ConnectionStatus};
+use syrinx_platform::browser::{ConnectionScheme, ConnectionState, ConnectionStatus};
 
 pub(super) fn response(request: &[u8]) -> Option<&'static str> {
     (request.starts_with(b"GET /security-recovery ") || request.starts_with(b"GET /security-recovery?"))
         .then_some("<!doctype html><title>Synthetic certificate recovery</title><link rel=icon href=data:,><p>Harmless local HTTP recovery document.</p>")
 }
+
+/// How long an attempt whose state is already `Failed` may wait for its certificate event.
+/// WebView2 can report the failed load first, so failing at `Failed` itself would be wrong.
+const CERTIFICATE_EVENT_GRACE: Duration = Duration::from_secs(5);
 
 pub(super) fn run(http_url: &str) -> Result<(), String> {
     let base = http_url
@@ -18,10 +22,11 @@ pub(super) fn run(http_url: &str) -> Result<(), String> {
         .ok_or("Synthetic HTTP URL shape changed.")?;
     let directory = reserve_profile()?;
     let mut server = CertificateServer::start(directory.clone())?;
+    let log = directory.join("server.log");
     let result = server.url().and_then(|url| {
         run_browser(
             directory.join("WebView2"),
-            &format!("{url}\n{base}/security-recovery"),
+            &format!("{url}\n{base}/security-recovery\n{}", log.display()),
             exercise,
         )
     });
@@ -121,9 +126,12 @@ fn exercise(
     deadline: Instant,
 ) -> Result<(), String> {
     while !matches!(checked_event(events, deadline)?, BrowserEvent::Ready) {}
-    let (url, recovery) = url
-        .split_once('\n')
-        .ok_or("Synthetic security URL pair changed.")?;
+    let mut lines = url.split('\n');
+    let (Some(url), Some(recovery), Some(log), None) =
+        (lines.next(), lines.next(), lines.next(), lines.next())
+    else {
+        return Err("Synthetic security URL and log lines changed.".into());
+    };
     send(
         host,
         BrowserCommand::Create {
@@ -141,7 +149,7 @@ fn exercise(
                 url: url.into(),
             },
         )?;
-        wait_rejection(events, deadline)?;
+        wait_rejection(events, deadline, attempt + 1, log)?;
         // A cancelled attempt can retain the previous document; use a distinct source for recovery.
         let next = format!("{recovery}?attempt={attempt}");
         send(
@@ -187,14 +195,70 @@ fn wait_recovery(
     Ok(())
 }
 
+/// Where the rejection wait stands: what it has seen and when it must stop waiting.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RejectionWait {
+    /// Both the failed completion and the certificate event have arrived.
+    Complete,
+    /// Keep waiting until `until`; `grace` means a `Failed` state started a short wait.
+    Waiting { until: Instant, grace: bool },
+}
+
+/// Decides how long to keep waiting, given when the attempt first reported `Failed`.
+fn rejection_wait(
+    failed_state_at: Option<Instant>,
+    rejected: bool,
+    failed: bool,
+    suite_deadline: Instant,
+) -> RejectionWait {
+    if rejected && failed {
+        return RejectionWait::Complete;
+    }
+    let grace_end = failed_state_at
+        .filter(|_| !rejected)
+        .map(|at| at + CERTIFICATE_EVENT_GRACE)
+        .filter(|end| *end < suite_deadline);
+    match grace_end {
+        Some(until) => RejectionWait::Waiting { until, grace: true },
+        None => RejectionWait::Waiting {
+            until: suite_deadline,
+            grace: false,
+        },
+    }
+}
+
+fn missing_certificate_event(attempt: usize, state: Option<ConnectionState>, log: &str) -> String {
+    format!(
+        "Synthetic invalid certificate attempt {attempt} failed without a certificate event \
+         within {}s of its Failed state (last connection state {state:?}); inspect the \
+         synthetic TLS server log at {log}.",
+        CERTIFICATE_EVENT_GRACE.as_secs()
+    )
+}
+
 fn wait_rejection(
     events: &mut UnboundedReceiver<BrowserEvent>,
     deadline: Instant,
+    attempt: usize,
+    log: &str,
 ) -> Result<(), String> {
     let mut rejected = false;
     let mut failed = false;
-    while !(rejected && failed) {
-        let event = next_event(events, deadline)?;
+    let mut failed_state_at = None;
+    let mut last_state = None;
+    loop {
+        let (until, grace) = match rejection_wait(failed_state_at, rejected, failed, deadline) {
+            RejectionWait::Complete => break,
+            RejectionWait::Waiting { until, grace } => (until, grace),
+        };
+        let event = match next_event(events, until) {
+            Ok(event) => event,
+            // The grace expired: name what was seen instead of the generic deadline message.
+            Err(_) if grace && Instant::now() >= until => {
+                return Err(missing_certificate_event(attempt, last_state, log));
+            }
+            Err(error) => return Err(error),
+        };
         if !matches!(
             event,
             BrowserEvent::NavigationCompleted {
@@ -220,6 +284,10 @@ fn wait_rejection(
                     return Err("Synthetic invalid certificate was labelled loaded.".into());
                 }
                 rejected |= state.status == ConnectionStatus::CertificateRejected;
+                if state.status == ConnectionStatus::Failed && failed_state_at.is_none() {
+                    failed_state_at = Some(Instant::now());
+                }
+                last_state = Some(state);
             }
             _ => {}
         }
@@ -234,4 +302,83 @@ fn reject_content(event: &BrowserEvent) -> Result<(), String> {
         return Err("Synthetic untrusted page content was displayed.".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CERTIFICATE_EVENT_GRACE, ConnectionScheme, ConnectionState, ConnectionStatus, Duration,
+        Instant, RejectionWait, missing_certificate_event, rejection_wait,
+    };
+
+    #[test]
+    fn waits_for_the_suite_deadline_until_a_failed_state_arrives() {
+        let suite = Instant::now() + Duration::from_secs(45);
+        let waiting = RejectionWait::Waiting {
+            until: suite,
+            grace: false,
+        };
+        assert_eq!(rejection_wait(None, false, false, suite), waiting);
+        // A failed completion alone, or a certificate event alone, keeps the old wait.
+        assert_eq!(rejection_wait(None, false, true, suite), waiting);
+        assert_eq!(rejection_wait(None, true, false, suite), waiting);
+    }
+
+    #[test]
+    fn a_failed_state_without_a_certificate_event_starts_a_short_grace() {
+        let failed_at = Instant::now();
+        let suite = failed_at + Duration::from_secs(45);
+        // The grace is a bounded wait, not an immediate failure.
+        assert_eq!(
+            rejection_wait(Some(failed_at), false, true, suite),
+            RejectionWait::Waiting {
+                until: failed_at + CERTIFICATE_EVENT_GRACE,
+                grace: true,
+            }
+        );
+        assert!(CERTIFICATE_EVENT_GRACE >= Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_late_certificate_event_ends_the_grace() {
+        let failed_at = Instant::now();
+        let suite = failed_at + Duration::from_secs(45);
+        assert_eq!(
+            rejection_wait(Some(failed_at), true, false, suite),
+            RejectionWait::Waiting {
+                until: suite,
+                grace: false,
+            }
+        );
+        assert_eq!(
+            rejection_wait(Some(failed_at), true, true, suite),
+            RejectionWait::Complete
+        );
+    }
+
+    #[test]
+    fn the_grace_never_extends_the_suite_deadline() {
+        let failed_at = Instant::now();
+        let suite = failed_at + Duration::from_secs(2);
+        assert_eq!(
+            rejection_wait(Some(failed_at), false, true, suite),
+            RejectionWait::Waiting {
+                until: suite,
+                grace: false,
+            }
+        );
+    }
+
+    #[test]
+    fn the_failure_names_the_attempt_state_and_log() {
+        let state = ConnectionState {
+            scheme: ConnectionScheme::Https,
+            status: ConnectionStatus::Failed,
+        };
+        let message = missing_certificate_event(2, Some(state), r"C:\synthetic\server.log");
+        assert!(message.contains("attempt 2"), "{message}");
+        assert!(message.contains("Https"), "{message}");
+        assert!(message.contains("Failed"), "{message}");
+        assert!(message.contains(r"C:\synthetic\server.log"), "{message}");
+    }
 }

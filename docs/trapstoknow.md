@@ -99,11 +99,14 @@ you found it in the commit message, not here.
   4000, which those suites never show, mid-load. A never-shown page is still
   suspended five seconds after its load completes, so show any fixture page
   whose script or events must arrive later than that. A refused or reset
-  HTTPS connection also ends the certificate suite with only the bare
-  deadline (the disposable instrumentation showed last state `Https/Failed`
-  there, against `Https/Loading` under suspension; the committed fixture
-  prints no state), so check that suite's `server.log` for a traceback or an
-  early stop before blaming suspension. Sources: `docs/p1-11-popups.md`,
+  HTTPS connection now fails the certificate suite about 5 s after its
+  `Failed` state, naming the attempt, the last connection state and the
+  path of that suite's `server.log` (DW-64); read that log for a traceback
+  or an early stop. A bare deadline in that suite now means no `Failed` state
+  arrived at least 5 s before the deadline (under suspension the attempt
+  stayed `Https/Loading`), so suspect suspension first there. A failing run keeps every synthetic directory and
+  lists them; a fully passing run deletes them (DW-65), so evidence exists
+  only for failures. Sources: `docs/p1-11-popups.md`,
   `docs/fixture-transport-timing-review.md` and
   `docs/fixture-timeout-diagnosis-plan.md` (observed; high on the mechanism,
   inferred for the untraced original failures).
