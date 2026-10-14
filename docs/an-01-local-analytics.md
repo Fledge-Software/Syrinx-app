@@ -1,8 +1,10 @@
 # AN-01: local usage counting
 
-**Status:** implemented on `claude/an-01-local-analytics` (2026-10-14), awaiting
-independent review, the owner's review of the frozen command list and an
-owner-approved merge. The owner started AN-01 on 2026-10-14, ahead of P1-39d,
+**Status:** implemented on `claude/an-01-local-analytics` (2026-10-14); the
+independent review's required changes are made in a second commit, and the
+slice awaits re-review, a quiet-machine overhead and file-load run, and an
+owner-approved merge. The owner approved the frozen command list as built on
+2026-10-14. The owner started AN-01 on 2026-10-14, ahead of P1-39d,
 because it needs neither the release keys nor the update host.
 
 ## Why this slice exists
@@ -33,7 +35,8 @@ and a later collector would be retrofitted into finished code.
   `COMMAND_KEYS`. `command_index` matches every `BrowserAction`, so a new
   built-in command fails to compile until the schema is changed, and a test
   checks that the frozen keys equal `command.` plus each registry identifier.
-  **The owner reviews this list** (the proposal makes that a done condition):
+  **The owner approved this list as built on 2026-10-14** (the proposal's
+  done condition):
   `browser.new-tab`, `close-tab`, `reopen-tab`, `reload`, `back`, `forward`,
   `edit-address`, `next-tab`, `previous-tab`, `save-page`, `show-history`,
   `find`, `downloads`, `print`, `zoom-in`, `zoom-out`, `zoom-reset`,
@@ -48,8 +51,10 @@ and a later collector would be retrofitted into finished code.
   only), a period (start day, the last day Syrinx started in it, days used,
   counts) and the file's two periods. A start on or after day 30 closes the
   current period, which replaces (deletes) the previous one, so at most about
-  60 days are ever kept. A completed period reports the last day of its 30-day
-  span as its end.
+  60 days are ever kept. A completed period records the day it actually closed
+  (`closed_on`, the first start on or after day 30) and reports that as its
+  `period_end`, as the proposal says; the current period has none, because
+  its end is the day of export.
 - `usage/codec.rs` writes `usage.json` and a report in one fixed JSON shape
   (UTF-8, LF, two-space indentation, final newline, every field present,
   zeros included) and reads back only that shape with a strict reader of its
@@ -64,6 +69,15 @@ and a later collector would be retrofitted into finished code.
   D13 synced-folder guard as the database. Its existence is what "on" means:
   switching off deletes it (and any set-aside damaged copy), so there is no
   state in which counting is off but counts linger.
+- Switching off is durable before anything is deleted: the worker stops the
+  recorder, writes and flushes an empty `usage.off` marker, deletes the usage
+  files, and removes the marker last. If a file cannot be deleted (another
+  program holds it), counting is already off, the window says so, and every
+  later start sees the marker, stays off and retries the deletion. Without the
+  marker a failed delete would have left `usage.json` behind and counting
+  would have resumed at the next start. Reset and switching on finish any
+  such leftover deletion first; a Reset that cannot delete the old counts
+  leaves counting off rather than bringing them back.
 - Only the session worker reads or writes it. Each write goes to
   `usage.json.new`, is flushed, then renamed over the file. Writes happen at
   most once every five minutes and only after a counter changed, on the
@@ -75,14 +89,24 @@ and a later collector would be retrofitted into finished code.
   `usage.json.damaged` (replacing an older one), counting starts afresh and is
   written at once so it stays on, `error.usage_file_reset` is counted once,
   and the owner sees a non-fatal notice. Start-up never fails because of it.
-- If Windows cannot report today's date, an existing file is left unread for
-  that run and switching on is refused with a message; nothing is guessed.
+- Today's date comes from Windows' local calendar. If Windows cannot report it,
+  the error code (never a path) is logged and the UTC day is used, at most a
+  day off. Only with no system clock at all is there no date: then an
+  existing file keeps counting as it is (no new day, no rotation) and says so,
+  rather than showing "off" while the file stays; a damaged file is still set
+  aside, and switching on is refused with a message.
+- Every status the worker reports carries its real state together with any
+  problem (`SessionEvent::Usage { status, problem }`), so a failed Reset or
+  switch-off can never leave "Counting since" on screen.
 
 ### What the owner sees (`crates/syrinx-app/src/ui/usage_report.rs`)
 
 Customize gains a **Usage report** section between Site permissions and
 Updates, with the approved switch text, "Count how I use Syrinx, on this
-computer only", and its note. The switch is off by default. Switching on
+computer only". Its note is shortened, by the owner's decision of 2026-10-14
+(`docs/decisions.md`), to "Nothing is sent anywhere. You can delete the
+counts at any time." until AN-02 adds viewing and exporting and restores the
+approved sentence. The switch is off by default. Switching on
 starts a period today and shows "Counting since YYYY-MM-DD. Periods last 30
 days." with a **Reset** button. Switching off and Reset each ask first ("Turn
 off and delete" / "Reset counts", or Cancel). The switch reuses Customize's
@@ -93,23 +117,24 @@ existing switch, now shared as `customize::switch_control`.
 | Field | Recorded at |
 |---|---|
 | `app.started`, `error.unclean_shutdown`, `error.storage_open`, `error.recovery_offered` | The worker, once the usage file is loaded at start-up |
-| `tab.created`, `tab.closed`, `tab.reopened`, `tab.switched_keyboard`, `saved.saved`, `saved.removed`, `saved.opened_unloaded`, `folder.created`, `folder.removed`, `import.completed` | The worker, after a command is accepted (a tab-opening command only if it opened a tab, any other only if it changed the model) |
+| `tab.created`, `tab.closed`, `tab.reopened`, `saved.saved`, `saved.removed`, `saved.opened_unloaded`, `folder.created`, `folder.removed`, `import.completed` | The worker, after a command is accepted (a tab-opening command only if it opened a tab, any other only if it changed the model) |
 | `tab.switched_sidebar` | A sidebar or peek row activation |
-| `palette.opened_ctrl_k`, `palette.opened_ctrl_l` | The Ctrl K and Ctrl L keys, from the chrome, a page or the peek; a key that only refocuses an open palette is not counted |
-| `palette.dismissed`, `palette.chose_*` | How each palette entry ended; Alt Enter is `chose_web_search`, any other submitted text `chose_address` |
+| `tab.switched_keyboard` | Ctrl Tab or Ctrl Shift Tab pressed with more than one tab open; the palette's Next and Previous tab commands count only as commands |
+| `palette.opened_ctrl_k`, `palette.opened_ctrl_l` | The Ctrl K and Ctrl L keys, from the chrome, a page or the peek; a key that only refocuses an open palette, and the palette's Edit address command, are not counted |
+| `palette.dismissed`, `palette.chose_*` | How each palette entry ended; submitted text counts by where it goes: an address is `chose_address`, a search (Alt Enter, or plain Enter on words) `chose_web_search`, and refused text neither |
 | `palette.scope_changed` | A different scope chip chosen |
 | `command.*` | Commands run from the palette; `>import bookmarks` and plugin commands count as `command.other` |
 | `nav.back`, `nav.forward`, `nav.reload` | The shared handler of the toolbar, keys and palette commands |
 | `sidebar.set_*`, `sidebar.peek_shown` | A sidebar state that settled on a new value; a peek popup installed |
 | `home.tile_opened`, `favorite.opened` | A Quick access or Favorites tile opened |
 | `find.opened`, `settings.opened` | A new find bar; Customize opened |
-| `startup.first_frame_ms` | `main` to the window's first render |
-| `startup.session_restored_ms` | `main` to the first session state reaching the window |
+| `startup.first_frame_ms` | `main` to the window's first render; not recorded on a start where a recovery or history-repair prompt waited on the owner |
+| `startup.session_restored_ms` | `main` to the first session state reaching the window; skipped the same way |
 | `palette.open_to_paint_ms` | The palette entry starting to its first presented frame |
 | `search.tier1_ms`, `store.save_ms`, `backup.snapshot_ms` | The worker's query, durable save and daily snapshot |
-| `tab.switch_to_visible_ms` | A tab selection to its page being shown; a selection that ends on Home is not timed |
+| `tab.switch_to_visible_ms` | A tab selection to the selected tab's page being shown. The timer keeps the tab it waits for (named by the request, or learned from the next state) and ignores other pages; a selection that changes nothing (the same tab, Ctrl Tab with one tab) or ends on Home is dropped |
 | `error.storage_write`, `error.backup_failed` | A failed durable save or daily snapshot |
-| `error.renderer_failed`, `error.browser_process_exited`, `error.webview_creation`, `error.navigation_failed` | The page host's crash, engine-recovery, creation-failure and failed-navigation events |
+| `error.renderer_failed`, `error.browser_process_exited`, `error.webview_creation`, `error.navigation_failed` | The page host's crash, engine-recovery, creation-failure and failed-navigation events; a navigation that failed only because it was stopped or replaced (WebView2's `OperationCanceled`, now reported as `cancelled` on `NavigationCompleted`) is not counted |
 | `error.import_refused` | A bookmark file the parser refused |
 | `error.usage_file_reset` | A damaged usage file set aside |
 
@@ -120,8 +145,9 @@ full-text results or captures exist), and `error.storage_location_refused`
 cannot be recorded, because the refused folder is the one that would hold the
 count.
 
-Timings and the start-up facts are measured only while counting is on; the
-worker reads no extra clock otherwise.
+Timings and the start-up facts are measured only while counting is on. While
+off, the worker's only usage work on each existing wake-up is one check that
+no write is waiting; it reads no clock for usage.
 
 ## Tests
 
@@ -130,49 +156,67 @@ folders; no real usage was collected.
 
 - `crates/syrinx-core/src/usage/tests.rs` (11 tests) and two `compile_fail`
   doc tests: slot order and size, the frozen command list against the
-  registry, a report whose key set equals the schema's compiled list with only
-  the four envelope text fields not numbers, bucket edges, disabled recording,
+  registry, a report whose key paths equal a literal golden list of every
+  approved key string (copied from the proposal, not generated from the code
+  under test) with only the four envelope text fields not numbers, bucket edges, disabled recording,
   saturation at the maximum, 30-day rotation with at most two periods, a
   round trip under 32 KiB even with every counter at its maximum, every
   truncation and a list of damaged variants refused without a panic, and
   calendar dates.
-- `crates/syrinx-app/src/session/usage.rs` (3 tests): with no file nothing is
+- `crates/syrinx-app/src/session/usage.rs` (6 tests): with no file nothing is
   counted or armed however long Syrinx idles; a write waits for a change and
   five minutes and goes through the replacement file; switching on without a
-  date changes nothing.
+  date changes nothing; an existing file keeps counting without a date; a
+  switch-off while another handle holds `usage.json` without delete sharing
+  stays off, stays off at the next start while still held, and finishes the
+  deletion once released; a Reset that cannot delete reports the off status it
+  left.
+- `crates/syrinx-app/src/ui/usage_report.rs` (5 tests): only the selected
+  tab's page ends a switch timing; a switch learns its target from the state;
+  a switch that changes nothing or ends on Home is dropped; nothing is timed
+  while off; a start that waited on a prompt records no start-up timings.
 - `crates/syrinx-app/src/session/usage_tests.rs` (6 tests, real
   session workers on disposable storage): counting off writes nothing; on
   counts every worker call site into the file and off deletes it; a run with
   private-looking addresses, a note body and a path leaves no five-character
-  fragment of them in the file or its report; Reset deletes both periods; a
+  fragment of them in the file or its report (this drives the worker's call
+  sites; the window's call sites cannot carry text at all, which the
+  recorder's type and its `compile_fail` tests guarantee); Reset deletes both
+  periods; a
   damaged file is set aside, counted once and counting continues; no backup
   holds the usage file and a confirmed restore leaves its counts in place
   while recording `error.storage_open` and `error.recovery_offered`.
 - `crates/syrinx-platform/src/calendar.rs`: the local date reads as ISO digits.
 - The smoke run (`--smoke`, always a fresh profile with counting off) now
   fails if anything was counted or a usage file exists when it ends.
-- `cargo xtask bench` now also measures one update's cost (the mean of 16
-  consecutive updates per sample, 200,000 samples) for a counter, a timing and
-  a switched-off call, and fails at a 99th percentile of 100 ns or more.
+- `cargo xtask bench` now also measures one update's cost for a counter, a
+  timing and a switched-off call, and fails at a 99th percentile of 100 ns or
+  more. The 99th percentile is taken over samples that are each the mean of
+  16 consecutive updates (200,000 samples), because one update is shorter than
+  the clock's own cost; it is not a percentile of single updates. It also
+  times loading the largest possible file (both periods, every counter at its
+  maximum): read, decode and one start, 2,000 runs, failing at a 95th
+  percentile of 1 ms or more.
 
 ## What remains
 
-- **The owner reviews the frozen command list above.** Until then AN-01 is
-  not done by the proposal's own condition.
-- **AN-02**: the preview, Save report…, Copy report, the suggested prompt and
-  `docs/usage-report.md`. The approved switch note already says the counts can
-  be viewed and exported; that is true only once AN-02 lands, which the plan
-  puts before P1-40.
-- The start-up cost of loading the file (proposal budget: under 1 ms at the
-  95th percentile) is not yet measured, and the overhead figures below come
-  from a busy machine; record both on a quiet machine before review.
+- **AN-02**: the preview, Save report…, Copy report, the suggested prompt,
+  `docs/usage-report.md`, and restoring the switch's approved note. The plan
+  puts it before P1-40.
+- The overhead and file-load figures below come from a busy machine and are
+  provisional; record a quiet-machine run before review.
 - The owner's visual check of the Usage report section and its confirmations.
 
 ## Verification on this machine (2026-10-14)
 
-- `cargo xtask check` passed with 1,328 test results (summed over every
-  `test result` line, including the release-tool steps), none failed or
-  ignored, and the smoke run passed with its new no-counting check.
+- `cargo xtask check` passed with 1,328 test results on the first commit and,
+  after the review fixes, with 1,336 (summed over every `test result` line,
+  including the release-tool steps), none failed or ignored, and the smoke
+  run passed with its new no-counting check.
+- After the review fixes, `cargo xtask bench` (busy machine; provisional
+  until a quiet-machine run): update p99s of 12.5 ns per counter, 12.5 ns per
+  timing and 6.25 ns switched off; loading the largest file took 0.173 ms at
+  the 95th percentile, under the 1 ms budget.
 - `cargo xtask bench`, run while other sessions' gates were building: the
   usage recorder's 99th percentiles were 18.75 ns per counter update, 25.0 ns
   per timing update and 12.5 ns per switched-off call, all under the 100 ns
@@ -193,4 +237,6 @@ folders; no real usage was collected.
   deleted the file. Syrinx closed cleanly (exit code 0). This is not the
   owner's visual acceptance. UI Automation's Toggle on the switch did nothing,
   as for Customize's existing Reduce transparency switch; GPUI does not map
-  Toggle to a click.
+  Toggle to a click. The check was repeated after the review fixes on a fresh
+  profile with the same results; the note now reads "Nothing is sent
+  anywhere. You can delete the counts at any time."

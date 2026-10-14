@@ -14,7 +14,7 @@ fn preferences(
                 settings,
                 destinations,
             } => return (settings, destinations),
-            SessionEvent::Usage(Ok(_)) => continue,
+            SessionEvent::Usage { .. } => continue,
             event => panic!("expected synthetic preferences, got {event:?}"),
         }
     }

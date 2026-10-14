@@ -361,7 +361,7 @@ fn create_close_fixture(
             BrowserEvent::Url { id, url: actual } if id == expected && actual == url => {
                 source_changed = true;
             }
-            BrowserEvent::NavigationCompleted { id, success: true } if id == expected => {
+            BrowserEvent::NavigationCompleted { id, success: true, .. } if id == expected => {
                 navigated = true
             }
             BrowserEvent::CloseRequested { id } if id == expected => requested = true,
@@ -406,7 +406,7 @@ fn describe_event(event: &BrowserEvent) -> String {
         BrowserEvent::CloseRequested { id } => format!("CloseRequested {id}"),
         BrowserEvent::Url { id, url } => format!("Url {id} {url}"),
         BrowserEvent::Loading { id, loading } => format!("Loading {id} {loading}"),
-        BrowserEvent::NavigationCompleted { id, success } => {
+        BrowserEvent::NavigationCompleted { id, success, .. } => {
             format!("NavigationCompleted {id} {success}")
         }
         BrowserEvent::Suspended { id, suspended } => format!("Suspended {id} {suspended}"),
@@ -428,7 +428,9 @@ fn wait_navigation(
             BrowserEvent::Url { id, url } if id == expected && url == "about:blank" => {
                 source_changed = true;
             }
-            BrowserEvent::NavigationCompleted { id, success: true } if id == expected => {
+            BrowserEvent::NavigationCompleted {
+                id, success: true, ..
+            } if id == expected => {
                 completed = true;
             }
             _ => {}
@@ -493,9 +495,9 @@ fn check_event(event: &BrowserEvent) -> Result<(), String> {
         BrowserEvent::ProcessFailed { id, kind } => Err(format!(
             "Synthetic tab {id} runtime process failed ({kind})."
         )),
-        BrowserEvent::NavigationCompleted { id, success: false } => {
-            Err(format!("Synthetic tab {id} navigation failed."))
-        }
+        BrowserEvent::NavigationCompleted {
+            id, success: false, ..
+        } => Err(format!("Synthetic tab {id} navigation failed.")),
         BrowserEvent::Stopped => Err("Synthetic browser stopped before shutdown.".into()),
         BrowserEvent::PopupBlocked { id } => Err(format!(
             "Synthetic tab {id} unexpectedly requested a popup."

@@ -294,6 +294,9 @@ pub enum BrowserEvent {
     NavigationCompleted {
         id: u64,
         success: bool,
+        /// The navigation failed only because it was stopped or replaced (WebView2's
+        /// `OperationCanceled`), which is not a failure to count (AN-01).
+        cancelled: bool,
     },
     ProcessFailed {
         id: u64,

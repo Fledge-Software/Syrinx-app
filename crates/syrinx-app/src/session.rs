@@ -14,7 +14,7 @@ pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
 pub use recovery::RecoveryPrompt;
 pub use synthetic::SyntheticCatalogue;
-pub use usage::{UsageControl, UsageError, UsageStatus};
+pub use usage::{STATE_FOLDER, UsageControl, UsageError, UsageStatus, usage_file};
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -251,7 +251,11 @@ pub enum SessionEvent {
     /// The answer to `SnapshotBeforeUpdate`; an update installs only after `Ok`.
     UpdateSnapshot(Result<(), SessionError>),
     /// Whether usage counting is on: once at start-up, then after each `Usage` command.
-    Usage(Result<UsageStatus, SessionError>),
+    Usage {
+        /// The worker's real status, sent with every problem so the window never shows a stale one.
+        status: UsageStatus,
+        problem: Option<SessionError>,
+    },
     /// Connections have closed before this event; joining the worker is now safe.
     Stopped,
 }
@@ -480,17 +484,43 @@ fn start_usage(
     if store.previous_shutdown() == ShutdownState::Unclean {
         usage.error(ErrorCategory::UncleanShutdown);
     }
-    if let Some(problem) = problem {
-        emit_recoverable(events, SessionError::Usage(problem))?;
-    }
-    emit(events, SessionEvent::Usage(Ok(collector.status())))?;
+    emit(
+        events,
+        SessionEvent::Usage {
+            status: collector.status(),
+            problem: problem.map(SessionError::Usage),
+        },
+    )?;
     Ok(collector)
 }
 
-/// Today's local date, or `None` when Windows cannot say, which leaves counting unchanged.
+/// Today's local date; the UTC day when Windows cannot say, and `None` only without any clock.
 fn local_today() -> Option<UsageDate> {
-    let text = syrinx_platform::calendar::local_iso_date().ok()?;
-    UsageDate::parse(&text)
+    match syrinx_platform::calendar::local_iso_date() {
+        Ok(text) => UsageDate::parse(&text),
+        Err(error) => {
+            // Only the Windows error code is logged; the UTC day is at most one day off.
+            eprintln!(
+                "Windows could not report today's local date ({:?})",
+                error.code()
+            );
+            utc_today()
+        }
+    }
+}
+
+/// The UTC calendar day, used only when Windows cannot report the local one.
+fn utc_today() -> Option<UsageDate> {
+    let seconds = match utc_seconds() {
+        Ok(seconds) => seconds,
+        Err(_) => return None,
+    };
+    let days = i32::try_from(seconds.div_euclid(86_400));
+    let epoch = UsageDate::from_ymd(1970, 1, 1);
+    match (days, epoch) {
+        (Ok(days), Some(epoch)) => Some(epoch.plus_days(days)),
+        _ => None,
+    }
 }
 
 fn startup_session(
@@ -684,8 +714,11 @@ impl Worker {
                 delay
             };
             let received = commands.recv_timeout(wait);
-            // The worker's existing wake-ups carry the five-minute usage write; it adds none.
-            if let Err(error) = usage.write_if_due(Instant::now()) {
+            // The worker's existing wake-ups carry the five-minute usage write; it adds none,
+            // and reads no clock unless a write is waiting.
+            if usage.pending()
+                && let Err(error) = usage.write_if_due(Instant::now())
+            {
                 emit_recoverable(events, SessionError::Usage(error))?;
             }
             match received {
@@ -694,10 +727,9 @@ impl Worker {
                     return self.settle_titles(store, true, events);
                 }
                 Ok(SessionCommand::Usage(control)) => {
-                    let result = usage
-                        .control(control, local_today(), Instant::now())
-                        .map_err(SessionError::Usage);
-                    emit(events, SessionEvent::Usage(result))?;
+                    let (status, problem) = usage.control(control, local_today(), Instant::now());
+                    let problem = problem.map(SessionError::Usage);
+                    emit(events, SessionEvent::Usage { status, problem })?;
                 }
                 Ok(command) => {
                     self.handle(store, command, events)?;
@@ -1148,7 +1180,8 @@ enum Counted {
     Nothing,
 }
 
-/// The feature counter a tab command can count; switching by click is counted in the window.
+/// The feature counter a tab command can count; switching by click or key is counted in the
+/// window, which knows whether a key or a palette command asked.
 fn counted_feature(command: &SessionCommand) -> Counted {
     use HomeEntryAction as Home;
     match command {
@@ -1171,7 +1204,6 @@ fn counted_feature(command: &SessionCommand) -> Counted {
         SessionCommand::CloseTab(_)
         | SessionCommand::CloseActive
         | SessionCommand::ObserveClosed(_) => Counted::IfChanged(Feature::TabClosed),
-        SessionCommand::CycleActive { .. } => Counted::IfChanged(Feature::TabSwitchedKeyboard),
         SessionCommand::SaveActive => Counted::IfChanged(Feature::SavedSaved),
         SessionCommand::Unsave(_) => Counted::IfChanged(Feature::SavedRemoved),
         SessionCommand::Folder(FolderCommand::Create { .. }) => {

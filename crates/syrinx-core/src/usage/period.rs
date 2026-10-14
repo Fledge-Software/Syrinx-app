@@ -34,14 +34,17 @@ impl UsageDate {
         if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
             return None;
         }
+        // Every byte in the range must be an ASCII digit; at most four, so no overflow.
         let number = |range: std::ops::Range<usize>| -> Option<u32> {
-            let digits = &text[range];
-            digits
-                .bytes()
-                .all(|byte| byte.is_ascii_digit())
-                .then(|| digits.parse().ok())?
+            bytes[range].iter().try_fold(0, |value, byte| {
+                byte.is_ascii_digit()
+                    .then(|| value * 10 + u32::from(byte - b'0'))
+            })
         };
-        let year = i32::try_from(number(0..4)?).ok()?;
+        let year = match i32::try_from(number(0..4)?) {
+            Ok(year) => year,
+            Err(_) => return None,
+        };
         Self::from_ymd(year, number(5..7)?, number(8..10)?)
     }
 
@@ -114,6 +117,9 @@ pub struct Period {
     pub last_counted: UsageDate,
     /// Days in the period on which Syrinx started at least once.
     pub days_used: u32,
+    /// The day a completed period closed, its reported end (the proposal's `period_end`);
+    /// `None` while the period is current, whose end is the day of export.
+    pub closed_on: Option<UsageDate>,
     pub counts: Counts,
 }
 
@@ -124,13 +130,9 @@ impl Period {
             start: today,
             last_counted: today,
             days_used: 1,
+            closed_on: None,
             counts: Counts::default(),
         }
-    }
-
-    /// The last day of the period's 30-day span, the end a completed period reports.
-    pub fn span_end(&self) -> UsageDate {
-        self.start.plus_days(PERIOD_DAYS - 1)
     }
 }
 
@@ -154,7 +156,8 @@ impl UsageFile {
     /// drops the period before it, and otherwise counts a new day of use.
     pub fn start_day(&mut self, today: UsageDate) {
         if today >= self.current.start.plus_days(PERIOD_DAYS) {
-            let closed = std::mem::replace(&mut self.current, Period::starting(today));
+            let mut closed = std::mem::replace(&mut self.current, Period::starting(today));
+            closed.closed_on = Some(today);
             self.previous = Some(closed);
             return;
         }

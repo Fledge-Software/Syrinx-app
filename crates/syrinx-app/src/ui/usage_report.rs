@@ -11,6 +11,7 @@ use gpui::{
     Context, Div, FontWeight, InteractiveElement, ParentElement, Role, Stateful,
     StatefulInteractiveElement, Styled, div, px,
 };
+use syrinx_core::TabId;
 use syrinx_core::usage::{Feature, Timing, UsageRecorder};
 use syrinx_ui::Palette;
 use syrinx_ui::metrics::text;
@@ -24,14 +25,25 @@ use crate::theme::rgba;
 
 /// The switch's approved wording (`docs/proposals/an-01-02-local-analytics.md`).
 const SWITCH_LABEL: &str = "Count how I use Syrinx, on this computer only";
-const SWITCH_NOTE: &str =
-    "Nothing is sent anywhere. You can view, export or delete the counts at any time.";
+/// Shortened by the owner (2026-10-14) until AN-02 adds viewing and exporting; AN-02 restores
+/// "Nothing is sent anywhere. You can view, export or delete the counts at any time."
+const SWITCH_NOTE: &str = "Nothing is sent anywhere. You can delete the counts at any time.";
 
 /// The step that waits for the owner to confirm.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Confirming {
     TurnOff,
     Reset,
+}
+
+/// A tab selection being timed until its page is shown.
+#[derive(Clone, Copy, Debug)]
+struct PendingSwitch {
+    started: Instant,
+    /// The tab that was active when the owner asked.
+    from: Option<TabId>,
+    /// The tab to be shown; learned from the next state when the request could not say.
+    target: Option<TabId>,
 }
 
 /// The window's usage state: the shared counters and what the section shows.
@@ -46,9 +58,9 @@ pub(super) struct UsageState {
     launched: Instant,
     first_frame: Option<Duration>,
     session_loaded: bool,
-    startup_recorded: bool,
-    /// When the owner asked for another tab, until that tab's page is shown.
-    switch_started: Option<Instant>,
+    /// Set once recorded, or when start-up waited on the owner and is not worth timing.
+    startup_done: bool,
+    switch: Option<PendingSwitch>,
 }
 
 impl UsageState {
@@ -61,8 +73,8 @@ impl UsageState {
             launched,
             first_frame: None,
             session_loaded: false,
-            startup_recorded: false,
-            switch_started: None,
+            startup_done: false,
+            switch: None,
         }
     }
 
@@ -74,14 +86,17 @@ impl UsageState {
         }
     }
 
-    /// The restored session is listed: the second start-up timing ends here.
+    /// A recovery or repair prompt waited on the owner, so this start-up is not timed.
+    pub(super) fn startup_waited(&mut self) {
+        self.startup_done = true;
+    }
+
+    /// The restored session is listed: the start-up timings can be recorded.
     pub(super) fn session_restored(&mut self) {
         if self.session_loaded {
             return;
         }
         self.session_loaded = true;
-        self.recorder
-            .time(Timing::StartupSessionRestored, self.launched.elapsed());
         self.record_startup();
     }
 
@@ -90,29 +105,48 @@ impl UsageState {
         let Some(first_frame) = self.first_frame else {
             return;
         };
-        if !self.session_loaded || self.startup_recorded {
+        if !self.session_loaded || self.startup_done {
             return;
         }
-        self.startup_recorded = true;
+        self.startup_done = true;
         self.recorder.time(Timing::StartupFirstFrame, first_frame);
+        self.recorder
+            .time(Timing::StartupSessionRestored, self.launched.elapsed());
     }
 
-    /// Starts timing a tab selection; the clock is read only while counting is on.
-    pub(super) fn switch_requested(&mut self) {
-        self.switch_started = self.recorder.is_enabled().then(Instant::now);
+    /// Starts timing a selection away from `from`; the clock is read only while counting is on.
+    pub(super) fn switch_requested(&mut self, from: Option<TabId>, target: Option<TabId>) {
+        self.switch = self.recorder.is_enabled().then(|| PendingSwitch {
+            started: Instant::now(),
+            from,
+            target,
+        });
     }
 
-    /// A selection that ends on Home shows no page, so it has nothing to time.
-    pub(super) fn switch_abandoned(&mut self) {
-        self.switch_started = None;
-    }
-
-    /// A page was shown: the selection that asked for it is complete.
-    pub(super) fn page_shown(&mut self) {
-        if let Some(started) = self.switch_started.take() {
-            self.recorder
-                .time(Timing::TabSwitchToVisible, started.elapsed());
+    /// A state arrived: a selection that changed nothing, or ended on Home, has nothing to
+    /// time; otherwise the active tab is the one to wait for.
+    pub(super) fn state_arrived(&mut self, active: Option<TabId>, home: bool) {
+        let Some(switch) = &mut self.switch else {
+            return;
+        };
+        if home || active == switch.from {
+            self.switch = None;
+            return;
         }
+        switch.target = active;
+    }
+
+    /// A page was shown; only the selected tab's page completes the selection.
+    pub(super) fn page_shown(&mut self, id: TabId) {
+        let Some(switch) = self.switch else {
+            return;
+        };
+        if switch.target != Some(id) {
+            return;
+        }
+        self.switch = None;
+        self.recorder
+            .time(Timing::TabSwitchToVisible, switch.started.elapsed());
     }
 }
 
@@ -121,15 +155,17 @@ impl BrowserView {
         self.usage.recorder.count(feature);
     }
 
-    /// The session's answer: at start-up, and after each switch or reset.
-    pub(super) fn usage_status_received(&mut self, result: Result<UsageStatus, SessionError>) {
+    /// The session's answer at start-up and after each control: always the real status.
+    pub(super) fn usage_status_received(
+        &mut self,
+        status: UsageStatus,
+        problem: Option<SessionError>,
+    ) {
         self.usage.confirming = None;
-        match result {
-            Ok(status) => {
-                self.usage.status = Some(status);
-                self.usage.problem = None;
-            }
-            Err(error) => self.usage.problem = Some(error.to_string()),
+        self.usage.status = Some(status);
+        self.usage.problem = problem.map(|problem| problem.to_string());
+        if let Some(problem) = &self.usage.problem {
+            self.message = problem.clone();
         }
     }
 
@@ -297,4 +333,106 @@ fn switch_text(palette: &Palette) -> Div {
                 .text_color(rgba(palette.text_muted))
                 .child(SWITCH_NOTE),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tab(id: u64) -> TabId {
+        TabId::new(id).expect("synthetic tab id")
+    }
+
+    fn counting() -> UsageState {
+        let recorder = Arc::new(UsageRecorder::new());
+        recorder.switch_on();
+        UsageState::new(recorder, Instant::now())
+    }
+
+    fn timed(state: &UsageState) -> u32 {
+        let counts = state.recorder.take().unwrap_or_default();
+        counts.timing(Timing::TabSwitchToVisible).iter().sum()
+    }
+
+    #[test]
+    fn only_the_selected_tab_ends_a_switch() {
+        let mut state = counting();
+        state.switch_requested(Some(tab(1)), Some(tab(2)));
+        // Another page appearing first, such as a popup, is not the selection.
+        state.page_shown(tab(3));
+        assert_eq!(timed(&state), 0);
+        state.state_arrived(Some(tab(2)), false);
+        state.page_shown(tab(2));
+        assert_eq!(timed(&state), 1);
+        // The selection is complete; showing the page again records nothing.
+        state.page_shown(tab(2));
+        assert_eq!(timed(&state), 0);
+    }
+
+    #[test]
+    fn a_switch_learns_its_target_from_the_state() {
+        let mut state = counting();
+        state.switch_requested(Some(tab(1)), None);
+        state.state_arrived(Some(tab(4)), false);
+        state.page_shown(tab(4));
+        assert_eq!(timed(&state), 1);
+    }
+
+    #[test]
+    fn a_switch_that_changes_nothing_or_ends_on_home_is_dropped() {
+        let mut state = counting();
+        // Ctrl Tab with a single tab: the state keeps the same active tab.
+        state.switch_requested(Some(tab(1)), None);
+        state.state_arrived(Some(tab(1)), false);
+        state.page_shown(tab(1));
+        assert_eq!(timed(&state), 0);
+
+        state.switch_requested(Some(tab(1)), Some(tab(5)));
+        state.state_arrived(Some(tab(5)), true);
+        state.page_shown(tab(5));
+        assert_eq!(timed(&state), 0);
+    }
+
+    #[test]
+    fn nothing_is_timed_while_counting_is_off() {
+        let mut state = UsageState::new(Arc::new(UsageRecorder::new()), Instant::now());
+        state.switch_requested(Some(tab(1)), Some(tab(2)));
+        assert!(state.switch.is_none(), "no clock is read while off");
+    }
+
+    #[test]
+    fn a_start_that_waited_on_the_owner_is_not_timed() {
+        let mut state = counting();
+        state.startup_waited();
+        state.frame_drawn();
+        state.session_restored();
+        let counts = state.recorder.take().unwrap_or_default();
+        assert_eq!(
+            counts.timing(Timing::StartupFirstFrame).iter().sum::<u32>(),
+            0
+        );
+        assert_eq!(
+            counts
+                .timing(Timing::StartupSessionRestored)
+                .iter()
+                .sum::<u32>(),
+            0
+        );
+
+        let mut state = counting();
+        state.frame_drawn();
+        state.session_restored();
+        let counts = state.recorder.take().unwrap_or_default();
+        assert_eq!(
+            counts.timing(Timing::StartupFirstFrame).iter().sum::<u32>(),
+            1
+        );
+        assert_eq!(
+            counts
+                .timing(Timing::StartupSessionRestored)
+                .iter()
+                .sum::<u32>(),
+            1
+        );
+    }
 }

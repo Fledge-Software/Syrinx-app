@@ -63,6 +63,7 @@ fn exercise_slow_hidden_load(
             BrowserEvent::NavigationCompleted {
                 id: SLOW_ID,
                 success: true,
+                ..
             } => completed = Some(started.elapsed()),
             BrowserEvent::Suspended {
                 id: SLOW_ID,
@@ -171,7 +172,8 @@ pub(super) fn exercise(
         checked_event(events, deadline)?,
         BrowserEvent::NavigationCompleted {
             id: 1500,
-            success: true
+            success: true,
+            ..
         }
     ) {}
     println!("Synthetic video navigation completed.");

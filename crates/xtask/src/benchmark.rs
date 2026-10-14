@@ -66,7 +66,7 @@ pub fn run() -> Result<(), String> {
         return Err("Search benchmark failed: at least one case has p95 >= 5 ms.".to_owned());
     }
     if !usage_passed {
-        return Err("Usage benchmark failed: an update's p99 is 100 ns or more.".to_owned());
+        return Err("Usage benchmark failed: an update's p99 is 100 ns or more, or loading the file takes 1 ms or more at p95.".to_owned());
     }
     Ok(())
 }

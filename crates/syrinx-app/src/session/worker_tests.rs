@@ -131,7 +131,7 @@ fn next_event(events: &mut UnboundedReceiver<SessionEvent>) -> SessionEvent {
     // The startup preferences and usage status have their own tests; tab-model tests read past them.
     loop {
         match next_any_event(events) {
-            SessionEvent::Preferences { .. } | SessionEvent::Usage(Ok(_)) => continue,
+            SessionEvent::Preferences { .. } | SessionEvent::Usage { .. } => continue,
             event => return event,
         }
     }

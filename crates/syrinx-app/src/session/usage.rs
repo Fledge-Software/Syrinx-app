@@ -1,6 +1,6 @@
 //! Keeps the usage counts in `usage.json` beside the database, only while counting is on (AN-01).
 //!
-//! The file existing is what "on" means: switching off deletes it, so no counts linger.
+//! The file existing is what "on" means, unless the off marker says a switch-off is unfinished.
 
 use std::{
     fs::{self, File},
@@ -14,14 +14,24 @@ use syrinx_core::usage::{
     ErrorCategory, Feature, MAX_FILE_BYTES, UsageDate, UsageFile, UsageRecorder,
 };
 
+/// The profile folder holding the database, the deletion journal and the usage file.
+pub const STATE_FOLDER: &str = "State";
 /// Beside `syrinx.db`, so D13's synced-folder guard covers it; backups copy only the database.
-pub(super) const FILE_NAME: &str = "usage.json";
+const FILE_NAME: &str = "usage.json";
 /// Each write goes here first, then replaces the file in one rename.
 const REPLACEMENT_NAME: &str = "usage.json.new";
 /// An unreadable file is moved here, replacing any earlier one, and counting starts afresh.
 const DAMAGED_NAME: &str = "usage.json.damaged";
+/// Written before switching off deletes anything, and removed last: while it exists, counting
+/// stays off and the next start finishes the deletion.
+const OFF_NAME: &str = "usage.off";
 /// The counts are written at most this often while in use, and once at a clean exit.
 pub(super) const WRITE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// Where a profile keeps its usage file; the smoke run checks that it never appears.
+pub fn usage_file(profile: &Path) -> PathBuf {
+    profile.join(STATE_FOLDER).join(FILE_NAME)
+}
 
 /// What the owner switches in Customize's Usage report section.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,10 +55,11 @@ pub struct UsageStatus {
 pub enum UsageError {
     Read,
     Write,
+    /// Counting is off, but some counts could not be deleted yet; the next start retries.
     Delete,
     /// The file was unreadable, so it was set aside and counting started afresh.
     Damaged,
-    /// Today's date is unknown, so a period cannot start.
+    /// Today's date is unknown, so a period cannot start or close.
     Clock,
 }
 
@@ -56,10 +67,13 @@ impl std::fmt::Display for UsageError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Read => "Syrinx couldn't read its usage counts, so it isn't counting this time",
-            Self::Write => "Syrinx couldn't save its usage counts; it will try again",
-            Self::Delete => "Syrinx couldn't delete its usage counts",
+            Self::Write => "Syrinx couldn't save its usage counts",
+            Self::Delete => {
+                "Counting is off, but Syrinx couldn't delete all its usage counts yet; it will \
+                 finish when it next starts"
+            }
             Self::Damaged => "Syrinx's usage counts were unreadable, so it started them afresh",
-            Self::Clock => "Syrinx couldn't read today's date, so usage counting didn't change",
+            Self::Clock => "Syrinx couldn't read today's date for its usage counts",
         })
     }
 }
@@ -96,26 +110,38 @@ impl UsageCollector {
     }
 
     fn open(&mut self, today: Option<UsageDate>, now: Instant) -> Result<(), UsageError> {
+        // An unfinished switch-off is finished, never undone.
+        if self.path(OFF_NAME).exists() {
+            return self.finish_off();
+        }
         let Some(bytes) = read_bounded(&self.path(FILE_NAME)).map_err(|_| UsageError::Read)? else {
             return Ok(());
         };
-        let Some(today) = today else {
-            return Err(UsageError::Clock);
-        };
-        match UsageFile::decode(&bytes) {
-            Ok(mut file) => {
+        let decoded = UsageFile::decode(&bytes);
+        match (decoded, today) {
+            (Ok(mut file), Some(today)) => {
                 file.start_day(today);
                 self.start(file);
                 self.recorder.count(Feature::AppStarted);
                 Ok(())
             }
-            Err(_) => self.start_afresh(today, now),
+            // Without a date the file keeps counting as it is: no new day, no rotation.
+            (Ok(file), None) => {
+                self.start(file);
+                self.recorder.count(Feature::AppStarted);
+                Err(UsageError::Clock)
+            }
+            (Err(_), today) => self.start_afresh(today, now),
         }
     }
 
-    /// Moves a damaged file aside and saves a new one at once, so counting stays on.
-    fn start_afresh(&mut self, today: UsageDate, now: Instant) -> Result<(), UsageError> {
+    /// Moves a damaged file aside and, with a date, saves a new one at once so counting
+    /// stays on; without one, nothing remains that could say counting is on.
+    fn start_afresh(&mut self, today: Option<UsageDate>, now: Instant) -> Result<(), UsageError> {
         fs::rename(self.path(FILE_NAME), self.path(DAMAGED_NAME)).map_err(|_| UsageError::Read)?;
+        let Some(today) = today else {
+            return Err(UsageError::Clock);
+        };
         self.start(UsageFile::begin(today));
         self.recorder.count(Feature::AppStarted);
         self.recorder.error(ErrorCategory::UsageFileReset);
@@ -157,26 +183,34 @@ impl UsageCollector {
         self.write(now)
     }
 
+    /// Applies a control; the status is the real one afterwards, even when it failed.
     pub(super) fn control(
         &mut self,
         control: UsageControl,
         today: Option<UsageDate>,
         now: Instant,
-    ) -> Result<UsageStatus, UsageError> {
-        match control {
-            UsageControl::TurnOn if self.file.is_none() => self.begin(today, now)?,
-            UsageControl::TurnOff => self.turn_off()?,
-            UsageControl::Reset if self.file.is_some() => self.begin(today, now)?,
-            UsageControl::TurnOn | UsageControl::Reset => {}
-        }
-        Ok(self.status())
+    ) -> (UsageStatus, Option<UsageError>) {
+        let result = match control {
+            UsageControl::TurnOn if self.file.is_none() => self.begin(today, now),
+            UsageControl::TurnOff => self.turn_off(),
+            UsageControl::Reset if self.file.is_some() => self.begin(today, now),
+            UsageControl::TurnOn | UsageControl::Reset => Ok(()),
+        };
+        (self.status(), result.err())
     }
 
     /// Starts one empty period today and saves it, which is what turns counting on.
     fn begin(&mut self, today: Option<UsageDate>, now: Instant) -> Result<(), UsageError> {
         let today = today.ok_or(UsageError::Clock)?;
-        // Reset also deletes counts set aside from a damaged file.
-        remove_if_present(&self.path(DAMAGED_NAME))?;
+        // Reset deletes both periods and counts set aside from a damaged file; a leftover
+        // switch-off is finished first, so nothing earlier survives into the new period.
+        self.recorder.switch_off();
+        self.file = None;
+        if let Err(error) = self.finish_off() {
+            // Old counts that cannot be deleted must not come back as "on": stay off durably.
+            self.turn_off()?;
+            return Err(error);
+        }
         self.start(UsageFile::begin(today));
         if let Err(error) = self.write(now) {
             // Without a file, counting cannot be on; leave nothing half-made.
@@ -186,12 +220,24 @@ impl UsageCollector {
         Ok(())
     }
 
-    /// Stops counting and deletes every usage file, so nothing lingers while off.
+    /// Stops counting at once, marks the switch-off durably, then deletes every usage file.
     fn turn_off(&mut self) -> Result<(), UsageError> {
         self.recorder.switch_off();
         self.file = None;
         self.unwritten = false;
-        for name in [FILE_NAME, REPLACEMENT_NAME, DAMAGED_NAME] {
+        let marked = write_durably(&self.path(OFF_NAME), b"");
+        let deleted = self.finish_off();
+        match (marked, deleted) {
+            (_, Ok(())) => Ok(()),
+            // The marker keeps the next start off while the deletion waits.
+            (Ok(()), Err(error)) => Err(error),
+            (Err(_), Err(_)) => Err(UsageError::Delete),
+        }
+    }
+
+    /// Deletes the usage files, then the off marker last.
+    fn finish_off(&mut self) -> Result<(), UsageError> {
+        for name in [FILE_NAME, REPLACEMENT_NAME, DAMAGED_NAME, OFF_NAME] {
             remove_if_present(&self.path(name))?;
         }
         Ok(())
@@ -209,12 +255,9 @@ impl UsageCollector {
         // A failure is retried at the next interval, not on every command.
         self.last_write = now;
         self.unwritten = true;
-        replace_file(
-            &self.path(REPLACEMENT_NAME),
-            &self.path(FILE_NAME),
-            text.as_bytes(),
-        )
-        .map_err(|_| UsageError::Write)?;
+        let replacement = self.path(REPLACEMENT_NAME);
+        write_durably(&replacement, text.as_bytes()).map_err(|_| UsageError::Write)?;
+        fs::rename(replacement, self.path(FILE_NAME)).map_err(|_| UsageError::Write)?;
         self.unwritten = false;
         Ok(())
     }
@@ -237,13 +280,11 @@ fn read_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
-/// Writes and flushes the replacement, then renames it over the file in one step.
-fn replace_file(replacement: &Path, target: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut file = File::create(replacement)?;
+/// Creates or truncates the file and flushes it to disk.
+fn write_durably(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = File::create(path)?;
     file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    fs::rename(replacement, target)
+    file.sync_all()
 }
 
 fn remove_if_present(path: &Path) -> Result<(), UsageError> {
@@ -257,6 +298,7 @@ fn remove_if_present(path: &Path) -> Result<(), UsageError> {
 #[cfg(test)]
 mod tests {
     use std::{
+        os::windows::fs::OpenOptionsExt,
         sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -282,11 +324,15 @@ mod tests {
             fs::create_dir(&path).expect("create test-owned folder");
             Self(path)
         }
+
+        fn has(&self, name: &str) -> bool {
+            self.0.join(name).exists()
+        }
     }
 
     impl Drop for Folder {
         fn drop(&mut self) {
-            for name in [FILE_NAME, REPLACEMENT_NAME, DAMAGED_NAME] {
+            for name in [FILE_NAME, REPLACEMENT_NAME, DAMAGED_NAME, OFF_NAME] {
                 if let Err(error) = remove_if_present(&self.0.join(name)) {
                     eprintln!("synthetic usage file left behind: {error}");
                 }
@@ -307,6 +353,17 @@ mod tests {
             .expect("the usage file exists")
     }
 
+    /// A collector on `folder` with counting switched on today.
+    fn counting(folder: &Folder, recorder: &Arc<UsageRecorder>) -> UsageCollector {
+        let start = Instant::now();
+        let (mut collector, _) =
+            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), start);
+        let (status, problem) = collector.control(UsageControl::TurnOn, Some(today()), start);
+        assert_eq!(problem, None);
+        assert_eq!(status.since, Some(today()));
+        collector
+    }
+
     #[test]
     fn without_a_file_nothing_is_counted_or_armed() {
         let folder = Folder::new();
@@ -320,7 +377,7 @@ mod tests {
         let later = start + WRITE_INTERVAL * 3;
         assert_eq!(collector.write_if_due(later), Ok(()));
         assert_eq!(collector.finish(later), Ok(()));
-        assert!(!folder.0.join(FILE_NAME).exists());
+        assert!(!folder.has(FILE_NAME));
     }
 
     #[test]
@@ -328,12 +385,7 @@ mod tests {
         let folder = Folder::new();
         let recorder = Arc::new(UsageRecorder::new());
         let start = Instant::now();
-        let (mut collector, _) =
-            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), start);
-        let status = collector
-            .control(UsageControl::TurnOn, Some(today()), start)
-            .expect("switching on writes the file");
-        assert_eq!(status.since, Some(today()));
+        let mut collector = counting(&folder, &recorder);
         let first = modified(&folder);
 
         // An unchanged recorder arms nothing, however long Syrinx stays idle.
@@ -346,12 +398,12 @@ mod tests {
         assert!(collector.pending());
         assert_eq!(collector.write_if_due(start + WRITE_INTERVAL / 2), Ok(()));
         assert!(collector.pending(), "not yet due");
-        assert_eq!(collector.write_if_due(start + WRITE_INTERVAL), Ok(()));
+        assert_eq!(collector.write_if_due(start + WRITE_INTERVAL * 11), Ok(()));
         assert!(!collector.pending());
         let bytes = fs::read(folder.0.join(FILE_NAME)).expect("read synthetic usage file");
         let file = UsageFile::decode(&bytes).expect("valid usage file");
         assert_eq!(file.current.counts.feature(Feature::TabCreated), 1);
-        assert!(!folder.0.join(REPLACEMENT_NAME).exists());
+        assert!(!folder.has(REPLACEMENT_NAME));
     }
 
     #[test]
@@ -360,11 +412,80 @@ mod tests {
         let recorder = Arc::new(UsageRecorder::new());
         let start = Instant::now();
         let (mut collector, _) = UsageCollector::load(recorder.clone(), &folder.0, None, start);
-        assert_eq!(
-            collector.control(UsageControl::TurnOn, None, start),
-            Err(UsageError::Clock)
+        let (status, problem) = collector.control(UsageControl::TurnOn, None, start);
+        assert!(!status.counting);
+        assert_eq!(problem, Some(UsageError::Clock));
+        assert!(!recorder.is_enabled());
+        assert!(!folder.has(FILE_NAME));
+    }
+
+    #[test]
+    fn an_existing_file_keeps_counting_when_the_date_is_unknown() {
+        let folder = Folder::new();
+        let recorder = Arc::new(UsageRecorder::new());
+        drop(counting(&folder, &recorder));
+        let (collector, problem) =
+            UsageCollector::load(recorder.clone(), &folder.0, None, Instant::now());
+        assert_eq!(problem, Some(UsageError::Clock));
+        assert!(collector.status().counting, "the file still says on");
+        assert!(recorder.is_enabled());
+    }
+
+    #[test]
+    fn a_switch_off_that_cannot_delete_stays_off_and_finishes_at_the_next_start() {
+        let folder = Folder::new();
+        let recorder = Arc::new(UsageRecorder::new());
+        let mut collector = counting(&folder, &recorder);
+
+        // Another program holds the file open without delete sharing.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(folder.0.join(FILE_NAME))
+            .expect("hold the synthetic usage file");
+        let (status, problem) = collector.control(UsageControl::TurnOff, None, Instant::now());
+        assert!(
+            !status.counting,
+            "counting stops even though deletion failed"
+        );
+        assert_eq!(problem, Some(UsageError::Delete));
+        assert!(!recorder.is_enabled());
+        assert!(folder.has(FILE_NAME) && folder.has(OFF_NAME));
+
+        // While the file is still held, the next start stays off.
+        let (collector, problem) =
+            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+        assert!(!collector.status().counting);
+        assert_eq!(problem, Some(UsageError::Delete));
+        assert!(!recorder.is_enabled());
+
+        // Once released, the next start finishes the deletion and removes the marker.
+        drop(held);
+        let (collector, problem) =
+            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+        assert!(!collector.status().counting);
+        assert_eq!(problem, None);
+        assert!(!folder.has(FILE_NAME) && !folder.has(OFF_NAME));
+    }
+
+    #[test]
+    fn a_failed_reset_reports_the_status_it_left() {
+        let folder = Folder::new();
+        let recorder = Arc::new(UsageRecorder::new());
+        let mut collector = counting(&folder, &recorder);
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(folder.0.join(FILE_NAME))
+            .expect("hold the synthetic usage file");
+        let (status, problem) =
+            collector.control(UsageControl::Reset, Some(today()), Instant::now());
+        assert!(problem.is_some());
+        assert!(
+            !status.counting,
+            "a reset that could not delete leaves counting off"
         );
         assert!(!recorder.is_enabled());
-        assert!(!folder.0.join(FILE_NAME).exists());
+        drop(held);
     }
 }

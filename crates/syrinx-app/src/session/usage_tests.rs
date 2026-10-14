@@ -18,15 +18,24 @@ fn read_usage(fixture: &Fixture) -> UsageFile {
     UsageFile::decode(&bytes).expect("the worker wrote a valid usage file")
 }
 
-/// The next usage status, skipping the tab states other commands publish.
-fn usage_status(events: &mut UnboundedReceiver<SessionEvent>) -> UsageStatus {
+/// The next usage status and problem, skipping the tab states other commands publish.
+fn usage_event(
+    events: &mut UnboundedReceiver<SessionEvent>,
+) -> (UsageStatus, Option<SessionError>) {
     loop {
         match next_any_event(events) {
-            SessionEvent::Usage(result) => return result.expect("usage control succeeds"),
+            SessionEvent::Usage { status, problem } => return (status, problem),
             SessionEvent::Preferences { .. } | SessionEvent::State(_) => continue,
             event => panic!("expected a usage status, got {event:?}"),
         }
     }
+}
+
+/// The next usage status, which must report no problem.
+fn usage_status(events: &mut UnboundedReceiver<SessionEvent>) -> UsageStatus {
+    let (status, problem) = usage_event(events);
+    assert_eq!(problem, None);
+    status
 }
 
 /// The status a worker reports as it starts, read with the first state after it.
@@ -152,7 +161,8 @@ fn switching_on_counts_into_the_file_and_switching_off_deletes_it() {
     assert_eq!(counts.feature(Feature::TabCreated), 2);
     assert_eq!(counts.feature(Feature::SavedSaved), 1);
     assert_eq!(counts.feature(Feature::FolderCreated), 1);
-    assert_eq!(counts.feature(Feature::TabSwitchedKeyboard), 2);
+    // Ctrl Tab is counted by the window, which can tell a key from a palette command.
+    assert_eq!(counts.feature(Feature::TabSwitchedKeyboard), 0);
     assert_eq!(counts.feature(Feature::TabClosed), 1);
     assert_eq!(counts.feature(Feature::TabReopened), 1);
     assert_eq!(counts.timing(Timing::SearchTier1).iter().sum::<u32>(), 1);
@@ -232,7 +242,8 @@ fn reset_deletes_both_periods_and_starts_today() {
     send(&handle, SessionCommand::Usage(UsageControl::Reset));
     let reset = usage_status(&mut events);
     assert!(reset.counting);
-    assert_eq!(reset.since, Some(today));
+    // Compared with the worker's own dates, so a run across midnight cannot fail.
+    assert!(reset.since > status.since);
     stop(handle, &mut events);
 
     let file = read_usage(&fixture);
@@ -253,14 +264,10 @@ fn a_damaged_usage_file_is_set_aside_counted_once_and_counting_continues() {
     checked_io(fs::write(usage_path(&fixture), damaged));
 
     let (handle, mut events) = fixture.start();
-    assert!(matches!(
-        next_any_event(&mut events),
-        SessionEvent::Failure {
-            error: SessionError::Usage(UsageError::Damaged),
-            fatal: false
-        }
-    ));
-    assert!(started_status(&mut events).counting);
+    let (status, problem) = usage_event(&mut events);
+    assert!(status.counting, "the real status comes with the problem");
+    assert_eq!(problem, Some(SessionError::Usage(UsageError::Damaged)));
+    state(&mut events);
     stop(handle, &mut events);
     assert_eq!(
         checked_io(fs::read(fixture.0.join("usage.json.damaged"))),

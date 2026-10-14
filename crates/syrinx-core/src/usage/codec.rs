@@ -101,6 +101,12 @@ fn period_value(period: &Period) -> Value {
     let mut fields = vec![
         ("period_start", Value::Text(period.start.to_string())),
         ("last_counted", Value::Text(period.last_counted.to_string())),
+        (
+            "closed_on",
+            period
+                .closed_on
+                .map_or(Value::Null, |closed| Value::Text(closed.to_string())),
+        ),
         ("days_used", Value::Number(period.days_used.into())),
     ];
     fields.extend(sections(&period.counts));
@@ -199,10 +205,20 @@ fn file_from_value(value: Value) -> Result<UsageFile, UsageFileError> {
         Value::Null => None,
         period => Some(period_from_value(period)?),
     };
-    Ok(UsageFile {
-        current: period_from_value(current)?,
-        previous,
-    })
+    let current = period_from_value(current)?;
+    // Only a completed period has closed, and it closed before the current one began.
+    let closed = previous.as_ref().map(|previous| previous.closed_on);
+    match closed {
+        None | Some(Some(_)) if current.closed_on.is_none() => {}
+        _ => return Err(UsageFileError::Malformed),
+    }
+    if closed
+        .flatten()
+        .is_some_and(|closed| closed > current.start)
+    {
+        return Err(UsageFileError::Malformed);
+    }
+    Ok(UsageFile { current, previous })
 }
 
 /// Another version may have other fields, so its number is read before the shape is checked.
@@ -222,11 +238,12 @@ fn check_version(value: &Value) -> Result<(), UsageFileError> {
 }
 
 fn period_from_value(value: Value) -> Result<Period, UsageFileError> {
-    let [start, last, days, counts, commands, timings, errors] = expect_fields(
+    let [start, last, closed, days, counts, commands, timings, errors] = expect_fields(
         value,
         &[
             "period_start",
             "last_counted",
+            "closed_on",
             "days_used",
             "counts",
             "commands",
@@ -237,6 +254,13 @@ fn period_from_value(value: Value) -> Result<Period, UsageFileError> {
     let start = expect_date(start)?;
     let last_counted = expect_date(last)?;
     if last_counted < start {
+        return Err(UsageFileError::Malformed);
+    }
+    let closed_on = match closed {
+        Value::Null => None,
+        date => Some(expect_date(date)?),
+    };
+    if closed_on.is_some_and(|closed| closed < last_counted) {
         return Err(UsageFileError::Malformed);
     }
     let mut slots = [0; SLOT_COUNT];
@@ -262,6 +286,7 @@ fn period_from_value(value: Value) -> Result<Period, UsageFileError> {
     Ok(Period {
         start,
         last_counted,
+        closed_on,
         days_used: expect_u32(days)?,
         counts: Counts::from_slots(slots),
     })
@@ -428,10 +453,13 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Some(b'.' | b'e' | b'E' | b'-' | b'+')) {
             return Err(UsageFileError::Malformed);
         }
-        std::str::from_utf8(digits)
-            .ok()
-            .and_then(|digits| digits.parse().ok())
-            .ok_or(UsageFileError::Malformed)
+        // Accumulated digit by digit; a value past u64 is refused, never wrapped.
+        digits.iter().try_fold(0u64, |value, digit| {
+            value
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(u64::from(digit - b'0')))
+                .ok_or(UsageFileError::Malformed)
+        })
     }
 
     fn literal(&mut self, expected: &[u8]) -> Result<(), UsageFileError> {

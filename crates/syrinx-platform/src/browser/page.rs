@@ -12,6 +12,7 @@ use webview2_com::{
         COREWEBVIEW2_MOVE_FOCUS_REASON, COREWEBVIEW2_MOVE_FOCUS_REASON_NEXT,
         COREWEBVIEW2_MOVE_FOCUS_REASON_PREVIOUS, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
         COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_PROCESS_FAILED_KIND,
+        COREWEBVIEW2_WEB_ERROR_STATUS, COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED,
         ICoreWebView2Environment, ICoreWebView2Settings4,
     },
     MoveFocusRequestedEventHandler, NavigationCompletedEventHandler, ProcessFailedEventHandler,
@@ -396,10 +397,17 @@ fn register_navigation(view: &WebView, id: u64, events: EventSink) -> Result<(),
             });
             return Err(error);
         }
+        // A superseded or stopped navigation also fails, but nothing went wrong (AN-01); an
+        // unreadable status is reported as an ordinary failure.
+        let mut status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
+        let cancelled = !success.as_bool()
+            && unsafe { args.WebErrorStatus(&mut status) }.is_ok()
+            && status == COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED;
         // wry's Finished event also covers failed navigation attempts; report the native result.
         events.emit(BrowserEvent::NavigationCompleted {
             id,
             success: success.as_bool(),
+            cancelled,
         });
         Ok(())
     }));

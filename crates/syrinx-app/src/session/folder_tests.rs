@@ -22,7 +22,7 @@ fn stored_settings(events: &mut UnboundedReceiver<SessionEvent>) -> BTreeMap<Str
     loop {
         match next_any_event(events) {
             SessionEvent::Preferences { settings, .. } => return settings,
-            SessionEvent::Usage(Ok(_)) => continue,
+            SessionEvent::Usage { .. } => continue,
             event => panic!("expected synthetic preferences, got {event:?}"),
         }
     }

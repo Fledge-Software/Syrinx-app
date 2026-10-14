@@ -448,7 +448,7 @@ impl BrowserView {
                 return view;
             }
         }
-        view.start_session(data_dir.join("State"), window, cx);
+        view.start_session(data_dir.join(session::STATE_FOLDER), window, cx);
         view.start_browser(data_dir.join("WebView2"), window, cx);
         if let Some(links) = links {
             view.start_link_feed(links, window, cx);
@@ -534,6 +534,8 @@ impl BrowserView {
     fn session_event(&mut self, event: SessionEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
             SessionEvent::RecoveryOffered(prompt) => {
+                // Start-up then waited on the owner, so its timings would measure the owner.
+                self.usage.startup_waited();
                 if !self.closing {
                     self.recovery = Some(recovery::RecoveryCard::new(prompt));
                     self.message =
@@ -542,6 +544,7 @@ impl BrowserView {
                 }
             }
             SessionEvent::HistoryRepairOffered(prompt) => {
+                self.usage.startup_waited();
                 if !self.closing {
                     self.recovery = None;
                     self.history_repair = Some(history_repair::HistoryRepairCard::new(prompt));
@@ -591,9 +594,8 @@ impl BrowserView {
                     self.usage.session_restored();
                 }
                 // Home shows no page, so a selection that ends there has nothing to time.
-                if self.active_address().is_empty() {
-                    self.usage.switch_abandoned();
-                }
+                let home = self.active_address().is_empty();
+                self.usage.state_arrived(self.model.active_id, home);
                 self.save_folder_expansion();
                 self.crashes.retain(&self.model);
                 self.zoom_levels
@@ -728,7 +730,9 @@ impl BrowserView {
                 }
             }
             SessionEvent::UpdateSnapshot(result) => self.update_snapshot_taken(result, cx),
-            SessionEvent::Usage(result) => self.usage_status_received(result),
+            SessionEvent::Usage { status, problem } => {
+                self.usage_status_received(status, problem);
+            }
             SessionEvent::Stopped => {
                 self.update_snapshot_lost();
                 self.abandon_import_write();
@@ -864,8 +868,13 @@ impl BrowserView {
                     self.request_close(cx);
                 }
             }
-            BrowserEvent::NavigationCompleted { id, success } => {
-                if !success {
+            BrowserEvent::NavigationCompleted {
+                id,
+                success,
+                cancelled,
+            } => {
+                // A stopped or replaced navigation is not a failure to count.
+                if !success && !cancelled {
                     self.usage.recorder.error(ErrorCategory::NavigationFailed);
                 }
                 // History retracts a visit whose navigation failed.
@@ -1073,8 +1082,8 @@ impl BrowserView {
             if let Some(previous) = self.shown {
                 self.forget_find(previous.get(), true);
             }
-            if next.is_some() {
-                self.usage.page_shown();
+            if let Some(id) = next {
+                self.usage.page_shown(id);
             }
             self.shown = next;
             if self.palette.is_none()
@@ -1116,8 +1125,13 @@ impl BrowserView {
         }
     }
 
-    fn switch_tab(&mut self, backwards: bool) {
-        self.usage.switch_requested();
+    /// Ctrl Tab or Ctrl Shift Tab (`by_key`), or the palette's Next and Previous tab commands.
+    fn switch_tab(&mut self, backwards: bool, by_key: bool) {
+        // The palette counts its own commands; a single tab has nowhere to switch to.
+        if by_key && self.model.tabs.len() > 1 {
+            self.count(Feature::TabSwitchedKeyboard);
+        }
+        self.usage.switch_requested(self.model.active_id, None);
         self.command(SessionCommand::CycleActive { backwards });
     }
 
@@ -1137,6 +1151,18 @@ impl BrowserView {
     }
 
     fn shortcut(&mut self, shortcut: BrowserShortcut, window: &mut Window, cx: &mut Context<Self>) {
+        self.browser_action(shortcut, true, window, cx);
+    }
+
+    /// Runs a browser shortcut from a key (`by_key`) or a palette command; only keys count as
+    /// keyboard use (AN-01).
+    fn browser_action(
+        &mut self,
+        shortcut: BrowserShortcut,
+        by_key: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.closing {
             return;
         }
@@ -1162,10 +1188,12 @@ impl BrowserView {
                 address: "about:blank".to_owned(),
             }),
             BrowserShortcut::CloseTab => self.close_tab(),
-            BrowserShortcut::Address => self.palette_key(true, window, cx),
-            BrowserShortcut::Palette => self.palette_key(false, window, cx),
-            BrowserShortcut::NextTab => self.switch_tab(false),
-            BrowserShortcut::PreviousTab => self.switch_tab(true),
+            BrowserShortcut::Address if by_key => self.palette_key(true, window, cx),
+            BrowserShortcut::Palette if by_key => self.palette_key(false, window, cx),
+            BrowserShortcut::Address => self.open_palette(true, window, cx),
+            BrowserShortcut::Palette => self.open_palette(false, window, cx),
+            BrowserShortcut::NextTab => self.switch_tab(false, by_key),
+            BrowserShortcut::PreviousTab => self.switch_tab(true, by_key),
             BrowserShortcut::ReopenTab => self.command(SessionCommand::ReopenClosed),
             BrowserShortcut::SavePage => self.command(SessionCommand::SaveActive),
             BrowserShortcut::Back => {
@@ -1218,7 +1246,16 @@ impl BrowserView {
             PaletteEvent::Submit {
                 force_search: true, ..
             } => usage.count(Feature::PaletteChoseWebSearch),
-            PaletteEvent::Submit { .. } => usage.count(Feature::PaletteChoseAddress),
+            // Plain Enter counts by where the text goes: an address, or a web search.
+            PaletteEvent::Submit { text, .. } => {
+                let goes = navigation::destination(text, false);
+                match (goes, navigation::recognized_address(text)) {
+                    (Ok(_), Ok(Some(_))) => usage.count(Feature::PaletteChoseAddress),
+                    (Ok(_), Ok(None)) => usage.count(Feature::PaletteChoseWebSearch),
+                    // A refused entry navigates nowhere, so nothing was chosen.
+                    (Err(_), _) | (_, Err(_)) => {}
+                }
+            }
             PaletteEvent::Activate(Target::Tab(_)) => usage.count(Feature::PaletteChoseTab),
             PaletteEvent::Activate(Target::Saved(_)) => usage.count(Feature::PaletteChoseSaved),
             PaletteEvent::Activate(Target::History(_)) => {
@@ -1320,7 +1357,12 @@ impl BrowserView {
         let command = activation_command(&self.model, target);
         match command {
             Some(command) => {
-                self.usage.switch_requested();
+                // A saved page may open as a new tab, so its target is learned from the state.
+                let target = match target {
+                    ActivationTarget::Tab(id) => Some(id),
+                    ActivationTarget::Saved(_) => None,
+                };
+                self.usage.switch_requested(self.model.active_id, target);
                 self.command(command);
             }
             None => self.message = "That tab is no longer open.".to_owned(),
@@ -1339,7 +1381,7 @@ impl BrowserView {
             self.activate_main_now();
         }
         match browser_shortcut(action) {
-            Some(shortcut) => self.shortcut(shortcut, window, cx),
+            Some(shortcut) => self.browser_action(shortcut, false, window, cx),
             None if action == BrowserAction::ClearBrowsingData => self.open_clear_data(),
             None if action == BrowserAction::InstallUpdateFromFile => {
                 self.install_update_from_file(window, cx);
@@ -1730,11 +1772,11 @@ impl Render for BrowserView {
                 cx.listener(|this, _: &Palette, window, cx| this.palette_key(false, window, cx)),
             )
             .on_action(cx.listener(|this, _: &NextTab, _, cx| {
-                this.switch_tab(false);
+                this.switch_tab(false, true);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| {
-                this.switch_tab(true);
+                this.switch_tab(true, true);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ReopenTab, _, cx| {

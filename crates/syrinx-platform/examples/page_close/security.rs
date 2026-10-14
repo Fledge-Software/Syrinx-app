@@ -184,6 +184,7 @@ fn wait_recovery(
             BrowserEvent::NavigationCompleted {
                 id: 4000,
                 success: true,
+                ..
             } => completed = true,
             BrowserEvent::Url {
                 id: 4000,
@@ -272,14 +273,17 @@ fn wait_rejection(
             event,
             BrowserEvent::NavigationCompleted {
                 id: 4000,
-                success: false
+                success: false,
+                ..
             }
         ) {
             check_event(&event)?;
         }
         reject_content(&event)?;
         match event {
-            BrowserEvent::NavigationCompleted { id: 4000, success } => {
+            BrowserEvent::NavigationCompleted {
+                id: 4000, success, ..
+            } => {
                 if success {
                     return Err("Synthetic invalid certificate navigation succeeded.".into());
                 }

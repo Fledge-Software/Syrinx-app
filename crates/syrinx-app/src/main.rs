@@ -117,7 +117,7 @@ fn main() -> ExitCode {
     // Counts nothing unless the profile's usage file says the owner switched counting on.
     let usage = Arc::new(UsageRecorder::new());
     let window_usage = usage.clone();
-    let usage_file = options.directory.join("State").join("usage.json");
+    let usage_file = session::usage_file(&options.directory);
     let options_smoke = options.smoke;
     // Smoke and acceptance runs succeed only when they report success themselves.
     let mut links = Some(links);

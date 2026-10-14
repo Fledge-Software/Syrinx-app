@@ -34,23 +34,119 @@ fn every_field_recorded() -> UsageRecorder {
     recorder
 }
 
+/// The approved version 1 field names, copied literally from the proposal and the frozen
+/// command list, so the test does not trust the code it checks.
+const APPROVED_FEATURES: [&str; 35] = [
+    "app.started",
+    "tab.created",
+    "tab.closed",
+    "tab.reopened",
+    "tab.switched_sidebar",
+    "tab.switched_keyboard",
+    "saved.saved",
+    "saved.removed",
+    "saved.opened_unloaded",
+    "folder.created",
+    "folder.removed",
+    "import.completed",
+    "palette.opened_ctrl_k",
+    "palette.opened_ctrl_l",
+    "palette.dismissed",
+    "palette.chose_tab",
+    "palette.chose_saved",
+    "palette.chose_history",
+    "palette.chose_page_text",
+    "palette.chose_command",
+    "palette.chose_address",
+    "palette.chose_web_search",
+    "palette.scope_changed",
+    "nav.back",
+    "nav.forward",
+    "nav.reload",
+    "sidebar.set_wide",
+    "sidebar.set_compact",
+    "sidebar.set_hidden",
+    "sidebar.peek_shown",
+    "home.tile_opened",
+    "favorite.opened",
+    "find.opened",
+    "page_text.captured",
+    "settings.opened",
+];
+const APPROVED_COMMANDS: [&str; 21] = [
+    "command.browser.new-tab",
+    "command.browser.close-tab",
+    "command.browser.reopen-tab",
+    "command.browser.reload",
+    "command.browser.back",
+    "command.browser.forward",
+    "command.browser.edit-address",
+    "command.browser.next-tab",
+    "command.browser.previous-tab",
+    "command.browser.save-page",
+    "command.browser.show-history",
+    "command.browser.find",
+    "command.browser.downloads",
+    "command.browser.print",
+    "command.browser.zoom-in",
+    "command.browser.zoom-out",
+    "command.browser.zoom-reset",
+    "command.browser.clear-data",
+    "command.browser.install-update",
+    "command.browser.check-updates",
+    "command.other",
+];
+const INTERACTION_BUCKETS: [&str; 12] = [
+    "le_1", "le_2", "le_5", "le_8", "le_16", "le_33", "le_50", "le_100", "le_250", "le_500",
+    "le_1000", "gt_1000",
+];
+const STARTUP_BUCKETS: [&str; 10] = [
+    "le_100", "le_250", "le_500", "le_750", "le_1000", "le_1500", "le_2000", "le_3000", "le_5000",
+    "gt_5000",
+];
+const APPROVED_TIMINGS: [(&str, &[&str]); 8] = [
+    ("startup.first_frame_ms", &STARTUP_BUCKETS),
+    ("startup.session_restored_ms", &STARTUP_BUCKETS),
+    ("palette.open_to_paint_ms", &INTERACTION_BUCKETS),
+    ("search.tier1_ms", &INTERACTION_BUCKETS),
+    ("search.tier2_ms", &INTERACTION_BUCKETS),
+    ("tab.switch_to_visible_ms", &INTERACTION_BUCKETS),
+    ("store.save_ms", &INTERACTION_BUCKETS),
+    ("backup.snapshot_ms", &STARTUP_BUCKETS),
+];
+const APPROVED_ERRORS: [&str; 13] = [
+    "error.storage_open",
+    "error.storage_write",
+    "error.storage_location_refused",
+    "error.backup_failed",
+    "error.recovery_offered",
+    "error.unclean_shutdown",
+    "error.renderer_failed",
+    "error.browser_process_exited",
+    "error.webview_creation",
+    "error.navigation_failed",
+    "error.import_refused",
+    "error.page_text_capture",
+    "error.usage_file_reset",
+];
+
 /// Every key path a version 1 report must have, in order, below the envelope.
 fn section_paths() -> Vec<String> {
-    let mut paths: Vec<String> = Feature::ALL
+    let mut paths: Vec<String> = APPROVED_FEATURES
         .iter()
-        .map(|feature| format!("counts/{}", feature.key()))
+        .map(|key| format!("counts/{key}"))
         .collect();
-    paths.extend(COMMAND_KEYS.iter().map(|key| format!("commands/{key}")));
-    for timing in Timing::ALL {
-        for bucket in timing.scale().bucket_names() {
-            paths.push(format!("timings/{}/{bucket}", timing.key()));
+    paths.extend(
+        APPROVED_COMMANDS
+            .iter()
+            .map(|key| format!("commands/{key}")),
+    );
+    for (timing, buckets) in APPROVED_TIMINGS {
+        for bucket in buckets {
+            paths.push(format!("timings/{timing}/{bucket}"));
         }
     }
-    paths.extend(
-        ErrorCategory::ALL
-            .iter()
-            .map(|category| format!("errors/{}", category.key())),
-    );
+    paths.extend(APPROVED_ERRORS.iter().map(|key| format!("errors/{key}")));
     paths
 }
 
@@ -236,7 +332,9 @@ fn a_period_closes_after_thirty_days_and_only_two_are_kept() {
     let previous = file.previous.clone().expect("the first period closed");
     assert_eq!(previous.start, start);
     assert_eq!(previous.days_used, 3);
-    assert_eq!(previous.span_end(), date(2026, 11, 12));
+    // A completed period ends on the day it actually closed (the proposal's `period_end`).
+    assert_eq!(previous.closed_on, Some(start.plus_days(PERIOD_DAYS)));
+    assert_eq!(file.current.closed_on, None);
     assert_eq!(file.current.start, start.plus_days(30));
     assert_eq!(file.current.days_used, 1);
 
@@ -311,6 +409,8 @@ fn damaged_files_are_refused_without_panicking() {
         text.replace("\"app.started\": 0", "\"app.started\": 0, \"extra\": 0"),
         text.replace("\"format\": \"syrinx-usage\"", "\"format\": \"other\""),
         text.replace("2026-10-14", "2026-02-30"),
+        // The current period cannot have closed.
+        text.replace("\"closed_on\": null", "\"closed_on\": \"2026-10-20\""),
         text.replace("\"previous\": null", "\"previous\": \"C:\\\\synthetic\""),
         text.replace("\"previous\": null", "\"previous\": {}"),
         text.replace("\"tab.created\": 0", "\"tab.created\": [0]"),
