@@ -294,7 +294,9 @@ fn show_panics_in_a_message_box() {
         if shown.swap(true, Ordering::AcqRel) {
             return;
         }
-        notice::show_warning(&format!("Syrinx stopped because of an internal error.\n\n{info}"));
+        notice::show_warning(&format!(
+            "Syrinx stopped because of an internal error.\n\n{info}"
+        ));
     }));
 }
 
