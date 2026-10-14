@@ -1,8 +1,8 @@
-# Next session: continue Syrinx v1 from the 2026-10-13 checkpoint
+# Next session: continue Syrinx v1 from the 2026-10-14 checkpoint
 
-The hand-off from the 2026-10-13 cloud session: first how the owner starts,
-then, from **Brief** down, what the new session reads. Where the files it
-names disagree with this prompt, the files win.
+The hand-off from the 2026-10-13/14 session on EZ-LAPTOP-01: first how the
+owner starts, then, from **Brief** down, what the new session reads. Where
+the files it names disagree with this prompt, the files win.
 
 ## How to start (for the owner)
 
@@ -21,104 +21,142 @@ names disagree with this prompt, the files win.
 
 Syrinx (called Atlas until 2026-10-12) is a browser-first workspace app for
 Windows 11. Plan 1 (engine, browser core and palette) is still open, so all
-work below comes from it. The repository is on GitHub at
-`Fledge-Software/Syrinx-app` (`docs/decisions.md`, 2026-10-13): push only the
-branch you were assigned, never `main` unless I ask, and open a pull request
-only when I ask.
+work below comes from it; plugins (Plan 2) start only once Plan 1 closes. The
+repository is on GitHub at `Fledge-Software/Syrinx-app`.
 
 ### 1. Read before anything else
 
 `CLAUDE.md` loads `AGENTS.md`, `docs/trapstoknow.md` and `docs/spec.md`. Then
-read, as `CLAUDE.md` says: `docs/decisions.md` (the three 2026-10-13 entries:
-the GitHub remote, the hawk logo and its `#FF612E` accent, and P1-39's
-approval); `docs/plans/Syrinx v1 — Plan.md` ("Decisions taken", "Open
-threads", "Deferred work" and the issue map); `design/README.md` before
-changing anything I see; `docs/LOCAL-DEV.md`; and the "Current checkpoint —
-2026-10-13" in `docs/implementation-status.md`.
+read, as `CLAUDE.md` says: `docs/decisions.md`; `docs/plans/Syrinx v1 —
+Plan.md` ("Decisions taken", "Open threads", the "Deferred work" register and
+the issue map); `design/README.md` before changing anything I see;
+`docs/LOCAL-DEV.md`; `docs/releasing.md` (GitHub now runs the gate on every
+push and pull request, PR #4); and `docs/implementation-status.md`, its
+current checkpoint and the P1-39 rows. For update work, also read
+`docs/proposals/p1-39-update-delivery.md` and `docs/p1-38-update-format.md`,
+whose P1-39a, P1-39b and P1-39c sections record my answers of 2026-10-14.
 
-### 2. Sync `main`
+### 2. Where things stand
 
-`git fetch origin` and fast-forward local `main` to `origin/main`. On
-2026-10-13 it was at `7c10ada`. Then check whether the P1-39 approval branch
-has merged: `git merge-base --is-ancestor a5d3ef4 origin/main`. Its two
-commits, `e7997fb` (the owner's approval recorded in `decisions.md`, the
-plan and the ledger) and `a5d3ef4` (P1-40 now waits on P1-39d; both
-issue-map copies agree), are on `ccr-99a24605-ajkyhv`. If they are not on
-`main`, tell me and ask whether to merge that branch through the normal
-review and gate before P1-39a starts; without it, `main`'s ledger still
-reads as though P1-39 waits on my decision.
+`git fetch origin` and fast-forward local `main` first. At hand-off
+`origin/main` was `b44c19a`; `cargo xtask check` last passed locally at
+`6dac3e1` with 1,305 tests and the smoke run, and PR #4 since changed only
+the GitHub workflows and `docs/releasing.md`. Run the gate on `main` before
+new work and record the count in the ledger's checkpoint.
 
-### 3. Run the gate on `main` first
+The 2026-10-13/14 session merged, each after independent review and a green
+gate:
 
-Run `cargo xtask check` on `main` before any new work, and record the test
-count in the checkpoint of `docs/implementation-status.md`. This matters
-because the cloud session merged `7c10ada` at my request **without the
-gate** (it runs only on Windows), and DW-7's three Store-level tests in
-`crates/syrinx-store/src/engine/tests/permissions.rs` have never run
-anywhere. The last recorded gate passed 1,014 tests, before the P1-05,
-P1-23 and `7c10ada` merges. If it fails, fix the cause on its own branch;
-never weaken a test.
+| Slice | What it did |
+| --- | --- |
+| DW-61 | One Tab stop and arrow keys in the sidebar tree and the peek; F6 lands on the active row |
+| DW-7 | Customize → Site permissions → Manage lists remembered choices, each with Forget |
+| Fixture-timeout diagnosis | The old hidden-tab suspension timer froze two never-shown test pages; my 2026-10-12 timer change already fixed it (20/20 passes; the reproduction fails 3/3 on `bbe59d3` and passes 3/3 on main) |
+| DW-64, DW-65 | The certificate suite fails within 5 s of a dropped connection; passing runs delete their synthetic profiles; the gate now runs the fixture's own unit tests |
+| P1-39a | The signed latest-version statement, its verifier, `cargo xtask package` writing the manifest, and `cargo xtask sign-update` |
+| P1-39b | "Install update from file…", `syrinx-apply.exe`, the pre-update snapshot, Restart now / Later and rollback |
+| P1-39c | The button-pressed "Check for updates" over WinHTTP (`syrinx-update-net`, the one D9 exception) |
+
+Every real update still fails closed, because `PRODUCTION_KEYS` stays empty
+until my P1-39d.
+
+**This machine (EZ-LAPTOP-01)** has Rust 1.97.1, VS 2022 Build Tools with
+the Windows SDK, Git for Windows, and Python 3.13 per-user. The certificate
+fixture needs `%LOCALAPPDATA%\Programs\Python\Python313` first on `PATH`,
+because a Microsoft Store `python.exe` alias also exists. Node and pnpm are
+not installed.
+
+### 3. Rules learned last session
+
+- **Another session also changes `main`.** On 2026-10-14 one rebased local
+  `main` onto `origin/main`, giving every local commit a new hash, and pushed
+  a merge before its gate ran. Before merging a slice, check that its base is
+  still an ancestor of `main` (`git merge-base --is-ancestor`); if it is not,
+  replay the slice's own unpushed commits with `git rebase --onto main
+  <old-base>` and re-gate. You may push `main` after a green gate, as a
+  fast-forward only: `git fetch` first, never force-push, never push ungated
+  work.
+- **Agents stop when I interrupt a tool call.** Afterwards, check
+  `ListAgents`, running `cargo` and `page_close` processes and each
+  worktree's `git status` before assuming an agent is still working. A
+  stopped agent cannot be resumed; launch a replacement in its existing
+  worktree when I ask.
+- **No synthetic keystrokes or clicks unless Syrinx's own window, by process
+  id, is confirmed in the foreground.** On 2026-10-14 a window check sent
+  Ctrl K into my Claude app.
+- **Serialize native fixture runs with every build:** check for a running
+  `page_close` before building, and never run timing experiments while
+  anything compiles.
+- **`git merge` cannot read `-F -` in this shell;** write the message to a
+  file in the scratchpad first. Python is not available for edits; prefer
+  the Edit tool, and never pipe Unicode through PowerShell (trap).
+- **Reviews catch real bugs.** P1-39b's first review found the helper could
+  never rename the program folder. Keep every slice on its own branch and
+  worktree, with an independent reviewer and the gate after each `--no-ff`
+  merge.
 
 ### 4. Agent work, in work order
 
-Use subagents, each in its own worktree on its own branch. Each slice merges
-to `main` with `--no-ff` only after an independent review approves it and
-the gate passes after the merge. Serialize every native fixture run with the
-gate (trap: "Do not build an example while its executable is running").
+Use subagents, each in its own worktree on its own branch.
 
-1. **DW-61: wire the roving-focus model into the sidebar and the peek.**
-   `crates/syrinx-ui/src/tree_focus.rs` already decides the single Tab stop
-   and where Up, Down, Home, End, Left and Right go. Wire it into
-   `crates/syrinx-app/src/ui/sidebar_view.rs` and `ui/peek.rs`, following
-   the module's own cautions: build the `TreeRow`s in the same loop that
-   draws the rows (`rows()` skips a row whose lookup fails), and after every
-   row change reset the focused id with `tab_stop(...)`, or
-   `focus_after_collapse` for a collapse. F6 should land on the active row.
-   Mind the GPUI traps on `tab_stop(true)` and the accessibility tree; rerun
-   the UI Automation probe in `docs/p1-36-accessibility.md`. My NVDA check
-   follows.
-2. **DW-7: the settings control to forget a site permission.** The store
-   half (`Store::forget_permission`) is merged. Add the control to P1-29's
-   settings surface with UI tests in `syrinx-app`, then remove the
-   `TODO(DW-7)` marker in `crates/syrinx-store/src/permissions.rs`.
-3. **The fixture-timeout diagnosis** (`docs/fixture-timeout-diagnosis-plan.md`).
-   Start with Step 0: 20 unchanged, untraced runs of the native fixture on
-   current `main`, keeping each run's output and each failed run's synthetic
-   directories under `target/`. Then the shared instrumentation, then
-   candidates 1 and 2. Never change an assertion or a deadline. Record
-   results in the plan and the P1-11 row.
-4. **P1-39a**, per the approved split in
-   `docs/proposals/p1-39-update-delivery.md`: the signed latest-version
-   statement and its verifier in `syrinx-update`, `cargo xtask package`
-   emitting P1-38's `manifest`, and `cargo xtask sign-update` tested with
-   in-memory keys. No network, and no real keys: those are mine (DW-30).
-   P1-39b and P1-39c follow in order; AN-01 follows P1-39.
+1. **Ask me first about AN-01.** The approved analytics proposal
+   (`docs/proposals/an-01-02-local-analytics.md`) puts AN-01 after all of
+   P1-39, including my P1-39d. The last session recommended starting AN-01
+   now, since it needs neither the keys nor the host; I had not answered.
+   Start it only on my yes.
+2. **DW-60:** announce the palette's moving selection to screen readers
+   (P1-36 follow-up, needed before P1-40). Rerun the UI Automation probe in
+   `docs/p1-36-accessibility.md`; my NVDA check follows.
+3. **DW-62:** show the focus ring only after keyboard input (P1-36
+   follow-up).
+4. **DW-66:** a "Reset update records" action for an unreadable
+   `Updates\state` (P1-39b follow-up, which I chose on 2026-10-14).
+5. **DW-68:** make `cargo xtask check-deps` check the resolved `windows`
+   features from `cargo metadata`'s `resolve.nodes`, so a third-party crate
+   cannot switch on networking unseen (P1-39c follow-up).
+6. **Ledger tidy:** many rows in `docs/implementation-status.md` still say
+   "merged into the integration branch" or "awaiting merge" for work that is
+   on `main`. Correct them so my picture of progress is accurate.
 
-Still blocked, so do not start them: P1-24 and P1-26 wait on P1-23's
-quiet-machine runs and engine choice, which must also resolve the lru
-advisory. If everything above is done or blocked, ask me before moving on.
+Still blocked, so do not start them:
+- P1-24 and P1-26 wait on P1-23's quiet-machine runs and engine choice,
+  which must also resolve the lru advisory.
+- AN-02 waits on AN-01.
+- DW-63 waits on my choice of key; it proposes Ctrl W on a focused row, with
+  Backspace as the alternative.
+- DW-5 belongs to Plan 2.
+- DW-67 is deferred until after P1-40.
+
+If everything above is done or blocked, ask me before moving on.
 
 ### 5. The owner's own items (point at them; never do them)
 
 - **Quiet-machine runs, P1-23 first:** three fresh-process runs per engine
-  and corpus with `run-comparison.ps1`, with Cargo and rustc not running,
-  because P1-24 and P1-26 wait on its result. Then D48's three runs for
-  P1-05 (`cargo xtask bench`) and P1-06's idle reruns and
+  and corpus with `run-comparison.ps1`, with Cargo and rustc not running;
+  P1-24 and P1-26 wait on them. Pause every agent first. Then D48's three
+  runs for P1-05 (`cargo xtask bench`), and P1-06's idle reruns and
   eight-suspended-tab measurement.
 - **Palette acceptance three times:** `cargo xtask palette-acceptance` in the
-  foreground, keyboard and mouse untouched (P1-33; confirms DW-90).
-- **Manual window checks** listed in each slice's row of
-  `docs/implementation-status.md`, including the branding: taskbar, Alt Tab
-  and title bar on a light taskbar, and the Haze/Glass accent adjustment.
-- **DW-30's release keys:** a primary on a hardware key and an offline
-  backup, created outside the repository and every agent session. Production
-  updates (P1-39d) wait on them and on the `syrinxapp.dev` host set-up.
+  foreground, keyboard and mouse untouched (P1-33).
+- **Manual window and NVDA checks** listed in each slice's row, including
+  DW-61's NVDA check 13 (Shift Tab into the tree, and the peek, which no
+  agent drove) and the new Customize sections (Site permissions, Updates).
+- **DW-63's key choice** for "Unload page" on a focused sidebar row.
+- **P1-39d:**
+  - create the two release keys, a primary on a hardware key and an offline
+    backup, outside the repository and every agent session;
+  - have a session pin both public keys (DW-30);
+  - make `syrinxapp.dev` serve `/updates/v1/` with its full certificate
+    chain;
+  - run the first real `sign-update` and update myself;
+  - keep my own record of the highest statement serial issued, and re-sign
+    `latest` at least every 60 days.
 - **Old Atlas folders:** `%LOCALAPPDATA%\Atlas\data`,
   `%LOCALAPPDATA%\AtlasProductPreview` and `%LOCALAPPDATA%\Programs\Atlas`
-  may hold signed-in WebView2 profiles. Syrinx never touches them; I delete
-  them by hand when nothing in them is needed (`docs/LOCAL-DEV.md`).
+  may hold signed-in WebView2 profiles. I delete them by hand when nothing in
+  them is needed.
 - **Owner-only slices:** P1-18 (site and sign-in acceptance) and P1-40 (a
-  default-browser week, after P1-39d).
+  default-browser week, after P1-39d and AN-02).
 
 Throughout: recommend directly, put undecided product questions to me, and
 write commits and reports in `AGENTS.md`'s "Writing voice".
