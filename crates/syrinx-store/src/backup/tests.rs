@@ -253,9 +253,13 @@ fn an_update_snapshot_ignores_the_daily_schedule_but_keeps_seven() {
             .attempt(&mut schedule, day * 86_400)
             .expect("daily backup succeeds");
     }
-    let extra = schedule
-        .create_now(&mut fixture.connection, &fixture.archive, 6 * 86_400 + 60)
-        .expect("update snapshot succeeds although not due");
+    let Ok(BackupOutcome::Created(extra)) = schedule.create_now(
+        &mut fixture.connection,
+        &fixture.archive,
+        6 * 86_400 + 7_200,
+    ) else {
+        panic!("update snapshot succeeds although not due");
+    };
     let remaining = fixture.archive.candidates().expect("candidates remain");
     assert_eq!(remaining.len(), 7);
     assert!(remaining.iter().any(|entry| entry.metadata == extra));
@@ -268,6 +272,48 @@ fn an_update_snapshot_ignores_the_daily_schedule_but_keeps_seven() {
         fixture.attempt(&mut schedule, 7 * 86_400),
         Ok(BackupOutcome::NotDue)
     );
+    fixture.finish();
+}
+
+#[test]
+fn repeated_update_snapshots_within_an_hour_keep_the_daily_window() {
+    // Retried updates must not rotate seven days of copies out one attempt at a time.
+    let mut fixture = Fixture::new();
+    let mut schedule = BackupSchedule::default();
+    for day in 0..7 {
+        fixture
+            .attempt(&mut schedule, day * 86_400)
+            .expect("daily backup succeeds");
+    }
+    let start = 6 * 86_400 + 7_200;
+    assert!(matches!(
+        schedule.create_now(&mut fixture.connection, &fixture.archive, start),
+        Ok(BackupOutcome::Created(_))
+    ));
+    let kept = fixture.archive.candidates().expect("candidates").len();
+    for retry in 1..=5 {
+        assert_eq!(
+            schedule.create_now(
+                &mut fixture.connection,
+                &fixture.archive,
+                start + retry * 600
+            ),
+            Ok(BackupOutcome::NotDue)
+        );
+    }
+    let remaining = fixture.archive.candidates().expect("candidates");
+    assert_eq!(remaining.len(), kept);
+    assert!(
+        remaining
+            .iter()
+            .any(|entry| entry.metadata.created_at == 86_400),
+        "the second day's copy survives every retry"
+    );
+    // An hour later a new attempt takes a fresh copy again.
+    assert!(matches!(
+        schedule.create_now(&mut fixture.connection, &fixture.archive, start + 3_600),
+        Ok(BackupOutcome::Created(_))
+    ));
     fixture.finish();
 }
 

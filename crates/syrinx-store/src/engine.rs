@@ -21,7 +21,7 @@ use crate::history::{
     HistoryWrite, RecordedVisit,
 };
 use crate::preferences::{self, PreferenceWrite, StoredPreferences};
-use crate::{BackupMetadata, BackupOutcome, DirectoryLease, ShutdownState};
+use crate::{BackupOutcome, DirectoryLease, ShutdownState};
 use crate::{backup, records, schema};
 
 mod session;
@@ -253,9 +253,9 @@ impl Store {
         result.recv().map_err(|_| StoreError::WorkerUnavailable)?
     }
 
-    /// Takes one validated backup now, outside the daily schedule, before an update installs
-    /// (P1-39b). This blocks on the existing writer queue.
-    pub fn backup_before_update(&self, now_utc_seconds: i64) -> Result<BackupMetadata, StoreError> {
+    /// Takes one validated backup before an update installs (P1-39b), outside the daily
+    /// schedule; `NotDue` when a valid copy is under an hour old. Blocks on the writer queue.
+    pub fn backup_before_update(&self, now_utc_seconds: i64) -> Result<BackupOutcome, StoreError> {
         let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
         let (reply, result) = mpsc::sync_channel(1);
         writer
@@ -435,7 +435,7 @@ enum WriterRequest {
     },
     BackupNow {
         now_utc_seconds: i64,
-        reply: mpsc::SyncSender<Result<BackupMetadata, StoreError>>,
+        reply: mpsc::SyncSender<Result<BackupOutcome, StoreError>>,
     },
     Preferences {
         change: PreferenceWrite,
