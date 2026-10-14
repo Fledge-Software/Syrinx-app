@@ -166,10 +166,11 @@ unproved; the successful run does not establish a policy exemption.
 
 ## What the architecture check protects
 
-`cargo xtask check-deps` reads Cargo metadata with format version 1 and
-`--no-deps --all-features`. It checks the actual package name, so a renamed
-import cannot hide GPUI or WebView2. Normal, optional, target-specific,
-development and build dependency declarations all count.
+`cargo xtask check-deps` reads Cargo metadata with format version 1,
+`--all-features --offline --locked`, including the resolved dependency graph.
+It checks the actual package name, so a renamed import cannot hide GPUI or
+WebView2. Normal, optional, target-specific, development and build dependency
+declarations all count, and so do entries in a crate's own `[features]` table.
 
 - Only `syrinx-app` and `syrinx-ui` may directly depend on GPUI crates.
 - Only `syrinx-platform` may directly depend on wry, WebView2 bindings or
@@ -178,6 +179,20 @@ development and build dependency declarations all count.
   `plugin-*` must not reach shell crates through other workspace crates.
 - A plugin's only Syrinx dependency is `syrinx-plugin-api`, and that API
   must not depend on other Syrinx crates. Fledge services stay behind Host.
+- No Syrinx crate may declare a network client or a Windows networking
+  feature (D9), except `Win32_Networking_WinHttp` in `syrinx-update-net`,
+  which only `syrinx-app` may use (P1-39c). The headless crates, the update
+  download included, must not reach a network client even through a
+  third-party library in the resolved graph.
+- Every resolved `windows` and `windows-sys` build may carry no networking
+  feature except WinHTTP on the build `syrinx-update-net` uses and the
+  third-party entries the owner approved on 2026-10-14 (DW-68,
+  `THIRD_PARTY_NETWORK_FEATURES` in
+  `crates/xtask/src/dependency_policy/resolved_windows.rs`), each pinned to
+  its requesting crates and versions. A new requester, version, feature or
+  namespace fails, and so does an approved entry that no longer matches.
+  Cargo's metadata unifies features across every target platform, so this
+  can report a Linux-only crate's request (zbus) as well as Windows ones.
 
 This is a manifest architecture check, not a runtime sandbox or complete
 third-party dependency audit. Internal routes are matched by normalized
@@ -189,7 +204,8 @@ paths. Dependency audit details are in `docs/dependency-audit.md`.
 
 The architecture tests use synthetic Cargo metadata to cover allowed shell
 composition, aliased and inactive forbidden imports, internal facade/cycle
-handling, plugin/API isolation and malformed metadata. Core and search tests
+handling, plugin/API isolation, resolved `windows` features with their
+approved and stale entries, and malformed metadata. Core and search tests
 use made-up titles and reserved domains.
 
 ## The tab and saved-page model

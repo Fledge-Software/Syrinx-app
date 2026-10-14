@@ -12,6 +12,33 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-14
 
+- **GPUI's existing Windows socket features are approved, pinned to the
+  crates that ask for them (DW-68; narrows D9's check, not D9).** D9 keeps
+  typing on the machine, and P1-39c made WinHTTP in `syrinx-update-net` the
+  one exception (2026-10-13, question 8). `cargo xtask check-deps` checked
+  only what Syrinx's own crates declare, so a third-party crate could switch
+  on another `windows` networking namespace and Cargo would unify it into
+  the build every crate shares. DW-68 now reads the features Cargo actually
+  resolves on every `windows` and `windows-sys` version, and found that
+  GPUI's own stack already turns on Windows sockets: `Win32_Networking_WinSock`
+  on the pinned `windows 0.62.2`, requested by `gpui-pre` and
+  `gpui-pre-windows` 0.3.8; `sysinfo 0.31.4`'s IpHelper, Ndis,
+  NetManagement and WinSock features on `windows 0.57.0`, reached through
+  GPUI's `zed-scap`; and on `windows-sys 0.61.2`, WinSock from mio, polling,
+  quinn-udp, rustix, socket2, uds_windows and zbus, and IpHelper from zbus.
+  These are bindings the shell may already link; no Syrinx crate calls
+  them, which the source scan in `crates/xtask/src/network_sources.rs` and
+  the declaration rules still enforce. The owner approved exactly those
+  entries, each with its requesting crates and versions, in
+  `THIRD_PARTY_NETWORK_FEATURES`
+  (`crates/xtask/src/dependency_policy/resolved_windows.rs`). Any new
+  requester, version, feature or namespace fails the check, and so does an
+  entry that no longer matches, so the list cannot outlive its reason.
+  Rejected: patching GPUI's vendored manifest to drop WinSock, a new vendor
+  patch that would not reach `sysinfo` through `zed-scap` and risks GPUI's
+  own socket use; and closing DW-68 as a known limit, which would leave a
+  third-party crate free to add networking unseen.
+
 - **Where Windows cannot list sync roots, Syrinx treats the machine as
   having none (narrows D13).** D13 keeps the database out of OneDrive and
   similar synced folders; the storage guard
