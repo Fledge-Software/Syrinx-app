@@ -66,10 +66,17 @@ previous period exists, so the window can offer it.
   `syrinx-usage-report-<period_start>-to-<period_end>.json`. Syrinx passes no
   folder, keeps none, and asks Windows not to add the file to its recent items;
   Windows asks before replacing a file. The same thread writes the shown bytes
-  and flushes them; a failure is shown under the buttons and names no path.
+  to a sibling `<chosen name>.partial` file, flushes it and renames it over the
+  chosen file, as AN-01's usage write does, so a failure (a full disk, a
+  removed drive) leaves any file being replaced untouched; the partial file is
+  then deleted and a fixed message, naming no path, is shown under the buttons.
 - **Copy report** puts the same text on the clipboard through GPUI's
   `write_to_clipboard`, then reads the clipboard back and says whether Windows
-  took it, because GPUI only logs a failed write.
+  took it, because GPUI only logs a failed write. GPUI does not exclude the
+  text from Windows clipboard history or cloud clipboard sync, and Syrinx does
+  not bypass GPUI to do so: if clipboard history or "Sync across your devices"
+  is on, Windows keeps the copied report there and may sync it. Save report…
+  avoids this, and `docs/usage-report.md` tells the owner so.
 - The suggested prompt is shown below, with **Copy prompt**, and a line saying
   that Syrinx sends nothing and that a report identifies its sender.
 - Save and Copy are unavailable while the report is loading, failed, or a save
@@ -107,6 +114,10 @@ created.
   exact view's lines, the table, the clipboard item's text and a file written by
   the save path are all the shown bytes, compared without normalising);
   `the_suggested_name_carries_the_two_period_dates`;
+  `a_failed_save_leaves_the_replaced_file_untouched_and_nothing_partial` (a
+  write that fails half way, and a target that cannot be replaced);
+  `the_suggested_prompt_is_the_approved_text` (against a copy of the
+  proposal's prompt, not the constant itself);
   `only_the_latest_request_is_shown`;
   `nothing_is_exportable_while_off_failed_loading_or_saving`;
   `only_the_export_buttons_reach_the_clipboard_or_a_chosen_file`, which scans
@@ -152,4 +163,5 @@ created.
   clipboard. Their behaviour is covered by the tests above. This is not the
   owner's visual acceptance.
 - **Gate.** `cargo xtask check` passed with 1,400 test results (summed over
-  every `test result` line), none failed or ignored, and the smoke run passed.
+  every `test result` line) on the first commit and 1,402 after the review
+  fixes, none failed or ignored, and the smoke run passed.

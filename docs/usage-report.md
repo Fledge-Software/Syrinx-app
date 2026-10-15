@@ -29,11 +29,14 @@ Syrinx, on this computer only"), and switching it off deletes every count.
    items. (Windows' dialog itself may open in the folder you used last; that
    is Windows' memory, not Syrinx's.)
 5. **Copy report** puts the same text on the clipboard, for pasting into a
-   model chat. **Copy prompt** copies the suggested prompt shown below the
-   buttons.
+   model chat. If Windows clipboard history or "Sync across your devices" is
+   on, Windows keeps the copied report in that history and may sync it to
+   your other devices; Save report… avoids this.
+6. **Copy prompt** copies only the suggested prompt shown below the buttons,
+   never any of the report.
 
-These three buttons are the only ways a report leaves Syrinx. Syrinx never
-uploads it, and the buttons are unavailable while counting is off.
+Save report… and Copy report are the only ways a report leaves Syrinx.
+Syrinx never uploads it, and both are unavailable while counting is off.
 
 ## What a report contains
 

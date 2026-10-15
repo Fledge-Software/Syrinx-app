@@ -1,7 +1,14 @@
 //! Customize's usage report preview and its only two exports, Save report… and Copy report
 //! (AN-02); the table is read from the very text that leaves.
 
-use std::{fs::File, io::Write, path::Path, sync::Arc, thread};
+use std::{
+    ffi::OsString,
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+    thread,
+};
 
 use futures::channel::oneshot;
 use gpui::{
@@ -464,10 +471,48 @@ fn choose_and_save(name: &str, bytes: &str, owner: isize) -> SaveOutcome {
 }
 
 /// Writes exactly `bytes` to the owner's chosen file and flushes it to disk.
-fn write_report(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut file = File::create(path)?;
-    file.write_all(bytes)?;
+fn write_report(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    replace_with(path, |file| file.write_all(bytes))
+}
+
+/// Fills a sibling temporary file, flushes it and renames it over `path`, so a failure
+/// leaves the chosen file as it was and no partial copy behind.
+fn replace_with(path: &Path, fill: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
+    let temporary = temporary_path(path)?;
+    let replaced = stage(&temporary, fill).and_then(|()| fs::rename(&temporary, path));
+    let Err(error) = replaced else {
+        return Ok(());
+    };
+    // A failed cleanup is reported in place of the write's own error.
+    remove_partial(&temporary)?;
+    Err(error)
+}
+
+/// `<chosen name>.partial` beside the chosen file.
+fn temporary_path(path: &Path) -> io::Result<PathBuf> {
+    let Some(name) = path.file_name() else {
+        return Err(io::Error::from(io::ErrorKind::InvalidInput));
+    };
+    let mut temporary: OsString = name.to_owned();
+    temporary.push(".partial");
+    Ok(path.with_file_name(temporary))
+}
+
+/// Creates the temporary file, never reusing an existing one, and flushes what `fill` wrote.
+fn stage(temporary: &Path, fill: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temporary)?;
+    fill(&mut file)?;
     file.sync_all()
+}
+
+fn remove_partial(temporary: &Path) -> io::Result<()> {
+    match fs::remove_file(temporary) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
 }
 
 /// The one place Syrinx writes the clipboard; reading it back shows whether Windows took it.
@@ -765,6 +810,69 @@ mod tests {
         let mut state = shown(&text);
         state.saving = true;
         assert!(state.exportable().is_none(), "one export at a time");
+    }
+
+    /// The folder's file names, sorted, to prove nothing partial was left behind.
+    fn names_in(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(folder)
+            .expect("the synthetic folder lists")
+            .map(|entry| {
+                let entry = entry.expect("a folder entry");
+                entry.file_name().to_string_lossy().into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_failed_save_leaves_the_replaced_file_untouched_and_nothing_partial() {
+        let folder = synthetic_folder();
+        let path = folder.join("syrinx-usage-report-2026-11-02-to-2026-11-30.json");
+        fs::write(&path, b"an earlier synthetic report\n").expect("a synthetic old file");
+
+        // The disk fills half way through the write.
+        let failed = replace_with(&path, |file| {
+            file.write_all(b"{\n  \"schema_version\": 1,")?;
+            Err(io::Error::from(io::ErrorKind::StorageFull))
+        });
+        assert_eq!(
+            failed.map_err(|error| error.kind()),
+            Err(io::ErrorKind::StorageFull)
+        );
+        let old = fs::read(&path).expect("the old file reads");
+        let names = names_in(&folder);
+        // A target that cannot be replaced, here a folder, is left as it was too.
+        let blocked = folder.join("blocked.json");
+        fs::create_dir(&blocked).expect("a synthetic folder in the way");
+        let refused = write_report(&blocked, synthetic_report().as_bytes());
+        let after_refusal = names_in(&folder);
+        let blocked_empty = names_in(&blocked).is_empty();
+        fs::remove_dir_all(&folder).expect("the synthetic folder is removed");
+
+        assert_eq!(old, b"an earlier synthetic report\n");
+        assert_eq!(names, ["syrinx-usage-report-2026-11-02-to-2026-11-30.json"]);
+        assert!(refused.is_err());
+        assert_eq!(
+            after_refusal,
+            [
+                "blocked.json",
+                "syrinx-usage-report-2026-11-02-to-2026-11-30.json"
+            ]
+        );
+        assert!(blocked_empty);
+    }
+
+    /// The approved suggested prompt, copied from the proposal rather than imported.
+    const APPROVED_PROMPT: &str = "This is a usage report from Syrinx, a desktop browser I use. \
+        It contains only aggregate counts and timing buckets for one period, described in its \
+        \"about\" field. Suggest up to five changes that might make Syrinx faster or easier for \
+        me, each tied to the numbers that support it. Say what each number cannot tell you, and \
+        do not assume why I did something from how often I did it.";
+
+    #[test]
+    fn the_suggested_prompt_is_the_approved_text() {
+        assert_eq!(SUGGESTED_PROMPT, APPROVED_PROMPT);
     }
 
     /// The source of this crate's non-test code, file by file.
