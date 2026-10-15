@@ -1815,7 +1815,7 @@ impl Render for BrowserView {
         } else if let Some(card) = self.crashed_page(cx) {
             card
         } else if self.shown.is_none() {
-            self.home_page(cx)
+            self.home_page(window, cx)
         } else {
             div().flex_1().h_full()
         };
@@ -1950,7 +1950,7 @@ impl Render for BrowserView {
                 gpui::Role::Status,
             ))
             .children(self.bar_pane(self.permission_bar(cx), Pane::Permission, gpui::Role::Alert))
-            .children(self.bar_pane(self.find_bar(cx), Pane::Find, gpui::Role::Search))
+            .children(self.bar_pane(self.find_bar(window, cx), Pane::Find, gpui::Role::Search))
             .child(
                 div()
                     .flex_1()

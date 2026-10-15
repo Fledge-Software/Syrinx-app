@@ -103,8 +103,12 @@ impl BrowserView {
                 }),
             )
             .children(address)
-            .child(self.favorites(labels, cx))
-            .children(labels.then(|| self.folder_editor_view(cx)).flatten())
+            .child(self.favorites(labels, window, cx))
+            .children(
+                labels
+                    .then(|| self.folder_editor_view(window, cx))
+                    .flatten(),
+            )
             .child(
                 div()
                     .flex_1()

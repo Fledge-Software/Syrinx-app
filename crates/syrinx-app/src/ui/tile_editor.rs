@@ -4,7 +4,7 @@ use gpui::{
     AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Role,
     Stateful, StatefulInteractiveElement, Styled, Subscription, Toggled, Window, div, px,
 };
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{InputEvent, InputState};
 use syrinx_core::{
     BuiltInPlugin, Destination, DestinationEdit, DestinationSurface, DestinationTarget,
     QuickDestinations,
@@ -15,6 +15,7 @@ use syrinx_ui::metrics::{radius, text};
 use super::BrowserView;
 use crate::controls::control;
 use crate::navigation;
+use crate::text_field;
 use crate::theme::rgba;
 
 /// What the form's tile will point at.
@@ -146,6 +147,7 @@ impl BrowserView {
         &self,
         editor: &TileEditor,
         palette: &Palette,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let mut choices = div().flex().flex_wrap().gap(px(6.));
@@ -184,10 +186,20 @@ impl BrowserView {
                     .text_color(rgba(palette.text))
                     .child(title),
             )
-            .child(Input::new(&editor.label).aria_label("Tile name"))
+            .child(text_field::labelled(
+                text_field::TILE_NAME,
+                &editor.label,
+                window,
+                cx,
+            ))
             .child(choices);
         if editor.target == TargetChoice::Website {
-            form = form.child(Input::new(&editor.address).aria_label("Tile address"));
+            form = form.child(text_field::labelled(
+                text_field::TILE_ADDRESS,
+                &editor.address,
+                window,
+                cx,
+            ));
         } else {
             form = form.child(
                 div()

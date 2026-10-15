@@ -355,7 +355,10 @@ you found it in the commit message, not here.
   from the field lands on itself). Setting the copy's `tab_stop` field does
   nothing: `track_focus` clones, and `FocusHandle::clone` rereads the flag
   shared by the focus id, which `tab_stop(false)` writes for every holder,
-  so restore it to true before the field renders (`query_container`). Source:
+  so restore it to true before the field renders. Since DW-70 every text
+  field goes through `crates/syrinx-app/src/text_field.rs` (`container` or
+  `labelled`), which does all of this; draw a new field through it, never
+  with a bare `Input::new`. Source:
   `gpui-base-0.7.1/src/input/base/state.rs`, line 4464,
   `gpui-pre-0.3.8/src/window/a11y.rs`, `set_focus`, and DW-60's probe in
   `docs/p1-36-accessibility.md` (source-confirmed and probed).

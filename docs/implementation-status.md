@@ -19,9 +19,10 @@ described as "merged into the integration branch" or "awaiting merge" is on
 main, with the merge that brought it there named in its row.
 
 **Latest recorded gate.** On 2026-10-14 `cargo xtask check` passed on `main`
-at `5a0ac2c` on EZ-LAPTOP-01: 1,305 tests passed, none failed or ignored, and
-the application smoke run passed (log: `target/gate-main-prompt.log` in the
-main checkout).
+at `08cf323` (after the design-polish merge and the hand-off split) on
+EZ-LAPTOP-01: 1,387 tests passed, none failed or ignored, and the
+application smoke run passed (log: `target/gate-main-08cf323.log` in the
+main checkout). Each later merge records its own gate in its row.
 
 **Open Plan 1 work.** Phase 1 stays open.
 - *Merged on 2026-10-14, each after independent review and a green gate:*
@@ -36,6 +37,14 @@ main checkout).
   selection announced to screen readers) has merged and waits only on the
   owner's NVDA check 7; see the P1-36 row. DW-69 (finishing an
   interrupted discard of a staged update) is open.
+- *Merged on 2026-10-15, after independent review and a green gate:* DW-70,
+  which gives the find bar, folder name, tile name and address and custom
+  accent fields a node that reports focus to screen readers through one
+  shared container (`crates/syrinx-app/src/text_field.rs`), the palette
+  included; it waits only on the owner's NVDA check 14
+  (`docs/p1-36-accessibility.md`, "DW-70"). Its probe found DW-71, the find
+  bar losing keyboard focus after a few characters on a page with matches,
+  which predates DW-70 and is open under P1-13.
 - *P1-39d:* the owner reported P1-39 finished on 2026-10-14, with release
   bugs still being worked out; the pinned keys (DW-30) are not yet on main.
 - *Blocked:* P1-24 and P1-26 on P1-23's quiet-machine runs and engine choice
@@ -110,7 +119,9 @@ passed 1,014 tests after the branding review.
 - *Deferred rows still open:* DW-5, DW-30, DW-60, DW-61 (wired; awaiting
   only the owner's NVDA check), DW-62, DW-63 (an Unload page shortcut on
   a focused sidebar row), DW-66 (a "Reset update records" action for an
-  unreadable `Updates\state`) and DW-67 (the "Last checked" line), in the
+  unreadable `Updates\state`), DW-67 (the "Last checked" line), DW-70
+  (merged; awaiting only the owner's NVDA check 14) and DW-71 (the find
+  bar losing focus while typing), in the
   plan's "Deferred work" register. DW-68 (checking the resolved `windows`
   features for networking) is done on
   `claude/dw-68-resolved-windows-features`; see the P1-39c row. DW-64 (a

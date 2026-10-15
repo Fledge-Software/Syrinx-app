@@ -2,8 +2,10 @@
 
 use super::*;
 use gpui::Subscription;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{InputEvent, InputState};
 use syrinx_platform::browser::PageAction;
+
+use crate::text_field;
 
 actions!(find, [DismissFind]);
 
@@ -129,7 +131,7 @@ impl BrowserView {
         if self.find.is_some() { 48. } else { 0. }
     }
 
-    pub(super) fn find_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn find_bar(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
         let bar = self.find.as_ref()?;
         let bar = div()
             .key_context("SyrinxFind")
@@ -143,9 +145,7 @@ impl BrowserView {
                 cx.notify();
             }))
             .child(
-                div()
-                    .w(px(280.))
-                    .child(Input::new(&bar.input).aria_label("Find in page")),
+                text_field::labelled(text_field::FIND_IN_PAGE, &bar.input, window, cx).w(px(280.)),
             )
             .child(match bar.count {
                 Some(count) => format!("{count} matches"),

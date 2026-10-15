@@ -10,9 +10,9 @@ use std::{rc::Rc, sync::Arc, time::Instant};
 
 use futures::channel::mpsc::UnboundedSender;
 use gpui::{
-    App, AppContext, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    KeyBinding, ParentElement, Render, ScrollHandle, Stateful, StatefulInteractiveElement, Styled,
-    Subscription, Window, actions, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, Div, Entity, InteractiveElement, IntoElement, KeyBinding,
+    ParentElement, Render, ScrollHandle, Stateful, StatefulInteractiveElement, Styled,
+    Subscription, Window, actions, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
 use syrinx_core::usage::{Feature, Timing, UsageRecorder};
@@ -27,7 +27,7 @@ use commands::{CommandMatcher, CommandMatches};
 use display::Preview;
 use query::{Chip, ParsedQuery, View};
 
-use crate::{acceptance::PresentProbe, session::SessionError, theme, ui};
+use crate::{acceptance::PresentProbe, session::SessionError, text_field, theme, ui};
 
 actions!(palette, [Dismiss, NextResult, PreviousResult, SearchWeb]);
 
@@ -555,11 +555,9 @@ impl Render for PaletteView {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(Input::new(&self.input).aria_label("Search or command")),
-                            )
+                            .child(div().flex_1().child(
+                                Input::new(&self.input).aria_label(text_field::PALETTE_QUERY.label),
+                            ))
                             .child(render::key_hint("Esc")),
                     )
                     .child(render::chips(self, cx))
@@ -574,32 +572,12 @@ impl PaletteView {
     /// field's own focus handle, so while the owner types it is the node a screen reader
     /// hears as focused, and the announced row below it can claim that focus.
     fn query_container(&self, window: &Window, cx: &App) -> Stateful<Div> {
-        let query = self.input.read(cx);
-        let handle = query.focus_handle(cx);
-        let container = div()
-            .id("palette-query")
-            .role(gpui::Role::EditableComboBox)
-            .aria_label("Search or command")
-            .when(window.is_a11y_active(), |container| {
-                container.aria_value(query.value().to_string())
-            })
-            // The field is already a Tab stop; a second stop for the same handle would trap
-            // Shift Tab on the field. `track_focus` keeps a clone, which reads the shared flag.
-            .track_focus(&handle.clone().tab_stop(false))
+        text_field::container(text_field::PALETTE_QUERY, &self.input, window, cx)
             .flex()
             .flex_col()
             .flex_1()
-            .min_h_0();
-        // `tab_stop` writes state every later clone reads, so restore it before the field
-        // draws, or the field itself would leave Tab order.
-        restore_tab_stop(handle);
-        container
+            .min_h_0()
     }
-}
-
-/// Makes the query field's handle a Tab stop again for every clone made from now on.
-fn restore_tab_stop(handle: FocusHandle) {
-    drop(handle.tab_stop(true));
 }
 
 #[cfg(test)]
