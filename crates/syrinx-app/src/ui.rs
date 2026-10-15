@@ -37,6 +37,7 @@ mod sidebar_tree;
 mod sidebar_view;
 mod site_permissions;
 mod suspended_fixture;
+mod theme_editor;
 mod tile_editor;
 mod tiles;
 mod title_bar;
@@ -1812,7 +1813,7 @@ impl Render for BrowserView {
                 .relative()
                 .flex()
                 .flex_col()
-                .child(page_card::window_fill_layer(None))
+                .child(page_card::window_fill_layer(None, window, cx))
                 .child(title_bar(div(), window.is_maximized()))
                 .child(self.startup_panel(cx));
         }
@@ -1863,7 +1864,7 @@ impl Render for BrowserView {
             .size_full()
             .relative()
             .key_context("Syrinx")
-            .child(page_card::window_fill_layer(card))
+            .child(page_card::window_fill_layer(card, window, cx))
             .text_color(theme::text())
             .text_sm()
             .font_family("Segoe UI Variable Text")
@@ -2121,7 +2122,7 @@ fn show_app_icon(hwnd: isize) {
     }
 }
 
-fn native_handle(window: &Window) -> Result<isize, &'static str> {
+pub(crate) fn native_handle(window: &Window) -> Result<isize, &'static str> {
     let handle =
         HasWindowHandle::window_handle(window).map_err(|_| "The native window is unavailable.")?;
     match handle.as_raw() {

@@ -4,6 +4,7 @@
 mod acceptance;
 mod appearance;
 mod controls;
+mod ground_image;
 mod navigation;
 mod palette;
 mod palette_sample;

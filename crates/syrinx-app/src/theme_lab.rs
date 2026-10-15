@@ -4,20 +4,16 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Background, Bounds, Context, Div, Image, ImageFormat, InteractiveElement,
-    IntoElement, ObjectFit, ParentElement, Render, StatefulInteractiveElement, Styled, StyledImage,
+    App, AppContext, Background, Bounds, Context, Div, Image, InteractiveElement, IntoElement,
+    ObjectFit, ParentElement, Render, StatefulInteractiveElement, Styled, StyledImage,
     TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowOptions, div, img,
     linear_color_stop, linear_gradient, px, size,
 };
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use syrinx_platform::backdrop::{self, Backdrop};
 use syrinx_ui::{Accent, Color, Ground, Palette, PaletteId, palette};
 
+use crate::ground_image::gradient_image;
 use crate::theme::rgba;
-
-/// Size of Tint's generated ground; it is stretched to the window, close to 1:1 at full screen.
-const GROUND_WIDTH: usize = 1920;
-const GROUND_HEIGHT: usize = 1200;
 
 /// Opens the lab; the application quits when it closes.
 pub(crate) fn open(cx: &mut App) -> Result<(), String> {
@@ -135,7 +131,8 @@ impl ThemeLab {
             Ground2::Material { backdrop, .. } => backdrop,
             Ground2::TwoStop | Ground2::Generated(_) => Backdrop::Mica,
         };
-        let applied = native_handle(window)
+        let applied = crate::ui::native_handle(window)
+            .map_err(str::to_owned)
             .and_then(|hwnd| backdrop::apply(hwnd, backdrop).map_err(|error| error.to_string()));
         if let Err(error) = applied {
             eprintln!("theme lab: could not set the {backdrop:?} backdrop: {error}");
@@ -606,127 +603,13 @@ fn two_stop(tokens: &Palette) -> Background {
     )
 }
 
-/// A three-stop CSS-style gradient with grey grain, as a 24-bit BMP GPUI can draw.
-fn gradient_image(stops: [(Color, f32); 3], angle_degrees: f32, grain: f32) -> Arc<Image> {
-    let (width, height) = (GROUND_WIDTH, GROUND_HEIGHT);
-    let mut noise = Noise(0x9E37_79B9_7F4A_7C15);
-    let mut pixels = Vec::with_capacity(width * height * 3);
-    // BMP rows run bottom to top, blue first.
-    for row in (0..height).rev() {
-        for column in 0..width {
-            let t = gradient_position(column, row, width, height, angle_degrees);
-            let [red, green, blue] = mix_stops(&stops, t);
-            let speck = noise.next() * 255.;
-            let grained = |channel: f32| (channel * (1. - grain) + speck * grain).round() as u8;
-            pixels.extend_from_slice(&[grained(blue), grained(green), grained(red)]);
-        }
-    }
-    Arc::new(Image::from_bytes(
-        ImageFormat::Bmp,
-        bmp(width, height, &pixels),
-    ))
-}
-
-/// Where a pixel falls along a CSS `linear-gradient(<angle>deg)` line, from 0 to 1.
-fn gradient_position(column: usize, row: usize, width: usize, height: usize, angle: f32) -> f32 {
-    let radians = angle.to_radians();
-    let (dx, dy) = (radians.sin(), -radians.cos());
-    let (w, h) = (width as f32, height as f32);
-    let length = (w * dx).abs() + (h * dy).abs();
-    let x = column as f32 + 0.5 - w / 2.;
-    let y = row as f32 + 0.5 - h / 2.;
-    ((x * dx + y * dy) / length + 0.5).clamp(0., 1.)
-}
-
-fn mix_stops(stops: &[(Color, f32); 3], t: f32) -> [f32; 3] {
-    let channels = |color: Color| [color.red, color.green, color.blue].map(f32::from);
-    let pair = if t <= stops[1].1 {
-        (stops[0], stops[1])
-    } else {
-        (stops[1], stops[2])
-    };
-    let ((from, from_at), (to, to_at)) = pair;
-    let span = (to_at - from_at).max(f32::EPSILON);
-    let share = ((t - from_at) / span).clamp(0., 1.);
-    let (from, to) = (channels(from), channels(to));
-    [0, 1, 2].map(|index| from[index] + (to[index] - from[index]) * share)
-}
-
-/// A minimal uncompressed 24-bit BMP; `pixels` holds rows bottom to top, three bytes each.
-fn bmp(width: usize, height: usize, pixels: &[u8]) -> Vec<u8> {
-    let row_bytes = width * 3;
-    let padding = (4 - row_bytes % 4) % 4;
-    let image_bytes = (row_bytes + padding) * height;
-    let mut file = Vec::with_capacity(54 + image_bytes);
-    let u32_le = |value: usize| (value as u32).to_le_bytes();
-    file.extend_from_slice(b"BM");
-    file.extend_from_slice(&u32_le(54 + image_bytes));
-    file.extend_from_slice(&[0; 4]);
-    file.extend_from_slice(&u32_le(54));
-    file.extend_from_slice(&u32_le(40));
-    file.extend_from_slice(&u32_le(width));
-    file.extend_from_slice(&u32_le(height));
-    file.extend_from_slice(&1u16.to_le_bytes());
-    file.extend_from_slice(&24u16.to_le_bytes());
-    file.extend_from_slice(&[0; 24]);
-    for row in pixels.chunks(row_bytes) {
-        file.extend_from_slice(row);
-        file.extend_from_slice(&[0; 3][..padding]);
-    }
-    file
-}
-
-/// A small deterministic noise source, so the grain looks the same on every run.
-struct Noise(u64);
-
-impl Noise {
-    /// The next value in 0..1 (xorshift64*).
-    fn next(&mut self) -> f32 {
-        self.0 ^= self.0 >> 12;
-        self.0 ^= self.0 << 25;
-        self.0 ^= self.0 >> 27;
-        let value = self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40;
-        value as f32 / (1u64 << 24) as f32
-    }
-}
-
 const fn white(alpha: f32) -> Color {
     Color::rgba(255, 255, 255, alpha)
-}
-
-fn native_handle(window: &Window) -> Result<isize, String> {
-    let handle = HasWindowHandle::window_handle(window)
-        .map_err(|_| "the native window is unavailable".to_owned())?;
-    match handle.as_raw() {
-        RawWindowHandle::Win32(handle) => Ok(handle.hwnd.get()),
-        _ => Err("the lab needs a Windows window".to_owned()),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_gradient_runs_from_its_first_stop_to_its_last() {
-        // At 155° the top-left corner is the start and the bottom-right the end.
-        assert!(gradient_position(0, 0, 100, 60, 155.) < 0.01);
-        assert!(gradient_position(99, 59, 100, 60, 155.) > 0.99);
-        let black = Color::rgba(0, 0, 0, 1.);
-        let grey = Color::rgba(100, 100, 100, 1.);
-        let stops = [(black, 0.), (grey, 0.5), (black, 1.)];
-        assert_eq!(mix_stops(&stops, 0.5), [100., 100., 100.]);
-        assert_eq!(mix_stops(&stops, 0.25), [50., 50., 50.]);
-    }
-
-    #[test]
-    fn the_bitmap_header_matches_its_rows() {
-        let file = bmp(3, 2, &[7; 18]);
-        // Each 9-byte row is padded to 12, after the 54-byte header.
-        assert_eq!(file.len(), 54 + 24);
-        assert_eq!(&file[..2], b"BM");
-        assert_eq!(u32::from_le_bytes(file[2..6].try_into().expect("size")), 78);
-    }
 
     #[test]
     fn every_variant_has_a_unique_code() {

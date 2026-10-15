@@ -12,6 +12,27 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-15
 
+- **Themes are built by the owner in an editor; only Graphite and Paper are
+  presets (replaces "all five ship" in `design/README.md`).** The owner's
+  window check that day passed Graphite and Paper. Tint, Haze and Glass
+  did not match the design, and the owner judged that the design itself
+  does not make transparency look good. The development-only theme lab
+  showed what Windows can draw. The owner then chose an editor over
+  picking new fixed palettes:
+  - The default is Graphite with the orange accent, fully opaque.
+  - Paper is the other preset.
+  - Everything else is a custom theme: mode, background colour, solid or
+    gradient, material (none, Mica, Mica Alt or Acrylic), transparency,
+    glass edges, grain and accent.
+  - Several themes can be saved by name.
+  - Text is kept at 4.5:1 or better, pages and the command palette stay
+    opaque, and Reduce transparency still turns materials off.
+  - A previously chosen Haze, Glass or Tint becomes a saved custom theme of
+    that name, so no look is lost.
+  - The owner also approved merging the page-card fix first, with Graphite
+    as the default.
+  - See `docs/theme-editor.md`.
+
 - **Plugins are built from a template repository, each in its own
   repository, as sandboxed WebAssembly loaded at run time; no plugin work
   starts until Plan 1 closes (changes D17 and D34).** The owner wants a

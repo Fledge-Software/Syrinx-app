@@ -1,7 +1,11 @@
 //! Places the page web view inside the card beside the sidebar, in physical pixels, and keeps
 //! the chrome's fill off the card while a page shows there.
 
-use gpui::{Bounds, ContentMask, IntoElement, Styled, canvas, fill, point, px, size};
+use gpui::{
+    AnyElement, App, Bounds, ContentMask, InteractiveElement, IntoElement, ObjectFit,
+    ParentElement, Pixels, Size, Styled, StyledImage, Window, canvas, div, fill, img, point, px,
+    size,
+};
 use syrinx_platform::browser::PageBounds;
 use syrinx_ui::metrics::chrome::CARD_INSET;
 
@@ -105,9 +109,31 @@ pub(super) fn card_edges(frame: CardFrame) -> CardEdges {
 /// The window fill behind all chrome, leaving `card` unpainted.
 ///
 /// GPUI composites above the page's child window (`docs/trapstoknow.md`), so any pixel painted
-/// over the card hides the page. The fill is one quad clipped to each strip around the card,
-/// so Tint's gradient stays continuous across them.
-pub(super) fn window_fill_layer(card: Option<CardEdges>) -> impl IntoElement {
+/// over the card hides the page. The fill is drawn whole and clipped to each strip around the
+/// card, so a gradient stays continuous across them.
+pub(crate) fn window_fill_layer(
+    card: Option<CardEdges>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let palette = theme::current();
+    let viewport = window.viewport_size();
+    let plain = plain_fill(card);
+    let Some(image) = crate::ground_image::ground_image(&palette.ground, palette.grain, window, cx)
+    else {
+        return plain.into_any_element();
+    };
+    // The plain fill stays underneath, so nothing shows through while the image decodes.
+    div()
+        .absolute()
+        .size_full()
+        .child(plain)
+        .child(image_fill(image, card, viewport))
+        .into_any_element()
+}
+
+/// The fill GPUI draws itself: one quad clipped to each strip.
+fn plain_fill(card: Option<CardEdges>) -> impl IntoElement {
     canvas(
         |_, _, _| (),
         move |bounds, (), window, _| {
@@ -121,6 +147,36 @@ pub(super) fn window_fill_layer(card: Option<CardEdges>) -> impl IntoElement {
     )
     .absolute()
     .size_full()
+}
+
+/// A generated ground: one window-sized image shown through each strip around the card.
+fn image_fill(
+    image: std::sync::Arc<gpui::Image>,
+    card: Option<CardEdges>,
+    viewport: Size<Pixels>,
+) -> gpui::Div {
+    let window = Bounds::new(point(px(0.), px(0.)), viewport);
+    let layer = div().absolute().size_full();
+    let strips = fill_strips(window, card).into_iter().enumerate();
+    layer.children(strips.map(|(index, strip)| {
+        div()
+            .id(("window-fill", index))
+            .absolute()
+            .left(strip.origin.x)
+            .top(strip.origin.y)
+            .w(strip.size.width)
+            .h(strip.size.height)
+            .overflow_hidden()
+            .child(
+                img(image.clone())
+                    .absolute()
+                    .left(-strip.origin.x)
+                    .top(-strip.origin.y)
+                    .w(viewport.width)
+                    .h(viewport.height)
+                    .object_fit(ObjectFit::Fill),
+            )
+    }))
 }
 
 /// The whole window, or the four strips around `card` within it.

@@ -57,8 +57,9 @@ pub(crate) fn ground() -> Rgba {
     })
 }
 
-/// What the main window paints behind all chrome: Tint's gradient, or a see-through palette's
-/// translucent tint over the OS material.
+/// What the main window paints behind all chrome: a solid colour, a gradient, or a see-through
+/// theme's translucent tint over the OS material. A three-stop gradient or grain is drawn as
+/// an image over this (`crate::ground_image`).
 pub(crate) fn window_fill() -> Background {
     CURRENT.with_borrow(|palette| match palette.ground {
         Ground::Solid(color) | Ground::Material { tint: color, .. } => rgba(color).into(),
@@ -66,7 +67,7 @@ pub(crate) fn window_fill() -> Background {
             angle_degrees,
             stops,
         } => {
-            // GPUI gradients take two stops, so Tint keeps its first and last.
+            // GPUI gradients take two stops; this keeps the first and last under the image.
             let [(from, from_at), _, (to, to_at)] = stops;
             linear_gradient(
                 angle_degrees,

@@ -26,6 +26,9 @@ pub(crate) const FOLDER_NAME: FieldName = plain("folder-name-field", "Folder nam
 pub(crate) const TILE_NAME: FieldName = plain("tile-name-field", "Tile name");
 pub(crate) const TILE_ADDRESS: FieldName = plain("tile-address-field", "Tile address");
 pub(crate) const CUSTOM_ACCENT: FieldName = plain("custom-accent-field", "Custom accent colour");
+pub(crate) const THEME_NAME: FieldName = plain("theme-name-field", "Theme name");
+pub(crate) const THEME_BACKGROUND: FieldName = plain("theme-background-field", "Background colour");
+pub(crate) const THEME_SECOND: FieldName = plain("theme-second-field", "Second gradient colour");
 
 const fn plain(id: &'static str, label: &'static str) -> FieldName {
     FieldName {
