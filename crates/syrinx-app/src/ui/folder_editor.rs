@@ -26,6 +26,7 @@ actions!(
     [
         RenameRow,
         RemoveRow,
+        CloseRowPage,
         DeleteFolderContents,
         MoveRowUp,
         MoveRowDown,
@@ -57,6 +58,13 @@ pub(super) fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", CancelFolderCard, Some(CARD_CONTEXT)),
         KeyBinding::new("shift-delete", DeleteFolderContents, Some(CARD_CONTEXT)),
     ]);
+}
+
+/// The window's close-tab key (Ctrl W) on a focused row closes that row's live page instead
+/// (DW-63). `ui::window_bindings` adds it after the window's own binding, because GPUI ranks a
+/// binding with no context as deep as the focused row's, and between equals the later wins.
+pub(super) fn close_row_page_binding(keystroke: &str) -> KeyBinding {
+    KeyBinding::new(keystroke, CloseRowPage, Some(ROW_CONTEXT))
 }
 
 /// The open naming form or removal card; at most one shows, under the saved section's header.

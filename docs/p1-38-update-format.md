@@ -692,8 +692,8 @@ next start if Windows still holds it.
 ### What a start does
 
 Before the window opens, `recover` takes the lock (and does nothing if the
-helper still holds it), removes any `incoming`, reads and removes the
-outcome, and settles `pending`: a `pending` naming the running version means
+helper still holds it), removes any `incoming`, reads the outcome (removed
+only once the rest of recovery succeeds, DW-69), and settles `pending`: a `pending` naming the running version means
 the swap finished but its records were not cleared, so it is cleared and
 recorded as `installed`; a `pending` staged by another version, or with no
 `Syrinx.new`, is discarded; and a `Syrinx.new` with no `pending` is removed
@@ -1132,6 +1132,114 @@ for updates again." The action is then shown and works, since no `pending`
 remains. Tests: `start_up_discards_a_staged_update_beside_an_unreadable_record`
 and `start_up_keeps_a_staged_update_beside_a_readable_record`
 (`tests_reset.rs`), and the start-up test in `syrinx-app`'s `updates.rs`.
+
+## DW-69: finishing an interrupted discard
+
+Before this change, `discard_staged` (`install/stage.rs`) removed `pending`
+first and `Syrinx.new` next, and a completed staging had already cleared the
+staging mark. A crash, a power cut or a file Windows held open between those
+two steps therefore left a program-sized `Syrinx.new` with neither `pending`
+nor the mark, which the next start's `clear_unfinished` keeps, since it looks
+like `install-syrinx.ps1`'s copy in progress. It stayed until the next
+staging. A DW-66 discard interrupted the same way also lost its notice,
+because start-up only reports that discard when it finds `pending`.
+
+Every discard (`discard_marked` in `install/stage.rs`) now runs in this
+order: write the staging mark, remove `pending`, remove `Syrinx.new`, clear
+the mark, then remove `Updates\apply` and `incoming`. A discard stopped
+before `Syrinx.new` is gone therefore leaves a marked `Syrinx.new` that the
+next start removes. The mark is cleared as soon as `Syrinx.new` is gone,
+not at the very end, so a mark left behind by a failed `Updates\apply` or
+`incoming` removal can never later authorise `clear_unfinished` to remove
+an `install-syrinx.ps1` copy that appears afterwards. The mark's text says
+why it is there: `discard` for an ordinary discard (a new staging replacing
+the old one, a failed staging's cleanup, a stale or rolled-back `pending` at
+start-up) and `discard unreadable-state` for DW-66's start-up discard. A
+start that finds no `pending` and the second text finishes the whole
+discard and reports `discarded_for_unreadable_state`, so the owner is still
+told once. The mark is read only when `pending` is absent, so a damaged mark
+never stops a start from offering a valid staged update. A DW-66 discard
+stopped before `pending` was removed is simply done again, for the same
+reason, and told. If instead the discard stops after the mark is cleared
+(only `Updates\apply` or `incoming` failed to go), that start reports
+"couldn't tidy" and the next one has nothing left to tell about the discard;
+the reset action stays visible, because it follows the unreadable record
+itself (`records_unreadable`), not the notice.
+
+The helper's own discard of a copy that fails its second check
+(`discard_refused`, `install/apply.rs`) has the same shape: it writes the
+mark, then records `verification_failed` with its outcome (which removes
+`pending`), then removes `Syrinx.new` and clears the mark. Once that outcome
+is written, it reaches the owner even if removing `Syrinx.new` fails: start-up
+recovery (`recover`, `install/startup.rs`) now reads the outcome with
+`Outcome::read` and removes it with `Outcome::clear` only after every other
+step has succeeded, so a start that fails (for example on a still-held file)
+leaves the outcome for the next start instead of losing it. This covers any
+helper outcome waiting when a DW-66 discard fails, too. A malformed outcome
+is still removed when it is refused, so it fails only one start.
+
+Keeping an outcome across starts needs two more rules, both from the second
+review. A start removes only an outcome it read, and the helper now records
+a failure before the swap (`record_unfinished`) while it still holds the
+update lock, so a start, which needs that lock, can never remove an outcome
+it did not see; only a failed wait for the lock is recorded without it, and
+then Syrinx itself holds the lock. And when the helper finishes without
+telling the owner (Restart now with a clean start, `finish` with
+`tell_owner` false), it removes any outcome still waiting, so a kept notice
+about an earlier attempt is never shown while a newer version runs. The
+install is already recorded by then, so if that removal fails the helper
+logs it and still reports the update installed: a stale notice is the
+smaller harm.
+
+The staging mark is read with a 64-byte limit. Without `pending`, a mark
+longer than that cannot be the `discard unreadable-state` mark, so that
+refusal is mapped deliberately to "not this mark" and `clear_unfinished`
+removes it like any other mark, as it did before DW-69; a mark that cannot
+be opened at all (for example, access denied) still stops the start with an
+error.
+
+A file Windows holds open is the other way a removal stops part way. Program
+folders are now removed with `syrinx-package.json` last
+(`remove_program_folder`, `install/files.rs`), so a half-removed folder keeps
+the record that identifies it as Syrinx's own and the next attempt finishes
+it. Before, the record (alphabetically before `syrinx.exe`) could go first,
+after which every later removal refused the folder as one Syrinx did not
+make.
+
+Two things are deliberately left as they were. An ordinary discard stopped
+before `pending` is removed leaves `pending` and the mark together, which is
+also what a staging stopped just after writing `pending` leaves; start-up
+keeps treating that as a staged update, offers it again if it is still
+valid, and otherwise discards it for the same reason as before. And a start that
+finishes an ordinary discard through `clear_unfinished` removes `Syrinx.new`
+and the mark but not `Updates\apply`, which holds only the helper and the
+kept manifest: a mark the helper wrote may be found while that helper is
+still exiting, and the next staging removes the folder anyway.
+
+A `Syrinx.new` without the mark is still left alone. Tests
+(`install/tests_discard.rs`): a re-staging stopped between removing `pending`
+and removing `Syrinx.new` (the test-only step `DiscardBegun`); a start-up
+discard of a copy staged by another version stopped at the same point; a
+DW-66 discard stopped there, whose notice still reaches the owner once; a
+DW-66 discard stopped before `pending` was removed (`DiscardMarked`), done
+again and told; a damaged mark beside a valid staged update, which is still
+offered; and a DW-66 discard stopped by a staged `syrinx.exe` held without
+delete sharing, which keeps the package record, keeps a waiting helper
+outcome through the failed start, and finishes and tells both once the file
+is released. `tests_apply.rs` adds the helper's refused copy stopped at
+`DiscardBegun`, and one whose removal is stopped by a held file in both the
+helper and the next start, whose `verification_failed` outcome reaches the
+first start that succeeds; Restart now removing an older kept outcome, and
+still recording the install when that removal fails; and a start run at a
+fixed point (the test-only `FailureRecorded` step, through the fault hook's
+`run_at`) after the helper has recorded a failure before the swap, which
+finds the helper running and clears nothing, after which the next start
+tells the outcome exactly once. `tests_discard.rs` also shows an over-long mark
+with no `pending` cleared, with a waiting outcome told, rather than stopping
+every start. Each shows the installed `Programs\Syrinx` untouched. The existing guard that an unmarked installer copy is kept also
+gained a case after a finished discard
+(`a_finished_discard_leaves_no_mark_to_remove_an_installer_copy`,
+`tests.rs`).
 
 ## What P1-39 needs from the owner
 

@@ -1,5 +1,5 @@
-//! Shows Windows' own open dialog so the owner picks an exported bookmarks file (P1-22) or an
-//! update package folder (P1-39b).
+//! Shows Windows' own file dialogs so the owner picks an exported bookmarks file (P1-22), an
+//! update package folder (P1-39b) or where to save a usage report (AN-02).
 
 use std::{ffi::OsString, fmt, os::windows::ffi::OsStringExt, path::PathBuf};
 
@@ -12,8 +12,10 @@ use windows::{
         },
         UI::{
             Shell::{
-                FILEOPENDIALOGOPTIONS, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST,
-                FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
+                FILEOPENDIALOGOPTIONS, FOS_DONTADDTORECENT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM,
+                FOS_NOREADONLYRETURN, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS,
+                FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog,
+                SIGDN_FILESYSPATH,
             },
             WindowsAndMessaging::IsWindow,
         },
@@ -58,6 +60,49 @@ pub fn choose_folder(title: &str, owner: isize) -> Result<Option<PathBuf>, FileD
     choose(title, owner, FOS_PICKFOLDERS)
 }
 
+/// Asks the owner where to save a new file, offering `suggested_name` in a folder Windows
+/// picks; Syrinx passes no folder and keeps none. Windows asks before replacing a file, and the
+/// file is not added to Windows' recent items. Returns `None` when they cancel. The same
+/// threading rules as `choose_file` apply.
+pub fn choose_new_file(
+    title: &str,
+    suggested_name: &str,
+    owner: isize,
+) -> Result<Option<PathBuf>, FileDialogError> {
+    let _apartment = Apartment::new()?;
+    let dialog: IFileSaveDialog =
+        unsafe { CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER) }
+            .map_err(|_| FileDialogError::Dialog)?;
+    let kind = FOS_OVERWRITEPROMPT | FOS_NOREADONLYRETURN | FOS_DONTADDTORECENT;
+    configure(&dialog, title, kind)?;
+    name_new_file(&dialog, suggested_name)?;
+    if let Err(error) = unsafe { dialog.Show(owner_window(owner)) } {
+        if error.code() == ERROR_CANCELLED.to_hresult() {
+            return Ok(None);
+        }
+        return Err(FileDialogError::Dialog);
+    }
+    chosen_path(&dialog).map(Some)
+}
+
+/// Offers the suggested name, keeping its extension if the owner types a name without one.
+fn name_new_file(dialog: &IFileDialog, suggested_name: &str) -> Result<(), FileDialogError> {
+    let extension = suggested_name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension);
+    unsafe {
+        dialog
+            .SetFileName(&HSTRING::from(suggested_name))
+            .map_err(|_| FileDialogError::Dialog)?;
+        if let Some(extension) = extension {
+            dialog
+                .SetDefaultExtension(&HSTRING::from(extension))
+                .map_err(|_| FileDialogError::Dialog)?;
+        }
+    }
+    Ok(())
+}
+
 /// Shows the dialog with `kind`'s options added to the file-system-only defaults.
 fn choose(
     title: &str,
@@ -78,9 +123,9 @@ fn choose(
     chosen_path(&dialog).map(Some)
 }
 
-/// Only existing file-system items can be chosen.
+/// Only file-system items in existing folders can be chosen.
 fn configure(
-    dialog: &IFileOpenDialog,
+    dialog: &IFileDialog,
     title: &str,
     kind: FILEOPENDIALOGOPTIONS,
 ) -> Result<(), FileDialogError> {
@@ -101,7 +146,7 @@ fn owner_window(owner: isize) -> Option<HWND> {
     (owner != 0 && unsafe { IsWindow(Some(window)) }.as_bool()).then_some(window)
 }
 
-fn chosen_path(dialog: &IFileOpenDialog) -> Result<PathBuf, FileDialogError> {
+fn chosen_path(dialog: &IFileDialog) -> Result<PathBuf, FileDialogError> {
     let item = unsafe { dialog.GetResult() }.map_err(|_| FileDialogError::NotAFile)?;
     let name = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) }
         .map(TaskString)

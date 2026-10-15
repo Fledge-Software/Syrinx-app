@@ -9,6 +9,7 @@ mod palette;
 mod palette_sample;
 mod session;
 mod smoke_watchdog;
+mod text_field;
 mod theme;
 mod theme_lab;
 mod ui;

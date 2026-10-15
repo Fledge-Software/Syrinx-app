@@ -15,6 +15,7 @@ use super::{
     BrowserView,
     sidebar_rows::{SavedRow, visible_saved_rows},
 };
+use crate::session::SessionCommand;
 
 /// A sidebar row's stable identity for focus: its folder, saved page or open tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -124,6 +125,27 @@ pub(super) fn active_tree_id(model: &TabModelSnapshot) -> Option<TreeId> {
         Some(saved) => TreeId::Page(saved),
         None => TreeId::Tab(tab.id),
     })
+}
+
+/// The open tab showing a saved page, if the page is live.
+pub(super) fn live_tab(model: &TabModelSnapshot, page: SavedPageId) -> Option<TabId> {
+    model
+        .tabs
+        .iter()
+        .find(|tab| tab.saved_page_id == Some(page))
+        .map(|tab| tab.id)
+}
+
+/// The live tab Ctrl W closes from a focused row (DW-63): a saved page's open tab, which
+/// unloads the page while its saved row stays, or the open tab itself. A folder, or a saved
+/// page with no live tab, closes nothing, and the key then does nothing rather than fall
+/// through to the window's Ctrl W: the active page may belong to a different row.
+pub(super) fn row_close_target(model: &TabModelSnapshot, row: TreeId) -> Option<TabId> {
+    match row {
+        TreeId::Folder(_) => None,
+        TreeId::Page(page) => live_tab(model, page),
+        TreeId::Tab(id) => model.tabs.iter().any(|tab| tab.id == id).then_some(id),
+    }
 }
 
 /// The tree key an unmodified key press stands for. Alt arrows move rows, so any modifier
@@ -366,6 +388,17 @@ impl BrowserView {
         if let Some(target) = step.focus {
             self.sidebar_trees.window(peek).focus(target, window, cx);
         }
+        cx.notify();
+    }
+
+    /// Ctrl W on a focused row closes the row's live page, if it has one (DW-63). An unloaded
+    /// saved row stays drawn and keeps focus; a closed tab's row vanishes, and the next frame's
+    /// `plan_frame` moves focus to the new Tab stop, as after Delete.
+    pub(super) fn close_row_page(&mut self, row: TreeId, cx: &mut Context<Self>) {
+        let Some(tab) = row_close_target(&self.model, row) else {
+            return;
+        };
+        self.command(SessionCommand::CloseTab(tab));
         cx.notify();
     }
 
@@ -677,6 +710,37 @@ mod tests {
         let next = plan_frame(&[], None, None);
         assert_eq!(next.refocus, None);
         assert!(next.keep.is_empty());
+    }
+
+    #[test]
+    fn ctrl_w_on_a_live_saved_row_unloads_its_tab() {
+        // Page 1 is live in tab 100 and not the only row, so the saved row stays.
+        assert_eq!(
+            row_close_target(&model(), TreeId::Page(page_id(1))),
+            Some(tab_id(100))
+        );
+    }
+
+    #[test]
+    fn ctrl_w_on_an_open_tab_row_closes_that_tab() {
+        assert_eq!(
+            row_close_target(&model(), TreeId::Tab(tab_id(200))),
+            Some(tab_id(200))
+        );
+        // A tab already closed by the time the key arrives closes nothing else.
+        assert_eq!(row_close_target(&model(), TreeId::Tab(tab_id(300))), None);
+    }
+
+    #[test]
+    fn ctrl_w_on_an_unloaded_saved_row_or_a_folder_closes_nothing() {
+        let model = model();
+        // Page 2 has no live tab, though page 1's tab is active: the active page stays open.
+        assert_eq!(model.active_id, Some(tab_id(100)));
+        assert_eq!(row_close_target(&model, TreeId::Page(page_id(2))), None);
+        assert_eq!(
+            row_close_target(&model, TreeId::Folder(folder_id(10))),
+            None
+        );
     }
 
     #[test]

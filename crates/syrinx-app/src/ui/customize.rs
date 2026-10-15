@@ -6,7 +6,7 @@ use gpui::{
     App, AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Role,
     Stateful, StatefulInteractiveElement, Styled, Subscription, Toggled, Window, div, px,
 };
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{InputEvent, InputState};
 use syrinx_core::QuickDestinations;
 use syrinx_ui::metrics::{radius, text};
 use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette, PaletteId, palette};
@@ -15,6 +15,7 @@ use super::BrowserView;
 use crate::appearance::{Appearance, accent_hex, parse_accent};
 use crate::controls::control;
 use crate::session::SessionCommand;
+use crate::text_field;
 use crate::theme::{self, rgba};
 
 /// The preset names: element ids and the swatches' accessible names.
@@ -72,16 +73,24 @@ impl BrowserView {
         window.refresh();
     }
 
-    pub(super) fn customize_panel(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
+    pub(super) fn customize_panel(
+        &self,
+        palette: &Palette,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let contents = div().flex().flex_col().gap(px(16.));
         // Managing site permissions replaces the appearance choices, so the panel stays short.
         let contents = if self.home.site_permissions.is_open() {
             contents.child(self.site_permissions_view(palette, cx))
+        } else if self.usage.report.is_open() {
+            // The report view replaces the choices in the same way.
+            contents.child(self.usage_report_view(palette, cx))
         } else {
             contents
                 .child(self.customize_title(palette, cx))
                 .child(self.palette_choices(palette, cx))
-                .child(self.accent_choices(palette, cx))
+                .child(self.accent_choices(palette, window, cx))
                 .child(self.transparency_switch(palette, cx))
                 .child(self.site_permissions_entry(palette, cx))
                 .child(self.usage_section(palette, cx))
@@ -134,6 +143,7 @@ impl BrowserView {
         self.home.customize_open = false;
         self.home.custom_accent = None;
         self.home.site_permissions.close();
+        self.usage.report.close();
     }
 
     fn customize_title(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
@@ -201,7 +211,7 @@ impl BrowserView {
         )
     }
 
-    fn accent_choices(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
+    fn accent_choices(&self, palette: &Palette, window: &Window, cx: &mut Context<Self>) -> Div {
         let chosen = self.home.appearance;
         let mut swatches = div().flex().items_center().gap(px(12.));
         for (index, color) in ACCENT_PRESETS.into_iter().enumerate() {
@@ -241,7 +251,7 @@ impl BrowserView {
             .child(group_heading(palette, "Accent"))
             .child(swatches);
         if let Some(custom) = &self.home.custom_accent {
-            group = group.child(custom_accent_field(custom, palette));
+            group = group.child(custom_accent_field(custom, palette, window, cx));
         }
         group
     }
@@ -522,12 +532,17 @@ fn accent_swatch(
     swatch
 }
 
-fn custom_accent_field(custom: &CustomAccent, palette: &Palette) -> Div {
+fn custom_accent_field(custom: &CustomAccent, palette: &Palette, window: &Window, cx: &App) -> Div {
     let mut field = div()
         .flex()
         .flex_col()
         .gap(px(4.))
-        .child(Input::new(&custom.input).aria_label("Custom accent colour"));
+        .child(text_field::labelled(
+            text_field::CUSTOM_ACCENT,
+            &custom.input,
+            window,
+            cx,
+        ));
     if let Some(error) = custom.error {
         field = field.child(
             div()

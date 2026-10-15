@@ -209,9 +209,9 @@ folders; no real usage was collected.
 
 ## What remains
 
-- **AN-02**: the preview, Save report…, Copy report, the suggested prompt,
-  `docs/usage-report.md`, and restoring the switch's approved note. The plan
-  puts it before P1-40.
+- **AN-02** is built on `claude/an-02-report-export`: the preview, Save
+  report…, Copy report, the suggested prompt, `docs/usage-report.md`, and the
+  switch's approved note restored. See `docs/an-02-report-export.md`.
 - The overhead and file-load figures below come from a busy machine and are
   provisional; record a quiet-machine run before review.
 - The owner's visual check of the Usage report section and its confirmations.
