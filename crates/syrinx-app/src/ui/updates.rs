@@ -3,6 +3,7 @@
 //! D13 snapshot.
 
 mod check;
+mod reset;
 
 use std::thread;
 
@@ -50,6 +51,8 @@ enum Stage {
     },
     /// The snapshot is taken; the helper starts once Syrinx has closed.
     HandedOver,
+    /// "Reset update records" is setting an unreadable `Updates\state` aside (DW-66).
+    ResettingRecords,
 }
 
 /// What the window does once the pre-update snapshot has finished.
@@ -76,6 +79,10 @@ pub(super) struct UpdatePanel {
     cancel: Option<Cancel>,
     /// Where a check returns to when it finds nothing or the owner declines.
     before_check: Stage,
+    /// `Updates\state` cannot be read, so "Reset update records" is offered (DW-66).
+    records_unreadable: bool,
+    /// The owner pressed "Reset update records" and is reading what it does.
+    confirming_reset: bool,
 }
 
 impl UpdatePanel {
@@ -94,6 +101,8 @@ impl UpdatePanel {
             remote: None,
             cancel: None,
             before_check: Stage::Idle,
+            records_unreadable: startup.records_unreadable,
+            confirming_reset: false,
         }
     }
 
@@ -189,6 +198,7 @@ impl BrowserView {
             let staged = receiver.await.unwrap_or(StagingResult::Failed {
                 reason: "Staging stopped unexpectedly.".into(),
                 still_staged: None,
+                records_unreadable: None,
             });
             if view
                 .update(cx, |view, cx| {
@@ -212,12 +222,17 @@ impl BrowserView {
             StagingResult::Failed {
                 reason,
                 still_staged,
+                records_unreadable,
             } => {
                 // A refusal after staging began has also removed the earlier staged copy.
                 self.updates.stage = still_staged.map_or(Stage::Idle, Stage::Ready);
+                if let Some(unreadable) = records_unreadable {
+                    self.updates.records_unreadable = unreadable;
+                }
                 self.show_update_status(reason);
             }
             StagingResult::Staged(staged) => {
+                self.updates.records_unreadable = false;
                 self.updates.stage = match staged {
                     Staged::Ready { version, .. } => Stage::Ready(version),
                     Staged::UpToDate(_) => Stage::Idle,
@@ -354,6 +369,9 @@ impl BrowserView {
         if let Some(version) = self.updates.waiting() {
             section = section.child(self.ready_row(palette, version, cx));
         }
+        if let Some(row) = self.reset_row(palette, cx) {
+            section = section.child(row);
+        }
         if let Some(status) = &self.updates.status {
             section = section.child(
                 div()
@@ -428,8 +446,22 @@ enum StagingResult {
         reason: String,
         /// The earlier staged version, if a refusal left it in place.
         still_staged: Option<Version>,
+        /// Whether `Updates\state` was unreadable once the worker finished (DW-66); `None`
+        /// when it was not looked at, which leaves the action as it was.
+        records_unreadable: Option<bool>,
     },
     Staged(Staged),
+}
+
+impl StagingResult {
+    /// A refusal from staging or a download, explained for the owner.
+    fn refused(context: &UpdateContext, error: &InstallError) -> Self {
+        Self::Failed {
+            reason: refusal_message(error),
+            still_staged: context.staged(),
+            records_unreadable: Some(context.records_unreadable()),
+        }
+    }
 }
 
 /// Runs on the staging thread: the folder dialog, then verification and copying.
@@ -441,6 +473,7 @@ fn choose_and_stage(context: &UpdateContext, owner: isize) -> StagingResult {
             return StagingResult::Failed {
                 reason: format!("{error}."),
                 still_staged: context.staged(),
+                records_unreadable: None,
             };
         }
     };
@@ -448,10 +481,7 @@ fn choose_and_stage(context: &UpdateContext, owner: isize) -> StagingResult {
         Ok(staged) => StagingResult::Staged(staged),
         Err(error) => {
             log_refusal(&error);
-            StagingResult::Failed {
-                reason: refusal_message(&error),
-                still_staged: context.staged(),
-            }
+            StagingResult::refused(context, &error)
         }
     }
 }
@@ -484,7 +514,7 @@ fn section_text(palette: &Palette, running: &str) -> Div {
 }
 
 /// The small outlined button Customize uses for its section actions.
-fn pill(palette: &Palette, element: Stateful<Div>) -> Stateful<Div> {
+pub(super) fn pill(palette: &Palette, element: Stateful<Div>) -> Stateful<Div> {
     element
         .h(px(28.))
         .px(px(12.))
@@ -516,6 +546,7 @@ mod tests {
         let startup = StartupUpdates {
             notice: None,
             staged: Some(STAGED),
+            records_unreadable: false,
         };
         let panel = UpdatePanel::new(UpdateContext::disabled(), startup);
         assert_eq!(panel.stage, Stage::Ready(STAGED));

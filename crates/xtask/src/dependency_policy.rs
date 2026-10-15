@@ -4,6 +4,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde_json::Value;
 
+mod resolved_windows;
+mod version_req;
+
 struct Package {
     dependencies: BTreeSet<String>,
     declarations: Vec<Declaration>,
@@ -26,6 +29,15 @@ type Workspace = BTreeMap<String, Package>;
 
 /// Returns policy violations, or an error when Cargo's metadata cannot be read.
 pub fn check_metadata(metadata: &Value) -> Result<Vec<String>, String> {
+    check_metadata_against(metadata, &resolved_windows::THIRD_PARTY_NETWORK_FEATURES)
+}
+
+/// The same check with the approved third-party networking features passed in, so tests can
+/// use synthetic graphs without the real list's entries reporting as stale.
+fn check_metadata_against(
+    metadata: &Value,
+    allowed_network_features: &[resolved_windows::AllowedFeature],
+) -> Result<Vec<String>, String> {
     // Validate membership before applying rules to the workspace packages.
     let workspace = read_workspace(metadata)?;
     let mut violations = BTreeSet::new();
@@ -37,7 +49,10 @@ pub fn check_metadata(metadata: &Value) -> Result<Vec<String>, String> {
         check_shell_paths(name, &workspace, &mut violations);
         check_network_declarations(name, package, &mut violations);
     }
-    check_headless_network_reach(metadata, &mut violations)?;
+    // Then Cargo's resolved graph, which third-party manifests also shape.
+    let graph = read_resolved_graph(metadata)?;
+    check_headless_network_reach(metadata, &graph, &mut violations)?;
+    resolved_windows::check(metadata, &graph, allowed_network_features, &mut violations)?;
     Ok(violations.into_iter().collect())
 }
 
@@ -136,26 +151,39 @@ fn imported_as(declaration: &Declaration) -> Vec<String> {
 
 /// The names and entries of a package's `[features]` table; a missing table means none.
 fn read_feature_table(package: &Value, name: &str) -> Result<(Vec<String>, Vec<String>), String> {
+    let table = read_feature_lists(package, name)?;
+    let names = table.keys().cloned().collect();
+    let entries = table.into_values().flatten().collect();
+    Ok((names, entries))
+}
+
+/// Each feature of a package's `[features]` table with the entries it switches on.
+fn read_feature_lists(
+    package: &Value,
+    name: &str,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
     let Some(features) = package.get("features") else {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(BTreeMap::new());
     };
     let table = features
         .as_object()
         .ok_or_else(|| format!("{name}.features must be an object"))?;
-    let names = table.keys().cloned().collect();
-    let mut entries = Vec::new();
+    let mut lists = BTreeMap::new();
     for (feature, enabled) in table {
         let list = enabled
             .as_array()
-            .ok_or_else(|| format!("{name}.features.{feature} must be an array"))?;
-        for entry in list {
-            let entry = entry
-                .as_str()
-                .ok_or_else(|| format!("{name}.features.{feature} must hold strings"))?;
-            entries.push(entry.to_owned());
-        }
+            .ok_or_else(|| format!("{name}.features.{feature} must be an array"))?
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("{name}.features.{feature} must hold strings"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        lists.insert(feature.clone(), list);
     }
-    Ok((names, entries))
+    Ok(lists)
 }
 
 fn read_declaration(dependency: &Value, package: &str) -> Result<Declaration, String> {
@@ -514,13 +542,19 @@ const NETWORK_CRATES: [&str; 22] = [
     "hickory-resolver",
 ];
 
-/// `windows` feature prefixes that expose Windows networking or HTTP APIs.
-const NETWORK_WINDOWS_FEATURES: [&str; 5] = [
+/// `windows` feature prefixes that expose Windows networking, HTTP or remote-call APIs: URL
+/// monikers download, RPC and WinRM reach other machines, and the web authentication broker
+/// opens a sign-in page.
+const NETWORK_WINDOWS_FEATURES: [&str; 9] = [
     "Win32_Networking",
     "Win32_NetworkManagement",
     "Win32_Web",
+    "Win32_System_Com_Urlmon",
+    "Win32_System_Rpc",
+    "Win32_System_RemoteManagement",
     "Networking",
     "Web",
+    "Security_Authentication_Web",
 ];
 
 fn check_network_declarations(name: &str, package: &Package, violations: &mut BTreeSet<String>) {
@@ -567,9 +601,9 @@ fn is_network_feature(feature: &str) -> bool {
 /// that rank typed text cannot reach a network crate even through a third-party library.
 fn check_headless_network_reach(
     metadata: &Value,
+    graph: &ResolvedGraph,
     violations: &mut BTreeSet<String>,
 ) -> Result<(), String> {
-    let graph = read_resolved_graph(metadata)?;
     for member in required_array(metadata, "workspace_members", "cargo metadata")? {
         let Some(id) = member.as_str() else {
             continue;
@@ -580,7 +614,7 @@ fn check_headless_network_reach(
         if !needs_shell_isolation(name) {
             continue;
         }
-        if let Some(path) = network_path(id, &graph) {
+        if let Some(path) = network_path(id, graph) {
             violations.insert(format!(
                 "{}: a headless crate reaches a network client (D9)",
                 path.join(" -> ")
@@ -590,10 +624,11 @@ fn check_headless_network_reach(
     Ok(())
 }
 
-/// Package names and resolved dependency edges, keyed by Cargo's package ID.
+/// Package names, resolved dependency edges and resolved features, keyed by Cargo's package ID.
 struct ResolvedGraph {
     names: BTreeMap<String, String>,
     edges: BTreeMap<String, Vec<String>>,
+    features: BTreeMap<String, BTreeSet<String>>,
 }
 
 fn read_resolved_graph(metadata: &Value) -> Result<ResolvedGraph, String> {
@@ -609,6 +644,7 @@ fn read_resolved_graph(metadata: &Value) -> Result<ResolvedGraph, String> {
         .filter(|value| value.is_object())
         .ok_or("cargo metadata must include the resolved dependency graph")?;
     let mut edges = BTreeMap::new();
+    let mut features = BTreeMap::new();
     for node in required_array(resolve, "nodes", "cargo metadata.resolve")? {
         let id = required_string(node, "id", "resolve node")?;
         let dependencies = required_array(node, "deps", "resolve node")?
@@ -617,8 +653,26 @@ fn read_resolved_graph(metadata: &Value) -> Result<ResolvedGraph, String> {
             .map(|pkg| pkg.map(str::to_owned))
             .collect::<Result<Vec<_>, _>>()?;
         edges.insert(id.to_owned(), dependencies);
+        features.insert(id.to_owned(), read_node_features(node, id)?);
     }
-    Ok(ResolvedGraph { names, edges })
+    Ok(ResolvedGraph {
+        names,
+        edges,
+        features,
+    })
+}
+
+/// The features Cargo switched on for one resolved package, after unifying every request.
+fn read_node_features(node: &Value, id: &str) -> Result<BTreeSet<String>, String> {
+    required_array(node, "features", &format!("resolve node {id}"))?
+        .iter()
+        .map(|feature| {
+            feature
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("resolve node {id}.features must hold strings"))
+        })
+        .collect()
 }
 
 // Breadth-first search for the shortest package path to a network crate.
@@ -654,10 +708,21 @@ fn display_name(id: &str, graph: &ResolvedGraph) -> String {
 mod tests {
     use serde_json::{Value, json};
 
-    use super::check_metadata;
+    use super::check_metadata_against;
+    use super::resolved_windows::AllowedFeature;
+
+    /// The policy with no third-party networking approved, so synthetic graphs stand alone.
+    fn check_metadata(metadata: &Value) -> Result<Vec<String>, String> {
+        check_metadata_against(metadata, &[])
+    }
 
     fn package(name: &str, dependencies: Value) -> Value {
-        json!({"id": format!("workspace:{name}"), "name": name, "dependencies": dependencies})
+        json!({
+            "id": format!("workspace:{name}"),
+            "name": name,
+            "version": "0.1.0",
+            "dependencies": dependencies
+        })
     }
 
     fn metadata(packages: Vec<Value>) -> Value {
@@ -678,7 +743,7 @@ mod tests {
             .iter()
             .map(|dependency| json!({"pkg": format!("workspace:{dependency}")}))
             .collect();
-        json!({"id": format!("workspace:{name}"), "deps": deps})
+        json!({"id": format!("workspace:{name}"), "deps": deps, "features": []})
     }
 
     #[test]
@@ -934,7 +999,12 @@ mod tests {
     }
 
     fn winhttp(features: Value) -> Value {
-        json!({"name": "windows", "uses_default_features": false, "features": features})
+        json!({
+            "name": "windows",
+            "req": "=0.62.2",
+            "uses_default_features": false,
+            "features": features
+        })
     }
 
     #[test]
@@ -1143,6 +1213,374 @@ mod tests {
         assert!(violations.iter().any(|message| message.contains(
             "syrinx-update-net -> helper -> hyper: a headless crate reaches a network client"
         )));
+        Ok(())
+    }
+
+    /// A third-party package, identified as Cargo's registry IDs are, by name and version.
+    fn versioned(name: &str, version: &str, dependencies: Value) -> Value {
+        json!({
+            "id": format!("{name}@{version}"),
+            "name": name,
+            "version": version,
+            "dependencies": dependencies
+        })
+    }
+
+    /// A resolved node with Cargo's unified feature list for that package.
+    fn resolved(id: &str, dependencies: &[&str], features: &[&str]) -> Value {
+        let deps: Vec<Value> = dependencies
+            .iter()
+            .map(|dependency| json!({"pkg": dependency}))
+            .collect();
+        json!({"id": id, "deps": deps, "features": features})
+    }
+
+    /// The update download and the platform crate's wry sharing one `windows 0.62.2` build,
+    /// whose resolved features are `windows_features`; wry asks for `wry_features`.
+    fn shared_windows_graph(
+        windows_features: &[&str],
+        wry_features: Value,
+    ) -> Result<Value, String> {
+        let mut input = metadata(vec![
+            update_net(json!([winhttp(json!(["Win32_Networking_WinHttp"]))])),
+            package("syrinx-platform", json!([{"name": "wry"}])),
+        ]);
+        extend_graph(
+            &mut input,
+            vec![
+                versioned(
+                    "wry",
+                    "0.57.0",
+                    json!([{"name": "windows", "req": "^0.62", "features": wry_features}]),
+                ),
+                versioned("windows", "0.62.2", json!([])),
+            ],
+            vec![
+                resolved("workspace:syrinx-update-net", &["windows@0.62.2"], &[]),
+                resolved("workspace:syrinx-platform", &["wry@0.57.0"], &[]),
+                resolved("wry@0.57.0", &["windows@0.62.2"], &[]),
+                resolved("windows@0.62.2", &[], windows_features),
+            ],
+        )?;
+        Ok(input)
+    }
+
+    /// Adds third-party packages and their resolved nodes to a synthetic graph.
+    fn extend_graph(
+        input: &mut Value,
+        packages: Vec<Value>,
+        nodes: Vec<Value>,
+    ) -> Result<(), String> {
+        input["packages"]
+            .as_array_mut()
+            .ok_or("synthetic packages")?
+            .extend(packages);
+        input["resolve"]["nodes"]
+            .as_array_mut()
+            .ok_or("synthetic nodes")?
+            .extend(nodes);
+        Ok(())
+    }
+
+    #[test]
+    fn the_resolved_windows_build_may_carry_only_winhttp() -> Result<(), String> {
+        // WinHTTP and the `Win32_Networking` parent it implies, on the download's own build.
+        let passing = shared_windows_graph(
+            &[
+                "Win32",
+                "Win32_Foundation",
+                "Win32_Networking",
+                "Win32_Networking_WinHttp",
+            ],
+            json!(["Win32_Foundation"]),
+        )?;
+        assert!(check_metadata(&passing)?.is_empty());
+
+        // A resolve node without its feature list cannot be checked, so it is an error.
+        let mut missing = passing.clone();
+        missing["resolve"]["nodes"][3]
+            .as_object_mut()
+            .ok_or("synthetic node")?
+            .remove("features");
+        assert!(check_metadata(&missing).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_third_party_crate_cannot_widen_the_shared_windows_build() -> Result<(), String> {
+        // Cargo unifies wry's request into the build every Syrinx crate shares.
+        let mut input = shared_windows_graph(
+            &[
+                "Win32_Foundation",
+                "Win32_Networking",
+                "Win32_Networking_WinHttp",
+                "Win32_Networking_WinSock",
+            ],
+            json!(["Win32_Foundation", "Win32_Networking_WinSock"]),
+        )?;
+        // A third party's own `[features]` table reaches a binding too, here an optional one.
+        let mut helper = versioned(
+            "helper",
+            "1.0.0",
+            json!([{"name": "windows-sys", "req": "^0.61", "optional": true}]),
+        );
+        helper["features"] = json!({"net": ["windows-sys?/Win32_NetworkManagement_IpHelper"]});
+        extend_graph(
+            &mut input,
+            vec![helper, versioned("windows-sys", "0.61.2", json!([]))],
+            vec![
+                resolved("helper@1.0.0", &["windows-sys@0.61.2"], &["net"]),
+                resolved(
+                    "windows-sys@0.61.2",
+                    &[],
+                    &[
+                        "Win32_NetworkManagement",
+                        "Win32_NetworkManagement_IpHelper",
+                    ],
+                ),
+            ],
+        )?;
+        let violations = check_metadata(&input)?;
+        assert_eq!(
+            violations,
+            [
+                "windows 0.62.2: resolved feature Win32_Networking_WinSock exposes Windows networking (D9); requested by wry 0.57.0",
+                "windows-sys 0.61.2: resolved feature Win32_NetworkManagement_IpHelper exposes Windows networking (D9); requested by helper 1.0.0",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn every_resolved_windows_version_is_checked() -> Result<(), String> {
+        // WinHTTP is approved only on the build the download uses, not on an older `windows`.
+        let mut input =
+            shared_windows_graph(&["Win32_Networking", "Win32_Networking_WinHttp"], json!([]))?;
+        extend_graph(
+            &mut input,
+            vec![
+                versioned(
+                    "gpui-base",
+                    "0.7.1",
+                    json!([
+                        {"name": "windows", "req": "^0.58", "features": ["Win32_Networking_WinHttp"]},
+                        {"name": "windows-sys", "req": "^0.52"}
+                    ]),
+                ),
+                versioned("windows", "0.58.0", json!([])),
+                versioned("windows-sys", "0.52.0", json!([])),
+            ],
+            vec![
+                resolved(
+                    "gpui-base@0.7.1",
+                    &["windows@0.58.0", "windows-sys@0.52.0"],
+                    &[],
+                ),
+                resolved(
+                    "windows@0.58.0",
+                    &[],
+                    &["Win32_Networking", "Win32_Networking_WinHttp"],
+                ),
+                // A namespace parent with no child is refused, with no declaration to blame.
+                resolved(
+                    "windows-sys@0.52.0",
+                    &[],
+                    &["Win32_Networking", "Networking"],
+                ),
+            ],
+        )?;
+        let violations = check_metadata(&input)?;
+        assert_eq!(
+            violations,
+            [
+                "windows 0.58.0: resolved feature Win32_Networking_WinHttp exposes Windows networking (D9); requested by gpui-base 0.7.1",
+                "windows-sys 0.52.0: resolved feature Networking exposes Windows networking (D9); requested by no direct declaration",
+                "windows-sys 0.52.0: resolved feature Win32_Networking exposes Windows networking (D9); requested by no direct declaration",
+            ]
+        );
+
+        // Without the download in the workspace, no build may carry WinHTTP at all.
+        let mut without_download = shared_windows_graph(&["Win32_Networking_WinHttp"], json!([]))?;
+        without_download["workspace_members"] = json!(["workspace:syrinx-platform"]);
+        let violations = check_metadata(&without_download)?;
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].starts_with(
+            "windows 0.62.2: resolved feature Win32_Networking_WinHttp exposes Windows networking"
+        ));
+        Ok(())
+    }
+
+    /// wry's WinSock on the shared build, approved from `requesters` only.
+    fn approved_winsock(requesters: &'static [&'static str]) -> [AllowedFeature; 1] {
+        [AllowedFeature {
+            binding: "windows 0.62.2",
+            feature: "Win32_Networking_WinSock",
+            requesters,
+        }]
+    }
+
+    fn wry_winsock_graph() -> Result<Value, String> {
+        shared_windows_graph(
+            &[
+                "Win32_Networking",
+                "Win32_Networking_WinHttp",
+                "Win32_Networking_WinSock",
+            ],
+            json!(["Win32_Networking_WinSock"]),
+        )
+    }
+
+    #[test]
+    fn an_approved_third_party_feature_passes_only_from_its_listed_crates() -> Result<(), String> {
+        // The owner's 2026-10-14 approval names each requesting crate and version.
+        let input = wry_winsock_graph()?;
+        let allowed = approved_winsock(&["wry 0.57.0"]);
+        assert!(check_metadata_against(&input, &allowed)?.is_empty());
+
+        // The same feature from a crate the approval does not list is refused.
+        let mut widened = wry_winsock_graph()?;
+        extend_graph(
+            &mut widened,
+            vec![versioned(
+                "helper",
+                "1.0.0",
+                json!([{"name": "windows", "req": "^0.62", "features": ["Win32_Networking_WinSock"]}]),
+            )],
+            vec![resolved("helper@1.0.0", &["windows@0.62.2"], &[])],
+        )?;
+        assert_eq!(
+            check_metadata_against(&widened, &allowed)?,
+            [
+                "windows 0.62.2: resolved feature Win32_Networking_WinSock is approved only from wry 0.57.0; also requested by helper 1.0.0"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_stale_approval_fails() -> Result<(), String> {
+        // A feature no longer resolved, or a listed crate that stopped asking, must be removed.
+        let without_winsock =
+            shared_windows_graph(&["Win32_Networking", "Win32_Networking_WinHttp"], json!([]))?;
+        let allowed = approved_winsock(&["wry 0.57.0"]);
+        assert_eq!(
+            check_metadata_against(&without_winsock, &allowed)?,
+            [
+                "windows 0.62.2: approved feature Win32_Networking_WinSock is no longer resolved; remove the stale entry (docs/decisions.md, 2026-10-14)"
+            ]
+        );
+
+        let allowed = approved_winsock(&["retired 2.0.0", "wry 0.57.0"]);
+        assert_eq!(
+            check_metadata_against(&wry_winsock_graph()?, &allowed)?,
+            [
+                "windows 0.62.2: approved feature Win32_Networking_WinSock lists retired 2.0.0, which no longer request it; remove the stale requester (docs/decisions.md, 2026-10-14)"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn winhttp_is_approved_per_build_whoever_else_asks() -> Result<(), String> {
+        // Cargo switches WinHTTP on for everyone sharing the download's build, so a third party
+        // asking for it there changes nothing and passes; the source scan confines its use.
+        let input = shared_windows_graph(
+            &["Win32_Networking", "Win32_Networking_WinHttp"],
+            json!(["Win32_Networking_WinHttp"]),
+        )?;
+        assert!(check_metadata(&input)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn checks_winapi_modules_and_the_wider_network_namespaces() -> Result<(), String> {
+        // winapi names modules; its address-struct modules declare no functions and pass.
+        let mut input = shared_windows_graph(&["Win32_Networking_WinHttp"], json!([]))?;
+        extend_graph(
+            &mut input,
+            vec![
+                versioned(
+                    "helper",
+                    "1.0.0",
+                    json!([
+                        {"name": "winapi", "req": "0.3.9", "features": ["inaddr", "winhttp"]},
+                        {"name": "windows-sys", "req": "^0.59", "features": ["Win32_System_Rpc"]}
+                    ]),
+                ),
+                versioned("winapi", "0.3.9", json!([])),
+                versioned("windows-sys", "0.59.0", json!([])),
+            ],
+            vec![
+                resolved("helper@1.0.0", &["winapi@0.3.9", "windows-sys@0.59.0"], &[]),
+                resolved("winapi@0.3.9", &[], &["in6addr", "inaddr", "winhttp"]),
+                // WinRT's `Networking` holds types of its own, so a child does not excuse it.
+                resolved(
+                    "windows-sys@0.59.0",
+                    &[],
+                    &["Networking", "Networking_Sockets", "Win32_System_Rpc"],
+                ),
+            ],
+        )?;
+        assert_eq!(
+            check_metadata(&input)?,
+            [
+                "winapi 0.3.9: resolved feature winhttp exposes Windows networking (D9); requested by helper 1.0.0",
+                "windows-sys 0.59.0: resolved feature Networking exposes Windows networking (D9); requested by no direct declaration",
+                "windows-sys 0.59.0: resolved feature Networking_Sockets exposes Windows networking (D9); requested by no direct declaration",
+                "windows-sys 0.59.0: resolved feature Win32_System_Rpc exposes Windows networking (D9); requested by helper 1.0.0",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn credits_only_manifests_that_activate_the_feature_on_that_build() -> Result<(), String> {
+        // A declaration of another version, or a `[features]` entry whose own feature is off,
+        // does not make a crate a requester of the resolved feature.
+        let mut input = wry_winsock_graph()?;
+        let mut helper = versioned(
+            "helper",
+            "1.0.0",
+            json!([
+                {"name": "windows", "req": "^0.58", "features": ["Win32_Networking_WinSock"]},
+                {"name": "windows", "req": "^0.62", "rename": "windows-new"}
+            ]),
+        );
+        helper["features"] = json!({"sockets": ["windows-new/Win32_Networking_WinSock"]});
+        extend_graph(
+            &mut input,
+            vec![helper],
+            vec![resolved("helper@1.0.0", &["windows@0.62.2"], &[])],
+        )?;
+        let allowed = approved_winsock(&["wry 0.57.0"]);
+        assert!(check_metadata_against(&input, &allowed)?.is_empty());
+
+        // Once its own `sockets` feature is on, the same entry makes it a new requester.
+        input["resolve"]["nodes"][4]["features"] = json!(["sockets"]);
+        let violations = check_metadata_against(&input, &allowed)?;
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].ends_with("also requested by helper 1.0.0"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_binding_or_requester_missing_from_the_graph_is_an_error() -> Result<(), String> {
+        // Fail closed: a part of the graph that cannot be read is never treated as clean.
+        let mut unresolved = shared_windows_graph(&["Win32_Networking_WinHttp"], json!([]))?;
+        extend_graph(
+            &mut unresolved,
+            vec![versioned("windows", "0.58.0", json!([]))],
+            vec![],
+        )?;
+        assert!(check_metadata(&unresolved).is_err());
+
+        let mut orphan = wry_winsock_graph()?;
+        extend_graph(
+            &mut orphan,
+            vec![],
+            vec![resolved("ghost@1.0.0", &["windows@0.62.2"], &[])],
+        )?;
+        assert!(check_metadata(&orphan).is_err());
         Ok(())
     }
 

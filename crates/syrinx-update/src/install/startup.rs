@@ -6,12 +6,13 @@ use std::path::Path;
 
 use super::error::io_error;
 use super::files::{
-    ensure_plain_directory, read_small, remove_file_if_present, remove_program_folder,
-    remove_update_folder, write_atomically,
+    ensure_plain_directory, entry_present, read_small, remove_file_if_present,
+    remove_program_folder, remove_update_folder, write_atomically,
 };
 use super::layout::APPLY_HELPER;
 use super::lock::ApplyLock;
 use super::records::{Outcome, Pending, UpdateResult, UpdateState};
+use super::reset::state_is_unreadable;
 use super::stage::discard_staged;
 use super::{InstallError, UpdateLayout};
 use crate::error::UpdateError;
@@ -34,6 +35,8 @@ pub struct Recovery {
     pub outcome: Option<Outcome>,
     /// The helper is still at work, so nothing was touched.
     pub helper_running: bool,
+    /// A staged update was removed because `Updates\state` is unreadable (DW-66).
+    pub discarded_for_unreadable_state: bool,
 }
 
 /// Finish or clear what an interrupted staging or swap left, unless the helper is at work.
@@ -46,12 +49,27 @@ pub fn recover(layout: &UpdateLayout, running: Version) -> Result<Recovery, Inst
     };
     remove_update_folder(&layout.incoming(), "the incoming folder")?;
     let outcome = Outcome::take(layout)?;
+    let discarded_for_unreadable_state = discard_beside_unreadable_state(layout)?;
     let staged = settle_pending(layout, running)?;
     Ok(Recovery {
         staged,
         outcome,
         helper_running: false,
+        discarded_for_unreadable_state,
     })
+}
+
+/// Remove a staged update whose state record cannot be read (owner, 2026-10-14): without the
+/// record, recovery cannot tell whether that version was rolled back, so it is never offered.
+fn discard_beside_unreadable_state(layout: &UpdateLayout) -> Result<bool, InstallError> {
+    if !entry_present(&layout.pending(), "checking for a staged update")? {
+        return Ok(false);
+    }
+    if !state_is_unreadable(layout)? {
+        return Ok(false);
+    }
+    discard_staged(layout)?;
+    Ok(true)
 }
 
 /// Keep a complete staged copy for this version; clear everything else.

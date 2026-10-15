@@ -43,7 +43,7 @@ impl NavigationStatus {
         let (raw_id, progress) = match event {
             BrowserEvent::Loading { id, loading: true } => (*id, Progress::Loading),
             BrowserEvent::Loading { id, loading: false } => (*id, Progress::Finishing),
-            BrowserEvent::NavigationCompleted { id, success } => {
+            BrowserEvent::NavigationCompleted { id, success, .. } => {
                 (*id, Progress::Completed(*success))
             }
             BrowserEvent::Error { tab: Some(id), .. } => {
@@ -138,6 +138,7 @@ mod tests {
                 let completed = BrowserEvent::NavigationCompleted {
                     id: id.get(),
                     success,
+                    cancelled: false,
                 };
                 let expected = if success {
                     "Page loaded."
@@ -188,7 +189,8 @@ mod tests {
             status.observe(
                 &BrowserEvent::NavigationCompleted {
                     id: background.get(),
-                    success: false
+                    success: false,
+                    cancelled: false
                 },
                 &model.snapshot(),
                 &loaded,
@@ -223,7 +225,8 @@ mod tests {
             status.observe(
                 &BrowserEvent::NavigationCompleted {
                     id: original.get(),
-                    success: false
+                    success: false,
+                    cancelled: false
                 },
                 &model.snapshot(),
                 &loaded,
@@ -254,7 +257,11 @@ mod tests {
             );
             assert_eq!(
                 status.observe(
-                    &BrowserEvent::NavigationCompleted { id, success: false },
+                    &BrowserEvent::NavigationCompleted {
+                        id,
+                        success: false,
+                        cancelled: false
+                    },
                     &model.snapshot(),
                     &loaded,
                     &pending,
@@ -279,6 +286,7 @@ mod tests {
                 &BrowserEvent::NavigationCompleted {
                     id: id.get(),
                     success: false,
+                    cancelled: false
                 },
                 &snapshot,
                 &loaded,
@@ -324,6 +332,7 @@ mod tests {
             BrowserEvent::NavigationCompleted {
                 id: id.get(),
                 success: false,
+                cancelled: false,
             },
         ] {
             assert_eq!(
@@ -351,7 +360,8 @@ mod tests {
                 status.observe(
                     &BrowserEvent::NavigationCompleted {
                         id: id.get(),
-                        success: true
+                        success: true,
+                        cancelled: false
                     },
                     &snapshot,
                     &loaded,

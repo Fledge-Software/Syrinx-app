@@ -190,6 +190,17 @@ impl PaletteChoices {
         usize::from(self.address.is_some())
     }
 
+    /// How many selectable rows are drawn: the Go to row, if any, then the results.
+    pub(super) fn row_count(&self) -> usize {
+        self.results.len() + self.address_rows()
+    }
+
+    /// The row a screen reader hears as focused (DW-60): the selection, but only once the
+    /// owner has moved it, so the query field keeps the focus while the owner types.
+    pub(super) fn announced_row(&self) -> Option<usize> {
+        self.selected.filter(|_| self.moved)
+    }
+
     pub(super) fn selected_hit(&self) -> Option<&SearchHit> {
         self.selected
             .and_then(|selected| selected.checked_sub(self.address_rows()))
@@ -206,7 +217,7 @@ impl PaletteChoices {
     }
 
     pub(super) fn next(&mut self) {
-        let rows = self.results.len() + self.address_rows();
+        let rows = self.row_count();
         if rows == 0 {
             return;
         }
@@ -747,6 +758,49 @@ mod tests {
             // Alt Enter is an explicit request and still searches the web.
             assert_submit(&mut choices, input, true, input);
         }
+    }
+
+    #[test]
+    fn only_a_moved_selection_is_announced_and_typing_withdraws_it() {
+        let [tab, saved] = targets();
+        let mut choices = PaletteChoices::default();
+        let request = choices.query_scoped("synthetic target", true);
+        choices.stage_commands(staged(&[], 0), true, false);
+        assert!(choices.receive(request, Ok(results(&[tab, saved]))));
+        assert_eq!(choices.row_count(), 2);
+        // The top row is selected for Enter, but the query field keeps the focus.
+        assert_eq!(choices.selected, Some(0));
+        assert_eq!(choices.announced_row(), None);
+
+        choices.next();
+        assert_eq!(choices.announced_row(), Some(1));
+        choices.previous();
+        assert_eq!(choices.announced_row(), Some(0));
+
+        // A model refresh keeps the moved row announced once its reply arrives.
+        choices.next();
+        let refreshed = choices.refresh();
+        assert_eq!(choices.announced_row(), None, "no rows while waiting");
+        assert!(choices.receive(refreshed, Ok(results(&[tab, saved]))));
+        assert_eq!(choices.announced_row(), Some(1));
+
+        // Typing hands the focus back to the query field.
+        let typed = choices.query_scoped("synthetic target two", true);
+        assert_eq!(choices.announced_row(), None);
+        assert!(choices.receive(typed, Ok(results(&[tab]))));
+        assert_eq!(choices.announced_row(), None);
+    }
+
+    #[test]
+    fn an_empty_list_announces_nothing_even_after_a_move() {
+        let mut choices = PaletteChoices::default();
+        let request = choices.query_scoped("synthetic nothing", false);
+        choices.stage_commands(staged(&[], 0), true, false);
+        assert!(choices.receive(request, Ok(results(&[]))));
+        choices.next();
+        choices.previous();
+        assert_eq!(choices.row_count(), 0);
+        assert_eq!(choices.announced_row(), None);
     }
 
     #[test]

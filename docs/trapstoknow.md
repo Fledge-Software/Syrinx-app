@@ -251,6 +251,15 @@ you found it in the commit message, not here.
   `cx.defer` (or a task) outside every update, and recheck that the request is
   still wanted when it runs. Source: `gpui-pre-0.3.8/src/app.rs`, lines
   1431–1455, and the fix in `ui/peek.rs` (`docs/p1-17-peek.md`).
+- **A root element's mouse listener misses presses on occluding children and
+  right after a key.** GPUI runs an element's `capture_any_mouse_down` only
+  while its hitbox counts as hovered, which an `.occlude()` child (the
+  toolbar) prevents, and `is_hovered` is false whenever the last input was a
+  key. DW-62's first build therefore never saw a press on a toolbar button.
+  To see every press in a window, register `Window::on_mouse_event` from a
+  canvas's paint, as `controls::watch_pointer` does. Source:
+  `gpui-pre-0.3.8/src/window.rs`, `HitboxId::is_hovered` (line 782), and
+  DW-62's visual probe (observed).
 - **A bounds observer fires on every activation change, not only on a move.**
   GPUI's activation callback calls `bounds_changed`, which runs every
   `observe_window_bounds` observer. The peek's watch closed the peek when it was
@@ -335,6 +344,21 @@ you found it in the commit message, not here.
   `docs/p1-36-accessibility.md`. Source: `gpui-pre-0.3.8/src/window/a11y.rs`,
   lines 232–243, 411–423 and 530–542, and `elements/div.rs`, lines 2326–2335
   (source-confirmed; P1-36 probe survived).
+- **A focused gpui-component text field is invisible to UI Automation, and
+  a row cannot claim focus under it.** The element tracking the field's
+  handle (`input-state`) has no role, so GPUI reports the window as focused
+  and ignores any `aria_active_descendant` below. To give a field a focused
+  node, track *the field's own handle* on a role-bearing ancestor, as the
+  palette's `palette-query` does (DW-60): only the node with a role claims,
+  keys still go to the field because it registers the handle last, and the
+  container's copy must not be a Tab stop (twice in Tab order, Shift Tab
+  from the field lands on itself). Setting the copy's `tab_stop` field does
+  nothing: `track_focus` clones, and `FocusHandle::clone` rereads the flag
+  shared by the focus id, which `tab_stop(false)` writes for every holder,
+  so restore it to true before the field renders (`query_container`). Source:
+  `gpui-base-0.7.1/src/input/base/state.rs`, line 4464,
+  `gpui-pre-0.3.8/src/window/a11y.rs`, `set_focus`, and DW-60's probe in
+  `docs/p1-36-accessibility.md` (source-confirmed and probed).
 - **GPUI draws above a WebView2 child window, not below it.** Note 08 read
   the code as the page covering GPUI; the Phase 0 spike found the opposite
   on this machine. Don't rely on either for layout: keep the page card's
@@ -549,6 +573,13 @@ you found it in the commit message, not here.
   not match and a P1-14 label regression failed. Use direct patches for Unicode
   text, or ASCII script literals with Unicode escapes; UTF-8 file reads alone
   do not control the shell's pipe encoding.
+- **A PowerShell double-quoted string silently drops Markdown backticks.**
+  The backtick is PowerShell's escape character, so `` "`None`" `` becomes
+  `None` with no error: a scripted replacement whose search text held a
+  backticked doc comment matched nothing, and one whose replacement held
+  them wrote doc comments without their code spans. Edit such text with the
+  Edit tool, or use single-quoted PowerShell strings, and check the result.
+  Source: AN-01's doc-comment edits (observed 2026-10-14).
 - **Files on disk have CRLF line endings; git stores LF.** This machine's
   system git config sets `core.autocrlf=true` and `.gitattributes` sets
   `* text=auto`, so `git ls-files --eol` shows `i/lf w/crlf` for most text

@@ -31,6 +31,11 @@ fn entry_metadata(path: &Path, step: &'static str) -> Result<Option<Metadata>, I
     }
 }
 
+/// Whether anything, a link included, is at `path`.
+pub(crate) fn entry_present(path: &Path, step: &'static str) -> Result<bool, InstallError> {
+    Ok(entry_metadata(path, step)?.is_some())
+}
+
 /// Create `path` if missing, then require a plain directory rather than a link or a file.
 pub(crate) fn ensure_plain_directory(path: &Path, what: &'static str) -> Result<(), InstallError> {
     match fs::create_dir(path) {

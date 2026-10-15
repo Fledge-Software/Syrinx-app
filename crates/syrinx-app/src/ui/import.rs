@@ -90,10 +90,11 @@ impl BrowserView {
         }
         let (sender, receiver) = oneshot::channel();
         let owner = self.parent_hwnd;
+        let usage = self.usage.recorder.clone();
         let spawned = thread::Builder::new()
             .name("syrinx-bookmark-import".to_owned())
             .spawn(move || {
-                if sender.send(prepare(owner)).is_err() {
+                if sender.send(prepare(owner, &usage)).is_err() {
                     eprintln!("The bookmark file was chosen after its window closed.");
                 }
             });
@@ -313,7 +314,7 @@ fn preview_options(window: &Window) -> WindowOptions {
 }
 
 /// Runs on the import thread: dialog, bounded read, parse. Logs nothing from the file.
-fn prepare(owner: isize) -> Prepared {
+fn prepare(owner: isize, usage: &UsageRecorder) -> Prepared {
     let path = match choose_file("Import bookmarks", owner) {
         Ok(Some(path)) => path,
         Ok(None) => return Prepared::Cancelled,
@@ -329,7 +330,10 @@ fn prepare(owner: isize) -> Prepared {
             import: Box::new(import),
             folder_title: import_folder_title(path.file_stem().and_then(|stem| stem.to_str())),
         },
-        Err(error) => Prepared::Failed(refusal_message(error)),
+        Err(error) => {
+            usage.error(ErrorCategory::ImportRefused);
+            Prepared::Failed(refusal_message(error))
+        }
     }
 }
 
@@ -554,7 +558,7 @@ impl Render for ImportPreview {
                     .child("There is nothing to import."),
             );
         }
-        let frame = div()
+        let frame = crate::controls::watch_pointer(div())
             .key_context(PREVIEW_CONTEXT)
             .on_action(cx.listener(|this, _: &ConfirmImport, window, _| {
                 // Enter on a focused Cancel cancels; anywhere else it confirms.

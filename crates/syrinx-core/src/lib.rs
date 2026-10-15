@@ -8,6 +8,7 @@ mod commands;
 mod destinations;
 mod page_text;
 mod tabs;
+pub mod usage;
 mod web_address;
 
 pub use address_display::readable_address;

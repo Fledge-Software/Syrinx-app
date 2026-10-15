@@ -16,6 +16,8 @@ use syrinx_store::{BackupOutcome, DirectoryLease, StoredSnapshot, validate_backu
 
 use super::*;
 
+mod usage_tests;
+
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 const SAVED_ADDRESS: &str = "https://saved-session.example.test/original";
 const LIVE_ADDRESS: &str = "https://live-session.example.test/latest";
@@ -39,11 +41,19 @@ impl Fixture {
     }
 
     fn start(&self) -> (SessionHandle, UnboundedReceiver<SessionEvent>) {
-        spawn(self.0.clone()).expect("start synthetic session worker")
+        self.start_with(Arc::default())
+    }
+
+    /// Starts a worker that records into `usage` (AN-01).
+    fn start_with(
+        &self,
+        usage: Arc<UsageRecorder>,
+    ) -> (SessionHandle, UnboundedReceiver<SessionEvent>) {
+        spawn(self.0.clone(), usage).expect("start synthetic session worker")
     }
 
     fn start_acceptance(&self) -> (SessionHandle, UnboundedReceiver<SessionEvent>) {
-        spawn_acceptance(self.0.clone()).expect("start acceptance session worker")
+        spawn_acceptance(self.0.clone(), Arc::default()).expect("start acceptance session worker")
     }
 
     fn cleanup(self) {
@@ -70,6 +80,9 @@ impl Fixture {
             "syrinx.db-journal",
             "syrinx.lifecycle",
             "syrinx.deletions",
+            "usage.json",
+            "usage.json.new",
+            "usage.json.damaged",
         ] {
             remove_if_present(&self.0.join(name), false);
         }
@@ -115,10 +128,10 @@ impl Wake for ThreadWake {
 }
 
 fn next_event(events: &mut UnboundedReceiver<SessionEvent>) -> SessionEvent {
-    // The startup preferences event has its own tests; tab-model tests read past it.
+    // The startup preferences and usage status have their own tests; tab-model tests read past them.
     loop {
         match next_any_event(events) {
-            SessionEvent::Preferences { .. } => continue,
+            SessionEvent::Preferences { .. } | SessionEvent::Usage { .. } => continue,
             event => return event,
         }
     }
@@ -683,7 +696,8 @@ fn worker_idle_path_publishes_the_acknowledged_snapshot_without_waiting_for_a_ti
     let acknowledged = state(&mut events);
 
     // Invoke the same private branch as the idle timer with a fixed synthetic UTC time.
-    backup_while_idle(&store, Ok(1_800_000_000), &sender).expect("run idle backup branch");
+    backup_while_idle(&store, Ok(1_800_000_000), &UsageRecorder::new(), &sender)
+        .expect("run idle backup branch");
     let first = archive
         .candidates()
         .expect("enumerate published synthetic backups");
@@ -695,7 +709,7 @@ fn worker_idle_path_publishes_the_acknowledged_snapshot_without_waiting_for_a_ti
     assert_eq!(verified.snapshot, acknowledged.model);
     let first_id = first[0].metadata.id;
     drop(first);
-    backup_while_idle(&store, Ok(1_800_000_060), &sender)
+    backup_while_idle(&store, Ok(1_800_000_060), &UsageRecorder::new(), &sender)
         .expect("check daily schedule on next idle poll");
     let repeated = archive
         .candidates()
@@ -704,8 +718,13 @@ fn worker_idle_path_publishes_the_acknowledged_snapshot_without_waiting_for_a_ti
     assert_eq!(repeated[0].metadata.id, first_id);
     drop(repeated);
 
-    backup_while_idle(&store, Err(SessionError::ClockUnavailable), &sender)
-        .expect("surface idle clock failure");
+    backup_while_idle(
+        &store,
+        Err(SessionError::ClockUnavailable),
+        &UsageRecorder::new(),
+        &sender,
+    )
+    .expect("surface idle clock failure");
     assert!(matches!(
         next_event(&mut events),
         SessionEvent::Failure {

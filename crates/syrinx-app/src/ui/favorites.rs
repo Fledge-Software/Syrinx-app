@@ -139,7 +139,7 @@ impl BrowserView {
                     }))
             } else {
                 cell.on_click(cx.listener(move |this, _, window, cx| {
-                    this.open_tile(&opened);
+                    this.open_tile(DestinationSurface::Favorites, &opened);
                     this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
                     cx.notify();
                 }))
@@ -181,7 +181,7 @@ impl BrowserView {
                     COMPACT_LETTER_SIZE,
                 ))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.open_tile(&opened);
+                    this.open_tile(DestinationSurface::Favorites, &opened);
                     this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
                     cx.notify();
                 })),

@@ -40,7 +40,7 @@ impl Render for PeekView {
             Ok(content) => content,
             Err(_) => div(), // The owner has gone; native ownership also tears down this window.
         };
-        div()
+        crate::controls::watch_pointer(div())
             .key_context("SyrinxPeek")
             .size_full()
             .text_color(theme::text())
@@ -226,6 +226,7 @@ impl BrowserView {
                 if let Some(browser) = &self.browser {
                     browser.set_peek_generation(generation);
                 }
+                self.count(Feature::SidebarPeekShown);
                 self.peek = Some(peek);
             }
             Ok(stale) => {
@@ -310,7 +311,7 @@ impl BrowserView {
         }
         match action {
             PeekAction::Dismiss => self.focus_page(window, cx),
-            PeekAction::Palette(address) => self.open_palette(address, window, cx),
+            PeekAction::Palette(address) => self.palette_key(address, window, cx),
             PeekAction::Toggle => self.toggle_sidebar(window, cx),
         }
         cx.notify();

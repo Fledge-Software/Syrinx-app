@@ -85,6 +85,7 @@ impl BrowserView {
                 .child(self.accent_choices(palette, cx))
                 .child(self.transparency_switch(palette, cx))
                 .child(self.site_permissions_entry(palette, cx))
+                .child(self.usage_section(palette, cx))
                 .child(self.updates_section(palette, cx))
         };
         let panel = div()
@@ -320,39 +321,14 @@ impl BrowserView {
 
     fn transparency_switch(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
         let on = self.home.appearance.reduce_transparency;
-        let (track, knob) = if on {
-            (palette.accent.fill, palette.accent.on_fill)
-        } else {
-            (palette.field, palette.icon_dim)
-        };
-        let mut switch = control(
-            div().id("reduce-transparency"),
-            Role::Switch,
-            "Reduce transparency",
-        )
-        .aria_toggled(toggled(on))
-        .w(px(36.))
-        .h(px(20.))
-        .flex_none()
-        .rounded(px(10.))
-        .border_1()
-        .border_color(rgba(palette.key))
-        .bg(rgba(track))
-        .p(px(2.))
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        .child(div().size(px(14.)).rounded_full().bg(rgba(knob)))
-        .on_click(cx.listener(move |this, _, window, cx| {
-            let appearance = Appearance {
-                reduce_transparency: !on,
-                ..this.home.appearance
-            };
-            this.choose_appearance(appearance, window, cx);
-        }));
-        if on {
-            switch = switch.justify_end();
-        }
+        let switch = switch_control("reduce-transparency", "Reduce transparency", on, palette)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                let appearance = Appearance {
+                    reduce_transparency: !on,
+                    ..this.home.appearance
+                };
+                this.choose_appearance(appearance, window, cx);
+            }));
         div()
             .pt(px(14.))
             .border_t_1()
@@ -494,6 +470,36 @@ fn palette_miniature(sample: &Palette) -> Div {
 /// A radio button's or switch's checked state for screen readers.
 fn toggled(on: bool) -> Toggled {
     if on { Toggled::True } else { Toggled::False }
+}
+
+/// A Customize on/off switch, drawn and announced as one; the caller adds its click.
+pub(super) fn switch_control(
+    id: &'static str,
+    label: &'static str,
+    on: bool,
+    palette: &Palette,
+) -> Stateful<Div> {
+    let (track, knob) = if on {
+        (palette.accent.fill, palette.accent.on_fill)
+    } else {
+        (palette.field, palette.icon_dim)
+    };
+    let switch = control(div().id(id), Role::Switch, label)
+        .aria_toggled(toggled(on))
+        .w(px(36.))
+        .h(px(20.))
+        .flex_none()
+        .rounded(px(10.))
+        .border_1()
+        .border_color(rgba(palette.key))
+        .bg(rgba(track))
+        .p(px(2.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .child(div().size(px(14.)).rounded_full().bg(rgba(knob)));
+    // The knob sits right when on, as Windows draws its own switches.
+    if on { switch.justify_end() } else { switch }
 }
 
 fn accent_swatch(

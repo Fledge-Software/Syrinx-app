@@ -7,12 +7,16 @@ use super::*;
 fn preferences(
     events: &mut UnboundedReceiver<SessionEvent>,
 ) -> (BTreeMap<String, String>, QuickDestinations) {
-    match next_any_event(events) {
-        SessionEvent::Preferences {
-            settings,
-            destinations,
-        } => (settings, destinations),
-        event => panic!("expected synthetic preferences, got {event:?}"),
+    // The usage status (AN-01) is reported first at start-up and has its own tests.
+    loop {
+        match next_any_event(events) {
+            SessionEvent::Preferences {
+                settings,
+                destinations,
+            } => return (settings, destinations),
+            SessionEvent::Usage { .. } => continue,
+            event => panic!("expected synthetic preferences, got {event:?}"),
+        }
     }
 }
 

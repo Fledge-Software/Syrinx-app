@@ -18,9 +18,13 @@ fn only_folder(snapshot: &SessionSnapshot) -> SavedFolderId {
 }
 
 fn stored_settings(events: &mut UnboundedReceiver<SessionEvent>) -> BTreeMap<String, String> {
-    match next_any_event(events) {
-        SessionEvent::Preferences { settings, .. } => settings,
-        event => panic!("expected synthetic preferences, got {event:?}"),
+    // The usage status (AN-01) is reported first at start-up and has its own tests.
+    loop {
+        match next_any_event(events) {
+            SessionEvent::Preferences { settings, .. } => return settings,
+            SessionEvent::Usage { .. } => continue,
+            event => panic!("expected synthetic preferences, got {event:?}"),
+        }
     }
 }
 

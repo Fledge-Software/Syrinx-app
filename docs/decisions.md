@@ -12,6 +12,93 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-14
 
+- **The focus ring shows only after keyboard input, decided by Syrinx's own
+  keyboard-or-pointer flag (DW-62).** P1-36 drew the ring on any focus, so
+  a chrome button clicked with the mouse kept a ring until focus moved on.
+  GPUI's built-in `focus_visible` cannot fix that: it judges keyboard use
+  from the keys GPUI itself receives, so it never sees the F6 or Tab that
+  leaves a web page through WebView2, and the ring would vanish exactly
+  when a keyboard user leaves a page; it also counts a bare mouse move as
+  pointer use. P1-36 recommended accepting the ring after clicks for v1,
+  since that errs toward keyboard users; the other alternative was a
+  vendored GPUI patch exposing a way to mark keyboard use, which would be a
+  further change to the pinned toolkit. The owner chose, in chat, neither:
+  Syrinx keeps its own flag, set to pointer by a mouse press in any Syrinx
+  window and to keyboard by any key Syrinx's windows receive and by every
+  key a focused page hands over (F6, Tab out of the page and the other
+  shortcuts), and draws the ring only in keyboard mode. This needs no GPUI
+  change and keeps the ring visible after F6 from a page. See
+  `docs/p1-36-accessibility.md`, "DW-62".
+
+- **GPUI's existing Windows network and remote-call features are approved,
+  pinned to the crates that ask for them (DW-68; narrows D9's check, not
+  D9).** D9 keeps typing on the machine, and P1-39c made WinHTTP in
+  `syrinx-update-net` the one exception (2026-10-13, question 8).
+  `cargo xtask check-deps` checked only what Syrinx's own crates declare, so
+  a third-party crate could switch on another networking namespace and Cargo
+  would unify it into the build every crate shares. DW-68 now reads the
+  features Cargo actually resolves on every `windows`, `windows-sys` and
+  `winapi` version, and found that GPUI's own stack already turns some on:
+  - `Win32_Networking_WinSock` on the pinned `windows 0.62.2`, requested by
+    `gpui-pre` and `gpui-pre-windows` 0.3.8;
+  - on `windows 0.57.0`, `sysinfo 0.31.4`'s IpHelper, Ndis, NetManagement
+    and WinSock features and `Win32_System_Rpc` (used by its WMI sensor
+    reading), reached through GPUI's `zed-scap`;
+  - on `windows-sys 0.61.2`, WinSock from mio, polling, quinn-udp, rustix,
+    socket2, uds_windows and zbus, and IpHelper from zbus.
+
+  The owner approved exactly those eight entries, each with its requesting
+  crates and versions, in `THIRD_PARTY_NETWORK_FEATURES`
+  (`crates/xtask/src/dependency_policy/resolved_windows.rs`); RPC was
+  approved as the eighth after a review widened the namespaces checked.
+  Any new requester, version, feature or namespace fails the check, and so
+  does an entry that no longer matches or lists a crate that stopped asking,
+  so the list cannot outlive its reason.
+
+  What is enforced, exactly: because `windows 0.62.2` is the build
+  `syrinx-platform` and `syrinx-app` also use, its WinSock bindings compile
+  in those crates. The source scan in `crates/xtask/src/network_sources.rs`
+  refuses `WinSock`, `NetworkManagement`, any `WSA`-prefixed name (as a
+  token) and the `ws2_32`, `wsock32`, `mswsock` and `iphlpapi` libraries
+  (in any letter case, with or without `.dll`) in every Syrinx crate except
+  the xtask tooling, and WinHTTP in every crate but the update download.
+  Manifests are checked twice. The declaration rule refuses a Syrinx crate
+  that asks `windows` or `windows-sys` for a networking feature. A Syrinx
+  crate asking `winapi` for a network module is refused by the
+  resolved-feature check instead, because no approved entry names it.
+  These are text and manifest checks, not a sandbox: a feature check cannot
+  see a raw `#[link]` or `windows-link` extern at all, and the source scan
+  sees one only when it names one of those libraries.
+
+  `winapi 0.3.9` also resolves `inaddr` and `in6addr` (requested by
+  `ntapi 0.4.3`). These modules define only the IPv4 and IPv6 address
+  structs and declare no functions, like std's `Ipv4Addr`, so they are not
+  on winapi's network list. The owner deferred this classification; it was
+  the agent's call, recorded here so it can be revisited.
+
+  Rejected: patching GPUI's vendored manifest to drop WinSock, a new vendor
+  patch that would not reach `sysinfo` through `zed-scap` and risks GPUI's
+  own socket use; and closing DW-68 as a known limit, which would leave a
+  third-party crate free to add networking unseen.
+
+- **AN-01 starts before P1-39d, an exception to the plan's order.** The
+  approved analytics proposal put AN-01 after P1-39. P1-39d needs the
+  owner's release keys and update host, which are not ready, while AN-01's
+  local collector needs neither, so the owner told the session to start
+  AN-01 now rather than wait. Only the order changes: AN-02 still precedes
+  P1-40.
+- **AN-01's frozen command list is approved as built.** The proposal made the
+  owner's review of the 20 built-in command counters plus `command.other`
+  (listed in `docs/an-01-local-analytics.md`) a done condition; the owner
+  approved them unchanged. A new built-in command still needs a new schema
+  version and the owner's approval.
+- **The usage switch's note is shortened until AN-02.** The approved note
+  says the counts can be viewed, exported or deleted, but viewing and
+  exporting arrive only with AN-02. Until then Customize says "Nothing is
+  sent anywhere. You can delete the counts at any time."; AN-02 restores
+  the approved sentence when it adds the preview and export. Showing a
+  promise the build cannot keep was the rejected alternative.
+
 - **Where Windows cannot list sync roots, Syrinx treats the machine as
   having none (narrows D13).** D13 keeps the database out of OneDrive and
   similar synced folders; the storage guard

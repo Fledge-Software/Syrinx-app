@@ -6,15 +6,16 @@ mod display;
 mod query;
 mod render;
 
-use std::{rc::Rc, time::Instant};
+use std::{rc::Rc, sync::Arc, time::Instant};
 
 use futures::channel::mpsc::UnboundedSender;
 use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, ParentElement,
-    Render, ScrollHandle, StatefulInteractiveElement, Styled, Subscription, Window, actions, div,
-    px,
+    App, AppContext, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    KeyBinding, ParentElement, Render, ScrollHandle, Stateful, StatefulInteractiveElement, Styled,
+    Subscription, Window, actions, div, prelude::FluentBuilder, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
+use syrinx_core::usage::{Feature, Timing, UsageRecorder};
 use syrinx_core::{CommandAction, CommandContext, CommandRegistry};
 use syrinx_platform::browser::BrowserShortcut;
 use syrinx_search::{Scope, SearchResults, Target};
@@ -70,6 +71,8 @@ pub struct PaletteEntry {
     pub initial: String,
     pub events: UnboundedSender<PaletteEvent>,
     pub context: CommandContext,
+    /// When the key or click that opened this entry was handled (AN-01).
+    pub opened: Instant,
 }
 
 /// The palette's view. Its popup is created once, hidden between uses and reset on each
@@ -91,6 +94,9 @@ pub struct PaletteView {
     native: PaletteNative,
     /// Present-time stamps for P1-33's acceptance run; `None` in every other run.
     probe: Option<PresentProbe>,
+    /// The shared usage counters (AN-01), and when the open entry began until it is painted.
+    usage: Arc<UsageRecorder>,
+    opening: Option<Instant>,
     _input_events: Subscription,
     /// Counts the input's notifications for P1-33's acceptance run; `None` otherwise.
     _input_count: Option<Subscription>,
@@ -120,6 +126,7 @@ impl PaletteView {
         registry: Rc<CommandRegistry>,
         native: PaletteNative,
         probe: Option<PresentProbe>,
+        usage: Arc<UsageRecorder>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -143,6 +150,8 @@ impl PaletteView {
             scroll: ScrollHandle::new(),
             native,
             probe,
+            usage,
+            opening: None,
             _input_events: input_events,
             _input_count: input_count,
             active_this_entry: false,
@@ -158,6 +167,7 @@ impl PaletteView {
         self.events = Some(entry.events);
         self.active_this_entry = false;
         self.context = entry.context;
+        self.opening = Some(entry.opened);
         self.choices.reset();
         self.chip = Chip::default();
         self.view = View::Everything;
@@ -359,6 +369,9 @@ impl PaletteView {
 
     /// Choosing a chip drops a typed prefix, since the prefix would otherwise override it.
     fn choose_chip(&mut self, chip: Chip, window: &mut Window, cx: &mut Context<Self>) {
+        if chip != self.chip {
+            self.usage.count(Feature::PaletteScopeChanged);
+        }
         self.chip = chip;
         let input = self.input.read(cx).value().to_string();
         let parsed = ParsedQuery::parse(&input);
@@ -446,6 +459,13 @@ impl Render for PaletteView {
             let probe = probe.clone();
             cx.defer(move |_| probe.presented(Instant::now()));
         }
+        // The open entry's first frame: timed after its present, as the probe is.
+        if self.is_open()
+            && let Some(opened) = self.opening.take()
+        {
+            let usage = self.usage.clone();
+            cx.defer(move |_| usage.time(Timing::PaletteOpenToPaint, opened.elapsed()));
+        }
         let tokens = theme::current();
         let wide = f32::from(window.viewport_size().width) >= PREVIEW_MIN_WIDTH;
         let list = render::list(self, wide, cx);
@@ -459,7 +479,7 @@ impl Render for PaletteView {
         if wide {
             body = body.child(render::preview(self.preview()));
         }
-        div()
+        crate::controls::watch_pointer(div())
             .id("palette")
             .role(gpui::Role::Dialog)
             .aria_label("Command palette")
@@ -527,23 +547,59 @@ impl Render for PaletteView {
             .on_action(|_: &ui::FocusNextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &ui::FocusPreviousControl, window, cx| window.focus_prev(cx))
             .child(
-                div()
-                    .h(px(56.))
-                    .px_4()
-                    .flex()
-                    .items_center()
-                    .gap_3()
+                self.query_container(window, cx)
                     .child(
                         div()
-                            .flex_1()
-                            .child(Input::new(&self.input).aria_label("Search or command")),
+                            .h(px(56.))
+                            .px_4()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Input::new(&self.input).aria_label("Search or command")),
+                            )
+                            .child(render::key_hint("Esc")),
                     )
-                    .child(render::key_hint("Esc")),
+                    .child(render::chips(self, cx))
+                    .child(body),
             )
-            .child(render::chips(self, cx))
-            .child(body)
             .child(render::footer(&self.choices.status))
     }
+}
+
+impl PaletteView {
+    /// The combo box that holds the query field and the rows (DW-60). It tracks the query
+    /// field's own focus handle, so while the owner types it is the node a screen reader
+    /// hears as focused, and the announced row below it can claim that focus.
+    fn query_container(&self, window: &Window, cx: &App) -> Stateful<Div> {
+        let query = self.input.read(cx);
+        let handle = query.focus_handle(cx);
+        let container = div()
+            .id("palette-query")
+            .role(gpui::Role::EditableComboBox)
+            .aria_label("Search or command")
+            .when(window.is_a11y_active(), |container| {
+                container.aria_value(query.value().to_string())
+            })
+            // The field is already a Tab stop; a second stop for the same handle would trap
+            // Shift Tab on the field. `track_focus` keeps a clone, which reads the shared flag.
+            .track_focus(&handle.clone().tab_stop(false))
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0();
+        // `tab_stop` writes state every later clone reads, so restore it before the field
+        // draws, or the field itself would leave Tab order.
+        restore_tab_stop(handle);
+        container
+    }
+}
+
+/// Makes the query field's handle a Tab stop again for every clone made from now on.
+fn restore_tab_stop(handle: FocusHandle) {
+    drop(handle.tab_stop(true));
 }
 
 #[cfg(test)]

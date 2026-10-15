@@ -185,6 +185,52 @@ fn first_open(open: OpenPanes, direction: Direction) -> Pane {
     found.unwrap_or(Pane::Address)
 }
 
+/// How the owner last moved around Syrinx, which decides whether focus shows its ring
+/// (DW-62): after a key the ring is the only cue to where focus is; after a click it is noise.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Modality {
+    /// A key came last, or nothing has happened yet, so the ring errs toward showing.
+    #[default]
+    Keyboard,
+    /// A mouse press in one of Syrinx's windows came last.
+    Pointer,
+}
+
+/// Something the owner did that can change the modality.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModalityInput<'a> {
+    /// A mouse press in one of Syrinx's own windows.
+    PointerPress,
+    /// A key one of Syrinx's windows received, named as GPUI names it ("tab", "f6").
+    Key(&'a str),
+    /// A key a focused page handed to Syrinx through WebView2's accelerator or focus-move
+    /// events (F6, Tab past the page's last element, Ctrl T). GPUI never sees these.
+    PageKey,
+}
+
+impl Modality {
+    /// The modality after `input`. A modifier pressed on its own changes nothing, so holding
+    /// Ctrl or Shift before a click never flashes the ring.
+    pub fn after(self, input: ModalityInput<'_>) -> Self {
+        match input {
+            ModalityInput::PointerPress => Modality::Pointer,
+            ModalityInput::Key(key) if is_modifier_key(key) => self,
+            ModalityInput::Key(_) | ModalityInput::PageKey => Modality::Keyboard,
+        }
+    }
+
+    /// Whether a focused control draws the focus ring.
+    pub const fn shows_focus_ring(self) -> bool {
+        matches!(self, Modality::Keyboard)
+    }
+}
+
+/// Whether GPUI's key name is a modifier pressed on its own: the names GPUI gives the
+/// keystroke it reports when a lone modifier is released (Caps Lock never becomes one).
+pub fn is_modifier_key(key: &str) -> bool {
+    matches!(key, "shift" | "control" | "alt" | "platform" | "function")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,5 +407,51 @@ mod tests {
                 assert!(ratio >= crate::contrast::NON_TEXT_MINIMUM, "{id:?} {ratio}");
             }
         }
+    }
+
+    #[test]
+    fn the_ring_shows_from_the_start_and_after_any_key() {
+        assert!(Modality::default().shows_focus_ring());
+        for key in ["tab", "f6", "enter", "space", "left", "a", "escape"] {
+            let after = Modality::Pointer.after(ModalityInput::Key(key));
+            assert_eq!(after, Modality::Keyboard, "{key}");
+            assert!(after.shows_focus_ring());
+        }
+    }
+
+    #[test]
+    fn a_click_hides_the_ring_until_the_next_key() {
+        let clicked = Modality::Keyboard.after(ModalityInput::PointerPress);
+        assert_eq!(clicked, Modality::Pointer);
+        assert!(!clicked.shows_focus_ring());
+        assert_eq!(
+            clicked.after(ModalityInput::PointerPress),
+            Modality::Pointer
+        );
+        assert_eq!(clicked.after(ModalityInput::Key("tab")), Modality::Keyboard);
+    }
+
+    #[test]
+    fn f6_or_tab_from_a_page_shows_the_ring_though_gpui_never_saw_the_key() {
+        assert_eq!(
+            Modality::Pointer.after(ModalityInput::PageKey),
+            Modality::Keyboard
+        );
+        assert_eq!(
+            Modality::Keyboard.after(ModalityInput::PageKey),
+            Modality::Keyboard
+        );
+    }
+
+    #[test]
+    fn a_modifier_alone_keeps_whatever_came_before() {
+        for key in ["shift", "control", "alt", "platform", "function"] {
+            assert!(is_modifier_key(key), "{key}");
+            for modality in [Modality::Keyboard, Modality::Pointer] {
+                assert_eq!(modality.after(ModalityInput::Key(key)), modality, "{key}");
+            }
+        }
+        assert!(!is_modifier_key("f6"));
+        assert!(!is_modifier_key("s"));
     }
 }

@@ -105,6 +105,9 @@ impl BrowserView {
         if self.closing || !self.crashes.start(sequence) {
             return;
         }
+        self.usage
+            .recorder
+            .error(syrinx_core::usage::ErrorCategory::BrowserProcessExited);
         for id in tabs {
             self.page_crashed(id, window);
         }

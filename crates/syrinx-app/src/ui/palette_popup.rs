@@ -111,6 +111,7 @@ impl BrowserView {
             },
             events,
             context: self.command_context(),
+            opened: Instant::now(),
         };
         let view = kept.view.clone();
         let begun = kept.window.update(cx, |_, popup, cx| {
@@ -154,6 +155,7 @@ impl BrowserView {
         let owner = self.parent_hwnd;
         let registry = self.commands.clone();
         let probe = self.acceptance_probe();
+        let usage = self.usage.recorder.clone();
         let created = Rc::new(RefCell::new(None));
         let retained = created.clone();
         let bounds = Bounds::new(
@@ -182,7 +184,8 @@ impl BrowserView {
                     popup: native.as_ref().map_or(0, |hwnd| *hwnd),
                     owner,
                 };
-                let palette = cx.new(|cx| PaletteView::new(registry, native, probe, popup, cx));
+                let palette =
+                    cx.new(|cx| PaletteView::new(registry, native, probe, usage, popup, cx));
                 // Closing the popup from Windows ends the entry like Esc; it is only hidden.
                 let closing = palette.downgrade();
                 popup.on_window_should_close(cx, move |popup, cx| {

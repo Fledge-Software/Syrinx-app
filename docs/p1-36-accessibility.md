@@ -57,7 +57,16 @@ Known limits of that provider, each checked in source:
   `set_active_descendant` (`gpui-pre-0.3.8/src/window/a11y.rs`, line 258)
   ignores the claim unless the focused node is an ancestor of the row. The
   palette keeps focus in its query field, which is the rows' sibling, so NVDA
-  cannot hear the arrow keys move the selection. Recorded as **DW-60**.
+  cannot hear the arrow keys move the selection. Recorded as **DW-60**, and
+  fixed on 2026-10-14 without a GPUI change (see "DW-60" below).
+- **A gpui-component text field is never the focused node.** The field's
+  frame (`Role::TextInput`) tracks a frame handle of its own, while the
+  element that tracks the field's focus handle (gpui-base's `input-state`,
+  `gpui-base-0.7.1/src/input/base/state.rs`, line 4464) has an id but no
+  role, so GPUI logs "focused element has no accessibility node" and UI
+  Automation reports the window as focused while the owner types. DW-60's
+  container gives the palette's field a focused node; the find bar, the
+  folder and tile forms and Customize's colour field still report the window.
 - **Plain text is not in the tree.** Text without an id is not reported, so
   Syrinx names the parts a screen reader must read (the permission question,
   the runtime notice, the status line) with labelled nodes.
@@ -92,9 +101,15 @@ claims in a frame need one handle tracked by two elements in that frame.
   root or the chrome root, which are alternative early returns; the import
   preview tracks its `focus` on the Import button or on the frame, never both
   (`import.rs`); peek, recovery and the palette are separate windows with
-  their own trees.
-- **Active descendant is not used.** DW-60 removed it, so the two panics
-  around it cannot trigger.
+  their own trees. One deliberate exception since DW-60: the palette's
+  query handle is tracked by the `palette-query` container and by the
+  field's own `input-state` element. That is still one claim, because
+  `input-state` has no role and so no node to claim with; only the
+  container calls the node builder's `set_focus`.
+- **Active descendant has one claimant.** Since DW-60 only the palette's
+  announced row claims it, at most one row per frame, and only while drawn
+  (so it is always in the tree); GPUI ignores the claim unless the container
+  is focused, so a chip or "Search the web" with focus is safe.
 - **A GPUI-level unit test is not possible without a dependency change.**
   `A11yNodeBuilder` is `pub(crate)` and GPUI's test harness needs its
   `test-support` feature, which would change the lockfile; the builder's own
@@ -174,6 +189,74 @@ ground, panel and card, with a 1 px inner line in the accent's on-fill colour
 so the ring still reads on accent-filled controls (a new test checks 3:1
 against every accent fill). `crates/syrinx-app/src/controls.rs` draws it as an
 inset shadow, so it never moves layout and a scrolling sidebar cannot clip it.
+Since DW-62 it shows only after keyboard use (next section).
+
+## DW-62: the ring only after keys
+
+Added on 2026-10-14 on `claude/dw-62-keyboard-focus-ring`, by the route the
+owner chose in chat that day: Syrinx keeps its own keyboard-or-pointer flag,
+with no GPUI change. Before it, the ring showed on any focus, so a clicked
+chrome button kept a ring until focus moved on. GPUI's `focus_visible` could
+not be used: it decides from the keys GPUI itself sees, so it misses the F6
+or Tab that leaves a page through WebView2, and it switches to pointer mode
+on a bare mouse move, which would hide the ring while the owner tabs with
+the mouse resting over the window.
+
+- **The rule** is `syrinx_ui::focus::Modality` (window-independent, four
+  tests): a mouse press means pointer; any key means keyboard; a modifier
+  pressed on its own changes nothing; the starting mode is keyboard, so the
+  ring errs toward showing. `shows_focus_ring` is true only in keyboard mode.
+- **Keys GPUI sees** are recorded by `controls::watch_keys`, an
+  `intercept_keystrokes` subscription made once at start-up. It runs before
+  any handler, so arrow keys on a sidebar row or the resize edge, which their
+  own key handlers consume, still count.
+- **Keys a page hands over** arrive as `BrowserEvent::Shortcut` from the
+  post-only `AcceleratorKeyPressed` and `MoveFocusRequested` handlers (F6,
+  Shift F6, Tab past the page's last element, Shift Tab before its first,
+  Esc for the peek and the Ctrl shortcuts). `ui.rs` marks each one as a key
+  before acting on it, so F6 from a page shows the ring on the address
+  field. The page handlers are unchanged.
+- **Mouse presses** are recorded by `controls::watch_pointer`, a
+  capture-phase window listener (`Window::on_mouse_event`, registered by a
+  zero-size canvas) added to the root of each Syrinx window that draws the
+  ring: the main window (and its start-up panel), the palette, the peek and
+  the import preview. Capture runs before the pressed control takes focus.
+  An element's own `capture_any_mouse_down` was tried first and missed
+  presses on the toolbar (see the new trap).
+  A press inside a web page is not seen, which is harmless: the page draws
+  its own focus.
+- **The ring** (`controls::focus_ring`) returns the style unchanged in
+  pointer mode, so every control, the address field, sidebar rows and the
+  resize edge follow the flag (the edge and rows keep their focused
+  background). A change of mode redraws the window it happened in at once,
+  and every other open Syrinx window from a deferred callback
+  (`refresh_every_window`), so a ring left in another window appears or
+  goes without waiting for an unrelated redraw.
+- The flag is one static for the whole app, because there is one owner with
+  one keyboard and one mouse.
+- A modifier pressed alone counts for nothing. GPUI reports a lone Shift,
+  Ctrl, Alt, Windows or Fn key as a keystroke when it is released; Caps Lock
+  only changes its modifier state and never becomes a keystroke, so it is
+  not in the list. The owner's decision is recorded in `docs/decisions.md`
+  (2026-10-14).
+
+No role, element id or focus handle changed, so the full UI Automation
+probe was not rerun. **Visual probe.** The gate's `local` build was launched
+visibly on fresh synthetic profiles `target\dw-62-probe-*`; a script posted
+a left-button press and Tab only to Syrinx's window, only while a Syrinx
+window was in the foreground, and screenshotted the toolbar. A press on
+"Reset zoom" focused it with no ring; Tab moved focus to "Zoom in" with the
+ring; a second press on "Reset zoom" focused it with no ring again. The first
+build, which used the root's own mouse listener, still drew the ring after
+the press; that is how the trap below was found. After the review fixes
+(redrawing every window, dropping Caps Lock) the probe was rerun on
+`target\dw-62-probe-3` with the same three results. No probe covered a ring
+in a second window being redrawn.
+
+**Not verified by an agent:** F6 and Tab out of a real web page (the page
+path is unit-tested in `syrinx_ui::focus` and the event wiring is one line in
+`ui.rs`, but no page was loaded), the palette, peek and import windows, and
+modifier-only presses. These are in owner check 12.
 
 **Focus returns predictably.** Closing the palette, peek or import preview
 still calls `focus_page`, which now also clears GPUI's focus to the window
@@ -286,6 +369,91 @@ code path, but nothing drove it); nested folders and saved pages natively
 (covered by the unit tests in `syrinx_ui::tree_focus` and
 `ui/sidebar_tree.rs`); and anything a screen reader says (owner check 13).
 
+## DW-60: the palette announces its moving selection
+
+Added on 2026-10-14 on `claude/dw-60-palette-active-descendant`. Before it,
+Up and Down moved the palette's highlighted row while keyboard focus stayed
+in the query field, and a screen reader heard nothing: GPUI lets a row claim
+the screen reader's focus (`aria_active_descendant`) only while a focused
+node is the row's ancestor, and the field was the rows' sibling. Worse, the
+field itself was never the focused node (see "A gpui-component text field is
+never the focused node" above), so UI Automation reported the palette window.
+
+**What changed** (`crates/syrinx-app/src/palette.rs` and
+`palette/render.rs`; no GPUI, gpui-base or gpui-component change):
+
+- A container, `palette-query`, now holds the query field, the scope chips
+  and the results. It is an editable combo box named "Search or command",
+  with the typed text as its value, and it tracks **the query field's own
+  focus handle** (`PaletteView::query_container`). While the owner types, it
+  is therefore the node a screen reader hears as focused, and the rows are
+  its descendants.
+- Typing is untouched. GPUI sends keys along the dispatch path of whichever
+  element registered the handle last, and the field registers after its
+  ancestor, so the field still receives every key, Enter and Esc; text and
+  IME input go to whichever input handler is painted with the focused handle,
+  which is still only the field's. The DW-90 reuse is unchanged: each frame
+  asks the current input for its handle, so the fresh field made at each
+  close is tracked without further work.
+- The container's copy of the handle is no Tab stop. Otherwise the same
+  handle would appear twice in Tab order, and Shift Tab from the field would
+  "move" to its own handle and stay there. It is made with GPUI's
+  `FocusHandle::tab_stop(false)`, which writes a flag shared by every handle
+  for that focus id; `FocusHandle::clone` reads that flag, and `track_focus`
+  stores a clone. So `query_container` restores the flag to true right after
+  the container takes its clone, before the field's own view renders and
+  takes its clone; otherwise the field would leave Tab order too. (The first
+  commit set the struct field instead, which the clone inside `track_focus`
+  silently discarded; review caught it, and the probe's forward Tab could
+  not, because only Shift Tab is affected.)
+- While a UI Automation client is attached, GPUI logs an info-level line,
+  "focused element ... has no accessibility node", once each time focus
+  enters the field (`gpui-pre-0.3.8/src/window/a11y.rs`, lines 193–201 and
+  245), because `input-state` still registers the focused handle without a
+  role. It is harmless and accepted: the container carries the node, and
+  the line is not written without a log subscriber. The combo box's value is
+  also built only while a client is attached (`Window::is_a11y_active`), so
+  typing does not copy the query for nobody.
+- Once the owner moves the selection (arrow keys, or a click on a row), the
+  selected row claims the active descendant, so a screen reader reads the
+  row's name, its kind and address, "selected" and its place ("2 of 7").
+  Typing a new query withdraws the claim and focus is the field again; a
+  model refresh keeps the claim on the same destination. The rule is
+  `PaletteChoices::announced_row` with two tests.
+- A mouse press anywhere in the container that no inner control takes
+  focuses the query field (GPUI does this for any element that tracks a
+  handle). The field already had the focus while the palette was open, so
+  only a press after Tab moved focus to a chip behaves differently: it
+  returns focus to the field.
+
+**Probe, rerun for DW-60.** The same kind of UI Automation client as above,
+extended to check that a Syrinx window (by process id) is in the foreground
+before posting each key, drove the gate's `local` build launched visibly on
+fresh synthetic profiles `target\dw-60-uia-*` (log
+`target\dw-60-uia-probe-4.log`; runs 1 to 3 stopped on script errors before
+sending palette keys). It made three blank tabs with the New tab button,
+opened the palette with the sidebar's Search button and posted keys only to
+the palette window. Results: on opening, UIA focus was the combo box "Search
+or command" with an empty value; typing "blank" left it there with value
+"blank"; Down, Down and Up each moved focus to a list item reported selected;
+typing "x" returned focus to the combo box (value "blankx") and Backspace
+kept it there; Tab then went through the five chips and "Search the web" and
+back to the query (reported as the still-selected row, since the selection
+had been moved); Esc closed the palette; a second opening of the reused popup
+started empty on the combo box, and Down then Enter opened the moved row.
+Syrinx stayed up with an empty stderr, so the tree built with debug
+assertions on and no doubled focus or active-descendant claim. A screenshot
+of the palette over Home showed the same layout as before. After the review
+fixes (the Tab-stop flag and the value guard) the probe was rerun on
+`target\dw-60-uia-5` (log `target\dw-60-uia-probe-5.log`) with identical
+results, including Tab from "Search the web" back into the field, which
+shows the field is still a Tab stop.
+
+**Not verified by an agent.** What NVDA actually says (owner check 7), Shift
+Tab (a posted key cannot carry Shift), IME composition (no IME was used; the
+input handler path is unchanged), and the rows' "2 of 7", which UIA reported
+but no screen reader read.
+
 ## Owner checks with NVDA
 
 An agent cannot judge speech output, so these are the owner's. Use a fresh
@@ -330,8 +498,17 @@ portable copy also works). Then record pass/fail for each:
    count and whether it is selected) and "Search the web", and Shift Tab
    returns to the field. This is deliberate: the palette has no inline forms
    yet, so Tab has nothing else to do there; when plan 2 adds forms, Tab will
-   be scoped to the form's fields. Known gap DW-60: arrowing through results
-   is probably not announced. Record what NVDA actually says.
+   be scoped to the form's fields. Since DW-60: on opening and while typing,
+   NVDA reads the combo box "Search or command" (with what you typed). Down
+   and Up read each row in turn: its title, "selected", its kind and address
+   and its place ("2 of 5"). Typing again returns to the combo box, and
+   characters are still echoed. Record what NVDA actually says, and whether
+   anything is read twice or not at all. Two behaviours to judge (owner
+   question 3): a row is announced only after you move the selection, not
+   while you type; and after Down, Tab through the chips and back into the
+   field, NVDA reads the still-selected row rather than the field, because
+   the moved selection keeps its claim until you type. Say if either should
+   change.
 8. **Permission bar.** On a synthetic page that asks for the camera (any test
    page you trust), NVDA reads the question when you F6 to the bar;
    "Remember for this site" reads as a checkbox with its state.
@@ -350,7 +527,12 @@ portable copy also works). Then record pass/fail for each:
     report any such stop with its message.
 12. **Ring visibility.** In each of the five palettes, the focus ring is
     visible on the toolbar, a sidebar row, an accent-filled button (Save in a
-    tile form) and the selected time-range chip.
+    tile form) and the selected time-range chip. Since DW-62, also check
+    that it shows only after keys: click a toolbar button (no ring), press
+    Tab (ring on the next control), click again (ring gone); click into a
+    web page, press F6 (ring on the address field) and Shift F6 (ring on the
+    sidebar's active row); in the palette, click a scope chip (no ring) and
+    press Tab (ring). Holding Ctrl or Shift alone must not bring it back.
 13. **Sidebar tree keys (DW-61).** With a few saved pages, a folder holding
     a page and a sub-folder, and some open tabs: F6 to the sidebar lands on
     the active row and NVDA reads it as a tree item, selected, with its
@@ -372,7 +554,9 @@ portable copy also works). Then record pass/fail for each:
    so a clicked chrome button keeps a ring until focus moves. Hiding it after
    clicks needs a GPUI change, because GPUI cannot see the F6 that leaves a
    page. Recommendation: accept the current behaviour for v1; it errs toward
-   keyboard users.
+   keyboard users. **Answered 2026-10-14, in chat:** hide it after clicks,
+   by a Syrinx-side flag rather than a GPUI change. Done the same day (see
+   "DW-62: the ring only after keys" above).
 2. **Sidebar keyboard model (DW-61).** Done on 2026-10-13: the tree has
    one Tab stop and arrow keys (see "DW-61: one Tab stop for the sidebar
    tree" above). One consequence to confirm: the rows' small buttons
@@ -388,6 +572,14 @@ portable copy also works). Then record pass/fail for each:
 3. **Palette announcements (DW-60).** Recommendation: change the palette so
    its list container owns focus and the query field (no GPUI patch), as a
    follow-up slice; the alternative is asking for a vendored GPUI change.
+   **Built 2026-10-14** that way (see "DW-60" above); DW-60 stays open until
+   check 7 passes. Two choices to confirm in check 7: a row is announced
+   only after you move the selection, not while you type, as the ARIA combo
+   box pattern does, so typing is not interrupted by a new row name at every
+   key (the alternative is to announce the top row after each query); and
+   Tab back into the field after a move reads the selected row, not the
+   field (the alternative is to drop the claim whenever focus leaves the
+   field). Recommendation: keep both as built.
 4. **Installing NVDA.** The checks above need NVDA on your machine; agents
    do not install software. Narrator, which ships with Windows, is an
    acceptable first pass if you prefer not to install NVDA yet.

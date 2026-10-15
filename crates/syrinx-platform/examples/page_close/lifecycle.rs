@@ -255,9 +255,9 @@ fn create_blank(
     while !(created && navigated) {
         match checked_event(events, deadline)? {
             BrowserEvent::Created { id } if id == expected => created = true,
-            BrowserEvent::NavigationCompleted { id, success: true } if id == expected => {
-                navigated = true
-            }
+            BrowserEvent::NavigationCompleted {
+                id, success: true, ..
+            } if id == expected => navigated = true,
             _ => {}
         }
     }
