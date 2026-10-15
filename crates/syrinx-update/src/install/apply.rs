@@ -220,7 +220,11 @@ fn apply_locked(
         Ok(BeforeSwap::Swapped(pending)) => pending,
         Ok(BeforeSwap::Stopped(applied)) => return Ok(applied),
         // Recorded while the lock is held, so a starting Syrinx never races the outcome.
-        Err(error) => return Err(record_unfinished(layout, error)),
+        Err(error) => {
+            let error = record_unfinished(layout, error);
+            checkpoint(Step::FailureRecorded)?;
+            return Err(error);
+        }
     };
     checkpoint(Step::Swapped)?;
     let applied = match request.mode {
@@ -605,7 +609,12 @@ fn finish(
     eprintln!("update {}: {result}", pending.version);
     if !tell_owner {
         // An older outcome a failed start kept would otherwise describe a superseded update.
-        return Outcome::clear(layout);
+        // The install is already recorded, so a failed removal is reported, not turned into a
+        // failed update: a stale notice is the smaller harm.
+        if let Err(error) = Outcome::clear(layout) {
+            eprintln!("an older update notice could not be removed: {error}");
+        }
+        return Ok(());
     }
     let outcome = Outcome {
         result,

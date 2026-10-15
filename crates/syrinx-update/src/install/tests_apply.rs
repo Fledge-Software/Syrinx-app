@@ -417,39 +417,57 @@ fn restart_now_drops_an_older_outcome_a_failed_start_kept() {
 }
 
 #[test]
-fn a_start_racing_the_helper_tells_its_outcome_exactly_once() {
-    // DW-69: the helper records a failure before releasing the lock, and a start removes only
-    // an outcome it read, so a start running alongside never deletes one unseen.
+fn a_start_while_the_helper_records_a_failure_waits_and_it_is_told_once() {
+    // DW-69: the helper records a failure before releasing the lock, so a start at that moment
+    // finds the helper running and touches nothing; the next start tells the outcome once.
     let (sandbox, keys) = staged_sandbox();
     let stranger = std::collections::BTreeMap::from([("owner.txt".to_owned(), b"keep".to_vec())]);
     write_tree(&sandbox.layout.previous(), &stranger);
     let layout = sandbox.layout.clone();
-    let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let watching = std::sync::Arc::clone(&finished);
-    let starts = thread::spawn(move || {
-        let mut told = 0;
-        while !watching.load(std::sync::atomic::Ordering::SeqCst) {
-            let recovery = recover(&layout, OLD).expect("a racing start");
-            told += usize::from(recovery.outcome.is_some());
-            // Leave the lock free often enough for the helper's wait to take it.
-            thread::sleep(Duration::from_millis(3));
-        }
-        told
+    let checked = Rc::new(RefCell::new(false));
+    let ran = Rc::clone(&checked);
+    hook::run_at(Step::FailureRecorded, move || {
+        assert!(layout.outcome().exists(), "recorded under the lock");
+        let recovery = recover(&layout, OLD).expect("a start during the helper");
+        assert!(recovery.helper_running);
+        assert_eq!(recovery.outcome, None);
+        assert!(layout.outcome().exists(), "nothing cleared");
+        *ran.borrow_mut() = true;
     });
     let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
     let applied = apply_update(
         &request(&sandbox.layout, &keys.pinned, ApplyMode::Quit),
         &mut launcher,
     );
-    finished.store(true, std::sync::atomic::Ordering::SeqCst);
-    let raced = starts.join().expect("racing starts");
+    assert!(
+        *checked.borrow(),
+        "the start ran while the helper held the lock"
+    );
     assert!(
         matches!(applied, Err(InstallError::UnexpectedEntry { .. })),
         "{applied:?}"
     );
-    let last = recover(&sandbox.layout, OLD).expect("a later start");
-    let told = raced + usize::from(last.outcome.is_some());
-    assert_eq!(told, 1, "told exactly once");
+    let told = recover(&sandbox.layout, OLD).expect("the next start");
+    let outcome = told.outcome.expect("told");
+    assert_eq!(outcome.result, UpdateResult::ApplyFailed);
+    let again = recover(&sandbox.layout, OLD).expect("a later start");
+    assert_eq!(again.outcome, None, "told once");
+}
+
+#[test]
+fn a_clean_restart_is_installed_even_if_an_older_notice_cannot_be_removed() {
+    let (sandbox, keys) = staged_sandbox();
+    // A folder in the outcome's place cannot be removed as a file.
+    fs::create_dir(sandbox.layout.outcome()).expect("unremovable outcome");
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Restart),
+        &mut launcher,
+    );
+    assert_eq!(applied, Ok(Applied::Installed(NEW)));
+    assert_new_installed(&sandbox);
+    let state = UpdateState::read(&sandbox.layout).expect("state");
+    assert_eq!(state.result, Some(UpdateResult::Installed));
 }
 
 #[test]

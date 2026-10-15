@@ -1186,7 +1186,10 @@ it did not see; only a failed wait for the lock is recorded without it, and
 then Syrinx itself holds the lock. And when the helper finishes without
 telling the owner (Restart now with a clean start, `finish` with
 `tell_owner` false), it removes any outcome still waiting, so a kept notice
-about an earlier attempt is never shown while a newer version runs.
+about an earlier attempt is never shown while a newer version runs. The
+install is already recorded by then, so if that removal fails the helper
+logs it and still reports the update installed: a stale notice is the
+smaller harm.
 
 The staging mark is read with a 64-byte limit. Without `pending`, a mark
 longer than that cannot be the `discard unreadable-state` mark, so that
@@ -1226,9 +1229,12 @@ outcome through the failed start, and finishes and tells both once the file
 is released. `tests_apply.rs` adds the helper's refused copy stopped at
 `DiscardBegun`, and one whose removal is stopped by a held file in both the
 helper and the next start, whose `verification_failed` outcome reaches the
-first start that succeeds; Restart now removing an older kept outcome; and
-starts running alongside a helper that fails before the swap, which tell
-its outcome exactly once. `tests_discard.rs` also shows an over-long mark
+first start that succeeds; Restart now removing an older kept outcome, and
+still recording the install when that removal fails; and a start run at a
+fixed point (the test-only `FailureRecorded` step, through the fault hook's
+`run_at`) after the helper has recorded a failure before the swap, which
+finds the helper running and clears nothing, after which the next start
+tells the outcome exactly once. `tests_discard.rs` also shows an over-long mark
 with no `pending` cleared, with a waiting outcome told, rather than stopping
 every start. Each shows the installed `Programs\Syrinx` untouched. The existing guard that an unmarked installer copy is kept also
 gained a case after a finished discard
