@@ -103,6 +103,10 @@ planned.
 
 ## What would settle it
 
+How the licence, signing and delivery would actually be done, and what
+Syrinx looks like after a Widevine update, is in
+`docs/widevine-licence-guide.md`.
+
 - The macOS spike, run on a Mac by the owner: Disney+, Hulu, a YouTube
   rental and Google sign-in in a WKWebView build, recording which key
   system each uses.
