@@ -1,7 +1,6 @@
-//! DW-69 on synthetic folders: a discard stopped after `pending` is gone, by a crash or a
-//! locked file, is finished by the next start, while an unmarked installer copy is kept.
+//! DW-69 on synthetic folders: a discard stopped part way, by a crash or a locked file, is
+//! finished by a later start, which still tells the owner what it would have told.
 
-use std::collections::BTreeMap;
 use std::fs;
 
 use super::fault::{Step, hook};
@@ -9,7 +8,7 @@ use super::stage::{DISCARD_MARK, UNREADABLE_STATE_DISCARD_MARK};
 use super::startup::open_unchangeable;
 use super::tests::{
     NEW, OLD, Sandbox, assert_untouched, now, packaged, plenty, program_files, read_tree, stage,
-    write_package, write_tree,
+    write_package,
 };
 use super::tests_reset::damage_state;
 use super::*;
@@ -115,10 +114,53 @@ fn an_unreadable_record_discard_stopped_part_way_still_tells_the_owner() {
 }
 
 #[test]
+fn an_unreadable_record_discard_stopped_before_pending_goes_is_redone_and_told() {
+    let (sandbox, keys) = packaged();
+    stage(&sandbox, &keys.pinned).expect("stage");
+    damage_state(&sandbox);
+    hook::stop_at(Some(Step::DiscardMarked));
+    assert_eq!(
+        recover(&sandbox.layout, OLD),
+        Err(InstallError::Interrupted(Step::DiscardMarked))
+    );
+    assert!(sandbox.layout.pending().exists(), "pending not yet removed");
+    assert_eq!(read_tree(&sandbox.layout.staged()), program_files(NEW));
+
+    // `pending` beside an unreadable record is discarded again, for the same reason.
+    let recovery = recover(&sandbox.layout, OLD).expect("following start");
+    assert!(recovery.discarded_for_unreadable_state);
+    assert_eq!(recovery.staged, None);
+    assert_discard_finished(&sandbox);
+    assert!(
+        !sandbox.layout.apply_folder().exists(),
+        "the whole discard ran"
+    );
+}
+
+#[test]
+fn a_damaged_mark_beside_a_staged_update_never_hides_it() {
+    let (sandbox, keys) = packaged();
+    stage(&sandbox, &keys.pinned).expect("stage");
+    // Too long to be any mark Syrinx writes, so reading it would be refused.
+    fs::write(sandbox.layout.staging_marker(), vec![b'x'; 4096]).expect("damaged mark");
+    let recovery = recover(&sandbox.layout, OLD).expect("start");
+    assert_eq!(recovery.staged, Some(NEW));
+    assert!(!recovery.discarded_for_unreadable_state);
+    assert_eq!(read_tree(&sandbox.layout.staged()), program_files(NEW));
+}
+
+#[test]
 fn a_discard_stopped_by_a_locked_file_keeps_the_copy_recognisable_until_it_finishes() {
     let (sandbox, keys) = packaged();
     stage(&sandbox, &keys.pinned).expect("stage");
     damage_state(&sandbox);
+    // A helper outcome waiting to be told must survive the failed start too.
+    let waiting = Outcome {
+        result: UpdateResult::ApplyFailed,
+        attempted: NEW,
+        current: OLD,
+    };
+    waiting.write(&sandbox.layout).expect("outcome");
     // Held without delete sharing, as a virus scanner might hold it.
     let locked = open_unchangeable(&sandbox.layout.staged().join(PROGRAM_EXECUTABLE))
         .expect("hold the staged program");
@@ -131,33 +173,17 @@ fn a_discard_stopped_by_a_locked_file_keeps_the_copy_recognisable_until_it_finis
     );
     assert_eq!(read_tree(&sandbox.layout.program()), program_files(OLD));
 
+    assert!(sandbox.layout.outcome().exists(), "outcome kept");
+
     drop(locked);
     let recovery = recover(&sandbox.layout, OLD).expect("next start");
     assert!(recovery.discarded_for_unreadable_state);
+    assert_eq!(recovery.outcome, Some(waiting));
     assert_discard_finished(&sandbox);
     assert!(
         !sandbox.layout.apply_folder().exists(),
         "the whole discard ran"
     );
-}
-
-#[test]
-fn an_unmarked_installer_copy_is_still_kept_after_a_finished_discard() {
-    let (sandbox, keys) = packaged();
-    stage(&sandbox, &keys.pinned).expect("stage");
-    hook::stop_at(Some(Step::DiscardBegun));
-    assert_eq!(
-        recover(&sandbox.layout, OTHER),
-        Err(InstallError::Interrupted(Step::DiscardBegun))
-    );
-    recover(&sandbox.layout, OTHER).expect("following start");
-    assert_discard_finished(&sandbox);
-
-    // `install-syrinx.ps1`'s copy in progress carries the same package record but no mark.
-    let installer_copy = BTreeMap::from([(PACKAGE_RECORD.to_owned(), b"package 1.4.0".to_vec())]);
-    write_tree(&sandbox.layout.staged(), &installer_copy);
-    let recovery = recover(&sandbox.layout, OTHER).expect("start during the installer");
-    assert_eq!(recovery.staged, None);
-    assert_eq!(read_tree(&sandbox.layout.staged()), installer_copy);
-    assert_eq!(read_tree(&sandbox.layout.program()), program_files(OLD));
+    let again = recover(&sandbox.layout, OLD).expect("start after that");
+    assert_eq!(again.outcome, None, "told once");
 }

@@ -29,6 +29,11 @@ use crate::{VerifiedManifest, cng};
 
 /// Free space kept beyond two copies of the package: one incoming, one staged.
 pub const SPACE_MARGIN_BYTES: u64 = 256 * 1024 * 1024;
+/// The staging mark's text while a discard runs.
+pub(crate) const DISCARD_MARK: &[u8] = b"discard\n";
+/// The mark's text while start-up discards an update beside an unreadable `Updates\state`, so
+/// the next start can finish that discard and still tell the owner (DW-69).
+pub(crate) const UNREADABLE_STATE_DISCARD_MARK: &[u8] = b"discard unreadable-state\n";
 
 /// What staging needs besides the folders: the package, the trusted keys and the clock.
 pub struct StageRequest<'a> {
@@ -250,12 +255,6 @@ fn check_space(
     Ok(())
 }
 
-/// The staging mark's text while a discard runs.
-pub(crate) const DISCARD_MARK: &[u8] = b"discard\n";
-/// The mark's text while start-up discards an update beside an unreadable `Updates\state`, so
-/// the next start can finish that discard and still tell the owner (DW-69).
-pub(crate) const UNREADABLE_STATE_DISCARD_MARK: &[u8] = b"discard unreadable-state\n";
-
 /// Remove an earlier staged update and anything a stopped staging left.
 pub(crate) fn discard_staged(layout: &UpdateLayout) -> Result<(), InstallError> {
     discard_marked(layout, DISCARD_MARK)
@@ -266,16 +265,18 @@ pub(crate) fn discard_for_unreadable_state(layout: &UpdateLayout) -> Result<(), 
     discard_marked(layout, UNREADABLE_STATE_DISCARD_MARK)
 }
 
-/// The mark goes before `pending`, so a discard stopped anywhere leaves a marked `Syrinx.new`
-/// that the next start's `clear_unfinished` removes (DW-69); the mark itself goes last.
+/// The mark goes before `pending`, so a discard stopped before `Syrinx.new` is gone leaves it
+/// marked for the next start's `clear_unfinished` (DW-69). The mark is cleared as soon as
+/// `Syrinx.new` is gone, so it can never later authorise removing an installer's copy.
 fn discard_marked(layout: &UpdateLayout, mark: &[u8]) -> Result<(), InstallError> {
     write_atomically(&layout.staging_marker(), mark, "marking the discard")?;
+    checkpoint(Step::DiscardMarked)?;
     remove_file_if_present(&layout.pending(), "removing the pending record")?;
     checkpoint(Step::DiscardBegun)?;
     remove_program_folder(&layout.staged(), "Syrinx.new")?;
+    remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")?;
     remove_update_folder(&layout.apply_folder(), "the apply folder")?;
-    remove_update_folder(&layout.incoming(), "the incoming folder")?;
-    remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")
+    remove_update_folder(&layout.incoming(), "the incoming folder")
 }
 
 /// The verified manifest with the exact bytes and signature that were checked.

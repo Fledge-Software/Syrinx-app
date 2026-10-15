@@ -48,9 +48,11 @@ pub fn recover(layout: &UpdateLayout, running: Version) -> Result<Recovery, Inst
         });
     };
     remove_update_folder(&layout.incoming(), "the incoming folder")?;
-    let outcome = Outcome::take(layout)?;
+    // Kept on disk until every step below succeeds, so a failed start never loses it (DW-69).
+    let outcome = Outcome::read(layout)?;
     let discarded_for_unreadable_state = discard_beside_unreadable_state(layout)?;
     let staged = settle_pending(layout, running)?;
+    Outcome::clear(layout)?;
     Ok(Recovery {
         staged,
         outcome,
@@ -62,13 +64,8 @@ pub fn recover(layout: &UpdateLayout, running: Version) -> Result<Recovery, Inst
 /// Remove a staged update whose state record cannot be read (owner, 2026-10-14): without the
 /// record, recovery cannot tell whether that version was rolled back, so it is never offered.
 fn discard_beside_unreadable_state(layout: &UpdateLayout) -> Result<bool, InstallError> {
-    if unreadable_state_discard_begun(layout)? {
-        // An earlier start began this discard and stopped; finish it and still tell the owner.
-        discard_for_unreadable_state(layout)?;
-        return Ok(true);
-    }
     if !entry_present(&layout.pending(), "checking for a staged update")? {
-        return Ok(false);
+        return finish_unreadable_state_discard(layout);
     }
     if !state_is_unreadable(layout)? {
         return Ok(false);
@@ -77,10 +74,16 @@ fn discard_beside_unreadable_state(layout: &UpdateLayout) -> Result<bool, Instal
     Ok(true)
 }
 
-/// Whether the staging mark records a discard begun beside an unreadable `Updates\state`.
-fn unreadable_state_discard_begun(layout: &UpdateLayout) -> Result<bool, InstallError> {
+/// With no `pending` left, finish a discard an earlier start began beside an unreadable
+/// `Updates\state` and stopped, and still tell the owner (DW-69).
+fn finish_unreadable_state_discard(layout: &UpdateLayout) -> Result<bool, InstallError> {
+    // Read only without `pending`, so a damaged mark never hides a valid staged update.
     let mark = read_small(&layout.staging_marker(), 64, "reading the staging mark")?;
-    Ok(mark.as_deref() == Some(UNREADABLE_STATE_DISCARD_MARK))
+    if mark.as_deref() != Some(UNREADABLE_STATE_DISCARD_MARK) {
+        return Ok(false);
+    }
+    discard_for_unreadable_state(layout)?;
+    Ok(true)
 }
 
 /// Keep a complete staged copy for this version; clear everything else.

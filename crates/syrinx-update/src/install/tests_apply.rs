@@ -326,6 +326,36 @@ fn a_refused_copy_whose_removal_stops_is_removed_and_reported_at_the_next_start(
 }
 
 #[test]
+fn a_refused_copy_held_open_is_removed_and_reported_once_a_start_succeeds() {
+    // DW-69: a held file stops the helper's discard and the next start's; the outcome waits.
+    let (sandbox, keys) = staged_sandbox();
+    fs::write(sandbox.layout.staged().join("added.dll"), b"extra").expect("tamper");
+    let held = open_unchangeable(&sandbox.layout.staged().join(PROGRAM_EXECUTABLE))
+        .expect("hold the staged program");
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Quit),
+        &mut launcher,
+    );
+    assert!(
+        matches!(applied, Err(InstallError::Io { .. })),
+        "{applied:?}"
+    );
+    let stopped = recover(&sandbox.layout, OLD).expect_err("still held at this start");
+    assert!(matches!(stopped, InstallError::Io { .. }), "{stopped:?}");
+    assert!(sandbox.layout.outcome().exists(), "outcome kept for later");
+    assert!(sandbox.layout.staged().join(PACKAGE_RECORD).exists());
+
+    drop(held);
+    let recovery = recover(&sandbox.layout, OLD).expect("a later start");
+    let outcome = recovery.outcome.expect("told once the start succeeds");
+    assert_eq!(outcome.result, UpdateResult::VerificationFailed);
+    assert_eq!(recovery.staged, None);
+    assert_untouched(&sandbox);
+    assert!(!sandbox.layout.staging_marker().exists());
+}
+
+#[test]
 fn the_helper_waits_for_syrinx_to_exit() {
     let (sandbox, keys) = staged_sandbox();
     let held = ApplyLock::try_acquire(&sandbox.layout)

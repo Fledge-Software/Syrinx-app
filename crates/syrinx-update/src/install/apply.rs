@@ -544,8 +544,9 @@ fn relaunch(request: &ApplyRequest<'_>) -> Vec<OsString> {
 
 /// Remove a staged copy that failed its second check, keeping the running helper itself.
 ///
-/// The mark goes first and the owner's notice next, so a stop part way still leaves the copy
-/// for the next start to remove and the owner still told (DW-69).
+/// The mark goes before `finish` removes `pending`, so a stop before `Syrinx.new` is gone
+/// leaves it marked for the next start; once `finish` has written the outcome, it stays on
+/// disk until a start whose recovery succeeds tells the owner (DW-69).
 fn discard_refused(layout: &UpdateLayout, pending: &Pending) -> Result<(), InstallError> {
     write_atomically(
         &layout.staging_marker(),
