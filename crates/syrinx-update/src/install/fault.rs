@@ -31,6 +31,8 @@ pub enum Step {
     Launched,
     /// Rollback moved the failed version aside; the previous one is not yet back.
     FailedMovedAside,
+    /// A discard marked `Syrinx.new` and removed `pending`; `Syrinx.new` is not yet removed.
+    DiscardBegun,
 }
 
 #[cfg(not(test))]

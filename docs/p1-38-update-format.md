@@ -1133,6 +1133,60 @@ remains. Tests: `start_up_discards_a_staged_update_beside_an_unreadable_record`
 and `start_up_keeps_a_staged_update_beside_a_readable_record`
 (`tests_reset.rs`), and the start-up test in `syrinx-app`'s `updates.rs`.
 
+## DW-69: finishing an interrupted discard
+
+Before this change, `discard_staged` (`install/stage.rs`) removed `pending`
+first and `Syrinx.new` next, and a completed staging had already cleared the
+staging mark. A crash, a power cut or a file Windows held open between those
+two steps therefore left a program-sized `Syrinx.new` with neither `pending`
+nor the mark, which the next start's `clear_unfinished` keeps, since it looks
+like `install-syrinx.ps1`'s copy in progress. It stayed until the next
+staging. A DW-66 discard interrupted the same way also lost its notice,
+because start-up only reports that discard when it finds `pending`.
+
+Every discard now writes the staging mark before it removes `pending`, and
+clears the mark last, so a discard stopped anywhere leaves a marked
+`Syrinx.new` that the next start removes. The mark's text says why it is
+there: `discard` for an ordinary discard (a new staging replacing the old
+one, a failed staging's cleanup, a stale or rolled-back `pending` at start-up)
+and `discard unreadable-state` for DW-66's start-up discard. A start that
+finds the second text finishes the whole discard and reports
+`discarded_for_unreadable_state` even though `pending` is already gone, so
+the owner is still told once. The helper's own discard of a copy that fails
+its second check (`discard_refused`, `install/apply.rs`) has the same order:
+it writes the mark, then records `verification_failed` with its outcome
+(which removes `pending`), and only then removes `Syrinx.new`, so that notice
+also survives an interruption.
+
+A file Windows holds open is the other way a removal stops part way. Program
+folders are now removed with `syrinx-package.json` last
+(`remove_program_folder`, `install/files.rs`), so a half-removed folder keeps
+the record that identifies it as Syrinx's own and the next attempt finishes
+it. Before, the record (alphabetically before `syrinx.exe`) could go first,
+after which every later removal refused the folder as one Syrinx did not
+make.
+
+Two things are deliberately left as they were. A discard stopped before
+`pending` is removed leaves `pending` and the mark together, which is also
+what a staging stopped just after writing `pending` leaves; start-up keeps
+treating that as a staged update, offers it again if it is still valid, and
+otherwise discards it for the same reason as before. And a start that
+finishes an ordinary discard through `clear_unfinished` removes `Syrinx.new`
+and the mark but not `Updates\apply`, which holds only the helper and the
+kept manifest: a mark the helper wrote may be found while that helper is
+still exiting, and the next staging removes the folder anyway.
+
+A `Syrinx.new` without the mark is still left alone. Tests
+(`install/tests_discard.rs`): a re-staging stopped between removing `pending`
+and removing `Syrinx.new`; a start-up discard of a copy staged by another
+version stopped at the same point; a DW-66 discard stopped there, whose
+notice still reaches the owner once; a DW-66 discard stopped by a staged
+`syrinx.exe` held without delete sharing, which keeps the package record and
+finishes once the file is released; and an unmarked installer copy kept after
+a finished discard. `tests_apply.rs` adds the helper's refused copy stopped
+at the same point, whose `verification_failed` outcome still reaches the
+next start. Each shows the installed `Programs\Syrinx` untouched.
+
 ## What P1-39 needs from the owner
 
 - The update host, how and when Syrinx contacts it, and what it may send.

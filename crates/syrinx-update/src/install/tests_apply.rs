@@ -299,6 +299,33 @@ fn a_staged_copy_changed_after_staging_fails_its_second_check() {
 }
 
 #[test]
+fn a_refused_copy_whose_removal_stops_is_removed_and_reported_at_the_next_start() {
+    // DW-69: the helper marks the copy and records the outcome before it removes anything.
+    let (sandbox, keys) = staged_sandbox();
+    fs::write(sandbox.layout.staged().join("added.dll"), b"extra").expect("tamper");
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    hook::stop_at(Some(Step::DiscardBegun));
+    assert_eq!(
+        apply_update(
+            &request(&sandbox.layout, &keys.pinned, ApplyMode::Quit),
+            &mut launcher
+        ),
+        Err(InstallError::Interrupted(Step::DiscardBegun))
+    );
+    hook::stop_at(None);
+    assert!(!sandbox.layout.pending().exists());
+    assert!(sandbox.layout.staged().exists(), "stopped before removal");
+
+    let recovery = recover(&sandbox.layout, OLD).expect("next start");
+    let outcome = recovery.outcome.expect("still told");
+    assert_eq!(outcome.result, UpdateResult::VerificationFailed);
+    assert_eq!(recovery.staged, None);
+    assert_untouched(&sandbox);
+    assert!(!sandbox.layout.staging_marker().exists());
+    assert!(!sandbox.layout.previous().exists(), "nothing was swapped");
+}
+
+#[test]
 fn the_helper_waits_for_syrinx_to_exit() {
     let (sandbox, keys) = staged_sandbox();
     let held = ApplyLock::try_acquire(&sandbox.layout)

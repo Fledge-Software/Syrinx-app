@@ -250,9 +250,28 @@ fn check_space(
     Ok(())
 }
 
-/// Remove an earlier staged update and anything a stopped staging left; `pending` goes first.
+/// The staging mark's text while a discard runs.
+pub(crate) const DISCARD_MARK: &[u8] = b"discard\n";
+/// The mark's text while start-up discards an update beside an unreadable `Updates\state`, so
+/// the next start can finish that discard and still tell the owner (DW-69).
+pub(crate) const UNREADABLE_STATE_DISCARD_MARK: &[u8] = b"discard unreadable-state\n";
+
+/// Remove an earlier staged update and anything a stopped staging left.
 pub(crate) fn discard_staged(layout: &UpdateLayout) -> Result<(), InstallError> {
+    discard_marked(layout, DISCARD_MARK)
+}
+
+/// Remove a staged update because `Updates\state` cannot be read (DW-66).
+pub(crate) fn discard_for_unreadable_state(layout: &UpdateLayout) -> Result<(), InstallError> {
+    discard_marked(layout, UNREADABLE_STATE_DISCARD_MARK)
+}
+
+/// The mark goes before `pending`, so a discard stopped anywhere leaves a marked `Syrinx.new`
+/// that the next start's `clear_unfinished` removes (DW-69); the mark itself goes last.
+fn discard_marked(layout: &UpdateLayout, mark: &[u8]) -> Result<(), InstallError> {
+    write_atomically(&layout.staging_marker(), mark, "marking the discard")?;
     remove_file_if_present(&layout.pending(), "removing the pending record")?;
+    checkpoint(Step::DiscardBegun)?;
     remove_program_folder(&layout.staged(), "Syrinx.new")?;
     remove_update_folder(&layout.apply_folder(), "the apply folder")?;
     remove_update_folder(&layout.incoming(), "the incoming folder")?;

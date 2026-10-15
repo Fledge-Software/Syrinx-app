@@ -13,7 +13,7 @@ use super::layout::APPLY_HELPER;
 use super::lock::ApplyLock;
 use super::records::{Outcome, Pending, UpdateResult, UpdateState};
 use super::reset::state_is_unreadable;
-use super::stage::discard_staged;
+use super::stage::{UNREADABLE_STATE_DISCARD_MARK, discard_for_unreadable_state, discard_staged};
 use super::{InstallError, UpdateLayout};
 use crate::error::UpdateError;
 use crate::keys::KeySet;
@@ -62,14 +62,25 @@ pub fn recover(layout: &UpdateLayout, running: Version) -> Result<Recovery, Inst
 /// Remove a staged update whose state record cannot be read (owner, 2026-10-14): without the
 /// record, recovery cannot tell whether that version was rolled back, so it is never offered.
 fn discard_beside_unreadable_state(layout: &UpdateLayout) -> Result<bool, InstallError> {
+    if unreadable_state_discard_begun(layout)? {
+        // An earlier start began this discard and stopped; finish it and still tell the owner.
+        discard_for_unreadable_state(layout)?;
+        return Ok(true);
+    }
     if !entry_present(&layout.pending(), "checking for a staged update")? {
         return Ok(false);
     }
     if !state_is_unreadable(layout)? {
         return Ok(false);
     }
-    discard_staged(layout)?;
+    discard_for_unreadable_state(layout)?;
     Ok(true)
+}
+
+/// Whether the staging mark records a discard begun beside an unreadable `Updates\state`.
+fn unreadable_state_discard_begun(layout: &UpdateLayout) -> Result<bool, InstallError> {
+    let mark = read_small(&layout.staging_marker(), 64, "reading the staging mark")?;
+    Ok(mark.as_deref() == Some(UNREADABLE_STATE_DISCARD_MARK))
 }
 
 /// Keep a complete staged copy for this version; clear everything else.

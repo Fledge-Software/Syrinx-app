@@ -12,6 +12,7 @@ use super::error::io_error;
 use super::layout::PACKAGE_RECORD;
 use crate::path::PackagePath;
 
+const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 /// Windows' "used by another process" error, which a closing program clears shortly.
 const ERROR_SHARING_VIOLATION: i32 = 32;
@@ -75,7 +76,30 @@ pub(crate) fn remove_program_folder(path: &Path, what: &'static str) -> Result<(
     if !is_program_folder(path)? {
         return Err(InstallError::UnexpectedEntry { what });
     }
+    remove_all_but_record(path)?;
     fs::remove_dir_all(path).map_err(io_error("removing an old program folder"))
+}
+
+/// Remove everything in a program folder except its package record, which goes last, so a
+/// folder a locked file stops half-removed is still recognised and removed later (DW-69).
+fn remove_all_but_record(folder: &Path) -> Result<(), InstallError> {
+    const STEP: &str = "removing an old program folder";
+    for entry in fs::read_dir(folder).map_err(io_error(STEP))? {
+        let entry = entry.map_err(io_error(STEP))?;
+        if entry.file_name().eq_ignore_ascii_case(PACKAGE_RECORD) {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(io_error(STEP))?;
+        // `remove_dir_all` removes a linked folder's link, never what it points to.
+        let removed = if metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0 {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        removed.map_err(io_error(STEP))?;
+    }
+    Ok(())
 }
 
 /// Remove a folder inside `Updates`, refusing a link in its place. Nothing there is fine.

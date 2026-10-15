@@ -13,6 +13,7 @@ use super::files::{
 };
 use super::lock::ApplyLock;
 use super::records::{Outcome, Pending, UpdateResult, UpdateState};
+use super::stage::DISCARD_MARK;
 use super::{InstallError, UpdateLayout};
 use crate::directory::DirectoryPayload;
 use crate::keys::KeySet;
@@ -210,10 +211,8 @@ fn apply_locked(
     // `pending` owns `Syrinx.new` now; a mark left by an interrupted staging is stale.
     remove_file_if_present(&layout.staging_marker(), "clearing a stale staging mark")?;
     if let Err(refusal) = reverify(layout, request.keys, &pending) {
-        discard_refused(layout)?;
-        let result = UpdateResult::VerificationFailed;
-        finish(layout, &pending, result, pending.from, true)?;
         eprintln!("reverification refused the staged update: {refusal}");
+        discard_refused(layout, &pending)?;
         return Ok(Applied::Discarded(pending.version));
     }
     checkpoint(Step::Reverified)?;
@@ -544,8 +543,18 @@ fn relaunch(request: &ApplyRequest<'_>) -> Vec<OsString> {
 }
 
 /// Remove a staged copy that failed its second check, keeping the running helper itself.
-fn discard_refused(layout: &UpdateLayout) -> Result<(), InstallError> {
-    remove_file_if_present(&layout.pending(), "removing the pending record")?;
+///
+/// The mark goes first and the owner's notice next, so a stop part way still leaves the copy
+/// for the next start to remove and the owner still told (DW-69).
+fn discard_refused(layout: &UpdateLayout, pending: &Pending) -> Result<(), InstallError> {
+    write_atomically(
+        &layout.staging_marker(),
+        DISCARD_MARK,
+        "marking the discard",
+    )?;
+    let result = UpdateResult::VerificationFailed;
+    finish(layout, pending, result, pending.from, true)?;
+    checkpoint(Step::DiscardBegun)?;
     remove_program_folder(&layout.staged(), "Syrinx.new")?;
     remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")?;
     remove_file_if_present(&layout.apply_manifest(), "removing the kept manifest")?;
