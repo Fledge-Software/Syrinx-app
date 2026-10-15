@@ -833,6 +833,16 @@ this plan, in order:
 
 The minimum list from the brief, grouped. Each is cleared as it is answered.
 
+- **Plugins as WASM from a template repository (2026-10-15), decided; plan
+  text not yet updated:** the owner chose a plugin template repository,
+  one repository per plugin, and sandboxed WebAssembly loaded at run time,
+  starting only after Plan 1 closes (`docs/decisions.md`, 2026-10-15).
+  This supersedes D17's deferral of the sandbox and D34's Rust `Plugin`
+  trait, and the `crates/plugin-*` layout in this plan, plans 2–4 and
+  `AGENTS.md`. Those texts are rewritten in Plan 2's slice breakdown, after
+  the research note on the WASM runtime and interface; until then
+  `docs/decisions.md` wins where they disagree.
+
 - **P1-25 repeated `Cache-Control` lines (2026-10-12), decided:** the
   synthetic harness found that WebView2 reports only the first line of a
   repeated response header, so a page sending `no-store` only on a later

@@ -12,6 +12,44 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-15
 
+- **Plugins are built from a template repository, each in its own
+  repository, as sandboxed WebAssembly loaded at run time; no plugin work
+  starts until Plan 1 closes (changes D17 and D34).** The owner wants a
+  plugin template made first, then Forge, Notes and Fledge each built from
+  it, the way Obsidian's sample-plugin template and Zed's extensions work.
+  Decided in chat:
+  - *Repositories.* A template repository on GitHub (marked as a template)
+    and one repository per plugin made from it, rather than the
+    `crates/plugin-*` workspace crates the plan and `AGENTS.md` describe.
+    The owner creates the repositories (operator work); agents prepare
+    their contents. Rejected: a template folder inside this repository.
+  - *Order.* After Plan 1 closes: the plugin interface and host first, then
+    the template, then each plugin. Rejected: starting the interface and
+    template now, ahead of Plan 1.
+  - *Form.* Each plugin is Rust compiled to WebAssembly (WASM) and run by
+    Syrinx in a sandbox (the Zed model). It reaches files, git, processes
+    and the network only through host functions its manifest asks for and
+    the owner grants (the Chrome extension model), and draws its interface
+    in HTML and JavaScript inside Syrinx's own local web view, as Notes and
+    Forge already planned for CodeMirror (D28). Rust state stays in the
+    plugin's WASM module and Syrinx's core, keeping S3. Rejected: compiling
+    built-ins into `syrinx.exe` (every plugin release would need a Syrinx
+    release, which defeats separate repositories), Obsidian-style
+    JavaScript plugins (no sandbox, state outside Rust) and native DLLs (no
+    sandbox, and Rust has no stable binary interface).
+  - *What changes.* D17's sandbox is no longer deferred until a third
+    party's plugin exists: the built-ins use it from the start. D34's
+    "`Plugin` trait" becomes a WASM interface definition (WIT) and host;
+    plan 2 stays thin otherwise. The owner chose this after being told the
+    cost: Forge needs the host to provide real capabilities
+    (terminals, git, language servers, tree-sitter), as Zed's host does.
+  - *Before building.* A research note compares the WASM runtime and
+    interface choices (for example wasmtime and the component model,
+    licences and maintenance, host-capability design, start-up and memory
+    cost against D6) and is reviewed with the owner before Plan 2's slice
+    breakdown. `AGENTS.md`'s layout and plugin guardrails are updated in
+    that slice breakdown, not before.
+
 - **Each platform's build uses that platform's own web engine: WebView2 on
   Windows, WKWebView on macOS. Syrinx bundles no Chromium.** The owner
   asked, in chat, for Disney+, Hulu, YouTube and Google's services to work
