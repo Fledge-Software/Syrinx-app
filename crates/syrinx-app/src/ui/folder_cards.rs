@@ -2,9 +2,8 @@
 
 use gpui::{
     Context, Div, FontWeight, InteractiveElement, ParentElement, Stateful,
-    StatefulInteractiveElement, Styled, div, px,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
-use gpui_component::input::Input;
 use syrinx_ui::{
     Palette,
     metrics::{radius, space, text},
@@ -18,17 +17,22 @@ use super::{
     },
     tile_editor::form_button,
 };
+use crate::text_field;
 use crate::theme::{self, rgba};
 
 impl BrowserView {
     /// The open form or card, drawn under the saved section's header in the wide sidebar.
-    pub(super) fn folder_editor_view(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn folder_editor_view(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
         let editor = self.folder_editor.as_ref()?;
         let card = card_frame().on_action(cx.listener(|this, _: &CancelFolderCard, _, cx| {
             this.cancel_folder_card(cx);
         }));
         match editor {
-            FolderEditor::Name(form) => Some(name_form(card, form, cx)),
+            FolderEditor::Name(form) => Some(name_form(card, form, window, cx)),
             FolderEditor::Remove(removal) => self.removal_card(card, removal, cx),
             FolderEditor::RemovePage(page) => self.page_card(card, page, cx),
         }
@@ -130,7 +134,7 @@ impl BrowserView {
     }
 }
 
-fn name_form(card: Div, form: &NameForm, cx: &mut Context<BrowserView>) -> Div {
+fn name_form(card: Div, form: &NameForm, window: &Window, cx: &mut Context<BrowserView>) -> Div {
     let palette = theme::current();
     let heading = match form.target {
         NameTarget::New => "New folder",
@@ -139,7 +143,12 @@ fn name_form(card: Div, form: &NameForm, cx: &mut Context<BrowserView>) -> Div {
     let save = form_button("folder-save", "Save", &palette, true)
         .on_click(cx.listener(|this, _, _, cx| this.submit_folder_name(cx)));
     card.child(card_heading(heading))
-        .child(Input::new(&form.input))
+        .child(text_field::labelled(
+            text_field::FOLDER_NAME,
+            &form.input,
+            window,
+            cx,
+        ))
         .children(form.error.map(|error| note(&palette, error.to_owned())))
         .child(button_row().child(save).child(cancel_button(&palette, cx)))
 }

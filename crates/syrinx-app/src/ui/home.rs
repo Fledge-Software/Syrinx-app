@@ -2,7 +2,7 @@
 
 use gpui::{
     Context, Div, FontWeight, InteractiveElement, ParentElement, Role, Stateful,
-    StatefulInteractiveElement, Styled, Toggled, div, px,
+    StatefulInteractiveElement, Styled, Toggled, Window, div, px,
 };
 use syrinx_core::usage::Feature;
 use syrinx_core::{
@@ -43,7 +43,7 @@ pub(super) struct HomeState {
 
 impl BrowserView {
     /// The page card shown when no web page is: the canvas home board.
-    pub(super) fn home_page(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn home_page(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let palette = theme::current();
         let mut card = div()
             .relative()
@@ -65,11 +65,11 @@ impl BrowserView {
                     .flex_col()
                     .child(self.home_header(&palette, cx))
                     .child(self.search_pill(&palette, cx))
-                    .child(self.quick_access(&palette, cx))
+                    .child(self.quick_access(&palette, window, cx))
                     .child(self.plugin_strip(&palette, cx)),
             );
         if self.home.customize_open {
-            card = card.child(self.customize_panel(&palette, cx));
+            card = card.child(self.customize_panel(&palette, window, cx));
         }
         div()
             .flex_1()
@@ -205,7 +205,7 @@ impl BrowserView {
             )
     }
 
-    fn quick_access(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
+    fn quick_access(&self, palette: &Palette, window: &Window, cx: &mut Context<Self>) -> Div {
         let surface = DestinationSurface::QuickAccess;
         let editing = self.home.editing == Some(surface);
         let tiles = self.home.destinations.list(surface);
@@ -235,7 +235,7 @@ impl BrowserView {
             .as_ref()
             .filter(|editor| editor.surface == surface)
         {
-            section = section.child(self.tile_editor(editor, palette, cx));
+            section = section.child(self.tile_editor(editor, palette, window, cx));
         }
         section
     }
