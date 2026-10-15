@@ -205,8 +205,21 @@ fn release_tool_step<'a>(command: &'a str, extra: &[&'a str], tail: &[&'a str]) 
 }
 
 fn run_cargo(root: &Path, arguments: &[&str]) -> Result<(), String> {
+    run_cargo_with(root, arguments, &[])
+}
+
+/// `run_cargo` with extra environment variables, such as the setup payload's path.
+fn run_cargo_with(
+    root: &Path,
+    arguments: &[&str],
+    environment: &[(&str, &Path)],
+) -> Result<(), String> {
     // Inherit output so compiler and test failures remain visible to the caller.
-    let status = cargo_command(root)
+    let mut command = cargo_command(root);
+    for (name, value) in environment {
+        command.env(name, value);
+    }
+    let status = command
         .args(arguments)
         .status()
         .map_err(|error| format!("Could not run cargo {}: {error}", arguments.join(" ")))?;

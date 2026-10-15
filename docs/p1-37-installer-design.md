@@ -17,6 +17,116 @@ an agent, installs software, writes registration keys and picks the default
 browser. So this slice builds artifacts and reviewed scripts and stops there.
 No script in `packaging/` has been run by an agent.
 
+## The setup program (owner decision, 2026-10-14)
+
+Release 0.2.0 shipped only the zip described below. The owner downloaded it on
+another machine, copied `syrinx.exe` out of it on its own and ran that copy.
+The owner then ruled that what Syrinx ships must be one program that installs
+itself: it creates the folders it needs in the right places, and running a
+newer one updates the existing install. The owner chose a setup program
+written in Rust over Inno Setup and a WiX MSI, and chose to register Syrinx
+as a browser by default through a checkbox (`docs/decisions.md`, 2026-10-14).
+The zip and its scripts stay: P1-39's updates use the same layout, and the
+scripts remain the owner's manual route.
+
+`syrinx-setup.exe` is a second binary of `syrinx-app`
+(`crates/syrinx-app/src/bin/syrinx-setup.rs`). It was put there rather than in
+a crate of its own for one reason. `cargo xtask check-deps` already lets
+`syrinx-app` use the update crate and `syrinx-platform`, so the dependency
+rules (P1-39's change 1) did not have to change. Its Windows calls (task
+dialogs, the running-Syrinx check, one registry read) are in
+`syrinx-platform/src/setup.rs`, as the platform boundary requires. The release
+build carries the finished package inside the executable:
+
+1. `cargo xtask package` builds the package folder and zip as before.
+2. The release tool's new `payload` command
+   (`syrinx-update-tool payload --package <folder> --output <file>`) packs the
+   folder. The payload is a fixed header, P1-38's `manifest`, then every file
+   the manifest lists, in its order. Packing checks each file's size and
+   SHA-256 against the manifest.
+3. `syrinx-app`'s build script reads `SYRINX_SETUP_PAYLOAD` and embeds that
+   file in `syrinx-setup.exe`. Without the variable it embeds nothing, and
+   such a setup program refuses to install, so the ordinary gate can build
+   and lint it.
+4. The result is `target\package\Syrinx-<version>-<commit>-x64-setup.exe`.
+   The weekly release publishes it as the main download, with the zip and
+   both checksums (`docs/releasing.md`).
+
+**What running it does.** Everything happens per user, with no
+administrator prompt:
+
+1. It reads its payload and refuses a damaged one: any size, SHA-256 or
+   layout mismatch, a missing `syrinx-apply.exe`, or trailing bytes.
+2. It reads `%LOCALAPPDATA%\Programs\Syrinx\manifest` to learn what is
+   installed. The heading says "Install", "Update 0.2.0 to 0.3.0",
+   "Reinstall" or "Replace … with the older …".
+3. It shows one dialog with Install (or Update) and Cancel, and the checkbox
+   "Register Syrinx as a browser". The box is ticked on a first install. On
+   an update it shows whether Syrinx is registered now.
+4. If a Syrinx runs from `Syrinx`, `Syrinx.new` or `Syrinx.previous`, it asks
+   the owner to close it and offers Retry. It never closes Syrinx itself.
+5. `syrinx_update::install::install_package` does the rest:
+   - It creates `Programs` and `Syrinx\data` if they are missing, and takes
+     P1-39b's update lock, so an in-app update cannot run at the same time.
+   - It refuses a `Syrinx` or `Syrinx.previous` folder that Syrinx's tooling
+     did not make, and does so before writing anything.
+   - It discards any in-app update waiting in `Syrinx.new`, together with its
+     `Updates` records, so the next start does not offer it.
+   - It writes every file into a fresh `Syrinx.new`, `syrinx-package.json`
+     first, so an interrupted copy is still recognised as Syrinx's. A failed
+     copy is removed.
+   - It swaps that copy in with the same function the update helper uses, and
+     keeps the version it replaced as `Syrinx.previous`. That function
+     removes the old `Syrinx.previous` before it moves anything. A swap
+     refused because the folder is in use (`ProgramInUse`) therefore costs
+     that older copy, though the installed version stays.
+   - If the installed version was moved aside but could not be put back,
+     setup says so and names `Syrinx.previous`.
+   - It never touches the profile in the data folder.
+6. It runs the installed `register-syrinx.ps1` in a hidden Windows
+   PowerShell, started from its fixed system path with
+   `-ExecutionPolicy RemoteSigned`:
+   - Ticked, the script writes the full registration as before.
+   - Unticked, it runs with the new `-AppOnly` switch, which writes only the
+     Installed apps entry and the Start menu shortcut.
+   - Unticking after an earlier registration first runs
+     `unregister-syrinx.ps1`.
+   - The scripts carry no Mark of the Web, because setup wrote them, so
+     `RemoteSigned` runs them. This keeps one reviewed implementation of the
+     registry table rather than a second one in Rust.
+7. It says Syrinx is installed and offers "Open Syrinx".
+
+**What it does not do yet.** Each of these is a possible follow-up, not a
+deferred-work marker in the code:
+
+- It does not check for the WebView2 runtime the way `install-syrinx.ps1`
+  does. Windows 11 ships the runtime (D2), but a missing one would only
+  show up when Syrinx starts.
+- Uninstall still runs `unregister-syrinx.ps1` from Installed apps.
+- The payload is not compressed. The setup program is about the size of the
+  unzipped package (around 45 MB at 0.2.0), not of the zip (15 MB).
+  Windows' built-in compression API would close that gap without a new
+  dependency.
+- The setup program is unsigned (D38), so a downloaded copy shows
+  SmartScreen's "Windows protected your PC" with an unknown publisher until
+  signing exists.
+
+**Tests.** `crates/syrinx-update/src/install/tests_setup.rs` covers these
+cases:
+- the payload round-trips;
+- damaged payloads are refused;
+- a package without the helper is refused;
+- a first install works;
+- upgrading twice keeps one previous version and leaves a synthetic profile
+  file untouched;
+- a foreign `Syrinx` folder is refused;
+- a held update lock stops setup.
+
+`syrinx-platform/src/setup.rs` tests the running-from-folder check, and the
+setup binary tests its headings. The real install writes to the owner's
+`%LOCALAPPDATA%` and per-user registry, so only the owner runs it (see the
+checklist below).
+
 ## What is on this machine
 
 Checked on 2026-10-12 with `where` and the tools' default install folders,
@@ -390,10 +500,24 @@ PowerShell's parser without running it.
 
 ## Owner checklist
 
-These steps are the owner's alone. Run them in a normal (not
+These steps are the owner's alone.
+
+**Install or update with the setup program (since 2026-10-14)**
+
+1. Download `Syrinx-<version>-<commit>-x64-setup.exe` from the release page
+   and double-click it. Windows may first show "Windows protected your PC"
+   because it is unsigned. Choose "More info", then "Run anyway", only after
+   confirming where it came from.
+2. Leave "Register Syrinx as a browser" ticked to see it in Default apps,
+   then press Install (or Update). Close Syrinx first if setup asks.
+3. Press "Open Syrinx". For a later version, run its setup program the same
+   way: the tabs, saved pages and sign-ins in `%LOCALAPPDATA%\Syrinx\data`
+   stay.
+
+The script steps below remain the manual route. Run them in a normal (not
 administrator) PowerShell window.
 
-**Install**
+**Install with the scripts**
 
 1. `cargo xtask package` in the repository, or receive a zip and confirm
    where it came from.

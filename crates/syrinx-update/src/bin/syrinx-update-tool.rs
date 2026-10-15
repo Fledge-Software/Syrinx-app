@@ -10,12 +10,14 @@ use std::process::ExitCode;
 use syrinx_update::{
     FileEntry, KeySet, KeyStorage, MAX_FILE_BYTES, MAX_MANIFEST_BYTES, MAX_STATEMENT_BYTES,
     MAX_STATEMENT_LIFETIME_SECONDS, Manifest, PackagePath, SECONDS_PER_DAY, SignedRelease,
-    Statement, StatementTerms, StoredKey, Timestamp, Version, read_bounded, sha256, sign_release,
+    Statement, StatementTerms, StoredKey, Timestamp, Version, install, read_bounded, sha256,
+    sign_release,
 };
 
 const USAGE: &str = "Usage:
   syrinx-update-tool manifest --package <folder> --version <x.y.z> --minimum-version <x.y.z> --file <path>...
-  syrinx-update-tool sign --package <folder> --storage <software|smart-card> --key <name> --serial <n> --days <1-60>";
+  syrinx-update-tool sign --package <folder> --storage <software|smart-card> --key <name> --serial <n> --days <1-60>
+  syrinx-update-tool payload --package <folder> --output <file>";
 
 /// File names the tool reads and writes inside a package folder.
 const MANIFEST: &str = "manifest";
@@ -30,6 +32,14 @@ const MAX_DAYS: u64 = MAX_STATEMENT_LIFETIME_SECONDS / SECONDS_PER_DAY;
 enum Request {
     Manifest(ManifestRequest),
     Sign(SignRequest),
+    Payload(PayloadRequest),
+}
+
+/// Pack a package folder into the payload `syrinx-setup.exe` carries.
+#[derive(Debug, PartialEq, Eq)]
+struct PayloadRequest {
+    package: PathBuf,
+    output: PathBuf,
 }
 
 /// List these package files, by path, in a new canonical `manifest`.
@@ -77,6 +87,11 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Request::Sign(request) => sign(&request),
+        Request::Payload(request) => {
+            write_setup_payload(&request)?;
+            println!("Wrote {}.", request.output.display());
+            Ok(())
+        }
     }
 }
 
@@ -87,6 +102,7 @@ fn parse_request(arguments: &[String]) -> Result<Request, String> {
     match command.as_str() {
         "manifest" => parse_manifest_request(rest).map(Request::Manifest),
         "sign" => parse_sign_request(rest).map(Request::Sign),
+        "payload" => parse_payload_request(rest).map(Request::Payload),
         _ => Err(USAGE.to_owned()),
     }
 }
@@ -106,6 +122,22 @@ fn parse_manifest_request(arguments: &[String]) -> Result<ManifestRequest, Strin
         minimum_version: parse_version(&options.take_one("--minimum-version")?)?,
         files,
     })
+}
+
+fn parse_payload_request(arguments: &[String]) -> Result<PayloadRequest, String> {
+    let mut options = Options::parse(arguments, &["--package", "--output"])?;
+    Ok(PayloadRequest {
+        package: PathBuf::from(options.take_one("--package")?),
+        output: PathBuf::from(options.take_one("--output")?),
+    })
+}
+
+/// Pack the folder, checking every file against its manifest, then write the payload.
+fn write_setup_payload(request: &PayloadRequest) -> Result<(), String> {
+    let payload = install::write_payload(&request.package)
+        .map_err(|error| format!("Could not pack {}: {error}.", request.package.display()))?;
+    fs::write(&request.output, payload)
+        .map_err(|error| format!("Could not write {}: {error}", request.output.display()))
 }
 
 fn parse_sign_request(arguments: &[String]) -> Result<SignRequest, String> {
@@ -507,6 +539,17 @@ mod tests {
                 days: 60,
             })
         );
+
+        let payload = parse_request(&strings(&["payload", "--package", "p", "--output", "o"]))
+            .expect("a full payload request parses");
+        assert_eq!(
+            payload,
+            Request::Payload(PayloadRequest {
+                package: PathBuf::from("p"),
+                output: PathBuf::from("o"),
+            })
+        );
+        assert!(parse_request(&strings(&["payload", "--package", "p"])).is_err());
 
         let base = [
             "sign",

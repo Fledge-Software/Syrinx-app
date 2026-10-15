@@ -23,7 +23,9 @@ cat <<EOF
 Weekly preview of Syrinx for Windows 11 (x64), built from \`${source:0:12}\` on \`main\`.
 
 This is an early, unsigned preview. Windows SmartScreen may warn before it runs.
-Check the zip against \`SHA256SUMS.txt\` before installing, then follow the
+Download the \`-setup.exe\` file, check it against \`SHA256SUMS.txt\`, then run
+it: it installs Syrinx for your Windows user, and running a newer one later
+updates that install. The zip is the same program for manual installs; see the
 [installation guide](https://docs.syrinxapp.dev/getting-started/install/).
 
 ## What changed

@@ -6,11 +6,18 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+# `cargo syrinx` and the gate's smoke run start the browser, not the setup program.
+default-run = "syrinx"
 
 # Name the executable after the product, as Task Manager and the registry show it.
 [[bin]]
 name = "syrinx"
 path = "src/main.rs"
+
+# Installs or upgrades Syrinx for this Windows user from the package it carries.
+[[bin]]
+name = "syrinx-setup"
+path = "src/bin/syrinx-setup.rs"
 
 [dependencies]
 syrinx-core = { path = "../syrinx-core" }

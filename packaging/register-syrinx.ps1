@@ -6,7 +6,9 @@ param(
     # Installed program folder; defaults to the folder holding this script.
     [string]$InstallDirectory = $PSScriptRoot,
     # Open Settings at Syrinx's Default apps page afterwards.
-    [switch]$OpenDefaultApps
+    [switch]$OpenDefaultApps,
+    # Write only the Installed apps entry and the shortcut, not the browser registration.
+    [switch]$AppOnly
 )
 
 Set-StrictMode -Version Latest
@@ -15,13 +17,13 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'syrinx-common.ps1')
 
 # Refuse before writing anything if another product already uses Syrinx's key names.
-function Assert-RegistrationIsOurs {
-    foreach ($owned in $SyrinxOwnedKeys) {
+function Assert-RegistrationIsOurs([string[]]$OwnedKeys, $SharedValues) {
+    foreach ($owned in $OwnedKeys) {
         if ((Get-SyrinxKeyOwner $owned) -eq 'foreign') {
             throw "HKCU\$owned exists without Syrinx's owner marker; another program may own it. Nothing was changed."
         }
     }
-    foreach ($shared in $SyrinxSharedValues) {
+    foreach ($shared in $SharedValues) {
         $current = Get-SyrinxRegistryValue $shared.Key $shared.Name
         if ($null -ne $current -and $current -cne $shared.Data) {
             throw "HKCU\$($shared.Key)\$($shared.Name) already points elsewhere. Nothing was changed."
@@ -66,12 +68,25 @@ $executable = Join-Path $InstallDirectory $SyrinxExecutable
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "No $SyrinxExecutable in $InstallDirectory; install Syrinx first." }
 $manifest = Read-SyrinxManifest $InstallDirectory
 
-Assert-RegistrationIsOurs
+# The app-only set is the Installed apps entry; the browser keys stay as they are.
+$ownedKeys = $SyrinxOwnedKeys
+$values = @($SyrinxRegistryValues)
+$sharedValues = @($SyrinxSharedValues)
+if ($AppOnly) {
+    $ownedKeys = @($SyrinxUninstallKey)
+    $values = @($values | Where-Object { $_.Key -ieq $SyrinxUninstallKey })
+    $sharedValues = @()
+}
+Assert-RegistrationIsOurs $ownedKeys $sharedValues
 $facts = @{ exe = $executable; dir = $InstallDirectory; version = [string]$manifest.version }
-foreach ($entry in @($SyrinxRegistryValues) + @($SyrinxSharedValues)) { Write-SyrinxValue $entry $facts }
+foreach ($entry in $values + $sharedValues) { Write-SyrinxValue $entry $facts }
 New-SyrinxShortcut $executable $InstallDirectory
 Update-SyrinxShellAssociations
 
+if ($AppOnly) {
+    Write-Host "Added Syrinx $($manifest.version) to Installed apps and the Start menu; it is not registered as a browser."
+    return
+}
 Write-Host "Registered Syrinx $($manifest.version) at $executable for this Windows user."
 if (-not $SyrinxAcceptsOpenUrl) {
     Write-Warning ("This Syrinx build cannot open links passed by Windows yet (P1-34 adds links after '$SyrinxLinkMarker'). " +

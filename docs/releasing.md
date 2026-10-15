@@ -25,7 +25,8 @@ short script in `.github/scripts/` so it can be read and tested on its own.
    `set-version.sh`. That commit sits on top of the `main` commit being
    released and is reachable only through its tag, so `main` is never pushed.
    It then runs `cargo xtask check` (the full gate in `docs/LOCAL-DEV.md`,
-   including the smoke run) and `cargo xtask package` (P1-37's portable zip).
+   including the smoke run) and `cargo xtask package` (P1-37's setup program
+   and portable zip).
    A failing gate stops everything: nothing is tagged or published.
 3. **Screenshots** (`capture-screenshots.ps1`). The freshly built
    `syrinx.exe` is launched four times, on brand-new empty profiles under
@@ -36,7 +37,10 @@ short script in `.github/scripts/` so it can be read and tested on its own.
 4. **Publish.** `release-notes.sh` lists `main`'s first-parent commits since
    the previous release, which are the reviewed slice merges. The workflow
    pushes an annotated tag `v0.N.0` and creates a GitHub pre-release with the
-   zip and `SHA256SUMS.txt`.
+   setup program (`Syrinx-<version>-<commit>-x64-setup.exe`), the zip and
+   `SHA256SUMS.txt`. The setup program is the download the website offers:
+   people run it to install Syrinx and run a newer one to update (owner,
+   2026-10-14). The zip stays for P1-39's updates and the owner-run scripts.
 5. **Website.** If this repository is public, the workflow checks out
    `Fledge-Software/syrinx-public-site`. It runs that repository's
    `scripts/publish-release.mjs` to write the version, download link,
