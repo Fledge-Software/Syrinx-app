@@ -10,6 +10,32 @@ on 2026-10-12, it was called Atlas, so older entries say Atlas.
 Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 `docs/plans/Atlas … .md` is now `docs/plans/Syrinx … .md`.
 
+## 2026-10-15
+
+- **Each platform's build uses that platform's own web engine: WebView2 on
+  Windows, WKWebView on macOS. Syrinx bundles no Chromium.** The owner
+  asked, in chat, for Disney+, Hulu, YouTube and Google's services to work
+  without shipping Chromium, because a bundled Chromium (CEF, Electron) adds
+  hundreds of megabytes and a new release every four to eight weeks
+  (`docs/research/01-shell-and-engine.md`), and because the owner wants
+  Syrinx's own settings, not Chrome's. Both engines come with the operating
+  system, so Syrinx ships neither, and both play protected video through a
+  DRM module the system supplies: WebView2 carries Google's Widevine (L3,
+  observed in note 07, section 2.1, and Disney+ passed in Phase 0), and
+  WKWebView carries Apple's FairPlay. Both are driven from Rust through wry,
+  so the tab model, palette, store and plugins stay one code base; only
+  `syrinx-platform`'s engine and window code is written once per platform.
+  This does not change D2: v1 is still Windows 11 only, and the macOS build
+  starts after v1, behind a macOS spike run on a Mac by the owner. ⚠️
+  Unverified until that spike: that Disney+, Hulu, YouTube rentals and
+  Google sign-in accept a WKWebView browser that is not Safari. Rejected:
+  CEF on every platform (one engine, but bundled Chromium, Google's
+  embedded-framework sign-in block names CEF, and Widevine needs Google's
+  licence and signing); a Firefox (Gecko) fork (no embedding API, dropped on
+  2026-10-09). A possible third build for Widevine where neither system
+  engine provides it, chiefly Linux, is a proposal, not a decision:
+  `docs/proposals/widevine-third-build.md`.
+
 ## 2026-10-14
 
 - **The focus ring shows only after keyboard input, decided by Syrinx's own
