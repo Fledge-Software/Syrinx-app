@@ -479,11 +479,13 @@ fn write_report(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// leaves the chosen file as it was and no partial copy behind.
 fn replace_with(path: &Path, fill: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
     let temporary = temporary_path(path)?;
-    let replaced = stage(&temporary, fill).and_then(|()| fs::rename(&temporary, path));
+    // Opening fails if the name is taken; that file is not this save's, so it is left alone.
+    let file = create_temporary(&temporary)?;
+    let replaced = fill_and_flush(file, fill).and_then(|()| fs::rename(&temporary, path));
     let Err(error) = replaced else {
         return Ok(());
     };
-    // A failed cleanup is reported in place of the write's own error.
+    // Only the file this call created is removed; a failed removal replaces the error.
     remove_partial(&temporary)?;
     Err(error)
 }
@@ -498,12 +500,19 @@ fn temporary_path(path: &Path) -> io::Result<PathBuf> {
     Ok(path.with_file_name(temporary))
 }
 
-/// Creates the temporary file, never reusing an existing one, and flushes what `fill` wrote.
-fn stage(temporary: &Path, fill: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
-    let mut file = OpenOptions::new()
+/// Creates the temporary file, never opening an existing one.
+fn create_temporary(temporary: &Path) -> io::Result<File> {
+    OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(temporary)?;
+        .open(temporary)
+}
+
+/// Writes and flushes the temporary file, closing it before it is renamed or removed.
+fn fill_and_flush(
+    mut file: File,
+    fill: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<()> {
     fill(&mut file)?;
     file.sync_all()
 }
@@ -861,6 +870,27 @@ mod tests {
             ]
         );
         assert!(blocked_empty);
+    }
+
+    #[test]
+    fn a_save_never_touches_a_partial_file_it_did_not_create() {
+        let folder = synthetic_folder();
+        let path = folder.join("syrinx-usage-report-2026-11-02-to-2026-11-30.json");
+        let partial = folder.join("syrinx-usage-report-2026-11-02-to-2026-11-30.json.partial");
+        fs::write(&path, b"an earlier synthetic report\n").expect("a synthetic old file");
+        fs::write(&partial, b"someone else's synthetic bytes\n").expect("a synthetic leftover");
+
+        let refused = write_report(&path, synthetic_report().as_bytes());
+        let target = fs::read(&path).expect("the old file reads");
+        let leftover = fs::read(&partial).expect("the leftover is still there");
+        fs::remove_dir_all(&folder).expect("the synthetic folder is removed");
+
+        assert_eq!(
+            refused.map_err(|error| error.kind()),
+            Err(io::ErrorKind::AlreadyExists)
+        );
+        assert_eq!(target, b"an earlier synthetic report\n");
+        assert_eq!(leftover, b"someone else's synthetic bytes\n");
     }
 
     /// The approved suggested prompt, copied from the proposal rather than imported.

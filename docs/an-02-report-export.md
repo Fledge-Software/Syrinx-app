@@ -70,6 +70,8 @@ previous period exists, so the window can offer it.
   chosen file, as AN-01's usage write does, so a failure (a full disk, a
   removed drive) leaves any file being replaced untouched; the partial file is
   then deleted and a fixed message, naming no path, is shown under the buttons.
+  A `.partial` file already at that name (a crash leftover or the owner's own)
+  is never opened or deleted: the save fails with the same message instead.
 - **Copy report** puts the same text on the clipboard through GPUI's
   `write_to_clipboard`, then reads the clipboard back and says whether Windows
   took it, because GPUI only logs a failed write. GPUI does not exclude the
@@ -116,6 +118,7 @@ created.
   `the_suggested_name_carries_the_two_period_dates`;
   `a_failed_save_leaves_the_replaced_file_untouched_and_nothing_partial` (a
   write that fails half way, and a target that cannot be replaced);
+  `a_save_never_touches_a_partial_file_it_did_not_create`;
   `the_suggested_prompt_is_the_approved_text` (against a copy of the
   proposal's prompt, not the constant itself);
   `only_the_latest_request_is_shown`;
@@ -163,5 +166,5 @@ created.
   clipboard. Their behaviour is covered by the tests above. This is not the
   owner's visual acceptance.
 - **Gate.** `cargo xtask check` passed with 1,400 test results (summed over
-  every `test result` line) on the first commit and 1,402 after the review
-  fixes, none failed or ignored, and the smoke run passed.
+  every `test result` line) on the first commit, 1,402 after the review
+  fixes and 1,403 after the re-review fix, none failed or ignored, and the smoke run passed.
