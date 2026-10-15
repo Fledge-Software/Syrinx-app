@@ -41,6 +41,7 @@ mod tile_editor;
 mod tiles;
 mod title_bar;
 mod updates;
+mod usage_preview;
 mod usage_report;
 
 #[cfg(test)]
@@ -740,6 +741,11 @@ impl BrowserView {
             SessionEvent::Usage { status, problem } => {
                 self.usage_status_received(status, problem);
             }
+            SessionEvent::UsageReport {
+                request_id,
+                period,
+                result,
+            } => self.usage_report_received(request_id, period, result),
             SessionEvent::Stopped => {
                 self.update_snapshot_lost();
                 self.abandon_import_write();

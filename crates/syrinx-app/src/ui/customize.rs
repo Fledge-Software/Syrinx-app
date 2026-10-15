@@ -78,6 +78,9 @@ impl BrowserView {
         // Managing site permissions replaces the appearance choices, so the panel stays short.
         let contents = if self.home.site_permissions.is_open() {
             contents.child(self.site_permissions_view(palette, cx))
+        } else if self.usage.report.is_open() {
+            // The report view replaces the choices in the same way.
+            contents.child(self.usage_report_view(palette, cx))
         } else {
             contents
                 .child(self.customize_title(palette, cx))
@@ -135,6 +138,7 @@ impl BrowserView {
         self.home.customize_open = false;
         self.home.custom_accent = None;
         self.home.site_permissions.close();
+        self.usage.report.close();
     }
 
     fn customize_title(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {

@@ -4,6 +4,7 @@ use std::fmt;
 
 use super::period::{Period, UsageDate, UsageFile};
 use super::recorder::Counts;
+use super::report::{ReportGroup, ReportPeriod, ReportRow, ReportTable, ReportValue};
 use super::schema::{COMMAND_KEYS, ErrorCategory, Feature, SCHEMA_VERSION, SLOT_COUNT, Timing};
 
 /// A larger usage file is refused unread; version 1's file is about 15 KiB.
@@ -86,6 +87,121 @@ pub fn report(period: &Period, period_end: UsageDate) -> String {
     ];
     fields.extend(sections(&period.counts));
     render(&object(fields))
+}
+
+impl UsageFile {
+    /// One period's exact report text, `None` when there is no previous period yet. The
+    /// current period ends `today`; a completed one on the day it closed.
+    pub fn report_text(&self, period: ReportPeriod, today: UsageDate) -> Option<String> {
+        match period {
+            ReportPeriod::Current => Some(report(&self.current, today)),
+            ReportPeriod::Previous => {
+                let previous = self.previous.as_ref()?;
+                Some(report(previous, previous.closed_on?))
+            }
+        }
+    }
+}
+
+/// A report's top-level keys, in the order `report` writes them.
+const REPORT_KEYS: [&str; 10] = [
+    "schema_version",
+    "syrinx_version",
+    "period_start",
+    "period_end",
+    "days_used",
+    "about",
+    "counts",
+    "commands",
+    "timings",
+    "errors",
+];
+
+/// Reads a report written by `report` back into its fields for the preview's table; any
+/// other shape, key or value is refused, so the table can show only what the text holds.
+pub fn read_report(text: &str) -> Result<ReportTable, UsageFileError> {
+    if text.len() > MAX_FILE_BYTES {
+        return Err(UsageFileError::TooLarge);
+    }
+    let value = Parser::new(text).document()?;
+    // Only the exact bytes `report` writes are read: no BOM, CR, other spacing or order.
+    if render(&value) != text {
+        return Err(UsageFileError::Malformed);
+    }
+    check_version(&value)?;
+    let [
+        version,
+        syrinx,
+        start,
+        end,
+        days,
+        about,
+        counts,
+        commands,
+        timings,
+        errors,
+    ] = expect_fields(value, &REPORT_KEYS)?;
+    let envelope = vec![
+        (REPORT_KEYS[0], expect_u32(version)?.to_string()),
+        (REPORT_KEYS[1], expect_text(syrinx)?),
+        (REPORT_KEYS[2], expect_date(start)?.to_string()),
+        (REPORT_KEYS[3], expect_date(end)?.to_string()),
+        (REPORT_KEYS[4], expect_u32(days)?.to_string()),
+        (REPORT_KEYS[5], expect_text(about)?),
+    ];
+    let feature_keys: Vec<&str> = Feature::ALL.iter().map(|feature| feature.key()).collect();
+    let error_keys: Vec<&str> = ErrorCategory::ALL.iter().map(|error| error.key()).collect();
+    let groups = vec![
+        count_group(REPORT_KEYS[6], counts, &feature_keys)?,
+        count_group(REPORT_KEYS[7], commands, &COMMAND_KEYS)?,
+        timing_group(REPORT_KEYS[8], timings)?,
+        count_group(REPORT_KEYS[9], errors, &error_keys)?,
+    ];
+    Ok(ReportTable {
+        envelope: envelope
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+        groups,
+    })
+}
+
+/// A group of single counts with exactly `keys`, in order.
+fn count_group(group: &str, value: Value, keys: &[&str]) -> Result<ReportGroup, UsageFileError> {
+    let rows = keys
+        .iter()
+        .zip(expect_counts(value, keys)?)
+        .map(|(key, count)| ReportRow {
+            key: (*key).to_owned(),
+            value: ReportValue::Count(count.into()),
+        })
+        .collect();
+    Ok(ReportGroup {
+        key: group.to_owned(),
+        rows,
+    })
+}
+
+/// The timings group: every histogram with exactly its scale's buckets.
+fn timing_group(group: &str, value: Value) -> Result<ReportGroup, UsageFileError> {
+    let timing_keys: Vec<&str> = Timing::ALL.iter().map(|timing| timing.key()).collect();
+    let mut rows = Vec::with_capacity(Timing::ALL.len());
+    for (timing, buckets) in Timing::ALL.iter().zip(expect_objects(value, &timing_keys)?) {
+        let names = timing.scale().bucket_names();
+        let buckets = names
+            .iter()
+            .zip(expect_counts(buckets, names)?)
+            .map(|(name, count)| ((*name).to_owned(), u64::from(count)))
+            .collect();
+        rows.push(ReportRow {
+            key: timing.key().to_owned(),
+            value: ReportValue::Buckets(buckets),
+        });
+    }
+    Ok(ReportGroup {
+        key: group.to_owned(),
+        rows,
+    })
 }
 
 fn object(fields: Vec<(&str, Value)>) -> Value {
