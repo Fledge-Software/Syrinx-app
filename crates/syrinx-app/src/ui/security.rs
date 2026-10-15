@@ -11,28 +11,35 @@ impl BrowserView {
         self.connections.insert(id, state);
     }
 
-    pub(super) fn connection_display(&self) -> Div {
-        let state = self
-            .shown
+    /// The shown page's connection, read aloud with the address field.
+    pub(super) fn connection_description(&self) -> String {
+        let (scheme, status) = label(self.shown_connection());
+        format!("{scheme} · {status}")
+    }
+
+    /// A mark in the address field only when there is something to notice: a blocked
+    /// certificate or an unencrypted page. HTTPS gets no mark, so nothing reads as "safe".
+    pub(super) fn connection_mark(&self) -> Option<Div> {
+        let state = self.shown_connection()?;
+        let (glyph, color) = match (state.status, state.scheme) {
+            (ConnectionStatus::CertificateRejected, _) => ("\u{E7BA}", 0xffb4ab),
+            (_, ConnectionScheme::Http) => ("\u{E946}", 0xb4b7bf),
+            _ => return None,
+        };
+        Some(
+            div()
+                .flex_none()
+                .font_family(crate::controls::glyph::FONT)
+                .text_size(px(11.))
+                .text_color(rgb(color))
+                .child(glyph),
+        )
+    }
+
+    fn shown_connection(&self) -> Option<ConnectionState> {
+        self.shown
             .and_then(|id| self.connections.get(&id.get()))
-            .copied();
-        let (scheme, status) = label(state);
-        div()
-            .flex()
-            .flex_col()
-            .text_xs()
-            .max_w(px(180.))
-            .flex_shrink_0()
-            .text_color(rgb(
-                if state.is_some_and(|state| state.status == ConnectionStatus::CertificateRejected)
-                {
-                    0xffb4ab
-                } else {
-                    0xb4b7bf
-                },
-            ))
-            .child(scheme)
-            .child(status)
+            .copied()
     }
 }
 

@@ -60,6 +60,7 @@ impl BrowserView {
             return;
         }
         self.retire_peek(cx);
+        self.close_menu(cx);
         if self.closing || self.session_revision.is_none() {
             return;
         }
@@ -264,6 +265,33 @@ impl BrowserView {
                 .is_err()
             {
                 eprintln!("The palette was shown after its browser was removed.");
+            }
+        })
+        .detach();
+    }
+
+    /// Keeps an open palette centred over the main window when the window moves or resizes.
+    pub(super) fn follow_palette(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.open_entry() else {
+            return;
+        };
+        if !self.palette_entry_live(cx) {
+            return;
+        }
+        let rect = palette_rect(window.bounds(), window.scale_factor());
+        // Moved from a task for the same reason as `show_palette`.
+        cx.spawn(async move |view, cx| {
+            let Ok(Some(hwnd)) = view.update(cx, |view, cx| view.entry_to_show(entry, cx)) else {
+                return;
+            };
+            if let Err(error) = show_overlay(hwnd, rect) {
+                let reported = view.update(cx, |view, cx| {
+                    view.message = format!("Cannot move the command palette: {error}");
+                    cx.notify();
+                });
+                if reported.is_err() {
+                    eprintln!("The palette moved after its browser was removed.");
+                }
             }
         })
         .detach();

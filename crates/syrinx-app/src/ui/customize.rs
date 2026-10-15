@@ -115,6 +115,21 @@ impl BrowserView {
             .child(panel)
     }
 
+    /// The sidebar's Appearance button: the Customize panel lives on Home, so another page
+    /// opens a new Home tab with the panel open.
+    pub(super) fn open_appearance(&mut self) {
+        if self.home.customize_open && self.home_showing() {
+            self.close_customize();
+            return;
+        }
+        if !self.home_showing() {
+            self.command(SessionCommand::NewTab {
+                address: "about:blank".to_owned(),
+            });
+        }
+        self.home.customize_open = true;
+    }
+
     /// Closes the panel, dropping an unfinished custom accent and the permissions view.
     pub(super) fn close_customize(&mut self) {
         self.home.customize_open = false;

@@ -21,7 +21,9 @@ the files it names disagree with this prompt, the files win.
 
 Syrinx (called Atlas until 2026-10-12) is a browser-first workspace app for
 Windows 11. Plan 1 (engine, browser core and palette) is still open, so all
-work below comes from it; plugins (Plan 2) start only once Plan 1 closes. The
+work below comes from it; plugins (Plan 2) start only once Plan 1 closes. When
+Plan 2 starts, read `docs/prompts/home-layout-and-widgets.md` first: the
+owner's queued request for a customisable Home page and widgets. The
 repository is on GitHub at `Fledge-Software/Syrinx-app`.
 
 ### 1. Read before anything else

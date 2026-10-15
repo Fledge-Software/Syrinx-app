@@ -157,16 +157,21 @@ pub(super) struct DraggedRow {
 
 impl Render for DraggedRow {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        use syrinx_ui::metrics::{radius, space, text};
-        div()
-            .px(px(space::M))
-            .py(px(space::XS))
-            .rounded(px(radius::CONTROL))
-            .bg(theme::preview_row_selected())
-            .text_color(theme::text())
-            .text_size(px(text::BODY))
-            .child(self.title.clone())
+        drag_chip(&self.title)
     }
+}
+
+/// The small label that follows the pointer while a row, tab or plugin is dragged.
+pub(super) fn drag_chip(title: &str) -> gpui::Div {
+    use syrinx_ui::metrics::{radius, space, text};
+    div()
+        .px(px(space::M))
+        .py(px(space::XS))
+        .rounded(px(radius::CONTROL))
+        .bg(theme::preview_row_selected())
+        .text_color(theme::text())
+        .text_size(px(text::BODY))
+        .child(title.to_owned())
 }
 
 impl BrowserView {

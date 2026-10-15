@@ -67,6 +67,11 @@ boundaries below; later changes to those boundaries require owner review.
 
 ## Plan 2 — plugin runtime and Fledge demonstration
 
+**Queued owner request (2026-10-14):** a customisable Home page with built-in
+and plugin widgets waits for this plan. Read
+[`docs/prompts/home-layout-and-widgets.md`](../prompts/home-layout-and-widgets.md)
+before starting Plan 2; it is not yet one of the approved slices below.
+
 **Entry gate:** Plan 1 must deliver its generic model, command registry,
 palette, storage, both search tiers, themes, shell and local gate, and pass its
 GPUI idle and browser exits. This slice map is approved; the three preview

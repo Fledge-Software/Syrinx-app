@@ -3,7 +3,7 @@
 use syrinx_platform::browser::PageBounds;
 use syrinx_ui::metrics::chrome::CARD_INSET;
 
-use super::{FOOTER_HEIGHT, TITLE_BAR_HEIGHT, TOOLBAR_HEIGHT};
+use super::{FOOTER_HEIGHT, TITLE_BAR_HEIGHT};
 
 /// The window's logical size and scale, and the width the sidebar reserves right now.
 #[derive(Clone, Copy, Debug)]
@@ -39,14 +39,9 @@ pub(super) fn edge_strip(sidebar_width: f32) -> (f32, f32) {
     (start, start + CARD_INSET)
 }
 
-/// The title bar holds navigation while hidden; visible states keep the existing toolbar below it.
-pub(super) fn chrome_height(sidebar_width: f32) -> f32 {
+/// The title bar holds navigation in every sidebar state, so it is the only chrome above the card.
+pub(super) fn chrome_height() -> f32 {
     TITLE_BAR_HEIGHT
-        + if sidebar_width > 0. {
-            TOOLBAR_HEIGHT
-        } else {
-            0.
-        }
 }
 
 /// The title bar pads left by 12 px and has three square Windows controls.
@@ -74,7 +69,7 @@ pub(super) fn page_card_bounds(frame: CardFrame) -> PageBounds {
 
     // Inset the card from the sidebar's strip, the toolbar and bars, the footer and the right.
     let (_, left) = edge_strip(frame.sidebar_width);
-    let top = chrome_height(frame.sidebar_width) + frame.bar_heights() + CARD_INSET;
+    let top = chrome_height() + frame.bar_heights() + CARD_INSET;
     let right = finite_or_zero(frame.viewport_width) - CARD_INSET;
     let bottom = finite_or_zero(frame.viewport_height) - FOOTER_HEIGHT - CARD_INSET;
 
@@ -192,14 +187,10 @@ mod tests {
             let left = state.reserved_width() + CARD_INSET;
             assert_eq!(bounds.x, left as i32, "{}", state.name());
             assert_eq!(bounds.width, (1280. - CARD_INSET - left) as u32);
-            assert_eq!(
-                bounds.y,
-                (chrome_height(state.reserved_width()) + CARD_INSET) as i32
-            );
+            assert_eq!(bounds.y, (chrome_height() + CARD_INSET) as i32);
             assert_eq!(
                 bounds.height,
-                (800. - chrome_height(state.reserved_width()) - FOOTER_HEIGHT - 2. * CARD_INSET)
-                    as u32
+                (800. - chrome_height() - FOOTER_HEIGHT - 2. * CARD_INSET) as u32
             );
         }
     }
@@ -222,7 +213,7 @@ mod tests {
             for state in SidebarWidthState::ALL {
                 let frame = frame(state.reserved_width(), scale);
                 let card = page_card_bounds(frame);
-                let controls_bottom = (chrome_height(frame.sidebar_width) * scale).round() as i32;
+                let controls_bottom = (chrome_height() * scale).round() as i32;
                 assert!(card.y >= controls_bottom + (CARD_INSET * scale).round() as i32);
             }
             let hidden = page_card_bounds(frame(0., scale));
@@ -255,7 +246,8 @@ mod tests {
         let logical = page_card_bounds(frame(52., 1.));
         let scaled = page_card_bounds(frame(52., 1.5));
         assert_eq!(scaled.x, 90);
-        assert_eq!(scaled.y, 138);
+        // One 36 px title bar and the 8 px inset, at 150%.
+        assert_eq!(scaled.y, 66);
         assert_eq!(scaled.width, (logical.width as f32 * 1.5).round() as u32);
         assert_eq!(scaled.height, (logical.height as f32 * 1.5).round() as u32);
     }

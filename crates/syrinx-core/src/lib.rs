@@ -35,7 +35,7 @@ pub use commands::{
 };
 pub use destinations::{
     BuiltInPlugin, Destination, DestinationEdit, DestinationError, DestinationSurface,
-    DestinationTarget, MAX_DESTINATIONS, QuickDestinations,
+    DestinationTarget, MAX_DESTINATIONS, MAX_LABEL_CHARS, QuickDestinations,
 };
 
 pub use tabs::{
