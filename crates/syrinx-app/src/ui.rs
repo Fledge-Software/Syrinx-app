@@ -41,6 +41,7 @@ mod tile_editor;
 mod tiles;
 mod title_bar;
 mod updates;
+mod usage_preview;
 mod usage_report;
 
 #[cfg(test)]
@@ -127,8 +128,20 @@ actions!(
     ]
 );
 
-/// Binds each browser command's shortcut from the command registry, plus Ctrl K for the palette.
+/// Binds the window's keys and each part of the chrome's own.
 pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys(window_bindings());
+    crate::palette::bind_keys(cx);
+    import::bind_keys(cx);
+    essentials::bind_zoom_keys(cx);
+    find::bind_keys(cx);
+    folder_editor::bind_keys(cx);
+    panes::bind_keys(cx);
+}
+
+/// Each browser command's shortcut from the command registry, Ctrl K for the palette, the
+/// window-only keys, and last the close-tab key's meaning on a focused sidebar row (DW-63).
+fn window_bindings() -> Vec<KeyBinding> {
     let registry = CommandRegistry::browser();
     let mut bindings: Vec<KeyBinding> = registry
         .iter()
@@ -157,13 +170,24 @@ pub fn bind_keys(cx: &mut App) {
             Some("SyrinxFullscreen"),
         ),
     ]);
-    cx.bind_keys(bindings);
-    crate::palette::bind_keys(cx);
-    import::bind_keys(cx);
-    essentials::bind_zoom_keys(cx);
-    find::bind_keys(cx);
-    folder_editor::bind_keys(cx);
-    panes::bind_keys(cx);
+    // After the window's close-tab binding, so a focused row's meaning wins (see the helper).
+    if let Some(close) = browser_keystroke(&registry, BrowserAction::CloseTab) {
+        bindings.push(folder_editor::close_row_page_binding(close));
+    }
+    bindings
+}
+
+/// The registry's shortcut for one browser action, if it has one.
+fn browser_keystroke(registry: &CommandRegistry, wanted: BrowserAction) -> Option<&str> {
+    registry
+        .iter()
+        .find_map(|(_, command)| match command.action {
+            CommandAction::Browser(action) if action == wanted => command
+                .shortcut
+                .as_ref()
+                .map(|shortcut| shortcut.keystroke()),
+            _ => None,
+        })
 }
 
 fn key_binding(action: BrowserAction, keystroke: &str) -> KeyBinding {
@@ -740,6 +764,11 @@ impl BrowserView {
             SessionEvent::Usage { status, problem } => {
                 self.usage_status_received(status, problem);
             }
+            SessionEvent::UsageReport {
+                request_id,
+                period,
+                result,
+            } => self.usage_report_received(request_id, period, result),
             SessionEvent::Stopped => {
                 self.update_snapshot_lost();
                 self.abandon_import_write();
@@ -1815,7 +1844,7 @@ impl Render for BrowserView {
         } else if let Some(card) = self.crashed_page(cx) {
             card
         } else if self.shown.is_none() {
-            self.home_page(cx)
+            self.home_page(window, cx)
         } else {
             div().flex_1().h_full()
         };
@@ -1950,7 +1979,7 @@ impl Render for BrowserView {
                 gpui::Role::Status,
             ))
             .children(self.bar_pane(self.permission_bar(cx), Pane::Permission, gpui::Role::Alert))
-            .children(self.bar_pane(self.find_bar(cx), Pane::Find, gpui::Role::Search))
+            .children(self.bar_pane(self.find_bar(window, cx), Pane::Find, gpui::Role::Search))
             .child(
                 div()
                     .flex_1()
@@ -2268,5 +2297,58 @@ mod palette_shortcut_tests {
             refocused,
             [BrowserShortcut::Address, BrowserShortcut::Palette]
         );
+    }
+}
+
+#[cfg(test)]
+mod row_close_key_tests {
+    use gpui::{Action, KeyContext, Keymap, Keystroke};
+
+    use super::*;
+
+    /// The actions Ctrl W runs, in the order GPUI tries them, under these key contexts.
+    fn ctrl_w(contexts: &[&str]) -> Vec<Box<dyn Action>> {
+        let keymap = Keymap::new(window_bindings());
+        let contexts: Vec<KeyContext> = contexts
+            .iter()
+            .map(|context| KeyContext::parse(context).expect("synthetic key context"))
+            .collect();
+        let keystroke = Keystroke::parse("ctrl-w").expect("ctrl-w parses");
+        let (bindings, pending) = keymap.bindings_for_input(&[keystroke], &contexts);
+        assert!(!pending, "no longer binding starts with Ctrl W");
+        bindings
+            .iter()
+            .map(|binding| binding.action().boxed_clone())
+            .collect()
+    }
+
+    #[test]
+    fn ctrl_w_on_a_focused_row_closes_the_rows_page_first() {
+        for window in ["Syrinx", "SyrinxPeek"] {
+            let actions = ctrl_w(&[window, folder_editor::ROW_CONTEXT]);
+            assert!(
+                actions[0].partial_eq(&folder_editor::CloseRowPage),
+                "{window}: {actions:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_w_without_a_focused_row_closes_the_active_page() {
+        // The page path (WebView2's accelerator) never reaches the keymap; these are the
+        // chrome's own keys when the window root or another control has focus.
+        for contexts in [&["Syrinx"][..], &["Syrinx", "SyrinxFind"], &[]] {
+            let actions = ctrl_w(contexts);
+            assert!(
+                actions[0].partial_eq(&CloseTab),
+                "{contexts:?}: {actions:?}"
+            );
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| action.partial_eq(&folder_editor::CloseRowPage)),
+                "{contexts:?}"
+            );
+        }
     }
 }

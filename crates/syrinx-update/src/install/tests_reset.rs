@@ -12,7 +12,7 @@ use super::*;
 const DAMAGED: &[u8] = b"not a state record\n";
 
 /// Write synthetic damage over `Updates\state`.
-fn damage_state(sandbox: &Sandbox) {
+pub(super) fn damage_state(sandbox: &Sandbox) {
     fs::create_dir_all(sandbox.layout.updates()).expect("updates");
     fs::write(sandbox.layout.state(), DAMAGED).expect("damaged state");
 }

@@ -109,12 +109,11 @@ independent review, then a `--no-ff` merge and the gate.
    field, as focused (`docs/p1-36-accessibility.md`, "DW-60"). Add a DW row
    first, then apply DW-60's container pattern to each field and rerun the
    UI Automation probe.
-4. **DW-63:** Ctrl W on a focused sidebar row closes that row's live page
-   (unloads a saved page, closes an open tab), bound in the row's key
-   context, plus a per-row right-click menu with Unload page and the row's
-   other actions, each showing its key (owner, 2026-10-14; the DW-63 row
-   and `docs/decisions.md` have the details). Rerun P1-36's UI Automation
-   probe if roles, ids or focus handles change.
+4. **DW-63 right-click menu:** Ctrl W on a focused row is built; the
+   owner also asked for a per-row right-click menu with Unload page and
+   the row's other actions, each showing its key (owner, 2026-10-14; the
+   DW-63 row and `docs/decisions.md` have the details). Rerun P1-36's UI
+   Automation probe if roles, ids or focus handles change.
 5. **P1-39d workflow signing (DW-30):** the owner decided on 2026-10-14
    that `.github/workflows/weekly-release.yml` signs each release with a key
    held as an encrypted GitHub Actions secret, re-signs `latest` weekly and

@@ -10,6 +10,92 @@ on 2026-10-12, it was called Atlas, so older entries say Atlas.
 Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 `docs/plans/Atlas … .md` is now `docs/plans/Syrinx … .md`.
 
+## 2026-10-15
+
+- **Plugins are built from a template repository, each in its own
+  repository, as sandboxed WebAssembly loaded at run time; no plugin work
+  starts until Plan 1 closes (changes D17 and D34).** The owner wants a
+  plugin template made first, then Forge, Notes and Fledge each built from
+  it, the way Obsidian's sample-plugin template and Zed's extensions work.
+  Decided in chat:
+  - *Repositories.* A template repository on GitHub (marked as a template)
+    and one repository per plugin made from it, rather than the
+    `crates/plugin-*` workspace crates the plan and `AGENTS.md` describe.
+    The owner creates the repositories (operator work); agents prepare
+    their contents. Rejected: a template folder inside this repository.
+  - *Order.* After Plan 1 closes: the plugin interface and host first, then
+    the template, then each plugin. Rejected: starting the interface and
+    template now, ahead of Plan 1.
+  - *Form.* Each plugin is Rust compiled to WebAssembly (WASM) and run by
+    Syrinx in a sandbox (the Zed model). It reaches files, git, processes
+    and the network only through host functions its manifest asks for and
+    the owner grants (the Chrome extension model), and draws its interface
+    in HTML and JavaScript inside Syrinx's own local web view, as Notes and
+    Forge already planned for CodeMirror (D28). Rust state stays in the
+    plugin's WASM module and Syrinx's core, keeping S3. Rejected: compiling
+    built-ins into `syrinx.exe` (every plugin release would need a Syrinx
+    release, which defeats separate repositories), Obsidian-style
+    JavaScript plugins (no sandbox, state outside Rust) and native DLLs (no
+    sandbox, and Rust has no stable binary interface).
+  - *What changes.* D17's sandbox is no longer deferred until a third
+    party's plugin exists: the built-ins use it from the start. D34's
+    "`Plugin` trait" becomes a WASM interface definition (WIT) and host;
+    plan 2 stays thin otherwise. The owner chose this after being told the
+    cost: Forge needs the host to provide real capabilities
+    (terminals, git, language servers, tree-sitter), as Zed's host does.
+  - *Before building.* A research note compares the WASM runtime and
+    interface choices (for example wasmtime and the component model,
+    licences and maintenance, host-capability design, start-up and memory
+    cost against D6) and is reviewed with the owner before Plan 2's slice
+    breakdown. `AGENTS.md`'s layout and plugin guardrails are updated in
+    that slice breakdown, not before.
+
+- **Each platform's build uses that platform's own web engine: WebView2 on
+  Windows, WKWebView on macOS. Syrinx bundles no Chromium.** The owner
+  asked, in chat, for Disney+, Hulu, YouTube and Google's services to work
+  without shipping Chromium, because a bundled Chromium (CEF, Electron) adds
+  hundreds of megabytes and a new release every four to eight weeks
+  (`docs/research/01-shell-and-engine.md`), and because the owner wants
+  Syrinx's own settings, not Chrome's. Both engines come with the operating
+  system, so Syrinx ships neither, and both play protected video through a
+  DRM module the system supplies: WebView2 carries Google's Widevine (L3,
+  observed in note 07, section 2.1, and Disney+ passed in Phase 0), and
+  WKWebView carries Apple's FairPlay. Both are driven from Rust through wry,
+  so the tab model, palette, store and plugins stay one code base; only
+  `syrinx-platform`'s engine and window code is written once per platform.
+  This does not change D2: v1 is still Windows 11 only, and the macOS build
+  starts after v1, behind a macOS spike run on a Mac by the owner. ⚠️
+  Unverified until that spike: that Disney+, Hulu, YouTube rentals and
+  Google sign-in accept a WKWebView browser that is not Safari. Rejected:
+  CEF on every platform (one engine, but bundled Chromium, Google's
+  embedded-framework sign-in block names CEF, and Widevine needs Google's
+  licence and signing); a Firefox (Gecko) fork (no embedding API, dropped on
+  2026-10-09). A possible third build for Widevine where neither system
+  engine provides it, chiefly Linux, is a proposal, not a decision:
+  `docs/proposals/widevine-third-build.md`.
+
+- **The usage switch's approved note is restored (AN-02).** With the report
+  preview, Save report… and Copy report built, Customize's Usage report note
+  again reads the approved sentence, "Nothing is sent anywhere. You can
+  view, export or delete the counts at any time.", replacing the shortened
+  note the owner chose on 2026-10-14 until AN-02 landed. This restores the
+  approved proposal (`docs/proposals/an-01-02-local-analytics.md`); it is
+  recorded here because the 2026-10-14 entry promised it.
+
+- **Ctrl W on a focused sidebar row closes that row's live page (DW-63).**
+  DW-61 took the rows' small buttons out of the Tab order, which left
+  "Unload page" (closing a saved page's live tab while keeping its saved
+  row) with no key: the owner had to press Enter to open the page, then
+  Ctrl W. The owner chose, in chat, Ctrl W while a row has focus: it unloads
+  a live saved page and closes an open tab, bound in the row's key context
+  so the window's Ctrl W is unchanged whenever the page or another control,
+  not a row, has focus. On a folder row or a saved page with no live tab it
+  does nothing rather than fall through and close the active page of a
+  different row (the agent's choice, approved in review). The rejected
+  alternative was Backspace, which no row uses but which does not mean
+  "close" anywhere else in Syrinx. See DW-63 in the plan's "Deferred work"
+  register and `docs/p1-36-accessibility.md`, "DW-63".
+
 ## 2026-10-14
 
 - **The weekly release workflow signs updates; the owner keeps no release
@@ -36,19 +122,13 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   the secret's value. Building this is an agent slice that changes the
   release workflow; see DW-30 in the plan's "Deferred work" register.
 
-- **Ctrl W on a focused sidebar row closes that row's live page (DW-63).**
-  DW-61 took the rows' small buttons out of the Tab order, which left
-  "Unload page" (closing a saved page's live tab while keeping its saved
-  row) with no key: the owner had to press Enter to open the page, then
-  Ctrl W. The owner chose, in chat, Ctrl W while a row has focus: it unloads
-  a saved page and closes an open tab, bound in the row's key context so the
-  window's Ctrl W is unchanged whenever the page, not a row, has focus. The
-  rejected alternative was Backspace, which no row uses but which does not
-  mean "close" anywhere else in Syrinx. The owner also asked for a per-row
-  right-click menu holding Unload page and the row's other actions, each
-  showing its key, so every row action is reachable by mouse as well;
-  today a right-click in the sidebar opens only the general ⋯ menu. See
-  DW-63 in the plan's "Deferred work" register.
+- **Sidebar rows get their own right-click menu (DW-63 follow-up).** When
+  choosing Ctrl W for DW-63 (recorded under 2026-10-15), the owner also
+  asked for a per-row right-click menu holding Unload page and the row's
+  other actions (Close tab, Remove saved page, Rename and Remove folder),
+  each showing its key, so every row action is reachable by mouse as well
+  as by keyboard. Today a right-click anywhere in the sidebar opens only
+  the general ⋯ menu. See DW-63 in the plan's "Deferred work" register.
 
 - **The focus ring shows only after keyboard input, decided by Syrinx's own
   keyboard-or-pointer flag (DW-62).** P1-36 drew the ring on any focus, so

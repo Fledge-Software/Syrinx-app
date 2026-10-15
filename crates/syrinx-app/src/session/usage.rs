@@ -1,4 +1,5 @@
-//! Keeps the usage counts in `usage.json` beside the database, only while counting is on (AN-01).
+//! Keeps the usage counts in `usage.json` beside the database, only while counting is on (AN-01),
+//! and builds the exact report text the owner previews and exports (AN-02).
 //!
 //! The file existing is what "on" means, unless the off marker says a switch-off is unfinished.
 
@@ -11,7 +12,7 @@ use std::{
 };
 
 use syrinx_core::usage::{
-    ErrorCategory, Feature, MAX_FILE_BYTES, UsageDate, UsageFile, UsageRecorder,
+    ErrorCategory, Feature, MAX_FILE_BYTES, ReportPeriod, UsageDate, UsageFile, UsageRecorder,
 };
 
 /// The profile folder holding the database, the deletion journal and the usage file.
@@ -48,6 +49,8 @@ pub enum UsageControl {
 pub struct UsageStatus {
     pub counting: bool,
     pub since: Option<UsageDate>,
+    /// A completed period is kept, so its report can be viewed.
+    pub previous: bool,
 }
 
 /// A usage file failure: a fixed category, never a path or the file's contents.
@@ -64,6 +67,10 @@ pub enum UsageError {
     Damaged,
     /// Today's date is unknown, so a period cannot start or close.
     Clock,
+    /// Counting is off, so there is no report to show or export.
+    Off,
+    /// No period has completed yet, so there is no previous report.
+    NoPrevious,
 }
 
 impl std::fmt::Display for UsageError {
@@ -81,6 +88,8 @@ impl std::fmt::Display for UsageError {
             }
             Self::Damaged => "Syrinx's usage counts were unreadable, so it started them afresh",
             Self::Clock => "Syrinx couldn't read today's date for its usage counts",
+            Self::Off => "Counting is off, so there is no usage report",
+            Self::NoPrevious => "There is no previous period yet; the first closes after 30 days",
         })
     }
 }
@@ -167,7 +176,34 @@ impl UsageCollector {
         UsageStatus {
             counting: self.file.is_some(),
             since: self.file.as_ref().map(|file| file.current.start),
+            previous: self
+                .file
+                .as_ref()
+                .is_some_and(|file| file.previous.is_some()),
         }
+    }
+
+    /// One period's exact report text, with every count recorded so far. Reads and writes no
+    /// file: the counts not yet saved are merged in memory and saved at the next write.
+    pub(super) fn report(
+        &mut self,
+        period: ReportPeriod,
+        today: Option<UsageDate>,
+    ) -> Result<String, UsageError> {
+        let file = self.file.as_mut().ok_or(UsageError::Off)?;
+        if let Some(counts) = self.recorder.take() {
+            file.add(&counts);
+            self.unwritten = true;
+        }
+        // The current period ends on the day of export; a completed one ends on its closing
+        // day, which the file keeps, so only the current one needs today's date.
+        let today = match today {
+            Some(today) => today,
+            None if period == ReportPeriod::Previous => file.current.last_counted,
+            None => return Err(UsageError::Clock),
+        };
+        file.report_text(period, today)
+            .ok_or(UsageError::NoPrevious)
     }
 
     /// Whether a write is waiting; nothing is waiting until a counter changes.

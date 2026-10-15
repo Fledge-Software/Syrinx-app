@@ -65,8 +65,9 @@ Known limits of that provider, each checked in source:
   `gpui-base-0.7.1/src/input/base/state.rs`, line 4464) has an id but no
   role, so GPUI logs "focused element has no accessibility node" and UI
   Automation reports the window as focused while the owner types. DW-60's
-  container gives the palette's field a focused node; the find bar, the
-  folder and tile forms and Customize's colour field still report the window.
+  container gives the palette's field a focused node, and since DW-70 the
+  find bar, the folder and tile forms and Customize's colour field have one
+  too (see "DW-70" below).
 - **Plain text is not in the tree.** Text without an id is not reported, so
   Syrinx names the parts a screen reader must read (the permission question,
   the runtime notice, the status line) with labelled nodes.
@@ -105,7 +106,9 @@ claims in a frame need one handle tracked by two elements in that frame.
   query handle is tracked by the `palette-query` container and by the
   field's own `input-state` element. That is still one claim, because
   `input-state` has no role and so no node to claim with; only the
-  container calls the node builder's `set_focus`.
+  container calls the node builder's `set_focus`. Since DW-70 every other
+  text field's handle is tracked the same way, by its `text_field`
+  container and its own `input-state`, with the same single claim.
 - **Active descendant has one claimant.** Since DW-60 only the palette's
   announced row claims it, at most one row per frame, and only while drawn
   (so it is always in the tree); GPUI ignores the claim unless the container
@@ -369,6 +372,86 @@ code path, but nothing drove it); nested folders and saved pages natively
 (covered by the unit tests in `syrinx_ui::tree_focus` and
 `ui/sidebar_tree.rs`); and anything a screen reader says (owner check 13).
 
+## DW-63: Ctrl W on a focused row
+
+Added on 2026-10-15 on `claude/dw-63-row-ctrl-w`, after the owner chose the
+key in chat that day ("Ctrl W on a focused row is my choice for DW-63"; the
+rejected alternative was Backspace). DW-61 took the rows' small buttons out
+of the Tab order, which left one row action without a key: unloading an open
+saved page, that is closing its live tab while keeping the saved row (the
+row's "×" button). Before this, a keyboard user pressed Enter to open the
+page and then the window's Ctrl W.
+
+**What Ctrl W does while a sidebar row has keyboard focus**, in the docked
+sidebar and in the peek alike (both draw their rows through `sidebar_at`,
+and the binding is attached to every row in `tree_item`):
+
+- On a saved page whose page is open, it unloads it, the same as the row's
+  "×" (Unload page) button. The saved row stays and keeps focus, so the
+  owner can carry on walking the tree.
+- On an open tab (a row that is not saved), it closes the tab, the same as
+  Delete there and the row's "×" (Close tab) button. The row disappears, and
+  DW-61's `plan_frame` moves focus to the tree's new Tab stop after the
+  frame, as it does after Delete.
+- On a saved page that is not open, or on a folder, it does nothing. The
+  key is still consumed by the row: it does not fall through to the window's
+  Ctrl W, because that closes the *active* page, which may belong to a
+  different row than the one the owner is looking at. Closing a page the
+  owner did not point at would be the surprising outcome.
+
+Whenever a row does not have focus (the page, the address field, the find
+bar, a button, or nothing), Ctrl W is unchanged and, in the main window,
+closes the active page; in the peek, a control that is not a row has no
+Ctrl W, as before.
+From a focused web page the key never reaches GPUI's keymap at all: it
+arrives through WebView2's `AcceleratorKeyPressed` handler as
+`BrowserShortcut::CloseTab` (`crates/syrinx-platform/src/browser/page.rs`),
+which this slice does not touch.
+
+**How it is built.** `CloseRowPage` is a row action in
+`ui/folder_editor.rs`, bound in `ROW_CONTEXT` to whatever keystroke the
+command registry gives the window's close-tab command, so the two cannot
+drift apart. The binding is added after the window's own (`window_bindings`
+in `ui.rs`): GPUI ranks a binding with no context as deep as the focused
+row's context, and between equals the later binding wins, so the order is
+what makes the row's meaning come first. GPUI then stops at the first
+action handled, and an action handler stops propagation unless it asks
+otherwise, which is why a row with nothing to close still swallows the key.
+The decision itself is the pure `row_close_target` in
+`ui/sidebar_tree.rs`, with a test for each row kind, and two keymap tests in
+`ui.rs` check the binding order with and without a focused row (docked and
+peek). The "Unload page" and "Close tab" buttons now announce their
+shortcut (`aria_keyshortcuts` "Control+W", and "Control+W Delete" for Close
+tab); no role, element id or focus handle changed. Keyboard use of the new
+key is not counted in the D39 usage report: adding a feature count changes
+the reviewed schema, so it is left for a separate decision.
+
+**Probe.** A UI Automation client of the same kind as above (script outside
+the repository) drove the `local` build, launched visibly on a fresh
+synthetic profile `target\dw-63-probe`, deleted afterwards. Unmodified keys
+were posted to Syrinx's window; Ctrl W, Ctrl D, Escape and the folder name
+went through `SendInput`, and only after checking that the foreground
+window belonged to Syrinx's own process id. Three blank tabs were opened
+with New tab, the active one saved with Ctrl D, and an empty folder made
+through More, New folder. Results:
+
+- Ctrl W on the focused, live saved row: the row stayed, lost its selected
+  state (another tab became active) and kept keyboard focus.
+- Ctrl W again on that now unloaded saved row: nothing changed (three rows,
+  the same active tab, focus on the row).
+- Down twice to a non-active open tab, then Ctrl W: the tab closed and
+  focus moved to the active row, as `plan_frame` intends.
+- Ctrl W on the focused folder row: nothing changed.
+- Ctrl W with the toolbar's Reload button focused: the active tab closed.
+- A synthetic page served from `127.0.0.1` and opened as a forwarded link,
+  with Win32 focus in the WebView2 child: Ctrl W closed it, through the
+  accelerator path.
+
+Syrinx stayed up throughout with UI Automation attached. **Not verified by
+an agent:** the peek popup (it needs a real pointer at the window's edge
+and a click to take the keys; the code path and the keymap test are shared
+with the docked sidebar) and what a screen reader says (check 15).
+
 ## DW-60: the palette announces its moving selection
 
 Added on 2026-10-14 on `claude/dw-60-palette-active-descendant`. Before it,
@@ -453,6 +536,97 @@ shows the field is still a Tab stop.
 Tab (a posted key cannot carry Shift), IME composition (no IME was used; the
 input handler path is unchanged), and the rows' "2 of 7", which UIA reported
 but no screen reader read.
+
+## DW-70: every text field has a focused node
+
+Added on 2026-10-14 on `claude/dw-70-accessible-text-fields`. DW-60 gave
+only the palette's query a node a screen reader hears as focused. The four
+other gpui-component text fields still reported the window while the owner
+typed in them, so NVDA would say nothing useful: the find bar, the folder
+name form (New folder and Rename folder in the sidebar), the tile form (Add
+or Change tile, on Home and in Favorites) and Customize's custom accent
+colour field.
+
+**What changed** (no GPUI, gpui-base or gpui-component change):
+
+- DW-60's container pattern now lives once, in
+  `crates/syrinx-app/src/text_field.rs`. `container` builds a role-bearing
+  `div` that tracks the field's own focus handle, as the palette's did: its
+  copy of the handle is no Tab stop, the shared `tab_stop` flag is restored
+  before the field draws, and the typed value is copied into the node only
+  while a UI Automation client is attached. `labelled` is that container
+  holding only the field, for a field that stands alone.
+- Each field's identity is a `FieldName` constant (element id, role, name):
+  `FIND_IN_PAGE` ("Find in page"), `FOLDER_NAME` ("Folder name"),
+  `TILE_NAME` ("Tile name"), `TILE_ADDRESS` ("Tile address") and
+  `CUSTOM_ACCENT` ("Custom accent colour") are text inputs, and
+  `PALETTE_QUERY` keeps DW-60's `palette-query` combo box. Three unit tests
+  pin that the ids differ (two sibling nodes with one id panic the tree
+  under debug assertions), that every field has a name, that only the
+  palette's is a combo box, and that the value is copied only while a
+  client listens.
+- The palette's `query_container` now calls the helper; its node is
+  unchanged. Moving it was low risk because the helper is the palette's
+  code, moved, with the role and name as parameters.
+- The render functions that draw these fields now take the window, because
+  `Window::is_a11y_active` decides whether to copy the value: `find_bar`,
+  `home_page`, `quick_access`, `customize_panel`, `accent_choices`,
+  `favorites`, `favorites_section`, `tile_editor` and `folder_editor_view`.
+- The folder field had no name of its own before (it fell back to its
+  placeholder, also "Folder name"); now it is named explicitly.
+- These six are every gpui-component text field in `syrinx-app` (a search
+  for `InputState`, `Input::new` and `TextInput` found no others, and no
+  other crate draws one). Draw any new field through the helper.
+
+The field's own frame node (`Role::TextInput` from gpui-component) is still
+in the tree, now as a child of its container, with the same name and value;
+only the container claims focus. Whether NVDA reads anything twice because
+of that nesting is part of owner check 14.
+
+**Probe.** DW-60's UI Automation client, extended to send Shift Tab (Shift
+needs a real key state, so Shift Tab went through `keybd_event` to the
+foreground window, and only after checking that it was Syrinx's, by process
+id; every other key was posted to Syrinx's window as before), drove the
+gate's `local` build launched visibly on fresh synthetic profiles
+`target\dw-70-uia-1` to `-3` (logs `target\dw-70-uia-probe-*.log`). Run 1
+found the sidebar's palette button renamed by the design work and stopped
+before the find bar; run 2 found that this preview opens only HTTP and
+HTTPS addresses, so a `file:` page never loaded; run 3 used
+`https://example.com/`. The same script then ran against an older build
+without DW-70 (copied from the `claude/design-polish` worktree, which this
+branch contains) on `target\dw-70-uia-baseline` and `-baseline-2`, to compare
+orders. Results, with DW-70:
+
+| Field | Focused node while typing | Tab, Shift Tab |
+| --- | --- | --- |
+| Custom accent colour | Edit "Custom accent colour", value `#FF612E`, then `ab`, then `a` after Backspace | Tab to "Reduce transparency", Shift Tab back to the field |
+| Tile name | Edit "Tile name", value `Example` | Tab through the Website, Forge, Notes and Fledge chips to "Tile address" |
+| Tile address | Edit "Tile address", value `example.test` | Shift Tab to the Fledge chip, then Notes |
+| Folder name | Edit "Folder name", value `Synthetic folder` | Tab to Save, Shift Tab back to the field; Esc closed the form |
+| Find in page | Edit "Find in page" on opening | see below |
+
+Without DW-70, UIA reported the window in every one of those fields, and
+every Tab and Shift Tab step that left a field landed on the same control
+as with DW-70, so the Tab order is unchanged. Syrinx stayed up with an empty
+stderr in all five runs, so the tree was built with debug assertions on and
+nothing claimed focus twice. Screenshots of the tile form and Customize
+showed the same layout as before.
+
+**The find bar's probe ran only partly.** Opening it put UIA focus on its
+node. After the first two characters ("al", 3 matches on example.com), the
+next ones never reached the field: GPUI focus had moved to the window root,
+which is what `page_took_focus` does when the page reports `GotFocus`, and
+Tab then started again at the toolbar. The build without DW-70 did exactly
+the same, with "al" and 3 matches, so this predates DW-70; it is recorded as
+**DW-71** in the plan's register. Because the probe posts characters rather
+than typing them, whether real typing also leaves the field is unproven.
+The page card also drew blank in these runs, the known separate issue of the
+chrome painting over the page.
+
+**Not verified by an agent.** What NVDA says in each field (owner check 14),
+IME composition (none was used; the input path is unchanged) and the
+peek's copy of the folder and Favorites tile forms (no agent opened them in
+the peek).
 
 ## Owner checks with NVDA
 
@@ -547,6 +721,30 @@ portable copy also works). Then record pass/fail for each:
     click the peek's "Syrinx" heading and Tab to the tree. The peek opens
     without taking activation; no agent has checked that a click gives it
     the keys, so record what happens.
+14. **Text fields (DW-70).** In each field, NVDA should read its name, that
+    it is editable and what it holds when focus arrives, and should echo
+    characters as you type: Customize, then the "+" custom accent
+    ("Custom accent colour", holding the current colour); Home's Add
+    shortcut ("Tile name", then Tab to "Tile address" past the four
+    chips); the sidebar's More menu, New folder ("Folder name"), and
+    Rename folder on an existing folder; and on a web page, the Page menu's
+    Find in page ("Find in page"). Shift Tab out of each field and back
+    must land on the field once, never twice. Record whether NVDA reads a
+    field's name twice (each field's own node sits inside its container),
+    and, in the find bar, whether your typing stays in the field after the
+    first matches appear (DW-71 found that it may not). Repeat the folder
+    form and the Favorites tile form in the peek if you use it.
+15. **Ctrl W on a focused row (DW-63).** With two saved pages, one open and
+    one not, a folder and an open tab that is not saved: F6 to the sidebar
+    and arrow to the open saved page, then Ctrl W. The page unloads, its row
+    stays and still has focus (NVDA reads it again or stays quiet, but Up
+    and Down still walk the tree). Arrow to the open tab and press Ctrl W:
+    it closes and focus moves to another row. On the unopened saved page
+    and on the folder, Ctrl W does nothing and the active page stays open.
+    Then click into a web page and press Ctrl W: the active page closes, as
+    before. With the sidebar hidden, repeat on a row in the peek. NVDA
+    should also read "Control+W" as the shortcut of the Unload page and
+    Close tab buttons, if it reads button shortcuts at all.
 
 ## Owner questions
 
@@ -568,7 +766,8 @@ portable copy also works). Then record pass/fail for each:
    built**, with a follow-up to give Unload page its own key on a focused
    row, recorded as DW-63 in the plan's "Deferred work" register (the key
    is still the owner's choice; the row proposes Ctrl W while a row has
-   focus).
+   focus). **The owner chose Ctrl W on 2026-10-15**, and it is built (see
+   "DW-63: Ctrl W on a focused row" above and check 15).
 3. **Palette announcements (DW-60).** Recommendation: change the palette so
    its list container owns focus and the query field (no GPUI patch), as a
    follow-up slice; the alternative is asking for a vendored GPUI change.
@@ -598,5 +797,14 @@ portable copy also works). Then record pass/fail for each:
 - `crates/syrinx-app/src/controls.rs` (new), `crates/syrinx-app/src/ui/panes.rs`
   (new) and the chrome files that now use them (`ui.rs`, `ui/*.rs`,
   `palette.rs`, `palette/render.rs`).
-- `docs/plans/Syrinx v1 — Plan.md` (DW-60 to DW-62),
+- `crates/syrinx-app/src/text_field.rs` (DW-70): the shared container and
+  each field's name, used by `palette.rs`, `ui/find.rs`,
+  `ui/folder_cards.rs`, `ui/tile_editor.rs` and `ui/customize.rs`, with the
+  window threaded through `ui.rs`, `ui/home.rs`, `ui/favorites.rs` and
+  `ui/sidebar_view.rs`.
+- DW-63: `crates/syrinx-app/src/ui/folder_editor.rs` (the action and its
+  binding), `ui.rs` (binding order and its tests), `ui/sidebar_tree.rs`
+  (`row_close_target`, `close_row_page`) and `ui/sidebar_view.rs`
+  (`tree_item`, the buttons' shortcuts).
+- `docs/plans/Syrinx v1 — Plan.md` (DW-60 to DW-63, DW-70, DW-71),
   `docs/implementation-status.md`, `docs/trapstoknow.md`.

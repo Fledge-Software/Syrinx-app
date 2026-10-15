@@ -1,6 +1,7 @@
 //! Customize's Usage report section and the window's own usage measurements (AN-01).
 //!
-//! Counting is off until the owner switches it on; turning it off deletes the counts.
+//! Counting is off until the owner switches it on; turning it off deletes the counts. The
+//! report view behind "View report" is `usage_preview.rs` (AN-02).
 
 use std::{
     sync::Arc,
@@ -12,22 +13,23 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 use syrinx_core::TabId;
-use syrinx_core::usage::{Feature, Timing, UsageRecorder};
+use syrinx_core::usage::{Feature, ReportPeriod, Timing, UsageRecorder};
 use syrinx_ui::Palette;
 use syrinx_ui::metrics::text;
 
 use super::BrowserView;
 use super::customize::switch_control;
 use super::updates::pill;
+use super::usage_preview::{ReportState, unavailable};
 use crate::controls::control;
 use crate::session::{SessionCommand, SessionError, UsageControl, UsageStatus};
 use crate::theme::rgba;
 
 /// The switch's approved wording (`docs/proposals/an-01-02-local-analytics.md`).
 const SWITCH_LABEL: &str = "Count how I use Syrinx, on this computer only";
-/// Shortened by the owner (2026-10-14) until AN-02 adds viewing and exporting; AN-02 restores
-/// "Nothing is sent anywhere. You can view, export or delete the counts at any time."
-const SWITCH_NOTE: &str = "Nothing is sent anywhere. You can delete the counts at any time.";
+/// The approved note, restored by AN-02 now that the counts can be viewed and exported.
+const SWITCH_NOTE: &str =
+    "Nothing is sent anywhere. You can view, export or delete the counts at any time.";
 
 /// The step that waits for the owner to confirm.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,6 +63,8 @@ pub(super) struct UsageState {
     /// Set once recorded, or when start-up waited on the owner and is not worth timing.
     startup_done: bool,
     switch: Option<PendingSwitch>,
+    /// The report view behind "View report" (AN-02).
+    pub(super) report: ReportState,
 }
 
 impl UsageState {
@@ -75,7 +79,26 @@ impl UsageState {
             session_loaded: false,
             startup_done: false,
             switch: None,
+            report: ReportState::default(),
         }
+    }
+
+    /// Counting is on, as the session last reported.
+    pub(super) fn counting(&self) -> bool {
+        self.status.is_some_and(|status| status.counting)
+    }
+
+    /// A completed period is kept, so its report can be viewed.
+    pub(super) fn has_previous(&self) -> bool {
+        self.status.is_some_and(|status| status.previous)
+    }
+
+    /// The session's answer at start-up and after each control: always the real status.
+    fn status_received(&mut self, status: UsageStatus, problem: Option<String>) {
+        self.confirming = None;
+        self.status = Some(status);
+        self.problem = problem;
+        self.report.counting_changed(status.counting);
     }
 
     /// Notes the first frame; recorded once the session says whether counting is on.
@@ -161,9 +184,8 @@ impl BrowserView {
         status: UsageStatus,
         problem: Option<SessionError>,
     ) {
-        self.usage.confirming = None;
-        self.usage.status = Some(status);
-        self.usage.problem = problem.map(|problem| problem.to_string());
+        self.usage
+            .status_received(status, problem.map(|problem| problem.to_string()));
         if let Some(problem) = &self.usage.problem {
             self.message = problem.clone();
         }
@@ -174,9 +196,9 @@ impl BrowserView {
         self.command(SessionCommand::Usage(control));
     }
 
-    /// Customize's Usage report section: the switch, the period and Reset.
+    /// Customize's Usage report section: the switch, the period, Reset and View report.
     pub(super) fn usage_section(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
-        let counting = self.usage.status.is_some_and(|status| status.counting);
+        let counting = self.usage.counting();
         let mut section = div()
             .pt(px(14.))
             .border_t_1()
@@ -195,6 +217,7 @@ impl BrowserView {
         if let Some(since) = self.usage.status.and_then(|status| status.since) {
             section = section.child(self.period_row(palette, &since.to_string(), cx));
         }
+        section = section.child(self.view_report_row(palette, counting, cx));
         if let Some(confirming) = self.usage.confirming {
             section = section.child(self.confirm_row(palette, confirming, cx));
         }
@@ -229,6 +252,26 @@ impl BrowserView {
                 cx.notify();
             },
         ))
+    }
+
+    /// "View report" opens the current period's report; with counting off there is none.
+    fn view_report_row(&self, palette: &Palette, counting: bool, cx: &mut Context<Self>) -> Div {
+        const NAME: &str = "View report";
+        let row = div().flex().items_center();
+        if !counting {
+            let button = pill(
+                palette,
+                unavailable(div().id("usage-view"), Role::Button, NAME),
+            );
+            return row.child(button.opacity(0.5).child(NAME));
+        }
+        let button = pill(palette, control(div().id("usage-view"), Role::Button, NAME))
+            .child(NAME)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.open_usage_report(ReportPeriod::Current);
+                cx.notify();
+            }));
+        row.child(button)
     }
 
     fn period_row(&self, palette: &Palette, since: &str, cx: &mut Context<Self>) -> Div {
@@ -391,6 +434,30 @@ mod tests {
         state.state_arrived(Some(tab(5)), true);
         state.page_shown(tab(5));
         assert_eq!(timed(&state), 0);
+    }
+
+    #[test]
+    fn turning_counting_off_closes_the_report_and_view_report_needs_counting() {
+        let mut state = counting();
+        let on = UsageStatus {
+            counting: true,
+            since: syrinx_core::usage::UsageDate::from_ymd(2026, 11, 2),
+            previous: false,
+        };
+        state.status_received(on, None);
+        assert!(state.counting() && !state.has_previous());
+        state.report.request(ReportPeriod::Current);
+        assert!(state.report.is_open());
+
+        let off = UsageStatus {
+            counting: false,
+            since: None,
+            previous: false,
+        };
+        state.status_received(off, None);
+        assert!(!state.counting());
+        assert!(!state.report.is_open());
+        assert!(state.report.exportable().is_none());
     }
 
     #[test]

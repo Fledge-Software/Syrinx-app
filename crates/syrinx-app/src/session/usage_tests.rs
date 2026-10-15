@@ -1,6 +1,7 @@
-//! Proves AN-01's collection through the session worker with synthetic profiles and values.
+//! Proves AN-01's collection and AN-02's report requests through the session worker, with
+//! synthetic profiles and values.
 
-use syrinx_core::usage::{Counts, UsageFile, report};
+use syrinx_core::usage::{Counts, ReportPeriod, UsageFile, read_report, report};
 
 use super::*;
 
@@ -127,7 +128,8 @@ fn counting_stays_off_and_writes_nothing_until_switched_on() {
         started_status(&mut events),
         UsageStatus {
             counting: false,
-            since: None
+            since: None,
+            previous: false,
         }
     );
     drive_worker(&handle, &mut events);
@@ -177,7 +179,8 @@ fn switching_on_counts_into_the_file_and_switching_off_deletes_it() {
         usage_status(&mut events),
         UsageStatus {
             counting: false,
-            since: None
+            since: None,
+            previous: false,
         }
     );
     assert!(
@@ -335,5 +338,131 @@ fn backups_never_carry_the_usage_file_and_a_restore_leaves_it_alone() {
     assert_eq!(counts.feature(Feature::AppStarted), 1);
     assert_eq!(counts.error(ErrorCategory::RecoveryOffered), 1);
     assert_eq!(counts.error(ErrorCategory::StorageOpen), 1);
+    fixture.cleanup();
+}
+
+/// The answer to a `UsageReport` request, skipping the tab states other commands publish.
+fn report_answer(
+    handle: &SessionHandle,
+    events: &mut UnboundedReceiver<SessionEvent>,
+    request: u64,
+    period: ReportPeriod,
+) -> Result<String, SessionError> {
+    send(
+        handle,
+        SessionCommand::UsageReport {
+            request_id: request,
+            period,
+        },
+    );
+    loop {
+        match next_any_event(events) {
+            SessionEvent::UsageReport {
+                request_id,
+                period: answered,
+                result,
+            } => {
+                assert_eq!((request_id, answered), (request, period));
+                return result;
+            }
+            SessionEvent::Preferences { .. } | SessionEvent::State(_) => continue,
+            event => panic!("expected a usage report, got {event:?}"),
+        }
+    }
+}
+
+/// Every file name in the profile folder, and the bytes of each usage file.
+fn usage_files_on_disk(fixture: &Fixture) -> (Vec<String>, Vec<Vec<u8>>) {
+    let mut names: Vec<String> = checked_io(fs::read_dir(&fixture.0))
+        .map(|entry| checked_io(entry).file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    let usage = names
+        .iter()
+        .filter(|name| name.starts_with("usage"))
+        .map(|name| checked_io(fs::read(fixture.0.join(name))))
+        .collect();
+    (names, usage)
+}
+
+#[test]
+fn a_report_request_answers_with_the_exact_counts_and_writes_nothing() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    started_status(&mut events);
+    send(&handle, SessionCommand::Usage(UsageControl::TurnOn));
+    let since = usage_status(&mut events)
+        .since
+        .expect("a period starts today");
+    drive_worker(&handle, &mut events);
+
+    let before = usage_files_on_disk(&fixture);
+    let text = report_answer(&handle, &mut events, 7, ReportPeriod::Current)
+        .expect("counting is on, so the current period reports");
+    assert_eq!(
+        usage_files_on_disk(&fixture),
+        before,
+        "a report writes nothing"
+    );
+
+    // Counts not yet saved are in the report, from the worker's own call sites.
+    let table = read_report(&text).expect("the worker sends a well-formed report");
+    assert_eq!(
+        table.envelope_value("period_start"),
+        Some(since.to_string().as_str())
+    );
+    assert!(text.contains("\"tab.created\": 2,"));
+    assert_no_private_fragment(&text);
+
+    // The merged counts are saved once at exit, not counted twice.
+    stop(handle, &mut events);
+    let file = read_usage(&fixture);
+    assert_eq!(file.current.counts.feature(Feature::TabCreated), 2);
+    fixture.cleanup();
+}
+
+#[test]
+fn there_is_nothing_to_export_while_off_or_before_a_period_closes() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    started_status(&mut events);
+    for period in [ReportPeriod::Current, ReportPeriod::Previous] {
+        assert_eq!(
+            report_answer(&handle, &mut events, 1, period),
+            Err(SessionError::Usage(UsageError::Off))
+        );
+    }
+    assert!(!usage_path(&fixture).exists());
+    send(&handle, SessionCommand::Usage(UsageControl::TurnOn));
+    assert!(!usage_status(&mut events).previous);
+    assert_eq!(
+        report_answer(&handle, &mut events, 2, ReportPeriod::Previous),
+        Err(SessionError::Usage(UsageError::NoPrevious))
+    );
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_completed_period_is_reported_until_the_day_it_closed() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    started_status(&mut events);
+    stop(handle, &mut events);
+    let today = local_today().expect("Windows reports today's date");
+    let mut seeded = UsageFile::begin(today.plus_days(-40));
+    seeded.start_day(today.plus_days(-5));
+    checked_io(fs::write(usage_path(&fixture), seeded.encode()));
+
+    let (handle, mut events) = fixture.start();
+    assert!(started_status(&mut events).previous);
+    let text = report_answer(&handle, &mut events, 3, ReportPeriod::Previous)
+        .expect("the seeded file has a completed period");
+    let table = read_report(&text).expect("the worker sends a well-formed report");
+    let start = today.plus_days(-40).to_string();
+    let end = today.plus_days(-5).to_string();
+    assert_eq!(table.envelope_value("period_start"), Some(start.as_str()));
+    assert_eq!(table.envelope_value("period_end"), Some(end.as_str()));
+    stop(handle, &mut events);
     fixture.cleanup();
 }
