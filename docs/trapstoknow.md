@@ -297,6 +297,22 @@ you found it in the commit message, not here.
   inspection. Source: continuation interactive-crash/desktop/visible launch
   records under `target/` (observed; not a breakpoint diagnosis).
 
+- **A visible test launch can pick up a real address.** A fresh profile
+  opens Home with the palette focused and takes the foreground; within
+  seconds of AN-02's launch the synthetic profile had opened a real address
+  that no agent sent. The owner's typing landing in the palette is the likely
+  route, a forwarded link the other; it was not diagnosed. Delete such a
+  profile after the check, crop captures to the area being checked, and never
+  keep a capture that shows a tab title or address. Source: AN-02's window
+  check (observed 2026-10-14).
+- **A UI Automation rectangle can lie outside the window.** A control
+  scrolled out of a GPUI panel keeps its real position, which can be above
+  the window; `SetCursorPos` clamps it to the screen edge and the click lands
+  in another program even though Syrinx was in the foreground. Before a
+  synthetic click, check that the point is inside Syrinx's window rectangle as
+  well as that Syrinx owns the foreground, and check the foreground again
+  before every capture. Source: AN-02's window check (observed 2026-10-14).
+
 - **A delayed Home snapshot reopens an already finished palette.** A new
   blank tab can reach the UI after its entry was submitted or dismissed.
   A boolean pending flag is insufficient: opening another saved page can

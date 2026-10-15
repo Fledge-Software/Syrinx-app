@@ -42,7 +42,10 @@ main checkout). Each later merge records its own gate in its row.
   interrupted one, keeps the recorded update outcome until a start's
   recovery succeeds, and has the update helper record a pre-swap failure
   before it releases the update lock (`docs/p1-38-update-format.md`,
-  "DW-69"); and DW-70,
+  "DW-69"); AN-02, the usage report's preview, Save report… and Copy
+  report with the approved switch note restored, which stays open until
+  the owner looks at the preview in the running app
+  (`docs/an-02-report-export.md`); and DW-70,
   which gives the find bar, folder name, tile name and address and custom
   accent fields a node that reports focus to screen readers through one
   shared container (`crates/syrinx-app/src/text_field.rs`), the palette
@@ -53,7 +56,7 @@ main checkout). Each later merge records its own gate in its row.
 - *P1-39d:* the owner reported P1-39 finished on 2026-10-14, with release
   bugs still being worked out; the pinned keys (DW-30) are not yet on main.
 - *Blocked:* P1-24 and P1-26 on P1-23's quiet-machine runs and engine choice
-  (which must also resolve the lru advisory); AN-02 on AN-01; DW-63 on the
+  (which must also resolve the lru advisory); DW-63 on the
   owner's key choice; DW-5 belongs to Plan 2; DW-67 waits until after P1-40.
 - *Owner checks and runs:* the quiet-machine runs (P1-23 first, then D48's
   for P1-05 and P1-06's idle and suspended-tab measurements), P1-33's three

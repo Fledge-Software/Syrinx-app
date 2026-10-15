@@ -36,6 +36,14 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   engine provides it, chiefly Linux, is a proposal, not a decision:
   `docs/proposals/widevine-third-build.md`.
 
+- **The usage switch's approved note is restored (AN-02).** With the report
+  preview, Save report… and Copy report built, Customize's Usage report note
+  again reads the approved sentence, "Nothing is sent anywhere. You can
+  view, export or delete the counts at any time.", replacing the shortened
+  note the owner chose on 2026-10-14 until AN-02 landed. This restores the
+  approved proposal (`docs/proposals/an-01-02-local-analytics.md`); it is
+  recorded here because the 2026-10-14 entry promised it.
+
 ## 2026-10-14
 
 - **The focus ring shows only after keyboard input, decided by Syrinx's own

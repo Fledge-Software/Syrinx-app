@@ -444,3 +444,167 @@ fn dates_are_calendar_days_written_as_iso_text() {
         assert_eq!(UsageDate::parse(refused), None, "{refused}");
     }
 }
+
+/// The `about` text exactly as the approved proposal prints it, copied rather than imported.
+const APPROVED_ABOUT: &str = "Aggregate counts from Syrinx, kept on the owner's computer. \
+                              Counters are totals for the period. Timing buckets are named by \
+                              their upper edge in milliseconds; gt_N counts everything above N. \
+                              No addresses, searches, text, paths or identifiers are recorded.";
+
+/// One `"key": value` line of a hand-written report, at `depth` levels of two spaces.
+fn expected_line(depth: usize, key: &str, value: &str, last: bool) -> String {
+    let comma = if last { "" } else { "," };
+    format!("{}\"{key}\": {value}{comma}\n", "  ".repeat(depth))
+}
+
+/// A group of single counts, each 1, as `every_field_recorded` leaves them.
+fn expected_count_group(name: &str, keys: &[&str], last: bool) -> String {
+    let mut text = format!("  \"{name}\": {{\n");
+    for (index, key) in keys.iter().enumerate() {
+        text += &expected_line(2, key, "1", index + 1 == keys.len());
+    }
+    text += if last { "  }\n" } else { "  },\n" };
+    text
+}
+
+/// Every timing recorded 3 ms once: `le_5` on the interaction scale, `le_100` at start-up.
+fn expected_timings() -> String {
+    let mut text = String::from("  \"timings\": {\n");
+    for (index, (timing, buckets)) in APPROVED_TIMINGS.iter().enumerate() {
+        text += &format!("    \"{timing}\": {{\n");
+        let startup = buckets.len() == STARTUP_BUCKETS.len();
+        for (position, bucket) in buckets.iter().enumerate() {
+            let hit = if startup { "le_100" } else { "le_5" };
+            let count = if *bucket == hit { "1" } else { "0" };
+            text += &expected_line(3, bucket, count, position + 1 == buckets.len());
+        }
+        let last = index + 1 == APPROVED_TIMINGS.len();
+        text += if last { "    }\n" } else { "    },\n" };
+    }
+    text += "  },\n";
+    text
+}
+
+/// A second, deliberately plain rendering of the synthetic report, written from the approved
+/// key lists, so AN-02's byte-exact check does not trust the renderer it checks.
+fn expected_report_text(start: &str, end: &str) -> String {
+    let mut text = String::from("{\n");
+    text += &expected_line(1, "schema_version", "1", false);
+    let version = format!("\"{}\"", env!("CARGO_PKG_VERSION"));
+    text += &expected_line(1, "syrinx_version", &version, false);
+    text += &expected_line(1, "period_start", &format!("\"{start}\""), false);
+    text += &expected_line(1, "period_end", &format!("\"{end}\""), false);
+    text += &expected_line(1, "days_used", "1", false);
+    text += &expected_line(1, "about", &format!("\"{APPROVED_ABOUT}\""), false);
+    text += &expected_count_group("counts", &APPROVED_FEATURES, false);
+    text += &expected_count_group("commands", &APPROVED_COMMANDS, false);
+    text += &expected_timings();
+    text += &expected_count_group("errors", &APPROVED_ERRORS, true);
+    text += "}\n";
+    text
+}
+
+/// The current period's report with every field used once, from 2026-11-02 to 2026-11-30.
+fn synthetic_report() -> String {
+    let recorder = every_field_recorded();
+    let mut file = UsageFile::begin(date(2026, 11, 2));
+    file.add(&recorder.take().expect("synthetic counts"));
+    file.report_text(ReportPeriod::Current, date(2026, 11, 30))
+        .expect("the current period always reports")
+}
+
+#[test]
+fn a_report_is_written_byte_for_byte_in_the_approved_format() {
+    let text = synthetic_report();
+    let bytes = text.as_bytes();
+
+    // Compared byte for byte, normalising nothing (the line-ending trap).
+    assert_eq!(text, expected_report_text("2026-11-02", "2026-11-30"));
+    assert_eq!(bytes.first(), Some(&b'{'), "no byte-order mark");
+    assert!(!bytes.contains(&b'\r') && !bytes.contains(&b'\t'));
+    assert!(text.ends_with("}\n") && !text.ends_with("\n\n"));
+    for line in text.lines() {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        assert_eq!(indent % 2, 0, "two-space indentation: {line:?}");
+    }
+}
+
+#[test]
+fn the_preview_table_holds_exactly_the_report_fields() {
+    let table = read_report(&synthetic_report()).expect("a written report reads back");
+
+    let envelope: Vec<(&str, &str)> = table
+        .envelope
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    assert_eq!(
+        envelope,
+        [
+            ("schema_version", "1"),
+            ("syrinx_version", env!("CARGO_PKG_VERSION")),
+            ("period_start", "2026-11-02"),
+            ("period_end", "2026-11-30"),
+            ("days_used", "1"),
+            ("about", APPROVED_ABOUT),
+        ]
+    );
+    // Every row of the table, as a key path, equals the approved schema and nothing more.
+    let mut paths = Vec::new();
+    for group in &table.groups {
+        for row in &group.rows {
+            match &row.value {
+                ReportValue::Count(count) => {
+                    assert_eq!(*count, 1);
+                    paths.push(format!("{}/{}", group.key, row.key));
+                }
+                ReportValue::Buckets(buckets) => paths.extend(
+                    buckets
+                        .iter()
+                        .map(|(bucket, _)| format!("{}/{}/{bucket}", group.key, row.key)),
+                ),
+            }
+        }
+    }
+    assert_eq!(paths, section_paths());
+}
+
+#[test]
+fn the_preview_refuses_any_text_but_the_exact_report() {
+    let text = synthetic_report();
+    let altered = [
+        text.replace('\n', "\r\n"),
+        format!("\u{feff}{text}"),
+        text.trim_end().to_owned(),
+        text.replacen("  \"schema_version\"", "    \"schema_version\"", 1),
+        text.replacen(
+            "\"days_used\": 1,",
+            "\"days_used\": 1,\n  \"user\": \"x\",",
+            1,
+        ),
+        text.replacen("    \"app.started\": 1,\n", "", 1),
+        text.replacen("\"schema_version\": 1", "\"schema_version\": 2", 1),
+    ];
+    for (index, variant) in altered.iter().enumerate() {
+        assert_ne!(variant, &text, "variant {index} changes the text");
+        assert!(read_report(variant).is_err(), "variant {index} was read");
+    }
+}
+
+#[test]
+fn a_completed_period_reports_until_the_day_it_closed() {
+    let start = date(2026, 10, 14);
+    let mut file = UsageFile::begin(start);
+    assert_eq!(
+        file.report_text(ReportPeriod::Previous, start.plus_days(3)),
+        None,
+        "nothing to export before a period has closed"
+    );
+    file.start_day(start.plus_days(31));
+    let text = file
+        .report_text(ReportPeriod::Previous, start.plus_days(40))
+        .expect("the first period closed");
+    let table = read_report(&text).expect("a written report reads back");
+    assert_eq!(table.envelope_value("period_start"), Some("2026-10-14"));
+    assert_eq!(table.envelope_value("period_end"), Some("2026-11-14"));
+}
