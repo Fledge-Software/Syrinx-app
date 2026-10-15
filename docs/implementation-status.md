@@ -52,12 +52,13 @@ main checkout). Each later merge records its own gate in its row.
   included; it waits only on the owner's NVDA check 14
   (`docs/p1-36-accessibility.md`, "DW-70"). Its probe found DW-71, the find
   bar losing keyboard focus after a few characters on a page with matches,
-  which predates DW-70 and is open under P1-13.
+  which predates DW-70 and is open under P1-13. DW-63 followed once the
+  owner chose Ctrl W: on a focused sidebar row it unloads a live saved page
+  or closes an open tab, and it waits only on the owner's check 15.
 - *P1-39d:* the owner reported P1-39 finished on 2026-10-14, with release
   bugs still being worked out; the pinned keys (DW-30) are not yet on main.
 - *Blocked:* P1-24 and P1-26 on P1-23's quiet-machine runs and engine choice
-  (which must also resolve the lru advisory); DW-63 on the
-  owner's key choice; DW-5 belongs to Plan 2; DW-67 waits until after P1-40.
+  (which must also resolve the lru advisory); DW-5 belongs to Plan 2; DW-67 waits until after P1-40.
 - *Owner checks and runs:* the quiet-machine runs (P1-23 first, then D48's
   for P1-05 and P1-06's idle and suspended-tab measurements), P1-33's three
   foreground palette runs, the manual window and NVDA checks in each row,
@@ -125,8 +126,8 @@ passed 1,014 tests after the branding review.
   timeouts (5 of 15 untraced runs) were diagnosed on 2026-10-13 as the old
   hidden-page suspension timer; see the P1-11 row.
 - *Deferred rows still open:* DW-5, DW-30, DW-60, DW-61 (wired; awaiting
-  only the owner's NVDA check), DW-62, DW-63 (an Unload page shortcut on
-  a focused sidebar row), DW-66 (a "Reset update records" action for an
+  only the owner's NVDA check), DW-62, DW-63 (Ctrl W on a focused sidebar
+  row; merged, awaiting only the owner's check 15), DW-66 (a "Reset update records" action for an
   unreadable `Updates\state`), DW-67 (the "Last checked" line), DW-70
   (merged; awaiting only the owner's NVDA check 14) and DW-71 (the find
   bar losing focus while typing), in the

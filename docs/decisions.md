@@ -44,6 +44,20 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   approved proposal (`docs/proposals/an-01-02-local-analytics.md`); it is
   recorded here because the 2026-10-14 entry promised it.
 
+- **Ctrl W on a focused sidebar row closes that row's live page (DW-63).**
+  DW-61 took the rows' small buttons out of the Tab order, which left
+  "Unload page" (closing a saved page's live tab while keeping its saved
+  row) with no key: the owner had to press Enter to open the page, then
+  Ctrl W. The owner chose, in chat, Ctrl W while a row has focus: it unloads
+  a live saved page and closes an open tab, bound in the row's key context
+  so the window's Ctrl W is unchanged whenever the page or another control,
+  not a row, has focus. On a folder row or a saved page with no live tab it
+  does nothing rather than fall through and close the active page of a
+  different row (the agent's choice, approved in review). The rejected
+  alternative was Backspace, which no row uses but which does not mean
+  "close" anywhere else in Syrinx. See DW-63 in the plan's "Deferred work"
+  register and `docs/p1-36-accessibility.md`, "DW-63".
+
 ## 2026-10-14
 
 - **The focus ring shows only after keyboard input, decided by Syrinx's own
