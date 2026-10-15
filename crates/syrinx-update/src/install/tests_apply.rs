@@ -396,6 +396,63 @@ fn the_helper_waits_for_syrinx_to_exit() {
 }
 
 #[test]
+fn restart_now_drops_an_older_outcome_a_failed_start_kept() {
+    // DW-69: an outcome about an earlier attempt must not be told while the newer version runs.
+    let (sandbox, keys) = staged_sandbox();
+    let older = Outcome {
+        result: UpdateResult::ApplyFailed,
+        attempted: Version::new(1, 3, 9),
+        current: OLD,
+    };
+    older.write(&sandbox.layout).expect("kept outcome");
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Restart),
+        &mut launcher,
+    );
+    assert_eq!(applied, Ok(Applied::Installed(NEW)));
+    assert!(!sandbox.layout.outcome().exists());
+    let recovery = recover(&sandbox.layout, NEW).expect("next start");
+    assert_eq!(recovery.outcome, None);
+}
+
+#[test]
+fn a_start_racing_the_helper_tells_its_outcome_exactly_once() {
+    // DW-69: the helper records a failure before releasing the lock, and a start removes only
+    // an outcome it read, so a start running alongside never deletes one unseen.
+    let (sandbox, keys) = staged_sandbox();
+    let stranger = std::collections::BTreeMap::from([("owner.txt".to_owned(), b"keep".to_vec())]);
+    write_tree(&sandbox.layout.previous(), &stranger);
+    let layout = sandbox.layout.clone();
+    let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watching = std::sync::Arc::clone(&finished);
+    let starts = thread::spawn(move || {
+        let mut told = 0;
+        while !watching.load(std::sync::atomic::Ordering::SeqCst) {
+            let recovery = recover(&layout, OLD).expect("a racing start");
+            told += usize::from(recovery.outcome.is_some());
+            // Leave the lock free often enough for the helper's wait to take it.
+            thread::sleep(Duration::from_millis(3));
+        }
+        told
+    });
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Quit),
+        &mut launcher,
+    );
+    finished.store(true, std::sync::atomic::Ordering::SeqCst);
+    let raced = starts.join().expect("racing starts");
+    assert!(
+        matches!(applied, Err(InstallError::UnexpectedEntry { .. })),
+        "{applied:?}"
+    );
+    let last = recover(&sandbox.layout, OLD).expect("a later start");
+    let told = raced + usize::from(last.outcome.is_some());
+    assert_eq!(told, 1, "told exactly once");
+}
+
+#[test]
 fn a_previous_folder_syrinx_did_not_make_stops_the_swap() {
     let (sandbox, keys) = staged_sandbox();
     let stranger = std::collections::BTreeMap::from([("owner.txt".to_owned(), b"keep".to_vec())]);

@@ -150,6 +150,25 @@ fn a_damaged_mark_beside_a_staged_update_never_hides_it() {
 }
 
 #[test]
+fn an_over_long_mark_without_pending_is_cleared_rather_than_stopping_every_start() {
+    let (sandbox, keys) = packaged();
+    stage(&sandbox, &keys.pinned).expect("stage");
+    fs::remove_file(sandbox.layout.pending()).expect("simulate a finished pending");
+    // Too long to be any mark Syrinx writes; it still marks `Syrinx.new` as Syrinx's own.
+    fs::write(sandbox.layout.staging_marker(), vec![b'x'; 4096]).expect("damaged mark");
+    let waiting = Outcome {
+        result: UpdateResult::ApplyFailed,
+        attempted: NEW,
+        current: OLD,
+    };
+    waiting.write(&sandbox.layout).expect("outcome");
+    let recovery = recover(&sandbox.layout, OLD).expect("start");
+    assert_eq!(recovery.outcome, Some(waiting), "not held back");
+    assert!(!recovery.discarded_for_unreadable_state);
+    assert_discard_finished(&sandbox);
+}
+
+#[test]
 fn a_discard_stopped_by_a_locked_file_keeps_the_copy_recognisable_until_it_finishes() {
     let (sandbox, keys) = packaged();
     stage(&sandbox, &keys.pinned).expect("stage");

@@ -1178,6 +1178,23 @@ leaves the outcome for the next start instead of losing it. This covers any
 helper outcome waiting when a DW-66 discard fails, too. A malformed outcome
 is still removed when it is refused, so it fails only one start.
 
+Keeping an outcome across starts needs two more rules, both from the second
+review. A start removes only an outcome it read, and the helper now records
+a failure before the swap (`record_unfinished`) while it still holds the
+update lock, so a start, which needs that lock, can never remove an outcome
+it did not see; only a failed wait for the lock is recorded without it, and
+then Syrinx itself holds the lock. And when the helper finishes without
+telling the owner (Restart now with a clean start, `finish` with
+`tell_owner` false), it removes any outcome still waiting, so a kept notice
+about an earlier attempt is never shown while a newer version runs.
+
+The staging mark is read with a 64-byte limit. Without `pending`, a mark
+longer than that cannot be the `discard unreadable-state` mark, so that
+refusal is mapped deliberately to "not this mark" and `clear_unfinished`
+removes it like any other mark, as it did before DW-69; a mark that cannot
+be opened at all (for example, access denied) still stops the start with an
+error.
+
 A file Windows holds open is the other way a removal stops part way. Program
 folders are now removed with `syrinx-package.json` last
 (`remove_program_folder`, `install/files.rs`), so a half-removed folder keeps
@@ -1209,8 +1226,11 @@ outcome through the failed start, and finishes and tells both once the file
 is released. `tests_apply.rs` adds the helper's refused copy stopped at
 `DiscardBegun`, and one whose removal is stopped by a held file in both the
 helper and the next start, whose `verification_failed` outcome reaches the
-first start that succeeds. Each shows the installed `Programs\Syrinx`
-untouched. The existing guard that an unmarked installer copy is kept also
+first start that succeeds; Restart now removing an older kept outcome; and
+starts running alongside a helper that fails before the swap, which tell
+its outcome exactly once. `tests_discard.rs` also shows an over-long mark
+with no `pending` cleared, with a waiting outcome told, rather than stopping
+every start. Each shows the installed `Programs\Syrinx` untouched. The existing guard that an unmarked installer copy is kept also
 gained a case after a finished discard
 (`a_finished_discard_leaves_no_mark_to_remove_an_installer_copy`,
 `tests.rs`).
