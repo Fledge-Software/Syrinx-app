@@ -1,9 +1,12 @@
-//! Places the page web view inside the card beside the sidebar, in physical pixels.
+//! Places the page web view inside the card beside the sidebar, in physical pixels, and keeps
+//! the chrome's fill off the card while a page shows there.
 
+use gpui::{Bounds, ContentMask, IntoElement, Styled, canvas, fill, point, px, size};
 use syrinx_platform::browser::PageBounds;
 use syrinx_ui::metrics::chrome::CARD_INSET;
 
 use super::{FOOTER_HEIGHT, TITLE_BAR_HEIGHT};
+use crate::theme;
 
 /// The window's logical size and scale, and the width the sidebar reserves right now.
 #[derive(Clone, Copy, Debug)]
@@ -67,21 +70,79 @@ pub(super) fn page_card_bounds(frame: CardFrame) -> PageBounds {
         };
     }
 
-    // Inset the card from the sidebar's strip, the toolbar and bars, the footer and the right.
-    let (_, left) = edge_strip(frame.sidebar_width);
-    let top = chrome_height() + frame.bar_heights() + CARD_INSET;
-    let right = finite_or_zero(frame.viewport_width) - CARD_INSET;
-    let bottom = finite_or_zero(frame.viewport_height) - FOOTER_HEIGHT - CARD_INSET;
-
     // Round each edge rather than each size, so neighbouring edges never drift apart.
-    let (x, width) = physical_span(left, right, scale);
-    let (y, height) = physical_span(top, bottom, scale);
+    let card = card_edges(frame);
+    let (x, width) = physical_span(card.left, card.right, scale);
+    let (y, height) = physical_span(card.top, card.bottom, scale);
     PageBounds {
         x,
         y,
         width,
         height,
     }
+}
+
+/// The card's logical edges outside fullscreen, which the page web view fills.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct CardEdges {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+/// Inset the card from the sidebar's strip, the toolbar and bars, the footer and the right.
+pub(super) fn card_edges(frame: CardFrame) -> CardEdges {
+    let (_, left) = edge_strip(frame.sidebar_width);
+    CardEdges {
+        left,
+        top: chrome_height() + frame.bar_heights() + CARD_INSET,
+        right: finite_or_zero(frame.viewport_width) - CARD_INSET,
+        bottom: finite_or_zero(frame.viewport_height) - FOOTER_HEIGHT - CARD_INSET,
+    }
+}
+
+/// The window fill behind all chrome, leaving `card` unpainted.
+///
+/// GPUI composites above the page's child window (`docs/trapstoknow.md`), so any pixel painted
+/// over the card hides the page. The fill is one quad clipped to each strip around the card,
+/// so Tint's gradient stays continuous across them.
+pub(super) fn window_fill_layer(card: Option<CardEdges>) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            let background = theme::window_fill();
+            for strip in fill_strips(bounds, card) {
+                window.with_content_mask(Some(ContentMask { bounds: strip }), |window| {
+                    window.paint_quad(fill(bounds, background));
+                });
+            }
+        },
+    )
+    .absolute()
+    .size_full()
+}
+
+/// The whole window, or the four strips around `card` within it.
+fn fill_strips(window: Bounds<gpui::Pixels>, card: Option<CardEdges>) -> Vec<Bounds<gpui::Pixels>> {
+    let Some(card) = card else {
+        return vec![window];
+    };
+    let (left, top) = (f32::from(window.origin.x), f32::from(window.origin.y));
+    let right = left + f32::from(window.size.width);
+    let bottom = top + f32::from(window.size.height);
+    let strip = |x0: f32, y0: f32, x1: f32, y1: f32| {
+        Bounds::new(
+            point(px(x0), px(y0)),
+            size(px((x1 - x0).max(0.)), px((y1 - y0).max(0.))),
+        )
+    };
+    vec![
+        strip(left, top, right, card.top),
+        strip(left, card.bottom, right, bottom),
+        strip(left, card.top, card.left, card.bottom),
+        strip(card.right, card.top, right, card.bottom),
+    ]
 }
 
 /// A span's physical start and length, never shorter than one pixel.
@@ -121,6 +182,43 @@ mod tests {
             find_height: 0.,
             fullscreen: false,
             scale,
+        }
+    }
+
+    #[test]
+    fn the_fill_surrounds_the_card_and_never_covers_it() {
+        let window = Bounds::new(point(px(0.), px(0.)), size(px(1280.), px(800.)));
+        let card = card_edges(frame(264., 1.));
+        let strips = fill_strips(window, Some(card));
+        let area = |bounds: &Bounds<gpui::Pixels>| {
+            f32::from(bounds.size.width) * f32::from(bounds.size.height)
+        };
+        let card_area = (card.right - card.left) * (card.bottom - card.top);
+        let painted: f32 = strips.iter().map(area).sum();
+        assert_eq!(painted + card_area, 1280. * 800.);
+        let inside = point(
+            px((card.left + card.right) / 2.),
+            px((card.top + card.bottom) / 2.),
+        );
+        assert!(strips.iter().all(|strip| !strip.contains(&inside)));
+        assert_eq!(fill_strips(window, None), vec![window]);
+    }
+
+    #[test]
+    fn the_web_view_fills_exactly_the_unpainted_card() {
+        // Odd sidebar widths, fractional scales and a find bar must not leave a gap or overlap.
+        for (sidebar, scale, find) in [(264., 1., 0.), (213., 1.25, 40.), (301., 1.5, 40.)] {
+            let frame = CardFrame {
+                find_height: find,
+                ..frame(sidebar, scale)
+            };
+            let card = card_edges(frame);
+            let bounds = page_card_bounds(frame);
+            let edge = |logical: f32| (logical * scale).round();
+            assert_eq!(bounds.x as f32, edge(card.left));
+            assert_eq!(bounds.y as f32, edge(card.top));
+            assert_eq!((bounds.x + bounds.width as i32) as f32, edge(card.right));
+            assert_eq!((bounds.y + bounds.height as i32) as f32, edge(card.bottom));
         }
     }
 

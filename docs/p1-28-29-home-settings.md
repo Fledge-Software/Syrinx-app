@@ -64,9 +64,11 @@ window, because an agent cannot see it.
   the panel scrolls inside the card when the window is too short to show it
   whole.
 - **Live application.** Choosing anything replaces the palette that
-  `theme.rs` hands to every render and asks Windows for the matching
-  backdrop: Mica for Haze and Glass, opaque otherwise. The chrome redraws at
-  once. The two opaque greys P1-07 left in `theme.rs` (selected row and the
+  `theme.rs` hands to every render. The chrome redraws at once. Every
+  palette keeps the window's Mica backdrop; solid and gradient grounds paint
+  their own fill over it. Until 2026-10-14 the solid and gradient grounds
+  asked Windows for an opaque window, which GPUI clears to white under the
+  page and so hid every page (`docs/trapstoknow.md`). The two opaque greys P1-07 left in `theme.rs` (selected row and the
   palette's secondary button) now read the canvas tokens `row_selected` and
   `field`, so Paper does not draw dark rows under dark text. The
   gpui-component widgets (the text fields in the palette, the tile form and
@@ -158,6 +160,39 @@ disposable databases with synthetic labels and `example.test` addresses
   that row. This is kept deliberately consistent with the existing storage
   rule for now (review finding 5); a narrower repair would need its own
   decision.
+- **Owner window check of the page-card fix, 2026-10-15.** The check ran on
+  branch `claude/page-card-paint` with a fresh `--test-data-dir`:
+  - Pages now show in the card (example.com and other sites), and resizing
+    settles with at most a brief flash.
+  - Graphite and Paper look closest to right.
+  - Tint, Haze and Glass fail. The owner's words: Glass "does not make it
+    look like liquid glass", Haze "only shifts the color", and "neither look
+    at all like the design"; Tint is "not like the design". The owner also
+    said the design itself does not make the transparency look good:
+    "Need to iterate."
+  - The owner's ruling is "Fix themes first": the fix stays uncommitted and
+    unmerged until Tint, Haze and Glass are redesigned with the owner and
+    built.
+  - The canvas and `design/README.md` change only with the owner. The known
+    gaps in the build are:
+    - Glass draws Mica rather than Acrylic, and has none of the light-edge
+      styling.
+    - Haze is a 74 %-opaque dark tint over Mica, so little of the wallpaper
+      shows.
+    - Tint drops the gradient's middle stop, because GPUI gradients take two
+      stops, and has no grain.
+- **The theme lab (2026-10-15, development only).** `syrinx --theme-lab`
+  opens a mock browser on the owner's real desktop, with buttons for
+  twelve variants: G0–G3 (Glass), H0–H3 (Haze) and T0–T3 (Tint).
+  - Each family has its current build (G0, H0, T0) and one variant that
+    follows the canvas as specified (G1, T1).
+  - The others push further: clearer Acrylic, Mica Alt, lighter tints,
+    finer grain, richer colour.
+  - Real Acrylic comes from `syrinx_platform::backdrop`, which calls
+    `DwmSetWindowAttribute`. Tint's three stops and grain come from an image
+    generated in `theme_lab.rs`, because GPUI's gradients take two stops.
+  - The owner picks one of each and updates the canvas. The browser then
+    adopts the picks.
 - **Glass uses Mica, not Acrylic.** GPUI's `Blurred` background is not the
   Windows 11 Acrylic (see `docs/trapstoknow.md`), and drawing real Acrylic
   needs `DwmSetWindowAttribute` in `syrinx-platform`. Until then Glass shows

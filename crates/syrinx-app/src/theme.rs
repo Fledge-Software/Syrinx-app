@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use gpui::{App, Background, Rgba, WindowBackgroundAppearance, linear_color_stop, linear_gradient};
+use gpui::{App, Background, Rgba, linear_color_stop, linear_gradient};
 use gpui_component::{Theme, ThemeMode, ThemeToken};
 use syrinx_ui::{Accent, Color, Ground, Palette, PaletteId, palette};
 
@@ -74,15 +74,6 @@ pub(crate) fn window_fill() -> Background {
                 linear_color_stop(rgba(to), to_at),
             )
         }
-    })
-}
-
-/// The OS backdrop the drawn palette asks for. Glass's Acrylic needs `syrinx-platform`; until
-/// then it shares Haze's Mica (recorded in `docs/p1-28-29-home-settings.md`).
-pub(crate) fn window_material() -> WindowBackgroundAppearance {
-    CURRENT.with_borrow(|palette| match palette.ground {
-        Ground::Material { .. } => WindowBackgroundAppearance::MicaBackdrop,
-        Ground::Solid(_) | Ground::Gradient { .. } => WindowBackgroundAppearance::Opaque,
     })
 }
 

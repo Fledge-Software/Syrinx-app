@@ -69,7 +69,6 @@ impl BrowserView {
         self.home.appearance = appearance;
         theme::apply(appearance.drawn_palette());
         theme::apply_component_theme(cx);
-        window.set_background_appearance(theme::window_material());
         window.refresh();
     }
 
