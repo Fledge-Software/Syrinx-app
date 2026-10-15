@@ -83,7 +83,7 @@ Windows 11, build 26300, with agents assisting. The repository remains local.
 
 **What this plan assumes, until the owner confirms (⚠️):**
 - ⚠️ Success means Syrinx is the owner's default browser for daily use, with
-  memory and start-up close to Edge's.
+  memory and start-up close to Edge's, or better.
 - ⚠️ The 15 sites in `docs/research/06-engine-and-ui-performance.md` (Phase 0
   checklist, item 4) are the owner's real daily set.
 
