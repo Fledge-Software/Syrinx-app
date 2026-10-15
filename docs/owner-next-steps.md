@@ -20,7 +20,7 @@ Record results as pass/fail and timings only, never account contents.
 
 ## Order
 
-### 1. Decide DW-63's key (two minutes; unblocks an agent slice)
+### 1. Decide DW-63's key (done 2026-10-14: Ctrl W on a focused row, plus a per-row right-click menu)
 
 "Unload page" on a focused sidebar row has no key. The choices are
 **Ctrl W while a row has focus** (recommended: it means "close" everywhere
@@ -29,15 +29,20 @@ DW-63 in the plan's "Deferred work" register has the details.
 
 ### 2. Finish P1-39d (in progress)
 
-- Get your release fixes and the two pinned public keys (DW-30) onto
-  `main`. Until `PRODUCTION_KEYS` in `crates/syrinx-update/src/keys.rs` is
-  non-empty there, every real update fails closed and P1-39d cannot close.
-- Make `https://syrinxapp.dev/updates/v1/` serve its files with the full
-  certificate chain.
-- Run the first real `cargo xtask sign-update` and update an installed
-  Syrinx yourself; record it in a P1-39 note.
-- Keep your own record of the highest statement serial issued, and re-sign
-  `latest` at least every 60 days.
+**Changed 2026-10-14:** you keep no release key on a device. The weekly
+workflow signs with a key held as a GitHub Actions secret and re-signs
+`latest` every week; the backup is an encrypted file in your password
+manager (`docs/decisions.md`, 2026-10-14). The release fixes are already
+on `main`.
+
+- Wait for the agent slice that adds workflow signing and publishes
+  `https://syrinxapp.dev/updates/v1/` (it returned 404 on 2026-10-14). It
+  will give you the commands for the one-time key creation.
+- Then, outside any agent session: create the key, put it in the GitHub
+  secret and the backup in your password manager, and give an agent only
+  the two public points and identifiers to pin (DW-30).
+- After the next release, update an installed Syrinx yourself with Check
+  for updates; record it in a P1-39 note.
 
 ### 3. Quiet-machine runs (unblock P1-24 and P1-26)
 
@@ -94,7 +99,17 @@ With NVDA installed and running, work through the thirteen checks in
 
 ### 6. Window checks of the new Customize sections
 
-On a fresh profile (`cargo syrinx -- --test-data-dir <new folder>`):
+**Blocked 2026-10-14:** on `main` at `08cf323`, a fresh `--test-data-dir`
+profile loads a page (the status reads "Page loaded.") but the page card
+stays blank, the same symptom being diagnosed in the 0.2.0 standalone exe.
+The diagnosis session found the cause the same day: since P1-28/29
+(`cc9c496`) Syrinx's chrome paints over the page card (the root fill in
+`crates/syrinx-app/src/ui.rs`, and the Graphite theme's opaque window
+material), and GPUI draws above the WebView2 child. A fix session awaits
+the owner's go-ahead. Items 4 to 6 wait until pages draw again.
+
+On a fresh profile (`cargo syrinx --test-data-dir <new folder>`; the alias already ends
+in `--`, so a second `--` reaches Syrinx and the test profile is not used):
 
 - **Site permissions:** remember a choice on a test site, Forget it, and
   see the site ask again.
@@ -120,7 +135,8 @@ home and settings, history, clear data, restore after restart).
 
 ### 8. Housekeeping when convenient
 
-- Delete the old Atlas folders by hand once nothing in them is needed:
+- (Done: none of these folders exists on this laptop, checked 2026-10-14.)
+  Delete the old Atlas folders by hand once nothing in them is needed:
   `%LOCALAPPDATA%\Atlas\data`, `%LOCALAPPDATA%\AtlasProductPreview` and
   `%LOCALAPPDATA%\Programs\Atlas` (they may hold signed-in WebView2
   profiles).

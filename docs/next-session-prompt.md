@@ -109,11 +109,24 @@ independent review, then a `--no-ff` merge and the gate.
    field, as focused (`docs/p1-36-accessibility.md`, "DW-60"). Add a DW row
    first, then apply DW-60's container pattern to each field and rerun the
    UI Automation probe.
+4. **DW-63:** Ctrl W on a focused sidebar row closes that row's live page
+   (unloads a saved page, closes an open tab), bound in the row's key
+   context, plus a per-row right-click menu with Unload page and the row's
+   other actions, each showing its key (owner, 2026-10-14; the DW-63 row
+   and `docs/decisions.md` have the details). Rerun P1-36's UI Automation
+   probe if roles, ids or focus handles change.
+5. **P1-39d workflow signing (DW-30):** the owner decided on 2026-10-14
+   that `.github/workflows/weekly-release.yml` signs each release with a key
+   held as an encrypted GitHub Actions secret, re-signs `latest` weekly and
+   publishes the update files to `https://syrinxapp.dev/updates/v1/`; the
+   owner keeps no key on a device (`docs/decisions.md`, 2026-10-14). Never
+   create, see or handle the private key or the secret's value; write the
+   owner's one-time key-creation steps instead. Changing the workflow is
+   approved by that decision; propose the design before building it.
 
 Still blocked, so do not start them:
 - P1-24 and P1-26 wait on P1-23's quiet-machine runs and engine choice,
   which must also resolve the lru advisory.
-- DW-63 waits on my choice of key (Ctrl W on a focused row, or Backspace).
 - DW-5 belongs to Plan 2; DW-67 waits until after P1-40.
 - P1-39d, P1-18 and P1-40 are mine.
 
