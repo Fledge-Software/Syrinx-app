@@ -13,7 +13,7 @@ use super::layout::APPLY_HELPER;
 use super::lock::ApplyLock;
 use super::records::{Outcome, Pending, UpdateResult, UpdateState};
 use super::reset::state_is_unreadable;
-use super::stage::discard_staged;
+use super::stage::{UNREADABLE_STATE_DISCARD_MARK, discard_for_unreadable_state, discard_staged};
 use super::{InstallError, UpdateLayout};
 use crate::error::UpdateError;
 use crate::keys::KeySet;
@@ -25,6 +25,8 @@ use crate::{cng, verify_manifest};
 
 /// Share only reading, so the helper cannot be changed between its check and its start.
 const FILE_SHARE_READ: u32 = 0x0000_0001;
+/// Longer than any staging mark Syrinx writes.
+const MARK_LIMIT: usize = 64;
 
 /// What a starting Syrinx found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -48,9 +50,14 @@ pub fn recover(layout: &UpdateLayout, running: Version) -> Result<Recovery, Inst
         });
     };
     remove_update_folder(&layout.incoming(), "the incoming folder")?;
-    let outcome = Outcome::take(layout)?;
+    // Kept on disk until every step below succeeds, so a failed start never loses it (DW-69).
+    let outcome = Outcome::read(layout)?;
     let discarded_for_unreadable_state = discard_beside_unreadable_state(layout)?;
     let staged = settle_pending(layout, running)?;
+    // Only an outcome this start read is removed; the helper writes one only under the lock.
+    if outcome.is_some() {
+        Outcome::clear(layout)?;
+    }
     Ok(Recovery {
         staged,
         outcome,
@@ -63,12 +70,30 @@ pub fn recover(layout: &UpdateLayout, running: Version) -> Result<Recovery, Inst
 /// record, recovery cannot tell whether that version was rolled back, so it is never offered.
 fn discard_beside_unreadable_state(layout: &UpdateLayout) -> Result<bool, InstallError> {
     if !entry_present(&layout.pending(), "checking for a staged update")? {
-        return Ok(false);
+        return finish_unreadable_state_discard(layout);
     }
     if !state_is_unreadable(layout)? {
         return Ok(false);
     }
-    discard_staged(layout)?;
+    discard_for_unreadable_state(layout)?;
+    Ok(true)
+}
+
+/// With no `pending` left, finish a discard an earlier start began beside an unreadable
+/// `Updates\state` and stopped, and still tell the owner (DW-69).
+fn finish_unreadable_state_discard(layout: &UpdateLayout) -> Result<bool, InstallError> {
+    const STEP: &str = "reading the staging mark";
+    // Read only without `pending`, so a damaged mark never hides a valid staged update.
+    let mark = match read_small(&layout.staging_marker(), MARK_LIMIT, STEP) {
+        Ok(mark) => mark,
+        // Longer than any mark Syrinx writes, so not this one; `clear_unfinished` removes it.
+        Err(InstallError::Record { what }) if what == STEP => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if mark.as_deref() != Some(UNREADABLE_STATE_DISCARD_MARK) {
+        return Ok(false);
+    }
+    discard_for_unreadable_state(layout)?;
     Ok(true)
 }
 

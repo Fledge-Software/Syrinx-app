@@ -35,9 +35,14 @@ main checkout). Each later merge records its own gate in its row.
   owner's visual check 12. DW-66 ("Reset
   update records") has merged; see the P1-39b row. DW-60 (the palette's
   selection announced to screen readers) has merged and waits only on the
-  owner's NVDA check 7; see the P1-36 row. DW-69 (finishing an
-  interrupted discard of a staged update) is open.
-- *Merged on 2026-10-15, after independent review and a green gate:* DW-70,
+  owner's NVDA check 7; see the P1-36 row.
+- *Merged on 2026-10-15, each after independent review (re-reviewed after
+  every fix commit) and a green gate:* DW-69, which makes every discard of a
+  staged update write the staging mark first so the next start finishes an
+  interrupted one, keeps the recorded update outcome until a start's
+  recovery succeeds, and has the update helper record a pre-swap failure
+  before it releases the update lock (`docs/p1-38-update-format.md`,
+  "DW-69"); and DW-70,
   which gives the find bar, folder name, tile name and address and custom
   accent fields a node that reports focus to screen readers through one
   shared container (`crates/syrinx-app/src/text_field.rs`), the palette

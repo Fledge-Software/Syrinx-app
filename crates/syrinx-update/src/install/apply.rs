@@ -13,6 +13,7 @@ use super::files::{
 };
 use super::lock::ApplyLock;
 use super::records::{Outcome, Pending, UpdateResult, UpdateState};
+use super::stage::DISCARD_MARK;
 use super::{InstallError, UpdateLayout};
 use crate::directory::DirectoryPayload;
 use crate::keys::KeySet;
@@ -175,18 +176,21 @@ pub fn apply_update(
     request: &ApplyRequest<'_>,
     launcher: &mut dyn Launcher,
 ) -> Result<Applied, InstallError> {
-    let applied = apply_locked(request, launcher);
+    let timing = request.timing;
+    let applied = match ApplyLock::wait(request.layout, timing.exit_wait, timing.poll) {
+        Ok(lock) => apply_locked(request, launcher, lock),
+        // Syrinx still holds the lock, so no starting Syrinx can be reading the outcome.
+        Err(error) => Err(record_unfinished(request.layout, error)),
+    };
     #[cfg(test)]
     if matches!(applied, Err(InstallError::Interrupted(_))) {
         // A fault hook stands in for a crash, which records and starts nothing.
         return applied;
     }
-    // After the swap the new version's own records apply; recording "stayed on the old
-    // version" or relaunching unwatched would both be wrong.
+    // After the swap the new version's own records apply; relaunching unwatched would be wrong.
     if matches!(applied, Err(InstallError::AfterSwap(_))) {
         return applied;
     }
-    let applied = applied.map_err(|error| record_unfinished(request.layout, error));
     let started = matches!(
         applied,
         Ok(Applied::Installed(_) | Applied::RolledBack { .. } | Applied::RollbackFailed { .. })
@@ -197,37 +201,31 @@ pub fn apply_update(
     applied
 }
 
+/// How the steps before the swap ended when nothing failed.
+enum BeforeSwap {
+    /// The new version is in place.
+    Swapped(Pending),
+    /// The update stopped without a swap and its outcome is recorded.
+    Stopped(Applied),
+}
+
 /// Every step that needs the lock, which is released when this returns.
 fn apply_locked(
     request: &ApplyRequest<'_>,
     launcher: &mut dyn Launcher,
+    lock: ApplyLock,
 ) -> Result<Applied, InstallError> {
     let layout = request.layout;
-    let timing = request.timing;
-    let lock = ApplyLock::wait(layout, timing.exit_wait, timing.poll)?;
-    checkpoint(Step::ExitObserved)?;
-    let pending = Pending::read(layout)?.ok_or(InstallError::NothingStaged)?;
-    // `pending` owns `Syrinx.new` now; a mark left by an interrupted staging is stale.
-    remove_file_if_present(&layout.staging_marker(), "clearing a stale staging mark")?;
-    if let Err(refusal) = reverify(layout, request.keys, &pending) {
-        discard_refused(layout)?;
-        let result = UpdateResult::VerificationFailed;
-        finish(layout, &pending, result, pending.from, true)?;
-        eprintln!("reverification refused the staged update: {refusal}");
-        return Ok(Applied::Discarded(pending.version));
-    }
-    checkpoint(Step::Reverified)?;
-    if !swap(layout, timing)? {
-        finish(
-            layout,
-            &pending,
-            UpdateResult::ApplyFailed,
-            pending.from,
-            true,
-        )?;
-        discard_unswapped(layout);
-        return Ok(Applied::NotSwapped(pending.version));
-    }
+    let pending = match before_swap(request) {
+        Ok(BeforeSwap::Swapped(pending)) => pending,
+        Ok(BeforeSwap::Stopped(applied)) => return Ok(applied),
+        // Recorded while the lock is held, so a starting Syrinx never races the outcome.
+        Err(error) => {
+            let error = record_unfinished(layout, error);
+            checkpoint(Step::FailureRecorded)?;
+            return Err(error);
+        }
+    };
     checkpoint(Step::Swapped)?;
     let applied = match request.mode {
         ApplyMode::Quit => finish(
@@ -243,6 +241,33 @@ fn apply_locked(
     applied.map_err(after_swap)
 }
 
+/// Recheck the staged copy and swap it in, or record why it was not.
+fn before_swap(request: &ApplyRequest<'_>) -> Result<BeforeSwap, InstallError> {
+    let layout = request.layout;
+    checkpoint(Step::ExitObserved)?;
+    let pending = Pending::read(layout)?.ok_or(InstallError::NothingStaged)?;
+    // `pending` owns `Syrinx.new` now; a mark left by an interrupted staging is stale.
+    remove_file_if_present(&layout.staging_marker(), "clearing a stale staging mark")?;
+    if let Err(refusal) = reverify(layout, request.keys, &pending) {
+        eprintln!("reverification refused the staged update: {refusal}");
+        discard_refused(layout, &pending)?;
+        return Ok(BeforeSwap::Stopped(Applied::Discarded(pending.version)));
+    }
+    checkpoint(Step::Reverified)?;
+    if !swap(layout, request.timing)? {
+        finish(
+            layout,
+            &pending,
+            UpdateResult::ApplyFailed,
+            pending.from,
+            true,
+        )?;
+        discard_unswapped(layout);
+        return Ok(BeforeSwap::Stopped(Applied::NotSwapped(pending.version)));
+    }
+    Ok(BeforeSwap::Swapped(pending))
+}
+
 /// Mark an error as happening once the new version is in place.
 fn after_swap(error: InstallError) -> InstallError {
     #[cfg(test)]
@@ -254,6 +279,10 @@ fn after_swap(error: InstallError) -> InstallError {
 
 /// Record an unexpected stop, so the next start tells the owner; the update stays staged.
 fn record_unfinished(layout: &UpdateLayout, error: InstallError) -> InstallError {
+    #[cfg(test)]
+    if matches!(error, InstallError::Interrupted(_)) {
+        return error;
+    }
     eprintln!("the update stopped: {error}");
     let recorded = Pending::read(layout).and_then(|pending| {
         let Some(pending) = pending else {
@@ -544,8 +573,19 @@ fn relaunch(request: &ApplyRequest<'_>) -> Vec<OsString> {
 }
 
 /// Remove a staged copy that failed its second check, keeping the running helper itself.
-fn discard_refused(layout: &UpdateLayout) -> Result<(), InstallError> {
-    remove_file_if_present(&layout.pending(), "removing the pending record")?;
+///
+/// The mark goes before `finish` removes `pending`, so a stop before `Syrinx.new` is gone
+/// leaves it marked for the next start; once `finish` has written the outcome, it stays on
+/// disk until a start whose recovery succeeds tells the owner (DW-69).
+fn discard_refused(layout: &UpdateLayout, pending: &Pending) -> Result<(), InstallError> {
+    write_atomically(
+        &layout.staging_marker(),
+        DISCARD_MARK,
+        "marking the discard",
+    )?;
+    let result = UpdateResult::VerificationFailed;
+    finish(layout, pending, result, pending.from, true)?;
+    checkpoint(Step::DiscardBegun)?;
     remove_program_folder(&layout.staged(), "Syrinx.new")?;
     remove_file_if_present(&layout.staging_marker(), "clearing the staging mark")?;
     remove_file_if_present(&layout.apply_manifest(), "removing the kept manifest")?;
@@ -553,7 +593,7 @@ fn discard_refused(layout: &UpdateLayout) -> Result<(), InstallError> {
 }
 
 /// Clear `pending` and record the result; with `tell_owner`, leave the outcome for the next
-/// Syrinx to show once.
+/// Syrinx to show once, and without it, remove any outcome still waiting (DW-69).
 fn finish(
     layout: &UpdateLayout,
     pending: &Pending,
@@ -568,6 +608,12 @@ fn finish(
     state.write(layout)?;
     eprintln!("update {}: {result}", pending.version);
     if !tell_owner {
+        // An older outcome a failed start kept would otherwise describe a superseded update.
+        // The install is already recorded, so a failed removal is reported, not turned into a
+        // failed update: a stale notice is the smaller harm.
+        if let Err(error) = Outcome::clear(layout) {
+            eprintln!("an older update notice could not be removed: {error}");
+        }
         return Ok(());
     }
     let outcome = Outcome {

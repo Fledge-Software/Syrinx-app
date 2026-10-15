@@ -223,18 +223,37 @@ impl Outcome {
 
     /// Read and remove the outcome, so it is told once.
     pub fn take(layout: &UpdateLayout) -> Result<Option<Self>, InstallError> {
+        let outcome = Self::read(layout)?;
+        Self::clear(layout)?;
+        Ok(outcome)
+    }
+
+    /// Read the outcome and keep it until `clear`, so a start that fails later still has it
+    /// to tell (DW-69). A malformed outcome is removed and refused, so it fails only once.
+    pub fn read(layout: &UpdateLayout) -> Result<Option<Self>, InstallError> {
         const WHAT: &str = "update outcome";
         let Some(bytes) = read_small(&layout.outcome(), RECORD_LIMIT, WHAT)? else {
             return Ok(None);
         };
-        remove_file_if_present(&layout.outcome(), "removing the update outcome")?;
-        let malformed = InstallError::Record { what: WHAT };
-        let values = parse(&bytes, OUTCOME_HEADER, &OUTCOME_FIELDS).ok_or(malformed.clone())?;
-        Ok(Some(Self {
-            result: UpdateResult::parse(values[0]).ok_or(malformed.clone())?,
-            attempted: Version::parse(values[1]).ok_or(malformed.clone())?,
-            current: Version::parse(values[2]).ok_or(malformed)?,
-        }))
+        let Some(outcome) = Self::parse_record(&bytes) else {
+            Self::clear(layout)?;
+            return Err(InstallError::Record { what: WHAT });
+        };
+        Ok(Some(outcome))
+    }
+
+    /// Remove the outcome once it has been told.
+    pub fn clear(layout: &UpdateLayout) -> Result<(), InstallError> {
+        remove_file_if_present(&layout.outcome(), "removing the update outcome")
+    }
+
+    fn parse_record(bytes: &[u8]) -> Option<Self> {
+        let values = parse(bytes, OUTCOME_HEADER, &OUTCOME_FIELDS)?;
+        Some(Self {
+            result: UpdateResult::parse(values[0])?,
+            attempted: Version::parse(values[1])?,
+            current: Version::parse(values[2])?,
+        })
     }
 }
 

@@ -545,6 +545,24 @@ fn a_staged_copy_without_its_record_or_the_staging_mark_is_left_alone() {
 }
 
 #[test]
+fn a_finished_discard_leaves_no_mark_to_remove_an_installer_copy() {
+    let (sandbox, keys) = packaged();
+    stage(&sandbox, &keys.pinned).expect("stage");
+    let other = Version::new(1, 3, 5);
+    recover(&sandbox.layout, other).expect("a start that discards the staged copy");
+    assert!(!sandbox.layout.staged().exists());
+    assert!(!sandbox.layout.staging_marker().exists());
+
+    // `install-syrinx.ps1`'s copy in progress carries the same package record but no mark.
+    let installer_copy = BTreeMap::from([(PACKAGE_RECORD.to_owned(), b"package 1.4.0".to_vec())]);
+    write_tree(&sandbox.layout.staged(), &installer_copy);
+    let recovery = recover(&sandbox.layout, other).expect("start during the installer");
+    assert_eq!(recovery.staged, None);
+    assert_eq!(read_tree(&sandbox.layout.staged()), installer_copy);
+    assert_eq!(read_tree(&sandbox.layout.program()), program_files(OLD));
+}
+
+#[test]
 fn staging_refuses_while_the_helper_holds_the_lock() {
     let (sandbox, keys) = packaged();
     let lock = ApplyLock::try_acquire(&sandbox.layout)
