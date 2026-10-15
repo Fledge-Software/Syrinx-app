@@ -372,6 +372,84 @@ code path, but nothing drove it); nested folders and saved pages natively
 (covered by the unit tests in `syrinx_ui::tree_focus` and
 `ui/sidebar_tree.rs`); and anything a screen reader says (owner check 13).
 
+## DW-63: Ctrl W on a focused row
+
+Added on 2026-10-15 on `claude/dw-63-row-ctrl-w`, after the owner chose the
+key in chat that day ("Ctrl W on a focused row is my choice for DW-63"; the
+rejected alternative was Backspace). DW-61 took the rows' small buttons out
+of the Tab order, which left one row action without a key: unloading an open
+saved page, that is closing its live tab while keeping the saved row (the
+row's "×" button). Before this, a keyboard user pressed Enter to open the
+page and then the window's Ctrl W.
+
+**What Ctrl W does while a sidebar row has keyboard focus**, in the docked
+sidebar and in the peek alike (both draw their rows through `sidebar_at`,
+and the binding is attached to every row in `tree_item`):
+
+- On a saved page whose page is open, it unloads it, the same as the row's
+  "×" (Unload page) button. The saved row stays and keeps focus, so the
+  owner can carry on walking the tree.
+- On an open tab (a row that is not saved), it closes the tab, the same as
+  Delete there and the row's "×" (Close tab) button. The row disappears, and
+  DW-61's `plan_frame` moves focus to the tree's new Tab stop after the
+  frame, as it does after Delete.
+- On a saved page that is not open, or on a folder, it does nothing. The
+  key is still consumed by the row: it does not fall through to the window's
+  Ctrl W, because that closes the *active* page, which may belong to a
+  different row than the one the owner is looking at. Closing a page the
+  owner did not point at would be the surprising outcome.
+
+Whenever a row does not have focus (the page, the address field, the find
+bar, a button, or nothing), Ctrl W is unchanged and closes the active page.
+From a focused web page the key never reaches GPUI's keymap at all: it
+arrives through WebView2's `AcceleratorKeyPressed` handler as
+`BrowserShortcut::CloseTab` (`crates/syrinx-platform/src/browser/page.rs`),
+which this slice does not touch.
+
+**How it is built.** `CloseRowPage` is a row action in
+`ui/folder_editor.rs`, bound in `ROW_CONTEXT` to whatever keystroke the
+command registry gives the window's close-tab command, so the two cannot
+drift apart. The binding is added after the window's own (`window_bindings`
+in `ui.rs`): GPUI ranks a binding with no context as deep as the focused
+row's context, and between equals the later binding wins, so the order is
+what makes the row's meaning come first. GPUI then stops at the first
+action handled, and an action handler stops propagation unless it asks
+otherwise, which is why a row with nothing to close still swallows the key.
+The decision itself is the pure `row_close_target` in
+`ui/sidebar_tree.rs`, with a test for each row kind, and two keymap tests in
+`ui.rs` check the binding order with and without a focused row (docked and
+peek). The "Unload page" and "Close tab" buttons now announce their
+shortcut (`aria_keyshortcuts` "Control+W", and "Control+W Delete" for Close
+tab); no role, element id or focus handle changed. Keyboard use of the new
+key is not counted in the D39 usage report: adding a feature count changes
+the reviewed schema, so it is left for a separate decision.
+
+**Probe.** A UI Automation client of the same kind as above (script outside
+the repository) drove the `local` build, launched visibly on a fresh
+synthetic profile `target\dw-63-probe`, deleted afterwards. Unmodified keys
+were posted to Syrinx's window; Ctrl W, Ctrl D, Escape and the folder name
+went through `SendInput`, and only after checking that the foreground
+window belonged to Syrinx's own process id. Three blank tabs were opened
+with New tab, the active one saved with Ctrl D, and an empty folder made
+through More, New folder. Results:
+
+- Ctrl W on the focused, live saved row: the row stayed, lost its selected
+  state (another tab became active) and kept keyboard focus.
+- Ctrl W again on that now unloaded saved row: nothing changed (three rows,
+  the same active tab, focus on the row).
+- Down twice to a non-active open tab, then Ctrl W: the tab closed and
+  focus moved to the active row, as `plan_frame` intends.
+- Ctrl W on the focused folder row: nothing changed.
+- Ctrl W with the toolbar's Reload button focused: the active tab closed.
+- A synthetic page served from `127.0.0.1` and opened as a forwarded link,
+  with Win32 focus in the WebView2 child: Ctrl W closed it, through the
+  accelerator path.
+
+Syrinx stayed up throughout with UI Automation attached. **Not verified by
+an agent:** the peek popup (it needs a real pointer at the window's edge
+and a click to take the keys; the code path and the keymap test are shared
+with the docked sidebar) and what a screen reader says (check 15).
+
 ## DW-60: the palette announces its moving selection
 
 Added on 2026-10-14 on `claude/dw-60-palette-active-descendant`. Before it,
@@ -654,6 +732,17 @@ portable copy also works). Then record pass/fail for each:
     and, in the find bar, whether your typing stays in the field after the
     first matches appear (DW-71 found that it may not). Repeat the folder
     form and the Favorites tile form in the peek if you use it.
+15. **Ctrl W on a focused row (DW-63).** With two saved pages, one open and
+    one not, a folder and an open tab that is not saved: F6 to the sidebar
+    and arrow to the open saved page, then Ctrl W. The page unloads, its row
+    stays and still has focus (NVDA reads it again or stays quiet, but Up
+    and Down still walk the tree). Arrow to the open tab and press Ctrl W:
+    it closes and focus moves to another row. On the unopened saved page
+    and on the folder, Ctrl W does nothing and the active page stays open.
+    Then click into a web page and press Ctrl W: the active page closes, as
+    before. With the sidebar hidden, repeat on a row in the peek. NVDA
+    should also read "Control+W" as the shortcut of the Unload page and
+    Close tab buttons, if it reads button shortcuts at all.
 
 ## Owner questions
 
@@ -675,7 +764,8 @@ portable copy also works). Then record pass/fail for each:
    built**, with a follow-up to give Unload page its own key on a focused
    row, recorded as DW-63 in the plan's "Deferred work" register (the key
    is still the owner's choice; the row proposes Ctrl W while a row has
-   focus).
+   focus). **The owner chose Ctrl W on 2026-10-15**, and it is built (see
+   "DW-63: Ctrl W on a focused row" above and check 15).
 3. **Palette announcements (DW-60).** Recommendation: change the palette so
    its list container owns focus and the query field (no GPUI patch), as a
    follow-up slice; the alternative is asking for a vendored GPUI change.
@@ -710,5 +800,9 @@ portable copy also works). Then record pass/fail for each:
   `ui/folder_cards.rs`, `ui/tile_editor.rs` and `ui/customize.rs`, with the
   window threaded through `ui.rs`, `ui/home.rs`, `ui/favorites.rs` and
   `ui/sidebar_view.rs`.
-- `docs/plans/Syrinx v1 — Plan.md` (DW-60 to DW-62, DW-70, DW-71),
+- DW-63: `crates/syrinx-app/src/ui/folder_editor.rs` (the action and its
+  binding), `ui.rs` (binding order and its tests), `ui/sidebar_tree.rs`
+  (`row_close_target`, `close_row_page`) and `ui/sidebar_view.rs`
+  (`tree_item`, the buttons' shortcuts).
+- `docs/plans/Syrinx v1 — Plan.md` (DW-60 to DW-63, DW-70, DW-71),
   `docs/implementation-status.md`, `docs/trapstoknow.md`.

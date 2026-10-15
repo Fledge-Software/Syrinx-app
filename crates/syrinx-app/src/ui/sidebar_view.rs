@@ -28,13 +28,13 @@ use super::{
     BrowserView,
     favorites::{DraggedFavorite, FavoriteSource},
     folder_editor::{
-        DeleteFolderContents, DraggedRow, MoveRowDown, MoveRowIn, MoveRowOut, MoveRowUp,
-        ROW_CONTEXT, RemoveRow, RenameRow,
+        CloseRowPage, DeleteFolderContents, DraggedRow, MoveRowDown, MoveRowIn, MoveRowOut,
+        MoveRowUp, ROW_CONTEXT, RemoveRow, RenameRow,
     },
     menus::MenuKind,
     page_card::edge_strip,
     saved_moves::{DropTarget, Step},
-    sidebar_tree::{SidebarEntry, TreeId, active_tree_id, sidebar_entries},
+    sidebar_tree::{SidebarEntry, TreeId, active_tree_id, live_tab, sidebar_entries},
     tiles::{self, monogram},
 };
 use crate::{session::SessionCommand, theme};
@@ -383,12 +383,7 @@ impl BrowserView {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let saved_id = page.id;
-        let live = self
-            .model
-            .tabs
-            .iter()
-            .find(|tab| tab.saved_page_id == Some(saved_id))
-            .map(|tab| tab.id);
+        let live = live_tab(&self.model, saved_id);
         let title = title_or_address(&page.metadata.title, &page.metadata.address);
         let look = RowLook {
             icon: monogram(&title),
@@ -417,15 +412,15 @@ impl BrowserView {
         }
         if let Some(id) = live {
             row = row.child(
-                row_action(("unload", id.get()), "×", "Unload page").on_click(cx.listener(
-                    move |this, _, window, cx| {
+                row_action(("unload", id.get()), "×", "Unload page")
+                    .aria_keyshortcuts("Control+W")
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.command(SessionCommand::CloseTab(id));
                         // The row stays, so its keys must not keep applying after the click.
                         this.release_row_focus(window, cx);
                         cx.notify();
-                    },
-                )),
+                    })),
             );
         }
         row.child(
@@ -475,13 +470,13 @@ impl BrowserView {
             return row;
         }
         row.child(
-            row_action(("close", id.get()), "×", "Close tab").on_click(cx.listener(
-                move |this, _, _, cx| {
+            row_action(("close", id.get()), "×", "Close tab")
+                .aria_keyshortcuts("Control+W Delete")
+                .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     this.command(SessionCommand::CloseTab(id));
                     cx.notify();
-                },
-            )),
+                })),
         )
     }
 
@@ -605,18 +600,22 @@ fn release_on_drag(view: &WeakEntity<BrowserView>, window: &mut Window, cx: &mut
 
 /// Makes a drawn row a member of the tree's roving focus (DW-61): it tracks its own focus
 /// handle, which is a Tab stop only for the one row `syrinx_ui::tree_focus` picks, and its
-/// arrow keys move focus between rows.
+/// arrow keys move focus between rows. Ctrl W closes its live page (DW-63); every row kind
+/// handles it, so a row with nothing to close never passes it on to the window's Ctrl W.
 fn tree_item(
     row: Stateful<Div>,
     id: TreeId,
     focus: &FocusHandle,
     cx: &mut Context<BrowserView>,
 ) -> Stateful<Div> {
-    row.track_focus(focus).on_key_down(cx.listener(
-        move |this, event: &KeyDownEvent, window, cx| {
+    row.track_focus(focus)
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             this.tree_key_down(id, event, window, cx);
-        },
-    ))
+        }))
+        // A handled action stops here: GPUI tries the window's binding only if it propagates.
+        .on_action(cx.listener(move |this, _: &CloseRowPage, _, cx| {
+            this.close_row_page(id, cx);
+        }))
 }
 
 /// The shared row shape: a titled row when labels show, a centred icon button otherwise.
@@ -671,8 +670,8 @@ fn row_icon(letter: &str, saved: bool) -> Div {
 }
 
 /// A small control at the end of a wide row, named for screen readers. It is not a Tab stop,
-/// so the tree keeps one (DW-61). The row's Delete and F2 close, remove and rename; only
-/// unloading a saved page has no key of its own (Enter, then Ctrl W).
+/// so the tree keeps one (DW-61). The row's own keys do what the buttons do: Delete and F2
+/// close, remove and rename, and Ctrl W unloads a saved page or closes a tab (DW-63).
 fn row_action(id: impl Into<ElementId>, glyph: &'static str, name: &'static str) -> Stateful<Div> {
     without_mouse_focus(control(
         div().id(id).px_1().rounded_md(),
