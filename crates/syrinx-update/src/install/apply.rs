@@ -254,7 +254,7 @@ fn before_swap(request: &ApplyRequest<'_>) -> Result<BeforeSwap, InstallError> {
         return Ok(BeforeSwap::Stopped(Applied::Discarded(pending.version)));
     }
     checkpoint(Step::Reverified)?;
-    if !swap(layout, request.timing)? {
+    if !swap(layout, request.timing.rename_patience)? {
         finish(
             layout,
             &pending,
@@ -346,14 +346,14 @@ fn reverify(layout: &UpdateLayout, keys: &KeySet, pending: &Pending) -> Result<(
 
 /// `Syrinx` becomes `Syrinx.previous`, then `Syrinx.new` becomes `Syrinx`. A failed first
 /// rename changes nothing, and a failed second one is undone; either way `false` means the
-/// installed version stayed.
-fn swap(layout: &UpdateLayout, timing: ApplyTiming) -> Result<bool, InstallError> {
+/// installed version stayed. `syrinx-setup.exe` swaps the same way.
+pub(super) fn swap(layout: &UpdateLayout, rename_patience: Duration) -> Result<bool, InstallError> {
     remove_program_folder(&layout.previous(), "Syrinx.previous")?;
     checkpoint(Step::PreviousRemoved)?;
     let aside = rename_patiently(
         &layout.program(),
         &layout.previous(),
-        timing.rename_patience,
+        rename_patience,
         "moving the installed version aside",
     );
     if let Err(error) = aside {
@@ -364,14 +364,14 @@ fn swap(layout: &UpdateLayout, timing: ApplyTiming) -> Result<bool, InstallError
     let installed = rename_patiently(
         &layout.staged(),
         &layout.program(),
-        timing.rename_patience,
+        rename_patience,
         "moving the new version into place",
     );
     if let Err(error) = installed {
         rename_patiently(
             &layout.previous(),
             &layout.program(),
-            timing.rename_patience,
+            rename_patience,
             "restoring the installed version",
         )?;
         eprintln!("the new version could not be moved into place: {error}");

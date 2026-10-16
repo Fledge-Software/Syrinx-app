@@ -12,6 +12,7 @@ mod layout;
 mod lock;
 mod records;
 mod reset;
+mod setup;
 mod source;
 mod stage;
 mod startup;
@@ -24,6 +25,8 @@ mod tests_apply;
 mod tests_discard;
 #[cfg(test)]
 mod tests_reset;
+#[cfg(test)]
+mod tests_setup;
 #[cfg(test)]
 mod tests_source;
 
@@ -42,6 +45,10 @@ pub use lock::ApplyLock;
 pub use records::{AcceptedRecord, Outcome, Pending, UpdateResult, UpdateState};
 pub use reset::{
     SET_ASIDE_STATE, StateReset, is_unreadable_state, reset_unreadable_state, state_is_unreadable,
+};
+pub use setup::{
+    Existing, MANIFEST_FILE, PAYLOAD_MAGIC, SetupPackage, existing_install, install_package,
+    write_payload,
 };
 pub use source::{FolderSource, PackageSource, SignedFile};
 pub use stage::{

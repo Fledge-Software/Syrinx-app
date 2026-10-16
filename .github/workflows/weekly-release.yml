@@ -116,7 +116,8 @@ jobs:
             tag -a "$TAG" -m "Syrinx $VERSION preview" -m "Source: $SOURCE"
           git push origin "refs/tags/$TAG"
           gh release create "$TAG" \
-            "target/package/${{ steps.package.outputs.asset }}" target/package/SHA256SUMS.txt \
+            "target/package/${{ steps.package.outputs.asset }}" \
+            "target/package/${{ steps.package.outputs.zip }}" target/package/SHA256SUMS.txt \
             --prerelease --title "Syrinx $VERSION preview" --notes-file target/release-notes.md
 
       - uses: actions/upload-artifact@v4
