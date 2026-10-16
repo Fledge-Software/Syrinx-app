@@ -70,6 +70,8 @@ impl PaletteId {
 pub enum WindowMaterial {
     /// Haze: the `mica` backdrop, softly coloured by the wallpaper.
     Mica,
+    /// Mica Alt: Mica with more of the wallpaper's colour, as tabbed windows use.
+    MicaAlt,
     /// Glass: the transient `acrylic` backdrop plus Syrinx's glass styling.
     Acrylic,
 }
@@ -146,8 +148,10 @@ pub struct Palette {
     pub id: PaletteId,
     /// `ground`
     pub ground: Ground,
-    /// `grain`: Tint overlays a faint noise texture.
-    pub grain: bool,
+    /// `grain`: the opacity of a faint grey noise over the ground, from 0 (none) to 1.
+    pub grain: f32,
+    /// The glass edge: the opacity of the light line along a surface's top, 0 for none.
+    pub edges: f32,
     /// `text`
     pub text: Color,
     /// `strong`
@@ -293,7 +297,7 @@ const LIGHT_PLUGINS: PluginColors = PluginColors {
 };
 
 /// The canvas's Haze stand-in wallpaper: its base and four radial-gradient centres.
-const HAZE_WALLPAPER: [Color; 5] = [
+pub(crate) const HAZE_WALLPAPER: [Color; 5] = [
     Color::hex(0x1A1F35),
     Color::hex(0x3F52AE),
     Color::hex(0x6B3F94),
@@ -312,11 +316,12 @@ const GLASS_WALLPAPER: [Color; 7] = [
     Color::hex(0x13252B),
 ];
 
-fn graphite(accent: Accent) -> Palette {
+pub(crate) fn graphite(accent: Accent) -> Palette {
     Palette {
         id: PaletteId::Graphite,
         ground: Ground::Solid(Color::hex(0x141519)),
-        grain: false,
+        grain: 0.,
+        edges: 0.,
         text: Color::hex(0xECEDF0),
         text_strong: Color::hex(0xFFFFFF),
         text_secondary: Color::hex(0xC9CBD1),
@@ -404,6 +409,8 @@ fn glass(accent: Accent) -> Palette {
             tint: Color::rgba(16, 17, 24, 0.46),
             wallpaper_standins: &GLASS_WALLPAPER,
         },
+        // The canvas's `inset 0 1px 0 rgba(255,255,255,0.24)` glass edge.
+        edges: 0.24,
         text: Color::hex(0xF4F5F8),
         text_secondary: Color::hex(0xE0E2E8),
         text_secondary_bright: Color::hex(0xE6E8ED),
@@ -454,7 +461,8 @@ fn tint(accent: Accent) -> Palette {
                 (tone(20., 6.), 1.),
             ],
         },
-        grain: true,
+        // The canvas's grain is an SVG noise at 9 % opacity.
+        grain: 0.09,
         text: tone(18., 95.),
         text_secondary: tone(12., 83.),
         text_secondary_bright: tone(12., 87.),
@@ -489,12 +497,13 @@ fn tint(accent: Accent) -> Palette {
     }
 }
 
-fn paper(accent: Accent) -> Palette {
+pub(crate) fn paper(accent: Accent) -> Palette {
     let ink = |alpha: f32| Color::rgba(20, 22, 30, alpha);
     Palette {
         id: PaletteId::Paper,
         ground: Ground::Solid(Color::hex(0xE9EAEE)),
-        grain: false,
+        grain: 0.,
+        edges: 0.,
         text: Color::hex(0x1B1C21),
         text_strong: Color::hex(0x0E0F12),
         text_secondary: Color::hex(0x3A3C44),

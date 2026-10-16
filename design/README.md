@@ -148,6 +148,15 @@ is copied.
 
 ## Base palettes
 
+**Replaced on 2026-10-15** (`docs/decisions.md`, `docs/theme-editor.md`).
+Graphite, the default, and Paper are the only presets. Haze, Glass and
+Tint are no longer fixed palettes: the owner builds looks like them in the
+theme editor (mode, background, gradient, Mica, Mica Alt or Acrylic,
+transparency, glass edges, grain) and saves them by name. The table and
+rules below describe the five palettes as first designed. Its see-through
+rules (opaque pages, near-opaque palette, Reduce transparency, measuring
+Acrylic) still hold for custom themes.
+
 The base palette is the ground, surfaces and text; the accent is chosen
 separately and sits on top of any of them. All five ship, and all five are
 offered in the Customize panel. Each is named for how it looks, not for the

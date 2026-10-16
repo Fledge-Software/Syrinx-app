@@ -4,6 +4,7 @@
 mod acceptance;
 mod appearance;
 mod controls;
+mod ground_image;
 mod navigation;
 mod palette;
 mod palette_sample;
@@ -11,6 +12,7 @@ mod session;
 mod smoke_watchdog;
 mod text_field;
 mod theme;
+mod theme_lab;
 mod ui;
 mod updates;
 
@@ -59,7 +61,7 @@ fn main() -> ExitCode {
     }
     let mut options = match parse_arguments(arguments).and_then(run_mode) {
         Ok(RunMode::Browser(options)) => options,
-        Ok(RunMode::PaletteSample) => return run_palette_sample(),
+        Ok(RunMode::Review(review)) => return run_review(review),
         Err(message) => {
             report_startup_problem(message, smoke_requested);
             return ExitCode::FAILURE;
@@ -139,6 +141,8 @@ fn main() -> ExitCode {
                     title: Some("Syrinx · integrated preview".into()),
                     ..Default::default()
                 }),
+                // Every palette keeps Mica: an `Opaque` window is cleared to white under the
+                // page's child window and hides it (`docs/trapstoknow.md`).
                 window_background: WindowBackgroundAppearance::MicaBackdrop,
                 window_min_size: Some(size(px(800.), px(500.))),
                 ..Default::default()
@@ -263,12 +267,16 @@ fn hand_off_update(
     }
 }
 
-fn run_palette_sample() -> ExitCode {
-    // Development review window for P1-07's tokens; it opens no profile, page or worker.
+fn run_review(review: Review) -> ExitCode {
+    // Development review windows open no profile, page or worker.
     let failed = Arc::new(AtomicU8::new(0));
     let result = failed.clone();
     gpui_platform::application().run(move |cx: &mut App| {
-        if let Err(message) = palette_sample::open(cx) {
+        let opened = match review {
+            Review::PaletteSample => palette_sample::open(cx),
+            Review::ThemeLab => theme_lab::open(cx),
+        };
+        if let Err(message) = opened {
             eprintln!("{message}");
             result.store(1, Ordering::Release);
             cx.quit();
@@ -280,10 +288,19 @@ fn run_palette_sample() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// What this launch does: the browser, or the development-only token review window.
+/// What this launch does: the browser, or a development-only review window.
 enum RunMode {
     Browser(Options),
+    Review(Review),
+}
+
+/// The development-only windows that show design tokens instead of the browser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Review {
+    /// P1-07's token review (`--palette-sample`).
     PaletteSample,
+    /// Variants of Tint, Haze and Glass for the owner to choose from (`--theme-lab`).
+    ThemeLab,
 }
 
 struct Options {
@@ -337,7 +354,7 @@ fn show_panics_in_a_message_box() {
 /// What the command line asked for, before a profile is chosen.
 #[derive(Debug, Default, PartialEq)]
 struct Arguments {
-    palette_sample: bool,
+    review: Option<Review>,
     smoke: bool,
     test_directory: Option<PathBuf>,
     link: Option<LinkRequest>,
@@ -349,6 +366,7 @@ struct Arguments {
 const ACCEPTANCE_FLAG: &str = "--test-palette-acceptance";
 
 const USAGE: &str = "Syrinx accepts --smoke, --test-data-dir <directory>, --palette-sample, \
+                     --theme-lab, \
                      --after-update, --test-suspended-tabs <1-32>, \
                      --test-palette-acceptance <report.json> <http://127.0.0.1:port> \
                      or -- followed by one http(s) link.";
@@ -365,7 +383,9 @@ fn parse_arguments(
             parsed.link = Some(link_after_marker(arguments)?);
             break;
         } else if argument == "--palette-sample" {
-            parsed.palette_sample = true;
+            parsed.review = Some(Review::PaletteSample);
+        } else if argument == "--theme-lab" {
+            parsed.review = Some(Review::ThemeLab);
         } else if argument == "--smoke" {
             parsed.smoke = true;
         } else if argument == syrinx_update::install::AFTER_UPDATE_FLAG {
@@ -391,8 +411,8 @@ fn parse_arguments(
         || parsed.after_update
         || parsed.test_directory.is_some()
         || parsed.link.is_some();
-    if parsed.palette_sample && other_than_sample {
-        return Err("--palette-sample takes no other arguments.");
+    if parsed.review.is_some() && other_than_sample {
+        return Err("--palette-sample and --theme-lab take no other arguments.");
     }
     let unattended_modes = [parsed.smoke, measuring, accepting];
     if unattended_modes.iter().filter(|chosen| **chosen).count() > 1 {
@@ -448,8 +468,8 @@ fn link_after_marker(
 }
 
 fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
-    if arguments.palette_sample {
-        return Ok(RunMode::PaletteSample);
+    if let Some(review) = arguments.review {
+        return Ok(RunMode::Review(review));
     }
     let Arguments {
         smoke,
@@ -561,6 +581,25 @@ mod tests {
             &["--after-update", "--palette-sample"][..],
             &["--after-update", "--", "https://example.test/"][..],
             &["--after-update", "--test-suspended-tabs", "4"][..],
+        ] {
+            assert!(parse(refused).is_err(), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn the_review_windows_take_no_other_arguments() {
+        assert_eq!(
+            parse(&["--theme-lab"]).expect("theme lab").review,
+            Some(Review::ThemeLab)
+        );
+        assert_eq!(
+            parse(&["--palette-sample"]).expect("token review").review,
+            Some(Review::PaletteSample)
+        );
+        for refused in [
+            &["--theme-lab", "--smoke"][..],
+            &["--theme-lab", "--test-data-dir", r"C:\Synthetic"][..],
+            &["--theme-lab", "--", "https://example.test/"][..],
         ] {
             assert!(parse(refused).is_err(), "{refused:?}");
         }

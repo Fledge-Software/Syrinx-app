@@ -53,7 +53,7 @@ impl Accent {
     }
 
     /// An HSL colour in the accent's hue, its saturation capped at the accent's own.
-    pub(crate) fn tone(self, saturation_percent: f64, lightness_percent: f64) -> Color {
+    pub fn tone(self, saturation_percent: f64, lightness_percent: f64) -> Color {
         let (hue, saturation) = self.hue_and_saturation();
         Color::hsl(hue, saturation_percent.min(saturation), lightness_percent)
     }

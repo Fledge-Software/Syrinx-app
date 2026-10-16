@@ -185,7 +185,7 @@ impl BrowserView {
     }
 
     /// Whether the page card shows the native web page rather than Syrinx's own content.
-    fn page_card_shows_web_page(&self) -> bool {
+    pub(super) fn page_card_shows_web_page(&self) -> bool {
         let crashed = self
             .shown
             .is_some_and(|id| self.crashes.is_crashed(id.get()));

@@ -37,6 +37,7 @@ mod sidebar_tree;
 mod sidebar_view;
 mod site_permissions;
 mod suspended_fixture;
+mod theme_editor;
 mod tile_editor;
 mod tiles;
 mod title_bar;
@@ -1592,8 +1593,16 @@ impl BrowserView {
     /// Keeps the page card beside the sidebar; render calls this on every drag step,
     /// window resize and DPI change.
     fn resize_pages(&mut self, window: &Window) {
+        let bounds = page_card::page_card_bounds(self.card_frame(window));
+        if self.bounds != Some(bounds) && self.page_command(BrowserCommand::Resize(bounds)) {
+            self.bounds = Some(bounds);
+        }
+    }
+
+    /// The window and chrome sizes the page card is placed from.
+    fn card_frame(&self, window: &Window) -> page_card::CardFrame {
         let viewport = window.viewport_size();
-        let bounds = page_card::page_card_bounds(page_card::CardFrame {
+        page_card::CardFrame {
             viewport_width: f32::from(viewport.width),
             viewport_height: f32::from(viewport.height),
             sidebar_width: self.sidebar_sizing.width(),
@@ -1602,9 +1611,6 @@ impl BrowserView {
             find_height: self.find_height(),
             fullscreen: self.fullscreen.is_some(),
             scale: window.scale_factor(),
-        });
-        if self.bounds != Some(bounds) && self.page_command(BrowserCommand::Resize(bounds)) {
-            self.bounds = Some(bounds);
         }
     }
 
@@ -1804,8 +1810,10 @@ impl Render for BrowserView {
         if self.session_revision.is_none() {
             return crate::controls::watch_pointer(div())
                 .size_full()
+                .relative()
                 .flex()
                 .flex_col()
+                .child(page_card::window_fill_layer(None, window, cx))
                 .child(title_bar(div(), window.is_maximized()))
                 .child(self.startup_panel(cx));
         }
@@ -1848,11 +1856,15 @@ impl Render for BrowserView {
         } else {
             div().flex_1().h_full()
         };
+        // The web view draws in the card once the browser is up, so the fill leaves it clear.
+        let page_drawn = self.browser_ready && !self.closing && self.page_card_shows_web_page();
+        let card = page_drawn.then(|| page_card::card_edges(self.card_frame(window)));
         let sidebar = self.sidebar(window, cx);
         let chrome = crate::controls::watch_pointer(div())
             .size_full()
+            .relative()
             .key_context("Syrinx")
-            .bg(theme::window_fill())
+            .child(page_card::window_fill_layer(card, window, cx))
             .text_color(theme::text())
             .text_sm()
             .font_family("Segoe UI Variable Text")
@@ -2110,7 +2122,7 @@ fn show_app_icon(hwnd: isize) {
     }
 }
 
-fn native_handle(window: &Window) -> Result<isize, &'static str> {
+pub(crate) fn native_handle(window: &Window) -> Result<isize, &'static str> {
     let handle =
         HasWindowHandle::window_handle(window).map_err(|_| "The native window is unavailable.")?;
     match handle.as_raw() {

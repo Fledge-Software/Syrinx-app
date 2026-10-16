@@ -14,9 +14,10 @@ use syrinx_ui::{Color, Palette};
 use super::BrowserView;
 use super::customize::CustomAccent;
 use super::site_permissions::SitePermissions;
+use super::theme_editor::ThemeEditor;
 use super::tile_editor::TileEditor;
 use super::tiles::{self, TileAction};
-use crate::appearance::Appearance;
+use crate::appearance::{Appearance, SavedThemes};
 use crate::controls::control;
 use crate::session::SessionCommand;
 use crate::theme::{self, rgba};
@@ -37,6 +38,9 @@ pub(super) struct HomeState {
     pub(super) editing: Option<DestinationSurface>,
     pub(super) editor: Option<TileEditor>,
     pub(super) custom_accent: Option<CustomAccent>,
+    /// The owner's saved themes, and the one whose controls are open.
+    pub(super) themes: SavedThemes,
+    pub(super) theme_editor: Option<ThemeEditor>,
     /// Customize's list of remembered site permissions (DW-7).
     pub(super) site_permissions: SitePermissions,
 }

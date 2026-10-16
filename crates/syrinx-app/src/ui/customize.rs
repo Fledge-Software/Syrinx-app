@@ -8,11 +8,13 @@ use gpui::{
 };
 use gpui_component::input::{InputEvent, InputState};
 use syrinx_core::QuickDestinations;
+use syrinx_platform::backdrop::{self, Backdrop};
 use syrinx_ui::metrics::{radius, text};
-use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette, PaletteId, palette};
+use syrinx_ui::theme::Material;
+use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette};
 
 use super::BrowserView;
-use crate::appearance::{Appearance, accent_hex, parse_accent};
+use crate::appearance::{self, Appearance, accent_hex, parse_accent};
 use crate::controls::control;
 use crate::session::SessionCommand;
 use crate::text_field;
@@ -30,8 +32,8 @@ pub(super) struct CustomAccent {
 }
 
 impl BrowserView {
-    /// Shows the stored appearance, sidebar width state and tiles; this restores, so nothing
-    /// is saved back.
+    /// Shows the stored appearance, saved themes, sidebar width state and tiles. Only an old
+    /// palette choice carried over into a saved theme is written back, once.
     pub(super) fn restore_preferences(
         &mut self,
         settings: &BTreeMap<String, String>,
@@ -41,17 +43,22 @@ impl BrowserView {
     ) {
         self.home.destinations = destinations;
         self.restore_sidebar_state(settings);
-        let (appearance, unreadable) = Appearance::from_settings(settings);
-        if !unreadable.0.is_empty() {
+        let loaded = appearance::load(settings);
+        if !loaded.unreadable.0.is_empty() {
             self.message =
                 "A saved appearance setting could not be read, so Syrinx used its default."
                     .to_owned();
         }
-        self.show_appearance(appearance, window, cx);
+        // An old Haze, Glass or Tint choice is saved once as a theme of that name.
+        if !loaded.carried_over.is_empty() {
+            self.command(SessionCommand::SaveSettings(loaded.carried_over));
+        }
+        self.home.themes = loaded.themes;
+        self.show_appearance(loaded.appearance, window, cx);
     }
 
     /// Applies and saves a Customize choice.
-    fn choose_appearance(
+    pub(super) fn choose_appearance(
         &mut self,
         appearance: Appearance,
         window: &mut Window,
@@ -65,12 +72,17 @@ impl BrowserView {
         cx.notify();
     }
 
-    fn show_appearance(&mut self, appearance: Appearance, window: &mut Window, cx: &mut App) {
+    pub(super) fn show_appearance(
+        &mut self,
+        appearance: Appearance,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         // Every later render, in every Syrinx window, reads the new palette.
         self.home.appearance = appearance;
-        theme::apply(appearance.drawn_palette());
+        theme::apply(appearance.drawn_palette(&self.home.themes));
         theme::apply_component_theme(cx);
-        window.set_background_appearance(theme::window_material());
+        show_material(appearance.material(&self.home.themes), window);
         window.refresh();
     }
 
@@ -90,7 +102,7 @@ impl BrowserView {
         } else {
             contents
                 .child(self.customize_title(palette, cx))
-                .child(self.palette_choices(palette, cx))
+                .child(self.theme_choices(palette, window, cx))
                 .child(self.accent_choices(palette, window, cx))
                 .child(self.transparency_switch(palette, cx))
                 .child(self.site_permissions_entry(palette, cx))
@@ -143,6 +155,7 @@ impl BrowserView {
     pub(super) fn close_customize(&mut self) {
         self.home.customize_open = false;
         self.home.custom_accent = None;
+        self.home.theme_editor = None;
         self.home.site_permissions.close();
         self.usage.report.close();
     }
@@ -179,37 +192,6 @@ impl BrowserView {
                 this.close_customize();
                 cx.notify();
             }))
-    }
-
-    fn palette_choices(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
-        let chosen = self.home.appearance;
-        let mut rows = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(group_heading(palette, "Palette"));
-        for id in PaletteId::ALL {
-            let selected = chosen.palette == id;
-            let row = palette_row(palette, id, chosen.accent, selected).on_click(cx.listener(
-                move |this, _, window, cx| {
-                    let appearance = Appearance {
-                        palette: id,
-                        ..this.home.appearance
-                    };
-                    this.choose_appearance(appearance, window, cx);
-                },
-            ));
-            rows = rows.child(row);
-        }
-        rows.child(
-            div()
-                .text_size(px(text::SMALL))
-                .text_color(rgba(palette.text_muted))
-                .child(
-                    "Haze and Glass let your desktop show through. They switch to Graphite when \
-                     Reduce transparency is on.",
-                ),
-        )
     }
 
     fn accent_choices(&self, palette: &Palette, window: &Window, cx: &mut Context<Self>) -> Div {
@@ -361,14 +343,29 @@ impl BrowserView {
                         div()
                             .text_size(px(text::SMALL))
                             .text_color(rgba(palette.text_muted))
-                            .child("Draws Haze and Glass as solid Graphite."),
+                            .child("Draws see-through themes opaque."),
                     ),
             )
             .child(switch)
     }
 }
 
-fn group_heading(palette: &Palette, title: &'static str) -> Div {
+/// Ask Windows for the theme's material; an opaque theme keeps Mica under its solid fill.
+fn show_material(material: Option<Material>, window: &Window) {
+    let backdrop = match material {
+        Some(Material::MicaAlt) => Backdrop::MicaAlt,
+        Some(Material::Acrylic) => Backdrop::Acrylic,
+        Some(Material::Mica | Material::None) | None => Backdrop::Mica,
+    };
+    let applied = super::native_handle(window)
+        .map_err(str::to_owned)
+        .and_then(|hwnd| backdrop::apply(hwnd, backdrop).map_err(|error| error.to_string()));
+    if let Err(error) = applied {
+        eprintln!("Syrinx could not set the {backdrop:?} backdrop: {error}");
+    }
+}
+
+pub(super) fn group_heading(palette: &Palette, title: &'static str) -> Div {
     div()
         .text_size(px(text::CAPTION))
         .font_weight(FontWeight::SEMIBOLD)
@@ -376,26 +373,29 @@ fn group_heading(palette: &Palette, title: &'static str) -> Div {
         .child(title.to_uppercase())
 }
 
-fn palette_description(id: PaletteId) -> &'static str {
-    match id {
-        PaletteId::Graphite => "Solid dark. The default.",
-        PaletteId::Haze => "Dark, softly coloured by your wallpaper.",
-        PaletteId::Glass => "See-through, with light edges.",
-        PaletteId::Tint => "Dark, in your accent colour.",
-        PaletteId::Paper => "Light.",
-    }
+/// What one theme row shows: its element id, name, a line about it and its colours.
+pub(super) struct ThemeRow<'a> {
+    pub(super) id: gpui::ElementId,
+    pub(super) name: &'a str,
+    pub(super) description: &'a str,
+    pub(super) sample: &'a Palette,
 }
 
-/// One palette choice: a miniature of that palette, its name and description.
-fn palette_row(panel: &Palette, id: PaletteId, accent: Accent, selected: bool) -> Stateful<Div> {
-    let sample = palette(id, accent);
+/// One theme choice: a miniature of that theme, its name and description.
+pub(super) fn theme_row(panel: &Palette, row: ThemeRow<'_>, selected: bool) -> Stateful<Div> {
+    let ThemeRow {
+        id,
+        name,
+        description,
+        sample,
+    } = row;
     let (background, outline) = if selected {
         (panel.accent.soft, panel.accent.soft_line)
     } else {
         (Color::rgba(0, 0, 0, 0.), panel.panel_divider)
     };
-    let mut row = control(div().id(id.id()), Role::RadioButton, id.name())
-        .aria_description(palette_description(id))
+    let mut row = control(div().id(id), Role::RadioButton, name.to_owned())
+        .aria_description(description.to_owned())
         .aria_toggled(toggled(selected))
         .h(px(56.))
         .w_full()
@@ -410,7 +410,7 @@ fn palette_row(panel: &Palette, id: PaletteId, accent: Accent, selected: bool) -
         .items_center()
         .gap(px(12.))
         .cursor_pointer()
-        .child(palette_miniature(&sample))
+        .child(palette_miniature(sample))
         .child(
             div()
                 .flex_1()
@@ -418,12 +418,17 @@ fn palette_row(panel: &Palette, id: PaletteId, accent: Accent, selected: bool) -
                 .flex()
                 .flex_col()
                 .gap(px(2.))
-                .child(div().font_weight(FontWeight::SEMIBOLD).child(id.name()))
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .truncate()
+                        .child(name.to_owned()),
+                )
                 .child(
                     div()
                         .text_size(px(text::SMALL))
                         .text_color(rgba(panel.text_muted))
-                        .child(palette_description(id)),
+                        .child(description.to_owned()),
                 ),
         );
     if selected {
@@ -478,7 +483,7 @@ fn palette_miniature(sample: &Palette) -> Div {
 }
 
 /// A radio button's or switch's checked state for screen readers.
-fn toggled(on: bool) -> Toggled {
+pub(super) fn toggled(on: bool) -> Toggled {
     if on { Toggled::True } else { Toggled::False }
 }
 

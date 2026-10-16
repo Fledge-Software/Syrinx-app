@@ -10,6 +10,7 @@ pub mod metrics;
 pub mod palette;
 pub mod sidebar;
 pub mod sidebar_setting;
+pub mod theme;
 pub mod tree_focus;
 
 pub use accent::{ACCENT_PRESETS, Accent, AccentColors, DEFAULT_ACCENT, FORMER_DEFAULT_ACCENT};

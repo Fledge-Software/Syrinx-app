@@ -384,6 +384,20 @@ you found it in the commit message, not here.
   region free of GPUI content and put the palette and the sidebar peek in
   separate owned popup windows, which work. Source:
   `docs/research/09-phase-0-verdict.md` (observed in the spike; high).
+- **A chrome background behind the page card hides every page.** The tab
+  gets its title and the status line says "Page loaded.", but the card stays
+  empty. GPUI's DirectComposition target is topmost
+  (`directx_renderer.rs`, `CreateTargetForHwnd(hwnd, true)`), so any pixel
+  GPUI paints over the card covers the WebView2 child window, even a root
+  `.bg()`. An `Opaque` window is also cleared to white under everything.
+  Paint the window fill only around the card
+  (`page_card::window_fill_layer`), keep the window's Mica backdrop for
+  every palette, and after changing what the root or the page pane paints,
+  run the app and look at a loaded page; the gate cannot see this. From
+  P1-28/29 (cc9c496) until the fix, every build, v0.1.0 and v0.2.0
+  included, hid every page. Source: the 2026-10-14 blank-page diagnosis,
+  which found a visible, full-size `WRY_WEBVIEW` child under an empty card
+  (observed; high).
 - **GPUI's Windows backend repaints every window on every display refresh,**
   even when nothing changed, so an idle Syrinx uses about 3.75% of a core.
   Patch the idle loop (D37) and measure idle CPU after any GPUI upgrade.

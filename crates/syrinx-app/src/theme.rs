@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use gpui::{App, Background, Rgba, WindowBackgroundAppearance, linear_color_stop, linear_gradient};
+use gpui::{App, Background, Rgba, linear_color_stop, linear_gradient};
 use gpui_component::{Theme, ThemeMode, ThemeToken};
 use syrinx_ui::{Accent, Color, Ground, Palette, PaletteId, palette};
 
@@ -57,8 +57,9 @@ pub(crate) fn ground() -> Rgba {
     })
 }
 
-/// What the main window paints behind all chrome: Tint's gradient, or a see-through palette's
-/// translucent tint over the OS material.
+/// What the main window paints behind all chrome: a solid colour, a gradient, or a see-through
+/// theme's translucent tint over the OS material. A three-stop gradient or grain is drawn as
+/// an image over this (`crate::ground_image`).
 pub(crate) fn window_fill() -> Background {
     CURRENT.with_borrow(|palette| match palette.ground {
         Ground::Solid(color) | Ground::Material { tint: color, .. } => rgba(color).into(),
@@ -66,7 +67,7 @@ pub(crate) fn window_fill() -> Background {
             angle_degrees,
             stops,
         } => {
-            // GPUI gradients take two stops, so Tint keeps its first and last.
+            // GPUI gradients take two stops; this keeps the first and last under the image.
             let [(from, from_at), _, (to, to_at)] = stops;
             linear_gradient(
                 angle_degrees,
@@ -74,15 +75,6 @@ pub(crate) fn window_fill() -> Background {
                 linear_color_stop(rgba(to), to_at),
             )
         }
-    })
-}
-
-/// The OS backdrop the drawn palette asks for. Glass's Acrylic needs `syrinx-platform`; until
-/// then it shares Haze's Mica (recorded in `docs/p1-28-29-home-settings.md`).
-pub(crate) fn window_material() -> WindowBackgroundAppearance {
-    CURRENT.with_borrow(|palette| match palette.ground {
-        Ground::Material { .. } => WindowBackgroundAppearance::MicaBackdrop,
-        Ground::Solid(_) | Ground::Gradient { .. } => WindowBackgroundAppearance::Opaque,
     })
 }
 
