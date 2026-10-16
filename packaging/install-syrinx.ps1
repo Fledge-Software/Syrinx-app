@@ -4,7 +4,7 @@
 [CmdletBinding()]
 param(
     # Unzipped package folder; defaults to the folder holding this script.
-    [string]$PackageDirectory = $PSScriptRoot,
+    [string]$PackageDirectory,
     # Program folder; defaults to %LOCALAPPDATA%\Programs\Syrinx.
     [string]$InstallDirectory
 )
@@ -13,6 +13,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'syrinx-registration.ps1')
 . (Join-Path $PSScriptRoot 'syrinx-common.ps1')
+# Windows PowerShell 5.1 leaves $PSScriptRoot empty in a param default under -File, so default here.
+if (-not $PackageDirectory) { $PackageDirectory = $PSScriptRoot }
 
 # Refuse without the Evergreen WebView2 runtime; Syrinx never downloads it itself. Reads only.
 function Assert-WebView2Runtime {
