@@ -98,6 +98,34 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-14
 
+- **Syrinx ships as a setup program that installs and updates itself
+  (P1-37).** Release 0.2.0 shipped a zip holding `syrinx.exe` and PowerShell
+  scripts. Copied out of that zip on its own, the exe ran, but nothing was
+  installed or registered. A downloaded zip's scripts are also refused by
+  Windows unless unblocked first. The owner's requirement: what Syrinx ships
+  must stand alone, set up the folders it needs where they belong on first
+  run, and update the existing install when a newer one is run.
+  - The owner chose `syrinx-setup.exe`, written in Rust, over two
+    alternatives. An Inno Setup wizard would need the tool on the build
+    runner and a second script language. A WiX MSI is the heaviest to
+    author and needs a licence check.
+  - The setup program carries the release package and installs it per user
+    into `%LOCALAPPDATA%\Programs\Syrinx`. It upgrades in place with the same
+    swap P1-39b's helper uses, keeping one previous version, and never
+    touches `%LOCALAPPDATA%\Syrinx\data`.
+  - Its checkbox "Register Syrinx as a browser" is ticked by default, as the
+    owner chose. It writes only the per-user keys P1-37 already lists and
+    never sets the default browser.
+  - The weekly release publishes the setup program as the download, beside
+    the zip.
+  - Every executable now links the C runtime statically
+    (`.cargo/config.toml`). 0.2.0's `syrinx.exe` imported `VCRUNTIME140.dll`,
+    so Windows would refuse to start it on a machine without the Visual C++
+    redistributable.
+  - This replaces the "portable zip plus scripts" recommendation as the way
+    people install Syrinx. The scripts remain the manual route. See
+    `docs/p1-37-installer-design.md`, "The setup program".
+
 - **The focus ring shows only after keyboard input, decided by Syrinx's own
   keyboard-or-pointer flag (DW-62).** P1-36 drew the ring on any focus, so
   a chrome button clicked with the mouse kept a ring until focus moved on.

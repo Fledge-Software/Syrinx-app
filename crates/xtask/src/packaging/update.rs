@@ -53,6 +53,11 @@ pub fn manifest_command(folder: &str, version: &str) -> Vec<String> {
     tool_command("manifest", &arguments)
 }
 
+/// Cargo arguments that pack `folder` into the payload `syrinx-setup.exe` carries.
+pub fn payload_command(folder: &str, output: &str) -> Vec<String> {
+    tool_command("payload", &["--package", folder, "--output", output])
+}
+
 /// Cargo arguments that pass the owner's `sign-update` options to the tool's `sign`.
 pub fn sign_command(options: &[String]) -> Vec<String> {
     let options: Vec<&str> = options.iter().map(String::as_str).collect();
@@ -78,6 +83,28 @@ mod tests {
             .filter(|pair| pair[0] == "--file")
             .map(|pair| pair[1].as_str())
             .collect()
+    }
+
+    #[test]
+    fn the_payload_command_names_the_folder_and_the_output() {
+        let command = payload_command(r"C:\package", r"C:\out.payload");
+        let tail: Vec<&str> = command
+            .iter()
+            .skip_while(|argument| *argument != "--")
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            tail,
+            [
+                "--",
+                "payload",
+                "--package",
+                r"C:\package",
+                "--output",
+                r"C:\out.payload"
+            ]
+        );
+        assert!(command.contains(&RELEASE_TOOL_FEATURE.to_owned()));
     }
 
     #[test]

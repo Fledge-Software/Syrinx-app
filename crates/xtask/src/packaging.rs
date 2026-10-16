@@ -24,6 +24,10 @@ const OUTPUT_FOLDER: &str = r"target\package";
 /// Cargo target directory for the `installed` build, so it never replaces the development exe.
 const PACKAGE_TARGET_DIR: &str = r"target\package-build";
 
+/// The setup program's binary, and the variable its build script reads the payload from.
+const SETUP_BINARY: &str = "syrinx-setup";
+const SETUP_PAYLOAD_VARIABLE: &str = "SYRINX_SETUP_PAYLOAD";
+
 /// Build the `local` executable and assemble a versioned folder and zip under `target\package`.
 pub fn package(root: &Path) -> Result<(), String> {
     check(root)?;
@@ -66,10 +70,14 @@ pub fn package(root: &Path) -> Result<(), String> {
     let name = manifest::package_name(&identity);
     let folder = fresh_package_folder(&output.join(&name))?;
     let files = copy_package_files(root, &folder)?;
+    for program in [EXECUTABLE, APPLY_HELPER] {
+        require_static_runtime(&folder.join(program))?;
+    }
     fs::write(folder.join(MANIFEST), manifest::render(&identity, &files)?)
         .map_err(|error| format!("Could not write {MANIFEST}: {error}"))?;
     write_update_manifest(root, &folder, &identity)?;
     let archive = zip_package(&output, &name)?;
+    let setup = build_setup(root, &output, &folder, &name)?;
 
     println!("Package folder: {}", folder.display());
     println!(
@@ -77,6 +85,7 @@ pub fn package(root: &Path) -> Result<(), String> {
         folder.join(update::UPDATE_MANIFEST).display()
     );
     println!("Package zip:    {}", archive.display());
+    println!("Setup program:  {}", setup.display());
     println!("Nothing was installed or registered. See docs/p1-37-installer-design.md.");
     Ok(())
 }
@@ -87,10 +96,88 @@ fn write_update_manifest(
     folder: &Path,
     identity: &BuildIdentity,
 ) -> Result<(), String> {
-    let folder = folder
-        .to_str()
-        .ok_or_else(|| format!("{} is not a Unicode path.", folder.display()))?;
-    run_tool(root, &update::manifest_command(folder, &identity.version))
+    run_tool(
+        root,
+        &update::manifest_command(text(folder)?, &identity.version),
+    )
+}
+
+/// Pack the finished package folder into `syrinx-setup.exe` and copy it beside the zip.
+fn build_setup(root: &Path, output: &Path, folder: &Path, name: &str) -> Result<PathBuf, String> {
+    let payload = output.join(format!("{name}.payload"));
+    run_tool(
+        root,
+        &update::payload_command(text(folder)?, text(&payload)?),
+    )?;
+    crate::run_cargo_with(
+        root,
+        &[
+            "build",
+            "--package",
+            "syrinx-app",
+            "--bin",
+            SETUP_BINARY,
+            "--features",
+            "installed",
+            "--profile",
+            "local",
+            "--target-dir",
+            PACKAGE_TARGET_DIR,
+            "--offline",
+            "--locked",
+        ],
+        &[(SETUP_PAYLOAD_VARIABLE, &payload)],
+    )?;
+    let built = root
+        .join(PACKAGE_TARGET_DIR)
+        .join("local")
+        .join(format!("{SETUP_BINARY}.exe"));
+    let setup = output.join(setup_name(name));
+    fs::copy(&built, &setup)
+        .map_err(|error| format!("Could not copy {}: {error}", built.display()))?;
+    require_static_runtime(&setup)?;
+    fs::remove_file(&payload)
+        .map_err(|error| format!("Could not remove {}: {error}", payload.display()))?;
+    Ok(setup)
+}
+
+/// The Visual C++ runtime DLLs a dynamically linked executable imports.
+const DYNAMIC_RUNTIME_DLLS: [&[u8]; 2] = [b"vcruntime140.dll", b"msvcp140.dll"];
+
+/// Refuse an executable that needs the Visual C++ redistributable, which a clean Windows lacks.
+///
+/// `.cargo/config.toml` links the runtime statically, but a `RUSTFLAGS` variable silently
+/// replaces that setting, so the built files are checked rather than the configuration.
+fn require_static_runtime(executable: &Path) -> Result<(), String> {
+    let bytes = fs::read(executable)
+        .map_err(|error| format!("Could not read {}: {error}", executable.display()))?
+        .to_ascii_lowercase();
+    if let Some(dll) = DYNAMIC_RUNTIME_DLLS
+        .iter()
+        .find(|dll| imports_name(&bytes, dll))
+    {
+        return Err(format!(
+            "{} imports {}, so it would not start without the Visual C++ redistributable. \
+             Build without RUSTFLAGS overriding .cargo/config.toml's crt-static setting.",
+            executable.display(),
+            String::from_utf8_lossy(dll)
+        ));
+    }
+    Ok(())
+}
+
+fn imports_name(bytes: &[u8], name: &[u8]) -> bool {
+    bytes.windows(name.len()).any(|window| window == name)
+}
+
+/// The setup program's published name, beside the zip of the same package.
+pub fn setup_name(package: &str) -> String {
+    format!("{package}-setup.exe")
+}
+
+fn text(path: &Path) -> Result<&str, String> {
+    path.to_str()
+        .ok_or_else(|| format!("{} is not a Unicode path.", path.display()))
 }
 
 /// Sign a package's `manifest` and a fresh latest statement with the owner's stored key.
@@ -411,6 +498,20 @@ mod tests {
                 "{script} is missing"
             );
         }
+    }
+
+    #[test]
+    fn a_dynamic_runtime_import_is_found_in_any_case() {
+        let imports = b"kernel32.dll\0VCRUNTIME140.dll\0".to_ascii_lowercase();
+        assert!(imports_name(&imports, DYNAMIC_RUNTIME_DLLS[0]));
+        assert!(!imports_name(
+            b"kernel32.dll\0user32.dll",
+            DYNAMIC_RUNTIME_DLLS[0]
+        ));
+        assert_eq!(
+            setup_name("Syrinx-0.3.0-abc-x64"),
+            "Syrinx-0.3.0-abc-x64-setup.exe"
+        );
     }
 
     #[test]
