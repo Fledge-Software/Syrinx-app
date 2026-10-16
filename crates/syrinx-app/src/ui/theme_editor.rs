@@ -275,10 +275,11 @@ impl BrowserView {
             .themes
             .get(editor.slot)
             .is_some_and(|theme| theme.material == Material::None && theme.fill != Fill::Solid);
+        // A hidden field keeps the stored second colour (`None`); a shown one must parse.
         let second = if shown {
-            theme::parse_hex(&read(&editor.second))
+            theme::parse_hex(&read(&editor.second)).map(Some)
         } else {
-            Some(Color::hex(0))
+            Some(None)
         };
         let (Some(background), Some(second)) = (background, second) else {
             editor.error = Some("Enter each colour as # and six hex digits, such as #141519.");
@@ -289,15 +290,7 @@ impl BrowserView {
         let slot = editor.slot;
         self.change_theme(
             slot,
-            move |theme| {
-                if !name.is_empty() {
-                    theme.name = name;
-                }
-                theme.background = background;
-                if let Fill::Gradient { angle, .. } = theme.fill {
-                    theme.fill = Fill::Gradient { second, angle };
-                }
-            },
+            move |theme| apply_typed(theme, name, background, second),
             window,
             cx,
         );
@@ -610,6 +603,18 @@ impl BrowserView {
     }
 }
 
+/// Put the editor's typed name and colours into `theme`. `second` is `None` while its field
+/// is hidden (a material is on), so a gradient keeps its stored second colour.
+fn apply_typed(theme: &mut ThemeSpec, name: String, background: Color, second: Option<Color>) {
+    if !name.is_empty() {
+        theme.name = name;
+    }
+    theme.background = background;
+    if let (Some(second), Fill::Gradient { angle, .. }) = (second, theme.fill) {
+        theme.fill = Fill::Gradient { second, angle };
+    }
+}
+
 /// A click that moves a stepped choice by `steps`.
 fn step_listener(
     slot: usize,
@@ -817,4 +822,44 @@ fn stepper_buttons(
         } else {
             raise_button
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hidden_second_colour_field_keeps_the_gradient_colour() {
+        let second = Color::hex(0x2A1838);
+        let mut theme = ThemeSpec {
+            fill: Fill::Gradient { second, angle: 155 },
+            material: Material::Mica,
+            ..ThemeSpec::new("Gradient under Mica")
+        };
+        apply_typed(&mut theme, "Renamed".to_owned(), Color::hex(0x101010), None);
+        assert_eq!(theme.name, "Renamed");
+        assert_eq!(theme.background, Color::hex(0x101010));
+        assert_eq!(theme.fill, Fill::Gradient { second, angle: 155 });
+    }
+
+    #[test]
+    fn a_shown_second_colour_field_replaces_the_gradient_colour() {
+        let mut theme = ThemeSpec {
+            fill: Fill::Gradient {
+                second: Color::hex(0x2A1838),
+                angle: 155,
+            },
+            ..ThemeSpec::new("Gradient")
+        };
+        let (typed, background) = (Color::hex(0x334455), theme.background);
+        apply_typed(&mut theme, String::new(), background, Some(typed));
+        assert_eq!(theme.name, "Gradient");
+        assert_eq!(
+            theme.fill,
+            Fill::Gradient {
+                second: typed,
+                angle: 155
+            }
+        );
+    }
 }
