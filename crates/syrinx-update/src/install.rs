@@ -22,6 +22,8 @@ mod tests;
 #[cfg(test)]
 mod tests_apply;
 #[cfg(test)]
+mod tests_discard;
+#[cfg(test)]
 mod tests_reset;
 #[cfg(test)]
 mod tests_setup;

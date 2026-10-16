@@ -28,7 +28,7 @@ use std::{
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use history::{HistoryRecorder, Observation};
-use syrinx_core::usage::{ErrorCategory, Feature, Timing, UsageDate, UsageRecorder};
+use syrinx_core::usage::{ErrorCategory, Feature, ReportPeriod, Timing, UsageDate, UsageRecorder};
 use syrinx_core::{
     Activation, BookmarkImport, DestinationEdit, DestinationError, DestinationSurface,
     ImportCommit, QuickDestinations, SavedPageId, SavedPageSnapshot, SnapshotError, TabError,
@@ -163,6 +163,12 @@ pub enum SessionCommand {
     SnapshotBeforeUpdate,
     /// Turns usage counting on or off, or resets it (AN-01); answered with `Usage`.
     Usage(UsageControl),
+    /// Builds one period's exact report text for the preview (AN-02); answered with
+    /// `UsageReport`. Writes nothing and puts nothing on the clipboard.
+    UsageReport {
+        request_id: u64,
+        period: ReportPeriod,
+    },
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -255,6 +261,12 @@ pub enum SessionEvent {
         /// The worker's real status, sent with every problem so the window never shows a stale one.
         status: UsageStatus,
         problem: Option<SessionError>,
+    },
+    /// The answer to `UsageReport`: the exact text a Save or Copy would export.
+    UsageReport {
+        request_id: u64,
+        period: ReportPeriod,
+        result: Result<String, SessionError>,
     },
     /// Connections have closed before this event; joining the worker is now safe.
     Stopped,
@@ -730,6 +742,17 @@ impl Worker {
                     let (status, problem) = usage.control(control, local_today(), Instant::now());
                     let problem = problem.map(SessionError::Usage);
                     emit(events, SessionEvent::Usage { status, problem })?;
+                }
+                Ok(SessionCommand::UsageReport { request_id, period }) => {
+                    let result = usage
+                        .report(period, local_today())
+                        .map_err(SessionError::Usage);
+                    let answer = SessionEvent::UsageReport {
+                        request_id,
+                        period,
+                        result,
+                    };
+                    emit(events, answer)?;
                 }
                 Ok(command) => {
                     self.handle(store, command, events)?;
@@ -1341,6 +1364,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::GrowSyntheticCatalogue { .. }
         | SessionCommand::SnapshotBeforeUpdate
         | SessionCommand::Usage(_)
+        | SessionCommand::UsageReport { .. }
         | SessionCommand::Shutdown => {}
     }
     Ok(())

@@ -299,6 +299,63 @@ fn a_staged_copy_changed_after_staging_fails_its_second_check() {
 }
 
 #[test]
+fn a_refused_copy_whose_removal_stops_is_removed_and_reported_at_the_next_start() {
+    // DW-69: the helper marks the copy and records the outcome before it removes anything.
+    let (sandbox, keys) = staged_sandbox();
+    fs::write(sandbox.layout.staged().join("added.dll"), b"extra").expect("tamper");
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    hook::stop_at(Some(Step::DiscardBegun));
+    assert_eq!(
+        apply_update(
+            &request(&sandbox.layout, &keys.pinned, ApplyMode::Quit),
+            &mut launcher
+        ),
+        Err(InstallError::Interrupted(Step::DiscardBegun))
+    );
+    hook::stop_at(None);
+    assert!(!sandbox.layout.pending().exists());
+    assert!(sandbox.layout.staged().exists(), "stopped before removal");
+
+    let recovery = recover(&sandbox.layout, OLD).expect("next start");
+    let outcome = recovery.outcome.expect("still told");
+    assert_eq!(outcome.result, UpdateResult::VerificationFailed);
+    assert_eq!(recovery.staged, None);
+    assert_untouched(&sandbox);
+    assert!(!sandbox.layout.staging_marker().exists());
+    assert!(!sandbox.layout.previous().exists(), "nothing was swapped");
+}
+
+#[test]
+fn a_refused_copy_held_open_is_removed_and_reported_once_a_start_succeeds() {
+    // DW-69: a held file stops the helper's discard and the next start's; the outcome waits.
+    let (sandbox, keys) = staged_sandbox();
+    fs::write(sandbox.layout.staged().join("added.dll"), b"extra").expect("tamper");
+    let held = open_unchangeable(&sandbox.layout.staged().join(PROGRAM_EXECUTABLE))
+        .expect("hold the staged program");
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Quit),
+        &mut launcher,
+    );
+    assert!(
+        matches!(applied, Err(InstallError::Io { .. })),
+        "{applied:?}"
+    );
+    let stopped = recover(&sandbox.layout, OLD).expect_err("still held at this start");
+    assert!(matches!(stopped, InstallError::Io { .. }), "{stopped:?}");
+    assert!(sandbox.layout.outcome().exists(), "outcome kept for later");
+    assert!(sandbox.layout.staged().join(PACKAGE_RECORD).exists());
+
+    drop(held);
+    let recovery = recover(&sandbox.layout, OLD).expect("a later start");
+    let outcome = recovery.outcome.expect("told once the start succeeds");
+    assert_eq!(outcome.result, UpdateResult::VerificationFailed);
+    assert_eq!(recovery.staged, None);
+    assert_untouched(&sandbox);
+    assert!(!sandbox.layout.staging_marker().exists());
+}
+
+#[test]
 fn the_helper_waits_for_syrinx_to_exit() {
     let (sandbox, keys) = staged_sandbox();
     let held = ApplyLock::try_acquire(&sandbox.layout)
@@ -336,6 +393,81 @@ fn the_helper_waits_for_syrinx_to_exit() {
     );
     release.join().expect("release thread");
     assert_eq!(applied, Ok(Applied::Installed(NEW)));
+}
+
+#[test]
+fn restart_now_drops_an_older_outcome_a_failed_start_kept() {
+    // DW-69: an outcome about an earlier attempt must not be told while the newer version runs.
+    let (sandbox, keys) = staged_sandbox();
+    let older = Outcome {
+        result: UpdateResult::ApplyFailed,
+        attempted: Version::new(1, 3, 9),
+        current: OLD,
+    };
+    older.write(&sandbox.layout).expect("kept outcome");
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Restart),
+        &mut launcher,
+    );
+    assert_eq!(applied, Ok(Applied::Installed(NEW)));
+    assert!(!sandbox.layout.outcome().exists());
+    let recovery = recover(&sandbox.layout, NEW).expect("next start");
+    assert_eq!(recovery.outcome, None);
+}
+
+#[test]
+fn a_start_while_the_helper_records_a_failure_waits_and_it_is_told_once() {
+    // DW-69: the helper records a failure before releasing the lock, so a start at that moment
+    // finds the helper running and touches nothing; the next start tells the outcome once.
+    let (sandbox, keys) = staged_sandbox();
+    let stranger = std::collections::BTreeMap::from([("owner.txt".to_owned(), b"keep".to_vec())]);
+    write_tree(&sandbox.layout.previous(), &stranger);
+    let layout = sandbox.layout.clone();
+    let checked = Rc::new(RefCell::new(false));
+    let ran = Rc::clone(&checked);
+    hook::run_at(Step::FailureRecorded, move || {
+        assert!(layout.outcome().exists(), "recorded under the lock");
+        let recovery = recover(&layout, OLD).expect("a start during the helper");
+        assert!(recovery.helper_running);
+        assert_eq!(recovery.outcome, None);
+        assert!(layout.outcome().exists(), "nothing cleared");
+        *ran.borrow_mut() = true;
+    });
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Quit),
+        &mut launcher,
+    );
+    assert!(
+        *checked.borrow(),
+        "the start ran while the helper held the lock"
+    );
+    assert!(
+        matches!(applied, Err(InstallError::UnexpectedEntry { .. })),
+        "{applied:?}"
+    );
+    let told = recover(&sandbox.layout, OLD).expect("the next start");
+    let outcome = told.outcome.expect("told");
+    assert_eq!(outcome.result, UpdateResult::ApplyFailed);
+    let again = recover(&sandbox.layout, OLD).expect("a later start");
+    assert_eq!(again.outcome, None, "told once");
+}
+
+#[test]
+fn a_clean_restart_is_installed_even_if_an_older_notice_cannot_be_removed() {
+    let (sandbox, keys) = staged_sandbox();
+    // A folder in the outcome's place cannot be removed as a file.
+    fs::create_dir(sandbox.layout.outcome()).expect("unremovable outcome");
+    let mut launcher = FakeLauncher::new(&sandbox.layout, Start::Cleanly);
+    let applied = apply_update(
+        &request(&sandbox.layout, &keys.pinned, ApplyMode::Restart),
+        &mut launcher,
+    );
+    assert_eq!(applied, Ok(Applied::Installed(NEW)));
+    assert_new_installed(&sandbox);
+    let state = UpdateState::read(&sandbox.layout).expect("state");
+    assert_eq!(state.result, Some(UpdateResult::Installed));
 }
 
 #[test]

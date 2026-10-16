@@ -50,9 +50,9 @@ const COMPACT_LETTER_SIZE: f32 = 13.;
 impl BrowserView {
     /// Favorites at the sidebar's width: the full section when labels show, otherwise one
     /// column of icon tiles that fits the favicon-only sidebar.
-    pub(super) fn favorites(&self, labels: bool, cx: &mut Context<Self>) -> Div {
+    pub(super) fn favorites(&self, labels: bool, window: &Window, cx: &mut Context<Self>) -> Div {
         let favorites = if labels {
-            self.favorites_section(cx)
+            self.favorites_section(window, cx)
         } else {
             self.favorites_column(cx)
         };
@@ -92,7 +92,7 @@ impl BrowserView {
 
     /// The Favorites grid and, while one is open, the Favorites tile form. Editing starts
     /// from the sidebar's menu, so there is no heading.
-    fn favorites_section(&self, cx: &mut Context<Self>) -> Div {
+    fn favorites_section(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let palette = theme::current();
         let surface = DestinationSurface::Favorites;
         let mut section = div()
@@ -106,7 +106,7 @@ impl BrowserView {
             .as_ref()
             .filter(|editor| editor.surface == surface)
         {
-            section = section.child(self.tile_editor(editor, &palette, cx));
+            section = section.child(self.tile_editor(editor, &palette, window, cx));
         }
         section
     }
