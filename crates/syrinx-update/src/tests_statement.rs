@@ -50,7 +50,7 @@ fn manifest_bytes(version: Version, contents: &[u8]) -> Result<Vec<u8>, UpdateEr
     Ok(Manifest::new(version, Version::new(1, 0, 0), vec![entry])?.to_bytes())
 }
 
-/// Two pinned keys, as DW-30 arranges: a primary and an offline backup.
+/// Two pinned keys, as #55 arranges: a primary and an offline backup.
 struct Keys {
     primary: TestKeyPair,
     backup: TestKeyPair,
@@ -425,7 +425,7 @@ fn the_backup_key_is_accepted_and_an_unpinned_key_is_not() -> Result<(), UpdateE
     let result = sign_release(&manifest, &stranger, &keys.pinned, terms(4, 30));
     assert_eq!(result.err(), Some(UpdateError::UnknownKey));
 
-    // Until DW-30 pins the owner's keys, every statement is refused.
+    // Until #55 pins the owner's keys, every statement is refused.
     let result = verify_statement(
         &by_backup.statement,
         &by_backup.statement_signature,

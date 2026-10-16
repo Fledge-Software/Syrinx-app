@@ -69,7 +69,7 @@ debugger stack run only when a test process actually crashed (a Windows
 
 - **It does not sign anything.** Syrinx has no code-signing certificate
   (D38), so Windows SmartScreen warns before the first run, and the website
-  says so. The P1-38 update packages and their signing key (DW-30) are a
+  says so. The P1-38 update packages and their signing key (issue #55) are a
   separate piece of work; these zips are not update packages.
 - **It does not install, register or update Syrinx anywhere.** The zip is
   P1-37's portable package; installing it remains a step the person
@@ -119,5 +119,5 @@ these are listed rather than changed. Checked on 2026-10-13:
   elsewhere (for example `ui-ux-pro-max`). Check that each one's licence
   allows redistribution, or stop tracking them before going public.
 - **Secrets.** No keys, tokens, `.env` or certificate files are tracked, and
-  the P1-38 production key does not exist yet (DW-30). GitHub's secret
+  the P1-38 production key does not exist yet (issue #55). GitHub's secret
   scanning runs automatically once the repository is public.

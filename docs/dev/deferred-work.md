@@ -12,3 +12,7 @@ excuses a failing test, a silenced lint or a swallowed error.
 | Issue | Deferred work and why | Status |
 | --- | --- | --- |
 | #28 | Bound palette command ranking before plugins can register commands (was DW-5). | Open |
+| #55 | Pin the owner's release public keys in `PRODUCTION_KEYS` (`crates/syrinx-update/src/keys.rs`); empty until the owner creates the keys, so every update is refused (was DW-30). | Open |
+| #56 | Show "Last checked N days ago" for updates; waits until after P1-40 (was DW-67). | Open |
+| #57 | Keep keyboard focus in the find bar while typing (was DW-71). | Open |
+| #58 | Right-click menu on sidebar rows; Ctrl W on a focused row is built (DW-63 follow-up). | Open |

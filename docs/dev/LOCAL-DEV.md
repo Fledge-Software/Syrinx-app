@@ -470,7 +470,7 @@ Since P1-39b the package also holds `syrinx-apply.exe`, the update helper,
 built from `syrinx-update` without the release tool. "Install update from
 file…" (Customize and the palette) works only in an `installed` build
 running from a folder named `Syrinx`; a development build says so and
-touches nothing. With `PRODUCTION_KEYS` still empty (DW-30), an installed
+touches nothing. With `PRODUCTION_KEYS` still empty (issue #55), an installed
 build refuses every package as signed by an unknown key. The staging and
 recovery tests write only under `target\syrinx-update-tests`. See
 `docs/update-format.md`, "P1-39b".
@@ -491,7 +491,7 @@ serial check sees only the same package folder, so the owner must track the
 highest serial they have issued outside the repository; installed copies
 refuse a reused serial whose statement differs, and a lower one. The
 command verifies what it signed against `PRODUCTION_KEYS` before writing,
-so until the owner's keys are pinned (DW-30) it refuses every key. Only the
+so until the owner's keys are pinned (issue #55) it refuses every key. Only the
 owner runs it; agents never create, open or name a release key. Its tests
 use in-memory keys only. Format and checks:
 `docs/update-format.md`, "P1-39a: the latest-version statement".

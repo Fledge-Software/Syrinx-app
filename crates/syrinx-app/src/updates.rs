@@ -224,7 +224,7 @@ impl UpdateContext {
 }
 
 /// Refuse before reading any package, or contacting the host, while no release key is pinned:
-/// nothing could be verified until the owner's keys exist (DW-30, P1-39d).
+/// nothing could be verified until the owner's keys exist (#55, P1-39d).
 fn require_release_keys(keys: &KeySet) -> Result<(), InstallError> {
     if keys.is_empty() {
         return Err(InstallError::NoReleaseKeys);

@@ -227,9 +227,9 @@ registry or a settings file. A key delivered alongside an update would let
 whoever controls the delivery choose the key.
 
 **The production key does not exist yet.** `PRODUCTION_KEYS` is an empty
-placeholder marked `TODO(DW-30)` in `crates/syrinx-update/src/keys.rs`, and
-deferred-work item DW-30 tracks it (its GitHub issue replaces the `DW-30`
-tag; see `docs/dev/deferred-work.md`). Because the set is empty,
+placeholder marked `TODO(#55)` in `crates/syrinx-update/src/keys.rs`, and
+GitHub issue #55 (formerly deferred-work item DW-30) tracks it; see
+`docs/dev/deferred-work.md`. Because the set is empty,
 every package fails with an unknown-key error: the verifier fails closed
 until the owner creates a key. No real key, public or private, is in the
 repository.
@@ -370,7 +370,7 @@ previous)` runs, in order:
 2. Find the pinned key the signature names, refusing an unknown identifier,
    and verify the signature with CNG. Any pinned key is accepted, which is
    how the backup key keeps installed copies updatable if the primary is
-   lost (DW-30).
+   lost (issue #55).
 3. Only then parse the statement strictly and require its canonical form,
    including the 60-day cap. A statement signed with a longer lifetime is
    still refused.
@@ -432,7 +432,7 @@ public half, never the private key. The statement is issued at the current
 time and expires `--days` later. The serial must be higher than one already
 in the folder's `latest`. Before writing, the tool verifies both signatures
 as an installed copy would, against `PRODUCTION_KEYS`, so it refuses a key
-that is not pinned. Because `PRODUCTION_KEYS` is empty until DW-30, the
+that is not pinned. Because `PRODUCTION_KEYS` is empty until issue #55, the
 command refuses every key today; that is intended, as it fails closed until
 the owner's keys exist.
 
@@ -464,7 +464,7 @@ repository holds no key.
 - P1-39c fetches `latest`, `latest.sig` and the package from
   `https://syrinxapp.dev/updates/v1/` (see "P1-39c" below).
 - P1-39d is the owner's key ceremony, the pinning of both public keys
-  (DW-30) and the first real `sign-update`.
+  (issue #55) and the first real `sign-update`.
 
 ## P1-39b: staging, "Install update from file…", the helper and rollback
 
@@ -477,7 +477,7 @@ the new one does not start. Without this slice the verifier protects
 nothing, because no update passes through it, and every fix during the
 owner's default-browser week (P1-40) would mean rerunning
 `install-syrinx.ps1` by hand. It adds no network call, no WinHTTP and no
-key: `PRODUCTION_KEYS` is still empty (DW-30), so today every real install
+key: `PRODUCTION_KEYS` is still empty (issue #55), so today every real install
 from a file is refused as signed by an unknown key, which is the intended
 fail-closed behaviour until P1-39d.
 
@@ -811,7 +811,7 @@ and, after the owner's yes, downloads it into P1-39b's staging. Without it
 every update would still mean copying a package folder by hand. It is the
 only place Syrinx makes a network call of its own, which the owner approved
 on 2026-10-13 as the one exception to D9 (`docs/decisions.md`). Production
-use still waits on P1-39d: `PRODUCTION_KEYS` is empty (DW-30) and the host
+use still waits on P1-39d: `PRODUCTION_KEYS` is empty (issue #55) and the host
 is not set up, so today a real check fails closed.
 
 ### When Syrinx contacts the host
@@ -984,10 +984,10 @@ No test resolves a name or reaches another machine.
 ### Not in this slice
 
 - The proposal's "Last checked 47 days ago" line in Settings is deferred as
-  DW-67: it needs the day of the last check in `Updates\state`, a format
+  issue #56: it needs the day of the last check in `Updates\state`, a format
   change of its own. The owner confirmed on 2026-10-14 that it stays
   deferred and is not needed before P1-40.
-- P1-39d: the release keys (DW-30), the host set-up and the first real
+- P1-39d: the release keys (issue #55), the host set-up and the first real
   update by the owner. The host must serve its full certificate chain, so
   Windows never has to fetch a missing intermediate (see "TLS" above).
 
@@ -996,7 +996,7 @@ No test resolves a name or reaches another machine.
 - Fetching the four small signed files before asking is approved, so the
   confirmation can show a verified size.
 - Certificate revocation checking stays off.
-- DW-67, the "Last checked" line, stays deferred and is not needed before
+- issue #56, the "Last checked" line, stays deferred and is not needed before
   P1-40.
 
 ## DW-66: "Reset update records"
@@ -1240,7 +1240,7 @@ gained a case after a finished discard
 The owner approved the update host, how and when Syrinx contacts it, the
 install and restart behaviour and the latest-version statement on
 2026-10-13 (`docs/decisions.md`). The release keys remain the owner's to
-create in P1-39d (DW-30): since 2026-10-14 the weekly release workflow signs
+create in P1-39d (issue #55): since 2026-10-14 the weekly release workflow signs
 with a primary key held as a GitHub Actions secret and the backup is an
 encrypted file in the owner's password manager (`docs/decisions.md`,
 2026-10-14). The owner's steps are in `docs/owner-checklist.md`.

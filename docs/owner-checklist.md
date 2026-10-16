@@ -34,7 +34,7 @@ on `main`.
   2026-10-14). It will give you the commands for the one-time key creation.
 - Then, outside any agent session: create the key, put it in the GitHub
   secret and the backup in your password manager, and give an agent only
-  the two public points and identifiers to pin (DW-30).
+  the two public points and identifiers to pin (issue #55).
 - After the next release, update an installed Syrinx yourself with Check
   for updates; record it in P1-39d's GitHub issue.
 

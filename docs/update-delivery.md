@@ -24,7 +24,7 @@ forbids "any network call Syrinx makes on its own" without the owner's yes,
 and before P1-39c Syrinx made none: `cargo xtask check-deps`
 (`crates/xtask/src/dependency_policy.rs`) refused every network crate and
 every Windows networking namespace in Syrinx's crates, citing D9. Keys never
-go into the repository, and the release key does not exist yet (DW-30).
+go into the repository, and the release key does not exist yet (issue #55).
 And the owner decides where Syrinx is published; on 2026-10-13 the
 repository was private and the licence undecided.
 
@@ -348,7 +348,7 @@ where the private key is.
 2. The owner exports the two 64-byte public points and records each key's
    identifier (P1-38: the first 8 bytes of SHA-256 over the point) somewhere
    outside the repository.
-3. An agent pins both public points in `PRODUCTION_KEYS` (closing DW-30), and
+3. An agent pins both public points in `PRODUCTION_KEYS` (closing issue #55), and
    a reviewer recomputes the identifiers and checks them against the
    owner's separate record.
 4. To release, the owner runs a reviewed signing command,
@@ -421,7 +421,7 @@ These replaced the single P1-39 row in Plan 1, renumbering nothing.
 | P1-39a | The statement format and its verifier in `syrinx-update`. `cargo xtask package` emits P1-38's `manifest`; today it writes only `syrinx-package.json` (`crates/xtask/src/packaging/manifest.rs`). `cargo xtask sign-update` is tested with in-memory keys | None | P1-38, this approval | P1-39b |
 | P1-39b | Staging, "Install update from file…", `syrinx-apply.exe`, the pre-update snapshot, restart and rollback, with the recovery tests. `check-deps` lifts the verifier quarantine for `syrinx-app` only (change 1) | None | P1-39a | P1-39c |
 | P1-39c | `syrinx-update-net` (WinHTTP). Its `check-deps` changes: it may depend on the verifier (change 1), it may use `windows` with its own feature allowlist (change 2), and it alone may use `Win32_Networking_WinHttp` (change 3). Also the Settings button and palette command, and the confirmation and ready messages | Owner-pressed check only | P1-39b, owner's host approval | P1-39d |
-| P1-39d | Owner gates: the key ceremony and pinning (DW-30), host set-up, and the first real update run by the owner. Recorded in a P1-39 note | Owner's own | P1-39c | P1-40, AN-01 |
+| P1-39d | Owner gates: the key ceremony and pinning (issue #55), host set-up, and the first real update run by the owner. Recorded in a P1-39 note | Owner's own | P1-39c | P1-40, AN-01 |
 
 P1-39a and P1-39b deliver real value even if the owner declines a host:
 signed, verified updates from a file, with rollback. AN-01 stays after
