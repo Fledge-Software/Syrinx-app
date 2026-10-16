@@ -10,13 +10,15 @@ param(
     # Wait for Enter before closing; Installed apps passes this so messages stay readable.
     [switch]$PauseAtEnd,
     # Installed program folder; defaults to the folder holding this script.
-    [string]$InstallDirectory = $PSScriptRoot
+    [string]$InstallDirectory
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'syrinx-registration.ps1')
 . (Join-Path $PSScriptRoot 'syrinx-common.ps1')
+# Windows PowerShell 5.1 leaves $PSScriptRoot empty in a param default under -File, so default here.
+if (-not $InstallDirectory) { $InstallDirectory = $PSScriptRoot }
 
 # Delete Syrinx's keys only where its owner marker shows Syrinx wrote them.
 function Remove-SyrinxRegistration {

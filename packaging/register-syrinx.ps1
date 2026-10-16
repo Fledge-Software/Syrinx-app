@@ -4,7 +4,7 @@
 [CmdletBinding()]
 param(
     # Installed program folder; defaults to the folder holding this script.
-    [string]$InstallDirectory = $PSScriptRoot,
+    [string]$InstallDirectory,
     # Open Settings at Syrinx's Default apps page afterwards.
     [switch]$OpenDefaultApps,
     # Write only the Installed apps entry and the shortcut, not the browser registration.
@@ -15,6 +15,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'syrinx-registration.ps1')
 . (Join-Path $PSScriptRoot 'syrinx-common.ps1')
+# Windows PowerShell 5.1 leaves $PSScriptRoot empty in a param default under -File, so default here.
+if (-not $InstallDirectory) { $InstallDirectory = $PSScriptRoot }
 
 # Refuse before writing anything if another product already uses Syrinx's key names.
 function Assert-RegistrationIsOurs([string[]]$OwnedKeys, $SharedValues) {

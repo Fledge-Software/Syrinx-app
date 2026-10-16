@@ -481,6 +481,80 @@ mod tests {
     }
 
     #[test]
+    fn entry_scripts_default_their_folder_outside_the_param_block() {
+        // Windows PowerShell 5.1 leaves $PSScriptRoot empty in a param default under -File.
+        for script in [
+            "install-syrinx.ps1",
+            "register-syrinx.ps1",
+            "unregister-syrinx.ps1",
+        ] {
+            let text =
+                normalized(&read_text(&repository().join(SCRIPT_FOLDER).join(script)).unwrap());
+            let start = text.find("param(").expect("entry script has a param block");
+            let end = start + text[start..].find("\n)").expect("param block closes");
+            assert!(
+                !text[start..end].contains("$PSScriptRoot"),
+                "{script} defaults a parameter to $PSScriptRoot"
+            );
+        }
+    }
+
+    #[test]
+    fn register_script_finds_its_own_folder_when_run_as_setup_runs_it() -> Result<(), String> {
+        // A synthetic folder without syrinx.exe: the script must stop before writing anything.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| format!("clock before 1970: {error}"))?
+            .as_nanos();
+        let folder = env::temp_dir().join(format!(
+            "syrinx-register-probe-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&folder)
+            .map_err(|error| format!("Could not create {}: {error}", folder.display()))?;
+        let result = run_register_probe(&folder);
+        fs::remove_dir_all(&folder)
+            .map_err(|error| format!("Could not remove {}: {error}", folder.display()))?;
+        let (succeeded, output) = result?;
+        assert!(
+            !succeeded,
+            "the probe has no syrinx.exe, so the script must refuse"
+        );
+        assert!(
+            output.contains("No syrinx.exe in"),
+            "the script did not resolve its own folder:\n{output}"
+        );
+        Ok(())
+    }
+
+    /// Copy the registration scripts into `folder` and run them with setup's arguments.
+    fn run_register_probe(folder: &Path) -> Result<(bool, String), String> {
+        for script in ["register-syrinx.ps1", GENERATED_SCRIPT, "syrinx-common.ps1"] {
+            let source = repository().join(SCRIPT_FOLDER).join(script);
+            fs::copy(&source, folder.join(script))
+                .map_err(|error| format!("Could not copy {}: {error}", source.display()))?;
+        }
+        let output = Command::new(windows_tool(r"WindowsPowerShell\v1.0\powershell.exe")?)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "RemoteSigned",
+                "-File",
+            ])
+            .arg(folder.join("register-syrinx.ps1"))
+            .current_dir(folder)
+            .output()
+            .map_err(|error| format!("Could not start PowerShell: {error}"))?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok((output.status.success(), text))
+    }
+
+    #[test]
     fn doc_table_replacement_keeps_surrounding_text() {
         let doc = format!("intro\n{TABLE_START}\nold\n{TABLE_END}\noutro\n");
         let updated = with_doc_table(&doc).unwrap();

@@ -161,7 +161,7 @@ fn register_with_windows(layout: &UpdateLayout, register: bool) -> Result<(), St
     run_script(&program, "register-syrinx.ps1", &["-AppOnly"])
 }
 
-/// Run one of the installed scripts, hidden, and report its output if it fails.
+/// Run one of the installed scripts on `program`, hidden, and report its output if it fails.
 fn run_script(program: &Path, script: &str, arguments: &[&str]) -> Result<(), String> {
     let windows = std::env::var_os("SystemRoot")
         .map(PathBuf::from)
@@ -176,6 +176,8 @@ fn run_script(program: &Path, script: &str, arguments: &[&str]) -> Result<(), St
             "-File",
         ])
         .arg(program.join(script))
+        .arg("-InstallDirectory")
+        .arg(program)
         .args(arguments)
         .current_dir(program)
         .creation_flags(CREATE_NO_WINDOW);

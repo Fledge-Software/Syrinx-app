@@ -613,6 +613,13 @@ you found it in the commit message, not here.
   them wrote doc comments without their code spans. Edit such text with the
   Edit tool, or use single-quoted PowerShell strings, and check the result.
   Source: AN-01's doc-comment edits (observed 2026-10-14).
+- **`$PSScriptRoot` is empty in a `param` default when Windows PowerShell 5.1
+  runs a script with `-File`.** It is set in the script body. 0.4.0's setup
+  program ran `register-syrinx.ps1` that way, and the script stopped with "A
+  folder path is required", so Syrinx was installed but not registered. Default a
+  folder parameter in the body (`if (-not $X) { $X = $PSScriptRoot }`), never in
+  `param(...)`. `xtask`'s packaging tests check the param blocks and run the
+  script as setup does. Source: the owner's 0.4.0 install (observed 2026-10-16).
 - **Files on disk have CRLF line endings; git stores LF.** This machine's
   system git config sets `core.autocrlf=true` and `.gitattributes` sets
   `* text=auto`, so `git ls-files --eol` shows `i/lf w/crlf` for most text
