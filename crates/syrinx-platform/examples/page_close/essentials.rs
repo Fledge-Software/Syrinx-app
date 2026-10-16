@@ -2,6 +2,13 @@
 
 use super::*;
 use syrinx_platform::browser::PageAction;
+use windows::Win32::{
+    Foundation::{LPARAM, WPARAM},
+    UI::{
+        Input::KeyboardAndMouse::{GetFocus, SetFocus},
+        WindowsAndMessaging::{GetWindowTextW, SendMessageW, WM_CHAR, WS_CHILD, WS_VISIBLE},
+    },
+};
 
 const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Essentials fixture</title><link rel=icon href=data:,><p>syntheticneedle syntheticneedle</p><input autofocus aria-label='Synthetic input'>";
 
@@ -63,6 +70,7 @@ pub(super) fn exercise(
     if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() } != parent {
         return Err("Synthetic find focus did not return to the chrome window.".into());
     }
+    find_updates_keep_chrome_focus(host, events, parent, deadline)?;
     send(host, BrowserCommand::Focus { id: 3000 })?;
     for (request, text, expected) in [(1, "syntheticneedle", 2), (2, "", 0)] {
         action(
@@ -129,4 +137,135 @@ pub(super) fn exercise(
 
 fn action(host: &BrowserHost, action: PageAction) -> Result<(), String> {
     send(host, BrowserCommand::PageAction { id: 3000, action })
+}
+
+/// Types into native chrome after each result, without refocusing between query updates.
+fn find_updates_keep_chrome_focus(
+    host: &BrowserHost,
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    parent: HWND,
+    deadline: Instant,
+) -> Result<(), String> {
+    let input = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("EDIT"),
+            w!(""),
+            WS_CHILD | WS_VISIBLE,
+            8,
+            8,
+            240,
+            28,
+            Some(parent),
+            None,
+            None,
+            None,
+        )
+    }
+    .map_err(|error| format!("Create synthetic find input failed ({}).", error.code().0))?;
+    let result = type_after_find_results(host, events, input, deadline);
+    let cleanup = unsafe { DestroyWindow(input) }
+        .map_err(|error| format!("Destroy synthetic find input failed ({}).", error.code().0));
+    combine(result, cleanup)
+}
+
+fn type_after_find_results(
+    host: &BrowserHost,
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    input: HWND,
+    deadline: Instant,
+) -> Result<(), String> {
+    // Observe the deliberate page focus before beginning the chrome-owned search.
+    send(host, BrowserCommand::Focus { id: 3000 })?;
+    while !matches!(
+        checked_event(events, deadline)?,
+        BrowserEvent::PageFocused { id: 3000 }
+    ) {}
+    lifecycle::barrier(host, events, deadline)?;
+    unsafe { SetFocus(Some(input)) }
+        .map_err(|error| format!("Focus synthetic find input failed ({}).", error.code().0))?;
+    if unsafe { GetFocus() } != input {
+        return Err("Synthetic find input did not receive setup focus.".into());
+    }
+
+    let mut expected = String::new();
+    for (index, character) in "syntheticneedlex".chars().enumerate() {
+        if unsafe { GetFocus() } != input {
+            return Err(format!(
+                "DW-71: native find took chrome focus before character {index}."
+            ));
+        }
+        // Send only to the actual focused fixture control, never to a guessed page handle.
+        unsafe {
+            SendMessageW(
+                input,
+                WM_CHAR,
+                Some(WPARAM(character as usize)),
+                Some(LPARAM(1)),
+            )
+        };
+        expected.push(character);
+        let mut text = [0_u16; 32];
+        let length = unsafe { GetWindowTextW(input, &mut text) } as usize;
+        let actual = String::from_utf16(&text[..length])
+            .map_err(|_| "Synthetic find input returned invalid text.")?;
+        if actual != expected {
+            return Err(format!("DW-71: find input lost character {index}."));
+        }
+        let request = 100 + index as u64;
+        action(
+            host,
+            PageAction::Find {
+                request,
+                text: actual,
+            },
+        )?;
+        wait_for_chrome_find(
+            events,
+            input,
+            request,
+            if character == 'x' { 0 } else { 2 },
+            deadline,
+        )?;
+    }
+    action(host, PageAction::StopFind)?;
+    println!("DW-71: typing after every native find result kept chrome focus.");
+    Ok(())
+}
+
+fn wait_for_chrome_find(
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    input: HWND,
+    request: u64,
+    expected_count: i32,
+    deadline: Instant,
+) -> Result<(), String> {
+    loop {
+        match checked_event(events, deadline)? {
+            BrowserEvent::PageFocused { id: 3000 } => {
+                return Err(format!(
+                    "DW-71: find emitted PageFocused for request {request}; native chrome focus retained: {}.",
+                    unsafe { GetFocus() } == input
+                ));
+            }
+            BrowserEvent::FindCompleted {
+                id: 3000,
+                request: completed,
+                count,
+            } if completed == request => {
+                if count != expected_count {
+                    return Err(format!(
+                        "Synthetic incremental find count {count} differs from {expected_count}."
+                    ));
+                }
+                if unsafe { GetFocus() } != input {
+                    return Err(format!(
+                        "DW-71: native find took chrome focus at request {request}."
+                    ));
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
 }

@@ -562,9 +562,21 @@ impl EventSink {
         Some(event)
     }
     fn emit(&self, event: BrowserEvent) {
-        let Some(event) = self.prepare(event) else {
+        self.emit_with_focus(event, None);
+    }
+    // Validate focus at delivery, after native find may have returned it to chrome.
+    fn emit_page_focus(&self, id: u64, window: isize) {
+        self.emit_with_focus(BrowserEvent::PageFocused { id }, Some(window));
+    }
+    fn emit_with_focus(&self, event: BrowserEvent, focus_window: Option<isize>) {
+        let Some(mut event) = self.prepare(event) else {
             return;
         };
+        if let BrowserEvent::Callback { ticket, .. } = &mut event
+            && let Some(window) = focus_window
+        {
+            ticket.require_focus(window);
+        }
         if self.0.unbounded_send(event).is_err() {
             // The owner UI is gone; terminate this thread instead of keeping its pages alive.
             unsafe { PostQuitMessage(0) };

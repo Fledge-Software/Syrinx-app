@@ -136,3 +136,100 @@ handler still captures only Ctrl J among these keys; Ctrl F/H/P and the zoom
 keys reach a focused page first, per the owner's 2026-10-12 decision. The find
 bar's height now feeds `page_card_bounds` in `crates/syrinx-app/src/ui/page_card.rs`,
 and P1-12's permissions became schema version 6 (see `docs/p1-12-permissions.md`).
+
+## DW-71: keep find input focus after native results
+
+Native matching must not make the next character disappear from Syrinx's find
+bar. This was reproduced on 2026-10-16 from `main` at `af3de53`, on Windows
+build 26300, using only P1-13's synthetic HTML and a fresh profile. The work is
+on `codex/fix-dw-71`, awaiting review; it is not merged.
+
+### Reproduction and cause
+
+Serve the `PAGE` constant from
+`crates/syrinx-platform/examples/page_close/essentials.rs` on loopback. It
+contains two occurrences of `syntheticneedle` and an empty input. Launch
+`cargo syrinx --test-data-dir <new-absolute-directory-under-target> -- <loopback-url>`.
+Move focus from the page to chrome with F6, then open Syrinx Find with Ctrl F.
+Click the find input, type `syn`, wait for two matches, then append
+`theticneedle` without clicking again. After the full matches appeared, UI
+Automation reported the window root as focused. Pressing `x` left the query
+at `syntheticneedle` and the count at two. This used Computer Use's SendInput
+path, not characters posted directly to Syrinx's window. Exact observations
+are in `target/repro-dw-71.txt` and launch output in `target/repro-run-dw-71.log`.
+
+The native regression establishes the cause: WebView2 delivered `PageFocused`
+for a search while the native chrome input still held keyboard focus. Syrinx
+queued that notification without checking whether its focus state was still
+current. `page_took_focus` then cleared GPUI's find focus to the window root,
+so later characters no longer reached the input.
+
+### Change and regression
+
+The page's focus callback now puts its native window identity in the existing
+callback ticket (`browser/page.rs`, `browser.rs` and `browser/lifecycle.rs` in
+`syrinx-platform`). When the UI unwraps the event, the ticket checks that the
+page still has focus, either on its window or a descendant. An obsolete focus
+event is discarded, just as a callback from a retired page already was. The
+check reuses `acceptance::keyboard_focus`, which reads the window's own input
+queue with `GetGUIThreadInfo`, even when the receiver is the GPUI thread. A
+query failure is reported explicitly instead of accepting an unverified
+focus transfer. The find code and `page_took_focus` stay unchanged. No page contents, identity,
+dependency, vendor file or public event shape changes. Refocusing after every
+result was rejected because it can override an intentional page click.
+
+`find_updates_keep_chrome_focus` extends the P1-13 native fixture with a native
+edit control. It types `syntheticneedlex` one character at a time into the
+currently focused fixture control, waits for each native result, checks the
+input's exact text and focus, and refuses a spurious delivered `PageFocused`.
+Each prefix through `syntheticneedle` has two matches; the final `x` has none.
+The deliberate initial page focus must still deliver its event. The original
+find, clearing, downloads, zoom, print and other native suites remain intact.
+
+`target/regression-dw-71-before-2.log` fails on unchanged production code with
+`find emitted PageFocused for request 100; native chrome focus retained: true`.
+`target/regression-dw-71-after-final.log` passes that regression and every native
+suite. The first attempt, `target/regression-dw-71-before.log`, failed in setup
+before a search: its page-focus command had not finished. The fixture now uses
+the existing command barrier before focusing its input; that first log is not
+claimed as a DW-71 regression failure.
+
+The unchanged baseline gate passed in `target/gate-fix-dw-71-before.log`:
+1,359 workspace tests plus 127 release-tool test executions, all passing with
+zero ignored, and a passing smoke run. The final `cargo xtask check` passed
+in full with exit code 0 in `target/gate-fix-dw-71-final.log`, including the
+application smoke run: 1,486 test executions before and 1,486 after, zero
+failed and zero ignored. The new regression is an additional case in the
+separately run native fixture, not a counted Rust test. The earlier
+`target/gate-fix-dw-71.log` passed before the cross-thread focus-query
+correction and is retained as intermediate evidence.
+
+### Visible acceptance and observations outside this fix
+
+The final source was launched with `cargo syrinx` using
+`target/dw-71-verified-final-profile` and the same loopback fixture; its output
+is in `target/verified-run-dw-71-final.log`. Computer Use's SendInput path
+repeated the reproduction: `syn` showed two matches; appending `theticneedle`
+kept the complete query; pressing `x` without refocusing changed it to
+`syntheticneedlex` with zero matches. Backspace restored `syntheticneedle`
+and two matches. Screenshots showed the caret remaining in the field through
+those updates. Clicking the page input then typing `synthetic page input`
+changed only that input, not the find query. These checks used fresh test
+profiles, with no owner data or sign-in.
+
+Two additional observations were not fixed. A Page menu Find click did not
+open the bar during the initial Computer Use attempt; F6 then Ctrl F did.
+Also, after deliberately clicking the page input, the find field could keep
+its ring/caret even while typing reached the page. A later click back into
+the find field could show its caret while typing still reached the page.
+Their product causes are unconfirmed; the latter was observed both before
+and after replacing the receiver-thread focus query with the page-thread
+query. Temporary structural diagnostics in `target/diagnostic-focus-dw-71.log`
+were removed from source. They are not claimed as resolved by DW-71.
+
+If the owner checks these separate observations, use the synthetic fixture:
+open Find from the Page menu; then search for `syntheticneedle`, click the page
+input and type made-up text, click back into Find and type another character.
+Check both the actual recipient and the focus ring. The original DW-71
+typing-after-results check is complete; this does not close P1-13's other
+operator checks or DW-70's NVDA check.

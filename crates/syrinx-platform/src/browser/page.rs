@@ -499,8 +499,9 @@ fn register_shortcuts(
 
 /// Tells Syrinx when the page takes keyboard focus, so the chrome stops showing a focus ring.
 fn register_focus_arrival(view: &WebView, id: u64, events: EventSink) -> Result<(), BrowserError> {
+    let window = view.hwnd().0 as isize;
     let handler = FocusChangedEventHandler::create(Box::new(move |_controller, _args| {
-        events.emit(BrowserEvent::PageFocused { id });
+        events.emit_page_focus(id, window);
         Ok(())
     }));
     let mut token = 0;

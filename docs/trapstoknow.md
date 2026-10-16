@@ -82,6 +82,19 @@ you found it in the commit message, not here.
   LNK1104 against its own executable. Serialize the native fixture and gate;
   do not kill another session's processes or relocate executables.
 
+- **Native find can report page focus after chrome has the keys again.**
+  DW-71's native fixture received `PageFocused` with its edit control still
+  holding Windows focus; treating it as a current transfer cleared GPUI's
+  find input and lost subsequent typing. Carry the page window in the
+  callback ticket and recheck native focus when the UI consumes it, alongside
+  the existing lifetime check. Query the page window's input queue, not
+  `GetFocus` on the receiving GPUI thread, which only reports the caller's
+  queue. Do not refocus after every result or ignore
+  every page click while Find is open. The fixture must finish its deliberate
+  page-focus command through the existing command barrier before focusing
+  its input, or setup itself races that command. Source:
+  `docs/p1-13-essentials.md`, "DW-71" (native reproduction, 2026-10-16).
+
 - **A consent click grants a replacement prompt.** Capture the displayed
   tab/request identity in each callback and give each prompt's buttons distinct
   element IDs. Reject a delayed click after navigation, tab change or a new

@@ -97,12 +97,34 @@ pub struct CallbackTicket {
     epoch: Arc<AtomicU64>,
     captured: u64,
     lifetime_only: bool,
+    focus_window: Option<isize>,
 }
 
 impl CallbackTicket {
     pub(super) fn current(&self) -> bool {
         let now = self.epoch.load(Ordering::Acquire);
-        now != 0 && (self.lifetime_only || now == self.captured && !now.is_multiple_of(2))
+        now != 0
+            && (self.lifetime_only || now == self.captured && !now.is_multiple_of(2))
+            && self.focus_window.is_none_or(page_has_focus)
+    }
+
+    pub(super) fn require_focus(&mut self, window: isize) {
+        self.focus_window = Some(window);
+    }
+}
+
+/// A queued GotFocus can arrive after native find has already returned the keys to chrome.
+fn page_has_focus(window: isize) -> bool {
+    use crate::acceptance::{KeyboardFocus, keyboard_focus};
+
+    // Query the page window's input queue; the receiver can run on the GPUI thread.
+    match keyboard_focus(window, None) {
+        Ok(KeyboardFocus::MainWindow | KeyboardFocus::InsideMainWindow) => true,
+        Ok(_) => false,
+        Err(error) => {
+            eprintln!("Could not validate queued page focus: {error}");
+            false
+        }
     }
 }
 
@@ -118,6 +140,7 @@ impl CallbackLife {
             epoch: self.0.clone(),
             captured: self.0.load(Ordering::Acquire),
             lifetime_only,
+            focus_window: None,
         }
     }
     fn suspend(&self) {
