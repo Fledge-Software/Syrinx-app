@@ -11,7 +11,7 @@ use syrinx_platform::edge::open_in_edge;
 use super::{BrowserView, button};
 use crate::{session::SessionCommand, theme};
 
-/// The setting holding the last runtime version Syrinx saw (`docs/p1-34-35-instance-runtime.md`).
+/// The setting holding the last runtime version Syrinx saw (`https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-34-35-instance-runtime.md`).
 pub(super) const RUNTIME_VERSION_SETTING: &str = "webview2.runtime_version";
 
 /// The notice strip's height; the page card moves down by this much while it shows.

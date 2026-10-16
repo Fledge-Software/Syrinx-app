@@ -1,5 +1,5 @@
 //! Runs P1-25's synthetic page-text feasibility cases against local loopback sites only;
-//! see `docs/p1-25-page-text.md` for the results and `--help` for the options.
+//! see `https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-25-page-text.md` for the results and `--help` for the options.
 
 #[path = "page_text_feasibility/cases.rs"]
 mod cases;

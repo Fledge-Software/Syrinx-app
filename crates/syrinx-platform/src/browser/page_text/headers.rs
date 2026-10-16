@@ -52,7 +52,7 @@ pub(super) fn observed_response(
         status,
         content_type,
         // WebView2 splits one line's directives but drops a repeated header's later lines
-        // (F2); see `docs/p1-25-page-text.md`.
+        // (F2); see `https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-25-page-text.md`.
         cache_control: header_values(&headers, w!("Cache-Control"))?,
         destination,
         method,

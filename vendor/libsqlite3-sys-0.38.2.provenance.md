@@ -5,7 +5,7 @@ in SQLite's 3.53.3/3.53.4 journal, WAL and corruption-check fixes while
 retaining Atlas's audited Rust wrapper, build script and feature set. The
 owner approved this source patch and the narrow exception for unchanged
 upstream TODO/FIXME comments on 2026-10-10. The rationale and verification
-requirements are in `docs/p1-04-sqlite-maintenance-review.md`.
+requirements are in `docs/dev/vendor-reviews/p1-04-sqlite-maintenance-review.md`.
 
 ## Sources and identity
 

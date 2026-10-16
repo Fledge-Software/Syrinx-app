@@ -58,7 +58,7 @@ impl CommandMatcher {
     }
 
     /// Ranks enabled commands for `text` and keeps the rows `view` shows.
-    // TODO(DW-5): bound this before plugins register commands: cap the registry or rank off the UI thread.
+    // TODO(#28): bound this before plugins register commands: cap the registry or rank off the UI thread.
     pub fn matches(
         &mut self,
         text: &str,

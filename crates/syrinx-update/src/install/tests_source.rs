@@ -169,7 +169,7 @@ fn a_check_naming_the_installed_version_stores_its_serial() {
 
 #[test]
 fn production_keys_refuse_every_checked_statement_today() {
-    // PRODUCTION_KEYS is empty until DW-30, so a real check fails closed.
+    // PRODUCTION_KEYS is empty until #55, so a real check fails closed.
     let (sandbox, _keys) = packaged();
     let production = KeySet::production().expect("empty production set");
     let host = FakeHost::new(&sandbox);

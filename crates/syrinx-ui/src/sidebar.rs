@@ -2,7 +2,7 @@
 //!
 //! D44 fixes the progression (wide with labels, favicon-only, hidden, reversible by dragging)
 //! but deliberately fixes no pixel values. Everything marked PROPOSED awaits the owner's
-//! approval; the review steps are in `docs/p1-07-design-tokens.md`.
+//! approval; the review steps are in `https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-07-design-tokens.md`.
 
 use crate::metrics::chrome::ICON_BUTTON;
 

@@ -1,4 +1,4 @@
-//! The F-tests from `docs/proposals/p1-25-page-text-extraction.md`, grouped by browser run.
+//! The F-tests from `docs/page-text-indexing.md`, grouped by browser run.
 
 use std::time::{Duration, Instant};
 

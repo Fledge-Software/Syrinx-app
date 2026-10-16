@@ -24,7 +24,7 @@ short script in `.github/scripts/` so it can be read and tested on its own.
    1.97.1 and commits the new version into `Cargo.toml` and `Cargo.lock` with
    `set-version.sh`. That commit sits on top of the `main` commit being
    released and is reachable only through its tag, so `main` is never pushed.
-   It then runs `cargo xtask check` (the full gate in `docs/LOCAL-DEV.md`,
+   It then runs `cargo xtask check` (the full gate in `docs/dev/LOCAL-DEV.md`,
    including the smoke run) and `cargo xtask package` (P1-37's setup program
    and portable zip).
    A failing gate stops everything: nothing is tagged or published.
@@ -69,7 +69,7 @@ debugger stack run only when a test process actually crashed (a Windows
 
 - **It does not sign anything.** Syrinx has no code-signing certificate
   (D38), so Windows SmartScreen warns before the first run, and the website
-  says so. The P1-38 update packages and their signing key (DW-30) are a
+  says so. The P1-38 update packages and their signing key (issue #55) are a
   separate piece of work; these zips are not update packages.
 - **It does not install, register or update Syrinx anywhere.** The zip is
   P1-37's portable package; installing it remains a step the person
@@ -96,7 +96,7 @@ These steps need the owner's GitHub account, so no agent does them.
    watched rather than discovered. The Windows gate takes a long time on a
    clean runner (allow over an hour). If the smoke run or a screenshot fails
    only on the runner, that is a new trap: record it in
-   `docs/trapstoknow.md`.
+   `docs/dev/trapstoknow.md`.
 
 ## Pre-publication checklist
 
@@ -109,7 +109,7 @@ these are listed rather than changed. Checked on 2026-10-13:
   hide it for future commits, turn on "Keep my email addresses private" in
   GitHub's email settings and use the `noreply` address in `git config`.
   Existing commits keep it unless history is rewritten.
-- **Windows user name in paths.** Some handoff notes, `docs/next-session-prompt.md`
+- **Windows user name in paths.** Some handoff notes, [`docs/next-session-prompt.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/next-session-prompt.md)
   and two tracked gate logs under `.claude/worktrees/` contain
   `C:\Users\<name>\Documents\GitHub\…` paths that reveal the Windows account
   name. The logs can simply be deleted from the tree; the history keeps them.
@@ -119,5 +119,5 @@ these are listed rather than changed. Checked on 2026-10-13:
   elsewhere (for example `ui-ux-pro-max`). Check that each one's licence
   allows redistribution, or stop tracking them before going public.
 - **Secrets.** No keys, tokens, `.env` or certificate files are tracked, and
-  the P1-38 production key does not exist yet (DW-30). GitHub's secret
+  the P1-38 production key does not exist yet (issue #55). GitHub's secret
   scanning runs automatically once the repository is public.

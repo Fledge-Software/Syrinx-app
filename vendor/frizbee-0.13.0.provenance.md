@@ -2,7 +2,7 @@
 
 Atlas must preserve accepted NUL queries without scoring SIMD padding or returning
 highlight positions beyond the field. The owner approved the exact three-file
-correction in `docs/p1-05-frizbee-maintenance-review.md` and the narrow unchanged
+correction in `docs/dev/vendor-reviews/p1-05-frizbee-maintenance-review.md` and the narrow unchanged
 upstream comment/lint exception on 2026-10-10. This records the source import;
 compilation, regression tests and performance validation are separate checks.
 

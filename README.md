@@ -29,15 +29,18 @@ cargo xtask check         # the gate: dependencies, format, Clippy, tests, smoke
 cargo xtask package       # the portable zip under target\package
 ```
 
-`docs/LOCAL-DEV.md` has the details and the traps.
+`docs/dev/LOCAL-DEV.md` has the details and the traps.
 
 ## Where things are
 
 - `crates/`: the Rust workspace (app, core model, storage, search, UI, platform).
-- `docs/spec.md`, `docs/decisions.md` and `docs/plans/`: what Syrinx is,
-  the decisions made and the phased plan.
+- `docs/spec.md`, `docs/decisions.md` and `docs/architecture-decisions.md`:
+  what Syrinx is, the phased plan and the decisions made. Work is tracked in
+  GitHub issues.
+- `docs/dev/`: contributor material, such as how to run the gate, the traps
+  and the dependency audits.
 - `design/`: the design target and brand assets.
-- `AGENTS.md` and `docs/trapstoknow.md`: rules and known traps for anyone,
+- `AGENTS.md` and `docs/dev/trapstoknow.md`: rules and known traps for anyone,
   person or agent, changing the code.
 
 ## Licence
