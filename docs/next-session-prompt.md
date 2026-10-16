@@ -127,7 +127,8 @@ Still blocked, so do not start them:
 - P1-24 and P1-26 wait on P1-23's quiet-machine runs and engine choice,
   which must also resolve the lru advisory.
 - DW-5 belongs to Plan 2; DW-67 waits until after P1-40.
-- P1-39d, P1-18 and P1-40 are mine.
+- P1-18 and P1-40 are mine, and so are P1-39d's key creation and first
+  real update; item 5 above is the only agent part of P1-39d.
 
 If everything above is done or blocked, ask me before moving on.
 

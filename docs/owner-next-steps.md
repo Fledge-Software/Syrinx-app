@@ -22,10 +22,9 @@ Record results as pass/fail and timings only, never account contents.
 
 ### 1. Decide DW-63's key (done 2026-10-14: Ctrl W on a focused row, plus a per-row right-click menu)
 
-"Unload page" on a focused sidebar row has no key. The choices are
-**Ctrl W while a row has focus** (recommended: it means "close" everywhere
-else in Syrinx) or **Backspace**. Tell the next agent session which one;
-DW-63 in the plan's "Deferred work" register has the details.
+You chose **Ctrl W while a row has focus**, and it is built on `main`.
+You also asked for a per-row right-click menu, which is still an agent
+slice; DW-63 in the plan's "Deferred work" register has the details.
 
 ### 2. Finish P1-39d (in progress)
 
