@@ -481,7 +481,7 @@ fn text_role<'a>(drawn: &'a mut Palette, role: &str) -> Option<&'a mut Color> {
 }
 
 /// Pairs `drawn` fails that its starting preset passes. Pairs the preset already fails are
-/// recorded design exceptions (`docs/p1-07-design-tokens.md`).
+/// recorded design exceptions (`https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-07-design-tokens.md`).
 fn new_failures(drawn: &Palette, accent: Accent) -> Vec<ContrastCheck> {
     failures_beyond(drawn, &inherited_failures(drawn.id, accent))
 }

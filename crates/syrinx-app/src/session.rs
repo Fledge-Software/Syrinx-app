@@ -123,7 +123,7 @@ pub enum SessionCommand {
         import: Box<BookmarkImport>,
         folder_title: String,
     },
-    /// Inserts or replaces documented settings keys (`docs/p1-28-29-home-settings.md`).
+    /// Inserts or replaces documented settings keys (`https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-28-29-home-settings.md`).
     SaveSettings(Vec<(String, String)>),
     /// Changes one Quick access or Favorites tile list.
     EditDestinations {

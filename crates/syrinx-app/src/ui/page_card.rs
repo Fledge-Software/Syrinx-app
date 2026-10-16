@@ -58,7 +58,7 @@ pub(super) fn titlebar_navigation_width(viewport_width: f32) -> f32 {
 }
 
 /// The page card's physical bounds. The child web view does not follow the window on its own
-/// (`docs/trapstoknow.md`), so this runs on every drag step, resize and DPI change.
+/// (`docs/dev/trapstoknow.md`), so this runs on every drag step, resize and DPI change.
 pub(super) fn page_card_bounds(frame: CardFrame) -> PageBounds {
     let scale = usable_scale(frame.scale);
 
@@ -108,7 +108,7 @@ pub(super) fn card_edges(frame: CardFrame) -> CardEdges {
 
 /// The window fill behind all chrome, leaving `card` unpainted.
 ///
-/// GPUI composites above the page's child window (`docs/trapstoknow.md`), so any pixel painted
+/// GPUI composites above the page's child window (`docs/dev/trapstoknow.md`), so any pixel painted
 /// over the card hides the page. The fill is drawn whole and clipped to each strip around the
 /// card, so a gradient stays continuous across them.
 pub(crate) fn window_fill_layer(

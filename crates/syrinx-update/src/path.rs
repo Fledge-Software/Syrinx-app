@@ -18,7 +18,7 @@ const NUMBERED_DEVICE_PREFIXES: [&str; 2] = ["COM", "LPT"];
 pub struct PackagePath(String);
 
 impl PackagePath {
-    /// Accepts only relative paths of safe ASCII components; see `docs/p1-38-update-format.md`.
+    /// Accepts only relative paths of safe ASCII components; see `docs/update-format.md`.
     pub fn parse(text: &str) -> Result<Self, PathProblem> {
         if text.len() > MAX_PATH_BYTES {
             return Err(PathProblem::TooLong);

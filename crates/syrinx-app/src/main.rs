@@ -142,7 +142,7 @@ fn main() -> ExitCode {
                     ..Default::default()
                 }),
                 // Every palette keeps Mica: an `Opaque` window is cleared to white under the
-                // page's child window and hides it (`docs/trapstoknow.md`).
+                // page's child window and hides it (`docs/dev/trapstoknow.md`).
                 window_background: WindowBackgroundAppearance::MicaBackdrop,
                 window_min_size: Some(size(px(800.), px(500.))),
                 ..Default::default()

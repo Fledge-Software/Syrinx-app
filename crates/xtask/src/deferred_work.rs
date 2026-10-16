@@ -1,17 +1,17 @@
-//! Keeps every deferred-work marker in Syrinx's own code tied to a tracked plan entry.
+//! Keeps every deferred-work marker in Syrinx's own code tied to a GitHub issue listed in the register.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Plan file holding the deferred-work register, relative to the workspace root.
-pub const REGISTER_PLAN: &str = "docs/plans/Syrinx v1 — Plan.md";
+/// File holding the deferred-work register, relative to the workspace root.
+pub const REGISTER: &str = "docs/dev/deferred-work.md";
 
-/// Heading that starts the register inside the plan.
+/// Heading that starts the register's table.
 const REGISTER_HEADING: &str = "## Deferred work";
 
-/// Prefix of every register identifier, as in `DW-12`.
-const ID_PREFIX: &str = "DW-";
+/// Prefix of every register identifier, a GitHub issue number as in `#12`.
+const ID_PREFIX: &str = "#";
 
 /// Marker words that record deferred work. Built in pieces so this file does not flag itself.
 const MARKERS: [&str; 3] = [
@@ -23,11 +23,11 @@ const MARKERS: [&str; 3] = [
 /// Directories under the workspace root that hold Syrinx-authored source.
 const SOURCE_ROOTS: [&str; 1] = ["crates"];
 
-/// Check every Syrinx-authored Rust file against the plan's deferred-work register.
+/// Check every Syrinx-authored Rust file against the deferred-work register.
 pub fn check(root: &Path) -> Result<Vec<String>, String> {
-    let plan = fs::read_to_string(root.join(REGISTER_PLAN))
-        .map_err(|error| format!("Could not read {REGISTER_PLAN}: {error}"))?;
-    let registered = registered_ids(&plan);
+    let register = fs::read_to_string(root.join(REGISTER))
+        .map_err(|error| format!("Could not read {REGISTER}: {error}"))?;
+    let registered = registered_ids(&register);
 
     let mut violations = Vec::new();
     for file in rust_sources(root)? {
@@ -43,12 +43,12 @@ pub fn check(root: &Path) -> Result<Vec<String>, String> {
     Ok(violations)
 }
 
-/// Collect `DW-n` identifiers from table rows in the plan's register section.
-fn registered_ids(plan: &str) -> BTreeSet<String> {
-    let Some(start) = plan.find(REGISTER_HEADING) else {
+/// Collect `#n` identifiers from table rows in the register section.
+fn registered_ids(register: &str) -> BTreeSet<String> {
+    let Some(start) = register.find(REGISTER_HEADING) else {
         return BTreeSet::new();
     };
-    let section = &plan[start + REGISTER_HEADING.len()..];
+    let section = &register[start + REGISTER_HEADING.len()..];
     let end = section.find("\n## ").unwrap_or(section.len());
 
     section[..end]
@@ -61,7 +61,7 @@ fn registered_ids(plan: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Report each marker that lacks a `(DW-n)` tag or names an unregistered entry.
+/// Report each marker that lacks a `(#n)` tag or names an unregistered entry.
 fn file_violations(path: &str, text: &str, registered: &BTreeSet<String>) -> Vec<String> {
     let mut violations = Vec::new();
     for (index, line) in text.lines().enumerate() {
@@ -69,11 +69,11 @@ fn file_violations(path: &str, text: &str, registered: &BTreeSet<String>) -> Vec
             let location = format!("{path}:{}", index + 1);
             match marker.id {
                 None => violations.push(format!(
-                    "{location}: {} needs a register tag, e.g. {}({ID_PREFIX}1), listed under \"{REGISTER_HEADING}\" in {REGISTER_PLAN}.",
+                    "{location}: {} needs a register tag, e.g. {}({ID_PREFIX}1), listed under \"{REGISTER_HEADING}\" in {REGISTER}.",
                     marker.word, marker.word
                 )),
                 Some(id) if !registered.contains(id) => violations.push(format!(
-                    "{location}: {id} is not listed under \"{REGISTER_HEADING}\" in {REGISTER_PLAN}."
+                    "{location}: {id} is not listed under \"{REGISTER_HEADING}\" in {REGISTER}."
                 )),
                 Some(_) => {}
             }
@@ -88,7 +88,7 @@ struct Marker<'line> {
     id: Option<&'line str>,
 }
 
-/// Find whole-word markers on one line and read an immediately following `(DW-n)` tag.
+/// Find whole-word markers on one line and read an immediately following `(#n)` tag.
 fn markers_in(line: &str) -> Vec<Marker<'_>> {
     let mut found = Vec::new();
     for word in MARKERS {
@@ -117,7 +117,7 @@ fn is_identifier_char(character: char) -> bool {
     character.is_alphanumeric() || character == '_'
 }
 
-/// Read `(DW-n)` directly after a marker.
+/// Read `(#n)` directly after a marker.
 fn tag_after(rest: &str) -> Option<&str> {
     let inner = rest.strip_prefix('(')?;
     let id = &inner[..inner.find(')')?];
@@ -168,35 +168,35 @@ mod tests {
 
     #[test]
     fn reads_ids_only_from_the_register_section() {
-        let plan = "## Other\n| DW-9 | elsewhere |\n## Deferred work\n| ID | Work |\n| --- | --- |\n| DW-1 | first |\n| DW-22 | second |\n## Next\n| DW-3 | after |\n";
-        assert_eq!(registered_ids(plan), register(&["DW-1", "DW-22"]));
+        let text = "## Other\n| #9 | elsewhere |\n## Deferred work\n| Issue | Work | Status |\n| --- | --- | --- |\n| #1 | first | Open |\n| #22 | second | Open |\n| DW-5 | old tag | Open |\n## Next\n| #3 | after |\n";
+        assert_eq!(registered_ids(text), register(&["#1", "#22"]));
     }
 
     #[test]
     fn missing_register_means_no_ids() {
-        assert!(registered_ids("# Plan\n").is_empty());
+        assert!(registered_ids("# Deferred work\n").is_empty());
     }
 
     #[test]
     fn accepts_a_registered_tag() {
-        let line = format!("// {}(DW-1): resume suspended tabs", todo());
-        assert!(file_violations("a.rs", &line, &register(&["DW-1"])).is_empty());
+        let line = format!("// {}(#1): resume suspended tabs", todo());
+        assert!(file_violations("a.rs", &line, &register(&["#1"])).is_empty());
     }
 
     #[test]
     fn rejects_an_untagged_marker() {
         let line = format!("// {}: later", todo());
-        let violations = file_violations("a.rs", &line, &register(&["DW-1"]));
+        let violations = file_violations("a.rs", &line, &register(&["#1"]));
         assert_eq!(violations.len(), 1);
         assert!(violations[0].starts_with("a.rs:1:"));
     }
 
     #[test]
     fn rejects_an_unregistered_tag() {
-        let line = format!("// {}(DW-7): later", MARKERS[1]);
-        let violations = file_violations("a.rs", &line, &register(&["DW-1"]));
+        let line = format!("// {}(#7): later", MARKERS[1]);
+        let violations = file_violations("a.rs", &line, &register(&["#1"]));
         assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("DW-7"));
+        assert!(violations[0].contains("#7"));
     }
 
     #[test]
@@ -207,10 +207,11 @@ mod tests {
 
     #[test]
     fn rejects_malformed_tags() {
-        for tag in ["(DW-)", "(DW-x)", "(dw-1)", " (DW-1)"] {
+        // An old `DW-n` tag is malformed now, even if a stray register row named it.
+        for tag in ["(#)", "(#x)", "(# 1)", "(DW-1)", " (#1)"] {
             let line = format!("// {}{tag}", todo());
             assert_eq!(
-                file_violations("a.rs", &line, &register(&["DW-1"])).len(),
+                file_violations("a.rs", &line, &register(&["#1", "DW-1"])).len(),
                 1,
                 "{tag}"
             );

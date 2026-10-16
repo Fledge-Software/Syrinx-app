@@ -4,10 +4,10 @@ GPUI's Windows backend asks Windows to repaint every window on every display
 refresh, even when nothing in the window changed. On this machine that is 60
 `WM_PAINT` messages a second per idle window, and D37 sets an idle budget of
 0.5% of one core. The owner approved vendoring the pinned package with the
-idle-repaint patch described in `docs/gpui-idle-patch-review.md` on
+idle-repaint patch described in `docs/dev/vendor-reviews/gpui-idle-patch-review.md` on
 2026-10-11 (`AGENTS.md`, "Approved narrow source patch, 2026-10-11"). This
 file records the source import; the measurements and behavioural checks are
-in `docs/p1-06-gpui-idle-results.md`.
+in `docs/dev/vendor-reviews/p1-06-gpui-idle-results.md`.
 
 ## Source and scope
 

@@ -86,7 +86,7 @@ pub fn package(root: &Path) -> Result<(), String> {
     );
     println!("Package zip:    {}", archive.display());
     println!("Setup program:  {}", setup.display());
-    println!("Nothing was installed or registered. See docs/p1-37-installer-design.md.");
+    println!("Nothing was installed or registered. See docs/installing.md.");
     Ok(())
 }
 
@@ -191,7 +191,7 @@ fn run_tool(root: &Path, command: &[String]) -> Result<(), String> {
 }
 
 /// Design doc whose registry table is rendered from the same Rust table.
-const DESIGN_DOC: &str = r"docs\p1-37-installer-design.md";
+const DESIGN_DOC: &str = r"docs\installing.md";
 const TABLE_START: &str = "<!-- BEGIN GENERATED REGISTRY TABLE -->";
 const TABLE_END: &str = "<!-- END GENERATED REGISTRY TABLE -->";
 

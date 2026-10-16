@@ -1,7 +1,7 @@
 //! Staging a verified package beside the installed program and swapping it in (P1-39b), from a
 //! folder or from any `PackageSource` such as P1-39c's download.
 //!
-//! The folders, records and helper protocol are in `docs/p1-38-update-format.md`, "P1-39b".
+//! The folders, records and helper protocol are in `docs/update-format.md`, "P1-39b".
 
 mod apply;
 mod check;

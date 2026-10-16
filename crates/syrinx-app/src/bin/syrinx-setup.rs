@@ -1,5 +1,5 @@
 //! `syrinx-setup.exe`: installs Syrinx for this Windows user from the package it carries, and
-//! upgrades that install in place when run again. See `docs/p1-37-installer-design.md`.
+//! upgrades that install in place when run again. See `docs/installing.md`.
 
 #![windows_subsystem = "windows"]
 

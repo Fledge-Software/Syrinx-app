@@ -1,5 +1,5 @@
 //! Downloads Syrinx's update files from the one compiled-in host over WinHTTP (P1-39c), and only
-//! when the owner presses "Check for updates". The design is `docs/proposals/p1-39-update-delivery.md`.
+//! when the owner presses "Check for updates". The design is `docs/update-delivery.md`.
 
 mod endpoint;
 mod remote;

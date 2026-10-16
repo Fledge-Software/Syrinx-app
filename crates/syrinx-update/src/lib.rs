@@ -1,7 +1,7 @@
 //! Local verification of signed update packages and latest statements, and the staging and
 //! install steps built on it (P1-39b): no download, network call or UI.
 //!
-//! The formats, key handling and install protocol are in `docs/p1-38-update-format.md`.
+//! The formats, key handling and install protocol are in `docs/update-format.md`.
 
 mod cng;
 mod directory;

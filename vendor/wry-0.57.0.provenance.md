@@ -3,13 +3,13 @@
 Atlas must persist a page-requested tab close before releasing its native
 web view. The owner approved the concrete Windows callback and its narrow
 vendor exception on 2026-10-10, as described in
-`docs/page-close-event-review.md`. This is the source import record;
+`docs/dev/vendor-reviews/page-close-event-review.md`. This is the source import record;
 compilation, Atlas event routing tests and native callback delivery are
 separate checks and were not run during this import.
 
 The owner separately approved the frozen failed-construction patch, including
 its documented limitations, on 2026-10-10. It is now applied exactly as reviewed
-in `docs/wry-failed-construction-patch-review.md`. This record distinguishes
+in `docs/dev/vendor-reviews/wry-failed-construction-patch-review.md`. This record distinguishes
 both patches from their still separate runtime validation; it does not diagnose
 the original breakpoint or authorize a commit, merge or public submission.
 

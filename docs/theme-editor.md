@@ -1,8 +1,7 @@
 # Theme editor
 
-Status: **built on `claude/theme-editor`, owner check pending**, from the owner's
-decision of 2026-10-15
-(`docs/decisions.md`).
+Status: **built (pull request #5), owner check pending**, from the owner's
+decision of 2026-10-15 (`docs/decisions.md`).
 
 ## Why
 
@@ -64,14 +63,14 @@ Rules that every theme keeps:
   - Text and icons that fail are lightened (dark themes) or darkened
     (light themes) two points at a time until they pass.
   - Pairs the starting preset already fails are the recorded design
-    exceptions of `docs/p1-07-design-tokens.md`, and are left as they are.
+    exceptions of [`docs/p1-07-design-tokens.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-07-design-tokens.md), and are left as they are.
   - Accent marks or tile letters that still fail are named in the editor;
     the theme is saved anyway.
 - **Opaque pages and popups.** Web pages and the command palette stay
   opaque, as the design requires.
 - **Reduce transparency.** It still turns any material off: a see-through
   theme then draws opaque over its own background colour.
-- **The page card stays unpainted** (`docs/trapstoknow.md`). Gradients and
+- **The page card stays unpainted** (`docs/dev/trapstoknow.md`). Gradients and
   grain are drawn only around the card.
 
 ## Storage

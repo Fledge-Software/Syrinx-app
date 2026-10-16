@@ -410,7 +410,7 @@ fn check_update_net_features(name: &str, package: &Package, violations: &mut BTr
 }
 
 /// Refuse any dependency that turns on the release tool's key-storage signer: Syrinx itself
-/// must never link code that opens Windows key storage (`docs/p1-38-update-format.md`).
+/// must never link code that opens Windows key storage (`docs/update-format.md`).
 fn check_release_tool_feature(name: &str, package: &Package, violations: &mut BTreeSet<String>) {
     let verifier = package
         .declarations

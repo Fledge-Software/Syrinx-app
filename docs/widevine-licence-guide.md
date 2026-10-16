@@ -1,7 +1,7 @@
 ---
 status: guide for the owner; nothing here is approved or started
 decisions: D2, D3; the 2026-10-15 per-platform engine decision
-related: docs/proposals/widevine-third-build.md, docs/research/07-google-sign-in-and-drm.md
+related: "the wiki's Ideas-Widevine-third-build page (was docs/proposals/widevine-third-build.md) and Background-07-google-sign-in-and-drm page (was docs/research/07-google-sign-in-and-drm.md), both also at af3de53"
 date: 2026-10-15
 ---
 
@@ -39,7 +39,7 @@ PlayReady with hardware support, which is Microsoft's, not Google's.
 licence does not help there either.
 
 **So the licence matters only for a Chromium-based "media engine"** of
-Syrinx's own: option C in `docs/proposals/widevine-third-build.md`. That
+Syrinx's own: option C in [`docs/proposals/widevine-third-build.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/proposals/widevine-third-build.md). That
 is the route for protected video on Linux, and a fallback on macOS if a
 service refuses WKWebView. The owner should weigh this before spending
 months on an application: if Syrinx never ships on Linux and the macOS
@@ -261,4 +261,4 @@ owner's approval (`AGENTS.md`). The design that fits Syrinx's rules:
 - [castlabs-evs on PyPI](https://pypi.org/project/castlabs-evs), castLabs' signing client, and [castLabs Electron releases](https://github.com/castlabs/electron-releases/blob/master/docs/api/components.md) on component-updater delivery and Linux's lack of VMP.
 - [CEF's Widevine loader](https://third-party-mirror.googlesource.com/cef/+/refs/heads/master/src/libcef/common/widevine_loader.cc) and [an Eclipse project disabling CEF's CDM download](https://gitlab.eclipse.org/eclipse/set/browser/-/merge_requests/16).
 - [Kodi inputstream.adaptive on VMP](https://github.com/xbmc/inputstream.adaptive/wiki/Verified-Media-Path-%28VMP%29).
-- `docs/research/07-google-sign-in-and-drm.md` for Widevine in WebView2 on the owner's machine.
+- [`docs/research/07-google-sign-in-and-drm.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/07-google-sign-in-and-drm.md) for Widevine in WebView2 on the owner's machine.

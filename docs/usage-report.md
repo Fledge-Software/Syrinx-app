@@ -3,7 +3,7 @@
 This page is for you, the owner. It explains what Syrinx's usage report
 contains, what it never contains, and what happens when you share one. The
 rules behind it are decision D39 in `docs/decisions.md` and the approved
-proposal, `docs/proposals/an-01-02-local-analytics.md`.
+proposal, `docs/usage-report-privacy.md`.
 
 ## What it is for
 

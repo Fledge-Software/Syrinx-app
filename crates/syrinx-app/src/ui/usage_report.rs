@@ -25,7 +25,7 @@ use crate::controls::control;
 use crate::session::{SessionCommand, SessionError, UsageControl, UsageStatus};
 use crate::theme::rgba;
 
-/// The switch's approved wording (`docs/proposals/an-01-02-local-analytics.md`).
+/// The switch's approved wording (`docs/usage-report-privacy.md`).
 const SWITCH_LABEL: &str = "Count how I use Syrinx, on this computer only";
 /// The approved note, restored by AN-02 now that the counts can be viewed and exported.
 const SWITCH_NOTE: &str =
