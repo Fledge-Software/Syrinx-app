@@ -119,6 +119,38 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 
 ## 2026-10-14
 
+- **The weekly release workflow signs updates; the owner keeps no release
+  key on a device (P1-39d, DW-30; replaces the 2026-10-13 key arrangement).**
+  The 2026-10-13 approval had the owner create two offline keys, a primary on
+  a hardware key and a backup stored separately. Walking through P1-39d, the
+  owner declined to keep a key on any device, because a lost or destroyed
+  device would strand every installed copy, and asked why updates do not
+  simply trust GitHub, where the weekly builds already appear. Trusting
+  GitHub alone was rejected: HTTPS already stops a network man-in-the-middle,
+  but the signature exists to stop someone who breaks into the update source
+  (the website, Vercel, the site-push token), and GitHub Releases of the
+  private repository would need a token that can read the source (the
+  reason recorded on 2026-10-13). Keeping the owner-held keys was the other
+  alternative. The owner chose, in chat: the primary release key is held as
+  an encrypted GitHub Actions secret and `.github/workflows/weekly-release.yml`
+  signs each release and re-signs `latest` every week, which also removes
+  the 60-day manual re-signing; the backup key is an encrypted file kept in
+  the owner's password manager, not on a device. Both public keys are still
+  pinned in `PRODUCTION_KEYS`. The accepted trade-off: whoever takes over
+  the owner's GitHub account or the workflow can sign updates, while a
+  break-in to the website or Vercel alone still cannot. The key must still be
+  created outside every agent session, and no agent sees the private key or
+  the secret's value. Building this is an agent slice that changes the
+  release workflow; see DW-30 in the plan's "Deferred work" register.
+
+- **Sidebar rows get their own right-click menu (DW-63 follow-up).** When
+  choosing Ctrl W for DW-63 (recorded under 2026-10-15), the owner also
+  asked for a per-row right-click menu holding Unload page and the row's
+  other actions (Close tab, Remove saved page, Rename and Remove folder),
+  each showing its key, so every row action is reachable by mouse as well
+  as by keyboard. Today a right-click anywhere in the sidebar opens only
+  the general ⋯ menu. See DW-63 in the plan's "Deferred work" register.
+
 - **Syrinx ships as a setup program that installs and updates itself
   (P1-37).** Release 0.2.0 shipped a zip holding `syrinx.exe` and PowerShell
   scripts. Copied out of that zip on its own, the exe ran, but nothing was
