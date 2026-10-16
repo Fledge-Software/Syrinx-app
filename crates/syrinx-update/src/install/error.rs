@@ -42,6 +42,10 @@ pub enum InstallError {
     StagedVersionMismatch { pending: Version, manifest: Version },
     /// Nothing is staged.
     NothingStaged,
+    /// The installed `Syrinx` folder could not be moved aside, usually because Syrinx runs.
+    ProgramInUse,
+    /// Setup moved the installed version to `Syrinx.previous` and could not put it back.
+    SetAside(Box<InstallError>),
     /// A staged update is waiting, so its records are not reset under it (DW-66).
     UpdateWaiting,
     /// A step failed after the new version was moved into place; its own records cover it.
@@ -158,6 +162,11 @@ impl fmt::Display for InstallError {
                 )
             }
             Self::NothingStaged => formatter.write_str("no update is staged"),
+            Self::ProgramInUse => formatter.write_str("the installed Syrinx folder is in use"),
+            Self::SetAside(error) => write!(
+                formatter,
+                "the installed version is in Syrinx.previous and could not be put back: {error}"
+            ),
             Self::UpdateWaiting => formatter.write_str("a staged update is waiting"),
             Self::AfterSwap(error) => write!(formatter, "after the swap: {error}"),
             Self::NoReleaseKeys => formatter.write_str("no release key is pinned"),

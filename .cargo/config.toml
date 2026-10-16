@@ -2,3 +2,8 @@
 [alias]
 xtask = "run --offline --locked --profile local --package xtask --"
 syrinx = "run --offline --locked --profile local --package syrinx-app --"
+
+# Link the C runtime into every executable, so a copied or installed Syrinx needs no Visual C++
+# redistributable (owner, 2026-10-14: what Syrinx ships must stand alone).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
