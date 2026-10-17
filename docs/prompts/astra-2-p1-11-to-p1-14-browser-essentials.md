@@ -4,7 +4,7 @@ Paste `docs/prompts/astra-common-rules.md` above this prompt.
 
 ## Why this matters
 
-The owner wants Atlas usable as a daily browser before any plugin work. The
+The owner wants Syrinx usable as a daily browser before any plugin work. The
 preview can browse, but it can't do things every browser does:
 
 - it can't complete a Google or GitHub sign-in that opens a popup;
@@ -25,7 +25,7 @@ blocks on an owner decision, stop there and report; don't skip ahead.
 
 ## Reading list (stay inside it)
 
-- `docs/plans/Atlas v1 — Plan.md`: grep for `P1-11`, `P1-12`, `P1-13` and
+- `docs/plans/Syrinx v1 — Plan.md`: grep for `P1-11`, `P1-12`, `P1-13` and
   `P1-14`, and read those rows plus the Phase 2 section around them
   (`grep -n "Phase 2"`).
 - `AGENTS.md`, section "Page web views and Google". **This is
@@ -37,28 +37,28 @@ blocks on an owner decision, stop there and report; don't skip ahead.
   set `Handled` and post a message.
 - `docs/research/08-gpui-and-wry-on-windows.md`, section 5 only.
 - `docs/research/02-*.md` (the browser-scope note): the "Musts" list only.
-- Source: `crates/atlas-platform/src/browser.rs`,
-  `crates/atlas-platform/src/browser/page.rs` (line 80 currently denies
-  every new-window request), `crates/atlas-app/src/session.rs` and the parts
-  of `crates/atlas-app/src/ui.rs` that create and route pages (grep for
+- Source: `crates/syrinx-platform/src/browser.rs`,
+  `crates/syrinx-platform/src/browser/page.rs` (line 80 currently denies
+  every new-window request), `crates/syrinx-app/src/session.rs` and the parts
+  of `crates/syrinx-app/src/ui.rs` that create and route pages (grep for
   `browser::`).
 - `docs/page-close-event-review.md` and `docs/wry-failed-construction-patch-review.md`,
   summaries only. The vendored wry patches you must keep intact.
 
 ## Per-slice outcome
 
-- **P1-11 popups.** Adopt `NewWindowRequested` targets as Atlas tabs through
+- **P1-11 popups.** Adopt `NewWindowRequested` targets as Syrinx tabs through
   the WebView2 deferral, keeping the opener relationship: the same
   environment and profile, and a target that has not navigated. Prove it
   with a synthetic loopback fixture (two local pages, one calling
   `window.open` and then reading `window.opener` and posting back). There
   must be no real OAuth provider in tests. Model it on
-  `crates/atlas-platform/examples/page_close.rs`. Remember the trap: an
+  `crates/syrinx-platform/examples/page_close.rs`. Remember the trap: an
   accepted socket must be set blocking.
-- **P1-12 permissions.** Atlas-drawn permission prompts for the WebView2
+- **P1-12 permissions.** Syrinx-drawn permission prompts for the WebView2
   `PermissionRequested` event: allow, deny, remember for the site. Nothing is
   auto-granted, and clipboard auto-grant stays off. Decisions persist in
-  `atlas-store` through a migration with tests. Notifications follow the
+  `syrinx-store` through a migration with tests. Notifications follow the
   plan row. Verify with disposable synthetic profiles only.
 - **P1-13 essentials.** Find in page (Ctrl F), downloads (Ctrl J) with a
   minimal list, print (Ctrl P), the default context menu, and zoom (Ctrl +,
@@ -78,7 +78,7 @@ blocks on an owner decision, stop there and report; don't skip ahead.
   accelerator handler does. **Do not add another vendor patch.** If one
   seems unavoidable, stop and write the case.
 - If a slice needs a GPUI drawing change (prompts, the find bar, the
-  downloads list), keep it inside new modules under `crates/atlas-app/src/ui/`.
+  downloads list), keep it inside new modules under `crates/syrinx-app/src/ui/`.
   Touch `ui.rs` only to wire them in. Another agent is building the design
   tokens crate (P1-07), so use the existing colour constants for now.
 - After any change the owner sees, the rule is to run the app and look at

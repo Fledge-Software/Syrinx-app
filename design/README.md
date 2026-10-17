@@ -1,15 +1,15 @@
 # Syrinx design
 
-The live design is the canvas **Atlas browser design**
+The live design is the owner's design canvas
 (<https://claude.ai/artifact/Cog1vuMS5rfYFmHLYPKj9f>, private to the owner).
 `canvas/project/` is a snapshot of its files taken on 2026-10-09; when the two
 disagree, the canvas wins. `reference/unified-workspace-mockup.html` is the
 original two-board mockup the spec points at.
 
-The canvas, its snapshot and the mockup predate the product's name and show
-the working name Atlas in titles and labels; read it as Syrinx, which is what
-the app says. The snapshot is left as taken; renaming the live canvas is the
-owner's call.
+The canvas and the mockup predate the product's name and may still show the
+working name Atlas in titles and labels; read it as Syrinx, which is what
+the app says. The snapshot in `canvas/project/` was renamed to Syrinx on
+2026-10-17; renaming the live canvas is the owner's call.
 
 The logo, the app-icon tile, the brand colours and the favicon kit are in
 `brand/`; `brand/README.md` says which to use where and how to regenerate them.

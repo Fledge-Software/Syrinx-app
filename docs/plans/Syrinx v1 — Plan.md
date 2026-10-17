@@ -330,7 +330,7 @@ decision (D4) stays reversible: only `syrinx-app` and `syrinx-ui` know GPUI,
 and only `syrinx-platform` knows WebView2.
 
 ```
-Atlas-app/
+Syrinx-app/
   Cargo.toml          virtual workspace: members = ["crates/*"], resolver 3, shared lints
   crates/
     syrinx-plugin-api/ the Plugin trait and its data types; depends on no Syrinx crate (used from plan 2)
@@ -1096,7 +1096,7 @@ to the Phase 5 table without renumbering any P1 label.
 
 ## Super-Pass ledger
 
-started: 2026-10-09   code repo: local Atlas-app (D41; no remote)   plan branch: claude/plan-atlas-v1
+started: 2026-10-09   code repo: local Syrinx-app (D41; no remote)   plan branch: claude/plan-atlas-v1
 | wave | job | route | model | worker result | branch @ sha | review | merged |
 |---|---|---|---|---|---|---|---|
 | Phase 0 | GPUI candidate spike | spike (worktree) | opus | partial: built, 50/50 automated checks; idle CPU 3.75% fails 0.5% bar; owner tests pending | spike/gpui @ bfac1c5 | n/a | never (throwaway) |
@@ -1125,7 +1125,7 @@ gates: 2026-10-10 owner chose confirmation before restoring a damaged database (
 gates: 2026-10-10 owner approved the pinned SQLite 3.53.4 source patch and vendor-comment exception; source identities and unchanged dependency graph verified; full cargo xtask check passed 78 tests and console launch
 gates: 2026-10-10 owner explicitly requested the P1-04 commit and approved its local merge; 6fbfc97 was fast-forward merged into claude/plan-atlas-v1 after the 138-test gate and independent reviews; upstream vendor whitespace preserved with all 17 source hashes verified
 gates: 2026-10-10 owner approved the page-close API and pinned wry vendor exception; its implementation passed independent review, 99 app/platform tests, dependency checks, workspace Clippy, scoped formatting, an actual synthetic native close fixture and the rebuilt standard app's desktop smoke check. The final workspace formatting recheck found unrelated search-profiler edits; see docs/page-close-event-review.md. No commit, merge or upstream publication is authorized by this patch approval.
-current: D49 integrated browser preview remains in progress with uncommitted work preserved. The current atlas-app.exe and preserved atlas-app-parallel-preview.exe share SHA-256 3ca0bf045fc0826e7300a647307845733fb5249b085f52feeadbebf0abd4c276. Two owner-requested parallel sessions used subagents for navigation reliability and WebView2 construction ownership. Reviewed navigation/popup fixes, saved-row lifecycle regressions and narrowed ASCII projection are integrated. The owner separately approved the exact wry construction patch; its source and provenance reviews pass. The latest full gate passes dependency checks, formatting, Clippy and 301 tests (including 41 app and 160 search unit tests), then Windows blocks the public matcher-test executable with error 4551 before execution. The full gate remains failed. Separate rebuilt app smoke and patched native lifecycle runs pass. Fault-injection validation is being prepared in disposable copies and has not run. The latest benchmark preserves all 1,040 exact results but passes only 10/26 D48 cases; the range index remains test-only. The owner stopped Computer Use during first inspection of the new synthetic preview, which was left open; no further UI automation followed. Popup typing/navigation and the original WebView2 crash remain unresolved. Plans 2–4 retain their approved 12/16/21 slice boundaries and predecessor exits. No commit, merge, push or security change occurred. See docs/handoff-integrated-preview-2026-10-10.md for current evidence, parallel-session ownership and required checks.
+current: D49 integrated browser preview remains in progress with uncommitted work preserved. The current syrinx-app.exe and preserved syrinx-app-parallel-preview.exe share SHA-256 3ca0bf045fc0826e7300a647307845733fb5249b085f52feeadbebf0abd4c276. Two owner-requested parallel sessions used subagents for navigation reliability and WebView2 construction ownership. Reviewed navigation/popup fixes, saved-row lifecycle regressions and narrowed ASCII projection are integrated. The owner separately approved the exact wry construction patch; its source and provenance reviews pass. The latest full gate passes dependency checks, formatting, Clippy and 301 tests (including 41 app and 160 search unit tests), then Windows blocks the public matcher-test executable with error 4551 before execution. The full gate remains failed. Separate rebuilt app smoke and patched native lifecycle runs pass. Fault-injection validation is being prepared in disposable copies and has not run. The latest benchmark preserves all 1,040 exact results but passes only 10/26 D48 cases; the range index remains test-only. The owner stopped Computer Use during first inspection of the new synthetic preview, which was left open; no further UI automation followed. Popup typing/navigation and the original WebView2 crash remain unresolved. Plans 2–4 retain their approved 12/16/21 slice boundaries and predecessor exits. No commit, merge, push or security change occurred. See docs/handoff-integrated-preview-2026-10-10.md for current evidence, parallel-session ownership and required checks.
 
 ## Iteration log
 

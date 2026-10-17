@@ -16,7 +16,7 @@ proposal.
 
 ## The source concern and the limit of this correction
 
-`crates/atlas-platform/src/browser/page.rs::Parent::window_handle` wraps the
+`crates/syrinx-platform/src/browser/page.rs::Parent::window_handle` wraps the
 GPUI thread's HWND on the browser thread. Its safety comment establishes
 lifetime, but pinned `raw-window-handle 0.6.2` documents that
 [`Win32WindowHandle`](https://docs.rs/raw-window-handle/0.6.2/raw_window_handle/struct.Win32WindowHandle.html)
@@ -55,7 +55,7 @@ GPUI palette, owned by main window       UI thread
 ```
 
 Keep ownership inside `Page`. Add a private native-host module under
-`crates/atlas-platform/src/browser/`, replace the borrowed `Parent` adapter,
+`crates/syrinx-platform/src/browser/`, replace the borrowed `Parent` adapter,
 and declare `Page` fields in the order `view`, then `host`. A host must be
 non-Send and non-Sync, created and destroyed on the browser thread, and must
 check its owning thread and live identity before lending a typed handle.
@@ -113,14 +113,14 @@ would cover Home and browser controls, so keep it confined to the page card.
 Check the Win32 return semantics individually; for example, `ShowWindow`'s
 return value describes previous visibility rather than ordinary success.
 
-Keep the palette's owner as the GPUI main HWND. Preserve Atlas's direct
+Keep the palette's owner as the GPUI main HWND. Preserve Syrinx's direct
 controller focus requests and queue-only accelerator handlers. No manual
 input-queue attachment, foreground workaround, cross-thread subclass or
-callback-driven destruction belongs in this prototype. Atlas currently does
+callback-driven destruction belongs in this prototype. Syrinx currently does
 not call wry's `focus_parent`; its target would change to the intermediary.
 
 Source review found GPUI's DirectComposition target configured above child
-windows and Atlas's undrawn active-page region compatible in principle with the proposed
+windows and Syrinx's undrawn active-page region compatible in principle with the proposed
 topology. That is not proof of painting or hit testing. The existing Phase 0
 overlay evidence covers the old topology. Nested native children, ordinary
 page-native popup placement after moving the main window, and actual typing

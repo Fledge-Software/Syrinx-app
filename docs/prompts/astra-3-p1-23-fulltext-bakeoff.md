@@ -20,7 +20,7 @@ nothing else. Product crates stay untouched.
 
 ## Reading list (stay inside it)
 
-- `docs/plans/Atlas v1 — Plan.md`: grep for `D18`, `D35`, `D40`, `P1-23`,
+- `docs/plans/Syrinx v1 — Plan.md`: grep for `D18`, `D35`, `D40`, `P1-23`,
   `P1-24` and `FullText`, and read those rows and paragraphs.
 - `docs/decisions.md`: the D40 and Q2 entries (retention and separation from
   the durable store).

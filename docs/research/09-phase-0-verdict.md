@@ -1,4 +1,4 @@
-# Phase 0 verdict: Atlas on Windows 11
+# Phase 0 verdict: Syrinx on Windows 11
 
 Written 2026-10-10 from two throwaway spikes built on 2026-10-09 and the
 owner's own tests. The spikes' code was never merged; their full results are
@@ -18,7 +18,7 @@ conditions are:
    3.75% of one core against the 0.5% bar (D6). The owner allowed a small,
    pinned GPUI patch offered upstream (D37). If the patch can't bring idle
    CPU under 0.5%, GPUI against Tauri goes back to the owner.
-2. **The untested musts are tested before Atlas becomes the daily browser.**
+2. **The untested musts are tested before Syrinx becomes the daily browser.**
    Hulu, the 13 other daily sites, Google sign-in with a password and phone
    prompt, and staying signed in after a restart were not tried in Phase 0.
    They move into plan 1's Phase 2 exit criteria.

@@ -18,10 +18,10 @@ startup ownership, matching recovery confirmation, platform preparation and
 minimal app wiring/tests and only that precise feature amendment. It grants no
 other Store/public-trait, dependency, vendor, security, commit or merge change.
 
-Atlas must not silently create an empty workspace when an established primary
+Syrinx must not silently create an empty workspace when an established primary
 database disappears. The implemented failed-start recovery flow cannot detect
 that case: `WindowsDirectoryLease::prepare` in
-`crates/atlas-platform/src/storage.rs` creates an absent `atlas.db`, after which
+`crates/syrinx-platform/src/storage.rs` creates an absent `syrinx.db`, after which
 normal Store startup can succeed. D46 still requires explicit confirmation
 before installing a backup. Tests and inspection must use disposable synthetic
 state, never the owner's daily database or browser profile.
@@ -134,7 +134,7 @@ for atomic creation. Final source review and integration validation are still
 required before this slice can be accepted.
 
 The owner explicitly approved enabling exactly these additional features on the existing pinned
-`windows = 0.62.2` dependency in `crates/atlas-platform/Cargo.toml`:
+`windows = 0.62.2` dependency in `crates/syrinx-platform/Cargo.toml`:
 
 ```toml
 "Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_System_IO"
@@ -143,7 +143,7 @@ The owner explicitly approved enabling exactly these additional features on the 
 The cached package's feature declarations enable only their Wdk/Win32 parent
 modules. Its typed `NtCreateFile` binding additionally requires the already
 enabled `Win32_Security` and `Win32_Storage_FileSystem` features. No package,
-version, lockfile, Atlas public API or operating-system minimum change is
+version, lockfile, Syrinx public API or operating-system minimum change is
 proposed. The owner's answer was “Approve these three feature flags.” That
 answer authorizes this manifest amendment only; it does not broaden the
 surrounding implementation or security policy.
@@ -173,7 +173,7 @@ preparation keeps its current semantics.
 This recommendation avoids handwritten foreign-function declarations that
 bypass the feature boundary. `CreateDirectory2W` is another atomic operation,
 but Microsoft lists Windows 11 24H2 as its minimum; choosing it would narrow
-Atlas's Windows 11 support decision. See
+Syrinx's Windows 11 support decision. See
 [CreateDirectory2W requirements](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createdirectory2w).
 The typed binding is the smaller reviewed extension. The independent source
 reviewers agree that the current feature set does not supply the needed
@@ -218,20 +218,20 @@ package versions, the workspace manifest and lockfile are unchanged.
 
 The exact files changed for this assignment are:
 
-- `crates/atlas-platform/src/lib.rs`
-- `crates/atlas-platform/Cargo.toml` (only the three approved features)
-- `crates/atlas-platform/src/storage.rs`
-- `crates/atlas-platform/src/storage/native.rs`
-- `crates/atlas-platform/src/storage/backup.rs` (retained archive directory opener)
-- `crates/atlas-platform/src/storage/session.rs`
-- `crates/atlas-platform/src/storage/recovery.rs`
-- `crates/atlas-platform/src/storage/recovery/resume.rs` (private boxed constructor)
-- `crates/atlas-platform/src/storage/recovery/tests.rs`
-- `crates/atlas-platform/src/storage/startup.rs` (new)
-- `crates/atlas-platform/src/storage/startup/tests.rs` (new)
-- `crates/atlas-app/src/session.rs`
-- `crates/atlas-app/src/session/recovery.rs`
-- `crates/atlas-app/src/session/worker_tests.rs`
+- `crates/syrinx-platform/src/lib.rs`
+- `crates/syrinx-platform/Cargo.toml` (only the three approved features)
+- `crates/syrinx-platform/src/storage.rs`
+- `crates/syrinx-platform/src/storage/native.rs`
+- `crates/syrinx-platform/src/storage/backup.rs` (retained archive directory opener)
+- `crates/syrinx-platform/src/storage/session.rs`
+- `crates/syrinx-platform/src/storage/recovery.rs`
+- `crates/syrinx-platform/src/storage/recovery/resume.rs` (private boxed constructor)
+- `crates/syrinx-platform/src/storage/recovery/tests.rs`
+- `crates/syrinx-platform/src/storage/startup.rs` (new)
+- `crates/syrinx-platform/src/storage/startup/tests.rs` (new)
+- `crates/syrinx-app/src/session.rs`
+- `crates/syrinx-app/src/session/recovery.rs`
+- `crates/syrinx-app/src/session/worker_tests.rs`
 - `docs/missing-primary-startup-review.md`
 - `docs/parallel-browser-usability-review-2026-10-10.md`
 - `docs/trapstoknow.md` (Windows metadata-only sharing exemption)
@@ -240,8 +240,8 @@ Integration alone should format and validate this frozen source:
 
 ```powershell
 cargo fmt --all
-cargo test -p atlas-platform --profile local --offline --locked storage::
-cargo test -p atlas-app --profile local --offline --locked session::worker_tests
+cargo test -p syrinx-platform --profile local --offline --locked storage::
+cargo test -p syrinx-app --profile local --offline --locked session::worker_tests
 cargo xtask check
 ```
 

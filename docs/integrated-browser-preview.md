@@ -4,7 +4,7 @@
 
 The owner-approved stable visible “Go to …” row is implemented and independently
 reviewed, preserving address selection across asynchronous local results. The
-current `target/local/atlas-app.exe` has SHA-256
+current `target/local/syrinx-app.exe` has SHA-256
 `0fe3b8daad72ddf3383f025756a5174b39f098d2fa7355d81bfd45eaec89c858`.
 The full `target/continuation-socket-close-commit-gate.log` exited zero, with all 376 tests
 passing (including 54 app, 164 search unit tests and five public matcher tests),
@@ -29,10 +29,10 @@ showed the Windows lock screen. The integration agent stopped Computer Use
 and asked the owner to unlock. This does not establish a Syrinx black-window
 failure. On October 11 the owner explicitly said “GO AHEAD”, confirmed Windows
 unlocked and Syrinx visible/responsive. The integration agent then observed Home
-and the palette rendered normally in synthetic `atlas-app-focus-20261010`
+and the palette rendered normally in synthetic `syrinx-app-focus-20261010`
 process 46216, window 6097856. Clicking edit element 3 showed a caret/popup
 focus, but value entry failed with “element 3 is not available in cached app
-state for atlas-app-focus-20261010.exe”; a refreshed list exposed only the main
+state for syrinx-app-focus-20261010.exe”; a refreshed list exposed only the main
 window. The manual `about:blank`, two-second wait and Enter check was initially
 pending, then the owner confirmed “All three worked”. Unlock is no longer the
 blocker; the tool-targeting failure did not establish a Syrinx typing failure.
@@ -122,13 +122,13 @@ remain unauthorized. Earlier evidence follows.
 
 ## Previous combined preview checkpoint
 
-The latest built binary is `target/local/atlas-app.exe`, SHA-256
+The latest built binary is `target/local/syrinx-app.exe`, SHA-256
 `3d8a38e8b542609961a1949cdb9d1f0b21c8ec054cceb257194aa38cc56f15aa`.
 It includes reviewed navigation-status feedback, scheme handling, popup
 reactivation and the approved wry construction-ownership patch. The latest
 full gate passed 369 tests and app smoke, including the previously blocked
 public matcher executable. No security setting changed. The separately
-preserved `atlas-app-parallel-preview.exe` is the earlier `3ca0bf0…` binary.
+preserved `syrinx-app-parallel-preview.exe` is the earlier `3ca0bf0…` binary.
 
 All 30 disposable construction-fault cases passed, but the expanded repeated
 native lifecycle harness failed local-fixture navigation twice. A disposable
@@ -146,7 +146,7 @@ checkpoint. The handoff records hashes, failures and source ownership.
 
 ## Preceding diagnostics checkpoint
 
-The latest verified binary at that checkpoint was `target/local/atlas-app.exe`, SHA-256
+The latest verified binary at that checkpoint was `target/local/syrinx-app.exe`, SHA-256
 `6edfe4113ccc7b0d5995faccaf7cb23e66541af147712443eb1b17bd9adddf1c`.
 It includes the approved frizbee correction. Dependency checks, formatting,
 workspace Clippy and all 347 workspace tests pass, including 153 search tests
@@ -177,7 +177,7 @@ patches remain unauthorized.
 
 Earlier in this session, the boost-helper binary rendered Home and Ctrl K in
 a fresh synthetic window (process 41380; TEMP profile
-`AtlasApprovedWindow-d8f8830e3b6e4779806d246aa0b6da9c`). The initial tool approval
+`SyrinxApprovedWindow-d8f8830e3b6e4779806d246aa0b6da9c`). The initial tool approval
 timeout recovered, but typing raised the parent instead of reaching the popup.
 Navigation and remaining interactive acceptance are unverified. The synthetic
 window later closed with Alt F4; its process is absent and stderr is empty.
@@ -205,7 +205,7 @@ still needs a concrete reviewed API proposal and its required authorization.
 
 ## Historical checkpoints
 
-Latest binary: `target/local/atlas-app-digit-counts.exe`, SHA-256
+Latest binary: `target/local/syrinx-app-digit-counts.exe`, SHA-256
 `3ea8af80db81795667d32c7732bb30c2f09e6db1d9da26c360f4d221e91668da`.
 Original digit counts reject impossible fields while preserving all 1,040
 benchmark results. Rare-identity p95 falls to 7.3758 ms; only 9/26 cases meet
@@ -226,7 +226,7 @@ Packed numeric matching remains test-only after mixed timings. The new
 occupancy evidence supports a bounded partial range-index experiment, while
 unique-field performance remains open. See `docs/p1-05-search.md` for results.
 
-Latest binary: `target/local/atlas-app-highlight-traces.exe`, SHA-256
+Latest binary: `target/local/syrinx-app-highlight-traces.exe`, SHA-256
 `a84d7dfc9fc834332401e31505d3eda26cad0173c86e8036b35c7d5ff074f9bf`.
 It adds reviewed query-local original-highlight trace reuse, retaining range
 validation on each original field. The awaited fresh synthetic desktop smoke
@@ -238,7 +238,7 @@ Numeric-span and hybrid-ranking experiments remain test-only after mixed
 timings. The WebView2 crash, interactive acceptance and approvals remain open.
 The following checkpoints are historical.
 
-Latest binary: `target/local/atlas-app-group-scores.exe`, SHA-256
+Latest binary: `target/local/syrinx-app-group-scores.exe`, SHA-256
 `03e314bd3a689d30f28a49e8df6f70b530960e4937c391aea83e7dbc636dafa7`.
 It adds reviewed live-group score reuse and exact narrower recency arithmetic.
 The awaited fresh synthetic desktop smoke run exits 0 with empty stderr
@@ -250,7 +250,7 @@ cases pass D48. Numeric-span matching remains test-only after mixed timings.
 The original crash, interactive acceptance and pending approvals remain open.
 The following binary checkpoints are historical.
 
-Latest binary: `target/local/atlas-app-grouped-search.exe`, SHA-256
+Latest binary: `target/local/syrinx-app-grouped-search.exe`, SHA-256
 `2b0c955a07d50b291510aa295dc9c9f25e287a50482ad98182f9b9c695c6f98e`.
 It adds independently reviewed bounded membership groups and query-local equivalent-score reuse to the
 earlier page-close and Home fixes. Its awaited normal-desktop synthetic smoke
@@ -261,7 +261,7 @@ tests and the same two NUL failures. Search latency improves materially for
 long near matches and shared fields, but only 6/26 cases meet D48. The original crash and interactive
 acceptance remain open. This checkpoint supersedes the earlier binaries below.
 
-Current continuation binary: `target/local/atlas-app-continuation.exe`,
+Current continuation binary: `target/local/syrinx-app-continuation.exe`,
 SHA-256 `8ba6694077c977af211b157a2d1ed347580b078379c2092aa6fc74b3aff89201`.
 It includes the approved page-close patch and correlated Home-palette fix.
 All 36 app tests pass; the final full gate passes dependency checks,
@@ -274,7 +274,7 @@ PowerShell GUI invocation supplied no exit code and is not exit evidence.
 Window access remains pending; the original breakpoint remains unresolved.
 The older evidence below is retained and does not supersede this checkpoint.
 
-Latest verification: `target/local/atlas-app-search.exe` includes the queued
+Latest verification: `target/local/syrinx-app-search.exe` includes the queued
 navigation and recovery-notice fixes, the Unicode-query/ASCII-field and short
 ASCII bitset search improvements, and a smoke-only independent 30-second deadline. Smoke startup
 exclusively reserves a synthetic directory before that deadline is armed.
@@ -355,13 +355,13 @@ classification. The updated application smoke run and interactive browser
 verification remain required before claiming the preview ready.
 
 The next rebuild (`target/integrated-preview-build-4.log`) reached linking
-but could not replace `target/local/atlas-app.exe`: Windows returned access
+but could not replace `target/local/syrinx-app.exe`: Windows returned access
 denied while the earlier preview was still running. The owner has been asked
 to close that window. Do not terminate a possibly used window or present the
 old executable as containing the latest fixes. No commit or merge is approved.
 
 Subsequent validation no longer needs to replace that running executable.
-`cargo rustc -p syrinx-app --bin syrinx-app --profile local --offline --locked -- --emit=link=target/local/atlas-app-validation.exe`
+`cargo rustc -p syrinx-app --bin syrinx-app --profile local --offline --locked -- --emit=link=target/local/syrinx-app-validation.exe`
 built the same current application source to a separate ignored executable.
 It remains unsigned. Running that executable with `--smoke` in the normal
 desktop context returned success in approximately five seconds, including
@@ -398,7 +398,7 @@ commands, wraparound and closing the last page to Home.
 All 11 application tests and focused Clippy passed after those changes
 (`target/integrated-preview-shortcut-tests.log` and
 `target/integrated-preview-shortcut-clippy.log`). The same separate-output
-build technique produced `target/local/atlas-app-smoke.exe`; its revised
+build technique produced `target/local/syrinx-app-smoke.exe`; its revised
 startup/shutdown check passed in the normal desktop context. These newer
 changes are not in the already-open validation window. Interactive testing
 and the complete gate are still outstanding.
@@ -425,7 +425,7 @@ retry and normal-desktop attempt are preserved in
 
 Focused Clippy passed in
 `target/integrated-preview-navigation-intents-clippy.log`. The same current
-product source built unsigned as `target/local/atlas-app-preview.exe` (build
+product source built unsigned as `target/local/syrinx-app-preview.exe` (build
 log `target/integrated-preview-build-navigation-intents.log`), and its fresh
 `--smoke` run exited successfully in the normal desktop context. The source
 and smoke evidence do not replace the blocked unit-test run, interactive
@@ -439,7 +439,7 @@ supersedes the execution block for this new executable without explaining
 the earlier Application Control refusal. The separate search suite still
 has two failing NUL-highlight tests, and interactive acceptance remains open.
 
-The latest unsigned `atlas-app-preview.exe` includes that bounded-search
+The latest unsigned `syrinx-app-preview.exe` includes that bounded-search
 source and passed another fresh normal-desktop `--smoke` run (exit zero).
 Its build is recorded in `target/integrated-preview-build-bounded-search.log`.
 A normal interactive launch with a separate fresh synthetic profile produced
@@ -465,7 +465,7 @@ also passed. Logs are
 `target/integrated-preview-field-bounds-navigation-clippy.log`. The already
 launched preview predates this correction.
 
-The corrected source built unsigned to `target/local/atlas-app-navigation.exe`
+The corrected source built unsigned to `target/local/syrinx-app-navigation.exe`
 and passed a fresh normal-desktop `--smoke` run with exit zero. Its build log
 is `target/integrated-preview-build-queued-navigation.log`. The existing owner
 window was left intact; this newer binary has not been visually inspected.
@@ -474,7 +474,7 @@ The separate page-requested-close mismatch is corrected through the approved
 patch in `docs/page-close-event-review.md`. A close request now waits for
 the session's durable acknowledgement before native teardown. All 99 app and
 platform tests and an actual loopback native close fixture passed.
-The rebuilt standard `target/local/atlas-app.exe` passed a fresh desktop
+The rebuilt standard `target/local/syrinx-app.exe` passed a fresh desktop
 smoke run. This supersedes older binaries for this fix; it is not presented
 as the breakpoint's proven cause or interactive acceptance. The report
 records the exact binary hash, evidence and remaining gate failures.

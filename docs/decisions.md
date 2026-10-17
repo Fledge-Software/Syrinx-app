@@ -5,10 +5,10 @@ Each entry says what changed and why. The spec's "Decisions already made"
 still stand unless an entry here says otherwise. Design decisions are
 recorded separately, in `design/README.md`.
 
-Entries keep the wording of their date: until the product was named Syrinx
-on 2026-10-12, it was called Atlas, so older entries say Atlas.
-Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
-`docs/plans/Atlas … .md` is now `docs/plans/Syrinx … .md`.
+Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
+2026-10-17 the owner asked that every entry say Syrinx, older ones
+included; "Atlas" remains only in real identifiers such as the old install's
+folder names.
 
 ## 2026-10-15
 
@@ -369,7 +369,7 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   is crowded across developer tools. The syrinx is a bird's vocal organ,
   which fits beside Fledge. The owner holds the domain `syrinxapp.dev`.
   Code, crates, the data folder and Windows registration names still say
-  Atlas until a dedicated rename slice changes them together. That slice
+  Syrinx until a dedicated rename slice changes them together. That slice
   must also handle the data folder (`%LOCALAPPDATA%\Atlas\data`) before the
   owner's first real install (P1-37). New work should not spread the old
   name further than it must.
@@ -383,26 +383,26 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   repository stays local, with no remote and no pushes. Commits still
   happen only within this approved slice workflow.
 
-- **Atlas never takes the foreground from another application.** When the
-  owner has moved to another program, Atlas does not bring itself to the
+- **Syrinx never takes the foreground from another application.** When the
+  owner has moved to another program, Syrinx does not bring itself to the
   front: no `SetForegroundWindow`, no synthetic Alt press and no GPUI
-  `activate_window`. A page that should take the keys while Atlas is behind
-  waits, and takes them when the owner returns to Atlas; Ctrl K while
-  Atlas is not in front leaves the palette closed rather than float a popup
+  `activate_window`. A page that should take the keys while Syrinx is behind
+  waits, and takes them when the owner returns to Syrinx; Ctrl K while
+  Syrinx is not in front leaves the palette closed rather than float a popup
   over the other program. The review of DW-90 found that the palette's Esc
   fallback called GPUI's `activate_window`, which forces the foreground with
   a synthetic Alt key. Keeping that fallback was rejected: focus returning a
-  little sooner does not justify Atlas stealing the screen from whatever the
+  little sooner does not justify Syrinx stealing the screen from whatever the
   owner is doing.
 
   There are two exceptions, both following the owner's own action. Launching
-  Atlas brings it to the front (`cx.activate(true)` in
+  Syrinx brings it to the front (`cx.activate(true)` in
   `crates/syrinx-app/src/main.rs`). A link the owner clicks in another program
-  while Atlas is their browser also brings it forward
+  while Syrinx is their browser also brings it forward
   (`ui/incoming_links.rs`): the forwarding instance grants the foreground
   through `AllowSetForegroundWindow` (`crates/syrinx-platform/src/instance/pipe.rs`). Every
   other activation, including Find in page, F6 pane cycling and the bookmark
-  import preview, activates natively only while Atlas is already in front.
+  import preview, activates natively only while Syrinx is already in front.
 
 - **Palette ranking is judged from key press to rows on screen (P1-33).**
   A keystroke's ranked rows must be presented within two display refresh
@@ -429,14 +429,14 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   Keeping a new window per opening was rejected, because it cannot meet the
   one-frame target.
 
-- **Page text skips every exit from an excluded site unless Atlas started it
+- **Page text skips every exit from an excluded site unless Syrinx started it
   (P1-25, "skip all exits").** A page reached by leaving an excluded document
   (Google, a bank or payment site, or a site the owner excluded) is never
-  read, unless Atlas itself started that navigation from the address bar,
+  read, unless Syrinx itself started that navigation from the address bar,
   the palette, a bookmark, a saved page, a tile or Home. Links, page
   scripts, auto-submitting forms, popups, back, forward and reload all count
   as leaving. The taint carries on: a page reached that way passes it to the
-  next page it leads to, until Atlas navigates the tab, so a sign-in
+  next page it leads to, until Syrinx navigates the tab, so a sign-in
   callback that moves on by script is not read either. A popup opened from
   an excluded or tainted page starts tainted. This replaces the
   user-initiated test in the entry below: WebView2's `IsUserInitiated`
@@ -454,14 +454,14 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   afterwards. A link the owner follows out of an excluded site still leads to
   a readable page if that page is otherwise eligible. Sign-in flows carry
   tokens and personal details from the excluded site to the next page this
-  way, which the redirect rule alone did not catch. Atlas tells these apart
+  way, which the redirect rule alone did not catch. Syrinx tells these apart
   from WebView2's own `IsUserInitiated` flag and the request method it
   reports, with no request filter and no injected script. Reading such pages
   and relying only on the exclusion lists was rejected.
 
 - **A split `no-store` header is an accepted limit (P1-25, F2).** When a site
   sends `Cache-Control` as several separate header lines, WebView2 shows
-  Atlas only the first, so a `no-store` on a later line is missed and the
+  Syrinx only the first, so a `no-store` on a later line is missed and the
   page can be read. The owner accepted this as a known limit rather than
   adding a request filter, which the Google guardrails forbid. A report to
   Microsoft is possible but is sent only with the owner's approval; nothing
@@ -488,15 +488,15 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   enough for the palette to recall a page, short enough to keep the database
   small. The owner rejected keeping history forever, a year and 30 days.
 
-- **The installed Atlas keeps its data in `%LOCALAPPDATA%\Atlas\data` (P1-37).**
-  Development and preview builds keep using `AtlasProductPreview`, so test
+- **The installed app keeps its data in `%LOCALAPPDATA%\Atlas\data` (P1-37).**
+  Development and preview builds keep using `SyrinxProductPreview`, so test
   runs never mix with the owner's real browsing data. Nothing is moved or
   deleted between them; the installed app starts empty and bookmarks are
   imported again. Keeping the preview folder was rejected for that reason.
 
 - **Page text is read with one DevTools snapshot, never a script (P1-25).**
   The owner approved `docs/proposals/p1-25-page-text-extraction.md` as
-  recommended. Atlas captures an eligible page's visible text with a single
+  recommended. Syrinx captures an eligible page's visible text with a single
   `DOMSnapshot.captureSnapshot` call and reads only response headers, so
   nothing runs inside any page. Google's own sites (YouTube included), banks
   and payment sites, pages with password or card fields, pages not proven
@@ -514,15 +514,15 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 - **Pages get find, history, print and zoom keys first (P1-13).** When a web
   page has focus, Ctrl F, Ctrl H, Ctrl P and the zoom keys go to the page
   first, as in Chrome. If the page doesn't use them, the engine's own find,
-  print and zoom apply. Atlas's own find and history stay reachable from
+  print and zoom apply. Syrinx's own find and history stay reachable from
   Ctrl K and the toolbar. Grabbing them first broke Google Docs' in-document
-  find and its Ctrl H find and replace. Ctrl T, W, L, K and Tab stay Atlas's.
+  find and its Ctrl H find and replace. Ctrl T, W, L, K and Tab stay Syrinx's.
 
 - **Smart App Control is off for development.** Windows Application Control
   repeatedly blocked locally built, unsigned executables (os error 4551),
   breaking gate runs at random. The owner turned Smart App Control off on
   their machine. This was the owner's own action; agents still never change
-  Windows security settings. Atlas stays unsigned for now (D38), and a fresh
+  Windows security settings. Syrinx stays unsigned for now (D38), and a fresh
   Windows install may still block it.
 
 - **The five palettes are approved (P1-07).** The owner reviewed the
@@ -540,13 +540,13 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   choice). Only UTF-8 files are accepted; anything else is refused with a
   request to re-export, rather than guessing the encoding. The parser's
   default limits (32 MiB, 50,000 entries, 32 levels of nesting) stand.
-- **`atlas-core` may depend on `url` (DW-1).** So that import and navigation
+- **`syrinx-core` may depend on `url` (DW-1).** So that import and navigation
   share one address rule instead of two copies, the core crate may take the
   `url` crate as its first outside dependency when the import step is built.
 - **The recorded contrast shortfalls are accepted for now (P1-07).** Sixteen
   colour pairs in the canvas palettes miss WCAG minimums, mostly muted text
   and worst in Glass. The owner accepted them for now rather than changing
-  the canvas. `atlas-ui`'s test keeps the list fixed, so any new shortfall
+  the canvas. `syrinx-ui`'s test keeps the list fixed, so any new shortfall
   fails the gate.
 
 ## 2026-10-11
@@ -556,7 +556,7 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   own branch with independent review. Plans 2–4 still wait for Plan 1's
   acceptance.
 - **Deferred-work markers are allowed when tracked.** `TODO`, `FIXME` and
-  `HACK` may appear in Atlas code if they carry a `DW-n` tag listed in the
+  `HACK` may appear in Syrinx code if they carry a `DW-n` tag listed in the
   plan's "Deferred work" register; each becomes an issue once on GitHub.
   `cargo xtask check` enforces this.
 - **Two dependency approvals.** Vendoring `gpui-pre-windows 0.3.8` for the
@@ -575,7 +575,7 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   owner still approves commits and merges. The target is daily use of the
   full planned browser before Monday, 2026-10-12; that date is a goal, not a
   claim that incomplete or untested features are ready.
-- **Local Atlas must run unsigned for now (D38 clarification).** The owner
+- **Local Syrinx must run unsigned for now (D38 clarification).** The owner
   has no signing certificate and explicitly requires development to continue
   without one. Signing remains deferred; it is not an application prerequisite.
   Keep Windows security settings unchanged and verify the actual application
@@ -593,12 +593,12 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   record. This replaces the alternative of discarding all older backups
   whenever history is cleared.
 - **Restoring a damaged database requires confirmation (D46).** Because an
-  older backup can lose newer state, Atlas offers the newest verified backup
+  older backup can lose newer state, Syrinx offers the newest verified backup
   with its date and asks the owner before replacing the current database.
   Damaged files remain preserved locally. The owner chose confirmation rather
   than automatic restoration.
 - **The top square tiles are Favorites (D45).** They provide quick access
-  to websites, plugin pages and other supported Atlas destinations, separate
+  to websites, plugin pages and other supported Syrinx destinations, separate
   from inline saved pages and folders. A plugin Favorite uses the normal
   plugin open/focus lifecycle. Before that plugin exists, its tile keeps the
   not-yet-implemented indication rather than pretending to open it.
@@ -622,10 +622,10 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
   while preserving its web-tab close/history rules. The owner approved
   the revised 40-slice map: flat saved-page lifecycle now, folder management
   and import in their existing later slices.
-- **Tab transitions follow visible order and keep Atlas open (D42,
+- **Tab transitions follow visible order and keep Syrinx open (D42,
   clarified by D43).** Closing the active page selects the next open page
   to its right, otherwise its left, skipping unloaded saved rows. Closing
-  the last live page shows Home and leaves Atlas open. New ordinary web tabs
+  the last live page shows Home and leaves Syrinx open. New ordinary web tabs
   append and become active. Reordering stays within saved or ordinary groups.
   Keep the 20 most recent web-tab closures, including saved-page instances,
   not 100. Reopen selects the restored ordinary tab with its metadata and
@@ -637,25 +637,25 @@ Old paths map directly: `crates/atlas-*` is now `crates/syrinx-*`, and
 - **Keep the current WebView2 engine and SmartScreen.** The owner confirmed
   the engine works after reviewing Microsoft's required runtime diagnostics
   and SmartScreen collection. Disclose those runtime behaviors separately
-  from Atlas's own analytics; the custom-crash setting still keeps crash
+  from Syrinx's own analytics; the custom-crash setting still keeps crash
   dumps local (D39).
-- **Atlas may measure its own use locally to guide improvements.** This
+- **Syrinx may measure its own use locally to guide improvements.** This
   replaces the earlier blanket "no telemetry" rule. The owner chose local
   aggregate counters and explicit report export: feature usage, command
   counts, timings and error categories, without account/device identifiers,
   URLs, searches, file paths, document text or a detailed event timeline.
   There are no automatic uploads. A model may suggest changes from a report
-  the owner chooses to share; the owner reviews product changes, and Atlas
+  the owner chooses to share; the owner reviews product changes, and Syrinx
   does not adapt its interface automatically. With one v1 user, removing
   identifiers cannot guarantee that a report's author is unknown by context.
   Collection and export need a reviewed schema and implementation breakdown
   before they are built; this is not permission to read or share real usage
   data during development (D39).
 - **Seven days applies to retained page text, not just search visibility.**
-  Keep the expiring page-text cache and its index outside Atlas's seven daily
+  Keep the expiring page-text cache and its index outside Syrinx's seven daily
   durable-state backups. Remove expired content from active storage and
   prevent restart, replay or restore from reintroducing it. This covers
-  Atlas-managed retention, not forensic erasure or owner-managed backups
+  Syrinx-managed retention, not forensic erasure or owner-managed backups
   (D40, clarifying D13/D18/D35).
 - **The four plans and plan 1's 40-slice breakdown are approved.** The owner
   also approved local implementation: one branch per slice, independent
@@ -674,7 +674,7 @@ These entries depart from `docs/spec.md`. Each is argued in
   v1, so the Phase 0 verdict is for Windows, not per OS.
 - **Pages render in WebView2, driven from Rust through wry, without Tauri**
   (D3). Servo is added later as a per-tab engine.
-- **Atlas's interface is drawn in Rust with GPUI, not Svelte** (D4), unless
+- **Syrinx's interface is drawn in Rust with GPUI, not Svelte** (D4), unless
   Phase 0's comparison with a Tauri + Svelte build trips the rule written
   in the plan.
 - **Notes and Forge edit in CodeMirror 6 inside a local web view** (D28).
@@ -685,34 +685,34 @@ These entries depart from `docs/spec.md`. Each is argued in
 - **Phase 0 runs locally before anything else is planned in detail** (D16).
 - **Import is the browser's bookmarks export, not a CSV.** Edge, Chrome and
   Firefox export bookmarks only as the standard HTML bookmarks file, so
-  Atlas imports that file. v1 imports no history and no passwords; password
+  Syrinx imports that file. v1 imports no history and no passwords; password
   import arrives with a password manager after v1. This replaces "Import is a
   CSV file only" below. Recorded in `docs/plans/Syrinx v1 — Plan.md` (D10,
   D14, D15).
 - **Performance is the deciding goal for the engine and UI.** The owner wants
-  Atlas to be as efficient as possible: low memory per tab, fast start, low
+  Syrinx to be as efficient as possible: low memory per tab, fast start, low
   typing and scrolling latency, low idle CPU. TypeScript and Svelte are
-  allowed. Atlas does not have to be written entirely in Rust, but all state
+  allowed. Syrinx does not have to be written entirely in Rust, but all state
   and logic still live in Rust, as the spec says.
 - **The browser engine is open again.** The spec's direction (Tauri 2 with OS
   web views) is one option, alongside Servo, Chromium through CEF, and
   hybrids. The research in `docs/research/` compares them. The choice is the
   first decision of the v1 plan and is made with the owner, not by default.
   The rule "embed an existing engine, don't build one" still holds.
-- **Import is a CSV file only for v1.** Atlas doesn't read other browsers'
+- **Import is a CSV file only for v1.** Syrinx doesn't read other browsers'
   profiles. What the CSV holds (bookmarks, history or both) is still to be
   confirmed. *(Replaced the same day: see the bookmarks-export entry above.)*
 - **Signing, SmartScreen and the Microsoft Store wait.** They come back only if
-  Atlas is productised. The Store's rule that browsers use the Chromium or
+  Syrinx is productised. The Store's rule that browsers use the Chromium or
   Gecko engine does not constrain the engine choice now.
-- **Atlas will probably be open source, released on GitHub.** That brings a
+- **Syrinx will probably be open source, released on GitHub.** That brings a
   public repository and a licence choice when the repository moves to GitHub.
   It stays local until the owner says otherwise.
 - **The next session asks the owner questions.** Planning v1 is a
   conversation: the engine, the UI approach, the v1 scope and anything else
   the owner hasn't decided are put to the owner in question rounds, never
   settled by picking a default.
-- **A hidden sidebar peeks over the page on hover, everywhere in Atlas.** See
+- **A hidden sidebar peeks over the page on hover, everywhere in Syrinx.** See
   `design/README.md`.
 - **A plugin is a tab that stays in the Plugins list when closed.** See
   `design/README.md`.

@@ -33,14 +33,14 @@ therefore bypasses the destructor that normally owns child destruction.
 The guard also needs to cover the helper itself: `create_container_hwnd`
 calls fallible `SetWindowPos` after `CreateWindowExW`. Beginning cleanup
 ownership only after that helper returns would leave this earlier gap open.
-Atlas's child path does not install wry's parent subclass; a generic upstream
+Syrinx's child path does not install wry's parent subclass; a generic upstream
 correction must still account for the non-child path's subclass ownership.
 
-Atlas supplies its shared environment, so wry's fallback environment-creation
-branch is not reached in ordinary Atlas page creation. Controller creation
-and `init_webview` remain fallible. `crates/atlas-platform/src/browser/page.rs`
+Syrinx supplies its shared environment, so wry's fallback environment-creation
+branch is not reached in ordinary Syrinx page creation. Controller creation
+and `init_webview` remain fallible. `crates/syrinx-platform/src/browser/page.rs`
 maps a failed builder result to `BrowserError::CreatePage`; the browser worker
-reports `CreationFailed` and can continue processing commands. Atlas has no
+reports `CreationFailed` and can continue processing commands. Syrinx has no
 owned `Page` to drop when the builder has not returned one. Parent destruction
 can eventually clean up child windows, but does not provide per-attempt
 cleanup while the browser remains open.
@@ -51,7 +51,7 @@ breakpoint. No fault was induced, crash dump read, or personal profile inspected
 
 The earlier, separate COM observation also remains open: wry calls
 `CoInitializeEx` for each construction attempt without a matching call in this
-module. Atlas balances its own apartment initialization and normally drops
+module. Syrinx balances its own apartment initialization and normally drops
 pages and the shared environment before its apartment guard. Do not guess an
 extra teardown count or alter that ownership without a dedicated review.
 
@@ -66,10 +66,10 @@ Prepare a small scoped proposal for temporary ownership of a successfully
 created container and controller until `InnerWebView` takes them. It must
 handle both controller-creation and configuration failures, preserve parent
 subclass cleanup, avoid double destruction, and report cleanup failures without
-adding Atlas-authored lint suppression or swallowed errors. Review the exact
+adding Syrinx-authored lint suppression or swallowed errors. Review the exact
 published baseline and a complete diff before requesting owner authorization.
 
-The main alternative is Atlas-side cleanup after `build_as_child` fails. That
+The main alternative is Syrinx-side cleanup after `build_as_child` fails. That
 caller never receives the newly created native handle, so searching the parent
 for a child would guess ownership and risks affecting another page. Cleanup
 belongs at the point that owns the resource, subject to the narrow dependency

@@ -11,7 +11,7 @@ Read only the files and line ranges your task lists. Never read a whole file
 over 600 lines; use `grep -n "^#"` to find headings and read only the section
 you need. In particular, never read all of `docs/p1-05-search.md` (2,348
 lines), `docs/handoff-integrated-preview-2026-10-10.md` (1,166 lines) or
-`docs/plans/Atlas v1 — Plan.md` (1,248 lines) end to end. Keep command output
+`docs/plans/Syrinx v1 — Plan.md` (1,248 lines) end to end. Keep command output
 short with `tail`, `grep` or `Select-Object -Last`.
 
 ## Read first, in this order
@@ -27,11 +27,11 @@ short with `tail`, `grep` or `Select-Object -Last`.
 
 ## Where you work
 
-- **Never work in `C:\Users\<user>\Documents\GitHub\Atlas-app` itself.** That
+- **Never work in `C:\Users\<user>\Documents\GitHub\Syrinx-app` itself.** That
   checkout belongs to the integration branch. Create your own worktree:
 
   ```powershell
-  git -C C:\Users\<user>\Documents\GitHub\Atlas-app worktree add ..\Atlas-wt\<slice> -b codex/<slice> codex/integrated-browser-preview
+  git -C C:\Users\<user>\Documents\GitHub\Syrinx-app worktree add ..\Syrinx-wt\<slice> -b codex/<slice> codex/integrated-browser-preview
   ```
 
 - Use one branch per slice, named in your task. Commit to that branch as you
@@ -44,7 +44,7 @@ short with `tail`, `grep` or `Select-Object -Last`.
   essentials, the P1-21 folder model, the P1-22 import parser and the P1-23
   full-text bake-off. Stay inside the files your task names. If you must
   change a shared file (the workspace `Cargo.toml`, `Cargo.lock`,
-  `crates/atlas-app/src/ui.rs` or `crates/atlas-platform/src/lib.rs`), keep
+  `crates/syrinx-app/src/ui.rs` or `crates/syrinx-platform/src/lib.rs`), keep
   the change minimal and say so in your final report.
 
 ## Gate and evidence
@@ -55,13 +55,13 @@ short with `tail`, `grep` or `Select-Object -Last`.
   (os error 4551). Record the block; never change a security setting, and
   never sign or relocate binaries to get around it.
 - `TODO`, `FIXME` and `HACK` markers are allowed only as `TODO(DW-n)`, with
-  the row added first to "Deferred work" in `docs/plans/Atlas v1 — Plan.md`.
+  the row added first to "Deferred work" in `docs/plans/Syrinx v1 — Plan.md`.
   The gate rejects any other form.
 - Never skip, `#[ignore]`, loosen or delete a test. Never silence Clippy with
   `#[allow]`. Never swallow errors with `let _ =`, `.ok()` or a catch-all
   default.
 - Use only synthetic test data: `example.com`, `.test`, `.invalid` and
-  made-up text. Never read a real browser profile or the owner's Atlas data.
+  made-up text. Never read a real browser profile or the owner's Syrinx data.
 
 ## Stop and ask, instead of acting
 

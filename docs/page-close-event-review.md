@@ -1,4 +1,4 @@
-# Keep page-requested closes inside Atlas's tab lifecycle
+# Keep page-requested closes inside Syrinx's tab lifecycle
 
 Status: owner approved the page-close patch and narrow vendor exception on
 2026-10-10. The patch is implemented and its native close fixture passed. This approval
@@ -6,7 +6,7 @@ does not authorize a commit, merge or upstream publication.
 
 A page that requests its own close must go through the same saved-tab and
 storage rules as the sidebar close button. Otherwise its native window can
-disappear while Atlas still shows a live tab. The approved implementation
+disappear while Syrinx still shows a live tab. The approved implementation
 now routes that request through durable session closure. This is not evidence that it caused the owner's
 reported `0x80000003` breakpoint; that crash remains unproved.
 
@@ -16,24 +16,24 @@ reported `0x80000003` breakpoint; that crash remains unproved.
   constructing the web view. At lines 683–685, its `WindowCloseRequested`
   handler calls `DestroyWindow(hwnd)` immediately. Its registration token is
   discarded, as are the other lifetime-bound handler tokens.
-- Atlas calls `build_as_child` in
-  `crates/atlas-platform/src/browser/page.rs:83`, then adds metadata,
+- Syrinx calls `build_as_child` in
+  `crates/syrinx-platform/src/browser/page.rs:83`, then adds metadata,
   navigation, process-failure and shortcut handlers. It has no close event.
   The page remains in the browser worker's `pages` map until a
   `BrowserCommand::Close` arrives.
-- `crates/atlas-app/src/ui.rs` records a created view in `loaded`. That state
+- `crates/syrinx-app/src/ui.rs` records a created view in `loaded`. That state
   is reconciled with the session model, which likewise receives no native
   close observation. A requested native close therefore bypasses both.
 - wry owns the child HWND for its whole `InnerWebView` lifetime. Its `Drop`
   calls controller `Close`, then `DestroyWindow` for a child. Destroying that
   HWND earlier leaves wry's stored handle stale. Windows handle reuse makes
   relying on a later second destruction undesirable; no such reuse or crash
-  has been observed in Atlas.
+  has been observed in Syrinx.
 
 Microsoft defines `WindowCloseRequested` as a request that the host may act
 on, rather than an instruction to destroy a host window immediately. It also
 warns that repeated requests need not each produce an event. The documented
-contract does not establish that an Atlas handler registered after wry's
+contract does not establish that an Syrinx handler registered after wry's
 destructive handler will reliably run after that destruction.
 [WebView2 close-event reference](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2#add_windowcloserequested).
 
@@ -45,7 +45,7 @@ wry callback override, with the default behavior unchanged for other users.
 ## Approved narrow patch
 
 The patch keeps wry at exactly 0.57.0 with its current features. A Windows-only
-builder callback replaces wry's automatic destruction when supplied. Atlas
+builder callback replaces wry's automatic destruction when supplied. Syrinx
 uses it only to enqueue the page's existing numeric ID. No page script,
 inter-process communication bridge, user-agent change or request filter is
 involved.
@@ -96,19 +96,19 @@ the verification record below distinguishes source changes from runtime evidence
 
 Both files already import `Rc`. Platform attributes derive `Clone`, so a
 reference-counted callback preserves their existing ownership contract. The
-callback captures only Atlas's event sender and the original page ID, not a
+callback captures only Syrinx's event sender and the original page ID, not a
 controller, web view, HWND owner or session model. It introduces no reference
 cycle to those owners. Existing teardown releases it with the web view.
 
-Atlas's accompanying changes are limited to the existing lifecycle:
+Syrinx's accompanying changes are limited to the existing lifecycle:
 
 | File | Proposed change and reason |
 | --- | --- |
-| `crates/atlas-platform/src/browser.rs` | Add public `BrowserEvent::CloseRequested { id: u64 }`. Keep content-redacted diagnostics and existing browser commands. |
-| `crates/atlas-platform/src/browser/page.rs` | Supply the new builder callback before `build_as_child`. It only emits that event and returns; it does not close the controller or remove its page. |
-| `crates/atlas-app/src/ui.rs` | Convert a valid ID to `TabId` and send `SessionCommand::ObserveClosed(id)` unless whole-app shutdown has begun. Do not optimistically remove the row or native page. |
-| `crates/atlas-app/src/session.rs` | Add `ObserveClosed(TabId)`, which closes a still-present web tab through `TabModel::close` and is a no-op for an absent ID. Preserve the existing save-before-State acknowledgement. |
-| `crates/atlas-app/src/session/worker_tests.rs` and existing browser/UI test modules | Exercise real queued closes and event routing with synthetic state. Keep native event delivery as a separate runtime check. |
+| `crates/syrinx-platform/src/browser.rs` | Add public `BrowserEvent::CloseRequested { id: u64 }`. Keep content-redacted diagnostics and existing browser commands. |
+| `crates/syrinx-platform/src/browser/page.rs` | Supply the new builder callback before `build_as_child`. It only emits that event and returns; it does not close the controller or remove its page. |
+| `crates/syrinx-app/src/ui.rs` | Convert a valid ID to `TabId` and send `SessionCommand::ObserveClosed(id)` unless whole-app shutdown has begun. Do not optimistically remove the row or native page. |
+| `crates/syrinx-app/src/session.rs` | Add `ObserveClosed(TabId)`, which closes a still-present web tab through `TabModel::close` and is a no-op for an absent ID. Preserve the existing save-before-State acknowledgement. |
+| `crates/syrinx-app/src/session/worker_tests.rs` and existing browser/UI test modules | Exercise real queued closes and event routing with synthetic state. Keep native event delivery as a separate runtime check. |
 
 After storage acknowledges the updated session, existing `sync_pages` sends
 `BrowserCommand::Close`. The browser worker removes its `Page`, and wry's
@@ -120,7 +120,7 @@ outside the WebView2 event callback, as required by its serial callback model.
 ## Identity, repeats and failures
 
 The event carries the live `TabId`, never a saved-page ID or a selected-tab
-guess. Atlas does not reuse live IDs. Repeated requests, a queued sidebar
+guess. Syrinx does not reuse live IDs. Repeated requests, a queued sidebar
 close followed by a page close, and late callbacks after close are harmless
 at the authoritative session worker: only the first still-present instance
 is closed. A reopened saved row has a fresh live ID and cannot be closed by
@@ -178,7 +178,7 @@ approved the narrow wry exception in `AGENTS.md`.
 
 The owner approved this close-event API and two-file pinned wry patch,
 including retaining unchanged upstream comments and lint annotations in its
-vendor directory, so Atlas can persist a page-requested close before
+vendor directory, so Syrinx can persist a page-requested close before
 destroying its native view. Prepare the upstream diff under D12; obtain
 separate permission before sending it publicly.
 
@@ -208,7 +208,7 @@ The vendored archive and two-file change are recorded in
 `vendor/wry-0.57.0.provenance.md`. Its local upstream diff is prepared but
 unpublished. The lockfile comparison changes only wry's source/checksum;
 versions and dependency edges remain identical. Independent reviews of the
-vendor patch, Atlas lifecycle and native fixture passed.
+vendor patch, Syrinx lifecycle and native fixture passed.
 
 `target/page-close-app-platform-tests.log` records all 99 relevant tests
 passing: 29 application, 48 platform unit, four backup integration and 18
@@ -222,14 +222,14 @@ Dependency boundaries and workspace Clippy passed; logs are
 `target/page-close-dependencies.log` and `target/page-close-clippy.log`.
 Formatting initially passed. The final workspace recheck found a newly
 changed assertion in the unrelated search profiler
-`crates/atlas-search/src/catalogue/profiling.rs`; that file was left untouched.
+`crates/syrinx-search/src/catalogue/profiling.rs`; that file was left untouched.
 `target/page-close-format.log` preserves that failure, while scoped app and
 platform formatting passes in `target/page-close-scoped-format.log`.
 The vendored wry emits an existing unused
-`platform_webview_version` warning with Atlas's features; its body and lint
+`platform_webview_version` warning with Syrinx's features; its body and lint
 settings remain unchanged. No warning suppression was added.
 
-The standalone fixture `crates/atlas-platform/examples/page_close.rs`
+The standalone fixture `crates/syrinx-platform/examples/page_close.rs`
 requires actual close-event delivery from its own loopback HTML page. It
 checks the native child and controller remain alive until a separate queued
 Close, then checks child destruction, a replacement page and orderly shutdown.
@@ -245,7 +245,7 @@ after Close, created another page and shut down cleanly. Build evidence is
 `target/page-close-native-run.stdout.log`, with an empty sibling stderr log.
 No certificate or Windows security change was involved.
 
-The standard `target/local/atlas-app.exe` was rebuilt with this patch and
+The standard `target/local/syrinx-app.exe` was rebuilt with this patch and
 passed a fresh normal-desktop `--smoke` run, exit zero and no stderr. Evidence
 is `target/page-close-app-build.log` and
 `target/page-close-app-smoke.stdout.log` / `.stderr.log`. Its SHA-256 at

@@ -2,7 +2,7 @@
 
 This ledger prevents tested foundations from being mistaken for a finished browser. It records implementation evidence against all four approved plans; it changes no requirement, decision or approval. Update it when a slice gains code, verification or an approved merge. The source of authority remains `docs/decisions.md`, the spec, the design and the active plans, in the order defined by `AGENTS.md`.
 
-The product was renamed from Atlas to Syrinx on 2026-10-12. Evidence recorded before then keeps its original file names: executables such as `target/local/atlas-app.exe` and logs under `target/` are named as they were built, and their hashes belong to those files. The executable is now `target/local/syrinx.exe`.
+The product was renamed from Syrinx to Syrinx on 2026-10-12. Evidence recorded before then keeps its original file names: executables such as `target/local/syrinx-app.exe` and logs under `target/` are named as they were built, and their hashes belong to those files. The executable is now `target/local/syrinx.exe`.
 
 ## Current checkpoint — 2026-10-14
 
@@ -147,7 +147,7 @@ normal-desktop gate: 436 tests, dependency boundaries, formatting, Clippy,
 documentation tests and synthetic application smoke. Evidence is
 `target/continuation-atomic-startup-desktop-gate.log`, SHA-256
 `5654ffa30e3f5af2b8711410ea862db2d5dcb8c42b474450b294048f49ccad79`.
-The current `target/local/atlas-app.exe` SHA-256 is
+The current `target/local/syrinx-app.exe` SHA-256 is
 `252044439eb668680360e28009a3245e2992a754cb22d82b2dae8b6b8839982d`.
 This supersedes the pending-validation checkpoints below. The restricted-context
 gate passed all tests but timed out in smoke with watchdog code 124; its log
@@ -185,7 +185,7 @@ identity needed by the completion event. The corrected full gate passes all
 411 tests (78 app tests), dependency checks, formatting, Clippy and synthetic
 smoke in `target/continuation-palette-refocus-gate.log`, SHA-256
 `10ddb5b7f6b9167614d710f049305859c52499855c4eb993cfe766403e945742`.
-Current `target/local/atlas-app.exe` SHA-256 is
+Current `target/local/syrinx-app.exe` SHA-256 is
 `4c437c976290615a00ee06287b5338b94b26267e1546002d8b307674d55cdfde`.
 Native caret/focus verification and the original crash remain unresolved.
 The preceding 409-test shortcut gate remains evidence of a test-coverage gap,
@@ -197,7 +197,7 @@ ordered worker shutdown. Independent source review passes. The full gate passes
 407 tests (75 application tests), dependency checks, formatting, Clippy and
 synthetic app smoke in `target/continuation-shutdown-actions-gate.log`, SHA-256
 `a9a3838e16c4916f394b7aded39daee7401841ba1c82ce39aefe641813ad9e8b`.
-The latest verified `target/local/atlas-app.exe` SHA-256 is
+The latest verified `target/local/syrinx-app.exe` SHA-256 is
 `2e3bc975b0b1ea894c12a4c94f5171401635324712b1e0d378f72cf558b47b9e`.
 Visual acceptance remains open. The Unicode-selected search experiment also
 passes its two focused tests in `target/continuation-unicode-selected-triplets.log`;
@@ -267,7 +267,7 @@ acceptance remain open. The complete gate then passes all 400 tests, dependency
 checks, formatting, Clippy and fresh synthetic app smoke in
 `target/continuation-recovery-watchdog-full-gate.log` (SHA-256
 `afa83cd812bae5dda7be9f1f5f68f18d9003658ed9f0ef72b40da25ead10be2e`).
-The latest verified `target/local/atlas-app.exe` SHA-256 is
+The latest verified `target/local/syrinx-app.exe` SHA-256 is
 `9b2fded8f7dc79d436ddbfe15af63133a1be005645c188c98750f17fcfb36119`.
 The cached-first experiment passes correctness but remains test-only because
 paired measurements show regressions in long near-match and mixed no-match.
@@ -297,7 +297,7 @@ address selection survives asynchronous local results. The full gate
 none ignored or filtered. Dependency checks, formatting, Clippy, documentation
 tests and app smoke pass. Gate SHA-256:
 `ca28dc0a417a3e00929ece8c652c21dc8b7b2e58da6acd820fec72af0a03ca62`.
-Current `target/local/atlas-app.exe` SHA-256:
+Current `target/local/syrinx-app.exe` SHA-256:
 `0fe3b8daad72ddf3383f025756a5174b39f098d2fa7355d81bfd45eaec89c858`.
 On October 11 the owner reported all three requested manual checks passed on
 this synthetic build: `about:blank` text appeared, its Go to row stayed selected
@@ -313,7 +313,7 @@ The earlier lock-screen capture and black captures/activation failures remain
 historical evidence, not a Syrinx black-window diagnosis. On October 11 the
 owner explicitly authorized continuation, confirmed Windows unlocked and Syrinx
 visible/responsive. The integration agent observed Home and the palette in
-synthetic `atlas-app-focus-20261010` process 46216, window 6097856. Clicking edit
+synthetic `syrinx-app-focus-20261010` process 46216, window 6097856. Clicking edit
 3 showed a caret/popup focus; setting its value failed because the element was
 unavailable in cached app state, and the refreshed list exposed only the main
 window. Manual `about:blank` entry, a two-second wait and Enter were requested
@@ -403,7 +403,7 @@ The latest full gate now PASSES all 369 tests and app smoke, including the
 navigation-status correction and test-only bound-reuse equivalence tests.
 `target/continuation-crash-usability-gate.log` has SHA-256
 `88b153e055d1e64b48feb2b18ff6b34199ebeb650e64cb22600d33e9e288b39d`;
-current `target/local/atlas-app.exe` has SHA-256
+current `target/local/syrinx-app.exe` has SHA-256
 `3d8a38e8b542609961a1949cdb9d1f0b21c8ec054cceb257194aa38cc56f15aa`.
 No security setting changed. Separate expanded native stress runs failed
 navigation during repeated local-fixture creation; diagnosis and the original
@@ -422,8 +422,8 @@ The handoff records source identities and remaining coverage limitations.
 
 ### Historical combined browser checkpoint after parallel work
 
-The current binary is `target/local/atlas-app.exe` (also preserved as
-`target/local/atlas-app-parallel-preview.exe`), SHA-256
+The current binary is `target/local/syrinx-app.exe` (also preserved as
+`target/local/syrinx-app-parallel-preview.exe`), SHA-256
 `3ca0bf045fc0826e7300a647307845733fb5249b085f52feeadbebf0abd4c276`.
 It includes reviewed popup reactivation, navigation scheme handling, narrowed
 ASCII projection and the newly owner-approved exact wry construction patch.
@@ -453,9 +453,9 @@ The latest benchmark passes 10/26 D48 cases (maximum p95 13.9768 ms, worst
 sample 17.7388 ms); search acceptance remains open. See
 `docs/p1-05-search.md` and the narrowed-profile/benchmark logs under `target/`.
 
-A fresh synthetic window was launched from `atlas-app-parallel-preview.exe`,
+A fresh synthetic window was launched from `syrinx-app-parallel-preview.exe`,
 process 22080, TEMP profile
-`AtlasParallelPreview-e88536c4ea344dc7ac2af6e7cbe298f5`.
+`SyrinxParallelPreview-e88536c4ea344dc7ac2af6e7cbe298f5`.
 The owner stopped Computer Use with physical Escape during its first
 inspection. No further Computer Use actions were issued in that turn.
 The window was left open; do not terminate it or assume interactive acceptance.
@@ -465,7 +465,7 @@ still be active. Preserve uncommitted work, existing windows and all approvals.
 
 ### Earlier evidence
 
-The latest verified binary is `target/local/atlas-app.exe`, SHA-256
+The latest verified binary is `target/local/syrinx-app.exe`, SHA-256
 `6edfe4113ccc7b0d5995faccaf7cb23e66541af147712443eb1b17bd9adddf1c`.
 It includes the approved frizbee correction. Dependency checks, formatting,
 workspace Clippy and all 347 workspace tests pass, including 153 search tests
@@ -496,7 +496,7 @@ patches remain unauthorized.
 
 Earlier in this session, the boost-helper binary rendered Home and Ctrl K in
 a fresh synthetic window (process 41380; TEMP profile
-`AtlasApprovedWindow-d8f8830e3b6e4779806d246aa0b6da9c`). The initial tool approval
+`SyrinxApprovedWindow-d8f8830e3b6e4779806d246aa0b6da9c`). The initial tool approval
 timeout recovered, but typing raised the parent instead of reaching the popup.
 Navigation and remaining interactive acceptance are unverified. The synthetic
 window later closed with Alt F4; its process is absent and stderr is empty.
@@ -524,7 +524,7 @@ still needs a concrete reviewed API proposal and its required authorization.
 
 ### Earlier in-place mutation checkpoint
 
-The current binary is `target/local/atlas-app-digit-counts.exe`; its awaited
+The current binary is `target/local/syrinx-app-digit-counts.exe`; its awaited
 fresh synthetic desktop smoke exits 0 with empty stderr. Original digit-count
 rejection preserves all 1,040 benchmark results and reduces rare-identity p95
 from 36.2976 to 7.3758 ms. Only 9/26 cases meet D48, so acceptance remains open.
@@ -555,7 +555,7 @@ open. The score-bound precomputation experiment was rejected and removed.
 See `docs/p1-05-search.md` and the handoff for evidence and limits. No job remains
 active; pending approvals and the WebView2 crash are unchanged.
 
-The current binary is `target/local/atlas-app-highlight-traces.exe`; its awaited
+The current binary is `target/local/syrinx-app-highlight-traces.exe`; its awaited
 fresh synthetic desktop smoke run exits 0 with empty stderr. Original highlight
 traces are reused within eligible queries, with range validation against every
 original field. All 1,040 benchmark results are unchanged. Nine of 26 cases meet
@@ -572,7 +572,7 @@ breakpoint, interactive acceptance and pending approvals remain unresolved.
 All uncommitted work is preserved and no continuation job remains active.
 Earlier checkpoints follow.
 
-The current binary is `target/local/atlas-app-group-scores.exe`; its awaited
+The current binary is `target/local/syrinx-app-group-scores.exe`; its awaited
 fresh synthetic desktop smoke run exits 0 with empty stderr. Live group IDs
 reuse original field scores within each query, and recency arithmetic keeps
 the same exact result with a narrower common path. The unchanged benchmark
@@ -589,7 +589,7 @@ breakpoint and pending approvals remain unresolved. The uncommitted tree is
 preserved, and no continuation job remains active. Earlier checkpoints follow.
 
 The latest continuation preserves the whole uncommitted tree and builds
-`target/local/atlas-app-grouped-search.exe`. Its awaited fresh synthetic
+`target/local/syrinx-app-grouped-search.exe`. Its awaited fresh synthetic
 normal-desktop smoke check exits 0. All 36 app tests pass. Bounded membership
 groups and query-local score reuse reduce unchanged benchmark long near-match p95
 from 367.56 to 30.78 ms and preserve all 1,040 sample results, but D48 still
@@ -606,7 +606,7 @@ The owner-approved page-close patch is now implemented and independently
 reviewed. All 99 app/platform tests pass, as do dependency boundaries,
 workspace Clippy and scoped formatting. A synthetic loopback page proves
 actual native close delivery, deferred destruction and safe host shutdown.
-The rebuilt standard `target/local/atlas-app.exe` passed a fresh desktop
+The rebuilt standard `target/local/syrinx-app.exe` passed a fresh desktop
 smoke check. See `docs/page-close-event-review.md` for its binary hash and
 logs. A final workspace formatting check found a concurrent change in the
 unrelated search profiler; it was left untouched. Search correctness and
@@ -615,7 +615,7 @@ open. No commit, merge or upstream publication has been made.
 
 Latest evidence supersedes the historical checkpoints below: the final
 watchdog/profile-reservation changes pass all 23 app tests, focused Clippy
-and independent review. `target/local/atlas-app-search.exe` passed a fresh
+and independent review. `target/local/syrinx-app-search.exe` passed a fresh
 normal-desktop smoke run with exit zero. Interactive acceptance and the
 breakpoint diagnosis remain open. Unicode-query matching against cached ASCII
 fields and short-ASCII bitsets improve relevant benchmark cases while preserving
@@ -629,16 +629,16 @@ search reports; no full gate, slice completion, commit or merge is claimed.
 - `target/integrated-preview-tests.log` records **178 passing tests**, zero ignored/filtered cases, and completed documentation-test stages: app 7, core 30, platform 62, search 26, store/engine 39 and xtask 14. Formatting, dependency boundaries and workspace Clippy passed. A subsequent focused Clippy pass covers the pending-page navigation correction. These results do not constitute the final application smoke/interactive gate.
 - The unsigned executable rendered Home and Ctrl K in the normal desktop context. Typing, real page navigation, page-focused shortcuts, save/unload/restart and final shutdown are **not yet verified**. An earlier restricted-context run produced a WebView2 breakpoint dialog; its cause remains unproved. Do not count its zero process exit as success.
 - At this check, old preview process **37612** is still running. `target/integrated-preview-build-4.log` shows Windows refusing to replace its open executable. The owner has been asked to close it. Recheck the PID before acting; do not kill a possibly used window or test the old binary as if it contained the latest fixes.
-- A later build emits the current source to `target/local/atlas-app-validation.exe`, leaving that old executable alone. Its revised `--smoke` check passed in the normal desktop context. Eleven new regressions also passed in an 80-test app/platform run, with focused Clippy and formatting passing. A fresh validation window is open, but interactive inspection awaits computer-use app-access approval. This does not resolve the earlier crash's cause or complete the GUI gate; see the updated preview report.
+- A later build emits the current source to `target/local/syrinx-app-validation.exe`, leaving that old executable alone. Its revised `--smoke` check passed in the normal desktop context. Eleven new regressions also passed in an 80-test app/platform run, with focused Clippy and formatting passing. A fresh validation window is open, but interactive inspection awaits computer-use app-access approval. This does not resolve the earlier crash's cause or complete the GUI gate; see the updated preview report.
 - The dependency additions have a completed audit and exact licence approval in `docs/integrated-preview-dependencies.md`. Product metadata contains no registry package/version absent from that proposal. No GPUI idle patch or passing D48 search benchmark exists.
-- A further review fixed palette reply invalidation, queued relative shortcuts, persistent failure reporting and result selection. The app now has 11 passing tests, focused Clippy passes, and a rebuilt `atlas-app-smoke.exe` passed startup/shutdown. The existing open validation window predates these changes; neither interactive acceptance nor the full latest workspace gate is claimed.
+- A further review fixed palette reply invalidation, queued relative shortcuts, persistent failure reporting and result selection. The app now has 11 passing tests, focused Clippy passes, and a rebuilt `syrinx-app-smoke.exe` passed startup/shutdown. The existing open validation window predates these changes; neither interactive acceptance nor the full latest workspace gate is claimed.
 - The later P1-05 ASCII-presence experiment has **34 passing search tests and two failing differential tests**. Both the filtered and exhaustive paths fail for a synthetic NUL query because frizbee returns out-of-range highlights. Its diagnostic benchmark preserves all 1,040 sample results but passes only 2/26 latency cases, with a 378.0657 ms worst sample. These current failures supersede earlier search correctness passes for the changed working tree; no completed performance fix is claimed.
 - Query errors now use request-scoped replies and reach the palette without letting stale failures affect current state. All 12 app tests passed after independent review (`target/integrated-preview-query-errors-final-tests.log`). The narrow frizbee source correction in `docs/p1-05-frizbee-maintenance-review.md` awaits owner approval; it has not been applied.
-- Unloaded tabs now retain the latest explicit address across stale snapshots; independent review and Clippy passed. Windows initially blocked the 17-test executable, but rebuilding after the bounded search integration produced a successful run of all 17 tests (`target/integrated-preview-bounded-search-tests.log`). The older unsigned `atlas-app-preview.exe` passed its fresh-profile smoke check. Interactive validation remains pending.
+- Unloaded tabs now retain the latest explicit address across stale snapshots; independent review and Clippy passed. Windows initially blocked the 17-test executable, but rebuilding after the bounded search integration produced a successful run of all 17 tests (`target/integrated-preview-bounded-search-tests.log`). The older unsigned `syrinx-app-preview.exe` passed its fresh-profile smoke check. Interactive validation remains pending.
 - Exact zero/one-deletion membership and conservative bounded ranking are now integrated experimentally. The full search suite passed 45 of 47 tests; the same two NUL-highlight regressions fail. New bound, saturation, scope/count and membership regressions passed, as did independent review and focused Clippy. Windows blocked the rebuilt benchmark executable in both execution contexts, so there is no timing result for this source. `docs/p1-05-search.md` preserves the evidence and unresolved D48 gate.
-- The newest `atlas-app-preview.exe` now includes bounded search and passed a fresh normal-desktop startup/shutdown check. It was then launched for the owner in a new synthetic profile as PID 36164. The process responds, but visible-window and interactive behavior remain unverified; do not replace or terminate a possibly used window. Build evidence: `target/integrated-preview-build-bounded-search.log`.
+- The newest `syrinx-app-preview.exe` now includes bounded search and passed a fresh normal-desktop startup/shutdown check. It was then launched for the owner in a new synthetic profile as PID 36164. The process responds, but visible-window and interactive behavior remain unverified; do not replace or terminate a possibly used window. Build evidence: `target/integrated-preview-build-bounded-search.log`.
 - Subsequent source now resolves navigation after queued tab selection on the session worker and tightens search bounds using cached field metadata. All 19 app tests pass; 47 of 49 search tests pass, with the same two NUL failures. Independent reviews, focused Clippy and formatting passed. The open preview predates these changes. The new benchmark finished: all 1,040 results equal the baseline, but only 1/26 timing cases passes, with a 382.8664 ms worst sample. See `target/integrated-preview-field-bounds-navigation-tests.log` and the two detailed reports.
-- That source built unsigned as `target/local/atlas-app-navigation.exe` and passed a fresh normal-desktop startup/shutdown check. Interactive acceptance remains pending. The separate page-close correction subsequently received explicit API/vendor approval and is implemented and verified as recorded at the top of this ledger.
+- That source built unsigned as `target/local/syrinx-app-navigation.exe` and passed a fresh normal-desktop startup/shutdown check. Interactive acceptance remains pending. The separate page-close correction subsequently received explicit API/vendor approval and is implemented and verified as recorded at the top of this ledger.
 
 The later recovery-notice correction passed all 19 app tests, focused Clippy
 and independent review. The binary above predates it. A private synthetic
@@ -671,7 +671,7 @@ The complete requirements and blocking edges remain in `docs/plans/Syrinx v1 —
 | 1 / P1-03 storage | **Merged/tested.** `syrinx-store` and native directory lease: serialized writes, migration, snapshots, revision checks, identity/path protection and long-path coverage. | Later schemas/features need their own persistence and recovery tests. |
 | 1 / P1-04 backup/recovery | **Merged/tested.** Clean/dirty lifecycle, daily idle snapshot mechanism, seven-copy rotation, validated owner-confirmed/resumable recovery and pure deletion-record contract. | Preview scheduling/shutdown needs real integration verification. No recovery confirmation UI exists yet. Actual history-deletion persistence/replay belongs to P1-27; schema 1 refuses unsupported deletion state. |
 | 1 / P1-05 tier 1 search | **Partial; the D48 work merged to main as `0723eed` (2026-10-13).** Branch `codex/p1-05-d48` partitions complete queries and shares equivalent field scores within each query. Seven new regressions and all 1,040 full-result comparison pairs pass. The full gate passes 445 workspace tests and application smoke in `target/d48-gate-20261012-jobs2.log`. Review corrections then moved the 100,000-row timing diagnostics behind the opt-in `acceptance-diagnostics` feature, so the gate no longer runs them, and recorded refused partition workers instead of discarding the error; that gate passed 444 tests (`target/d48-review-gate-20261012.log`). The dated design and diagnostic evidence are in `docs/p1-05-search.md`. | D48 remains unverified for this implementation: no build-free window has been available. Retain 100,000 rows, `safe_read`, exact counts/highlights and the 5 ms p95 limit. On a quiet machine, run the preserved baseline executable three times (stop if it differs materially from the historical 10/26), then obtain three passing fresh-process `cargo xtask bench` runs of the candidate, recording the logical processor count beside them. |
-| 1 / P1-06 GPUI idle | **On main (integration merge `d3bbb8c`, reaching main through `681d992` on 2026-10-12); owner checks pending; provisional D37 pass.** Built on branch `claude/p1-06-gpui-idle-v2`. Approved demand-driven repaint patch vendored as `vendor/gpui-pre-windows-0.3.8` with provenance and upstream-ready diff. Idle `WM_PAINT` 59/s to 0/s; idle CPU 1.66–2.00% to 0.23–0.46% of one core (harness and fresh-profile `atlas-app`, 300 s, two runs each, on a busy machine): a provisional pass only, 0.46% being 8% under the bar. Evidence in `docs/evidence/p1-06/`. Two-window behaviour harness and eight latch unit tests pass. See `docs/p1-06-gpui-idle-results.md`. | Quiet-machine idle reruns and the eight-suspended-tab measurement (P1-15 is now integrated) are still pending before D37 passes outright; five-launch first-page startup comparison and owner window/touchpad inspection. Public submission requires permission. |
+| 1 / P1-06 GPUI idle | **On main (integration merge `d3bbb8c`, reaching main through `681d992` on 2026-10-12); owner checks pending; provisional D37 pass.** Built on branch `claude/p1-06-gpui-idle-v2`. Approved demand-driven repaint patch vendored as `vendor/gpui-pre-windows-0.3.8` with provenance and upstream-ready diff. Idle `WM_PAINT` 59/s to 0/s; idle CPU 1.66–2.00% to 0.23–0.46% of one core (harness and fresh-profile `syrinx-app`, 300 s, two runs each, on a busy machine): a provisional pass only, 0.46% being 8% under the bar. Evidence in `docs/evidence/p1-06/`. Two-window behaviour harness and eight latch unit tests pass. See `docs/p1-06-gpui-idle-results.md`. | Quiet-machine idle reruns and the eight-suspended-tab measurement (P1-15 is now integrated) are still pending before D37 passes outright; five-launch first-page startup comparison and owner window/touchpad inspection. Public submission requires permission. |
 | 1 / P1-07 design tokens | **On main (integration merge `af4f93c`, reaching main through `681d992` on 2026-10-12); palettes owner-approved.** `crates/syrinx-ui` holds the five canvas palettes, accent states, Reduce-transparency fallback, metrics, PROPOSED D44 width states/thresholds and a WCAG audit; `syrinx-app` colours come from Graphite unchanged; `--palette-sample` renders palettes and width states. The owner reviewed the sample window on 2026-10-12 and approved the palettes, and accepted the 16 recorded contrast shortfalls for now. See `docs/p1-07-design-tokens.md`. | D44 drag thresholds and peek edge stay PROPOSED until the owner tries them in a draggable sidebar (P1-08). `ui/recovery.rs` colours move to tokens with their slice; `SIDEBAR_WIDTH` was replaced by the `syrinx_ui::sidebar` tokens on the P1-08 sidebar branch. |
 | 2 / P1-08 sidebar width states | **Partial; on main (integration merge `fe42daa`, reaching main through `681d992` on 2026-10-12); awaiting owner window check.** The edge between sidebar and page card drags through D44's wide (264 px), favicon-only (52 px) and hidden states and back, snapping at 158/26 px with labels shown exactly when a release would settle wide (`syrinx_ui::SidebarSizing`). A release outside the window snaps where the button came up; window deactivation settles a drag in progress. The page card's physical bounds come from one tested function (`ui/page_card.rs`) on every drag step, resize and DPI change, and the drag strip and card share one edge calculation, tested not to overlap from 0 to 264 px; `SIDEBAR_WIDTH` is gone. Only the shown page follows drag steps; hidden pages take the card's bounds when shown (`syrinx-platform/src/browser/placement.rs`). The edge is a focusable splitter whose Left and Right keys step between states; rows are tree items with levels, and favicon-only rows keep their titles as accessible labels. Hidden keeps the selection. Review fixes landed 2026-10-12. The settled state persists in P1-29's `sidebar.width_state` setting and is restored at start-up (DW-2 Done; tested from settle to restore). P1-29's Favorites render as the four-column grid when wide, one column of named icon tiles in favicon-only and not at all when hidden. See `docs/p1-08-sidebar-states.md`. | Owner's manual checks in that note (no agent window inspection), including Favorites in favicon-only and the width surviving a restart. Ctrl Alt S and peek belong to P1-17 (DW-3); peek must share the hidden handle's left-edge zone. Shared-environment, guardrail and runtime-disclosure items below still apply. |
 | 2 / P1-09 saved rows and folders | **Partial.** Saved, open and ordinary rows render in wide and favicon-only widths from the core snapshot. P1-21's folders render in layout order with depth indentation. From `claude/p1-09-21-folder-ui`, reviewed and on main (integration merges `6fd4272` and `c5bdd1c`, reaching main through `681d992` on 2026-10-12; the owner's window check is pending): rows are focusable tree items (Enter/Space activate through `activate()` or toggle), folder expansion is persisted as the `sidebar.expanded_folders` setting (open folders only, so imports and unnamed folders start collapsed), and the peek draws the same rows and controls. See `docs/p1-09-21-folder-ui.md`. | Prove repeated lifecycle changes create no duplicate or leaked views; compact-folder affordances need owner review (D44, owner question 1 in `docs/p1-09-21-folder-ui.md`). |

@@ -26,7 +26,7 @@ remains isolated/unpromoted, and the original WebView2 breakpoint is unresolved.
 
 ## What the current app does
 
-`crates/atlas-app/src/ui.rs:581` retains the popup's window handle and view
+`crates/syrinx-app/src/ui.rs:581` retains the popup's window handle and view
 together. Reopening an existing popup requests native activation and focuses
 its existing input, preserving the query and selection. A stale window handle
 clears the retained state and reports an error. Fresh popup creation at line
@@ -35,20 +35,20 @@ focuses the input after construction. Terminal event handling at lines 732,
 737 and 749 clears the popup, and the receiver's entity-identity check at
 line 691 prevents an old popup's events from acting on its replacement.
 
-`crates/atlas-app/src/palette.rs:136` focuses the input through its existing
+`crates/syrinx-app/src/palette.rs:136` focuses the input through its existing
 state. The capture handlers at lines 279 and 284 route the focused editor's
 Up and Down actions to palette selection. The pinned input's ordinary Escape
 handler propagates when it has no transient editing surface to dismiss, and
 its default `clean_on_escape` is false. Its `secondary-enter` binding means
-Ctrl+Enter on Windows, so it does not conflict with Atlas's Alt+Enter binding.
+Ctrl+Enter on Windows, so it does not conflict with Syrinx's Alt+Enter binding.
 These source checks found no separate first-open typing defect.
 
 ## The ordering hazard
 
-`crates/atlas-app/src/ui.rs:757` calls `window.activate_window()` and then
+`crates/syrinx-app/src/ui.rs:757` calls `window.activate_window()` and then
 immediately sends `BrowserCommand::Focus` for the shown page. The page command
 runs on a separate native worker. Its handler in
-`crates/atlas-platform/src/browser/page.rs:126` calls wry's `focus`, which
+`crates/syrinx-platform/src/browser/page.rs:126` calls wry's `focus`, which
 calls WebView2's `MoveFocus` in `vendor/wry-0.57.0/src/webview2/mod.rs:1622`.
 
 GPUI's activation call only schedules foreground work. Its Windows task later
@@ -107,7 +107,7 @@ The earlier Computer Use attempt targeted the main window and activated it
 when typing; the owned popup was not separately enumerated. A visible caret
 without entered text does not establish native keyboard ownership. A later
 direct-launch capture showed the Windows lock screen, so the intervening
-black captures and activation failures do not establish an Atlas rendering
+black captures and activation failures do not establish an Syrinx rendering
 or focus defect. Computer Use input stopped pending the owner's unlock at that
 checkpoint; the October 11 manual outcome above supersedes that pending state.
 
@@ -119,11 +119,11 @@ or alter window ownership to accommodate automation. This review ran no app,
 UI automation, build or tests.
 
 If the restoration race is reproduced, a synchronous activation operation
-with an explicit completion/error result in `atlas-platform` is a candidate
+with an explicit completion/error result in `syrinx-platform` is a candidate
 design. Page focus could then be sent after the main activation operation
 returns, while checking that the request remains current, no replacement
 popup is open and shutdown has not started. The existing Windows bindings
-live in that crate; `atlas-app` has no direct Windows dependency. Such a
+live in that crate; `syrinx-app` has no direct Windows dependency. Such a
 cross-crate platform API needs a separate proposal and the required approval
 before implementation. This document neither requests that approval nor
 changes a settled decision. Further bounded checks should cover repeated

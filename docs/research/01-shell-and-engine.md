@@ -1,25 +1,25 @@
-# Shell and engine: can Atlas run on Tauri 2 child webviews?
+# Shell and engine: can Syrinx run on Tauri 2 child webviews?
 
 **Date:** 2026-10-09. All sources were read that day. Each claim names the source's own version or date, and carries a confidence level: high, medium or low.
 
-**Terms.** A **child webview** is a web view placed at a set position inside an Atlas window, one per tab, created with Tauri's `Window::add_child`. The **chrome webview** is the full-window Svelte UI: the sidebar, the home page and the palette. **`unstable`** is a Cargo feature that unlocks APIs Tauri may change without a major version. **Z-order** is which surface is drawn on top. A **freeze frame** is a screenshot of a page shown in its place while the real web view is hidden. **wry** is Tauri's web view layer, and **webview2-com**, **objc2-web-kit** and **webkit2gtk** are the Rust bindings to the raw engines.
+**Terms.** A **child webview** is a web view placed at a set position inside an Syrinx window, one per tab, created with Tauri's `Window::add_child`. The **chrome webview** is the full-window Svelte UI: the sidebar, the home page and the palette. **`unstable`** is a Cargo feature that unlocks APIs Tauri may change without a major version. **Z-order** is which surface is drawn on top. A **freeze frame** is a screenshot of a page shown in its place while the real web view is hidden. **wry** is Tauri's web view layer, and **webview2-com**, **objc2-web-kit** and **webkit2gtk** are the Rust bindings to the raw engines.
 
 ## Questions
 
 1. What is the status of Tauri 2 multi-webview on Windows (WebView2), macOS (WKWebView) and Linux (WebKitGTK)? What is the latest release, and is multi-webview still behind `unstable`? Which open issues matter to a browser?
-2. How can Atlas draw its own UI above a page that is a separate native web view, both the palette with a dimmed backdrop and the sidebar that peeks in from the left edge? Which options work on each OS?
+2. How can Syrinx draw its own UI above a page that is a separate native web view, both the palette with a dimmed backdrop and the sidebar that peeks in from the left edge? Which options work on each OS?
 3. Do transparent windows and `windowEffects` (Mica, Acrylic, vibrancy, Liquid Glass) work with several child webviews?
-4. Which browser plumbing does each engine expose, and does Tauri or wry surface it, or does Atlas need platform code?
-5. What are the fallbacks if multi-webview is not viable (CEF, Servo, others), and what would make Atlas switch?
+4. Which browser plumbing does each engine expose, and does Tauri or wry surface it, or does Syrinx need platform code?
+5. What are the fallbacks if multi-webview is not viable (CEF, Servo, others), and what would make Syrinx switch?
 6. What should the Phase 0 spike build and measure, so that it ends with a per-OS verdict?
 7. Added by the owner: since performance and efficiency decide, what are the performance numbers for each option?
 
 ## Short answer
 
 - **Multi-webview is still unstable, and nobody is assigned to it.** The newest stable release is tauri 2.12.2 (2026-10-09), and `Window::add_child` still needs `unstable` there and in 3.0.0-alpha.4. No stabilisation has been announced, and a maintainer wrote in September 2025 that the team has "no capacity to look into multiwebview issues". (high)
-- **Windows and macOS are workable, but Atlas will own platform code.** Another open-source Tauri app, codeg, shipped browser tabs as child webviews on both in September 2026. Atlas will need its own code for keyboard shortcuts, z-order, screenshots, find in page, favicons and, on Windows, crash recovery. (medium)
+- **Windows and macOS are workable, but Syrinx will own platform code.** Another open-source Tauri app, codeg, shipped browser tabs as child webviews on both in September 2026. Syrinx will need its own code for keyboard shortcuts, z-order, screenshots, find in page, favicons and, on Windows, crash recovery. (medium)
 - **Linux is not viable on stock Tauri.** Tauri packs every child webview into a vertical GTK box and ignores its bounds, so tabs cannot be laid out; the fix is a set of open, unreviewed pull requests. (high)
-- **HTML in the chrome can never paint over a page.** Atlas has to cover the page with another native surface: raise a web view above it, or show a freeze frame and hide the page. Freeze frames have a shipping precedent and need no web view transparency, which is fragile on Windows: WebView2 runtime 154 was reported on 2026-10-08 to paint transparent web views opaque. (medium)
+- **HTML in the chrome can never paint over a page.** Syrinx has to cover the page with another native surface: raise a web view above it, or show a freeze frame and hide the page. Freeze frames have a shipping precedent and need no web view transparency, which is fragile on Windows: WebView2 runtime 154 was reported on 2026-10-08 to paint transparent web views opaque. (medium)
 - **Window effects compose with child webviews, but cost power on macOS.** On macOS the effect view sits beneath every web view, so Haze and Glass can work, but one report measured a transparent window at about 8 times the GPU power of an opaque one on a static page. On Windows, Mica and Acrylic depend on the same fragile transparency. Linux has no effects. (medium)
 - **Plumbing is about half done in Tauri.** Tauri covers navigation, titles, downloads (without progress), popups (only as new windows), permissions (2.12.0), devtools, user agent, cookies and clearing. Missing are find in page, favicons, back and forward (they arrive in 3.0 alpha), context menus, fullscreen video, crash recovery outside macOS, and screenshots. All of them exist in the engines. (high)
 - **The only realistic fallback is Tauri 3's CEF runtime, and it is not ready.** It is alpha and runs unsandboxed on Windows. It still uses native child windows, so it does not fix overlays. It adds hundreds of MB, and Chromium ships every two weeks. Servo cannot yet browse the general web. (high)
@@ -64,7 +64,7 @@
 - **Readest** moved its Linux builds to Tauri's CEF runtime ([PR #6218](https://github.com/readest/readest/pull/6218), 2026-09-16). (high)
 - **athas** went the other way: it dropped CEF for the system web views, citing 187–455 MB Linux packages and a git-pinned Tauri ([PR #767](https://github.com/athasdev/athas/pull/767), 2026-10-04). (high)
 
-### 2. Drawing Atlas UI above a page
+### 2. Drawing Syrinx UI above a page
 
 **Why CSS cannot do it.** A child webview is its own OS surface: an HWND, an NSView or a GtkWidget. A commenter on [#15682](https://github.com/tauri-apps/tauri/issues/15682) (not a maintainer) called this expected native behaviour, and Microsoft's WebView2 team said in 2020 that windowed WebView2 is always on top ([WebView2Feedback#708](https://github.com/MicrosoftEdge/WebView2Feedback/issues/708)). CSS `backdrop-filter` cannot see another surface either ([#15512](https://github.com/tauri-apps/tauri/issues/15512), maintainer, June 2026). (high)
 
@@ -80,7 +80,7 @@
 | **f. Shrink the page** | Works, but the design says the peek must not resize the page | same | same, but bounds are broken |
 
 **Notes on these options**
-- Neither Tauri nor wry exposes screenshots ([wry#1358](https://github.com/tauri-apps/wry/issues/1358) is open) or a raise call, so options a, b and c all need platform code through `Webview::with_webview`. A tab created after the overlay lands above it, so Atlas must raise the overlay again after every new tab. (high)
+- Neither Tauri nor wry exposes screenshots ([wry#1358](https://github.com/tauri-apps/wry/issues/1358) is open) or a raise call, so options a, b and c all need platform code through `Webview::with_webview`. A tab created after the overlay lands above it, so Syrinx must raise the overlay again after every new tab. (high)
 - Hiding a WebView2 throttles it and purges some caches, so a frozen page is cheap while hidden; its video keeps playing audio unseen. (medium)
 - **Hover detection:** the chrome cannot see the pointer while it is over a page. Leave a few-pixel strip of chrome at the left edge, or poll `cursor_position()`. (medium)
 - **How Electron differs:** `addChildView` on an existing child moves it to the top ([Electron docs](https://www.electronjs.org/docs/latest/api/view)). This works because Chromium composites its own views, which Tauri cannot copy. (high)
@@ -112,7 +112,7 @@
 
 Through `Webview::with_webview`, Tauri hands over the raw engine object on the main thread: `controller()` and `environment()` on Windows, a WKWebView pointer on macOS and a `webkit2gtk::WebView` on Linux. The docs say to pin Tauri's minor version when using it ([Webview docs](https://docs.rs/tauri/2.12.2/tauri/webview/struct.Webview.html)). (high) The table checks tauri 2.12.2 and wry 0.57.0 against [Microsoft's WebView2 reference](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2), Apple's WebKit docs and the [WebKitGTK reference](https://webkitgtk.org/reference/webkit2gtk/stable/). Confidence is high unless marked.
 
-| Feature | What Tauri 2.12 / wry give | Platform code Atlas needs |
+| Feature | What Tauri 2.12 / wry give | Platform code Syrinx needs |
 |---|---|---|
 | Downloads | `on_download`: `Requested` (block or change the path) and `Finished` (on macOS the path is empty). No progress, cancel or pause | WebView2 `DownloadStarting`; `WKDownload`; `WebKitDownload` |
 | New windows and popups | `on_new_window` can return only a whole window. wry's handler can return a web view (0.53+) | Use wry's handler or the engine call (`put_NewWindow`, `createWebViewWith:`, the `create` signal) to open a popup as a tab and keep `window.opener` |
@@ -143,13 +143,13 @@ Through `Webview::with_webview`, Tauri hands over the raw engine object on the m
 - **Size:** bundles are "hundreds of megabytes larger", and the first build downloads about 1 GB ([v3 CEF docs](https://v3.tauri.app/develop/cef/)). (high)
 - **Open bugs:** Linux idles at 100% of a core ([#16189](https://github.com/tauri-apps/tauri/issues/16189)), and transparency gives a black screen ([#15718](https://github.com/tauri-apps/tauri/issues/15718)). (high)
 - **Licence:** CEF is BSD and the bindings are Apache-2.0/MIT. The `cef` crate is at 154.5.0, released every few days ([crates.io](https://crates.io/api/v1/crates/cef)), while the runtime still pins 152. (high)
-- **Update burden:** Chrome moved to a two-week stable cycle with Chrome 153 on 2026-09-08 ([Chrome blog](https://developer.chrome.com/blog/chrome-two-week-start)). CEF builds every other milestone (about 4 weeks), with extended builds every 4th (about 8 weeks) ([CEF branches](https://chromiumembedded.github.io/cef/branches_and_building)). Atlas would have to ship a new Chromium at least every 4–8 weeks. (high)
+- **Update burden:** Chrome moved to a two-week stable cycle with Chrome 153 on 2026-09-08 ([Chrome blog](https://developer.chrome.com/blog/chrome-two-week-start)). CEF builds every other milestone (about 4 weeks), with extended builds every 4th (about 8 weeks) ([CEF branches](https://chromiumembedded.github.io/cef/branches_and_building)). Syrinx would have to ship a new Chromium at least every 4–8 weeks. (high)
 
 **Servo: not viable for a daily browser in 2026.** It has released monthly since `servo` 0.1.0 (2026-04-13), and the newest is 0.7.0 (2026-10-05), MPL-2.0, with downloads of about 50–110 MB per platform ([releases](https://github.com/servo/servo/releases)). It is "not a 1.0" and breaks its API monthly ([Servo blog](https://servo.org/blog/2026/04/13/servo-0.1.0-release/)), and its web compatibility is still being fixed site by site ([July 2026 report](https://servo.org/blog/2026/08/31/july-in-servo/)). Verso, the Tauri bridge, was archived on 2025-10-08 ([repo](https://github.com/versotile-org/verso)). (high)
 
 **Others.** Electron (v44.7.0, 2026-10-07) is mature and solves overlays with Chromium's own views, but is not Rust ([releases](https://github.com/electron/electron/releases)). (high) Ultralight is proprietary and an HTML UI renderer rather than a browser ([pricing](https://ultralig.ht/pricing/)). (high) Ladybird is pre-alpha with no embedding API, and Gecko has no desktop embedding API. (medium)
 
-**What would make Atlas switch to CEF:** child webviews that can't be laid out, focused or kept alive reliably on Windows or macOS even with platform code; shortcuts that can't be caught on Windows; or WebKit compatibility on macOS that proves unacceptable for the owner's sites. Overlays are not a reason, since CEF has the same limit. Even then, wait for the runtime to leave alpha and for the Windows sandbox to work.
+**What would make Syrinx switch to CEF:** child webviews that can't be laid out, focused or kept alive reliably on Windows or macOS even with platform code; shortcuts that can't be caught on Windows; or WebKit compatibility on macOS that proves unacceptable for the owner's sites. Overlays are not a reason, since CEF has the same limit. Even then, wait for the runtime to leave alpha and for the Windows sandbox to work.
 
 ### 6. Phase 0 spike checklist
 
@@ -163,7 +163,7 @@ Through `Webview::with_webview`, Tauri hands over the raw engine object on the m
 6. **Effects:** Graphite, Haze and Glass with three tabs open, while dragging and resizing the window.
 7. **Crashes:** kill a renderer (by PID or Edge's Browser Task Manager on Windows, the WebContent PID on macOS, `WebKitWebProcess` on Linux), then detect it and reload. On macOS, close tabs by hide-then-destroy.
 8. **Focus and DPI:** Alt+Tab, clicking between chrome and page, Tab into a page, typing in form fields (#8705), and dragging the window between 100% and 150% monitors.
-9. **Linux:** try PR #15463 with wry #1745, or Atlas's own `GtkFixed` container. Log whether bounds, raising and snapshots work on X11 and on Wayland.
+9. **Linux:** try PR #15463 with wry #1745, or Syrinx's own `GtkFixed` container. Log whether bounds, raising and snapshots work on X11 and on Wayland.
 
 **Measure on each OS**, against Edge on Windows and Safari on macOS loading the same pages on the same machine.
 
@@ -215,21 +215,21 @@ The memory method (`time -v`) and why Tauri reads 150 MB higher are not explaine
 - **IPC:** JSON through serde. A 10 MB binary payload took about 5 ms on macOS and 200 ms on Windows, but that is an informal test relayed by a maintainer ([discussion](https://github.com/orgs/tauri-apps/discussions/11915)). (low)
 - **Memory APIs not passed through:** WebView2's `MemoryUsageTargetLevel` is in wry but not Tauri, and `TrySuspend` is in neither ([wry source](https://github.com/tauri-apps/wry/blob/dev/src/webview2/mod.rs)). (high)
 
-## What this means for Atlas v1
+## What this means for Syrinx v1
 
 **Build**
 - **Tauri:** pin 2.12 (`=2.12`) with `unstable`. Don't adopt the 3.0 alpha in Phase 0, but recheck it at Phase 1 for back and forward and the runtime split.
-- **Page web views as Atlas-owned objects:** build tab web views without Tauri's IPC scripts (try wry directly in the spike). That saves a script load per page and keeps Fledge's IPC away from arbitrary sites. The chrome webview stays a normal Tauri web view.
+- **Page web views as Syrinx-owned objects:** build tab web views without Tauri's IPC scripts (try wry directly in the spike). That saves a script load per page and keeps Fledge's IPC away from arbitrary sites. The chrome webview stays a normal Tauri web view.
 - **One `shell::platform` module per OS, behind a Rust trait.** It holds all `with_webview` code: raise, capture, find, favicon, back and forward, shortcuts, crash recovery, fullscreen and context menu. The core model never sees an engine type.
 - **Overlays:** the palette is a freeze frame, which is robust on every OS, needs no transparency and allows real blur behind the palette. The peek is a pre-created opaque sidebar webview raised over the page.
 - **Permissions:** install `on_permission_request` from day one, because of the macOS default grant.
 - **Memory on Windows:** for hidden tabs, call `MemoryUsageTargetLevel` Low through platform code.
 
-**Defer:** Linux, until #15463 lands or Atlas decides to own a GTK container; WebView2 visual hosting; CEF; extensions; and tab discarding beyond hide plus the memory level.
+**Defer:** Linux, until #15463 lands or Syrinx decides to own a GTK container; WebView2 visual hosting; CEF; extensions; and tab discarding beyond hide plus the memory level.
 
 **Risks**
 - **Maintenance:** no maintainer capacity for multi-webview, and minor-version churn in `unstable`.
-- **Evergreen WebView2 regressions:** #5752 shows the runtime can break transparency without any Atlas change.
+- **Evergreen WebView2 regressions:** #5752 shows the runtime can break transparency without any Syrinx change.
 - **macOS:** the crash on destroy (#1730), input bugs (#8705, #9257) and the GPU cost of see-through palettes.
 
 ## Open questions for the owner

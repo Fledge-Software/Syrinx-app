@@ -50,7 +50,7 @@ FIN/RST packets or acknowledgments.
 ## Exact proposed difference
 
 Use **A** for the frozen v4 control and **B** for a fresh v4-derived disposable
-copy. In B's `crates/atlas-platform/examples/page_close.rs::respond`, insert
+copy. In B's `crates/syrinx-platform/examples/page_close.rs::respond`, insert
 only the following statement after the existing successful-response counter
 increment and before the existing final `eprintln!`:
 

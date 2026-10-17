@@ -910,7 +910,7 @@ timing. These corrections are not yet implemented; scalar transition and
 cache lookup costs remain hypotheses requiring attribution.
 
 The retained production changes are built in
-`target/local/atlas-app-group-scores.exe`, SHA-256
+`target/local/syrinx-app-group-scores.exe`, SHA-256
 `03e314bd3a689d30f28a49e8df6f70b530960e4937c391aea83e7dbc636dafa7`.
 The explicitly awaited normal-desktop `--smoke` run uses a fresh synthetic
 profile, exits 0 and has empty stderr. Build and smoke logs begin
@@ -1181,7 +1181,7 @@ Longer queries keep the current path. Compare every endpoint/digit pair with
 the scalar transition, retain the existing row oracle, and charge construction
 in query timing. This is unimplemented and its benefit remains a hypothesis.
 
-The new binary is `target/local/atlas-app-highlight-traces.exe`, SHA-256
+The new binary is `target/local/syrinx-app-highlight-traces.exe`, SHA-256
 `a84d7dfc9fc834332401e31505d3eda26cad0173c86e8036b35c7d5ff074f9bf`.
 The build log is `target/continuation-highlight-traces-app-build.log`; the
 explicitly awaited fresh synthetic normal-desktop smoke exits 0 with empty
@@ -1332,7 +1332,7 @@ pass and the same two NUL-highlight tests fail. Search is 114/116; no test was
 ignored or filtered in the gate, and later stages remain unreached. The initial
 gate and post-label isolated reports are preserved separately. Only test-only
 code remains from this continuation, so the production binary and its preceding
-smoke evidence remain `target/local/atlas-app-highlight-traces.exe`. No new
+smoke evidence remain `target/local/syrinx-app-highlight-traces.exe`. No new
 application build or smoke acceptance is claimed. All pending approvals remain.
 
 A smaller next numeric experiment is also source-reviewed but unimplemented:
@@ -1521,7 +1521,7 @@ route counts, paired query times and update costs before adopting this extra
 metadata. Do not discard the stable target or assume vector positions survive
 `swap_remove`.
 
-The production build is `target/local/atlas-app-digit-counts.exe`, SHA-256
+The production build is `target/local/syrinx-app-digit-counts.exe`, SHA-256
 `3ea8af80db81795667d32c7732bb30c2f09e6db1d9da26c360f4d221e91668da`.
 Its awaited fresh synthetic normal-desktop smoke exits 0 with empty stderr;
 build and smoke evidence use `target/continuation-digit-counts-app-`.
@@ -1637,7 +1637,7 @@ existing full-tree rebuilds and member shifts are now measured costs rather
 than assumptions. The index remains test-only: retain the locality change,
 reduce avoidable mutation work, review loading and complete the unchanged
 acceptance benchmark before considering production activation. The latest
-production binary remains `atlas-app-digit-counts.exe`; this continuation
+production binary remains `syrinx-app-digit-counts.exe`; this continuation
 changes only test-only code and documentation. The original crash, matcher
 patch and later-plan approval requirements remain open.
 
@@ -1797,7 +1797,7 @@ The unchanged production benchmark in
 preserves all 1,040 results and their exact serialized integer checksums. Only
 9/26 cases pass D48; the worst sample is 18.0096 ms. This single run does not
 attribute timing changes to the arithmetic extraction. The separately rebuilt
-`target/local/atlas-app-boost-helper.exe` has SHA-256
+`target/local/syrinx-app-boost-helper.exe` has SHA-256
 `9e6e404e933f05d9a2a0d28f6c5d07af3ac09b7fb564e205225ce5ce4042823f`.
 Its fresh normal-desktop smoke exits zero with empty stderr. Build and smoke
 logs use the `target/continuation-boost-helper-app-` prefix. This startup
@@ -1849,7 +1849,7 @@ filtered, and all documentation-test stages pass. The reviewed fixture
 correction preserves strict invalid-range validation; both original NUL
 regressions now pass.
 
-The gate rebuilds `target/local/atlas-app.exe` in 18.05 seconds, SHA-256
+The gate rebuilds `target/local/syrinx-app.exe` in 18.05 seconds, SHA-256
 `6edfe4113ccc7b0d5995faccaf7cb23e66541af147712443eb1b17bd9adddf1c`, then fails
 its restricted-context smoke run at the 30-second watchdog. A subsequent
 `Chrome_WidgetWin_0` unregister error reports 1411. This is a failed gate,
@@ -2528,7 +2528,7 @@ starts three native threads beside the caller, so its timing depends on how
 many logical processors are free. The quiet-machine acceptance record must
 state the logical processor count, for example from
 `$env:NUMBER_OF_PROCESSORS`, beside the three baseline and three candidate
-reports. An optional seventh run with Atlas open and a few ordinary pages
+reports. An optional seventh run with Syrinx open and a few ordinary pages
 loaded shows how the four partitions behave when other work competes for
 cores. Record it as a separate under-load result; it does not replace the
 quiet acceptance runs, and D48 is judged on the quiet ones.

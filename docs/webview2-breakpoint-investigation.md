@@ -21,7 +21,7 @@ this investigation changes no product or vendor source.
 
 The integration chat confirmed terminal exit zero for the serial five-run
 launcher and its pre-run SHA-256 check of
-`target/local/atlas-app-parallel-preview.exe`:
+`target/local/syrinx-app-parallel-preview.exe`:
 `3ca0bf045fc0826e7300a647307845733fb5249b085f52feeadbebf0abd4c276`.
 It used normal-desktop execution with `Start-Process --smoke`, hidden startup
 and each run's built-in fresh synthetic profile. A separate non-smoke launch
@@ -40,10 +40,10 @@ breakpoint. The following findings guide discriminating tests rather than
 justify a speculative patch.
 
 Normal shutdown retains the parent window. In
-`crates/atlas-app/src/main.rs`, the window-close callback vetoes immediate
+`crates/syrinx-app/src/main.rs`, the window-close callback vetoes immediate
 destruction. `ui.rs::request_close` queues browser shutdown first.
-`crates/atlas-platform/src/browser.rs` releases `BrowserState` pages and its
-environment before Atlas's apartment guard, then `HostCompletion` emits
+`crates/syrinx-platform/src/browser.rs` releases `BrowserState` pages and its
+environment before Syrinx's apartment guard, then `HostCompletion` emits
 `Stopped`. The UI joins that completed browser worker, stops the session
 worker, and quits after both stop. No normal premature-parent destruction
 was identified in this path.
@@ -55,7 +55,7 @@ A callback that never completes could therefore stall shutdown. This is a
 liveness hypothesis, not evidence of the breakpoint or permission to add
 guessed COM teardown calls.
 
-Atlas confines controllers and their calls to the message-pumped browser
+Syrinx confines controllers and their calls to the message-pumped browser
 thread. Accelerator callbacks in `browser/page.rs` read key arguments, mark
 handled keys, reject repeats and queue commands; they do not directly close,
 navigate or focus a page or start a nested event loop. This follows
@@ -80,7 +80,7 @@ Microsoft documents the
 This unnecessary operation is an actionable source concern, already outside
 the approved failed-construction patch's scope. It has not reproduced the
 reported failure in the tested close runs. The v5 fault harness creates its
-parent on the same apartment thread; its 30 passes do not test Atlas's
+parent on the same apartment thread; its 30 passes do not test Syrinx's
 GPUI-parent/browser-worker thread boundary.
 
 The source-only follow-up in `docs/browser-parent-host-review.md` proposes
@@ -375,7 +375,7 @@ probe compiler once. Evidence is preserved in `target/macro-load-probe/`,
 alongside `target/continuation-process-role-build.log` and
 `target/continuation-process-role-build-trace.log`.
 
-No diagnostic Atlas application ran, so process-role and browser-exit
+No diagnostic Syrinx application ran, so process-role and browser-exit
 observations remain uncollected. This establishes the probe's policy block,
 not which policy rule selected the file, every earlier compiler failure's
 cause, or the original WebView2 breakpoint's cause. The earlier empty scoped
@@ -392,7 +392,7 @@ proof that every native close succeeded or all COM references were released.
 
 Windows session termination follows a different path in the pinned GPUI source:
 it calls application shutdown, clears windows before awaiting quit observers,
-and may exit without Atlas's stopped-event and join protocol. Atlas's fallback
+and may exit without Syrinx's stopped-event and join protocol. Syrinx's fallback
 `BrowserHost` destructor requests shutdown but retains no parent-window owner
 and does not wait. This leaves the parent-lifetime guarantee unenforced on that
 path; native destruction timing and consequences remain untested. It does not

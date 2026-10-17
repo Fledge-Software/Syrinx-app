@@ -52,7 +52,7 @@ Line references below identify the frozen input, before the candidate changes.
 | Resource or boundary | Source evidence | Required ownership |
 | --- | --- | --- |
 | Container HWND | `create_container_hwnd`, lines 266–291, calls `CreateWindowExW`, then fallible `SetWindowPos`. Both modes create a `WS_CHILD` container. | Begin ownership inside this helper, immediately after acquisition. A guard only in its caller misses this failure. Destroy this attempt's container in either mode on failure. |
-| Environment | `new_in_hwnd`, lines 133–137, clones the supplied environment or creates one. | Rust COM references retain ordinary ownership. Atlas supplies its environment; the fallback still needs the container guard. |
+| Environment | `new_in_hwnd`, lines 133–137, clones the supplied environment or creates one. | Rust COM references retain ordinary ownership. Syrinx supplies its environment; the fallback still needs the container guard. |
 | Controller | `create_controller`, lines 380–431, receives completion through a channel. | Own every non-null controller before inspecting completion status. Move the temporary owner through the channel; a discarded completion must explicitly attempt `Close`. |
 | Canceled wait | Pinned `webview2-com 0.39.1`, `src/lib.rs::wait_with_pump`, returns on `GetMessageA` failure or quit. | A controller can arrive after the receiving wait ended. Ownership cannot begin only after a successful return from `create_controller`. |
 | Configuration | `init_webview`, lines 443 onward, obtains the web view and performs fallible settings/handler/navigation work. | Keep the controller and container guarded until configuration succeeds. Preserve the original returned error. |
@@ -131,7 +131,7 @@ safe against reentrant HWND reuse: the existing sizing sequence still calls
 COM `SetBounds` before `SetWindowPos` without an intervening identity check.
 The new destruction observer proves the temporary cleanup decision only;
 general operation/reentrancy and successful-owner teardown remain outside
-that claim. Atlas uses child construction, but both constructor modes belong
+that claim. Syrinx uses child construction, but both constructor modes belong
 in the proposed fault tests.
 
 Delaying attachment also delays the parent's focus/resize callback during
@@ -143,7 +143,7 @@ review alone does not establish that timing change as harmless.
 
 Frozen wry `new_in_hwnd:115` ignores the result of `CoInitializeEx` on every
 construction attempt. This module has no matching `CoUninitialize`.
-Atlas's `crates/atlas-platform/src/browser/environment.rs:24–36` checks its own
+Syrinx's `crates/syrinx-platform/src/browser/environment.rs:24–36` checks its own
 initialization result and balances that successful call through `Apartment`.
 Its worker retains the apartment while pages and the shared environment live.
 
@@ -157,7 +157,7 @@ reported breakpoint.
 
 ## Alternatives rejected
 
-Atlas cannot clean up a failed builder by enumerating the parent's children:
+Syrinx cannot clean up a failed builder by enumerating the parent's children:
 it never receives the failed attempt's owned HWND. Picking a matching class,
 the newest child or the last handle risks destroying a successful page.
 Ownership belongs inside the component that acquired the resource.

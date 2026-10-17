@@ -17,11 +17,11 @@ not converging.
 ## Your branch
 
 `codex/p1-05-d48`, in your own worktree (see the common rules). Stay inside
-`crates/atlas-search` and `crates/xtask/src/benchmark*`.
+`crates/syrinx-search` and `crates/xtask/src/benchmark*`.
 
 ## Reading list (stay inside it)
 
-- `docs/plans/Atlas v1 — Plan.md`: grep for `D48` and for `P1-05`, and read
+- `docs/plans/Syrinx v1 — Plan.md`: grep for `D48` and for `P1-05`, and read
   only those rows and paragraphs.
 - `docs/p1-05-search.md`: lines 1–80 (scope, boundaries, corpus and
   thresholds), then lines 1948–2348 (the last two days of experiments and
@@ -30,7 +30,7 @@ not converging.
 - `docs/trapstoknow.md`, section "Local search": four frizbee traps.
 - `docs/p1-05-frizbee-maintenance-review.md`, the summary only: why frizbee
   is vendored and patched.
-- The source: `crates/atlas-search/src/catalogue.rs`, `membership.rs` and
+- The source: `crates/syrinx-search/src/catalogue.rs`, `membership.rs` and
   `score_cache.rs`. Read `range_index/` only if you decide to promote it.
 
 ## What to do

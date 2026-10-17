@@ -1,17 +1,17 @@
 # Preserve command-send failures through smoke shutdown
 
-The synthetic smoke check must fail when Atlas observes a worker transport
+The synthetic smoke check must fail when Syrinx observes a worker transport
 error, even if both workers subsequently stop cleanly. This is a reporting
 correction; it does not establish the cause of the unresolved native crash.
 
 ## Source finding
 
-`crates/atlas-app/src/ui.rs` marks the smoke outcome successful after its
+`crates/syrinx-app/src/ui.rs` marks the smoke outcome successful after its
 runtime health wait, then requests orderly shutdown. Previously, the
 `page_command` and `command` methods put actual send errors only in the
 transient status message. Neither changed the stored outcome.
 
-`BrowserHost::send` in `crates/atlas-platform/src/browser.rs` enqueues a
+`BrowserHost::send` in `crates/syrinx-platform/src/browser.rs` enqueues a
 command before calling `PostThreadMessageW` to wake the native worker. A
 failed wake therefore does not prove that the command was rejected. The
 worker can still consume the queued shutdown and report `Stopped`. With
@@ -53,7 +53,7 @@ as part of this source edit.
 The hard smoke watchdog had a separate reporting defect: `terminate_smoke`
 wrote to stderr before calling `process::exit`. Another thread holding the
 stderr lock could therefore prevent the supposed last-resort termination.
-The correction in `crates/atlas-app/src/smoke_watchdog.rs` removes terminal-path
+The correction in `crates/syrinx-app/src/smoke_watchdog.rs` removes terminal-path
 output and reports the structural failure through the process status alone:
 124 means the hard deadline expired; 125 means the cancellation channel
 disconnected. Both are failures. Ordinary error exits remain unchanged.

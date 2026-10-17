@@ -7,7 +7,7 @@ Plugin/Fledge, Notes and Forge work; it does not remove browser requirements
 or waive their dependencies. The smallest useful next milestone is repeatable
 D49 browsing: type an address, browse and switch pages, save/unload/reopen,
 restart without losing committed state, and close cleanly. This is narrower
-than completing Plan 1 or declaring Atlas a daily driver.
+than completing Plan 1 or declaring Syrinx a daily driver.
 
 **Recommendation:** visually validate the now-implemented stale open-palette correction
 described below. Integration assigned it after freezing its `ui.rs` smoke-error
@@ -105,7 +105,7 @@ only thin partial credit. P1-04's accepted library slice stays complete. Its
 bounded failed-start application prompt is now implemented; missing-primary
 preflight and visual recovery acceptance remain open.
 Sources: `docs/implementation-status.md:383–407` and Plan 1's map at
-`docs/plans/Atlas v1 — Plan.md:924–984`.
+`docs/plans/Syrinx v1 — Plan.md:924–984`.
 
 Strict accepted completion is **4/40, or 10%**. Code touches 16/40 slices,
 which is **40% coverage, not 40% completion**. A useful rough planning estimate
@@ -199,10 +199,10 @@ reopen a dismissed popup, or issue another query for an unchanged/no-op State.
 Use the existing global-query and popup-lifetime guards. Coalesce superseded
 refreshes through the current request mechanism rather than add polling.
 
-Assigned production files are **only `crates/atlas-app/src/ui.rs` and
-`crates/atlas-app/src/palette.rs`**, plus focused tests alongside the pure
+Assigned production files are **only `crates/syrinx-app/src/ui.rs` and
+`crates/syrinx-app/src/palette.rs`**, plus focused tests alongside the pure
 refresh/selection policy. Add a worker regression in
-`crates/atlas-app/src/session/worker_tests.rs` only for the missing-target
+`crates/syrinx-app/src/session/worker_tests.rs` only for the missing-target
 safety/catalogue-order behavior. No platform, vendor, search, dependency or
 public API change is needed. Root froze its separate smoke send-error outcome
 correction in `ui.rs`, then explicitly assigned this palette implementation.
@@ -263,16 +263,16 @@ validated from the test or smoke result.
 | Lane | Useful authorized work | Proposed ownership and boundary |
 | --- | --- | --- |
 | Integration | Run focused manual acceptance, collect failures and run the gate/benchmarks/native experiments in one execution lane. | Own shared handoff/status records and assign all shared files. Its frozen smoke outcome patch is preserved in the palette handoff. Do not benchmark beside native/UI work or builds. |
-| Existing search team | Continue exact-semantics P1-05 analysis and its assigned implementation. | Keep `crates/atlas-search/` and search benchmark files with their assigned owner. No range-index promotion or public API change is implied. |
+| Existing search team | Continue exact-semantics P1-05 analysis and its assigned implementation. | Keep `crates/syrinx-search/` and search benchmark files with their assigned owner. No range-index promotion or public API change is implied. |
 | Existing native investigation team | Analyze preserved failures and prepare bounded evidence that distinguishes host, fixture and timing hypotheses. | Retain existing platform/vendor/disposable-copy ownership. Do not infer a product fix from instrumented passes; integration executes. |
 | Assigned palette worker | The stale open-palette correction passed source review and the gate; visible validation remains open. Shortcut forwarding is still review-only. | This chat's assigned files are `palette.rs`, minimal `ui.rs` wiring and focused private tests plus this report. Source remains frozen during integration validation. |
-| Recovery application worker, now assigned | Bounded failed-start offer and explicit confirmation passed the gate; the actual card still needs visual validation. | This chat owns `crates/atlas-app/src/session.rs`, new `session/recovery.rs`, `session/worker_tests.rs`, new `ui/recovery.rs` and minimal `ui.rs` wiring after integration released source ownership. Search, platform, store, vendor and public APIs remain outside this assignment. |
+| Recovery application worker, now assigned | Bounded failed-start offer and explicit confirmation passed the gate; the actual card still needs visual validation. | This chat owns `crates/syrinx-app/src/session.rs`, new `session/recovery.rs`, `session/worker_tests.rs`, new `ui/recovery.rs` and minimal `ui.rs` wiring after integration released source ownership. Search, platform, store, vendor and public APIs remain outside this assignment. |
 
 Recovery was the highest-value independently assignable missing D49 behavior:
 startup previously called `Store::open` directly without an application offer.
 Integration subsequently assigned the bounded failed-start implementation.
 The existing platform functions at
-`atlas-platform/src/storage/recovery.rs:93,148,153` already provide the offer,
+`syrinx-platform/src/storage/recovery.rs:93,148,153` already provide the offer,
 date and explicit confirmation. Acceptance must cover a damaged synthetic
 primary, a dated offer before replacement, cancel preserving bytes, explicit
 confirm only, preserved displaced files, no valid backup, ordinary I/O refusal,
@@ -516,19 +516,19 @@ this review makes no claim of design conformity.
 | Back, forward and reload | `browser/page.rs:123–153` calls native Reload/GoBack/GoForward and checks availability. Source/title callbacks feed the session (`ui.rs:314,362`; `page.rs::register_source`). Toolbar and shortcuts are wired (`ui.rs:519–545,829–855`). | Missing implementation must not be inferred merely from absent visual evidence. Verify two synthetic destinations, title/address changes, saved-target independence and shortcuts with page focus. P1-10. |
 | Palette, address and focus | Popup ownership, deferred input focus, reactivation and page focus return exist (`ui.rs:549–622,681–729`; `sync_pages:474–480`). Query identities reject stale replies (`palette.rs:95–119`; `ui.rs:264–276`). | Literal submission has the concrete gap below. Actual typing, Enter/Esc, reopen, Alt Tab, native focus return and stacking remain unverified. P1-10 and D49; full registry/scopes/previews remain P1-30–P1-33. |
 | Normal startup and interrupted exit | `session.rs:204–247` opens the guarded store and restores its snapshot. `NavigationIntents::desired_page` and `sync_pages` load the active destination lazily. `worker_tests.rs:176,323` cover restart and queued shutdown. | App restart with several live tabs plus unloaded saved rows needs execution evidence. The unclean-session notice (`ui.rs:235–239`) describes reading committed state, not restoring a damaged database. P1-19 composition brought forward by D49. |
-| Damaged database recovery | `session.rs:209–214` directly opens the store and propagates failure. `ui.rs:278–286` reports storage failure. No application recovery offer/confirmation flow exists. | This is missing integration, not merely an unverified UI. Existing `offer_recovery`, `RecoveryOffer::metadata` and `confirm` are available in `atlas-platform/src/storage/recovery.rs:93,147–153`. P1-04/D46, within D49's named backup scope. |
+| Damaged database recovery | `session.rs:209–214` directly opens the store and propagates failure. `ui.rs:278–286` reports storage failure. No application recovery offer/confirmation flow exists. | This is missing integration, not merely an unverified UI. Existing `offer_recovery`, `RecoveryOffer::metadata` and `confirm` are available in `syrinx-platform/src/storage/recovery.rs:93,147–153`. P1-04/D46, within D49's named backup scope. |
 | Shutdown and engine failure | `ui.rs:746–804` waits for browser and session shutdown; browser Stopped triggers store shutdown (`ui.rs:383–397`). `session.rs:214–222` observes store close errors. `browser.rs::run` keeps the apartment alive around its browser state. | Separate smoke/lifecycle evidence supports limited shutdown behavior. Repeat navigation/palette/creation shutdown stress and durable restart through the integration owner. `ui.rs:354–360` reports process failures but does not implement renderer/shared-browser recovery; that feature remains P1-16. Do not equate shutdown ordering with a diagnosed crash. |
 
-Paths in this table are under `crates/atlas-app/src/` except `browser.rs`
-and `browser/page.rs`, which are under `crates/atlas-platform/src/`.
+Paths in this table are under `crates/syrinx-app/src/` except `browser.rs`
+and `browser/page.rs`, which are under `crates/syrinx-platform/src/`.
 
 ## Smallest proposed implementation: stable literal navigation
 
 The source confirms a timing-dependent action. In
-[`palette.rs`](../crates/atlas-app/src/palette.rs), `query` clears results and
+[`palette.rs`](../crates/syrinx-app/src/palette.rs), `query` clears results and
 selects index zero (lines 80–86), `receive` installs results and selects zero
 (105–117), and `submit(false)` activates any selected hit (128–138).
-[`ui.rs`](../crates/atlas-app/src/ui.rs), lines 700–709, sends a submission to
+[`ui.rs`](../crates/syrinx-app/src/ui.rs), lines 700–709, sends a submission to
 current-tab navigation but turns activation into FocusTab or OpenSaved. Ctrl L
 only supplies initial text; its address intent does not reach `PaletteView`
 (571–616).
@@ -551,9 +551,9 @@ a second URL policy. This needs no full command registry, new dependency,
 native page-content access or public crate API change.
 
 **Proposed future file ownership:** integration should assign the navigation
-team exclusive ownership for this correction of `crates/atlas-app/src/palette.rs`,
-`crates/atlas-app/src/navigation.rs`, and only the necessary palette
-construction/event wiring in `crates/atlas-app/src/ui.rs`. Put the pure action
+team exclusive ownership for this correction of `crates/syrinx-app/src/palette.rs`,
+`crates/syrinx-app/src/navigation.rs`, and only the necessary palette
+construction/event wiring in `crates/syrinx-app/src/ui.rs`. Put the pure action
 selection tests beside that policy; no new shared source file is required.
 The integration session owns acceptance records and serialized execution.
 The recorded navigation allocation already includes `navigation.rs`,
@@ -593,7 +593,7 @@ navigation sequence should verify truthful status and preserve serious errors.
 
 Recovery is the next concrete missing D49 integration identified by both
 reviewers. A future recovery owner can use the unchanged platform API and own
-`crates/atlas-app/src/session.rs`, a new `session/recovery.rs`,
+`crates/syrinx-app/src/session.rs`, a new `session/recovery.rs`,
 `session/worker_tests.rs`, a new `ui/recovery.rs`, and limited `ui.rs` wiring.
 These are proposed paths, not files created by this review. Integration must
 coordinate exclusive session/UI ownership and transfer any overlapping
@@ -612,7 +612,7 @@ The remaining browser features retain their normal plan dependencies:
 | Confirmed gap or incomplete delivery | Existing slice and evidence |
 | --- | --- |
 | Site-created windows are denied | P1-11; `browser/page.rs:80–83` explicitly returns `NewWindowResponse::Deny`. A successful simple page does not prove popup OAuth works. |
-| Permission/notification workflow, reachable browser essentials and security state | P1-12–P1-14. The current browser command/event surface in `browser.rs:57–118` does not supply complete Atlas prompt/find/download/print/zoom/security flows; native defaults do not establish acceptance. |
+| Permission/notification workflow, reachable browser essentials and security state | P1-12–P1-14. The current browser command/event surface in `browser.rs:57–118` does not supply complete Syrinx prompt/find/download/print/zoom/security flows; native defaults do not establish acceptance. |
 | Hidden-tab suspension, fullscreen and process recovery | P1-15/P1-16; `Page::show` only changes visibility, and `ui.rs::browser_event` only reports process failure. |
 | Draggable wide/compact/hidden sidebar, row reordering and hover peek | P1-07–P1-10/P1-17; fixed `SIDEBAR_WIDTH` and `sidebar` rendering in `ui.rs`, plus the absence of a reorder session command, leave these undelivered. Do not invent D44 thresholds without the planned review. |
 | History, folders/import, full text/retention/clearing, complete Home/Favorites/settings and palette | P1-20–P1-33; the implementation ledger lists these open exits. Flat saved rows and typed local catalogue entries do not implement these journeys. |

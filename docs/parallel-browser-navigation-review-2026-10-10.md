@@ -14,7 +14,7 @@ validation result.
 
 ## Changes and behavior
 
-`crates/atlas-app/src/navigation.rs` now recognizes the already supported URL
+`crates/syrinx-app/src/navigation.rs` now recognizes the already supported URL
 schemes without regard to ASCII case. Previously, submitting
 `HTTPS://example.test/Case?Key=Value#Part` returned the preview's unsupported-
 scheme error. It now takes the existing URL validation path and preserves the
@@ -30,14 +30,14 @@ the parser makes no network requests. The implementation compares only the
 scheme instead of lowercasing the full address, which would change destinations
 whose paths or query values depend on case.
 
-`crates/atlas-app/src/ui/page_lifecycle.rs` has one new regression and no
+`crates/syrinx-app/src/ui/page_lifecycle.rs` has one new regression and no
 production changes. A saved page closes while its native creation callback is
 delayed, then reopens with a fresh live identity. The test checks that callbacks
 for the closed identity cannot consume the replacement's pending ownership or
 alter its loaded ownership. The existing pending-ID guard already provides
 this behavior; the audit found no demonstrated defect in these helpers.
 
-`crates/atlas-app/src/ui/navigation_intents.rs` is unchanged. Its audit traced
+`crates/syrinx-app/src/ui/navigation_intents.rs` is unchanged. Its audit traced
 committed navigation through `ui.rs`, `session.rs` and the browser command queue.
 Retained destinations survive delayed readiness and inactive selection; later
 navigation follows creation in queue order; closing removes intents for old live
@@ -55,10 +55,10 @@ files. Source review does not establish that the new tests compile or pass.
 
 ## Integration follow-up outside this ownership boundary
 
-`BrowserHost::send` in `crates/atlas-platform/src/browser.rs` places a command on
+`BrowserHost::send` in `crates/syrinx-platform/src/browser.rs` places a command on
 its Rust queue before calling `PostThreadMessageW`. A wake failure can therefore
 return an error after queue acceptance. `page_command` in
-`crates/atlas-app/src/ui.rs` treats every error as an unsuccessful enqueue. If a
+`crates/syrinx-app/src/ui.rs` treats every error as an unsuccessful enqueue. If a
 queued Create later executes, the UI can lack pending ownership and ignore its
 Created callback; a later synchronization can attempt duplicate creation.
 
@@ -81,7 +81,7 @@ merge, dependency, public API or existing shared documentation was changed.
 The integration chat must run the following after its other source is frozen:
 
 ```powershell
-cargo test --package atlas-app --profile local --offline --locked
+cargo test --package syrinx-app --profile local --offline --locked
 cargo xtask check
 ```
 
@@ -91,7 +91,7 @@ approved window-testing scope. Existing windows and personal data were untouched
 
 The source fingerprints at handoff are SHA-256:
 
-| File under `crates/atlas-app/src/` | SHA-256 |
+| File under `crates/syrinx-app/src/` | SHA-256 |
 | --- | --- |
 | `navigation.rs` | `3eeeb8e380d37513b802b0b55059b3e810d32387d064974d34b5cb1161a27db5` |
 | `ui/navigation_intents.rs` (unchanged) | `39161bbf385f457b556d483aa2882f3188909b4a1e30f6409e6bcb093aebff75` |
@@ -104,7 +104,7 @@ gate; the change is not yet declared validated or complete.
 ## Fixture transport continuation — 2026-10-11
 
 The synthetic close-page server must wait for request bytes before deciding that
-a speculative connection is idle. In `crates/atlas-platform/examples/page_close.rs`,
+a speculative connection is idle. In `crates/syrinx-platform/examples/page_close.rs`,
 the listener is intentionally nonblocking, but its accepted streams previously
 received read/write timeouts without switching to blocking mode. Windows accepts
 inherit listener properties, and socket timeouts govern blocking calls. Thus an
@@ -152,7 +152,7 @@ The integration chat owns execution and must serialize this focused command with
 its other builds, then perform its bounded native validation and full gate:
 
 ```powershell
-cargo test -p atlas-platform --example page_close --profile local --offline --locked
+cargo test -p syrinx-platform --example page_close --profile local --offline --locked
 cargo xtask check
 ```
 
@@ -191,13 +191,13 @@ policy-independent wrong-tab or stale-instance defect, so no source fix or new
 test is proposed. This is a source-review verdict, not additional runtime
 validation.
 
-An unresolved routing distinction remains. In `crates/atlas-app/src/ui.rs`, tab
+An unresolved routing distinction remains. In `crates/syrinx-app/src/ui.rs`, tab
 selection is queued to the session worker, while history actions immediately
 target the currently shown page. A queued switch from A to B followed by Reload
 before the selection snapshot arrives can therefore send Reload to A. Typed
 `NavigateActive` instead resolves the worker's authoritative selection after
 earlier session commands. The native shortcut path in
-`crates/atlas-platform/src/browser/page.rs` and `browser.rs` also delivers a
+`crates/syrinx-platform/src/browser/page.rs` and `browser.rs` also delivers a
 shortcut without its originating page ID.
 
 These paths have different ordering semantics, but deciding which page a history

@@ -17,15 +17,15 @@ Terms. An **ABI** (application binary interface) is how compiled code lays out d
 
 ## Short answer
 
-- **Plugins are Rust crates compiled into Atlas, each implementing one `Plugin` trait from a small `atlas-plugin-api` crate, and registered in an explicit list.** Everything that crosses the trait is an owned, serialisable value, so the same trait can later be served by a WebAssembly component for third parties (Zed's model) without touching the built-ins, which keep running natively with no sandbox cost. Dynamic libraries are ruled out (Rust's ABI has no stability guarantee and `abi_stable` cannot unload), and out-of-process plugins buy isolation Atlas does not need yet.
+- **Plugins are Rust crates compiled into Syrinx, each implementing one `Plugin` trait from a small `syrinx-plugin-api` crate, and registered in an explicit list.** Everything that crosses the trait is an owned, serialisable value, so the same trait can later be served by a WebAssembly component for third parties (Zed's model) without touching the built-ins, which keep running natively with no sandbox cost. Dynamic libraries are ruled out (Rust's ABI has no stability guarantee and `abi_stable` cannot unload), and out-of-process plugins buy isolation Syrinx does not need yet.
 - **Plugin UI reaches the chrome three ways:** declarative specs (forms, lists) that the chrome renders, which is how Raycast does it and how the palette's "New lead" form should work; Svelte components shipped inside the chrome bundle for the rich built-in views (Forge, Notes), lazily loaded; and later, for third parties only, a sandboxed web view per plugin on a custom protocol. The declarative specs survive a switch to a Rust UI toolkit unchanged.
-- **The boundary is a few generic async Tauri commands plus one channel per stream.** Keep every palette message under 8 KiB of JSON, because Tauri delivers channel messages below 8,192 bytes by direct script evaluation, measured about 2x faster than its fetch path on WebView2; send bytes as raw ArrayBuffers; never use events on hot paths. On Windows a 10 MB binary transfer was reported at about 200 ms against 5 ms on macOS, so Atlas sends results, not data, and coalesces terminal output per frame.
+- **The boundary is a few generic async Tauri commands plus one channel per stream.** Keep every palette message under 8 KiB of JSON, because Tauri delivers channel messages below 8,192 bytes by direct script evaluation, measured about 2x faster than its fetch path on WebView2; send bytes as raw ArrayBuffers; never use events on hot paths. On Windows a 10 MB binary transfer was reported at about 200 ms against 5 ms on macOS, so Syrinx sends results, not data, and coalesces terminal output per frame.
 - **Typed bindings: `tauri-specta`, pinned exactly.** It is still a release candidate (2.0.0-rc.25, May 2026) after two years. GitButler, the closest comparable app (Tauri, Svelte, Rust, rusqlite), generates TypeScript from JSON schemas instead, which is the fallback.
 - **Search has two tiers.** Per keystroke, an in-memory catalogue of everything with a title (tabs, commands, bookmarks, recent history, note titles, plugin records) is ranked by `frizbee`, a typo-tolerant matcher benchmarked at 1.78 ms per 100,000 items (about 4 to 5 times `nucleo`), blended with frecency the way Zed blends usage with fuzzy score. Full text (note bodies, plugin content, old history) lives in **tantivy** and arrives as a second message. Phase 2 needs only the first tier.
-- **Tantivy beats FTS5 for the full-text tier on speed and typo tolerance**: the only head-to-head benchmark found shows a 0.74 ms median against 42 ms on 57,000 documents, and tantivy has Levenshtein fuzzy queries while FTS5 has none. FTS5 is simpler (one file, kept in sync by triggers), so it stays the fallback behind a trait, and a one-day bake-off on Atlas's own data comes before Phase 4.
+- **Tantivy beats FTS5 for the full-text tier on speed and typo tolerance**: the only head-to-head benchmark found shows a 0.74 ms median against 42 ms on 57,000 documents, and tantivy has Levenshtein fuzzy queries while FTS5 has none. FTS5 is simpler (one file, kept in sync by triggers), so it stays the fallback behind a trait, and a one-day bake-off on Syrinx's own data comes before Phase 4.
 - **Storage is rusqlite with `rusqlite_migration`**, WAL with `synchronous=NORMAL`, one writer thread and a few readers, in the local (not roaming) app data folder, with a daily `VACUUM INTO` snapshot. Not sqlx (its SQLite driver runs a thread per connection anyway, and checked queries need a database at build time) and not `tauri-plugin-sql` (it runs SQL from the frontend).
 - **Testing:** most tests are plain `cargo test` against crates that do not depend on Tauri; a few command tests use Tauri's mock runtime; Svelte uses Vitest with Tauri's IPC mocks; end-to-end smoke tests run on Windows through WebdriverIO's Tauri service, whose embedded driver even covers macOS but is only five months old.
-- **Layout:** a virtual Cargo workspace with flat `crates/` (`atlas-plugin-api`, `atlas-core`, `atlas-store`, `atlas-search`, one crate per plugin, `atlas-shell`, `xtask`), where `atlas-shell` is the only crate that depends on Tauri, and `ui/` is a plain Vite and Svelte 5 app. In the Rust-toolkit variant, `atlas-shell` and `ui/` become `atlas-app`, `atlas-ui` and one `plugin-*-ui` crate per rich plugin; nothing else moves.
+- **Layout:** a virtual Cargo workspace with flat `crates/` (`syrinx-plugin-api`, `syrinx-core`, `syrinx-store`, `syrinx-search`, one crate per plugin, `syrinx-shell`, `xtask`), where `syrinx-shell` is the only crate that depends on Tauri, and `ui/` is a plain Vite and Svelte 5 app. In the Rust-toolkit variant, `syrinx-shell` and `ui/` become `syrinx-app`, `syrinx-ui` and one `plugin-*-ui` crate per rich plugin; nothing else moves.
 
 ## Findings
 
@@ -35,7 +35,7 @@ Each claim carries its source and a confidence (high, medium or low).
 
 **Static registration.** A trait implemented by crates linked into the binary costs nothing at run time and gives plugins the whole of Rust. `inventory` 0.3.25 adds "typed distributed plugin registration": `collect!` declares a registry and `submit!` adds to it from any crate, taking effect together at startup ([inventory](https://docs.rs/inventory/latest/inventory/); high). Tauri's own plugins work this way: a Cargo crate plus an optional NPM package, registered in code with `.plugin(...)`, with commands namespaced `plugin:<name>|<command>` and blocked until a permission grants them ([Tauri plugins](https://v2.tauri.app/develop/plugins/); high).
 
-**Dynamic libraries.** The Rust Reference says "The Rust ABI offers no stability guarantees" ([external blocks](https://doc.rust-lang.org/reference/items/external-blocks.html); high), and the default struct layout makes "no other guarantees" beyond soundness ([type layout](https://doc.rust-lang.org/reference/type-layout.html); high), so a plugin built by another compiler version cannot safely share Rust types. A stable "crABI" is still an experimental tracking issue, open, with its last comment in July 2026 ([rust#111423](https://github.com/rust-lang/rust/issues/111423); high). `abi_stable` 0.11.3 works around this by checking type layouts at load time, with FFI-safe replacements for standard types and `sabi_trait` trait objects, but its plugin use case is "without support for unloading" ([abi_stable](https://docs.rs/abi_stable/latest/abi_stable/); high). A crashing library takes Atlas down with it.
+**Dynamic libraries.** The Rust Reference says "The Rust ABI offers no stability guarantees" ([external blocks](https://doc.rust-lang.org/reference/items/external-blocks.html); high), and the default struct layout makes "no other guarantees" beyond soundness ([type layout](https://doc.rust-lang.org/reference/type-layout.html); high), so a plugin built by another compiler version cannot safely share Rust types. A stable "crABI" is still an experimental tracking issue, open, with its last comment in July 2026 ([rust#111423](https://github.com/rust-lang/rust/issues/111423); high). `abi_stable` 0.11.3 works around this by checking type layouts at load time, with FFI-safe replacements for standard types and `sabi_trait` trait objects, but its plugin use case is "without support for unloading" ([abi_stable](https://docs.rs/abi_stable/latest/abi_stable/); high). A crashing library takes Syrinx down with it.
 
 **WebAssembly.** Zed's extensions are Rust compiled to `wasm32-wasip2` and run inside the Zed process in wasmtime, with host and guest bindings generated from the same WIT files; Zed first considered embedding a JavaScript runtime (Deno's V8) and chose WASM once the component model matured. The build records `wasm_api_version` in the manifest and the host instantiates that API version ([Zed decoded: extensions](https://zed.dev/blog/zed-decoded-extensions); high), and the repository keeps one WIT folder per API version, `since_v0.0.1` to `since_v0.8.0` ([Zed WIT](https://github.com/zed-industries/zed/tree/main/crates/extension_api/wit); high). Extensions can add languages, debuggers, themes, icon themes, snippets and MCP servers ([Zed docs](https://zed.dev/docs/extensions/developing-extensions); high) but, as of that post, could not create panels or other UI (medium; the API grows). Lapce runs its WASI plugins in-process in `lapce-proxy` with wasmtime, talking LSP-style JSON-RPC over in-memory pipes, and grants HTTP with `allowed_hosts` set to `"insecure:allow-all"`, so its sandbox is partial ([lapce wasi.rs](https://github.com/lapce/lapce/blob/master/lapce-proxy/src/plugin/wasi.rs); high). Wasmtime's component API generates typed Rust traits from a WIT world with `bindgen!` and supports resources and async ([wasmtime::component](https://docs.wasmtime.dev/api/wasmtime/component/index.html); high); instantiation fell from about 2 ms to 5 µs in wasmtime 1.0 ([Bytecode Alliance, 2022](https://bytecodealliance.org/articles/wasmtime-10-performance); high), so a WASM host would not hurt startup. Extism wraps wasmtime 49 with WASI preview 1 and passes buffers of bytes in and out through memory it manages ([Extism runtime](https://raw.githubusercontent.com/extism/extism/main/runtime/Cargo.toml), [Extism memory](https://extism.org/docs/concepts/memory); medium that it does not use the component model, inferred from its WASI feature).
 
@@ -59,7 +59,7 @@ Each claim carries its source and a confidence (high, medium or low).
 
 **State stays in Rust.** Tauri's managed `State<T>` is wrapped in `Arc` for you, the standard `Mutex` is preferred, and a wrong state type fails at run time, not compile time ([state management](https://v2.tauri.app/develop/state-management/); high). On the Svelte side, `$state` wraps arrays and objects in deep proxies, while `$state.raw` skips that cost for large data that is only replaced ([Svelte $state](https://svelte.dev/docs/svelte/$state); high), which suits snapshots received from Rust.
 
-**If the chrome is a Rust toolkit**, there is no serialisation boundary: the UI calls the core in-process, and the shape becomes "the core owns state, the UI sends actions, the core publishes changes", as iced messages, GPUI entities and Floem signals each do (sources above). GitButler shows one Rust API serving Tauri, a server and N-API at once (above; high), which is the argument for writing Atlas's core API as plain Rust actions and events now, whatever draws them.
+**If the chrome is a Rust toolkit**, there is no serialisation boundary: the UI calls the core in-process, and the shape becomes "the core owns state, the UI sends actions, the core publishes changes", as iced messages, GPUI entities and Floem signals each do (sources above). GitButler shows one Rust API serving Tauri, a server and N-API at once (above; high), which is the argument for writing Syrinx's core API as plain Rust actions and events now, whatever draws them.
 
 ### 3. The shared search index
 
@@ -85,18 +85,18 @@ Each claim carries its source and a confidence (high, medium or low).
 
 ### 5. Testing
 
-Tauri's `test` feature (an unstable module) provides `mock_builder`, `mock_context`, `noop_assets` and `get_ipc_response` to run a command through the IPC layer without a window ([tauri::test](https://docs.rs/tauri/latest/tauri/test/index.html); high). In the frontend, `mockIPC` intercepts `invoke`, event mocking arrived in 2.7.0, and `emitTo` is not mocked yet ([mocking](https://v2.tauri.app/develop/tests/mocking/); high). Driving `tauri-driver` directly works only on Windows and Linux because "macOS has no WKWebView driver tool"; WebdriverIO's Tauri service covers all three through an embedded WebDriver server compiled into the app (`tauri-plugin-wdio-webdriver`) or CrabNebula's fork, which needs a paid key on macOS ([Tauri WebDriver](https://v2.tauri.app/develop/tests/webdriver/); high). Those plugins are test-only and belong behind `debug_assertions` or a feature, since the execute API runs script through `window.eval()` ([WebdriverIO plugin setup](https://webdriver.io/docs/desktop-testing/tauri/plugin-setup); high). The embedded driver was first published on 1 May 2026 and reached 1.5.0 on 8 October 2026 ([crates.io](https://crates.io/api/v1/crates/tauri-plugin-wdio-webdriver); high), and how it handles several child web views in one window is not documented (low). On Windows, Playwright can attach to WebView2 over CDP by setting `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>`, with a separate user-data folder per parallel test ([Playwright WebView2](https://playwright.dev/docs/webview2); high); whether each Atlas child web view shows up as its own target is untested (low).
+Tauri's `test` feature (an unstable module) provides `mock_builder`, `mock_context`, `noop_assets` and `get_ipc_response` to run a command through the IPC layer without a window ([tauri::test](https://docs.rs/tauri/latest/tauri/test/index.html); high). In the frontend, `mockIPC` intercepts `invoke`, event mocking arrived in 2.7.0, and `emitTo` is not mocked yet ([mocking](https://v2.tauri.app/develop/tests/mocking/); high). Driving `tauri-driver` directly works only on Windows and Linux because "macOS has no WKWebView driver tool"; WebdriverIO's Tauri service covers all three through an embedded WebDriver server compiled into the app (`tauri-plugin-wdio-webdriver`) or CrabNebula's fork, which needs a paid key on macOS ([Tauri WebDriver](https://v2.tauri.app/develop/tests/webdriver/); high). Those plugins are test-only and belong behind `debug_assertions` or a feature, since the execute API runs script through `window.eval()` ([WebdriverIO plugin setup](https://webdriver.io/docs/desktop-testing/tauri/plugin-setup); high). The embedded driver was first published on 1 May 2026 and reached 1.5.0 on 8 October 2026 ([crates.io](https://crates.io/api/v1/crates/tauri-plugin-wdio-webdriver); high), and how it handles several child web views in one window is not documented (low). On Windows, Playwright can attach to WebView2 over CDP by setting `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>`, with a separate user-data folder per parallel test ([Playwright WebView2](https://playwright.dev/docs/webview2); high); whether each Syrinx child web view shows up as its own target is untested (low).
 
 ### 6. Workspace layout
 
 A virtual manifest (a root `Cargo.toml` with `[workspace]` and no package) needs an explicit `resolver`, shares one `Cargo.lock` and `target`, and lets members inherit `[workspace.dependencies]`, `[workspace.package]` and `[workspace.lints]` ([Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html); high). rust-analyzer's maintainer recommends a flat `crates/` folder, folder names equal to crate names, `version = "0.0.0"` for internal crates and automation in an `xtask` crate ([Large Rust workspaces](https://matklad.github.io/2021/08/22/large-rust-workspaces.html); high, an experienced opinion). Tauri's `src-tauri` is "a normal Cargo project" with `tauri.conf.json`, `capabilities/` and `build.rs`, can be a member of a larger workspace, and keeps code in `lib.rs` with a thin `main.rs` ([project structure](https://v2.tauri.app/start/project-structure/); high); SvelteKit needs `adapter-static`, SPA mode and `ssr = false` because "Tauri doesn't support server-based solutions" ([Tauri SvelteKit](https://v2.tauri.app/start/frontend/sveltekit/); high). Comparables: Helix splits `helix-core`, `helix-view`, `helix-term`, `helix-lsp` and `helix-event`, but admits `helix-view`, meant to be frontend-agnostic, is "tied to the terminal UI" ([Helix architecture](https://raw.githubusercontent.com/helix-editor/helix/master/docs/architecture.md); high); Lapce has `lapce-app`, `lapce-core`, `lapce-proxy` and `lapce-rpc` ([Lapce](https://github.com/lapce/lapce); high); GitButler keeps 59 flat crates under `crates/`, with `gitbutler-tauri` the shell over `but-api`, and its Svelte app under `apps/` ([GitButler crates](https://github.com/gitbutlerapp/gitbutler/tree/master/crates), [gitbutler-tauri](https://raw.githubusercontent.com/gitbutlerapp/gitbutler/master/crates/gitbutler-tauri/Cargo.toml); high).
 
-## What this means for Atlas v1
+## What this means for Syrinx v1
 
 ### The plugin trait
 
 ```rust
-// crates/atlas-plugin-api: the only Atlas crate a plugin may depend on. No tauri, no atlas-core.
+// crates/syrinx-plugin-api: the only Syrinx crate a plugin may depend on. No tauri, no syrinx-core.
 pub const API_VERSION: u32 = 1;
 pub struct Manifest {
     pub id: PluginId, pub name: String, pub version: Version, pub api_version: u32,
@@ -104,10 +104,10 @@ pub struct Manifest {
     pub commands: Vec<CommandSpec>,  // id, title, keywords, scope chip, whether it shows a form
 }
 pub enum ViewSpec {
-    Component(String),  // a view shipped in Atlas's chrome bundle (Svelte now, a Rust view later)
+    Component(String),  // a view shipped in Syrinx's chrome bundle (Svelte now, a Rust view later)
     Form(FormSpec),     // declarative fields, validation, submit and "create and open"
     List(ListSpec),     // declarative rows with actions
-}                       // later, third parties only: Web { entry: "atlas-plugin://<id>/index.html" }
+}                       // later, third parties only: Web { entry: "syrinx-plugin://<id>/index.html" }
 pub enum Outcome { Done { toast: Option<String> }, Form(FormSpec), OpenTab(TabRef) }
 
 #[async_trait::async_trait]
@@ -125,9 +125,9 @@ pub trait IndexFeed: Send + Sync {  // pull-based; the host keeps the cursor in 
 #[derive(Clone)] pub struct Host { /* own storage namespace, settings, a channel to its views, logger */ }
 ```
 
-`atlas-shell` registers built-ins in a plain list (`vec![Arc::new(Notes::default()), Arc::new(Forge::default()), Arc::new(Fledge::new(fledge_client::Stub::default()))]`), which is clearer and easier to test than `inventory`. Three rules make "built-ins use the third-party API" real: a plugin crate depends only on `atlas-plugin-api`; only owned, serialisable values cross the trait (no references into core state), so a later `WasmPlugin` adapter can implement `Plugin` by calling a wasmtime component whose WIT world mirrors the trait; and the plugin reaches Atlas only through `Host`. Plugin calls run on async tasks, never the main thread, behind a timeout and `catch_unwind`, so a buggy built-in fails one command rather than the app.
+`syrinx-shell` registers built-ins in a plain list (`vec![Arc::new(Notes::default()), Arc::new(Forge::default()), Arc::new(Fledge::new(fledge_client::Stub::default()))]`), which is clearer and easier to test than `inventory`. Three rules make "built-ins use the third-party API" real: a plugin crate depends only on `syrinx-plugin-api`; only owned, serialisable values cross the trait (no references into core state), so a later `WasmPlugin` adapter can implement `Plugin` by calling a wasmtime component whose WIT world mirrors the trait; and the plugin reaches Syrinx only through `Host`. Plugin calls run on async tasks, never the main thread, behind a timeout and `catch_unwind`, so a buggy built-in fails one command rather than the app.
 
-**UI.** A command returning `Outcome::Form` makes the palette preview render a generic `<PluginForm>` from the `FormSpec`; Enter calls `palette_submit`, which calls `run` with the values, and Ctrl Enter submits and opens the tab. `ViewSpec::Component("forge.editor")` names an entry in `ui/src/lib/plugins/registry.ts` that maps to a dynamic `import()`, so Forge's editor code loads only when a Forge tab opens; the component talks to its plugin through `plugin_call` and its own channel. Third-party pages, when they come, get their own child web view on an `atlas-plugin://` scheme with a capability scoped to that web view's label.
+**UI.** A command returning `Outcome::Form` makes the palette preview render a generic `<PluginForm>` from the `FormSpec`; Enter calls `palette_submit`, which calls `run` with the values, and Ctrl Enter submits and opens the tab. `ViewSpec::Component("forge.editor")` names an entry in `ui/src/lib/plugins/registry.ts` that maps to a dynamic `import()`, so Forge's editor code loads only when a Forge tab opens; the component talks to its plugin through `plugin_call` and its own channel. Third-party pages, when they come, get their own child web view on an `syrinx-plugin://` scheme with a capability scoped to that web view's label.
 
 ### The boundary
 
@@ -137,34 +137,34 @@ All commands are async: `tabs_*`, `palette_query(seq, text, scope)`, `palette_ru
 
 - **Tier 1, the catalogue, in memory:** one row per titled thing (id, kind, title, URL or path, plugin, frecency, open flag) for open tabs, commands, bookmarks, the most recent history (around 20,000 rows), note titles and plugin records. Each keystroke runs `frizbee` (one typo allowed from four characters), keeps the top 50 by fuzzy score plus frecency plus an open-tab boost, and counts the scope chips in the same pass. Budget: under 5 ms at 100,000 rows. This tier is all Phase 2 needs.
 - **Tier 2, full text, in tantivy** under `app_cache_dir()/index/`: note bodies, plugin content and older history, with `kind` and `plugin` as exact-match fields for scope chips. It runs only for queries of three or more characters, after tier 1 has been sent, with a prefix on the last term and edit distance 1 on terms of five or more characters. One writer thread at a 32 MB budget commits in batches (every two seconds or 500 documents) and is dropped when idle; the reader reloads on commit. The index is derived from SQLite and the plugins' feeds, with cursors in SQLite, and is rebuilt on a schema change or any error.
-- **Check before Phase 4:** a one-day bake-off of tantivy against FTS5 (with `prefix='2 3'` and `ORDER BY rank LIMIT 20`) on the owner's notes, with p95 budgets of 10 ms for tier 2. If FTS5 meets it, its single-file simplicity wins; `atlas-search` hides either behind a `FullText` trait.
+- **Check before Phase 4:** a one-day bake-off of tantivy against FTS5 (with `prefix='2 3'` and `ORDER BY rank LIMIT 20`) on the owner's notes, with p95 budgets of 10 ms for tier 2. If FTS5 meets it, its single-file simplicity wins; `syrinx-search` hides either behind a `FullText` trait.
 
 ### Storage
 
-rusqlite with the `bundled` and `backup` features is the only SQLite in the binary. One writer connection on a dedicated thread takes commands over a channel; two read connections serve queries. At open: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, `optimize=0x10002`, then `rusqlite_migration` `to_latest()`; hot statements use `prepare_cached`. Files: `app_local_data_dir()/data/atlas.db` (local, not roaming, and in its own folder because the web views share that root), the index in the cache folder, and `data/backups/` holding a daily `VACUUM INTO` snapshot taken when idle, seven kept. A clean-shutdown flag triggers a background `quick_check` after a crash; a failure renames the bad file, restores the newest snapshot and tells the owner.
+rusqlite with the `bundled` and `backup` features is the only SQLite in the binary. One writer connection on a dedicated thread takes commands over a channel; two read connections serve queries. At open: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, `optimize=0x10002`, then `rusqlite_migration` `to_latest()`; hot statements use `prepare_cached`. Files: `app_local_data_dir()/data/syrinx.db` (local, not roaming, and in its own folder because the web views share that root), the index in the cache folder, and `data/backups/` holding a daily `VACUUM INTO` snapshot taken when idle, seven kept. A clean-shutdown flag triggers a background `quick_check` after a crash; a failure renames the bad file, restores the newest snapshot and tells the owner.
 
 ### Testing
 
-`atlas-core`, `atlas-store` (a temporary file per test) and `atlas-search` carry most tests in plain Rust: the tab model, migrations through `validate()`, ranking orders as `insta` snapshots, and a fake plugin driven through the trait. `atlas-shell` has one `tauri::test` test per command family; `ui/` uses Vitest with `mockIPC`. Three to five end-to-end smoke flows run on Windows only, through WebdriverIO's embedded driver behind an `e2e` feature, with Playwright over CDP as the fallback. `cargo xtask bench` runs criterion benchmarks of both tiers at 100,000 rows and 50,000 documents and fails when a budget is missed.
+`syrinx-core`, `syrinx-store` (a temporary file per test) and `syrinx-search` carry most tests in plain Rust: the tab model, migrations through `validate()`, ranking orders as `insta` snapshots, and a fake plugin driven through the trait. `syrinx-shell` has one `tauri::test` test per command family; `ui/` uses Vitest with `mockIPC`. Three to five end-to-end smoke flows run on Windows only, through WebdriverIO's embedded driver behind an `e2e` feature, with Playwright over CDP as the fallback. `cargo xtask bench` runs criterion benchmarks of both tiers at 100,000 rows and 50,000 documents and fails when a budget is missed.
 
 ### Crate layout
 
 ```
-Atlas-app/
+Syrinx-app/
   Cargo.toml          virtual manifest: members = ["crates/*"], resolver = "3", workspace deps and lints
   crates/
-    atlas-plugin-api/ traits and data types (serde, specta derives); depends on no Atlas crate
-    atlas-core/       tab model, session, palette, command registry, plugin host; no tauri
-    atlas-store/      rusqlite, migrations, repositories for settings, tiles, pins, bookmarks, history
-    atlas-search/     catalogue (frizbee plus frecency) and full-text index (tantivy)
-    plugin-notes/  plugin-forge/  plugin-fledge/    each depends on atlas-plugin-api only
+    syrinx-plugin-api/ traits and data types (serde, specta derives); depends on no Syrinx crate
+    syrinx-core/       tab model, session, palette, command registry, plugin host; no tauri
+    syrinx-store/      rusqlite, migrations, repositories for settings, tiles, pins, bookmarks, history
+    syrinx-search/     catalogue (frizbee plus frecency) and full-text index (tantivy)
+    plugin-notes/  plugin-forge/  plugin-fledge/    each depends on syrinx-plugin-api only
     fledge-client/    the Fledge API trait, its stub and later the HTTP client
-    atlas-shell/      the Tauri app: tauri.conf.json, capabilities/, commands, web views
-    xtask/            bindings, check-deps (no crate but atlas-shell may depend on tauri), bench
+    syrinx-shell/      the Tauri app: tauri.conf.json, capabilities/, commands, web views
+    xtask/            bindings, check-deps (no crate but syrinx-shell may depend on tauri), bench
   ui/                 Vite + Svelte 5 + TypeScript (plain Vite: the chrome needs no SvelteKit router)
 ```
 
-**Rust-toolkit variant.** `atlas-shell` and `ui/` become `atlas-app` (window, toolkit, engine), `atlas-ui` (chrome widgets, which also draw `FormSpec` and `ListSpec`) and `plugin-forge-ui` and `plugin-notes-ui` (toolkit views that depend on their plugin crate and `atlas-ui`). The plugin logic crates, the core, the store and the search crate do not change, which is what keeps the toolkit decision reversible; `xtask check-deps` should also forbid toolkit dependencies outside those three.
+**Rust-toolkit variant.** `syrinx-shell` and `ui/` become `syrinx-app` (window, toolkit, engine), `syrinx-ui` (chrome widgets, which also draw `FormSpec` and `ListSpec`) and `plugin-forge-ui` and `plugin-notes-ui` (toolkit views that depend on their plugin crate and `syrinx-ui`). The plugin logic crates, the core, the store and the search crate do not change, which is what keeps the toolkit decision reversible; `xtask check-deps` should also forbid toolkit dependencies outside those three.
 
 ### Defer
 
@@ -174,7 +174,7 @@ The WASM host until a plugin from someone else exists; dynamic libraries for goo
 
 - `tauri-specta` has been a release candidate for two years; pin it, and keep the GitButler-style schema generator in mind.
 - Windows IPC was reported about 40 times slower than macOS on a 10 MB transfer; budget everything on Windows numbers, measured in Phase 0.
-- In-process built-ins share Atlas's fate: `catch_unwind` stops panics, but not an infinite loop or a crash in C code (tree-sitter, libgit2).
+- In-process built-ins share Syrinx's fate: `catch_unwind` stops panics, but not an infinite loop or a crash in C code (tree-sitter, libgit2).
 - Two stores (SQLite and tantivy) can disagree after a crash; idempotent upserts by id and replay from the cursor cover it.
 - `frizbee` is pre-1.0 and changes monthly; pin it, with `nucleo-matcher` as a drop-in fallback for scoring without typos.
 - The FTS5-against-tantivy evidence is one third-party benchmark; the bake-off is the real decision.
@@ -183,11 +183,11 @@ The WASM host until a plugin from someone else exists; dynamic libraries for goo
 ## Open questions for the owner
 
 1. Will plugins ever come from people other than you? If not, the WASM host may never be needed.
-2. Should Atlas index the text of the web pages you visit? It makes history searchable by content but grows the index and keeps a private record.
+2. Should Syrinx index the text of the web pages you visit? It makes history searchable by content but grows the index and keeps a private record.
 3. Should Fledge records be copied into the local index (instant, offline) or searched live through the API (always fresh, but a network round trip per keystroke)?
-4. Will the Atlas data folder ever sit in OneDrive or another synced folder? WAL breaks there, so the database would need to stay outside it.
+4. Will the Syrinx data folder ever sit in OneDrive or another synced folder? WAL breaks there, so the database would need to stay outside it.
 5. Are two stores (SQLite plus tantivy) acceptable for speed and typo tolerance, or do you prefer FTS5's single file if the bake-off is close?
-6. How many days of database snapshots should Atlas keep?
+6. How many days of database snapshots should Syrinx keep?
 
 ## Sources
 
