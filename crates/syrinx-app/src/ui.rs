@@ -774,8 +774,10 @@ impl BrowserView {
                 self.update_snapshot_lost();
                 self.abandon_import_write();
                 self.home.site_permissions.session_lost();
-                if !self.closing && self.failure.is_none() {
-                    self.fail("Local storage stopped. Restart Syrinx before continuing.");
+                if !self.closing {
+                    self.fail_unless_failed(
+                        "Local storage stopped. Restart Syrinx before continuing.",
+                    );
                 }
                 self.session_stopped = true;
                 if let Some(session) = self.session.take()

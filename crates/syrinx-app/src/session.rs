@@ -430,22 +430,17 @@ fn finish_worker(
     result: Result<(), SessionError>,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
-    // The reason is logged first, so a console still has it when the window is gone.
     if let Err(error) = &result {
+        // The reason is logged first, so a console still has it when the window is gone.
         stop::log_stop(error);
-    }
-    // A failed receiver is still visible to the caller through the worker's join result.
-    if let Err(error) = &result
-        && emit(
-            events,
-            SessionEvent::Failure {
-                error: error.clone(),
-                fatal: true,
-            },
-        )
-        .is_err()
-    {
-        return result;
+        let failure = SessionEvent::Failure {
+            error: error.clone(),
+            fatal: true,
+        };
+        // A failed receiver is still visible to the caller through the worker's join result.
+        if emit(events, failure).is_err() {
+            return result;
+        }
     }
     let delivered = emit(events, SessionEvent::Stopped);
     result.and(delivered)
@@ -464,19 +459,53 @@ fn run(
         return Ok(());
     };
     worker.acceptance = acceptance;
-    // From here the guard has accepted the folder, so the stop log may sit beside the database.
-    let mut collector = match start_usage(&data_dir, &usage, &store, startup, events) {
-        Ok(collector) => collector,
-        Err(error) => {
-            stop::keep_stop(&data_dir, &error);
-            return Err(error);
-        }
-    };
-    worker.usage = usage;
-    let result = worker.serve(&store, commands, events, &mut collector);
+    // The guard has accepted the folder; `serve_accepted` keeps any stop beside the database.
+    serve_accepted(usage, startup, store, worker, commands, events, &data_dir)
+}
+
+/// Serves commands on the accepted folder. The one place a stop is kept in the log, written
+/// before the store closes so the guard's lease is still held, as for usage.json.
+fn serve_accepted(
+    usage: Arc<UsageRecorder>,
+    startup: StartupFacts,
+    store: Store,
+    mut worker: Worker,
+    commands: mpsc::Receiver<SessionCommand>,
+    events: &UnboundedSender<SessionEvent>,
+    data_dir: &std::path::Path,
+) -> Result<(), SessionError> {
+    let result = serve_counted(
+        &usage,
+        startup,
+        &store,
+        &mut worker,
+        commands,
+        events,
+        data_dir,
+    );
+    if let Err(error) = &result {
+        stop::keep_stop(data_dir, error);
+    }
+    // A shutdown failure after the line is written goes to the window and stderr only.
+    finish_store(result, store.shutdown())
+}
+
+/// Loads usage counting, serves until the loop ends and saves the counts.
+fn serve_counted(
+    usage: &Arc<UsageRecorder>,
+    startup: StartupFacts,
+    store: &Store,
+    worker: &mut Worker,
+    commands: mpsc::Receiver<SessionCommand>,
+    events: &UnboundedSender<SessionEvent>,
+    data_dir: &std::path::Path,
+) -> Result<(), SessionError> {
+    let mut collector = start_usage(data_dir, usage, store, startup, events)?;
+    worker.usage = usage.clone();
+    let result = worker.serve(store, commands, events, &mut collector);
     // Counts are saved even after a storage failure; a failed save is reported, not fatal.
     let saved = collector.finish(Instant::now());
-    let result = match (result, saved) {
+    match (result, saved) {
         (Ok(()), Err(error)) => emit_recoverable(events, SessionError::Usage(error)),
         (Err(primary), Err(error)) => {
             // The storage failure is the one the window shows; this one is only logged.
@@ -484,13 +513,7 @@ fn run(
             Err(primary)
         }
         (result, Ok(())) => result,
-    };
-    let result = finish_store(result, store.shutdown());
-    // The guard accepted this folder at start; its lease is released now, as for usage.json.
-    if let Err(error) = &result {
-        stop::keep_stop(&data_dir, error);
     }
-    result
 }
 
 /// What happened while opening storage, counted once usage counting is known to be on.

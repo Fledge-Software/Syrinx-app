@@ -1,4 +1,5 @@
-//! Names what the session worker was doing when it stopped, so its reason is never lost (#9).
+//! Names what the session worker was doing when it stopped, and keeps that reason in a
+//! size-capped log beside the database so it is never lost (#9).
 
 use std::{
     fs::{self, OpenOptions},
@@ -8,7 +9,8 @@ use std::{
 
 use super::{SessionCommand, SessionError};
 
-/// Beside `syrinx.db`, so D13's synced-folder guard covers it; backups copy only the database.
+/// Beside `syrinx.db`. D13's synced-folder guard covers it only while its lease is held, so
+/// write it before the store closes; backups copy only the database.
 pub(super) const LOG_NAME: &str = "worker-stops.log";
 /// The previous log, replaced each time the current one reaches `LOG_LIMIT`.
 pub(super) const OLD_LOG_NAME: &str = "worker-stops.log.old";
@@ -70,7 +72,8 @@ pub(super) fn during(operation: &'static str) -> impl FnOnce(SessionError) -> Se
     }
 }
 
-/// The diagnostic line for a stopped worker: error categories and operation names only.
+/// The diagnostic line for a stopped worker: the error text and operation name, which may carry
+/// numbers (revisions, SQLite codes) but never an address or page content.
 pub(super) fn stop_line(error: &SessionError) -> String {
     format!("The session worker stopped: {error}")
 }

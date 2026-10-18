@@ -937,9 +937,6 @@ fn a_command_that_stops_the_worker_loop_names_its_reason_and_operation() {
     let shown = expected.to_string();
     assert!(shown.contains("Cannot save or read the session"), "{shown}");
     assert!(shown.ends_with("(while closing the active tab)"), "{shown}");
-    let logged = stop::stop_line(&expected);
-    assert_eq!(logged, format!("The session worker stopped: {shown}"));
-    assert!(!logged.contains("example.test"), "{logged}");
     drop(worker);
     store.shutdown().expect("close synthetic stop store");
     fixture.cleanup();
@@ -1002,13 +999,63 @@ fn a_full_stop_log_is_moved_aside_so_the_pair_stays_capped() {
     fixture.cleanup();
 }
 
+/// Runs the real `run` on the fixture's folder until it returns.
+fn run_in_thread(
+    fixture: &Fixture,
+    commands: mpsc::Receiver<SessionCommand>,
+    events: UnboundedSender<SessionEvent>,
+) -> thread::JoinHandle<Result<(), SessionError>> {
+    let data_dir = fixture.0.clone();
+    thread::spawn(move || run(data_dir, Arc::default(), false, commands, &events))
+}
+
+fn read_stop_log(fixture: &Fixture) -> Vec<String> {
+    let log = checked_io(fs::read_to_string(fixture.0.join(stop::LOG_NAME)));
+    log.lines().map(str::to_owned).collect()
+}
+
 #[test]
-fn command_operation_names_leave_out_their_contents() {
-    let command = SessionCommand::NavigateActive {
-        address: LIVE_ADDRESS.into(),
-    };
-    assert_eq!(command.operation(), "navigating the active tab");
-    assert_eq!(SessionCommand::Shutdown.operation(), "shutting down");
+fn run_keeps_the_stop_of_a_command_that_ends_the_loop_in_the_log() {
+    let fixture = Fixture::new();
+    let (commands, receiver) = mpsc::channel();
+    let (sender, mut events) = unbounded();
+    let worker = run_in_thread(&fixture, receiver, sender);
+    // Once the restored tabs arrive the loop is serving; the window then goes away.
+    while !matches!(next_any_event(&mut events), SessionEvent::State(_)) {}
+    drop(events);
+    commands
+        .send(SessionCommand::NewTab {
+            address: LIVE_ADDRESS.into(),
+        })
+        .expect("queue the command whose answer cannot be delivered");
+
+    let error = worker
+        .join()
+        .expect("join the run thread")
+        .expect_err("a lost window stops the loop");
+
+    // The log holds exactly the returned error's line, naming the operation, with no address.
+    let lines = read_stop_log(&fixture);
+    assert_eq!(lines, [stop::stop_line(&error)]);
+    assert!(lines[0].contains("(while "), "{lines:?}");
+    assert!(!lines[0].contains("example.test"), "{lines:?}");
+    fixture.cleanup();
+}
+
+#[test]
+fn run_keeps_a_stop_that_happens_while_usage_counting_loads() {
+    let fixture = Fixture::new();
+    let (_commands, receiver) = mpsc::channel();
+    let (sender, events) = unbounded();
+    drop(events);
+
+    let error = run_in_thread(&fixture, receiver, sender)
+        .join()
+        .expect("join the run thread")
+        .expect_err("no window to report usage status to");
+
+    assert_eq!(read_stop_log(&fixture), [stop::stop_line(&error)]);
+    fixture.cleanup();
 }
 
 #[test]
