@@ -378,6 +378,20 @@ you found it in the commit message, not here.
   `gpui-base-0.7.1/src/input/base/state.rs`, line 4464,
   `gpui-pre-0.3.8/src/window/a11y.rs`, `set_focus`, and DW-60's probe in
   [`docs/p1-36-accessibility.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-36-accessibility.md) (source-confirmed and probed).
+- **GPUI answers `WM_NCHITTEST` from the last pointer position it saw, not
+  the point Windows asks about.** Windows sends the hit test before the move
+  that would update GPUI, so a pointer arriving on ✕ from □ got □'s answer:
+  the snap-layouts flyout on ✕ and "Minimize" on □ (#11). Syrinx's main
+  window is subclassed in `syrinx_platform::caption` to answer the three
+  caption buttons from the hit test's own point; keep the buttons square,
+  as tall as the title bar and flush with the top-right corner, or update
+  that geometry, and never draw anything clickable over that corner: a
+  click there acts as the caption button beneath it. A probe that measures this must be per-monitor DPI aware:
+  a DPI-unaware process reads scaled rectangles but sends raw `lparam`s.
+  Source: `gpui-pre-0.3.8/src/window.rs`, `on_hit_test_window_control`
+  (uses `mouse_hit_test`), and a `SendMessage` probe on 2026-10-18 that got
+  the previously hovered button's code at every button before the fix and
+  the right one after it (measured).
 - **GPUI draws above a WebView2 child window, not below it.** Note 08 read
   the code as the page covering GPUI; the Phase 0 spike found the opposite
   on this machine. Don't rely on either for layout: keep the page card's

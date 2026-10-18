@@ -1,9 +1,11 @@
 //! Draws the canvas home page: name, Customize, the search pill, Quick access and plugins (P1-28).
 
 use gpui::{
-    Context, Div, FontWeight, InteractiveElement, ParentElement, Role, Stateful,
-    StatefulInteractiveElement, Styled, Toggled, Window, div, px,
+    Context, Div, FontWeight, Image, ImageFormat, InteractiveElement, ObjectFit, ParentElement,
+    Role, Stateful, StatefulInteractiveElement, Styled, StyledImage, Toggled, Window, div, img, px,
 };
+use std::sync::{Arc, OnceLock};
+
 use syrinx_core::usage::Feature;
 use syrinx_core::{
     BuiltInPlugin, Destination, DestinationEdit, DestinationSurface, QuickDestinations,
@@ -27,6 +29,17 @@ const QUICK_ACCESS_COLUMNS: u16 = 8;
 const QUICK_TILE_SIZE: f32 = 72.;
 const QUICK_TILE_RADIUS: f32 = 18.;
 const SEARCH_PILL_MAX_WIDTH: f32 = 760.;
+const LOGO_TILE_SIZE: f32 = 30.;
+
+/// The brand's 64 px icon tile (`design/brand/icon`), about twice the logo tile's size, for sharp HiDPI.
+static LOGO_PNG: &[u8] = include_bytes!("../../../../design/brand/icon/syrinx-icon-64.png");
+
+/// The Syrinx bird tile, built once so each frame clones an Arc instead of copying and hashing the bytes.
+fn logo_image() -> Arc<Image> {
+    static LOGO: OnceLock<Arc<Image>> = OnceLock::new();
+    LOGO.get_or_init(|| Arc::new(Image::from_bytes(ImageFormat::Png, LOGO_PNG.to_vec())))
+        .clone()
+}
 
 /// Home, Customize and tile-editing state, owned by the browser window.
 #[derive(Default)]
@@ -116,16 +129,10 @@ impl BrowserView {
             .items_center()
             .gap(px(12.))
             .child(
-                div()
-                    .size(px(30.))
+                img(logo_image())
+                    .size(px(LOGO_TILE_SIZE))
                     .rounded(px(9.))
-                    .bg(rgba(palette.accent.fill))
-                    .text_color(rgba(palette.accent.on_fill))
-                    .font_weight(FontWeight::BOLD)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child("A"),
+                    .object_fit(ObjectFit::Contain),
             )
             .child(
                 div()

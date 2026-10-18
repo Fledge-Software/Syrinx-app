@@ -73,6 +73,56 @@ pub struct TabMetadata {
     pub badge: Option<String>,
 }
 
+/// The address a new, blank tab holds until the owner navigates somewhere.
+pub const BLANK_ADDRESS: &str = "about:blank";
+
+/// How a web tab came to exist; an adopted popup is not shown as Home while it is blank.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PageOrigin {
+    Ordinary,
+    AdoptedPopup,
+}
+
+impl PageOrigin {
+    /// The origin for a tab that is, or is not, an adopted popup.
+    pub fn from_adopted_popup(adopted: bool) -> Self {
+        if adopted {
+            Self::AdoptedPopup
+        } else {
+            Self::Ordinary
+        }
+    }
+}
+
+/// What every view calls a blank tab; spelled here and nowhere else.
+const HOME_TITLE: &str = "Home";
+
+impl TabMetadata {
+    /// Whether this is a blank tab shown as Home; an adopted popup still awaiting its first
+    /// address is not, so its row keeps the address.
+    pub fn is_home(&self, origin: PageOrigin) -> bool {
+        self.address == BLANK_ADDRESS && origin == PageOrigin::Ordinary
+    }
+
+    /// The name Home takes the place of the title with, if this tab is a blank one. Views
+    /// that fall back to the address themselves (the palette) use this directly.
+    pub fn home_title(&self, origin: PageOrigin) -> Option<&'static str> {
+        self.is_home(origin).then_some(HOME_TITLE)
+    }
+
+    /// The one name the sidebar shows for an open tab: Home for a blank tab, otherwise the
+    /// title, or the address when the page has no title.
+    pub fn display_title(&self, origin: PageOrigin) -> String {
+        if let Some(home) = self.home_title(origin) {
+            return home.to_owned();
+        }
+        if self.title.is_empty() {
+            return self.address.clone();
+        }
+        self.title.clone()
+    }
+}
+
 impl fmt::Debug for TabMetadata {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Never include browsing or document content in diagnostic formatting.
@@ -617,7 +667,32 @@ impl fmt::Debug for TabModel {
 
 #[cfg(test)]
 mod tests {
-    use super::{Activation, TabError, TabKind, TabMetadata, TabModel};
+    use super::{Activation, BLANK_ADDRESS, PageOrigin, TabError, TabKind, TabMetadata, TabModel};
+
+    #[test]
+    fn a_blank_tab_is_called_home_and_other_tabs_use_title_then_address() {
+        let metadata = |title: &str, address: &str| TabMetadata {
+            title: title.to_owned(),
+            address: address.to_owned(),
+            ..TabMetadata::default()
+        };
+        assert_eq!(
+            metadata("", BLANK_ADDRESS).display_title(PageOrigin::Ordinary),
+            "Home"
+        );
+        assert_eq!(
+            metadata("", BLANK_ADDRESS).display_title(PageOrigin::AdoptedPopup),
+            BLANK_ADDRESS
+        );
+        assert_eq!(
+            metadata("Example", "https://example.test/").display_title(PageOrigin::Ordinary),
+            "Example"
+        );
+        assert_eq!(
+            metadata("", "https://example.test/").display_title(PageOrigin::Ordinary),
+            "https://example.test/"
+        );
+    }
 
     #[test]
     fn live_id_exhaustion_preserves_open_state() -> Result<(), TabError> {
