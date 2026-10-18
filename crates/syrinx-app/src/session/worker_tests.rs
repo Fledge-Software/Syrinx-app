@@ -83,6 +83,8 @@ impl Fixture {
             "usage.json",
             "usage.json.new",
             "usage.json.damaged",
+            stop::LOG_NAME,
+            stop::OLD_LOG_NAME,
         ] {
             remove_if_present(&self.0.join(name), false);
         }
@@ -940,6 +942,67 @@ fn a_command_that_stops_the_worker_loop_names_its_reason_and_operation() {
     assert!(!logged.contains("example.test"), "{logged}");
     drop(worker);
     store.shutdown().expect("close synthetic stop store");
+    fixture.cleanup();
+}
+
+#[test]
+fn a_stop_is_appended_to_the_log_beside_the_database_without_an_address() {
+    let fixture = Fixture::new();
+    checked_io(fs::create_dir(&fixture.0));
+    let stopped = SessionError::During {
+        operation: SessionCommand::NavigateActive {
+            address: LIVE_ADDRESS.into(),
+        }
+        .operation(),
+        error: Box::new(SessionError::Store(StoreError::StaleRevision {
+            expected: 4,
+            actual: 5,
+        })),
+    };
+    stop::append_stop(&fixture.0, &SessionError::ClockUnavailable).expect("write first stop");
+    stop::append_stop(&fixture.0, &stopped).expect("append second stop");
+
+    // Both stops are kept, one per line, in order; the address never reaches the file.
+    let log = checked_io(fs::read_to_string(fixture.0.join(stop::LOG_NAME)));
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            stop::stop_line(&SessionError::ClockUnavailable),
+            stop::stop_line(&stopped)
+        ]
+    );
+    assert!(
+        lines[1].ends_with("(while navigating the active tab)"),
+        "{log}"
+    );
+    assert!(!log.contains("example.test"), "{log}");
+    assert!(!fixture.0.join(stop::OLD_LOG_NAME).exists());
+    fixture.cleanup();
+}
+
+#[test]
+fn a_full_stop_log_is_moved_aside_so_the_pair_stays_capped() {
+    let fixture = Fixture::new();
+    checked_io(fs::create_dir(&fixture.0));
+    let current = fixture.0.join(stop::LOG_NAME);
+    let old = fixture.0.join(stop::OLD_LOG_NAME);
+    let full = "x".repeat(usize::try_from(stop::LOG_LIMIT).expect("small cap"));
+    checked_io(fs::write(&old, "stale previous log"));
+    checked_io(fs::write(&current, &full));
+
+    stop::append_stop(&fixture.0, &SessionError::ClockUnavailable).expect("rotate and append");
+
+    // The full log replaced the previous one, and the new line starts a fresh file.
+    assert_eq!(checked_io(fs::read_to_string(&old)), full);
+    assert_eq!(
+        checked_io(fs::read_to_string(&current)),
+        format!(
+            "{}
+",
+            stop::stop_line(&SessionError::ClockUnavailable)
+        )
+    );
     fixture.cleanup();
 }
 

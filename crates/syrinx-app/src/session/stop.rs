@@ -1,6 +1,19 @@
 //! Names what the session worker was doing when it stopped, so its reason is never lost (#9).
 
+use std::{
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    path::Path,
+};
+
 use super::{SessionCommand, SessionError};
+
+/// Beside `syrinx.db`, so D13's synced-folder guard covers it; backups copy only the database.
+pub(super) const LOG_NAME: &str = "worker-stops.log";
+/// The previous log, replaced each time the current one reaches `LOG_LIMIT`.
+pub(super) const OLD_LOG_NAME: &str = "worker-stops.log.old";
+/// About 300 stop lines; with the previous file kept, at most twice this on disk.
+pub(super) const LOG_LIMIT: u64 = 32 * 1024;
 
 /// Names shared with the loop, which answers these two commands before `handle`.
 pub(super) const CHANGING_USAGE: &str = "changing usage counting";
@@ -63,7 +76,39 @@ pub(super) fn stop_line(error: &SessionError) -> String {
 }
 
 /// Writes the stop reason to stderr, the app's diagnostic stream; a launch from Windows
-/// has no console, so there it reaches only the window.
+/// has no console, so `keep_stop` also writes it to the stop log.
 pub(super) fn log_stop(error: &SessionError) {
     eprintln!("{}", stop_line(error));
+}
+
+/// Adds the stop line to the log in `directory`; a failed write is reported, never fatal.
+pub(super) fn keep_stop(directory: &Path, error: &SessionError) {
+    if let Err(problem) = append_stop(directory, error) {
+        eprintln!(
+            "Cannot write the session worker's stop log ({:?}, code {:?})",
+            problem.kind(),
+            problem.raw_os_error()
+        );
+    }
+}
+
+/// Appends one stop line, first moving a full log aside so the pair stays small.
+pub(super) fn append_stop(directory: &Path, error: &SessionError) -> io::Result<()> {
+    let path = directory.join(LOG_NAME);
+    rotate_if_full(&path, &directory.join(OLD_LOG_NAME))?;
+    let mut log = OpenOptions::new().create(true).append(true).open(&path)?;
+    writeln!(log, "{}", stop_line(error))
+}
+
+/// Replaces the previous log with the current one once it reaches `LOG_LIMIT`.
+fn rotate_if_full(path: &Path, old: &Path) -> io::Result<()> {
+    let length = match fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if length < LOG_LIMIT {
+        return Ok(());
+    }
+    fs::rename(path, old)
 }

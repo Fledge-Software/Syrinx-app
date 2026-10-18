@@ -464,7 +464,14 @@ fn run(
         return Ok(());
     };
     worker.acceptance = acceptance;
-    let mut collector = start_usage(&data_dir, &usage, &store, startup, events)?;
+    // From here the guard has accepted the folder, so the stop log may sit beside the database.
+    let mut collector = match start_usage(&data_dir, &usage, &store, startup, events) {
+        Ok(collector) => collector,
+        Err(error) => {
+            stop::keep_stop(&data_dir, &error);
+            return Err(error);
+        }
+    };
     worker.usage = usage;
     let result = worker.serve(&store, commands, events, &mut collector);
     // Counts are saved even after a storage failure; a failed save is reported, not fatal.
@@ -478,7 +485,11 @@ fn run(
         }
         (result, Ok(())) => result,
     };
-    finish_store(result, store.shutdown())
+    let result = finish_store(result, store.shutdown());
+    if let Err(error) = &result {
+        stop::keep_stop(&data_dir, error);
+    }
+    result
 }
 
 /// What happened while opening storage, counted once usage counting is known to be on.
