@@ -1472,7 +1472,8 @@ fn sync_tabs(
     Ok(())
 }
 
-/// Upserts one open tab; its title comes from the core rule the sidebar uses too.
+/// Upserts one open tab; a blank tab takes the core's Home title, as in the sidebar. Other
+/// titles stay as reported, since the palette falls back to the address itself.
 fn upsert_tab(
     catalogue: &mut Catalogue,
     popups: &HashSet<TabId>,
@@ -1480,7 +1481,9 @@ fn upsert_tab(
 ) -> Result<(), SessionError> {
     let origin = PageOrigin::from_adopted_popup(popups.contains(&tab.id));
     let mut row = entry(Target::Tab(tab.id), &tab.metadata, true);
-    row.title = tab.metadata.display_title(origin);
+    if let Some(home) = tab.metadata.home_title(origin) {
+        row.title = home.to_owned();
+    }
     catalogue.upsert(row).map_err(SessionError::Search)
 }
 
@@ -1718,6 +1721,31 @@ mod tests {
         )?;
         let row = catalogue.get(Target::Tab(tab)).expect("synthetic tab row");
         assert_eq!(row.title, "Home");
+        Ok(())
+    }
+
+    #[test]
+    fn an_untitled_page_keeps_an_empty_palette_title() -> Result<(), SessionError> {
+        let mut model = TabModel::new();
+        let mut catalogue = Catalogue::new();
+        let id = model
+            .open(
+                TabKind::Web,
+                TabMetadata {
+                    address: "https://untitled.example.test/".to_owned(),
+                    ..TabMetadata::default()
+                },
+                Activation::Foreground,
+            )
+            .map_err(SessionError::Model)?;
+        sync_catalogue(
+            &mut catalogue,
+            &HashSet::new(),
+            &TabModelSnapshot::default(),
+            &model.snapshot(),
+        )?;
+        let row = catalogue.get(Target::Tab(id)).expect("synthetic tab row");
+        assert_eq!(row.title, "");
         Ok(())
     }
 

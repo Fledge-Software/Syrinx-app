@@ -104,11 +104,17 @@ impl TabMetadata {
         self.address == BLANK_ADDRESS && origin == PageOrigin::Ordinary
     }
 
-    /// The one name every view (sidebar and palette) shows for an open tab: Home for a blank
-    /// tab, otherwise the title, or the address when the page has no title.
+    /// The name Home takes the place of the title with, if this tab is a blank one. Views
+    /// that fall back to the address themselves (the palette) use this directly.
+    pub fn home_title(&self, origin: PageOrigin) -> Option<&'static str> {
+        self.is_home(origin).then_some(HOME_TITLE)
+    }
+
+    /// The one name the sidebar shows for an open tab: Home for a blank tab, otherwise the
+    /// title, or the address when the page has no title.
     pub fn display_title(&self, origin: PageOrigin) -> String {
-        if self.is_home(origin) {
-            return HOME_TITLE.to_owned();
+        if let Some(home) = self.home_title(origin) {
+            return home.to_owned();
         }
         if self.title.is_empty() {
             return self.address.clone();
