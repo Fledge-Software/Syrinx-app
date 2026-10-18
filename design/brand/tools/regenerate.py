@@ -55,6 +55,7 @@ def main():
     hawk = hawk_paths()
     write_tile_svgs(hawk)
     rasters = render_icon_sizes()
+    render_small_extras()
     pack_ico(ICON_DIR / "syrinx.ico", rasters, ICO_SIZES)
     write_web_kit(rasters)
     print("Brand assets regenerated.")
@@ -105,7 +106,6 @@ def render_icon_sizes():
         render(BRAND / variant, size, target)
         check_tile(target, size, rounded=True)
         rasters[size] = target
-    render_small_extras()
     return rasters
 
 

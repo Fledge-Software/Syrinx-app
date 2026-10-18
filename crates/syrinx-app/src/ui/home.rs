@@ -132,7 +132,6 @@ impl BrowserView {
             .child(
                 img(logo_image())
                     .size(px(LOGO_TILE_SIZE))
-                    .rounded(px(9.))
                     .object_fit(ObjectFit::Contain),
             )
             .child(
