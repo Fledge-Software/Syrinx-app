@@ -44,6 +44,8 @@ SMALL_LIMIT = 32
 ICON_SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256, 512]
 ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
 FAVICON_ICO_SIZES = [16, 32, 48]
+# Syrinx's own 30 px interface marks (Home's logo tile) draw the small variant at twice their size.
+SMALL_EXTRA_SIZES = [64]
 
 
 def main():
@@ -53,6 +55,7 @@ def main():
     hawk = hawk_paths()
     write_tile_svgs(hawk)
     rasters = render_icon_sizes()
+    render_small_extras()
     pack_ico(ICON_DIR / "syrinx.ico", rasters, ICO_SIZES)
     write_web_kit(rasters)
     print("Brand assets regenerated.")
@@ -104,6 +107,14 @@ def render_icon_sizes():
         check_tile(target, size, rounded=True)
         rasters[size] = target
     return rasters
+
+
+def render_small_extras():
+    # The small tile at sizes above SMALL_LIMIT, named apart so the normal icon set is unchanged.
+    for size in SMALL_EXTRA_SIZES:
+        target = ICON_DIR / f"syrinx-icon-small-{size}.png"
+        render(BRAND / "syrinx-icon-small.svg", size, target)
+        check_tile(target, size, rounded=True)
 
 
 def render(svg, size, target):
