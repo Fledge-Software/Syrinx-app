@@ -31,17 +31,17 @@ records these specific fixes after 3.53.2:
 | 3.53.4 | `bf70dadc2d` | Crash-damaged super-journal records with zeroed name/checksum could prevent required rollback. |
 | 3.53.3 | `246f46614f` | Extended DOS paths were mistaken for network paths when choosing shared-memory locks. |
 
-These are conditional defects, not evidence of damage to an Atlas database.
-Atlas's ordinary single-database WAL transactions do not normally create
+These are conditional defects, not evidence of damage to an Syrinx database.
+Syrinx's ordinary single-database WAL transactions do not normally create
 multi-database super-journals. P1-04 nevertheless handles damaged input by
 design, and a read-only connection does not eliminate every affected path.
 
 The cached 3.53.2 `sqlite3/sqlite3.c` confirms the first issue in
 `pager_playback`: it passes `Pager.pTmpSpace` to `readSuperJournal` using the
-VFS pathname limit. A VFS is SQLite's file-access implementation. Atlas uses
+VFS pathname limit. A VFS is SQLite's file-access implementation. Syrinx uses
 the standard locking `win32-longpath` VFS, whose limit is 65,534 bytes; the
 ordinary database page size is 4,096 bytes. This establishes a relevant
-buffer-size relationship, not proof that Atlas has exercised the full
+buffer-size relationship, not proof that Syrinx has exercised the full
 trigger. The P1-03 filesystem guard checks file identities and locations,
 not journal contents. Keep long-path support; changing the VFS to evade
 this review would break an already tested requirement.
@@ -65,7 +65,7 @@ f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8
 Its packaged `.cargo_vcs_info.json` identifies upstream base commit
 `e88f112bef7899234a497baed5cc3c3d553deeb8`, path `libsqlite3-sys`.
 Use the published package as the baseline, because its normalized manifest
-is the version actually resolved and audited by Atlas.
+is the version actually resolved and audited by Syrinx.
 
 Replace exactly these four files with their complete contents from
 [rusqlite commit `901f9946efdaaa289e6b1c5bd56dc67f4b651e51`](https://github.com/rusqlite/rusqlite/commit/901f9946efdaaa289e6b1c5bd56dc67f4b651e51):
@@ -117,7 +117,7 @@ by this review.
 
 A direct Cargo Git override to the import commit is not the proposed route.
 Its [manifest](https://raw.githubusercontent.com/rusqlite/rusqlite/901f9946efdaaa289e6b1c5bd56dc67f4b651e51/libsqlite3-sys/Cargo.toml)
-still declares 0.38.1, while Atlas's published rusqlite 0.40.2 requires
+still declares 0.38.1, while Syrinx's published rusqlite 0.40.2 requires
 libsqlite3-sys `^0.38.2` on Windows. Retain the audited 0.38.2 manifest and
 wrapper rather than changing rusqlite or mixing in upstream master changes.
 Waiting for a published package containing the fixes is the alternative if
@@ -164,7 +164,7 @@ additional files unchanged from the audited 0.38.2 package:
 | Existing build-script watched input | `sqlite3/wasm32-wasi-vfs.c` |
 
 This gives 17 upstream files in the proposed vendor directory, plus a
-separate Atlas provenance document. The WASI source is not compiled on
+separate Syrinx provenance document. The WASI source is not compiled on
 Windows; keeping it avoids inventing a missing path for the unchanged build
 script's unconditional change-watcher declaration. The small alternate
 bindings and headers preserve the published wrapper layout without enabling
@@ -175,7 +175,7 @@ standalone `Cargo.lock`, `Upgrade.md`, `.gitignore`, and Cargo-cache metadata
 such as `.cargo-ok` and `.cargo_vcs_info.json`. Record these omissions and the
 original archive/VCS identity in provenance. Do not copy the second large
 SQLCipher amalgamation merely to reproduce inactive package contents. The
-trimmed package supports only Atlas's audited Windows bundled feature set;
+trimmed package supports only Syrinx's audited Windows bundled feature set;
 the unchanged manifest still declares optional features, but this proposal
 does not claim to support or authorize enabling SQLCipher or other paths.
 Inventory every copied/omitted file rather than silently treating this as a
@@ -184,7 +184,7 @@ complete unmodified registry package.
 Add a root-manifest `[patch.crates-io]` entry pointing `libsqlite3-sys` to
 that directory, retaining package version 0.38.2. Explicitly exclude the
 vendor directory from workspace membership. Cargo otherwise includes local
-path dependencies automatically; the dependency must not become an Atlas
+path dependencies automatically; the dependency must not become an Syrinx
 product crate. These are the documented
 [patch](https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html#the-patch-section)
 and [workspace exclusion](https://doc.rust-lang.org/cargo/reference/workspaces.html#the-members-and-exclude-fields)
@@ -209,13 +209,13 @@ changes are included.
 `AGENTS.md` prohibits `TODO` and `FIXME` markers in the codebase. The existing
 cached SQLite source contains both, and an unmodified upstream import can
 retain them. Approval must explicitly allow those existing upstream comments
-inside this one vendor directory. Atlas-authored files remain subject to the
-rule, and new Atlas work is recorded in the plan rather than vendor comments.
+inside this one vendor directory. Syrinx-authored files remain subject to the
+rule, and new Syrinx work is recorded in the plan rather than vendor comments.
 
 `crates/xtask/src/main.rs` currently contains no marker-scanning step, so no
 gate check needs removal. Keep the existing product formatting, Clippy,
 tests and dependency-policy checks intact. The workspace exclusion preserves
-the dependency's status as outside code; it does not permit lowering Atlas
+the dependency's status as outside code; it does not permit lowering Syrinx
 lint levels or hiding test failures. Any future marker scan should apply the
 same precise vendor boundary, not a repository-wide exception.
 
@@ -229,7 +229,7 @@ same precise vendor boundary, not a repository-wide exception.
 2. Confirm the lockfile/source change and active Windows feature graph are
    exactly the intended patch. Recheck build environment overrides listed in
    `docs/dev/dependency-audit.md`. Confirm workspace metadata excludes the vendor
-   crate and still includes every Atlas crate.
+   crate and still includes every Syrinx crate.
 3. Add a meaningful runtime version/source-ID assertion using the linked
    SQLite engine, so selecting an unpatched registry or system build cannot
    silently pass. Review the relevant fixed C paths and retain the existing
@@ -251,14 +251,14 @@ same precise vendor boundary, not a repository-wide exception.
 interruption or power loss before completion can leave an unusable output.
 A later application-controlled rename still needs its own durability
 design. These are [SQLite's documented guarantees](https://www.sqlite.org/lang_vacuum.html),
-not results of a new Atlas backup test.
+not results of a new Syrinx backup test.
 
 Cancellation is cooperative and can race with successful completion. Use a
 dedicated operation connection/interrupt handle, wait for the result, and
 close it before cleanup or promotion. The
 [interrupt contract](https://www.sqlite.org/c3ref/interrupt.html) does not
 provide a fixed deadline. Candidate validation needs full `integrity_check`,
-`foreign_key_check`, exact Atlas schema/version checks and snapshot
+`foreign_key_check`, exact Syrinx schema/version checks and snapshot
 invariants: [quick_check alone omits index correspondence and UNIQUE checks](https://www.sqlite.org/pragma.html#pragma_quick_check).
 Reject unexpected candidate sidecars. Preserve the live database and its
 WAL together; [the WAL can contain committed state](https://www.sqlite.org/wal.html#the_wal_file).
@@ -272,7 +272,7 @@ On 2026-10-10, the complete `cargo xtask check` passed with the patched
 engine: dependency boundaries, formatting, Clippy with warnings denied,
 all 78 tests, documentation-test selection and the console application
 launch. This preserves the P1-03 suite and adds
-`crates/atlas-store/tests/sqlite_engine.rs`, which queries the linked C
+`crates/syrinx-store/tests/sqlite_engine.rs`, which queries the linked C
 library's actual version and source ID. Both match the approved 3.53.4
 source. The existing long-path and sidecar-boundary integration tests passed.
 

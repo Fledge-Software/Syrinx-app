@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Atlas command palette</title>
+<title>Syrinx command palette</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -94,7 +94,7 @@ button,input{font:inherit;color:inherit}
 </button>
 </div>
 
-<!-- web search stays pinned: Atlas is a browser first -->
+<!-- web search stays pinned: Syrinx is a browser first -->
 <div style="flex-shrink: 0; padding: 6px 10px; border-top: 1px solid {{k.panelDiv}}">
 <button style="height: 40px; width: 100%; box-sizing: border-box; border: 0; border-radius: 10px; background: transparent; padding: 0 10px; display: flex; align-items: center; gap: 12px; color: {{k.text2b}}; font-size: 13.5px; text-align: left; cursor: pointer">
 <span aria-hidden="true" style="width: 24px; height: 24px; flex-shrink: 0; border-radius: 7px; background: {{k.plug.neutralBg}}; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{k.plug.neutral}}" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"></path></svg></span>
@@ -122,8 +122,8 @@ button,input{font:inherit;color:inherit}
 </label>
 <div style="display: flex; gap: 12px">
 <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
-<span id="atlas-src-label" style="font-size: 12px; color: {{k.iconDim}}">Source</span>
-<button aria-haspopup="listbox" aria-labelledby="atlas-src-label atlas-src-value" style="height: 36px; box-sizing: border-box; border-radius: 9px; background: {{k.input}}; border: 1px solid {{k.inputLine}}; padding: 0 10px 0 12px; display: flex; align-items: center; color: {{k.text2b}}; font-size: 13.5px; text-align: left; cursor: pointer"><span id="atlas-src-value" style="flex-grow: 1">Referral</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{k.text3}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+<span id="syrinx-src-label" style="font-size: 12px; color: {{k.iconDim}}">Source</span>
+<button aria-haspopup="listbox" aria-labelledby="syrinx-src-label syrinx-src-value" style="height: 36px; box-sizing: border-box; border-radius: 9px; background: {{k.input}}; border: 1px solid {{k.inputLine}}; padding: 0 10px 0 12px; display: flex; align-items: center; color: {{k.text2b}}; font-size: 13.5px; text-align: left; cursor: pointer"><span id="syrinx-src-value" style="flex-grow: 1">Referral</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{k.text3}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
 </div>
 <label style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: {{k.iconDim}}">Est. value
 <input defaultValue="$4,200" style="height: 36px; box-sizing: border-box; border-radius: 9px; background: {{k.input}}; border: 1px solid {{k.inputLine}}; padding: 0 12px; color: {{k.text2b}}; font-size: 13.5px; outline: none">

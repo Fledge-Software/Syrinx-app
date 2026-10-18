@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Atlas browsing a web page</title>
+<title>Syrinx browsing a web page</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -22,7 +22,7 @@ button,input{font:inherit;color:inherit}
 <div aria-hidden="true" style="position: absolute; left: 0; top: 0; width: 1440px; height: 900px; z-index: -1; background: {{k.materialBg}}; backdrop-filter: {{k.materialBlur}}"></div>
 </sc-if>
 <sc-if value="{{k.grain}}" hint-placeholder-val="{{ false }}">
-<svg aria-hidden="true" width="1440" height="900" style="position: absolute; left: 0; top: 0; z-index: -1; opacity: 0.09; pointer-events: none"><filter id="atlas-grain-web"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"></feTurbulence><feColorMatrix type="saturate" values="0"></feColorMatrix></filter><rect width="1440" height="900" filter="url(#atlas-grain-web)"></rect></svg>
+<svg aria-hidden="true" width="1440" height="900" style="position: absolute; left: 0; top: 0; z-index: -1; opacity: 0.09; pointer-events: none"><filter id="syrinx-grain-web"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"></feTurbulence><feColorMatrix type="saturate" values="0"></feColorMatrix></filter><rect width="1440" height="900" filter="url(#syrinx-grain-web)"></rect></svg>
 </sc-if>
 
 <sc-if value="{{expanded}}" hint-placeholder-val="{{ true }}">
@@ -48,7 +48,7 @@ button,input{font:inherit;color:inherit}
 </sc-if>
 <span style="flex-grow: 1"></span>
 <button aria-label="Downloads" title="Downloads (Ctrl J)" style="width: 32px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg></button>
-<button aria-label="Atlas menu" style="width: 32px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg></button>
+<button aria-label="Syrinx menu" style="width: 32px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg></button>
 <span style="width: 8px"></span>
 <button aria-label="Minimize" style="width: 46px; height: 36px; border: 0; padding: 0; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 12h16"></path></svg></button>
 <button aria-label="Maximize" style="width: 46px; height: 36px; border: 0; padding: 0; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1"></rect></svg></button>

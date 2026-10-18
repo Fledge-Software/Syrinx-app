@@ -2,8 +2,8 @@
 
 The product is named Syrinx (owner decision, 2026-10-12, in
 `docs/decisions.md`). The spec below was written when its working name was
-Atlas, so it still says Atlas. This is the owner's spec as written on
-2026-10-09, kept verbatim apart from formatting. Design decisions made since then are in
+Atlas. This is the owner's spec as written on 2026-10-09, kept verbatim
+apart from formatting and, since 2026-10-17, the name. Design decisions made since then are in
 `design/README.md`.
 
 ## What this is
