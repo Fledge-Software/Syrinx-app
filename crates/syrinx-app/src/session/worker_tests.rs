@@ -83,6 +83,8 @@ impl Fixture {
             "usage.json",
             "usage.json.new",
             "usage.json.damaged",
+            stop::LOG_NAME,
+            stop::OLD_LOG_NAME,
         ] {
             remove_if_present(&self.0.join(name), false);
         }
@@ -878,6 +880,181 @@ fn failed_close_save_reports_fatal_failure_without_acknowledging_native_cleanup(
     // The worker holds the deletion journal until it is dropped.
     drop(worker);
     store.shutdown().expect("close synthetic failure store");
+    fixture.cleanup();
+}
+
+#[test]
+fn a_command_that_stops_the_worker_loop_names_its_reason_and_operation() {
+    let fixture = Fixture::new();
+    let lease =
+        Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic stop store"));
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let store = Store::open(lease).expect("open synthetic stop store");
+    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let (sender, mut events) = unbounded();
+    worker
+        .handle(
+            &store,
+            SessionCommand::NewTab {
+                address: SAVED_ADDRESS.into(),
+            },
+            &sender,
+        )
+        .expect("commit synthetic page");
+    let acknowledged = state(&mut events);
+
+    // Inject the failure: storage advances behind the worker, so its next save is refused.
+    let revision = store
+        .save(acknowledged.revision, acknowledged.model.clone())
+        .expect("advance synthetic store revision");
+    let cause = SessionError::Store(StoreError::StaleRevision {
+        expected: acknowledged.revision,
+        actual: revision,
+    });
+    let expected = SessionError::During {
+        operation: "closing the active tab",
+        error: Box::new(cause),
+    };
+    let (commands, receiver) = mpsc::channel();
+    commands
+        .send(SessionCommand::CloseActive)
+        .expect("queue the failing command");
+    let (mut usage, _) =
+        UsageCollector::load(Arc::default(), &fixture.0, local_today(), Instant::now());
+
+    // The real loop ends on the refusal, and the stop path reports it before `Stopped`.
+    let result = worker.serve(&store, receiver, &sender, &mut usage);
+    assert_eq!(result, Err(expected.clone()));
+    assert_eq!(finish_worker(result, &sender), Err(expected.clone()));
+    assert!(matches!(next_event(&mut events), SessionEvent::State(_)));
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::Failure { error, fatal: true } if error == expected
+    ));
+    assert!(matches!(next_event(&mut events), SessionEvent::Stopped));
+
+    // What the owner sees and the log line both name the cause and the operation, no address.
+    let shown = expected.to_string();
+    assert!(shown.contains("Cannot save or read the session"), "{shown}");
+    assert!(shown.ends_with("(while closing the active tab)"), "{shown}");
+    drop(worker);
+    store.shutdown().expect("close synthetic stop store");
+    fixture.cleanup();
+}
+
+#[test]
+fn a_stop_is_appended_to_the_log_beside_the_database_without_an_address() {
+    let fixture = Fixture::new();
+    checked_io(fs::create_dir(&fixture.0));
+    let stopped = SessionError::During {
+        operation: SessionCommand::NavigateActive {
+            address: LIVE_ADDRESS.into(),
+        }
+        .operation(),
+        error: Box::new(SessionError::Store(StoreError::StaleRevision {
+            expected: 4,
+            actual: 5,
+        })),
+    };
+    stop::append_stop(&fixture.0, &SessionError::ClockUnavailable).expect("write first stop");
+    stop::append_stop(&fixture.0, &stopped).expect("append second stop");
+
+    // Both stops are kept, one per line, in order; the address never reaches the file.
+    let log = checked_io(fs::read_to_string(fixture.0.join(stop::LOG_NAME)));
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            stop::stop_line(&SessionError::ClockUnavailable),
+            stop::stop_line(&stopped)
+        ]
+    );
+    assert!(
+        lines[1].ends_with("(while navigating the active tab)"),
+        "{log}"
+    );
+    assert!(!log.contains("example.test"), "{log}");
+    assert!(!fixture.0.join(stop::OLD_LOG_NAME).exists());
+    fixture.cleanup();
+}
+
+#[test]
+fn a_full_stop_log_is_moved_aside_so_the_pair_stays_capped() {
+    let fixture = Fixture::new();
+    checked_io(fs::create_dir(&fixture.0));
+    let current = fixture.0.join(stop::LOG_NAME);
+    let old = fixture.0.join(stop::OLD_LOG_NAME);
+    let full = "x".repeat(usize::try_from(stop::LOG_LIMIT).expect("small cap"));
+    checked_io(fs::write(&old, "stale previous log"));
+    checked_io(fs::write(&current, &full));
+
+    stop::append_stop(&fixture.0, &SessionError::ClockUnavailable).expect("rotate and append");
+
+    // The full log replaced the previous one, and the new line starts a fresh file.
+    assert_eq!(checked_io(fs::read_to_string(&old)), full);
+    assert_eq!(
+        checked_io(fs::read_to_string(&current)),
+        format!("{}\n", stop::stop_line(&SessionError::ClockUnavailable))
+    );
+    fixture.cleanup();
+}
+
+/// Runs the real `run` on the fixture's folder until it returns.
+fn run_in_thread(
+    fixture: &Fixture,
+    commands: mpsc::Receiver<SessionCommand>,
+    events: UnboundedSender<SessionEvent>,
+) -> thread::JoinHandle<Result<(), SessionError>> {
+    let data_dir = fixture.0.clone();
+    thread::spawn(move || run(data_dir, Arc::default(), false, commands, &events))
+}
+
+fn read_stop_log(fixture: &Fixture) -> Vec<String> {
+    let log = checked_io(fs::read_to_string(fixture.0.join(stop::LOG_NAME)));
+    log.lines().map(str::to_owned).collect()
+}
+
+#[test]
+fn run_keeps_the_stop_of_a_command_that_ends_the_loop_in_the_log() {
+    let fixture = Fixture::new();
+    let (commands, receiver) = mpsc::channel();
+    let (sender, mut events) = unbounded();
+    let worker = run_in_thread(&fixture, receiver, sender);
+    // Once the restored tabs arrive the loop is serving; the window then goes away.
+    while !matches!(next_any_event(&mut events), SessionEvent::State(_)) {}
+    drop(events);
+    commands
+        .send(SessionCommand::NewTab {
+            address: LIVE_ADDRESS.into(),
+        })
+        .expect("queue the command whose answer cannot be delivered");
+
+    let error = worker
+        .join()
+        .expect("join the run thread")
+        .expect_err("a lost window stops the loop");
+
+    // The log holds exactly the returned error's line, naming the operation, with no address.
+    let lines = read_stop_log(&fixture);
+    assert_eq!(lines, [stop::stop_line(&error)]);
+    assert!(lines[0].contains("(while "), "{lines:?}");
+    assert!(!lines[0].contains("example.test"), "{lines:?}");
+    fixture.cleanup();
+}
+
+#[test]
+fn run_keeps_a_stop_that_happens_while_usage_counting_loads() {
+    let fixture = Fixture::new();
+    let (_commands, receiver) = mpsc::channel();
+    let (sender, events) = unbounded();
+    drop(events);
+
+    let error = run_in_thread(&fixture, receiver, sender)
+        .join()
+        .expect("join the run thread")
+        .expect_err("no window to report usage status to");
+
+    assert_eq!(read_stop_log(&fixture), [stop::stop_line(&error)]);
     fixture.cleanup();
 }
 
