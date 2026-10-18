@@ -65,24 +65,22 @@ pub fn install(hwnd: isize, button_size: f32) -> Result<(), &'static str> {
 }
 
 /// Which caption button lies under a client-area point, all values in logical pixels.
-pub fn button_at(x: f32, y: f32, client_width: f32, button_size: f32) -> Option<CaptionButton> {
+fn button_at(x: f32, y: f32, client_width: f32, button_size: f32) -> Option<CaptionButton> {
+    let buttons = CaptionButton::LEFT_TO_RIGHT;
+    let first_left = client_width - buttons.len() as f32 * button_size;
     let in_strip = button_size > 0. && (0. ..button_size).contains(&y);
-    let from_right = client_width - x;
-    if !in_strip || from_right.is_nan() || from_right <= 0. {
+    if !in_strip || !(first_left..client_width).contains(&x) {
         return None;
     }
-    let slot_from_right = (from_right / button_size).floor() as usize;
-    let slot = CaptionButton::LEFT_TO_RIGHT
-        .len()
-        .checked_sub(slot_from_right + 1)?;
-    CaptionButton::LEFT_TO_RIGHT.get(slot).copied()
+    let slot = ((x - first_left) / button_size).floor() as usize;
+    buttons.get(slot).copied()
 }
 
 /// Correct GPUI's hit-test answer with the button actually under the pointer.
 ///
 /// Resize edges and other answers GPUI computes from the real point are kept. A button code
 /// for a point that is not on that button is GPUI's stale answer, so it becomes client area.
-pub fn corrected_answer(gpui: isize, under_pointer: Option<CaptionButton>, style: u32) -> isize {
+fn corrected_answer(gpui: isize, under_pointer: Option<CaptionButton>, style: u32) -> isize {
     let button_answers = [HTMINBUTTON, HTMAXBUTTON, HTCLOSE];
     let caption_answers = [HTCLIENT, HTCAPTION, HTNOWHERE];
     if !is_one_of(gpui, &button_answers) && !is_one_of(gpui, &caption_answers) {

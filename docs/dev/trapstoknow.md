@@ -385,7 +385,8 @@ you found it in the commit message, not here.
   window is subclassed in `syrinx_platform::caption` to answer the three
   caption buttons from the hit test's own point; keep the buttons square,
   as tall as the title bar and flush with the top-right corner, or update
-  that geometry. A probe that measures this must be per-monitor DPI aware:
+  that geometry, and never draw anything clickable over that corner: a
+  click there acts as the caption button beneath it. A probe that measures this must be per-monitor DPI aware:
   a DPI-unaware process reads scaled rectangles but sends raw `lparam`s.
   Source: `gpui-pre-0.3.8/src/window.rs`, `on_hit_test_window_control`
   (uses `mouse_hit_test`), and a `SendMessage` probe on 2026-10-18 that got
