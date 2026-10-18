@@ -215,7 +215,7 @@ impl BrowserView {
         cx.spawn_in(window, async move |view, cx| {
             while let Some(event) = receiver.next().await {
                 let closed = event.finishes_entry();
-                let delivered = view.update_in(cx, |view, window, cx| {
+                let delivered = update_in_main(&view, cx, |view, window, cx| {
                     if !is_current(view.open_entry(), entry) {
                         return false;
                     }

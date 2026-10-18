@@ -90,7 +90,7 @@ impl BrowserView {
         let started = Instant::now();
         cx.spawn_in(window, async move |view, cx| {
             loop {
-                let keep_watching = view.update_in(cx, |view, window, cx| {
+                let keep_watching = update_in_main(&view, cx, |view, window, cx| {
                     view.sample_peek(started.elapsed(), window, cx)
                 });
                 match keep_watching {
@@ -168,7 +168,7 @@ impl BrowserView {
     }
 
     /// Places the popup now and opens it after this update ends (see `open_requested_peek`).
-    fn request_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn request_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_peek_editor();
         let main_bounds = window.bounds();
         let scale = window.scale_factor();
@@ -276,20 +276,11 @@ impl BrowserView {
             if !cx.windows().contains(&main) {
                 return;
             }
-            if main
-                .update(cx, |_, window, cx| {
-                    if view
-                        .update(cx, |view, cx| {
-                            view.apply_peek_action(generation, action, window, cx)
-                        })
-                        .is_err()
-                    {
-                        eprintln!("Sidebar action arrived after its browser was removed.");
-                    }
-                })
-                .is_err()
-            {
-                eprintln!("Sidebar action could not reach its owner window.");
+            let applied = update_in_main(&view, cx, |view, window, cx| {
+                view.apply_peek_action(generation, action, window, cx)
+            });
+            if let Err(error) = applied {
+                eprintln!("Sidebar action could not reach its browser window: {error:#}");
             }
         });
     }
@@ -368,6 +359,11 @@ impl BrowserView {
                 false
             }
         }
+    }
+
+    /// The open peek popup's window, if one is on screen.
+    pub(super) fn peek_window(&self) -> Option<gpui::AnyWindowHandle> {
+        self.peek.as_ref().map(|peek| peek.window.into())
     }
 
     /// Whether `window` is the open peek popup. Unlike `!is_main_window`, it is false while a
