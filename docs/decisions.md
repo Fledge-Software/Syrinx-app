@@ -10,6 +10,42 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+## 2026-10-16
+
+- **Planned work lives in GitHub issues; `docs/` holds only the app and its
+  operations.** The plans, slice notes, handoffs, prompts and review records
+  had become build history, and the owner wanted `docs/` to describe Syrinx
+  rather than how it was built. Plans 2–4 became four epics with one issue
+  per phase (#25 plugin runtime, #32 Fledge, #35 Notes, #42 Forge), each
+  listing its approved slices, because the 2026-10-15 WASM decision means
+  the slice boundaries are re-cut anyway (#27). Plan 1's remaining code
+  work has its own epic. Plan 1's "Decisions taken" moved, unchanged, to
+  `docs/architecture-decisions.md`; contributor material that agents and
+  tooling read moved to `docs/dev/`; the research notes became the wiki's
+  Background pages; the removed files stay readable at commit `af3de53`,
+  linked from the wiki's History page. Rejected: copying developer docs only
+  to the wiki (agents load `LOCAL-DEV.md` and the traps from disk, and the
+  vendor-patch exceptions cite their reviews by path) and keeping the
+  records in a `docs/archive/` folder.
+- **Labels stay simple.** GitHub's default labels plus the area labels
+  `plugin-runtime`, `fledge`, `notes` and `forge`, and `blocked`. Decision
+  issues use `question`. Epics are titled "Epic: …"; there are no
+  milestones. The owner chose this over the Fledge set (`epic`, `decision`,
+  sizes, priorities) because Syrinx is now mostly tuning and feature
+  additions; the set may grow when feature work needs it, but not before.
+- **Deferred-work markers cite issues.** A marker is written `TODO(#n)`, and
+  `cargo xtask check` requires `#n` in `docs/dev/deferred-work.md`. This
+  replaces the `DW-n` register in Plan 1 (owner rule 2026-10-11, same
+  intent). Rejected: keeping DW numbers in their own file, which would keep
+  two numbering schemes.
+- **Acceptance checks name the Graphite and Paper presets plus one custom
+  theme made in the theme editor,** replacing "all five palettes" in the
+  plugin plans, because only two presets ship since 2026-10-15 and a custom
+  theme catches hard-coded colours.
+- **The WASM research note (#26) may start before Plan 1 closes.** It is
+  reading and writing, not code; the plugin interface, host and template
+  still wait for Plan 1's exit, as decided on 2026-10-15.
+
 ## 2026-10-15
 
 - **Themes are built by the owner in an editor; only Graphite and Paper are
@@ -76,7 +112,7 @@ folder names.
   asked, in chat, for Disney+, Hulu, YouTube and Google's services to work
   without shipping Chromium, because a bundled Chromium (CEF, Electron) adds
   hundreds of megabytes and a new release every four to eight weeks
-  (`docs/research/01-shell-and-engine.md`), and because the owner wants
+  ([`docs/research/01-shell-and-engine.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/01-shell-and-engine.md)), and because the owner wants
   Syrinx's own settings, not Chrome's. Both engines come with the operating
   system, so Syrinx ships neither, and both play protected video through a
   DRM module the system supplies: WebView2 carries Google's Widevine (L3,
@@ -93,14 +129,14 @@ folder names.
   licence and signing); a Firefox (Gecko) fork (no embedding API, dropped on
   2026-10-09). A possible third build for Widevine where neither system
   engine provides it, chiefly Linux, is a proposal, not a decision:
-  `docs/proposals/widevine-third-build.md`.
+  [`docs/proposals/widevine-third-build.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/proposals/widevine-third-build.md).
 
 - **The usage switch's approved note is restored (AN-02).** With the report
   preview, Save report… and Copy report built, Customize's Usage report note
   again reads the approved sentence, "Nothing is sent anywhere. You can
   view, export or delete the counts at any time.", replacing the shortened
   note the owner chose on 2026-10-14 until AN-02 landed. This restores the
-  approved proposal (`docs/proposals/an-01-02-local-analytics.md`); it is
+  approved proposal (`docs/usage-report-privacy.md`); it is
   recorded here because the 2026-10-14 entry promised it.
 
 - **Ctrl W on a focused sidebar row closes that row's live page (DW-63).**
@@ -114,8 +150,8 @@ folder names.
   does nothing rather than fall through and close the active page of a
   different row (the agent's choice, approved in review). The rejected
   alternative was Backspace, which no row uses but which does not mean
-  "close" anywhere else in Syrinx. See DW-63 in the plan's "Deferred work"
-  register and `docs/p1-36-accessibility.md`, "DW-63".
+  "close" anywhere else in Syrinx. See DW-63 in the plan's ["Deferred work"
+  register](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work) and [`docs/p1-36-accessibility.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-36-accessibility.md), "DW-63".
 
 ## 2026-10-14
 
@@ -141,7 +177,7 @@ folder names.
   break-in to the website or Vercel alone still cannot. The key must still be
   created outside every agent session, and no agent sees the private key or
   the secret's value. Building this is an agent slice that changes the
-  release workflow; see DW-30 in the plan's "Deferred work" register.
+  release workflow; see DW-30 in the plan's ["Deferred work" register](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work).
 
 - **Sidebar rows get their own right-click menu (DW-63 follow-up).** When
   choosing Ctrl W for DW-63 (recorded under 2026-10-15), the owner also
@@ -149,7 +185,7 @@ folder names.
   other actions (Close tab, Remove saved page, Rename and Remove folder),
   each showing its key, so every row action is reachable by mouse as well
   as by keyboard. Today a right-click anywhere in the sidebar opens only
-  the general ⋯ menu. See DW-63 in the plan's "Deferred work" register.
+  the general ⋯ menu. See DW-63 in the plan's ["Deferred work" register](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work).
 
 - **Syrinx ships as a setup program that installs and updates itself
   (P1-37).** Release 0.2.0 shipped a zip holding `syrinx.exe` and PowerShell
@@ -177,7 +213,7 @@ folder names.
     redistributable.
   - This replaces the "portable zip plus scripts" recommendation as the way
     people install Syrinx. The scripts remain the manual route. See
-    `docs/p1-37-installer-design.md`, "The setup program".
+    `docs/installing.md`, "The setup program".
 
 - **The focus ring shows only after keyboard input, decided by Syrinx's own
   keyboard-or-pointer flag (DW-62).** P1-36 drew the ring on any focus, so
@@ -195,7 +231,7 @@ folder names.
   key a focused page hands over (F6, Tab out of the page and the other
   shortcuts), and draws the ring only in keyboard mode. This needs no GPUI
   change and keeps the ring visible after F6 from a page. See
-  `docs/p1-36-accessibility.md`, "DW-62".
+  [`docs/p1-36-accessibility.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-36-accessibility.md), "DW-62".
 
 - **GPUI's existing Windows network and remote-call features are approved,
   pinned to the crates that ask for them (DW-68; narrows D9's check, not
@@ -256,7 +292,7 @@ folder names.
   P1-40.
 - **AN-01's frozen command list is approved as built.** The proposal made the
   owner's review of the 20 built-in command counters plus `command.other`
-  (listed in `docs/an-01-local-analytics.md`) a done condition; the owner
+  (listed in [`docs/an-01-local-analytics.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/an-01-local-analytics.md)) a done condition; the owner
   approved them unchanged. A new built-in command still needs a new schema
   version and the owner's approval.
 - **The usage switch's note is shortened until AN-02.** The approved note
@@ -289,7 +325,7 @@ folder names.
 ## 2026-10-13
 
 - **P1-39 update delivery is approved as proposed.** The owner answered yes
-  to all nine questions in `docs/proposals/p1-39-update-delivery.md`.
+  to all nine questions in `docs/update-delivery.md`.
   Syrinx checks for updates only when the owner presses "Check for updates"
   in Settings or the palette, never at start-up or in the background;
   start-up checks, a periodic check, BITS background transfers and
@@ -495,7 +531,7 @@ folder names.
   imported again. Keeping the preview folder was rejected for that reason.
 
 - **Page text is read with one DevTools snapshot, never a script (P1-25).**
-  The owner approved `docs/proposals/p1-25-page-text-extraction.md` as
+  The owner approved `docs/page-text-indexing.md` as
   recommended. Syrinx captures an eligible page's visible text with a single
   `DOMSnapshot.captureSnapshot` call and reads only response headers, so
   nothing runs inside any page. Google's own sites (YouTube included), banks
@@ -505,7 +541,7 @@ folder names.
   the owner. This keeps D35's no-injection rule absolute.
 
 - **Local usage counting is approved, off until switched on (AN-01/02).**
-  The owner approved `docs/proposals/an-01-02-local-analytics.md` as
+  The owner approved `docs/usage-report-privacy.md` as
   recommended: the fixed version 1 schema, turning it off deletes the counts,
   30-day periods with two kept, never backed up or restored, and export only
   as a JSON file the owner saves or copies. AN-01 follows P1-39 and AN-02
@@ -557,7 +593,7 @@ folder names.
   acceptance.
 - **Deferred-work markers are allowed when tracked.** `TODO`, `FIXME` and
   `HACK` may appear in Syrinx code if they carry a `DW-n` tag listed in the
-  plan's "Deferred work" register; each becomes an issue once on GitHub.
+  plan's ["Deferred work" register](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work); each becomes an issue once on GitHub.
   `cargo xtask check` enforces this.
 - **Two dependency approvals.** Vendoring `gpui-pre-windows 0.3.8` for the
   D37 idle patch, with its unchanged upstream TODO comments, and adding
@@ -668,7 +704,7 @@ folder names.
 ## 2026-10-09
 
 These entries depart from `docs/spec.md`. Each is argued in
-`docs/plans/Syrinx v1 — Plan.md`, decision number in brackets.
+`docs/architecture-decisions.md`, decision number in brackets.
 
 - **v1 runs on Windows 11 only** (D2). No macOS or Linux work or testing in
   v1, so the Phase 0 verdict is for Windows, not per OS.
@@ -687,7 +723,7 @@ These entries depart from `docs/spec.md`. Each is argued in
   Firefox export bookmarks only as the standard HTML bookmarks file, so
   Syrinx imports that file. v1 imports no history and no passwords; password
   import arrives with a password manager after v1. This replaces "Import is a
-  CSV file only" below. Recorded in `docs/plans/Syrinx v1 — Plan.md` (D10,
+  CSV file only" below. Recorded in `docs/architecture-decisions.md` (D10,
   D14, D15).
 - **Performance is the deciding goal for the engine and UI.** The owner wants
   Syrinx to be as efficient as possible: low memory per tab, fast start, low
@@ -696,7 +732,7 @@ These entries depart from `docs/spec.md`. Each is argued in
   and logic still live in Rust, as the spec says.
 - **The browser engine is open again.** The spec's direction (Tauri 2 with OS
   web views) is one option, alongside Servo, Chromium through CEF, and
-  hybrids. The research in `docs/research/` compares them. The choice is the
+  hybrids. The research in [`docs/research/`](https://github.com/Fledge-Software/Syrinx-app/tree/af3de53/docs/research) compares them. The choice is the
   first decision of the v1 plan and is made with the owner, not by default.
   The rule "embed an existing engine, don't build one" still holds.
 - **Import is a CSV file only for v1.** Syrinx doesn't read other browsers'

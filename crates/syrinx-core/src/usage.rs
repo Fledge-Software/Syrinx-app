@@ -1,7 +1,7 @@
 //! Local usage counting (D39, AN-01/02): a fixed schema of counters, kept only while switched on.
 //!
-//! The approved design is `docs/proposals/an-01-02-local-analytics.md`; what was built is in
-//! `docs/an-01-local-analytics.md` and `docs/an-02-report-export.md`.
+//! The approved design is `docs/usage-report-privacy.md`; what was built is in
+//! `https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/an-01-local-analytics.md` and `https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/an-02-report-export.md`.
 
 mod codec;
 mod period;

@@ -52,7 +52,7 @@ pub enum InstallError {
     AfterSwap(Box<InstallError>),
     /// Fetching a file from the update host failed (P1-39c).
     Transfer(TransferProblem),
-    /// No release key is pinned, so nothing could be verified (DW-30).
+    /// No release key is pinned, so nothing could be verified (#55).
     NoReleaseKeys,
     /// A step failed and cleaning up after it also failed.
     Incomplete {

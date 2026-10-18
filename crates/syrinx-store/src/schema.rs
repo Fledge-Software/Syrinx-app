@@ -135,7 +135,7 @@ const HISTORY_VISITS_INDEX: &str =
 const HISTORY_TIME_INDEX: &str =
     "CREATE INDEX history_visits_by_time ON history_visits(visited_at)";
 
-// Owner preferences as documented keys and text values; `docs/p1-28-29-home-settings.md` lists them.
+// Owner preferences as documented keys and text values; `https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-28-29-home-settings.md` lists them.
 const SETTINGS_TABLE: &str = "CREATE TABLE settings (
     key TEXT PRIMARY KEY NOT NULL CHECK(length(key) BETWEEN 1 AND 64),
     value TEXT NOT NULL CHECK(length(value) <= 256)

@@ -1,5 +1,5 @@
 @AGENTS.md
-@docs/trapstoknow.md
+@docs/dev/trapstoknow.md
 
 # Syrinx
 
@@ -14,27 +14,27 @@ conditionally approved GPUI base (D37's idle-patch gate still applies).
   `docs/spec.md`, loaded below. Its "Decisions already made" are not to be
   relitigated.
 - The owner's decisions since the spec are in `docs/decisions.md`; where it
-  and the spec disagree, it wins. The v1 plan, with every decision argued,
-  is `docs/plans/Syrinx v1 — Plan.md`.
+  and the spec disagree, it wins. The v1 decisions D1–D49, each argued with
+  what was rejected, are in `docs/architecture-decisions.md`. Work is tracked
+  in GitHub issues on `Fledge-Software/Syrinx-app`.
 - The design target and the decisions made since the spec are in
   `design/README.md`. The live canvas is the source of truth for the design;
   `design/canvas/` is a snapshot of it.
 
 # At the start of every session
 
-`AGENTS.md` (the rules) and `docs/trapstoknow.md` (the traps) are loaded
+`AGENTS.md` (the rules) and `docs/dev/trapstoknow.md` (the traps) are loaded
 above, and `docs/spec.md` below. Before picking up work, also read:
 
 - `docs/decisions.md`: the owner's decisions since the spec, which win over
   it.
-- `docs/plans/Syrinx v1 — Plan.md`: its "Decisions taken" table, its "Open
-  threads" and the part of the plan the work you are taking comes from. The
-  owner approved all four plans on 2026-10-10; their decisions are settled.
+- `docs/architecture-decisions.md`: the v1 decisions, which are settled.
   Where they disagree with the files above, those files still win.
+- The GitHub issue you are working, and its epic.
 - `design/README.md`, before changing anything the owner sees.
-- The research note in `docs/research/` behind the area you are working in,
-  for the reasoning (notes 07 and 08 correct parts of the earlier ones).
-- `docs/LOCAL-DEV.md`, once the scaffold has created it: how to run the app
+- The wiki's Background page behind the area you are working in, for the
+  reasoning (notes 07 and 08 correct parts of the earlier ones).
+- `docs/dev/LOCAL-DEV.md`, once the scaffold has created it: how to run the app
   and the gate on this machine.
 
 # Writing readable code
@@ -61,7 +61,7 @@ above, and `docs/spec.md` below. Before picking up work, also read:
   independent review approves it and `cargo xtask check` passes, merge it to
   `main` (see `docs/decisions.md`). GitHub is not a prerequisite. The owner-requested planning baseline is
   committed as `2c80273`; the scaffold records the exact development commands
-  in `docs/LOCAL-DEV.md`.
+  in `docs/dev/LOCAL-DEV.md`.
 - **Commit only when the owner asks.** (The v1 plan may be committed as it
   is written, to its local branch.)
 - **Work the phases in order.** Phase 0, the feasibility spike, comes first;
@@ -79,7 +79,7 @@ above, and `docs/spec.md` below. Before picking up work, also read:
   the PR branch and push; do not rebase, amend or force-push somebody else's
   branch.
 - **Build and test on this machine.** Syrinx is a Windows desktop app with no
-  server or deploy. Run `cargo xtask check` as defined in `docs/LOCAL-DEV.md`:
+  server or deploy. Run `cargo xtask check` as defined in `docs/dev/LOCAL-DEV.md`:
   dependency checks, formatting, Clippy, tests and an application smoke run
   under D38's `local` profile. After changing anything the owner sees, run
   the app and look at the window.

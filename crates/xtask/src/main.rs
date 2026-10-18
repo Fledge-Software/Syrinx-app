@@ -127,7 +127,7 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
 }
 
 fn check_deferred_work(root: &Path) -> Result<(), String> {
-    // Allow deferred-work markers only when the plan's register tracks them.
+    // Allow deferred-work markers only when docs/dev/deferred-work.md lists their issue.
     let violations = deferred_work::check(root)?;
     if !violations.is_empty() {
         return Err(violations.join(

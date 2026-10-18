@@ -1,7 +1,7 @@
 # Syrinx: rules for agents
 
 These are the rules for any agent working in this repository. `CLAUDE.md`
-loads this file and `docs/trapstoknow.md`; other agents should read both
+loads this file and `docs/dev/trapstoknow.md`; other agents should read both
 before starting. The rules say how to work and how to write; the traps say
 what has already been found to go wrong.
 
@@ -19,7 +19,7 @@ A person reads, reviews and changes everything you write. Write for them.
 - A reason belongs in a comment only where the code cannot show it, such as
   a WebView2 quirk, a rule that keeps Google sign-in working, or a trap. Keep
   it to one or two lines, at that spot. Longer reasoning goes in the commit
-  message, the plan or `docs/trapstoknow.md`.
+  message, the issue or `docs/dev/trapstoknow.md`.
 
 **Structure keeps the main path obvious.**
 - Keep nesting shallow. Return early on guard conditions (invert the `if`,
@@ -43,9 +43,10 @@ failures instead of swallowing them. Follow the same shape in product code.
 Syrinx is a Rust Cargo workspace on Windows 11. P1-01 provides `syrinx-app`
 and `xtask`; P1-02 adds the window-independent `syrinx-core` model. Later
 crates are added in their approved slice.
-The layout proposed in `docs/research/03-core-architecture.md` ("Crate
-layout") is the starting point, adjusted for the engine and interface
-decisions made since (D3 and D4 in the plan), and the scaffold settles it:
+The layout proposed in research note 03 (wiki: `Background-03-core-architecture`,
+"Crate layout") is the starting point, adjusted for the engine and interface
+decisions made since (D3 and D4 in `docs/architecture-decisions.md`), and the
+scaffold settles it:
 
 - `crates/syrinx-plugin-api` holds the `Plugin` trait and the data types that
   cross it. It depends on no other Syrinx crate.
@@ -60,16 +61,20 @@ decisions made since (D3 and D4 in the plan), and the scaffold settles it:
   `syrinx-platform` owns WebView2 and Win32. Other product crates remain free
   of toolkit/web-view dependencies so the core stays testable without a window.
 - Notes and Forge edit in CodeMirror 6 inside a small local web view (D28).
-- `docs/` holds the spec, the owner's decisions, the plans, the research
-  notes and `docs/trapstoknow.md`. `docs/LOCAL-DEV.md` says how to run the
-  app and the gate on this machine; dependency audits live beside it.
+- `docs/` holds the spec, the owner's decisions, the v1 architecture
+  decisions and the documents for the app and its operations. `docs/dev/`
+  holds contributor material agents and tooling read: `LOCAL-DEV.md` (how to
+  run the app and the gate on this machine), `trapstoknow.md`, the dependency
+  audits, the deferred-work register and `vendor-reviews/`. The research
+  notes are the wiki's Background pages; removed plans and records are linked
+  from the wiki's History page.
 - `design/` holds the design snapshot and the original mockup.
 
 Phase 0's spike is throwaway code (D16). Keep it apart from the product
 crates, and carry nothing from it into them without rewriting it to these
 rules.
 
-**The gate** is defined in `docs/LOCAL-DEV.md`:
+**The gate** is defined in `docs/dev/LOCAL-DEV.md`:
 
 ```
 cargo xtask check
@@ -81,8 +86,8 @@ on this machine before calling a change done.
 
 ## Read this first: what is the source of truth
 
-The owner approved the four plans on 2026-10-10. Read these in this order of
-authority:
+The owner approved the four v1 plans on 2026-10-10; their work is now
+tracked in GitHub issues. Read these in this order of authority:
 
 1. **`docs/decisions.md`**, the owner's decisions since the spec. Where it
    and the spec disagree, it wins.
@@ -91,30 +96,34 @@ authority:
 3. **`design/README.md`** and the live design canvas it links, for anything
    the owner sees. When the canvas and the snapshot in `design/canvas/`
    disagree, the canvas wins.
-4. **`docs/plans/Syrinx v1 — Plan.md`**, the v1 plan. Its "Decisions taken"
-   table argues the standing and later decisions with what was rejected and
-   why. It is `active`, and its "Decisions taken" are settled. Where it
-   disagrees with the three above, they win and the disagreement goes under
-   its "Open threads". Plans 2–4 are also approved, with implementation
-   queued in order; they live in `docs/plans/`.
+4. **`docs/architecture-decisions.md`**, the v1 decisions (Plan 1's
+   "Decisions taken"). It argues the standing and later decisions with what
+   was rejected and why, and they are settled. Where it disagrees with the
+   three above, they win and the disagreement goes to a GitHub issue. Plans
+   2–4 are also approved, with implementation queued in order through their
+   epics (#25 plugin runtime, #32 Fledge, #35 Notes, #42 Forge).
 
 - **Settled decisions stay settled.** If code or a task seems to need a
   different decision, stop and ask; do not quietly build around one.
 - **Research notes are read for reasoning, never for current fact.** The
-  notes in `docs/research/` are dated and track fast-moving projects (GPUI
-  snapshots, wry, the WebView2 Evergreen runtime). Notes 07 and 08 correct
-  parts of the earlier notes, and note 03 assumes Tauri, which D3 and D4
-  replaced. Where a note disagrees with the plan or the decisions, they win.
+  notes, now the wiki's Background pages, are dated and track fast-moving
+  projects (GPUI snapshots, wry, the WebView2 Evergreen runtime). Notes 07
+  and 08 correct parts of the earlier notes, and note 03 assumes Tauri, which
+  D3 and D4 replaced. Where a note disagrees with the decisions, they win.
 - **The product is Syrinx; Atlas was only a working name.** The owner
   named the product Syrinx on 2026-10-12, and on 2026-10-17 asked that the
   docs and the wiki say Syrinx throughout, older records included. Write
   Syrinx everywhere. "Atlas" stays only where it is a real identifier: the
   old branch `claude/plan-atlas-v1`, the old install's folders and registry
-  keys (`%LOCALAPPDATA%\Atlas\data`, `AtlasBrowser`), raw logs under
-  `docs/evidence/`, and vendored code, where GPUI's texture atlas is
-  unrelated.
+  keys (`%LOCALAPPDATA%\Atlas\data`, `AtlasBrowser`), raw evidence logs,
+  and vendored code, where GPUI's texture atlas is unrelated. Files retired
+  on 2026-10-16, such as the plans, are read at
+  [af3de53](https://github.com/Fledge-Software/Syrinx-app/tree/af3de53/docs/plans)
+  and keep the old name there.
 - **Anything marked ⚠️ or "unverified" is checked before anything is built on
-  it.** The plan's "Still unproven" section lists them.
+  it.** Plan 1's "Still unproven" section
+  ([at af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md))
+  lists them; an open one belongs in a GitHub issue.
 
 ## Operator work
 
@@ -125,7 +134,7 @@ Some work needs the owner, not an agent:
   or Hulu playback test, because they need the owner's own accounts. An agent
   never enters, stores or asks for the owner's credentials;
 - checking whether the owner's Google Workspace admin console turns on
-  device checks (the plan's "Open threads");
+  device checks (an open thread, tracked in GitHub issues);
 - creating the GitHub repository and choosing the account or organisation it
   lives under (D16);
 - making the repository public (the licence, MPL-2.0, was chosen on
@@ -172,7 +181,7 @@ time:
 - **Do not start later work while earlier work is open.** Out-of-order work
   is how foundations get skipped: a palette built before the tab model it
   reads, or a plugin built before the trait it implements.
-- **Any exception to strict order is named in the plan.** For example, the
+- **Any exception to strict order is named in the plan or its epic.** For example, the
   real Fledge client is not part of plan 2; it waits for Fledge's Stage C
   (D24). Follow the plan's exception; do not invent one.
 - **If the next task is blocked** (waiting on the owner, Fledge or a
@@ -194,7 +203,8 @@ style problem.
 - **One generic tab model.** The sidebar and the palette read from it, never
   from per-feature code (spec, "Architecture direction").
 
-**Page web views and Google** (`docs/research/07-google-sign-in-and-drm.md`):
+**Page web views and Google** (research note 07, wiki:
+`Background-07-google-sign-in-and-drm`):
 
 - **Never set a custom user agent on a page web view**: not wry's
   `with_user_agent`, not the `--user-agent` browser argument, not a DevTools
@@ -213,7 +223,8 @@ style problem.
   or a site the owner excluded, and the extraction method must inject nothing
   on an excluded site.
 - **Pass Syrinx's own browser arguments.** wry's defaults switch SmartScreen
-  off (`docs/research/08-gpui-and-wry-on-windows.md`, 5.1); Syrinx keeps it on.
+  off (note 08, wiki: `Background-08-gpui-and-wry-on-windows`, 5.1); Syrinx
+  keeps it on.
 - Use the Evergreen WebView2 runtime only, and add no DRM code: Widevine
   lives inside the runtime.
 
@@ -222,7 +233,7 @@ style problem.
 - **A plugin crate depends only on `syrinx-plugin-api`.** Built-in plugins use
   the same API a third party will, so only owned, serialisable values cross
   the trait and a plugin reaches Syrinx only through its `Host`
-  (`docs/research/03-core-architecture.md`, "The plugin trait").
+  (note 03, wiki: `Background-03-core-architecture`, "The plugin trait").
 - **Fledge sits behind a trait.** The Fledge plugin calls Fledge only through
   the `fledge-client` trait, on the stand-in client until the real client is
   built after Fledge's Stage C (D24). Syrinx authenticates as an ordinary OAuth
@@ -277,12 +288,12 @@ style problem.
 
 - **Syrinx is MPL-2.0 (owner, 2026-10-13); no GPL code.** Outside code comes in only
   under permissive licences (MIT, Apache-2.0, BSD) or as whole MPL-2.0 files
-  kept under MPL (the plan's "Open threads"). Zed's editor and `languages`
+  kept under MPL (Plan 1's "Open threads"). Zed's editor and `languages`
   crate are GPL-3.0 and stay out.
 - **Approved narrow licence exception, 2026-10-10:** `unicode-ident 1.0.26`
   may carry Unicode-3.0 alongside its MIT/Apache-2.0 terms. The owner approved
   it for the pinned Windows bindings' build dependency. This does not choose
-  Syrinx's licence or approve unrelated packages; see `docs/dependency-audit.md`.
+  Syrinx's licence or approve unrelated packages; see `docs/dev/dependency-audit.md`.
 - **Approved narrow licence exception, 2026-10-10:** `foldhash 0.2.0` may use
   Zlib for the pinned SQLite prepared-statement cache's dependency. The owner
   approved that package and version, not a general licence-policy expansion.
@@ -290,12 +301,12 @@ style problem.
   `libsqlite3-sys 0.38.2` wrapper with SQLite 3.53.4 and matching bindings from
   upstream commit `901f9946efdaaa289e6b1c5bd56dc67f4b651e51`. Preserve the
   existing Rust dependency versions/features and verify the source identities
-  as specified in `docs/p1-04-sqlite-maintenance-review.md`. Unchanged upstream
+  as specified in `docs/dev/vendor-reviews/p1-04-sqlite-maintenance-review.md`. Unchanged upstream
   `TODO`/`FIXME` comments are permitted only inside
   `vendor/libsqlite3-sys-0.38.2`; Syrinx-authored work remains subject to the
   ordinary rule. This approval covers neither commits nor merges.
 - **Approved narrow source patch, 2026-10-10:** wry remains exactly 0.57.0
-  with the Windows close callback proposed in `docs/page-close-event-review.md`.
+  with the Windows close callback proposed in `docs/dev/vendor-reviews/page-close-event-review.md`.
   The owner approved that two-file dependency patch and its Syrinx close-event
   API so page-requested closure follows the durable tab lifecycle. Unchanged
   upstream `TODO`/`FIXME` comments and existing lint annotations are permitted
@@ -309,7 +320,7 @@ style problem.
   SHA-256 is `a87ca514149545576a25a39a390a444234d6db9159bcde751e7806aafc959042`;
   it changes `vendor/wry-0.57.0/src/webview2/mod.rs` and adds its private
   `construction.rs`. Preserve pins, features and all other vendor files.
-  `docs/wry-failed-construction-patch-review.md` records temporary native
+  `docs/dev/vendor-reviews/wry-failed-construction-patch-review.md` records temporary native
   ownership, delayed parent attachment and limited structural cleanup
   diagnostics. Validation is serialized through the integration chat, with
   independent subagent review. Fault hooks stay in disposable test copies,
@@ -317,7 +328,7 @@ style problem.
   teardown change, security change, commit, merge or publication.
 - **Approved narrow source patch, 2026-10-10:** P1-05 may vendor the audited
   `frizbee 0.13.0` package with exactly the three-file padding correction in
-  `docs/p1-05-frizbee-maintenance-review.md`. Preserve the pin, features
+  `docs/dev/vendor-reviews/p1-05-frizbee-maintenance-review.md`. Preserve the pin, features
   (`default-features=false`, `std` and `safe_read`), licence and other package
   files. Unchanged upstream `TODO`/`FIXME` comments and existing lint
   annotations are permitted only inside `vendor/frizbee-0.13.0`; no new
@@ -328,7 +339,7 @@ style problem.
 - **Approved narrow source patch, 2026-10-11:** P1-06 may vendor the pinned
   `gpui-pre-windows 0.3.8` package (Zed snapshot
   `279fe070bb389b79652e52065b2f001edcc0b11b`, Apache-2.0) with the D37 idle
-  repaint patch described in `docs/gpui-idle-patch-review.md`. Unchanged
+  repaint patch described in `docs/dev/vendor-reviews/gpui-idle-patch-review.md`. Unchanged
   upstream `TODO`/`FIXME` comments, including those at
   `src/shaders.hlsl:490` and `:704`, and existing lint annotations are
   permitted only inside `vendor/gpui-pre-windows-0.3.8`; no new
@@ -349,7 +360,7 @@ style problem.
 - **Approved dependency, 2026-10-11:** the owner approved adding Tantivy
   for P1-23's full-text bake-off, and for P1-24 if the bake-off chooses it.
   Pin the exact audited version and record its audit, including every
-  transitive package's licence, in `docs/p1-23-fulltext-audit.md`. This
+  transitive package's licence, in `docs/dev/fulltext-audit.md`. This
   approval accepts the lockfile growth Tantivy brings. It does not accept any
   transitive package outside the permissive licences listed above; stop and
   ask if one appears.
@@ -368,7 +379,7 @@ style problem.
 
 ## Traps that cost real time
 
-**Read `docs/trapstoknow.md` before you start work and before you debug a
+**Read `docs/dev/trapstoknow.md` before you start work and before you debug a
 build, a test or a window.** It lists the mistakes that look fine, often pass
 the gate, and fail somewhere else. Add a new trap there, not here.
 
@@ -376,28 +387,26 @@ the gate, and fail somewhere else. Add a new trap there, not here.
 
 Syrinx is a desktop app for one owner on Windows 11, so there is no server,
 deploy or cloud preview. Build, run and test it on the owner's machine; the
-scaffold writes how into `docs/LOCAL-DEV.md`. Run the app and look at the
+scaffold writes how into `docs/dev/LOCAL-DEV.md`. Run the app and look at the
 window after changing anything the owner sees: a passing gate does not prove
 a page card resized, a popup stacked correctly or focus came back to the page.
 
 ## Where outstanding work goes
 
-**While Syrinx is local:** in the plan. Open questions go under the plan's
-"Open threads" and Phase 0's results go in its report. Plan 1's approved
-40-slice breakdown is its local "Issue map"; each phase is a future milestone.
-Use the local branch/review workflow in D41. Later plans get approved slice
-breakdowns before implementation; creating GitHub is no longer a prerequisite.
+**In GitHub issues on `Fledge-Software/Syrinx-app`, and nowhere else.**
+Open questions, deferred work and new slices each get an issue, written in
+the Fledge format (an epic per plan or phase, its slices as issues under a
+milestone). Labels follow the wiki's How-we-track-work page; they are kept
+simple on purpose. The plans that held this work before 2026-10-16 are read
+at af3de53, linked from the wiki's History page.
 
-**Once Syrinx is on GitHub:** in that repository's issue tracker, and nowhere
-else. Each plan entry gets an issue under its milestone, and the plan's
-"Issue map" records them.
-
-Either way, a deferred-work marker (`TODO`, `FIXME`, `HACK`) in Syrinx-authored
-code is allowed only when it carries a tag from the plan's "Deferred work"
-register, as in `TODO(DW-3): restore zoom per site`. Add the register row
-first. Once Syrinx is on GitHub, each row becomes an issue, and the marker
-stays until that issue is fixed. `cargo xtask check` rejects untagged or
-unregistered markers. The owner set this rule on 2026-10-11. A marker never
+A deferred-work marker (`TODO`, `FIXME`, `HACK`) in Syrinx-authored code is
+allowed only when it names its GitHub issue, as in
+`TODO(#28): bound command ranking`, and that issue is listed in
+`docs/dev/deferred-work.md`. Open the issue and add the register row first;
+the marker stays until that issue is fixed. `cargo xtask check` rejects
+untagged or unregistered markers. The owner set this rule on 2026-10-11 and
+switched it from `DW-n` tags to issue numbers on 2026-10-16. A marker never
 excuses a failing test, a silenced lint or a swallowed error.
 
 ## Writing voice for commits, plans and anything published
@@ -468,7 +477,7 @@ the task description seems to imply it or a script or tool makes it easy:
 - Anything that touches a page web view's identity or contents (user agent,
   IPC handler, injected script, request filter); see the guardrails above
 - Changing a decision in `docs/decisions.md`, the spec's "Decisions already
-  made", the plan's "Decisions taken" or `design/README.md`
+  made", `docs/architecture-decisions.md` or `design/README.md`
 - Indexing, logging or exporting any of the owner's browsing data in a new
   way
 - Calling Fledge's real API, or asking for more OAuth permissions than a

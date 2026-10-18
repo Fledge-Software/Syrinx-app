@@ -258,7 +258,7 @@ fn stages_a_verified_package_beside_the_program() {
 
 #[test]
 fn production_keys_refuse_every_package_today() {
-    // PRODUCTION_KEYS is empty until DW-30, so installing from a file fails closed.
+    // PRODUCTION_KEYS is empty until #55, so installing from a file fails closed.
     let (sandbox, _keys) = packaged();
     let production = KeySet::production().expect("empty production set");
     assert_eq!(

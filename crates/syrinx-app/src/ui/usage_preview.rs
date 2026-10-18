@@ -29,7 +29,7 @@ use crate::controls::control;
 use crate::session::{SessionCommand, SessionError};
 use crate::theme::rgba;
 
-/// The approved suggested prompt (`docs/proposals/an-01-02-local-analytics.md`).
+/// The approved suggested prompt (`docs/usage-report-privacy.md`).
 pub(super) const SUGGESTED_PROMPT: &str = "This is a usage report from Syrinx, a desktop browser \
      I use. It contains only aggregate counts and timing buckets for one period, described in its \
      \"about\" field. Suggest up to five changes that might make Syrinx faster or easier for me, \

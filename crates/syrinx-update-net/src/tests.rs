@@ -101,7 +101,7 @@ fn accept(listener: &TcpListener, patience: Duration) -> Option<TcpStream> {
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                // An accepted socket inherits the listener's mode (docs/trapstoknow.md).
+                // An accepted socket inherits the listener's mode (docs/dev/trapstoknow.md).
                 stream.set_nonblocking(false).expect("blocking stream");
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))

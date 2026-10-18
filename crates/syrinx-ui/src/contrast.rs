@@ -269,7 +269,7 @@ mod tests {
     use super::*;
 
     /// Pairs below their WCAG minimum in the canvas values, recorded for the owner's review in
-    /// `docs/p1-07-design-tokens.md` rather than silently retuned. Any change here is a design change.
+    /// `https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-07-design-tokens.md` rather than silently retuned. Any change here is a design change.
     const RECORDED_FAILURES: &[&str] = &[
         "glass/6ea8ff/text_muted/card",
         "glass/6ea8ff/text_muted/field",

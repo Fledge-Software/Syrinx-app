@@ -7,7 +7,7 @@ use crate::error::UpdateError;
 ///
 /// Empty on purpose: until the owner creates a release key outside the repository,
 /// every package fails as signed by an unknown key.
-// TODO(DW-30): pin the owner's release public key and its separately recorded identifier.
+// TODO(#55): pin the owner's release public key and its separately recorded identifier.
 pub const PRODUCTION_KEYS: &[PinnedKey] = &[];
 
 /// The first 8 bytes of SHA-256 over a key's public point; it selects a key, not trust.
@@ -66,7 +66,7 @@ impl KeySet {
         Self::new(PRODUCTION_KEYS)
     }
 
-    /// Whether no key is pinned, so every package would be refused (DW-30).
+    /// Whether no key is pinned, so every package would be refused (#55).
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }

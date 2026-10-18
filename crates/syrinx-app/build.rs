@@ -333,7 +333,7 @@ fn sdk_version(name: &str) -> Option<Vec<u32>> {
 fn missing_rc_message() -> String {
     "rc.exe, the Windows SDK resource compiler, was not found. Install the Windows 11 SDK \
      (Visual Studio Installer, \"Desktop development with C++\"), build from a Developer \
-     Command Prompt, or set RC to rc.exe's full path. See docs/LOCAL-DEV.md."
+     Command Prompt, or set RC to rc.exe's full path. See docs/dev/LOCAL-DEV.md."
         .to_owned()
 }
 
