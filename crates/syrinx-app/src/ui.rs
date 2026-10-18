@@ -74,8 +74,8 @@ use gpui_component::Root;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use syrinx_core::usage::{ErrorCategory, Feature, UsageRecorder};
 use syrinx_core::{
-    ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry, Route,
-    SavedFolderId, TabId, TabModelSnapshot, route,
+    ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry, PageOrigin,
+    Route, SavedFolderId, TabId, TabModelSnapshot, route,
 };
 use syrinx_platform::browser::{
     BrowserCommand, BrowserEvent, BrowserHost, BrowserShortcut, PageBounds, set_overlay_owner,
@@ -478,6 +478,7 @@ impl BrowserView {
             Ok(handle) => {
                 view.parent_hwnd = handle;
                 show_app_icon(handle);
+                title_bar::correct_caption_hit_test(handle);
             }
             Err(error) => {
                 view.fail(error);
@@ -1516,7 +1517,9 @@ impl BrowserView {
             .iter()
             .find(|tab| Some(tab.id) == self.model.active_id)
             .map_or_else(String::new, |tab| {
-                if tab.metadata.address == "about:blank" && !self.popup_pages.contains(&tab.id) {
+                if tab.metadata.is_home(PageOrigin::from_adopted_popup(
+                    self.popup_pages.contains(&tab.id),
+                )) {
                     String::new()
                 } else {
                     tab.metadata.address.clone()
