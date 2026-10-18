@@ -12,7 +12,7 @@ use gpui::{
 use syrinx_core::usage::Feature;
 use syrinx_core::{
     ActivationTarget, BuiltInPlugin, DestinationTarget, SavedEntryId, SavedFolderSnapshot,
-    SavedPageSnapshot, TabId, TabSnapshot,
+    SavedPageSnapshot, TabId,
 };
 use syrinx_ui::{
     SIDEBAR_WIDTH_STATE_KEY, SidebarWidthState,
@@ -366,7 +366,9 @@ impl BrowserView {
                 } => self.folder_row(folder, *depth, *expanded, labels, cx),
                 SidebarEntry::Page { page, depth } => self.saved_row(page, *depth, labels, cx),
                 SidebarEntry::Tab(tab) => {
-                    let title = ordinary_title(tab, self.popup_pages.contains(&tab.id));
+                    let title = tab
+                        .metadata
+                        .display_title(self.popup_pages.contains(&tab.id));
                     self.ordinary_row(tab.id, title, labels, cx)
                 }
             };
@@ -828,15 +830,6 @@ fn title_or_address(title: &str, address: &str) -> String {
     } else {
         title.to_owned()
     }
-}
-
-/// An ordinary tab's title; a blank tab is Home, unless it is an adopted popup (P1-11)
-/// that has not reported its first address yet.
-fn ordinary_title(tab: &TabSnapshot, popup: bool) -> String {
-    if tab.metadata.address == "about:blank" && !popup {
-        return "Home".to_owned();
-    }
-    title_or_address(&tab.metadata.title, &tab.metadata.address)
 }
 
 #[cfg(test)]

@@ -1512,7 +1512,7 @@ impl BrowserView {
             .iter()
             .find(|tab| Some(tab.id) == self.model.active_id)
             .map_or_else(String::new, |tab| {
-                if tab.metadata.address == "about:blank" && !self.popup_pages.contains(&tab.id) {
+                if tab.metadata.is_home(self.popup_pages.contains(&tab.id)) {
                     String::new()
                 } else {
                     tab.metadata.address.clone()

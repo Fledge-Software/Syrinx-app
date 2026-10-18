@@ -1439,9 +1439,13 @@ fn sync_tabs(
         }
     }
     for tab in &after.tabs {
-        catalogue
-            .upsert(entry(Target::Tab(tab.id), &tab.metadata, true))
-            .map_err(SessionError::Search)?;
+        // The palette names a blank tab Home, as the sidebar does; other titles stay as
+        // reported, since the palette already falls back to the address itself.
+        let mut row = entry(Target::Tab(tab.id), &tab.metadata, true);
+        if tab.metadata.is_home(false) {
+            row.title = "Home".to_owned();
+        }
+        catalogue.upsert(row).map_err(SessionError::Search)?;
     }
     Ok(())
 }

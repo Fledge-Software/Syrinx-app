@@ -73,6 +73,29 @@ pub struct TabMetadata {
     pub badge: Option<String>,
 }
 
+/// The address a new, blank tab holds until the owner navigates somewhere.
+pub const BLANK_ADDRESS: &str = "about:blank";
+
+impl TabMetadata {
+    /// Whether this is a blank tab shown as Home; an adopted popup still awaiting its first
+    /// address is not, so its sidebar row keeps the address.
+    pub fn is_home(&self, popup: bool) -> bool {
+        self.address == BLANK_ADDRESS && !popup
+    }
+
+    /// The one name the sidebar shows for an open tab: Home for a blank tab, otherwise the
+    /// title, or the address when the page has no title.
+    pub fn display_title(&self, popup: bool) -> String {
+        if self.is_home(popup) {
+            return "Home".to_owned();
+        }
+        if self.title.is_empty() {
+            return self.address.clone();
+        }
+        self.title.clone()
+    }
+}
+
 impl fmt::Debug for TabMetadata {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Never include browsing or document content in diagnostic formatting.
@@ -617,7 +640,29 @@ impl fmt::Debug for TabModel {
 
 #[cfg(test)]
 mod tests {
-    use super::{Activation, TabError, TabKind, TabMetadata, TabModel};
+    #[test]
+    fn a_blank_tab_is_called_home_and_other_tabs_use_title_then_address() {
+        let metadata = |title: &str, address: &str| TabMetadata {
+            title: title.to_owned(),
+            address: address.to_owned(),
+            ..TabMetadata::default()
+        };
+        assert_eq!(metadata("", BLANK_ADDRESS).display_title(false), "Home");
+        assert_eq!(
+            metadata("", BLANK_ADDRESS).display_title(true),
+            BLANK_ADDRESS
+        );
+        assert_eq!(
+            metadata("Example", "https://example.test/").display_title(false),
+            "Example"
+        );
+        assert_eq!(
+            metadata("", "https://example.test/").display_title(false),
+            "https://example.test/"
+        );
+    }
+
+    use super::{Activation, BLANK_ADDRESS, TabError, TabKind, TabMetadata, TabModel};
 
     #[test]
     fn live_id_exhaustion_preserves_open_state() -> Result<(), TabError> {
