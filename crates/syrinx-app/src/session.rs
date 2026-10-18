@@ -31,8 +31,9 @@ use history::{HistoryRecorder, Observation};
 use syrinx_core::usage::{ErrorCategory, Feature, ReportPeriod, Timing, UsageDate, UsageRecorder};
 use syrinx_core::{
     Activation, BookmarkImport, DestinationEdit, DestinationError, DestinationSurface,
-    ImportCommit, QuickDestinations, SavedPageId, SavedPageSnapshot, SnapshotError, TabError,
-    TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, commit_bookmark_import,
+    ImportCommit, PageOrigin, QuickDestinations, SavedPageId, SavedPageSnapshot, SnapshotError,
+    TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, TabSnapshot,
+    commit_bookmark_import,
 };
 use syrinx_platform::{DeletionJournal, JournalError, StartupStorage, WindowsDirectoryLease};
 use syrinx_search::{
@@ -643,6 +644,8 @@ fn finish_store<T>(
 struct Worker {
     model: TabModel,
     catalogue: Catalogue,
+    /// Tabs adopted from a popup, which the palette names as the sidebar does.
+    popup_tabs: HashSet<TabId>,
     history: HistoryRecorder,
     deletions: DeletionJournal,
     /// When history retention next expires old visits, and how far it last reached (DW-4).
@@ -678,7 +681,12 @@ impl Worker {
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
         let snapshot = model.snapshot();
         let mut catalogue = Catalogue::new();
-        sync_catalogue(&mut catalogue, &TabModelSnapshot::default(), &snapshot)?;
+        sync_catalogue(
+            &mut catalogue,
+            &HashSet::new(),
+            &TabModelSnapshot::default(),
+            &snapshot,
+        )?;
         // Durable history joins the catalogue once; later visits update it row by row.
         // Retention keeps this load to about 90 days of history.
         for entry in store.history_entries().map_err(SessionError::Store)? {
@@ -689,6 +697,7 @@ impl Worker {
         Ok(Self {
             model,
             catalogue,
+            popup_tabs: HashSet::new(),
             history: HistoryRecorder::restored(&snapshot),
             deletions,
             retention: schedule,
@@ -936,7 +945,24 @@ impl Worker {
         self.count_change(counted, before != after, !created.is_empty());
         let navigate = if navigating { after.active_id } else { None };
         let popup = popup_request.map(|request| (request, created.first().copied()));
+        if let Some((_, Some(tab))) = popup {
+            self.register_popup_tab(&after, tab)?;
+        }
         self.publish(events, after, created, navigate, home_entry, popup)
+    }
+
+    /// Remembers an adopted popup and refreshes its palette row, which `persist` indexed
+    /// before the tab was known to be a popup.
+    fn register_popup_tab(
+        &mut self,
+        after: &TabModelSnapshot,
+        id: TabId,
+    ) -> Result<(), SessionError> {
+        self.popup_tabs.insert(id);
+        let Some(tab) = after.tabs.iter().find(|tab| tab.id == id) else {
+            return Ok(());
+        };
+        upsert_tab(&mut self.catalogue, &self.popup_tabs, tab)
     }
 
     /// Counts an accepted command (AN-01): a tab-opening one only if it opened a tab, any
@@ -967,7 +993,7 @@ impl Worker {
             if let Some(started) = started {
                 self.usage.time(Timing::StoreSave, started.elapsed());
             }
-            sync_catalogue(&mut self.catalogue, before, &after)?;
+            sync_catalogue(&mut self.catalogue, &self.popup_tabs, before, &after)?;
         }
         Ok(after)
     }
@@ -1394,11 +1420,12 @@ fn cycle_active(model: &mut TabModel, backwards: bool) -> Result<(), SessionErro
 
 fn sync_catalogue(
     catalogue: &mut Catalogue,
+    popups: &HashSet<TabId>,
     before: &TabModelSnapshot,
     after: &TabModelSnapshot,
 ) -> Result<(), SessionError> {
     // The feed contains only model-derived rows; it creates no browsing history or usage log.
-    sync_tabs(catalogue, before, after)?;
+    sync_tabs(catalogue, popups, before, after)?;
     let open_before = open_saved_pages(before);
     let open_after = open_saved_pages(after);
     // Most changes touch only live tabs; then only saved rows whose open state flipped change.
@@ -1427,6 +1454,7 @@ fn sync_catalogue(
 /// Removes closed tabs and upserts open ones; the catalogue skips unchanged entries.
 fn sync_tabs(
     catalogue: &mut Catalogue,
+    popups: &HashSet<TabId>,
     before: &TabModelSnapshot,
     after: &TabModelSnapshot,
 ) -> Result<(), SessionError> {
@@ -1439,15 +1467,21 @@ fn sync_tabs(
         }
     }
     for tab in &after.tabs {
-        // The palette names a blank tab Home, as the sidebar does; other titles stay as
-        // reported, since the palette already falls back to the address itself.
-        let mut row = entry(Target::Tab(tab.id), &tab.metadata, true);
-        if tab.metadata.is_home(false) {
-            row.title = "Home".to_owned();
-        }
-        catalogue.upsert(row).map_err(SessionError::Search)?;
+        upsert_tab(catalogue, popups, tab)?;
     }
     Ok(())
+}
+
+/// Upserts one open tab; its title comes from the core rule the sidebar uses too.
+fn upsert_tab(
+    catalogue: &mut Catalogue,
+    popups: &HashSet<TabId>,
+    tab: &TabSnapshot,
+) -> Result<(), SessionError> {
+    let origin = PageOrigin::from_adopted_popup(popups.contains(&tab.id));
+    let mut row = entry(Target::Tab(tab.id), &tab.metadata, true);
+    row.title = tab.metadata.display_title(origin);
+    catalogue.upsert(row).map_err(SessionError::Search)
 }
 
 fn open_saved_pages(model: &TabModelSnapshot) -> HashSet<SavedPageId> {
@@ -1637,11 +1671,16 @@ mod tests {
         )?;
         apply_model(&mut model, SessionCommand::SaveActive)?;
         let before = model.snapshot();
-        sync_catalogue(&mut catalogue, &TabModelSnapshot::default(), &before)?;
+        sync_catalogue(
+            &mut catalogue,
+            &HashSet::new(),
+            &TabModelSnapshot::default(),
+            &before,
+        )?;
         let tab = model.tabs()[0].id();
         let saved = model.saved_pages()[0].id();
         apply_model(&mut model, SessionCommand::CloseTab(tab))?;
-        sync_catalogue(&mut catalogue, &before, &model.snapshot())?;
+        sync_catalogue(&mut catalogue, &HashSet::new(), &before, &model.snapshot())?;
         assert!(catalogue.get(Target::Tab(tab)).is_none());
         assert!(
             !catalogue
@@ -1650,8 +1689,61 @@ mod tests {
                 .open
         );
         let generation = catalogue.generation();
-        sync_catalogue(&mut catalogue, &model.snapshot(), &model.snapshot())?;
+        sync_catalogue(
+            &mut catalogue,
+            &HashSet::new(),
+            &model.snapshot(),
+            &model.snapshot(),
+        )?;
         assert_eq!(catalogue.generation(), generation);
+        Ok(())
+    }
+
+    #[test]
+    fn a_blank_tab_is_titled_home_in_the_palette_catalogue() -> Result<(), SessionError> {
+        let mut model = TabModel::new();
+        let mut catalogue = Catalogue::new();
+        apply_model(
+            &mut model,
+            SessionCommand::NewTab {
+                address: "about:blank".to_owned(),
+            },
+        )?;
+        let tab = model.tabs()[0].id();
+        sync_catalogue(
+            &mut catalogue,
+            &HashSet::new(),
+            &TabModelSnapshot::default(),
+            &model.snapshot(),
+        )?;
+        let row = catalogue.get(Target::Tab(tab)).expect("synthetic tab row");
+        assert_eq!(row.title, "Home");
+        Ok(())
+    }
+
+    #[test]
+    fn a_blank_adopted_popup_keeps_its_address_in_the_palette_catalogue() -> Result<(), SessionError>
+    {
+        let mut model = TabModel::new();
+        let mut catalogue = Catalogue::new();
+        apply_model(
+            &mut model,
+            SessionCommand::NewTab {
+                address: "about:blank".to_owned(),
+            },
+        )?;
+        let tab = model.tabs()[0].id();
+        let popups = HashSet::from([tab]);
+        sync_catalogue(
+            &mut catalogue,
+            &popups,
+            &TabModelSnapshot::default(),
+            &model.snapshot(),
+        )?;
+        let row = catalogue
+            .get(Target::Tab(tab))
+            .expect("synthetic popup row");
+        assert_eq!(row.title, "about:blank");
         Ok(())
     }
 

@@ -11,8 +11,8 @@ use gpui::{
 };
 use syrinx_core::usage::Feature;
 use syrinx_core::{
-    ActivationTarget, BuiltInPlugin, DestinationTarget, SavedEntryId, SavedFolderSnapshot,
-    SavedPageSnapshot, TabId,
+    ActivationTarget, BuiltInPlugin, DestinationTarget, PageOrigin, SavedEntryId,
+    SavedFolderSnapshot, SavedPageSnapshot, TabId,
 };
 use syrinx_ui::{
     SIDEBAR_WIDTH_STATE_KEY, SidebarWidthState,
@@ -366,9 +366,9 @@ impl BrowserView {
                 } => self.folder_row(folder, *depth, *expanded, labels, cx),
                 SidebarEntry::Page { page, depth } => self.saved_row(page, *depth, labels, cx),
                 SidebarEntry::Tab(tab) => {
-                    let title = tab
-                        .metadata
-                        .display_title(self.popup_pages.contains(&tab.id));
+                    let title = tab.metadata.display_title(PageOrigin::from_adopted_popup(
+                        self.popup_pages.contains(&tab.id),
+                    ));
                     self.ordinary_row(tab.id, title, labels, cx)
                 }
             };
