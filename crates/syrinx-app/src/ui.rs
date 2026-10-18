@@ -1899,6 +1899,12 @@ impl Render for BrowserView {
                 this.toggle_sidebar(window, cx);
             }))
             .on_action(cx.listener(|this, _: &DismissPeek, window, cx| {
+                // A menu still opening has no keys yet; Escape withdraws it.
+                if this.menu.is_some() {
+                    this.retire_menu(cx);
+                    cx.notify();
+                    return;
+                }
                 if let Some(generation) = this.peek.as_ref().map(|peek| peek.generation) {
                     this.dismiss_peek(generation, window, cx);
                 } else {

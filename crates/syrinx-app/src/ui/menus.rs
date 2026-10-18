@@ -139,6 +139,7 @@ pub(super) struct OpenMenu {
     kind: MenuKind,
     generation: u64,
     popup: Option<OwnedPopup>,
+    view: Option<WeakEntity<MenuView>>,
 }
 
 /// The menu a press on the main window closed, and when, so that press does not reopen it.
@@ -243,6 +244,7 @@ impl BrowserView {
             kind,
             generation,
             popup: None,
+            view: None,
         });
         let request = MenuRequest {
             generation,
@@ -291,19 +293,20 @@ impl BrowserView {
         &mut self,
         generation: u64,
         rect: OverlayRect,
-        opened: Result<OwnedPopup, OwnedPopupError>,
+        opened: Result<(OwnedPopup, WeakEntity<MenuView>), OwnedPopupError>,
         cx: &mut Context<Self>,
     ) {
         let wanted = self.awaits_menu(generation);
         match opened {
-            Ok(popup) if wanted => {
+            Ok((popup, view)) if wanted => {
                 let hwnd = popup.hwnd;
                 if let Some(menu) = &mut self.menu {
                     menu.popup = Some(popup);
+                    menu.view = Some(view);
                 }
                 self.show_menu_popup(generation, hwnd, rect, cx);
             }
-            Ok(stale) => remove_menu_window(stale, self.parent_hwnd, cx),
+            Ok((stale, _)) => remove_menu_window(stale, self.parent_hwnd, cx),
             Err(error) => {
                 if wanted {
                     self.menu = None;
@@ -358,7 +361,10 @@ impl BrowserView {
             return;
         }
         match shown {
-            Ok(true) => return,
+            Ok(true) => {
+                self.menu_activated(cx);
+                return;
+            }
             Ok(false) => {
                 self.message = "Syrinx was not in front, so the menu stayed closed.".into()
             }
@@ -366,6 +372,17 @@ impl BrowserView {
         }
         self.retire_menu(cx);
         cx.notify();
+    }
+
+    /// The popup now has the keys, so any later deactivation is the owner leaving it, even
+    /// one GPUI delivers before the popup's own activation callback has run.
+    fn menu_activated(&self, cx: &mut Context<Self>) {
+        let Some(view) = self.menu.as_ref().and_then(|menu| menu.view.clone()) else {
+            return;
+        };
+        if view.update(cx, |menu, _| menu.was_active = true).is_err() {
+            eprintln!("The menu popup closed before it took the keys.");
+        }
     }
 
     fn is_current_menu(&self, generation: u64) -> bool {
@@ -502,6 +519,8 @@ fn open_requested_menu(browser: WeakEntity<BrowserView>, request: MenuRequest, c
             ..Default::default()
         },
     };
+    let created = Rc::new(RefCell::new(None));
+    let retained = created.clone();
     let opened = open_owned_popup(spec, cx, move |_, popup, cx| {
         let closing = browser.clone();
         popup.on_window_should_close(cx, move |_, cx| {
@@ -510,8 +529,13 @@ fn open_requested_menu(browser: WeakEntity<BrowserView>, request: MenuRequest, c
             });
             queued.is_err() // With no owner entity, nothing else will close this window.
         });
-        cx.new(|cx| MenuView::new(browser, generation, kind, rows, popup, cx))
-            .into()
+        let view = cx.new(|cx| MenuView::new(browser, generation, kind, rows, popup, cx));
+        *retained.borrow_mut() = Some(view.downgrade());
+        view.into()
+    });
+    let opened = opened.map(|popup| {
+        let view = created.borrow_mut().take().expect("created menu view");
+        (popup, view)
     });
     entity.update(cx, |browser, cx| {
         browser.install_menu(generation, rect, opened, cx);
