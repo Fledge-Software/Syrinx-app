@@ -4,11 +4,12 @@ use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::Pixels;
-use syrinx_platform::browser::{
-    BrowserError, OverlayRect, activate_if_foreground, show_overlay, syrinx_in_foreground,
-};
+use syrinx_platform::browser::{BrowserError, OverlayRect, activate_if_foreground, show_overlay};
 
-use super::*;
+use super::{
+    owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup, show_and_activate},
+    *,
+};
 use crate::palette::{PaletteEntry, PaletteNative};
 
 /// The design's palette is 880 by 560, 72 below the window's top edge.
@@ -60,7 +61,7 @@ impl BrowserView {
             return;
         }
         self.retire_peek(cx);
-        self.close_menu(cx);
+        self.retire_menu(cx);
         if self.closing || self.session_revision.is_none() {
             return;
         }
@@ -162,8 +163,11 @@ impl BrowserView {
             point(px(0.), px(0.)),
             size(px(PALETTE_WIDTH), px(PALETTE_HEIGHT)),
         );
-        let opened = cx.open_window(
-            WindowOptions {
+        let spec = PopupSpec {
+            title: "Syrinx command palette",
+            noun: "command palette",
+            owner,
+            options: WindowOptions {
                 kind: WindowKind::PopUp,
                 titlebar: None,
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -171,48 +175,32 @@ impl BrowserView {
                 show: false,
                 ..Default::default()
             },
-            move |popup, cx| {
-                popup.set_window_title("Syrinx command palette");
-                let native = native_handle(popup)
-                    .map_err(str::to_owned)
-                    .and_then(|hwnd| {
-                        set_overlay_owner(hwnd, owner).map_err(|error| error.to_string())?;
-                        show_app_icon(hwnd);
-                        Ok(hwnd)
-                    });
-                let native = PaletteNative {
-                    popup: native.as_ref().map_or(0, |hwnd| *hwnd),
-                    owner,
-                };
-                let palette =
-                    cx.new(|cx| PaletteView::new(registry, native, probe, usage, popup, cx));
-                // Closing the popup from Windows ends the entry like Esc; it is only hidden.
-                let closing = palette.downgrade();
-                popup.on_window_should_close(cx, move |popup, cx| {
-                    closing
-                        .update(cx, |palette, cx| palette.dismiss(popup, cx))
-                        .is_err()
-                });
-                *retained.borrow_mut() = Some((palette.clone(), native));
-                cx.new(|cx| Root::new(palette, popup, cx))
-            },
-        );
-        let window = opened.map_err(|_| "Cannot open the command palette.".to_owned())?;
-        let (view, native) = created.borrow_mut().take().expect("created palette view");
-        if native.popup == 0 {
-            let handle: gpui::AnyWindowHandle = window.into();
-            if handle
-                .update(cx, |_, popup, _| popup.remove_window())
-                .is_err()
-            {
+        };
+        let opened = open_owned_popup(spec, cx, move |hwnd, popup, cx| {
+            let native = PaletteNative { popup: hwnd, owner };
+            let palette = cx.new(|cx| PaletteView::new(registry, native, probe, usage, popup, cx));
+            // Closing the popup from Windows ends the entry like Esc; it is only hidden.
+            let closing = palette.downgrade();
+            popup.on_window_should_close(cx, move |popup, cx| {
+                closing
+                    .update(cx, |palette, cx| palette.dismiss(popup, cx))
+                    .is_err()
+            });
+            *retained.borrow_mut() = Some(palette.clone());
+            palette.into()
+        });
+        let popup = match opened {
+            Ok(popup) => popup,
+            Err(OwnedPopupError::Notice(error)) => return Err(error),
+            Err(OwnedPopupError::Orphaned) => {
                 return Err("Cannot close the failed palette window.".to_owned());
             }
-            return Err("Cannot make the command palette an owned window.".to_owned());
-        }
+        };
+        let view = created.borrow_mut().take().expect("created palette view");
         Ok(KeptPalette {
-            window,
+            window: popup.window,
             view,
-            hwnd: native.popup,
+            hwnd: popup.hwnd,
         })
     }
 
@@ -254,12 +242,7 @@ impl BrowserView {
                 probe.show_started(Instant::now());
                 probe.arm_open();
             }
-            // Syrinx never takes the foreground from another application (owner, 2026-10-12).
-            let shown = if syrinx_in_foreground() {
-                show_overlay(hwnd, rect).and_then(|()| activate_if_foreground(hwnd))
-            } else {
-                Ok(false)
-            };
+            let shown = show_and_activate(hwnd, rect);
             if view
                 .update(cx, |view, cx| view.palette_shown(entry, shown, cx))
                 .is_err()

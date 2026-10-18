@@ -18,6 +18,7 @@ mod incoming_links;
 mod menus;
 mod navigation_intents;
 mod navigation_status;
+mod owned_popup;
 mod page_card;
 mod page_lifecycle;
 mod palette_acceptance;
@@ -321,9 +322,11 @@ pub struct BrowserView {
     focus: FocusHandle,
     /// The open palette entry; `None` while the kept popup is hidden.
     palette: Option<palette_popup::PalettePopup>,
-    /// The open drop-down menu, if any, and the focus that lets Escape close it.
+    /// The open drop-down menu, if any; it draws in its own popup window (#12).
     menu: Option<menus::OpenMenu>,
-    menu_focus: FocusHandle,
+    menu_generation: u64,
+    /// The menu a press on the main window last closed, so that press does not reopen it.
+    menu_dismissal: Option<menus::MenuDismissal>,
     /// The palette popup, created once and kept hidden between entries (DW-90).
     kept_palette: Option<palette_popup::KeptPalette>,
     palette_entries: u64,
@@ -434,7 +437,8 @@ impl BrowserView {
             focus: cx.focus_handle(),
             palette: None,
             menu: None,
-            menu_focus: cx.focus_handle(),
+            menu_generation: 0,
+            menu_dismissal: None,
             kept_palette: None,
             palette_entries: 0,
             page_focus_on_activation: false,
@@ -1545,6 +1549,7 @@ impl BrowserView {
         self.closing = true;
         self.stop_link_feed();
         self.retire_peek(cx);
+        self.retire_menu(cx);
         self.remove_palette(cx);
         self.close_import_preview(cx);
         self.message = "Saving and closing…".to_owned();
@@ -1907,8 +1912,10 @@ impl Render for BrowserView {
                 this.toggle_sidebar(window, cx);
             }))
             .on_action(cx.listener(|this, _: &DismissPeek, window, cx| {
-                // An open menu is the topmost thing Escape dismisses.
-                if this.close_menu_to_page(window, cx) {
+                // A menu still opening has no keys yet; Escape withdraws it.
+                if this.menu.is_some() {
+                    this.retire_menu(cx);
+                    cx.notify();
                     return;
                 }
                 if let Some(generation) = this.peek.as_ref().map(|peek| peek.generation) {
@@ -2031,8 +2038,7 @@ impl Render for BrowserView {
                     .text_xs()
                     .text_color(theme::icon())
                     .child(self.failure.as_ref().unwrap_or(&self.message).clone()),
-            )
-            .children(self.menu_overlay(cx));
+            );
         self.essential_actions(chrome, cx)
     }
 }
