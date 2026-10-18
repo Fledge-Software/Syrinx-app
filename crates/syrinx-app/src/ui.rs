@@ -1340,6 +1340,8 @@ impl BrowserView {
         if finishes_entry {
             self.pending_query = None;
             self.home_palette.finish_entry();
+            // Before the arms below drop the entry and its saved status.
+            self.settle_palette_status();
         }
         match event {
             PaletteEvent::Query {

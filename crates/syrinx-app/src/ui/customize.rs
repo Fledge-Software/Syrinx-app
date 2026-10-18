@@ -7,7 +7,7 @@ use gpui::{
     Stateful, StatefulInteractiveElement, Styled, Subscription, Toggled, Window, div, px,
 };
 use gpui_component::input::{InputEvent, InputState};
-use syrinx_core::QuickDestinations;
+use syrinx_core::{ActivationTarget, PageOrigin, QuickDestinations, TabId};
 use syrinx_platform::backdrop::{self, Backdrop};
 use syrinx_ui::metrics::{radius, text};
 use syrinx_ui::theme::Material;
@@ -136,19 +136,48 @@ impl BrowserView {
             .child(panel)
     }
 
-    /// The sidebar's Appearance button: the Customize panel lives on Home, so another page
-    /// opens a new Home tab with the panel open.
+    /// The sidebar's Appearance (settings) button: the Customize panel lives on Home, so
+    /// another page switches to an open Home tab, or opens one, with the panel open.
     pub(super) fn open_appearance(&mut self) {
-        if self.home.customize_open && self.home_showing() {
-            self.close_customize();
-            return;
-        }
-        if !self.home_showing() {
-            self.command(SessionCommand::NewTab {
-                address: "about:blank".to_owned(),
-            });
+        let route = appearance_route(
+            self.home_showing(),
+            self.home.customize_open,
+            self.first_home_tab(),
+        );
+        match route {
+            AppearanceRoute::Close => {
+                self.close_customize();
+                return;
+            }
+            AppearanceRoute::Show => {}
+            AppearanceRoute::SwitchTo(id) => self.activate(ActivationTarget::Tab(id)),
+            AppearanceRoute::OpenHome => self.open_home_without_palette(),
         }
         self.home.customize_open = true;
+    }
+
+    /// Opens a Home tab for the panel. It is not a palette entry: nobody asked to type, so
+    /// its acknowledgement must not open the palette over the panel (#14).
+    fn open_home_without_palette(&mut self) {
+        let queued = self.try_command(SessionCommand::NewTab {
+            address: "about:blank".to_owned(),
+        });
+        if queued {
+            self.home_palette.finish_entry();
+        }
+    }
+
+    /// The first open tab shown as Home, which the Appearance button reuses.
+    fn first_home_tab(&self) -> Option<TabId> {
+        self.model
+            .tabs
+            .iter()
+            .find(|tab| {
+                let adopted = self.popup_pages.contains(&tab.id);
+                tab.metadata
+                    .is_home(PageOrigin::from_adopted_popup(adopted))
+            })
+            .map(|tab| tab.id)
     }
 
     /// Closes the panel, dropping an unfinished custom accent and the permissions view.
@@ -558,4 +587,78 @@ fn custom_accent_field(custom: &CustomAccent, palette: &Palette, window: &Window
         );
     }
     field
+}
+
+/// Where the Appearance button takes the owner.
+#[derive(Debug, PartialEq, Eq)]
+enum AppearanceRoute {
+    /// Home already shows the panel, so a second press closes it.
+    Close,
+    /// Home is showing; open the panel on it.
+    Show,
+    /// Another page is showing and a Home tab is open; switch to it.
+    SwitchTo(TabId),
+    /// No Home tab is open; open one for the panel, without the palette (#14).
+    OpenHome,
+}
+
+/// Chooses the Appearance button's route; it never adds a Home tab while one is open.
+fn appearance_route(
+    home_showing: bool,
+    customize_open: bool,
+    open_home: Option<TabId>,
+) -> AppearanceRoute {
+    if home_showing {
+        return if customize_open {
+            AppearanceRoute::Close
+        } else {
+            AppearanceRoute::Show
+        };
+    }
+    match open_home {
+        Some(id) => AppearanceRoute::SwitchTo(id),
+        None => AppearanceRoute::OpenHome,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tab(id: u64) -> TabId {
+        TabId::new(id).expect("synthetic tab ID")
+    }
+
+    #[test]
+    fn appearance_on_home_shows_the_panel_and_a_second_press_closes_it() {
+        assert_eq!(
+            appearance_route(true, false, Some(tab(1))),
+            AppearanceRoute::Show
+        );
+        assert_eq!(
+            appearance_route(true, true, Some(tab(1))),
+            AppearanceRoute::Close
+        );
+    }
+
+    #[test]
+    fn appearance_on_a_page_reuses_an_open_home_tab_instead_of_adding_one() {
+        assert_eq!(
+            appearance_route(false, false, Some(tab(7))),
+            AppearanceRoute::SwitchTo(tab(7))
+        );
+        // The panel was left open on a Home the owner has since moved away from.
+        assert_eq!(
+            appearance_route(false, true, Some(tab(7))),
+            AppearanceRoute::SwitchTo(tab(7))
+        );
+    }
+
+    #[test]
+    fn appearance_with_no_home_tab_opens_one() {
+        assert_eq!(
+            appearance_route(false, false, None),
+            AppearanceRoute::OpenHome
+        );
+    }
 }

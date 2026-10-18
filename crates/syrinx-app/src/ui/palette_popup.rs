@@ -19,6 +19,8 @@ const PALETTE_TOP: f32 = 72.;
 /// Narrower windows shrink the palette to this, keeping a 24-pixel margin each side.
 const PALETTE_MIN_WIDTH: f32 = 320.;
 const PALETTE_MARGIN: f32 = 24.;
+/// The status line while an entry is open; ending the entry puts back what it replaced.
+const PALETTE_OPEN_STATUS: &str = "Palette open";
 
 /// The palette popup, created once and hidden between entries.
 #[derive(Clone)]
@@ -34,6 +36,8 @@ pub(super) struct PalettePopup {
     pub(super) view: Entity<PaletteView>,
     pub(super) hwnd: isize,
     entry: u64,
+    /// The status line this entry replaced, shown again when the entry ends (#14).
+    resting_status: String,
 }
 
 impl BrowserView {
@@ -84,7 +88,6 @@ impl BrowserView {
         let Some(entry) = self.begin_entry(kept, address, window, cx) else {
             return;
         };
-        self.message = "Palette open".to_owned();
         if let Some(probe) = self.acceptance_probe() {
             probe.show_requested(Instant::now());
         }
@@ -133,6 +136,7 @@ impl BrowserView {
             view: kept.view,
             hwnd: kept.hwnd,
             entry,
+            resting_status: std::mem::replace(&mut self.message, PALETTE_OPEN_STATUS.to_owned()),
         });
         self.listen_to_palette(entry, receiver, window, cx);
         Some(entry)
@@ -355,6 +359,7 @@ impl BrowserView {
             view.update(cx, |palette, cx| palette.dismiss(popup, cx));
         });
         if dismissed.is_err() {
+            self.settle_palette_status();
             self.palette = None;
             self.kept_palette = None;
         }
@@ -365,6 +370,7 @@ impl BrowserView {
         // Invalidate queued popup events before hiding the popup.
         self.pending_query = None;
         self.home_palette.finish_entry();
+        self.settle_palette_status();
         let Some(palette) = self.palette.take() else {
             return;
         };
@@ -375,6 +381,16 @@ impl BrowserView {
         if closed.is_err() {
             // The popup is already gone; the next Ctrl K builds a new one.
             self.kept_palette = None;
+        }
+    }
+
+    /// Puts back the status line the open entry replaced, unless something has said more since.
+    pub(super) fn settle_palette_status(&mut self) {
+        let Some(palette) = &self.palette else {
+            return;
+        };
+        if let Some(status) = status_after_palette(&self.message, &palette.resting_status) {
+            self.message = status;
         }
     }
 
@@ -412,6 +428,12 @@ impl BrowserView {
 /// Whether an event or show task for `entry` still belongs to the open entry.
 fn is_current(open: Option<u64>, entry: u64) -> bool {
     open == Some(entry)
+}
+
+/// The status line once an entry ends: what it replaced, while "Palette open" still shows.
+/// A notice written during the entry (a failed show, a search error) stays.
+fn status_after_palette(current: &str, resting: &str) -> Option<String> {
+    (current == PALETTE_OPEN_STATUS).then(|| resting.to_owned())
 }
 
 /// The popup to show: only for the current entry, and only while it still takes input,
@@ -471,6 +493,23 @@ mod tests {
             show_target(false, true, 42),
             None,
             "a newer entry owns the popup"
+        );
+    }
+
+    #[test]
+    fn an_ended_entry_puts_back_the_status_it_replaced() {
+        assert_eq!(
+            status_after_palette(PALETTE_OPEN_STATUS, "Saved locally").as_deref(),
+            Some("Saved locally"),
+            "Esc must not leave the status line saying the palette is open"
+        );
+        assert_eq!(
+            status_after_palette(
+                "Cannot show the command palette: synthetic",
+                "Saved locally"
+            ),
+            None,
+            "a notice written while the entry was open stays"
         );
     }
 

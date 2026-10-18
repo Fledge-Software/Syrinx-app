@@ -144,6 +144,19 @@ mod tests {
     }
 
     #[test]
+    fn a_home_opened_for_the_appearance_panel_opens_no_palette() {
+        // The Appearance button queues Home, then finishes the entry nobody asked for (#14).
+        let (home, id) = home();
+        let mut intent = HomePaletteIntent::default();
+        let request = queue(&mut intent, new_home());
+        intent.finish_entry();
+        assert!(!intent.acknowledge(&home, &[id], Some(request)));
+        // Ctrl T afterwards is an ordinary entry again.
+        let next = queue(&mut intent, new_home());
+        assert!(intent.acknowledge(&home, &[id], Some(next)));
+    }
+
+    #[test]
     fn saved_or_reopened_real_page_cannot_rearm_an_earlier_home_acknowledgment() {
         let (home, id) = home();
         let saved = syrinx_core::SavedPageId::new(1).expect("synthetic saved ID");
