@@ -758,8 +758,9 @@ fn library_row(labels: bool, cx: &mut Context<BrowserView>) -> Div {
     let buttons = [
         icon_button(div().id("library-history"), glyph::HISTORY, "History")
             .aria_keyshortcuts("Control+H")
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.toggle_history();
+            .on_click(cx.listener(|this, _, window, cx| {
+                let return_focus = this.chrome_return_focus(window, cx);
+                this.toggle_history(return_focus, window, cx);
                 cx.notify();
             })),
         icon_button(div().id("library-bookmarks"), glyph::BOOKMARKS, "Bookmarks").on_click(

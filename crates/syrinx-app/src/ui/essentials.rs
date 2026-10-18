@@ -15,7 +15,8 @@ const ZOOM_IN_KEYS: [&str; 2] = ["ctrl-=", "ctrl-+"];
 const ZOOM_OUT_KEY: &str = "ctrl--";
 
 /// Binds the zoom keys the registry cannot hold, while Syrinx chrome has focus. Reset zoom's
-/// Ctrl 0 comes from the registry. A focused page keeps these keys first (owner, 2026-10-12).
+/// Ctrl 0 comes from the registry. A focused page sends them through its accelerator handler
+/// instead (owner, 2026-10-18).
 pub(super) fn bind_zoom_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new(ZOOM_IN_KEYS[0], ZoomIn, None),

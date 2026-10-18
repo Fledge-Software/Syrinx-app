@@ -1,7 +1,8 @@
 //! Shows recent visits in the page card and opens one in a new tab (P1-20, Ctrl H).
 
 use gpui::{
-    Context, Div, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled, div, px,
+    App, Context, Div, FocusHandle, InteractiveElement, ParentElement, StatefulInteractiveElement,
+    Styled, Window, div, px,
 };
 use syrinx_store::HistoryVisit;
 
@@ -14,6 +15,39 @@ use crate::{
 /// How many visits the list reads; older history stays searchable through the palette.
 const RECENT_LIMIT: usize = 200;
 
+/// Where the keys go when the list closes: the page it hid, or the chrome control that had them.
+pub(super) enum ReturnFocus {
+    Page,
+    Control(FocusHandle),
+}
+
+/// What Escape in Syrinx's chrome closes, topmost first.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ChromeEscape {
+    Menu,
+    Peek(u64),
+    History,
+    /// Nothing of Syrinx's is open, so the key goes on to whatever else wants it.
+    Nothing,
+}
+
+pub(super) fn chrome_escape(
+    menu_open: bool,
+    peek: Option<u64>,
+    history_open: bool,
+) -> ChromeEscape {
+    if menu_open {
+        return ChromeEscape::Menu;
+    }
+    if let Some(generation) = peek {
+        return ChromeEscape::Peek(generation);
+    }
+    if history_open {
+        return ChromeEscape::History;
+    }
+    ChromeEscape::Nothing
+}
+
 /// Whether the list is shown, and the newest read whose reply it will accept.
 #[derive(Default)]
 pub(super) struct HistoryList {
@@ -22,6 +56,7 @@ pub(super) struct HistoryList {
     pending: Option<u64>,
     visits: Vec<HistoryVisit>,
     error: Option<String>,
+    return_focus: Option<ReturnFocus>,
 }
 
 impl HistoryList {
@@ -30,7 +65,11 @@ impl HistoryList {
     }
 
     /// Shows the list and returns the read that fills it; a newer read supersedes older replies.
-    pub(super) fn open(&mut self) -> SessionCommand {
+    /// A refresh keeps the focus the first opening will return to.
+    pub(super) fn open(&mut self, return_focus: ReturnFocus) -> SessionCommand {
+        if !self.open {
+            self.return_focus = Some(return_focus);
+        }
         self.open = true;
         self.sequence = self.sequence.wrapping_add(1);
         self.pending = Some(self.sequence);
@@ -40,11 +79,13 @@ impl HistoryList {
         }
     }
 
-    pub(super) fn close(&mut self) {
+    /// Hides the list and hands back where the keys were when it opened, if it was open.
+    pub(super) fn close(&mut self) -> Option<ReturnFocus> {
         self.open = false;
         self.pending = None;
         self.visits.clear();
         self.error = None;
+        self.return_focus.take()
     }
 
     /// Accepts only the reply to the newest read while the list is open.
@@ -78,6 +119,68 @@ impl HistoryList {
             return Some("No history yet. Pages you visit will appear here.".to_owned());
         }
         None
+    }
+}
+
+impl BrowserView {
+    /// Ctrl H, the History button or command: shows the list, or closes it if shown.
+    pub(super) fn toggle_history(
+        &mut self,
+        return_focus: ReturnFocus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.history.is_open() {
+            self.close_history(window, cx);
+        } else {
+            self.open_history(return_focus, window, cx);
+        }
+    }
+
+    /// Where a chrome key or click that opens the list should give the keys back: the
+    /// focused control, or the page when only Syrinx's root (or nothing) has them.
+    pub(super) fn chrome_return_focus(&self, window: &Window, cx: &App) -> ReturnFocus {
+        match window.focused(cx) {
+            Some(handle) if handle != self.focus => ReturnFocus::Control(handle),
+            _ => ReturnFocus::Page,
+        }
+    }
+
+    fn open_history(
+        &mut self,
+        return_focus: ReturnFocus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.closing || self.session_revision.is_none() {
+            return;
+        }
+        let from_page = matches!(return_focus, ReturnFocus::Page);
+        let read = self.history.open(return_focus);
+        self.command(read);
+        self.sync_pages();
+        // The list hides the page, so its keys move to the chrome, where Escape closes it.
+        if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
+            self.message = error.to_string();
+        }
+        if from_page && self.is_main_window(window) {
+            window.focus(&self.focus, cx);
+        }
+    }
+
+    /// Hides the list and gives the keys back to the page or control that had them.
+    pub(super) fn close_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(return_focus) = self.history.close() else {
+            return;
+        };
+        self.sync_pages();
+        match return_focus {
+            ReturnFocus::Page => self.focus_page(window, cx),
+            ReturnFocus::Control(handle) if self.is_main_window(window) => {
+                window.focus(&handle, cx);
+            }
+            ReturnFocus::Control(_) => {}
+        }
     }
 }
 
@@ -117,10 +220,12 @@ pub(super) fn render(list: &HistoryList, cx: &mut Context<BrowserView>) -> Div {
             )),
         )
         .child(
-            button("history-close", "Close · Ctrl H").on_click(cx.listener(|this, _, _, cx| {
-                this.toggle_history();
-                cx.notify();
-            })),
+            button("history-close", "Close · Ctrl H").on_click(cx.listener(
+                |this, _, window, cx| {
+                    this.close_history(window, cx);
+                    cx.notify();
+                },
+            )),
         );
     let mut rows = div().flex().flex_col().gap_1();
     if let Some(status) = list.status() {
@@ -170,8 +275,8 @@ fn row(
     .gap_3()
     .cursor_pointer()
     .hover(|style| style.bg(theme::preview_row_selected()))
-    .on_click(cx.listener(move |this, _, _, cx| {
-        this.toggle_history();
+    .on_click(cx.listener(move |this, _, window, cx| {
+        this.close_history(window, cx);
         this.command(SessionCommand::OpenHistory(entry));
         cx.notify();
     }))
@@ -216,14 +321,14 @@ mod tests {
         let SessionCommand::RecentHistory {
             request_id: first,
             limit,
-        } = list.open()
+        } = list.open(ReturnFocus::Page)
         else {
             panic!("opening reads recent history");
         };
         assert_eq!(limit, RECENT_LIMIT);
         let SessionCommand::RecentHistory {
             request_id: second, ..
-        } = list.open()
+        } = list.open(ReturnFocus::Page)
         else {
             panic!("refreshing reads recent history");
         };
@@ -236,7 +341,7 @@ mod tests {
         // A reply after closing is ignored and the closed list holds nothing.
         let SessionCommand::RecentHistory {
             request_id: third, ..
-        } = list.open()
+        } = list.open(ReturnFocus::Page)
         else {
             panic!("reopening reads recent history");
         };
@@ -247,9 +352,31 @@ mod tests {
     }
 
     #[test]
+    fn closing_returns_the_focus_of_the_first_opening_once() {
+        let mut list = HistoryList::default();
+        assert!(
+            list.close().is_none(),
+            "a closed list has nowhere to return"
+        );
+        list.open(ReturnFocus::Page);
+        // A refresh while open keeps the original return.
+        list.open(ReturnFocus::Page);
+        assert!(matches!(list.close(), Some(ReturnFocus::Page)));
+        assert!(list.close().is_none(), "the return is used once");
+    }
+
+    #[test]
+    fn escape_closes_the_topmost_of_menu_peek_and_history() {
+        assert_eq!(chrome_escape(true, Some(3), true), ChromeEscape::Menu);
+        assert_eq!(chrome_escape(false, Some(3), true), ChromeEscape::Peek(3));
+        assert_eq!(chrome_escape(false, None, true), ChromeEscape::History);
+        assert_eq!(chrome_escape(false, None, false), ChromeEscape::Nothing);
+    }
+
+    #[test]
     fn status_reports_loading_empty_and_failure() {
         let mut list = HistoryList::default();
-        let SessionCommand::RecentHistory { request_id, .. } = list.open() else {
+        let SessionCommand::RecentHistory { request_id, .. } = list.open(ReturnFocus::Page) else {
             panic!("opening reads recent history");
         };
         assert_eq!(list.status().as_deref(), Some("Loading history…"));
@@ -258,7 +385,7 @@ mod tests {
             list.status()
                 .is_some_and(|status| status.starts_with("No history yet"))
         );
-        let SessionCommand::RecentHistory { request_id, .. } = list.open() else {
+        let SessionCommand::RecentHistory { request_id, .. } = list.open(ReturnFocus::Page) else {
             panic!("refreshing reads recent history");
         };
         assert!(list.receive(request_id, Err(SessionError::HistoryUnavailable)));

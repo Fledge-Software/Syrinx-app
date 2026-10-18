@@ -192,7 +192,9 @@ impl BrowserView {
             MenuItem::ZoomOut => self.essential_shortcut(BrowserShortcut::ZoomOut),
             MenuItem::ResetZoom => self.essential_shortcut(BrowserShortcut::ZoomReset),
             MenuItem::SavePage => self.command(SessionCommand::SaveActive),
-            MenuItem::History => self.toggle_history(),
+            MenuItem::History => {
+                self.toggle_history(super::history_list::ReturnFocus::Page, window, cx);
+            }
             MenuItem::NewTab => self.command(SessionCommand::NewTab {
                 address: "about:blank".to_owned(),
             }),

@@ -91,6 +91,7 @@ use title_bar::title_bar;
 
 pub(crate) use panes::{FocusNextControl, FocusPreviousControl};
 
+use history_list::ChromeEscape;
 use home_palette::HomePaletteIntent;
 use navigation_intents::NavigationIntents;
 use navigation_status::NavigationStatus;
@@ -233,8 +234,8 @@ fn activation_command(
     }
 }
 
-/// Runs a browser command through the same handler as its keyboard shortcut; history, clear
-/// browsing data and the two update commands have no native page shortcut, so they run directly.
+/// Runs a browser command through the same handler as its keyboard shortcut; clear browsing
+/// data and the two update commands have no native page shortcut, so they run directly.
 fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
     Some(match action {
         BrowserAction::NewTab => BrowserShortcut::NewTab,
@@ -253,8 +254,8 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
         BrowserAction::ZoomIn => BrowserShortcut::ZoomIn,
         BrowserAction::ZoomOut => BrowserShortcut::ZoomOut,
         BrowserAction::ResetZoom => BrowserShortcut::ZoomReset,
-        BrowserAction::ShowHistory
-        | BrowserAction::ClearBrowsingData
+        BrowserAction::ShowHistory => BrowserShortcut::History,
+        BrowserAction::ClearBrowsingData
         | BrowserAction::InstallUpdateFromFile
         | BrowserAction::CheckForUpdates => return None,
     })
@@ -1181,17 +1182,6 @@ impl BrowserView {
         self.command(SessionCommand::CloseActive);
     }
 
-    /// Shows recent history in the page card, or returns to the active page.
-    fn toggle_history(&mut self) {
-        if self.history.is_open() {
-            self.history.close();
-        } else if !self.closing && self.session_revision.is_some() {
-            let read = self.history.open();
-            self.command(read);
-        }
-        self.sync_pages();
-    }
-
     fn shortcut(&mut self, shortcut: BrowserShortcut, window: &mut Window, cx: &mut Context<Self>) {
         self.browser_action(shortcut, true, window, cx);
     }
@@ -1221,6 +1211,10 @@ impl BrowserView {
             BrowserShortcut::LeavePageBackward => self.leave_page_backward(window, cx),
             BrowserShortcut::Fullscreen => self.fullscreen_shortcut(window),
             BrowserShortcut::Find => self.open_find(window, cx),
+            // From a page key, the palette or a menu, the keys were the page's to return.
+            BrowserShortcut::History => {
+                self.toggle_history(history_list::ReturnFocus::Page, window, cx);
+            }
             BrowserShortcut::Downloads
             | BrowserShortcut::Print
             | BrowserShortcut::ZoomIn
@@ -1428,8 +1422,7 @@ impl BrowserView {
             None if action == BrowserAction::InstallUpdateFromFile => {
                 self.install_update_from_file(window, cx);
             }
-            None if action == BrowserAction::CheckForUpdates => self.check_for_updates(window, cx),
-            None => self.toggle_history(),
+            None => self.check_for_updates(window, cx),
         }
         // Edit address reopens the palette and Find focuses its bar; the rest return to the page.
         if !matches!(
@@ -1501,6 +1494,13 @@ impl BrowserView {
     }
 
     fn focus_shown_page(&mut self) {
+        // A page hidden behind History, clear data or a crash card must not take the keys.
+        if !self.page_card_shows_web_page() {
+            if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
+                self.message = error.to_string();
+            }
+            return;
+        }
         if let Some(id) = self.shown {
             self.acceptance_mark("page focus sent");
             self.page_command(BrowserCommand::Focus { id: id.get() });
@@ -1897,14 +1897,19 @@ impl Render for BrowserView {
                 this.toggle_sidebar(window, cx);
             }))
             .on_action(cx.listener(|this, _: &DismissPeek, window, cx| {
-                // An open menu is the topmost thing Escape dismisses.
-                if this.close_menu_to_page(window, cx) {
-                    return;
-                }
-                if let Some(generation) = this.peek.as_ref().map(|peek| peek.generation) {
-                    this.dismiss_peek(generation, window, cx);
-                } else {
-                    cx.propagate();
+                // Escape closes the topmost of an open menu, the peek and the history list.
+                let peek = this.peek.as_ref().map(|peek| peek.generation);
+                match history_list::chrome_escape(this.menu.is_some(), peek, this.history.is_open())
+                {
+                    ChromeEscape::Menu => {
+                        this.close_menu_to_page(window, cx);
+                    }
+                    ChromeEscape::Peek(generation) => this.dismiss_peek(generation, window, cx),
+                    ChromeEscape::History => {
+                        this.close_history(window, cx);
+                        cx.notify();
+                    }
+                    ChromeEscape::Nothing => cx.propagate(),
                 }
             }))
             .on_action(cx.listener(|this, _: &NewTab, _, cx| {
@@ -1948,8 +1953,9 @@ impl Render for BrowserView {
             .on_action(cx.listener(|this, _: &Reload, _, _| {
                 this.shown_page_action(Feature::NavReload, |id| BrowserCommand::Reload { id });
             }))
-            .on_action(cx.listener(|this, _: &ShowHistory, _, cx| {
-                this.toggle_history();
+            .on_action(cx.listener(|this, _: &ShowHistory, window, cx| {
+                let return_focus = this.chrome_return_focus(window, cx);
+                this.toggle_history(return_focus, window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ClearBrowsingData, _, cx| {
@@ -2195,12 +2201,11 @@ mod palette_shortcut_tests {
             let CommandAction::Browser(action) = command.action else {
                 panic!("built-in commands are browser actions");
             };
-            // History, clear data and updates run directly, not through a page shortcut.
+            // Clear data and updates run directly, not through a page shortcut.
             let Some(shortcut) = browser_shortcut(action) else {
                 assert!(matches!(
                     action,
-                    BrowserAction::ShowHistory
-                        | BrowserAction::ClearBrowsingData
+                    BrowserAction::ClearBrowsingData
                         | BrowserAction::InstallUpdateFromFile
                         | BrowserAction::CheckForUpdates
                 ));
@@ -2213,8 +2218,10 @@ mod palette_shortcut_tests {
             shortcuts.push(shortcut);
         }
         // Every native shortcut except the palette, fullscreen and the window's sidebar and
-        // peek keys is reachable as a command: ten navigation actions and six page essentials.
-        assert_eq!(shortcuts.len(), 16);
+        // peek keys is reachable as a command: ten navigation actions, history and six page
+        // essentials.
+        assert_eq!(shortcuts.len(), 17);
+        assert!(shortcuts.contains(&BrowserShortcut::History));
         for window_key in [
             BrowserShortcut::Palette,
             BrowserShortcut::Fullscreen,
