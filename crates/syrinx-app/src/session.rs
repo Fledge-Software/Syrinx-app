@@ -430,7 +430,7 @@ fn finish_worker(
     result: Result<(), SessionError>,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
-    // The reason is logged first, so it survives even a window that is already gone.
+    // The reason is logged first, so a console still has it when the window is gone.
     if let Err(error) = &result {
         stop::log_stop(error);
     }
@@ -758,7 +758,7 @@ impl Worker {
                     let (status, problem) = usage.control(control, local_today(), Instant::now());
                     let problem = problem.map(SessionError::Usage);
                     emit(events, SessionEvent::Usage { status, problem })
-                        .map_err(stop::during("changing usage counting"))?;
+                        .map_err(stop::during(stop::CHANGING_USAGE))?;
                 }
                 Ok(SessionCommand::UsageReport { request_id, period }) => {
                     let result = usage
@@ -769,7 +769,7 @@ impl Worker {
                         period,
                         result,
                     };
-                    emit(events, answer).map_err(stop::during("building a usage report"))?;
+                    emit(events, answer).map_err(stop::during(stop::BUILDING_USAGE_REPORT))?;
                 }
                 Ok(command) => {
                     let operation = command.operation();

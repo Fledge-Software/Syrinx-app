@@ -2,6 +2,10 @@
 
 use super::{SessionCommand, SessionError};
 
+/// Names shared with the loop, which answers these two commands before `handle`.
+pub(super) const CHANGING_USAGE: &str = "changing usage counting";
+pub(super) const BUILDING_USAGE_REPORT: &str = "building a usage report";
+
 impl SessionCommand {
     /// A fixed name for this command, safe to show and log: it never includes the contents.
     pub(crate) fn operation(&self) -> &'static str {
@@ -38,8 +42,8 @@ impl SessionCommand {
             Self::ClearHistory { .. } => "clearing history",
             Self::GrowSyntheticCatalogue { .. } => "growing the synthetic catalogue",
             Self::SnapshotBeforeUpdate => "taking the pre-update snapshot",
-            Self::Usage(_) => "changing usage counting",
-            Self::UsageReport { .. } => "building a usage report",
+            Self::Usage(_) => CHANGING_USAGE,
+            Self::UsageReport { .. } => BUILDING_USAGE_REPORT,
             Self::Shutdown => "shutting down",
         }
     }
@@ -58,7 +62,8 @@ pub(super) fn stop_line(error: &SessionError) -> String {
     format!("The session worker stopped: {error}")
 }
 
-/// Writes the stop reason to stderr, the app's diagnostic stream, even if the window is gone.
+/// Writes the stop reason to stderr, the app's diagnostic stream; a launch from Windows
+/// has no console, so there it reaches only the window.
 pub(super) fn log_stop(error: &SessionError) {
     eprintln!("{}", stop_line(error));
 }
