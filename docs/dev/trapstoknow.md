@@ -364,6 +364,14 @@ you found it in the commit message, not here.
   to the window root when focus goes to the page: `focus_page` does, and the
   page's `GotFocus` event (`BrowserEvent::PageFocused`) covers clicks.
   Source: P1-36 (code-confirmed; owner visual check pending).
+- **WebView2 raises `GotFocus` during native find although the keys stay in
+  the chrome.** Clearing GPUI focus on every `PageFocused` pushed the find
+  bar's caret to the window root after the first matches (#57, was DW-71),
+  while Windows focus never left Syrinx's window. `page_took_focus` now
+  clears only when `chrome_has_keyboard_focus` is false; keep that check, and
+  never infer the page holds the keys from the event alone. Source: the
+  native fixture's essentials suite, two such events over five queries with
+  `GetFocus` on the chrome throughout (observed 2026-10-18).
 - **GPUI's accessibility tree can panic the `local` build, but only with a
   UI Automation client attached.** The `local` profile keeps debug
   assertions, and the tree builder panics if one `FocusHandle` is tracked by
