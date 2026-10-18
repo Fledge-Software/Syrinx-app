@@ -118,10 +118,13 @@ impl MenuItem {
         Shortcut::new(keys).ok().map(|shortcut| shortcut.label())
     }
 
-    /// Whether the item puts the keys in a chrome field; every other item returns them
-    /// to the page, where they were before the menu opened.
+    /// Whether the item puts the keys in a chrome field or list (History places them itself);
+    /// every other item returns them to the page, where they were before the menu opened.
     fn takes_keys(self) -> bool {
-        matches!(self, MenuItem::Find | MenuItem::NewFolder)
+        matches!(
+            self,
+            MenuItem::Find | MenuItem::NewFolder | MenuItem::History
+        )
     }
 }
 
@@ -833,14 +836,17 @@ mod tests {
     }
 
     #[test]
-    fn only_find_and_new_folder_keep_the_keys_from_the_page() {
+    fn only_find_new_folder_and_history_keep_the_keys_from_the_page() {
         let taking: Vec<_> = PAGE_ITEMS
             .iter()
             .chain(&SIDEBAR_ITEMS)
             .copied()
             .filter(|item| item.takes_keys())
             .collect();
-        assert_eq!(taking, [MenuItem::Find, MenuItem::NewFolder]);
+        assert_eq!(
+            taking,
+            [MenuItem::Find, MenuItem::History, MenuItem::NewFolder]
+        );
     }
 
     #[test]
