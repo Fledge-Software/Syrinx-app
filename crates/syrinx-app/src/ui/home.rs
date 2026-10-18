@@ -31,8 +31,9 @@ const QUICK_TILE_RADIUS: f32 = 18.;
 const SEARCH_PILL_MAX_WIDTH: f32 = 760.;
 const LOGO_TILE_SIZE: f32 = 30.;
 
-/// The brand's 64 px icon tile (`design/brand/icon`), about twice the logo tile's size, for sharp HiDPI.
-static LOGO_PNG: &[u8] = include_bytes!("../../../../design/brand/icon/syrinx-icon-64.png");
+/// The brand's small-variant icon tile at 64 px (`design/brand/icon`): the brand asks for the small
+/// variant at 32 px and below, and this mark is 30 px, drawn at twice that for sharp HiDPI.
+static LOGO_PNG: &[u8] = include_bytes!("../../../../design/brand/icon/syrinx-icon-small-64.png");
 
 /// The Syrinx bird tile, built once so each frame clones an Arc instead of copying and hashing the bytes.
 fn logo_image() -> Arc<Image> {

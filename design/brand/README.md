@@ -45,6 +45,8 @@ such as a dark hero section on the website or Syrinx's own Graphite chrome.
 - `icon/syrinx-icon-<size>.png`: the tile at 16, 20, 24, 32, 40, 48, 64, 128,
   256 and 512 px, with a transparent background outside the rounded corners.
   Sizes up to 32 use the small variant.
+- `icon/syrinx-icon-small-64.png`: the small variant at 64 px, for Syrinx's own 30 px
+  logo tile on Home (twice its size, for sharp HiDPI). Made by `tools/regenerate.py`.
 - `icon/syrinx.ico`: every size from 16 to 256 as PNG-compressed entries.
   `crates/syrinx-app/build.rs` compiles it into `syrinx.exe` as icon resource 1,
   which the window, taskbar, Start menu and Installed apps all show.
