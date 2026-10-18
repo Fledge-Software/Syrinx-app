@@ -997,11 +997,7 @@ fn a_full_stop_log_is_moved_aside_so_the_pair_stays_capped() {
     assert_eq!(checked_io(fs::read_to_string(&old)), full);
     assert_eq!(
         checked_io(fs::read_to_string(&current)),
-        format!(
-            "{}
-",
-            stop::stop_line(&SessionError::ClockUnavailable)
-        )
+        format!("{}\n", stop::stop_line(&SessionError::ClockUnavailable))
     );
     fixture.cleanup();
 }

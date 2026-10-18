@@ -84,20 +84,28 @@ pub(super) fn log_stop(error: &SessionError) {
 /// Adds the stop line to the log in `directory`; a failed write is reported, never fatal.
 pub(super) fn keep_stop(directory: &Path, error: &SessionError) {
     if let Err(problem) = append_stop(directory, error) {
-        eprintln!(
-            "Cannot write the session worker's stop log ({:?}, code {:?})",
-            problem.kind(),
-            problem.raw_os_error()
-        );
+        report_log_problem("write", &problem);
     }
 }
 
 /// Appends one stop line, first moving a full log aside so the pair stays small.
+/// A failed move is reported and the line still appended: one overshoot beats losing it.
 pub(super) fn append_stop(directory: &Path, error: &SessionError) -> io::Result<()> {
     let path = directory.join(LOG_NAME);
-    rotate_if_full(&path, &directory.join(OLD_LOG_NAME))?;
+    if let Err(problem) = rotate_if_full(&path, &directory.join(OLD_LOG_NAME)) {
+        report_log_problem("move aside", &problem);
+    }
     let mut log = OpenOptions::new().create(true).append(true).open(&path)?;
     writeln!(log, "{}", stop_line(error))
+}
+
+/// One stderr line naming the failed step, the error kind and the Windows code; no path.
+fn report_log_problem(step: &str, problem: &io::Error) {
+    eprintln!(
+        "Cannot {step} the session worker's stop log ({:?}, code {:?})",
+        problem.kind(),
+        problem.raw_os_error()
+    );
 }
 
 /// Replaces the previous log with the current one once it reaches `LOG_LIMIT`.

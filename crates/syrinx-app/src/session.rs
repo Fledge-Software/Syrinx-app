@@ -486,6 +486,7 @@ fn run(
         (result, Ok(())) => result,
     };
     let result = finish_store(result, store.shutdown());
+    // The guard accepted this folder at start; its lease is released now, as for usage.json.
     if let Err(error) = &result {
         stop::keep_stop(&data_dir, error);
     }
