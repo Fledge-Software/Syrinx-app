@@ -6,7 +6,7 @@
 Syrinx is a browser-first workspace app: a Windows desktop browser with a
 vertical-tab sidebar, where Forge (code), Notes and Fledge run as built-in
 plugins that open as tabs. It was called Atlas, a working name, until the
-owner named it Syrinx on 2026-10-12; older records still say Atlas. Pages render in WebView2 driven from
+owner named it Syrinx on 2026-10-12; the docs and wiki say Syrinx throughout. Pages render in WebView2 driven from
 Rust through wry, and Syrinx's own interface is drawn in Rust with the
 conditionally approved GPUI base (D37's idle-patch gate still applies).
 

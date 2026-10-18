@@ -24,8 +24,8 @@ Previews are unsigned, so Windows SmartScreen warns before the first run.
 Syrinx is licensed under the Mozilla Public License 2.0.
 
 The product was called Atlas, a working name, until the owner named it
-Syrinx on 2026-10-12. Older records still say Atlas; read Atlas there as
-Syrinx.
+Syrinx on 2026-10-12, and the wiki and the docs now say Syrinx
+throughout.
 
 ## Where things are
 

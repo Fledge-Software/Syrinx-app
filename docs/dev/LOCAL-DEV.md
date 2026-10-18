@@ -143,7 +143,7 @@ A certificate is not an application requirement. `xtask.exe` is a separate
 development tool that runs the quality checks listed above; "optimized" means
 compiled with the release-style `local` profile. It is not the browser.
 On 2026-10-10, signature inspection reported `NotSigned` for
-`target/local/atlas-app.exe`, and launching that exact file printed
+`target/local/syrinx-app.exe`, and launching that exact file printed
 `Atlas 0.1.0` (its name then) and exited successfully. This proves the current console
 scaffold starts unsigned, not that the later browser window is implemented.
 

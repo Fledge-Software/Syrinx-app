@@ -1,27 +1,27 @@
 > **Research note dated 2026-10-09.** Read for reasoning, not current fact; later decisions in [`docs/decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/decisions.md) and [`docs/architecture-decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/architecture-decisions.md) win.
 >
-> Written while Syrinx (then Atlas) was planned on Tauri 2 for three operating systems; v1 is Windows 11 only (D2) and uses wry and GPUI (D3, D4). Its Widevine statements are wrong for the WebView2 runtime on the owner's machine; [note 07](Background-07-google-sign-in-and-drm) corrects them. Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri. The product was called Atlas until 2026-10-12; read Atlas here as Syrinx.
+> Written while Syrinx was planned on Tauri 2 for three operating systems; v1 is Windows 11 only (D2) and uses wry and GPUI (D3, D4). Its Widevine statements are wrong for the WebView2 runtime on the owner's machine; [note 07](Background-07-google-sign-in-and-drm) corrects them. Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri.
 >
 > Moved from `docs/research/02-browser-v1-scope.md` ([original at af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/02-browser-v1-scope.md)) on 2026-10-16.
 
-# Browser v1 scope: what Atlas needs to be a daily browser
+# Browser v1 scope: what Syrinx needs to be a daily browser
 
 **Date:** 2026-10-09
 
-**Question:** What does a browser need at v1 for its owner to use it as their daily browser, and what can wait? Atlas is a Tauri 2 app with a Rust core and a Svelte 5 chrome that renders pages in the operating system's web view: WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux. Profiles, Chrome extensions, a built-in password manager and ad blocking are out of scope by the owner's decision; they appear below only where their absence causes a real problem.
+**Question:** What does a browser need at v1 for its owner to use it as their daily browser, and what can wait? Syrinx is a Tauri 2 app with a Rust core and a Svelte 5 chrome that renders pages in the operating system's web view: WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux. Profiles, Chrome extensions, a built-in password manager and ad blocking are out of scope by the owner's decision; they appear below only where their absence causes a real problem.
 
-Terms used below. The **chrome** is the browser's own interface (sidebar, palette, title bar), as opposed to the page. A **web view** is the embedded engine that draws a page; each Atlas tab is its own child web view. A web view's **default UI** is the dialog or bar the engine shows by itself when the host app does nothing. An **accelerator** is a keyboard shortcut.
+Terms used below. The **chrome** is the browser's own interface (sidebar, palette, title bar), as opposed to the page. A **web view** is the embedded engine that draws a page; each Syrinx tab is its own child web view. A web view's **default UI** is the dialog or bar the engine shows by itself when the host app does nothing. An **accelerator** is a keyboard shortcut.
 
 ## Short answer
 
-- Much of a browser's plumbing already lives inside WebView2: the find bar, printing, the download flyout, permission prompts that remember the answer, certificate-error pages, SmartScreen phishing protection, the right-click menu and web notifications all work with no code. Atlas mostly builds chrome around them. On macOS far more has to be built (find, downloads, certificate warnings and mute have no built-in UI).
-- What Atlas must build itself is the browser's memory: the tab model, session restore, reopening closed tabs, history, bookmarks and import. That is Rust and SQLite work and matches the spec's Phase 1.
-- Keyboard shortcuts are the hidden v1 cost. WebView2 never handles Ctrl T, Ctrl L, Ctrl Tab, Ctrl 1 to 9, Ctrl D, Ctrl H or Ctrl Shift T, and when a page has focus its key presses do not reach the Svelte chrome. Atlas has to catch every browser shortcut at the native layer in every page web view and route it to Rust.
+- Much of a browser's plumbing already lives inside WebView2: the find bar, printing, the download flyout, permission prompts that remember the answer, certificate-error pages, SmartScreen phishing protection, the right-click menu and web notifications all work with no code. Syrinx mostly builds chrome around them. On macOS far more has to be built (find, downloads, certificate warnings and mute have no built-in UI).
+- What Syrinx must build itself is the browser's memory: the tab model, session restore, reopening closed tabs, history, bookmarks and import. That is Rust and SQLite work and matches the spec's Phase 1.
+- Keyboard shortcuts are the hidden v1 cost. WebView2 never handles Ctrl T, Ctrl L, Ctrl Tab, Ctrl 1 to 9, Ctrl D, Ctrl H or Ctrl Shift T, and when a page has focus its key presses do not reach the Svelte chrome. Syrinx has to catch every browser shortcut at the native layer in every page web view and route it to Rust.
 - **Google sign-in is the biggest daily-use risk.** Microsoft's WebView2 documentation states that Google has disabled Google authentication in embedded web views, WebView2 included. If the owner uses Gmail, YouTube or Google Workspace, Phase 0 has to test signing in before anything else is built on top.
 - Session restore on Windows can bring back each tab's address but not its back/forward list: WebView2 has no API for it, and Microsoft has called the request niche. WKWebView and WebKitGTK can save and restore the list.
-- HTML5 fullscreen video, popup windows for OAuth sign-in, and DRM-protected media all need deliberate work or will fail: fullscreen fills only the tab's web view, unhandled popups escape into windows Atlas cannot control, and WebView2 has no Widevine.
+- HTML5 fullscreen video, popup windows for OAuth sign-in, and DRM-protected media all need deliberate work or will fail: fullscreen fills only the tab's web view, unhandled popups escape into windows Syrinx cannot control, and WebView2 has no Widevine.
 - Becoming the default browser on Windows 11 is registration plus a link into Windows Settings; no app may make itself the default, and the user confirms it.
-- Ship through the Tauri updater, whose signatures cannot be turned off. For Windows code signing, Microsoft's Artifact Signing (from $9.99 a month, individuals in the US or Canada) is the cheapest route, and EV certificates no longer skip SmartScreen warnings. Signing can wait until somebody other than the owner installs Atlas.
+- Ship through the Tauri updater, whose signatures cannot be turned off. For Windows code signing, Microsoft's Artifact Signing (from $9.99 a month, individuals in the US or Canada) is the cheapest route, and EV certificates no longer skip SmartScreen warnings. Signing can wait until somebody other than the owner installs Syrinx.
 - Send nothing home: no telemetry, local crash logs only, and switch off WebView2's default upload of crash dumps to Microsoft. Keep each web view's phishing protection on.
 - Picture-in-picture, split view, multiple windows, tab sleeping and a site-settings page can wait until after v1.
 
@@ -29,54 +29,54 @@ Terms used below. The **chrome** is the browser's own interface (sidebar, palett
 
 | Feature | Priority | Provided by | Notes |
 |---|---|---|---|
-| Tabs: open, close, switch, reorder, pin | Must | Atlas builds it | The core tab model over Tauri child web views. |
-| Reopen closed tab (Ctrl Shift T) | Must | Atlas builds it | A stack of closed tabs in Rust; WebView2 never handles this key. |
-| Session restore after quit | Must | Atlas builds it | Windows: address, title, pin and order only. macOS and Linux can also restore back/forward. |
-| Crash recovery of the app | Must | Atlas builds it | Write the session to SQLite on every change, not only on exit. |
-| Page crash recovery ("sad tab") | Must | Web view event, Atlas UI | `ProcessFailed` (WebView2), `webViewWebContentProcessDidTerminate` (WKWebView). |
-| History | Must | Atlas builds it | From navigation and title events into the shared search index. |
-| Bookmarks | Must | Atlas builds it | Spec Phase 1; the palette searches them. |
-| Import bookmarks (Chrome, Edge, Firefox, HTML file) | Must | Atlas builds it | Without it the owner starts from nothing. |
-| Import history | Should | Atlas builds it | Makes palette search useful on day one. |
+| Tabs: open, close, switch, reorder, pin | Must | Syrinx builds it | The core tab model over Tauri child web views. |
+| Reopen closed tab (Ctrl Shift T) | Must | Syrinx builds it | A stack of closed tabs in Rust; WebView2 never handles this key. |
+| Session restore after quit | Must | Syrinx builds it | Windows: address, title, pin and order only. macOS and Linux can also restore back/forward. |
+| Crash recovery of the app | Must | Syrinx builds it | Write the session to SQLite on every change, not only on exit. |
+| Page crash recovery ("sad tab") | Must | Web view event, Syrinx UI | `ProcessFailed` (WebView2), `webViewWebContentProcessDidTerminate` (WKWebView). |
+| History | Must | Syrinx builds it | From navigation and title events into the shared search index. |
+| Bookmarks | Must | Syrinx builds it | Spec Phase 1; the palette searches them. |
+| Import bookmarks (Chrome, Edge, Firefox, HTML file) | Must | Syrinx builds it | Without it the owner starts from nothing. |
+| Import history | Should | Syrinx builds it | Makes palette search useful on day one. |
 | Import logins and cookies | Later | Not possible from Chrome | Chrome encrypts cookies for Chrome alone; sign in again. |
 | Google account sign-in | Must (test first) | Blocked by Google in embedded web views | The top Phase 0 risk; see Findings 1. |
-| Downloads | Must | WebView2 default flyout (Ctrl J); Tauri download hook | macOS has no download UI: Atlas builds a list there. |
-| Find in page (Ctrl F) | Must | WebView2 built-in bar; API on macOS | An Atlas-styled bar is Should on Windows, Must on macOS. |
+| Downloads | Must | WebView2 default flyout (Ctrl J); Tauri download hook | macOS has no download UI: Syrinx builds a list there. |
+| Find in page (Ctrl F) | Must | WebView2 built-in bar; API on macOS | An Syrinx-styled bar is Should on Windows, Must on macOS. |
 | Zoom (Ctrl plus, minus, 0) | Must | WebView2 per web view; `pageZoom` on macOS | Per-site memory across restarts is Should. |
 | Printing (Ctrl P) | Must | WebView2 built-in; `printOperation` on macOS | macOS has no `window.print()` hook. |
-| Windows keyboard shortcuts | Must | Atlas builds it | Route keys from every page web view to Rust. |
+| Windows keyboard shortcuts | Must | Syrinx builds it | Route keys from every page web view to Rust. |
 | Audio indicator and mute | Should | WebView2 API; WebKitGTK API | WebView2's own Ctrl M does nothing; WKWebView has no mute at all. |
 | Permission prompts (camera, mic, location) | Must | WebView2 default prompt, saved per site | macOS needs Info.plist usage strings and entitlements. |
-| Site settings page | Later | Atlas UI on WebView2 profile APIs | `GetNonDefaultPermissionSettings` lists what was granted. |
-| HTTPS indicator and certificate errors | Must | WebView2 warning page; Atlas padlock | No API reports the security state of a page that loaded fine. |
+| Site settings page | Later | Syrinx UI on WebView2 profile APIs | `GetNonDefaultPermissionSettings` lists what was granted. |
+| HTTPS indicator and certificate errors | Must | WebView2 warning page; Syrinx padlock | No API reports the security state of a page that loaded fine. |
 | Phishing and malware protection | Must | WebView2 SmartScreen; WKWebView warning | On by default; none on Linux. |
 | Tracking prevention | Should | WebView2 profile setting | Balanced by default when enabled; expose Strict. |
-| Clear browsing data | Must | WebView2 by kind and time range; WKWebsiteDataStore | Atlas also clears its own history store. |
-| HTML5 fullscreen video | Must | Atlas builds it | Resize the tab's web view to the window; WKWebView needs it switched on. |
-| Popups and new windows (OAuth) | Must | WebView2 `NewWindowRequested` | Supply Atlas's own web view so `window.opener` survives. |
+| Clear browsing data | Must | WebView2 by kind and time range; WKWebsiteDataStore | Syrinx also clears its own history store. |
+| HTML5 fullscreen video | Must | Syrinx builds it | Resize the tab's web view to the window; WKWebView needs it switched on. |
+| Popups and new windows (OAuth) | Must | WebView2 `NewWindowRequested` | Supply Syrinx's own web view so `window.opener` survives. |
 | Right-click menu | Must | WebView2 default menu | Customise later ("Open link in new tab"). |
 | Link preview in a status bar | Should | WebView2 default status bar | Check it draws inside the page card. |
 | DRM video and music | Should | PlayReady on WebView2, FairPlay on macOS | No Widevine in WebView2; Widevine-only sites fail. |
 | Passkeys and Windows Hello | Should | WebView2 (undocumented but working) | macOS needs Apple's gated browser entitlement. |
-| Default browser registration | Must | Installer registry entries, Atlas | User confirms in Windows Settings. |
-| Opening links from other apps | Must | Tauri single-instance, Atlas | Forward the URL to the running instance as a new tab. |
+| Default browser registration | Must | Installer registry entries, Syrinx | User confirms in Windows Settings. |
+| Opening links from other apps | Must | Tauri single-instance, Syrinx | Forward the URL to the running instance as a new tab. |
 | Auto-update | Must | Tauri updater plugin | Update signatures are mandatory. |
 | Windows code signing | Should (Must before others install) | Artifact Signing or a certificate | Unsigned builds show "Windows protected your PC". |
 | macOS signing and notarisation | Later (Must for a Mac release) | Apple Developer Program, $99 a year | Hardened Runtime and `notarytool`. |
-| Crash reporting | Should | Atlas builds it | Local log and dump folder; nothing uploaded. |
+| Crash reporting | Should | Syrinx builds it | Local log and dump folder; nothing uploaded. |
 | Telemetry | None | n/a | Deliberately none, as Orion and Zen do. |
-| Keyboard-only chrome, F6 between panes | Must | Atlas builds it | Plus moving focus into and out of the page web view. |
+| Keyboard-only chrome, F6 between panes | Must | Syrinx builds it | Plus moving focus into and out of the page web view. |
 | Screen-reader support for the chrome | Should | Web view exposes the Svelte DOM | Correct roles, names and focus order in the components. |
 | Screen-reader support for pages | Free on Windows | WebView2 | Unverified on macOS; test VoiceOver. |
 | Web notifications (mail, calendars) | Should | WebView2 default UI | Missing in WKWebView. |
-| Page dark-mode preference | Should | WebView2 `PreferredColorScheme` | Follow Atlas's palette or the OS. |
+| Page dark-mode preference | Should | WebView2 `PreferredColorScheme` | Follow Syrinx's palette or the OS. |
 | Developer tools (F12) | Should | WebView2, Tauri `devtools` | The owner is a developer. |
-| Search engine choice and suggestions | Should | Atlas builds it | The palette is the address bar. |
+| Search engine choice and suggestions | Should | Syrinx builds it | The palette is the address bar. |
 | Save page as (Ctrl S) | Later | WebView2 `ShowSaveAsUI` | WebView2 never handles Ctrl S itself. |
 | Tab sleeping for memory | Later | WebView2 `TrySuspend` | Edge sleeps tabs after two hours. |
 | Picture-in-picture | Later | Undocumented on both | Test before promising it. |
-| Split view | Later | Atlas builds it | Two child web views in one card; Zen allows four. |
-| Multiple windows, tear-off tabs | Later | Atlas builds it | One window is enough for v1. |
+| Split view | Later | Syrinx builds it | Two child web views in one card; Zen allows four. |
+| Multiple windows, tear-off tabs | Later | Syrinx builds it | One window is enough for v1. |
 | Passwords | Out of scope | n/a | Drop the Passwords button, as the design note suggests. |
 
 ## Findings
@@ -91,7 +91,7 @@ Each claim carries its source and a confidence (high, medium or low). Short keys
 
 **Which shortcuts WebView2 handles.** BF lists Ctrl T, Ctrl N, Ctrl Tab, Ctrl 1 to 9, Ctrl L and Alt D, Ctrl D, Ctrl H, Ctrl Shift T, Ctrl S and F10 as always off in WebView2; Ctrl W and F11 work only in popups WebView2 opened itself. Ctrl F, Ctrl P, F5, zoom, Alt Left and Ctrl J work by default and are switched off together by `AreBrowserAcceleratorKeysEnabled`. The host receives keys while a page has focus through the controller's `AcceleratorKeyPressed` event, and moves keyboard focus with `MoveFocus` and `MoveFocusRequested`. (BF, OV; high)
 
-**The Ctrl S clash.** Atlas's design pins the sidebar with Ctrl S, as Arc does on Windows, but Chrome, Edge and Zen use Ctrl S to save a page, and Zen puts its floating sidebar on Ctrl Alt S. ([Arc: hide the sidebar](https://resources.arc.net/hc/en-us/articles/25619487530519-How-Do-You-Hide-the-Sidebar), medium, read via search results because the page refused direct fetches; [Zen shortcuts](https://docs.zen-browser.app/user-manual/shortcuts), high) Inside Forge, Ctrl S has to save the file.
+**The Ctrl S clash.** Syrinx's design pins the sidebar with Ctrl S, as Arc does on Windows, but Chrome, Edge and Zen use Ctrl S to save a page, and Zen puts its floating sidebar on Ctrl Alt S. ([Arc: hide the sidebar](https://resources.arc.net/hc/en-us/articles/25619487530519-How-Do-You-Hide-the-Sidebar), medium, read via search results because the page refused direct fetches; [Zen shortcuts](https://docs.zen-browser.app/user-manual/shortcuts), high) Inside Forge, Ctrl S has to save the file.
 
 **Session restore and closed tabs are expected.** Firefox restores the last session after a crash, offers a Restore Session page and lists Recently Closed Tabs and Windows. ([Firefox: restore previous session](https://support.mozilla.org/en-US/kb/restore-previous-session); high) Vivaldi keeps a Closed Tabs menu for the latest session and points users to it when a crash loses the session. ([Vivaldi: opening and closing tabs](https://help.vivaldi.com/article/opening-and-closing-tabs); high)
 
@@ -105,7 +105,7 @@ Each claim carries its source and a confidence (high, medium or low). Short keys
 - Permissions: `PermissionRequested`; unhandled, the default prompt shows and the decision is saved in the profile. `SetPermissionState` and `GetNonDefaultPermissionSettings` (`ICoreWebView2Profile4`) back a site-settings page.
 - Zoom: Ctrl plus, minus, 0 and Ctrl wheel work in each web view; `ZoomFactor` sets it. Whether per-site zoom survives a restart is undocumented. (medium)
 - Certificate errors: unhandled `ServerCertificateErrorDetected` shows the built-in warning page. There is no API for the certificate or security state of a page that loaded fine ([WebView2Feedback #2642](https://github.com/MicrosoftEdge/WebView2Feedback/issues/2642)). (medium-high)
-- Popups: if `NewWindowRequested` is not handled, the runtime opens its own popup the app cannot control. Handing it a fresh Atlas web view keeps `window.opener`, which OAuth popups need. (medium-high)
+- Popups: if `NewWindowRequested` is not handled, the runtime opens its own popup the app cannot control. Handing it a fresh Syrinx web view keeps `window.opener`, which OAuth popups need. (medium-high)
 - Fullscreen: `ContainsFullScreenElementChanged` fires, but the element only fills its web view, so the host resizes it and hides the chrome.
 - Audio: `IsMuted` and `IsDocumentPlayingAudio`; the built-in Ctrl M does nothing.
 - Also: the context menu, status bar, `NotificationReceived` with a default notification UI, `PreferredColorScheme`, `PreferredTrackingPreventionLevel` (`ICoreWebView2Profile3`), and `TrySuspend` for sleeping tabs.
@@ -137,7 +137,7 @@ Each claim carries its source and a confidence (high, medium or low). Short keys
 ### 3. Becoming the default browser
 
 - **Windows 11.** A browser registers a `Capabilities` key with `ApplicationDescription`, `FileAssociations` (.htm, .html and so on) and `UrlAssociations` (http, https) pointing to its own ProgIDs (program identifiers in the registry), plus a value under `HKLM\SOFTWARE\RegisteredApplications`. The installer then calls `SHChangeNotify(SHCNE_ASSOCCHANGED, ...)`, after which Windows may show a notification offering the new browser as default. ([Microsoft Learn: Default Programs](https://learn.microsoft.com/en-us/windows/win32/shell/default-programs); high)
-- The same page marks the programmatic default-setting APIs (`SetAppAsDefaultAll`, `QueryAppIsDefault`) as deprecated or unsupported since Windows 8, says Windows 10 changed how defaults work, and says "the choice of default should be user driven". Atlas registers itself and then opens Windows Settings at its own entry for the owner to confirm. (high for the deprecation; medium for the Settings link, which is common practice rather than something this page states)
+- The same page marks the programmatic default-setting APIs (`SetAppAsDefaultAll`, `QueryAppIsDefault`) as deprecated or unsupported since Windows 8, says Windows 10 changed how defaults work, and says "the choice of default should be user driven". Syrinx registers itself and then opens Windows Settings at its own entry for the owner to confirm. (high for the deprecation; medium for the Settings link, which is common practice rather than something this page states)
 - **macOS.** A browser declares `http` and `https` in `CFBundleURLTypes`. `NSWorkspace.setDefaultApplication(at:toOpenURLsWithScheme:)` (macOS 12) changes the default and "if a change requires user consent, the system asks"; `LSSetDefaultHandlerForURLScheme` is deprecated since macOS 12. (A/appkit/nsworkspace; high)
 
 ### 4. Shipping and updating
@@ -160,17 +160,17 @@ Each claim carries its source and a confidence (high, medium or low). Short keys
 
 - Microsoft treats the keyboard as a primary input: every control reachable by Tab, and F6 moving between panes, with Edge's address bar, tab strip and content as the example. ([keyboard accessibility](https://learn.microsoft.com/en-us/windows/apps/design/accessibility/keyboard-accessibility); high)
 - By default WebView2 joins the accessibility tree as a child of its parent window, so screen readers reach page content with no work. (OV; high) An older bug where NVDA and JAWS could not read WebView2 in WinUI was fixed in 2024. ([WebView2Feedback #2330](https://github.com/MicrosoftEdge/WebView2Feedback/issues/2330); medium) Apple documents nothing on VoiceOver and WKWebView, so test it. (low)
-- Atlas's chrome is itself HTML in a web view, so it is accessible exactly as far as its Svelte markup has the right roles, names and focus order. Windows contrast themes reach web content through the `forced-colors` media query. ([MDN: forced-colors](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/forced-colors); high)
+- Syrinx's chrome is itself HTML in a web view, so it is accessible exactly as far as its Svelte markup has the right roles, names and focus order. Windows contrast themes reach web content through the `forced-colors` media query. ([MDN: forced-colors](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/forced-colors); high)
 
-## What this means for Atlas v1
+## What this means for Syrinx v1
 
 1. **Add four tests to Phase 0**, because each is a Must that depends on the multi-webview design: Google and Microsoft account sign-in, including an OAuth popup; browser shortcuts while a page has focus; HTML5 fullscreen video in a child web view; and Tab and F6 moving focus between the chrome and a page.
 2. **Build a shortcut router early.** Register `AcceleratorKeyPressed` on every page web view (and the macOS menu equivalents), send each browser shortcut to one Rust command table, and let the palette and sidebar read from it.
 3. **Phase 1 holds the browser-memory Musts:** tab model, closed-tab stack, a session written on every change, history, bookmarks, and import from Chrome, Edge and Firefox files plus HTML. Restore address-only on Windows; use `interactionState` on macOS later.
-4. **Lean on WebView2's default UI first** for find, downloads, printing, permissions, notifications and the context menu, and replace each only when it looks wrong in the page card. macOS will need Atlas versions of most of them; that is a reason to make Windows the v1 daily target.
+4. **Lean on WebView2's default UI first** for find, downloads, printing, permissions, notifications and the context menu, and replace each only when it looks wrong in the page card. macOS will need Syrinx versions of most of them; that is a reason to make Windows the v1 daily target.
 5. **Handle `NewWindowRequested` and fullscreen from day one.** Unhandled popups escape into uncontrolled windows, and fullscreen video otherwise fills only the card.
 6. **Privacy defaults:** no telemetry; `IsCustomCrashReportingEnabled` on so dumps stay local; SmartScreen kept on with a one-line notice in Settings, since turning it off leaves no phishing protection.
-7. **Ship the updater from the first daily-use build**, signed with a Tauri key kept outside the repository. Add Windows code signing when anyone else installs Atlas.
+7. **Ship the updater from the first daily-use build**, signed with a Tauri key kept outside the repository. Add Windows code signing when anyone else installs Syrinx.
 8. **Accessibility is discipline in the Svelte chrome:** semantic elements, visible focus, F6 pane cycling, and a pass with Narrator or NVDA before v1.
 9. **Defer** picture-in-picture, split view, multiple windows, tab sleeping, a site-settings page, save-page-as and a custom downloads panel.
 
@@ -180,7 +180,7 @@ Each claim carries its source and a confidence (high, medium or low). Short keys
 2. **DRM:** do you use Spotify's web player or other Widevine-only services in the browser? WebView2 cannot play them.
 3. **Ctrl S:** keep it for pinning the sidebar (as Arc does), or move pinning to Ctrl Alt S (as Zen does) so Ctrl S can save a file in Forge? The recommendation is Ctrl Alt S.
 4. **Logins without a password manager:** WebView2 can save passwords in its own profile (`IsPasswordAutosaveEnabled`, off by default). Leave it off, consistent with the scope decision, or turn it on as a stopgap?
-5. **Code signing:** are you eligible for Artifact Signing as an individual in the US or Canada, or is a business identity or the Microsoft Store the route? Not needed until someone else installs Atlas.
+5. **Code signing:** are you eligible for Artifact Signing as an individual in the US or Canada, or is a business identity or the Microsoft Store the route? Not needed until someone else installs Syrinx.
 6. **Platforms:** is v1 a Windows-only daily browser, with macOS following? That decides whether notarisation and the Apple Developer Program are v1 costs.
 7. **Search:** which engine should "Search the web" use, and should the palette fetch suggestions as you type (which sends keystrokes to that engine)?
 
