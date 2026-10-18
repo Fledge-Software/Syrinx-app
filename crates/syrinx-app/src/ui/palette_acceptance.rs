@@ -220,7 +220,7 @@ impl BrowserView {
 
 /// Writes the report, then closes Syrinx with the run's verdict as its exit status.
 fn finish(view: &WeakEntity<BrowserView>, cx: &mut AsyncWindowContext, report: &Report) {
-    let plan = view.update_in(cx, |view, _, _| {
+    let plan = update_in_main(view, cx, |view, _, _| {
         view.acceptance.as_ref().map(|run| run.plan.clone())
     });
     let Ok(Some(plan)) = plan else {
@@ -239,7 +239,7 @@ fn finish(view: &WeakEntity<BrowserView>, cx: &mut AsyncWindowContext, report: &
         eprintln!("Cannot write the acceptance report: {error}");
     }
     let passed = report.passed() && written.is_ok();
-    let closed = view.update_in(cx, |view, _, cx| {
+    let closed = update_in_main(view, cx, |view, _, cx| {
         // An earlier failure (2) is never replaced by a pass.
         if view.outcome.load(Ordering::Acquire) == 0 {
             view.outcome
@@ -291,16 +291,14 @@ impl Run {
         &mut self,
         update: impl FnOnce(&mut BrowserView, &mut Window, &mut Context<BrowserView>) -> R,
     ) -> Result<R, String> {
-        let (result, refused) = self
-            .view
-            .update_in(&mut self.cx, |view, window, cx| {
-                let refused = view
-                    .acceptance
-                    .as_ref()
-                    .and_then(|acceptance| acceptance.refused.clone());
-                (update(view, window, cx), refused)
-            })
-            .map_err(|_| CLOSED.to_owned())?;
+        let (result, refused) = update_in_main(&self.view, &mut self.cx, |view, window, cx| {
+            let refused = view
+                .acceptance
+                .as_ref()
+                .and_then(|acceptance| acceptance.refused.clone());
+            (update(view, window, cx), refused)
+        })
+        .map_err(|_| CLOSED.to_owned())?;
         // A refused destination ends the run at its next step.
         match refused {
             Some(reason) => Err(reason),

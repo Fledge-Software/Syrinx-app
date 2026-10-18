@@ -15,6 +15,7 @@ mod home;
 mod home_palette;
 mod import;
 mod incoming_links;
+mod main_window;
 mod menus;
 mod navigation_intents;
 mod navigation_status;
@@ -70,6 +71,7 @@ use gpui::{
     actions, div, point, px, rgb, size,
 };
 use gpui_component::Root;
+use main_window::update_in_main;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use syrinx_core::usage::{ErrorCategory, Feature, UsageRecorder};
 use syrinx_core::{
@@ -507,21 +509,21 @@ impl BrowserView {
         self.session_stopped = false;
         cx.spawn_in(window, async move |view, cx| {
             while let Some(event) = events.next().await {
-                if view
-                    .update_in(cx, |view, window, cx| view.session_event(event, window, cx))
-                    .is_err()
-                {
+                if let Err(error) = update_in_main(&view, cx, |view, window, cx| {
+                    view.session_event(event, window, cx)
+                }) {
+                    // Ending here drops the stream, so its sender fails next; say why (#9).
+                    eprintln!("Session events stopped reaching the browser window: {error:#}");
                     return;
                 }
             }
-            if view
-                .update_in(cx, |view, window, cx| {
-                    if !view.session_stopped {
-                        view.fail("The session worker stopped unexpectedly.");
-                        view.session_event(SessionEvent::Stopped, window, cx);
-                    }
-                })
-                .is_err()
+            if update_in_main(&view, cx, |view, window, cx| {
+                if !view.session_stopped {
+                    view.fail("The session worker stopped unexpectedly.");
+                    view.session_event(SessionEvent::Stopped, window, cx);
+                }
+            })
+            .is_err()
             {
                 eprintln!("Session event stream closed after its window was removed.");
             }
@@ -541,21 +543,21 @@ impl BrowserView {
         self.browser_stopped = false;
         cx.spawn_in(window, async move |view, cx| {
             while let Some(event) = events.next().await {
-                if view
-                    .update_in(cx, |view, window, cx| view.browser_event(event, window, cx))
-                    .is_err()
-                {
+                if let Err(error) = update_in_main(&view, cx, |view, window, cx| {
+                    view.browser_event(event, window, cx)
+                }) {
+                    // Ending here drops the stream, so its sender fails next; say why (#9).
+                    eprintln!("Page host events stopped reaching the browser window: {error:#}");
                     return;
                 }
             }
-            if view
-                .update_in(cx, |view, window, cx| {
-                    if !view.browser_stopped {
-                        view.fail("The page host stopped unexpectedly.");
-                        view.browser_event(BrowserEvent::Stopped, window, cx);
-                    }
-                })
-                .is_err()
+            if update_in_main(&view, cx, |view, window, cx| {
+                if !view.browser_stopped {
+                    view.fail("The page host stopped unexpectedly.");
+                    view.browser_event(BrowserEvent::Stopped, window, cx);
+                }
+            })
+            .is_err()
             {
                 eprintln!("Browser event stream closed after its window was removed.");
             }

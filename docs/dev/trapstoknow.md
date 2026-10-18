@@ -267,6 +267,17 @@ you found it in the commit message, not here.
   bounds, viewport and scale with the last seen values before acting. Source:
   `gpui-pre-0.3.8/src/window.rs`, line 1953, and [`docs/p1-17-peek.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-17-peek.md)
   (code-confirmed and observed with posted activation).
+- **`update_in` reaches the window that drew a view last, not the one the task
+  was spawned in.** The sidebar peek draws `BrowserView` too, so while it is
+  open a background task's `update_in` ran in the popup, and once the popup
+  closed GPUI dropped the view's window and `update_in` failed until the main
+  window drew again. The session event loop stopped on that failure: a peek
+  click's tab switch was never applied (#10) and the worker failed on its next
+  send (#9). Update the browser view from tasks only through
+  `ui::main_window::update_in_main`; a unit test refuses `.update_in(` under
+  `src/ui`. Source: `gpui-pre-0.3.8/src/app.rs`, `App::with_window` and the
+  window-removal cleanup of `current_window_by_entity`, and an in-process probe
+  that dispatched the click to the peek (observed 2026-10-18).
 
 - **A popup's input form can survive after its Enter handler loses its window.**
   `InputState` and `subscribe_in` are tied to the creating window. Do not render

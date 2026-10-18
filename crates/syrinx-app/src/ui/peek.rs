@@ -89,7 +89,7 @@ impl BrowserView {
         let started = Instant::now();
         cx.spawn_in(window, async move |view, cx| {
             loop {
-                let keep_watching = view.update_in(cx, |view, window, cx| {
+                let keep_watching = update_in_main(&view, cx, |view, window, cx| {
                     view.sample_peek(started.elapsed(), window, cx)
                 });
                 match keep_watching {

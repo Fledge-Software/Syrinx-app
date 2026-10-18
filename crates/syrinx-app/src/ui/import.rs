@@ -108,11 +108,10 @@ impl BrowserView {
             let prepared = receiver.await.unwrap_or_else(|_| {
                 Prepared::Failed("The import stopped unexpectedly.".to_owned())
             });
-            if view
-                .update_in(cx, |view, window, cx| {
-                    view.bookmarks_prepared(prepared, window, cx)
-                })
-                .is_err()
+            if update_in_main(&view, cx, |view, window, cx| {
+                view.bookmarks_prepared(prepared, window, cx)
+            })
+            .is_err()
             {
                 eprintln!("The bookmark preview arrived after the browser window closed.");
             }
@@ -197,9 +196,10 @@ impl BrowserView {
             let Some(event) = receiver.next().await else {
                 return;
             };
-            if view
-                .update_in(cx, |view, window, cx| view.preview_event(event, window, cx))
-                .is_err()
+            if update_in_main(&view, cx, |view, window, cx| {
+                view.preview_event(event, window, cx)
+            })
+            .is_err()
             {
                 eprintln!("The import choice arrived after the browser window closed.");
             }
