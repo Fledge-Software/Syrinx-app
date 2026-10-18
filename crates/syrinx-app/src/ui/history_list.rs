@@ -138,10 +138,17 @@ impl BrowserView {
     }
 
     /// Where a chrome key or click that opens the list should give the keys back: the
-    /// focused control, or the page when only Syrinx's root (or nothing) has them.
+    /// focused control of the main window, or the page when only Syrinx's root (or nothing)
+    /// has them. The find bar closes with its page, so its field cannot take them back.
     pub(super) fn chrome_return_focus(&self, window: &Window, cx: &App) -> ReturnFocus {
+        if !self.is_main_window(window) {
+            return ReturnFocus::Page;
+        }
+        let find_field = self.find_field_focus(cx);
         match window.focused(cx) {
-            Some(handle) if handle != self.focus => ReturnFocus::Control(handle),
+            Some(handle) if handle != self.focus && Some(&handle) != find_field.as_ref() => {
+                ReturnFocus::Control(handle)
+            }
             _ => ReturnFocus::Page,
         }
     }
@@ -173,13 +180,19 @@ impl BrowserView {
         let Some(return_focus) = self.history.close() else {
             return;
         };
-        self.sync_pages();
         match return_focus {
-            ReturnFocus::Page => self.focus_page(window, cx),
             ReturnFocus::Control(handle) if self.is_main_window(window) => {
+                // Reshow the page without giving it the keys, which go back to the control.
+                self.sync_pages_and_focus(false);
+                if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
+                    self.message = error.to_string();
+                }
                 window.focus(&handle, cx);
             }
-            ReturnFocus::Control(_) => {}
+            ReturnFocus::Page | ReturnFocus::Control(_) => {
+                self.sync_pages();
+                self.focus_page(window, cx);
+            }
         }
     }
 }

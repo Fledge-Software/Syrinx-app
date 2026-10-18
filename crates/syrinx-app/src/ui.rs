@@ -261,6 +261,11 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
     })
 }
 
+/// Whether a shortcut opens something in Syrinx's chrome, which page fullscreen hides.
+fn needs_chrome(shortcut: BrowserShortcut) -> bool {
+    matches!(shortcut, BrowserShortcut::Find | BrowserShortcut::History)
+}
+
 /// How this launch runs: normally, or as one of the unattended synthetic checks.
 pub struct LaunchChecks {
     pub smoke: bool,
@@ -1078,6 +1083,11 @@ impl BrowserView {
     }
 
     fn sync_pages(&mut self) {
+        self.sync_pages_and_focus(true);
+    }
+
+    /// Shows the page the model wants; `focus_shown` gives a newly shown page the keys.
+    fn sync_pages_and_focus(&mut self, focus_shown: bool) {
         if self.closing || self.session_revision.is_none() {
             return;
         }
@@ -1129,7 +1139,8 @@ impl BrowserView {
                 self.usage.page_shown(id);
             }
             self.shown = next;
-            if self.palette.is_none()
+            if focus_shown
+                && self.palette.is_none()
                 && self.peek.is_none()
                 && let Some(id) = next
             {
@@ -1210,6 +1221,8 @@ impl BrowserView {
             }
             BrowserShortcut::LeavePageBackward => self.leave_page_backward(window, cx),
             BrowserShortcut::Fullscreen => self.fullscreen_shortcut(window),
+            // A fullscreen page fills the window, leaving the find bar and History nowhere to show.
+            _ if self.fullscreen.is_some() && needs_chrome(shortcut) => {}
             BrowserShortcut::Find => self.open_find(window, cx),
             // From a page key, the palette or a menu, the keys were the page's to return.
             BrowserShortcut::History => {
@@ -1494,7 +1507,7 @@ impl BrowserView {
     }
 
     fn focus_shown_page(&mut self) {
-        // A page hidden behind History, clear data or a crash card must not take the keys.
+        // A page the card does not show (Home, History, clear data, a crash card) gets no keys.
         if !self.page_card_shows_web_page() {
             if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
                 self.message = error.to_string();
@@ -2228,6 +2241,21 @@ mod palette_shortcut_tests {
             BrowserShortcut::ToggleSidebar,
         ] {
             assert!(!shortcuts.contains(&window_key));
+        }
+    }
+
+    #[test]
+    fn only_find_and_history_wait_for_page_fullscreen_to_end() {
+        assert!(needs_chrome(BrowserShortcut::Find));
+        assert!(needs_chrome(BrowserShortcut::History));
+        for shortcut in [
+            BrowserShortcut::ZoomIn,
+            BrowserShortcut::ZoomOut,
+            BrowserShortcut::ZoomReset,
+            BrowserShortcut::Fullscreen,
+            BrowserShortcut::CloseTab,
+        ] {
+            assert!(!needs_chrome(shortcut));
         }
     }
 
