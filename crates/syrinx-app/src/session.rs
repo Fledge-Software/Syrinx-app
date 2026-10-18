@@ -7,6 +7,7 @@ mod history_repair;
 mod preferences;
 mod recovery;
 mod retention;
+mod stop;
 mod synthetic;
 mod usage;
 
@@ -317,6 +318,11 @@ pub enum SessionError {
         primary: Box<SessionError>,
         cleanup: StoreError,
     },
+    /// The error that ended the worker's loop, with the fixed name of what it was doing.
+    During {
+        operation: &'static str,
+        error: Box<SessionError>,
+    },
 }
 
 impl fmt::Display for SessionError {
@@ -361,6 +367,7 @@ impl fmt::Display for SessionError {
             Self::CleanupFailed { primary, cleanup } => {
                 write!(formatter, "{primary}; shutdown also failed: {cleanup}")
             }
+            Self::During { operation, error } => write!(formatter, "{error} (while {operation})"),
         }
     }
 }
@@ -424,18 +431,17 @@ fn finish_worker(
     result: Result<(), SessionError>,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
-    // A failed receiver is still visible to the caller through the worker's join result.
-    if let Err(error) = &result
-        && emit(
-            events,
-            SessionEvent::Failure {
-                error: error.clone(),
-                fatal: true,
-            },
-        )
-        .is_err()
-    {
-        return result;
+    if let Err(error) = &result {
+        // The reason is logged first, so a console still has it when the window is gone.
+        stop::log_stop(error);
+        let failure = SessionEvent::Failure {
+            error: error.clone(),
+            fatal: true,
+        };
+        // A failed receiver is still visible to the caller through the worker's join result.
+        if emit(events, failure).is_err() {
+            return result;
+        }
     }
     let delivered = emit(events, SessionEvent::Stopped);
     result.and(delivered)
@@ -454,12 +460,53 @@ fn run(
         return Ok(());
     };
     worker.acceptance = acceptance;
-    let mut collector = start_usage(&data_dir, &usage, &store, startup, events)?;
-    worker.usage = usage;
-    let result = worker.serve(&store, commands, events, &mut collector);
+    // The guard has accepted the folder; `serve_accepted` keeps any stop beside the database.
+    serve_accepted(usage, startup, store, worker, commands, events, &data_dir)
+}
+
+/// Serves commands on the accepted folder. The one place a stop is kept in the log, written
+/// before the store closes so the guard's lease is still held, as for usage.json.
+fn serve_accepted(
+    usage: Arc<UsageRecorder>,
+    startup: StartupFacts,
+    store: Store,
+    mut worker: Worker,
+    commands: mpsc::Receiver<SessionCommand>,
+    events: &UnboundedSender<SessionEvent>,
+    data_dir: &std::path::Path,
+) -> Result<(), SessionError> {
+    let result = serve_counted(
+        &usage,
+        startup,
+        &store,
+        &mut worker,
+        commands,
+        events,
+        data_dir,
+    );
+    if let Err(error) = &result {
+        stop::keep_stop(data_dir, error);
+    }
+    // A shutdown failure after the line is written goes to the window and stderr only.
+    finish_store(result, store.shutdown())
+}
+
+/// Loads usage counting, serves until the loop ends and saves the counts.
+fn serve_counted(
+    usage: &Arc<UsageRecorder>,
+    startup: StartupFacts,
+    store: &Store,
+    worker: &mut Worker,
+    commands: mpsc::Receiver<SessionCommand>,
+    events: &UnboundedSender<SessionEvent>,
+    data_dir: &std::path::Path,
+) -> Result<(), SessionError> {
+    let mut collector = start_usage(data_dir, usage, store, startup, events)?;
+    worker.usage = usage.clone();
+    let result = worker.serve(store, commands, events, &mut collector);
     // Counts are saved even after a storage failure; a failed save is reported, not fatal.
     let saved = collector.finish(Instant::now());
-    let result = match (result, saved) {
+    match (result, saved) {
         (Ok(()), Err(error)) => emit_recoverable(events, SessionError::Usage(error)),
         (Err(primary), Err(error)) => {
             // The storage failure is the one the window shows; this one is only logged.
@@ -467,8 +514,7 @@ fn run(
             Err(primary)
         }
         (result, Ok(())) => result,
-    };
-    finish_store(result, store.shutdown())
+    }
 }
 
 /// What happened while opening storage, counted once usage counting is known to be on.
@@ -724,8 +770,10 @@ impl Worker {
                 settings: std::mem::take(&mut self.startup_settings),
                 destinations: self.destinations.clone(),
             },
-        )?;
-        self.publish(events, self.model.snapshot(), Vec::new(), None, None, None)?;
+        )
+        .map_err(stop::during("sending the saved settings"))?;
+        self.publish(events, self.model.snapshot(), Vec::new(), None, None, None)
+            .map_err(stop::during("sending the restored tabs"))?;
         let mut delay = IDLE_DELAY;
         loop {
             // Held page titles are written once they settle, even while nothing else happens.
@@ -740,17 +788,21 @@ impl Worker {
             if usage.pending()
                 && let Err(error) = usage.write_if_due(Instant::now())
             {
-                emit_recoverable(events, SessionError::Usage(error))?;
+                emit_recoverable(events, SessionError::Usage(error))
+                    .map_err(stop::during("reporting a usage write failure"))?;
             }
             match received {
                 Ok(SessionCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     // A title still held at exit most likely names the tab's current page.
-                    return self.settle_titles(store, true, events);
+                    return self
+                        .settle_titles(store, true, events)
+                        .map_err(stop::during("saving page titles at shutdown"));
                 }
                 Ok(SessionCommand::Usage(control)) => {
                     let (status, problem) = usage.control(control, local_today(), Instant::now());
                     let problem = problem.map(SessionError::Usage);
-                    emit(events, SessionEvent::Usage { status, problem })?;
+                    emit(events, SessionEvent::Usage { status, problem })
+                        .map_err(stop::during(stop::CHANGING_USAGE))?;
                 }
                 Ok(SessionCommand::UsageReport { request_id, period }) => {
                     let result = usage
@@ -761,23 +813,28 @@ impl Worker {
                         period,
                         result,
                     };
-                    emit(events, answer)?;
+                    emit(events, answer).map_err(stop::during(stop::BUILDING_USAGE_REPORT))?;
                 }
                 Ok(command) => {
-                    self.handle(store, command, events)?;
+                    let operation = command.operation();
+                    self.handle(store, command, events)
+                        .map_err(stop::during(operation))?;
                     delay = IDLE_DELAY;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
-                    self.settle_titles(store, false, events)?;
+                    self.settle_titles(store, false, events)
+                        .map_err(stop::during("saving settled page titles"))?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     let now = utc_seconds();
                     // A clock failure is reported once, by the backup check below.
                     if let Ok(now) = &now {
-                        self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events)?;
+                        self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events)
+                            .map_err(stop::during("expiring old history"))?;
                     }
                     // The store retains its daily due state; retries remain idle and bounded.
-                    backup_while_idle(store, now, &self.usage, events)?;
+                    backup_while_idle(store, now, &self.usage, events)
+                        .map_err(stop::during("taking the daily backup"))?;
                     delay = BACKUP_CHECK_INTERVAL;
                 }
             }
