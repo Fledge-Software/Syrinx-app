@@ -7,6 +7,7 @@ mod history_repair;
 mod preferences;
 mod recovery;
 mod retention;
+mod stop;
 mod synthetic;
 mod usage;
 
@@ -316,6 +317,11 @@ pub enum SessionError {
         primary: Box<SessionError>,
         cleanup: StoreError,
     },
+    /// The error that ended the worker's loop, with the fixed name of what it was doing.
+    During {
+        operation: &'static str,
+        error: Box<SessionError>,
+    },
 }
 
 impl fmt::Display for SessionError {
@@ -360,6 +366,7 @@ impl fmt::Display for SessionError {
             Self::CleanupFailed { primary, cleanup } => {
                 write!(formatter, "{primary}; shutdown also failed: {cleanup}")
             }
+            Self::During { operation, error } => write!(formatter, "{error} (while {operation})"),
         }
     }
 }
@@ -423,6 +430,10 @@ fn finish_worker(
     result: Result<(), SessionError>,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
+    // The reason is logged first, so it survives even a window that is already gone.
+    if let Err(error) = &result {
+        stop::log_stop(error);
+    }
     // A failed receiver is still visible to the caller through the worker's join result.
     if let Err(error) = &result
         && emit(
@@ -715,8 +726,10 @@ impl Worker {
                 settings: std::mem::take(&mut self.startup_settings),
                 destinations: self.destinations.clone(),
             },
-        )?;
-        self.publish(events, self.model.snapshot(), Vec::new(), None, None, None)?;
+        )
+        .map_err(stop::during("sending the saved settings"))?;
+        self.publish(events, self.model.snapshot(), Vec::new(), None, None, None)
+            .map_err(stop::during("sending the restored tabs"))?;
         let mut delay = IDLE_DELAY;
         loop {
             // Held page titles are written once they settle, even while nothing else happens.
@@ -731,17 +744,21 @@ impl Worker {
             if usage.pending()
                 && let Err(error) = usage.write_if_due(Instant::now())
             {
-                emit_recoverable(events, SessionError::Usage(error))?;
+                emit_recoverable(events, SessionError::Usage(error))
+                    .map_err(stop::during("reporting a usage write failure"))?;
             }
             match received {
                 Ok(SessionCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     // A title still held at exit most likely names the tab's current page.
-                    return self.settle_titles(store, true, events);
+                    return self
+                        .settle_titles(store, true, events)
+                        .map_err(stop::during("saving page titles at shutdown"));
                 }
                 Ok(SessionCommand::Usage(control)) => {
                     let (status, problem) = usage.control(control, local_today(), Instant::now());
                     let problem = problem.map(SessionError::Usage);
-                    emit(events, SessionEvent::Usage { status, problem })?;
+                    emit(events, SessionEvent::Usage { status, problem })
+                        .map_err(stop::during("changing usage counting"))?;
                 }
                 Ok(SessionCommand::UsageReport { request_id, period }) => {
                     let result = usage
@@ -752,23 +769,28 @@ impl Worker {
                         period,
                         result,
                     };
-                    emit(events, answer)?;
+                    emit(events, answer).map_err(stop::during("building a usage report"))?;
                 }
                 Ok(command) => {
-                    self.handle(store, command, events)?;
+                    let operation = command.operation();
+                    self.handle(store, command, events)
+                        .map_err(stop::during(operation))?;
                     delay = IDLE_DELAY;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
-                    self.settle_titles(store, false, events)?;
+                    self.settle_titles(store, false, events)
+                        .map_err(stop::during("saving settled page titles"))?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     let now = utc_seconds();
                     // A clock failure is reported once, by the backup check below.
                     if let Ok(now) = &now {
-                        self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events)?;
+                        self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events)
+                            .map_err(stop::during("expiring old history"))?;
                     }
                     // The store retains its daily due state; retries remain idle and bounded.
-                    backup_while_idle(store, now, &self.usage, events)?;
+                    backup_while_idle(store, now, &self.usage, events)
+                        .map_err(stop::during("taking the daily backup"))?;
                     delay = BACKUP_CHECK_INTERVAL;
                 }
             }

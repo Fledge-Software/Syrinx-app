@@ -517,7 +517,7 @@ impl BrowserView {
             if view
                 .update_in(cx, |view, window, cx| {
                     if !view.session_stopped {
-                        view.fail("The session worker stopped unexpectedly.");
+                        view.fail_unless_failed("The session worker stopped unexpectedly.");
                         view.session_event(SessionEvent::Stopped, window, cx);
                     }
                 })
@@ -1014,6 +1014,13 @@ impl BrowserView {
         self.failure = Some(message.into());
     }
 
+    /// As `fail`, but never replaces a reason already shown with a vaguer one (#9).
+    fn fail_unless_failed(&mut self, message: impl Into<String>) {
+        if self.failure.is_none() {
+            self.fail(message);
+        }
+    }
+
     fn metadata(&mut self, id: u64, title: Option<String>, address: Option<String>) {
         let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id) else {
             return;
@@ -1047,7 +1054,8 @@ impl BrowserView {
         ) {
             Ok(queued) => queued,
             Err(_) => {
-                self.fail("The session worker is unavailable.");
+                // The worker's Failure event, sent once its loop ends, replaces this with the reason.
+                self.fail_unless_failed("The session worker stopped taking requests.");
                 false
             }
         }

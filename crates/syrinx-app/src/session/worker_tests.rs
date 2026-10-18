@@ -882,6 +882,77 @@ fn failed_close_save_reports_fatal_failure_without_acknowledging_native_cleanup(
 }
 
 #[test]
+fn a_command_that_stops_the_worker_loop_names_its_reason_and_operation() {
+    let fixture = Fixture::new();
+    let lease =
+        Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic stop store"));
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let store = Store::open(lease).expect("open synthetic stop store");
+    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let (sender, mut events) = unbounded();
+    worker
+        .handle(
+            &store,
+            SessionCommand::NewTab {
+                address: SAVED_ADDRESS.into(),
+            },
+            &sender,
+        )
+        .expect("commit synthetic page");
+    let acknowledged = state(&mut events);
+
+    // Inject the failure: storage advances behind the worker, so its next save is refused.
+    let revision = store
+        .save(acknowledged.revision, acknowledged.model.clone())
+        .expect("advance synthetic store revision");
+    let cause = SessionError::Store(StoreError::StaleRevision {
+        expected: acknowledged.revision,
+        actual: revision,
+    });
+    let expected = SessionError::During {
+        operation: "closing the active tab",
+        error: Box::new(cause),
+    };
+    let (commands, receiver) = mpsc::channel();
+    commands
+        .send(SessionCommand::CloseActive)
+        .expect("queue the failing command");
+    let (mut usage, _) =
+        UsageCollector::load(Arc::default(), &fixture.0, local_today(), Instant::now());
+
+    // The real loop ends on the refusal, and the stop path reports it before `Stopped`.
+    let result = worker.serve(&store, receiver, &sender, &mut usage);
+    assert_eq!(result, Err(expected.clone()));
+    assert_eq!(finish_worker(result, &sender), Err(expected.clone()));
+    assert!(matches!(next_event(&mut events), SessionEvent::State(_)));
+    assert!(matches!(
+        next_event(&mut events),
+        SessionEvent::Failure { error, fatal: true } if error == expected
+    ));
+    assert!(matches!(next_event(&mut events), SessionEvent::Stopped));
+
+    // What the owner sees and the log line both name the cause and the operation, no address.
+    let shown = expected.to_string();
+    assert!(shown.contains("Cannot save or read the session"), "{shown}");
+    assert!(shown.ends_with("(while closing the active tab)"), "{shown}");
+    let logged = stop::stop_line(&expected);
+    assert_eq!(logged, format!("The session worker stopped: {shown}"));
+    assert!(!logged.contains("example.test"), "{logged}");
+    drop(worker);
+    store.shutdown().expect("close synthetic stop store");
+    fixture.cleanup();
+}
+
+#[test]
+fn command_operation_names_leave_out_their_contents() {
+    let command = SessionCommand::NavigateActive {
+        address: LIVE_ADDRESS.into(),
+    };
+    assert_eq!(command.operation(), "navigating the active tab");
+    assert_eq!(SessionCommand::Shutdown.operation(), "shutting down");
+}
+
+#[test]
 fn home_entry_acknowledgments_follow_their_command_and_do_not_survive_restart() {
     let fixture = Fixture::new();
     let (handle, mut events) = fixture.start();
