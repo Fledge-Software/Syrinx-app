@@ -474,6 +474,7 @@ impl BrowserView {
             Ok(handle) => {
                 view.parent_hwnd = handle;
                 show_app_icon(handle);
+                title_bar::correct_caption_hit_test(handle);
             }
             Err(error) => {
                 view.fail(error);
