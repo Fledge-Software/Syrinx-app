@@ -1,10 +1,10 @@
 > **Research note dated 2026-10-09.** Read for reasoning, not current fact; later decisions in [`docs/decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/decisions.md) and [`docs/architecture-decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/architecture-decisions.md) win.
 >
-> Fledge is a separate project. Fledge-side findings are a list for the owner, never issues or pull requests in Fledge's repositories. The real Fledge client waits for Fledge's Stage C (D24). Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri. The product was called Atlas until 2026-10-12; read Atlas here as Syrinx.
+> Fledge is a separate project. Fledge-side findings are a list for the owner, never issues or pull requests in Fledge's repositories. The real Fledge client waits for Fledge's Stage C (D24). Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri.
 >
 > Moved from `docs/research/05-fledge-api.md` ([original at af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/05-fledge-api.md)) on 2026-10-16.
 
-# Fledge's API surface for Atlas's Fledge plugin
+# Fledge's API surface for Syrinx's Fledge plugin
 
 Date: 2026-10-09. Read-only research over source code; no Fledge service, Supabase project or
 production URL was called. Repositories are under `C:\Users\<user>\Documents\GitHub\`. Branches
@@ -17,16 +17,16 @@ in production today). Confidence is marked (high), (medium) or (low) on each cla
 1. What API could a desktop client call for leads, contacts and jobs, mail, calendar and docs, and
    which surfaces are stable rather than internal?
 2. How would a desktop app authenticate as the user, and can a third-party client use anything today?
-3. Is there an MCP server, what tools does it expose, and could Atlas use it instead of a bespoke API?
+3. Is there an MCP server, what tools does it expose, and could Syrinx use it instead of a bespoke API?
 4. What do the modules' `/api/platform/{search,series-context,mcp-tools}` endpoints return, and
-   could Atlas's shared index use the search endpoint?
-5. What shape should Atlas's `FledgeClient` trait take, and what must Fledge build for a real client?
+   could Syrinx's shared index use the search endpoint?
+5. What shape should Syrinx's `FledgeClient` trait take, and what must Fledge build for a real client?
 
 ## Short answer
 
 - **No public, stable client API exists for leads, mail, calendar or docs.** Every module's REST
   routes are internal UI routes behind the browser's cookie session, and Nest's writes are Next.js
-  Server Actions, whose IDs change between builds. Do not build Atlas against either.
+  Server Actions, whose IDs change between builds. Do not build Syrinx against either.
 - **The sanctioned way for an outside client to act for a person is the platform's OAuth 2.1
   authorization server**, the one Fledge's MCP server uses. It supports dynamic client
   registration, PKCE and `http://127.0.0.1` loopback redirects, which is exactly the desktop flow.
@@ -35,12 +35,12 @@ in production today). Confidence is marked (high), (medium) or (low) on each cla
   `calendar_list`, `calendar_find_free_time`, `calendar_create_event`, `chat_post` and
   `desk_search`. It has **no leads or contacts tool**, because no consent scope covers customer
   data yet, and **no tool lists an inbox or opens a document**.
-- **MCP alone is a poor fit for Atlas's UI**: its results are prose for a model, fenced as
+- **MCP alone is a poor fit for Syrinx's UI**: its results are prose for a model, fenced as
   untrusted, with no structured output. Use the same OAuth tokens on a small structured REST
   surface; the "delegated surface" mechanism for that exists but honours identity only today.
 - **`/<module>/api/platform/*` is shell-to-module plumbing** on the person's Supabase session token,
   not a client API. Its search answers a live query with at most 5 hits per group and no change
-  feed, so it can back a live palette provider but cannot feed Atlas's local index.
+  feed, so it can back a live palette provider but cannot feed Syrinx's local index.
 - **"New lead" maps cleanly onto Nest**: a lead is a contact plus a job at the Lead stage, created
   through `nest.capture_lead()`. But it is service-role only, it takes no value, and Nest has no
   Company field, so the palette form needs Fledge-side work.
@@ -51,7 +51,7 @@ in production today). Confidence is marked (high), (medium) or (low) on each cla
 
 ### 1. The API surface by capability
 
-| Need | What exists | Where | Usable by Atlas? |
+| Need | What exists | Where | Usable by Syrinx? |
 |---|---|---|---|
 | Create a lead | `nest.capture_lead(p_org, p_name, p_phone, p_email, p_source, p_notes, …)` returns `(job_id, contact_id, contact_outcome)` | fledge-nest `supabase/migrations/0006_nest_fold_leads.sql:71-91`, grants `:474-477` | No: service role only (and Growth's `growth_reader` role, `0017:101`) |
 | Create a contact | `nest.match_or_create_contact` (duplicate-matching insert) | fledge-nest `0001_nest_hub_contacts.sql:501`, grants `:661-664` | No: service role only |
@@ -82,8 +82,8 @@ in production today). Confidence is marked (high), (medium) or (low) on each cla
 ### 2. Authentication
 
 - **Sign-in is Supabase Auth** (password, or Google through `apps/app/components/auth/GoogleButton.tsx`)
-  and the session is a host-only cookie on `app.*` (Fledge-App `AGENTS.md`). Atlas's web tabs will
-  carry that cookie; Atlas's Rust core cannot use it. (high)
+  and the session is a host-only cookie on `app.*` (Fledge-App `AGENTS.md`). Syrinx's web tabs will
+  carry that cookie; Syrinx's Rust core cannot use it. (high)
 - **The platform's OAuth 2.1 authorization server** (ported from Workspace): Fledge-App
   `apps/app/lib/oauth/server.ts`, `apps/app/app/api/oauth/{register,token,revoke}/route.ts`, the
   consent page `apps/app/app/(auth)/oauth/authorize/page.tsx` and `apps/app/app/.well-known/`.
@@ -92,7 +92,7 @@ in production today). Confidence is marked (high), (medium) or (low) on each cla
   - Open dynamic client registration (RFC 7591), 10 per hour per IP; a client without a secret is
     a public client authenticated by PKCE alone (`register/route.ts:22,48`). (high)
   - Redirect URIs must be HTTPS or HTTP on `localhost`, `127.0.0.1` or `[::1]`; **custom schemes
-    such as `atlas://` are refused** (`server.ts:174-209`). Matching is an exact string, so a
+    such as `syrinx://` are refused** (`server.ts:174-209`). Matching is an exact string, so a
     desktop client "has to register every port it might use", up to 20 (`server.ts:127,157`;
     the reasoning is in Workspace `main:apps/connect/lib/oauth/server.ts:332-341`). (high)
   - Access tokens last 1 hour and refresh tokens 30 days (`server.ts:38-40`). **Refresh tokens
@@ -166,10 +166,10 @@ MCP (Model Context Protocol) is a JSON-RPC protocol that AI clients use to disco
 - **Limits**: 60 tool calls per token and 120 requests per IP per minute, per serverless instance;
   a write that times out is reported as "it may have happened" (`lib/mcp/limits.ts:21-27`,
   `mcp-forward.ts` response table). (high)
-- **Could Atlas use MCP instead of a bespoke API?** For authentication, yes: the same OAuth server.
-  For data, not well: Atlas would parse text written for a model, there is no inbox list, document
+- **Could Syrinx use MCP instead of a bespoke API?** For authentication, yes: the same OAuth server.
+  For data, not well: Syrinx would parse text written for a model, there is no inbox list, document
   read or leads tool, and an MCP-audienced token cannot call REST routes. MCP suits SERIES and
-  Claude; Atlas needs structured JSON. (medium: a recommendation)
+  Claude; Syrinx needs structured JSON. (medium: a recommendation)
 
 ### 4. The per-module platform endpoints
 
@@ -183,25 +183,25 @@ MCP (Model Context Protocol) is a JSON-RPC protocol that AI clients use to disco
   returns `mail`, `calendar` and `chat` (links to `/connect/inbox`, `/connect/calendar` and
   `/connect/chat`, not to the item, fledge-connect `apps/app/lib/search.ts:77-79,139-141`); Desk
   returns `documents`, `tables` and `files` (fledge-desk `apps/app/lib/search.ts:255-257`). (high)
-- **Can Atlas's shared index use the search endpoint?** Not to build it. An index must list
+- **Can Syrinx's shared index use the search endpoint?** Not to build it. An index must list
   everything and then fetch changes; this endpoint answers one query with five hits per group, no
   cursor, on a Supabase JWT. It can serve as a live palette provider (query as you type, groups
   under a "Fledge" scope) once a client-facing route accepts an OAuth token. The owner export
   (`/<m>/api/platform/export`, owner only, up to 150 MB, `checklist.md:143`) is a backup, not a
   sync feed. (high)
 
-## What this means for Atlas v1
+## What this means for Syrinx v1
 
 1. **Build the plugin against a trait with a stub now.** Nothing real can be called before Stage C.
 2. **Authenticate the real client with the platform's OAuth server**, asking for the REST
    resource rather than MCP once Fledge's delegated REST surface exists. Register once per install
    with a few fixed loopback ports (`http://127.0.0.1:<port>/fledge/callback`). Open the authorize
-   URL in an Atlas web tab, where the person is already signed into Fledge, catch the code with a
+   URL in an Syrinx web tab, where the person is already signed into Fledge, catch the code with a
    one-shot listener in the Rust core, and redeem it with PKCE (S256). Keep tokens in the OS
    keychain, and save each rotated refresh token before using it, since reusing an old one revokes
    the grant.
 3. **"Open" means a web tab** at the item's `href`, which uses the person's normal Fledge session.
-4. **Offline**: one cache layer (Atlas's SQLite) wraps whichever client is in use. Offline reads
+4. **Offline**: one cache layer (Syrinx's SQLite) wraps whichever client is in use. Offline reads
    come from the cache, marked stale. Writes go to an outbox with a client-made idempotency key.
    A write whose outcome is unknown is shown to the person, never retried, because Fledge's writes
    are not idempotent today.
@@ -295,15 +295,15 @@ Candidate issues, in rough order. Each is one shippable unit.
 
 ## Open questions for the owner
 
-- Is Atlas an ordinary third-party client that goes through the same consent screen as Claude
+- Is Syrinx an ordinary third-party client that goes through the same consent screen as Claude
   (recommended), or a first-party client with a pre-registered id?
 - What should the consent wording for contacts and leads say, and is creating a lead from outside
   Fledge acceptable?
-- Should the Fledge rules (no `mail:send`, no calendar invitations with attendees) hold for Atlas?
-  The recommendation is yes: Atlas drafts, and the person sends from a Connect tab.
+- Should the Fledge rules (no `mail:send`, no calendar invitations with attendees) hold for Syrinx?
+  The recommendation is yes: Syrinx drafts, and the person sends from a Connect tab.
 - Where does a lead's Company live in Nest, and should `capture_lead` take an estimated value?
-- REST delegated surface (recommended) or MCP with structured output as Atlas's data channel?
-- When does Stage C happen? It decides when Atlas's real client can be built, since grants made
+- REST delegated surface (recommended) or MCP with structured output as Syrinx's data channel?
+- When does Stage C happen? It decides when Syrinx's real client can be built, since grants made
   before it are re-issued.
 
 ## Sources

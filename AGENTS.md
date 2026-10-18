@@ -110,14 +110,16 @@ tracked in GitHub issues. Read these in this order of authority:
   projects (GPUI snapshots, wry, the WebView2 Evergreen runtime). Notes 07
   and 08 correct parts of the earlier notes, and note 03 assumes Tauri, which
   D3 and D4 replaced. Where a note disagrees with the decisions, they win.
-- **Older records say Atlas.** Atlas was the working name until the owner
-  named the product Syrinx on 2026-10-12. Research notes, dated decisions,
-  handoffs, prompts, review records and Phase 0 evidence keep the wording
-  of their time; read Atlas there as Syrinx. To follow an old path,
-  `crates/atlas-*` is now `crates/syrinx-*` and `docs/plans/Atlas … .md`
-  is now `docs/plans/Syrinx … .md`; the plans themselves were removed on
-  2026-10-16 and are read at
-  [af3de53](https://github.com/Fledge-Software/Syrinx-app/tree/af3de53/docs/plans).
+- **The product is Syrinx; Atlas was only a working name.** The owner
+  named the product Syrinx on 2026-10-12, and on 2026-10-17 asked that the
+  docs and the wiki say Syrinx throughout, older records included. Write
+  Syrinx everywhere. "Atlas" stays only where it is a real identifier: the
+  old branch `claude/plan-atlas-v1`, the old install's folders and registry
+  keys (`%LOCALAPPDATA%\Atlas\data`, `AtlasBrowser`), raw evidence logs,
+  and vendored code, where GPUI's texture atlas is unrelated. Files retired
+  on 2026-10-16, such as the plans, are read at
+  [af3de53](https://github.com/Fledge-Software/Syrinx-app/tree/af3de53/docs/plans)
+  and keep the old name there.
 - **Anything marked ⚠️ or "unverified" is checked before anything is built on
   it.** Plan 1's "Still unproven" section
   ([at af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md))

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Atlas home page</title>
+<title>Syrinx home page</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -22,7 +22,7 @@ button,input{font:inherit;color:inherit}
 <div aria-hidden="true" style="position: absolute; left: 0; top: 0; width: 1440px; height: 900px; z-index: -1; background: {{k.materialBg}}; backdrop-filter: {{k.materialBlur}}"></div>
 </sc-if>
 <sc-if value="{{k.grain}}" hint-placeholder-val="{{ false }}">
-<svg aria-hidden="true" width="1440" height="900" style="position: absolute; left: 0; top: 0; z-index: -1; opacity: 0.09; pointer-events: none"><filter id="atlas-grain-home"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"></feTurbulence><feColorMatrix type="saturate" values="0"></feColorMatrix></filter><rect width="1440" height="900" filter="url(#atlas-grain-home)"></rect></svg>
+<svg aria-hidden="true" width="1440" height="900" style="position: absolute; left: 0; top: 0; z-index: -1; opacity: 0.09; pointer-events: none"><filter id="syrinx-grain-home"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"></feTurbulence><feColorMatrix type="saturate" values="0"></feColorMatrix></filter><rect width="1440" height="900" filter="url(#syrinx-grain-home)"></rect></svg>
 </sc-if>
 
 <dc-import name="Sidebar" screen="home" theme="{{theme}}" embedded="{{yes}}" accent="{{accent}}" hint-size="264px,900px" style="width: 264px; height: 900px"></dc-import>
@@ -32,7 +32,7 @@ button,input{font:inherit;color:inherit}
 <!-- title bar: drag region, app actions, window controls -->
 <div style="height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 2px; color: {{k.icon}}">
 <button aria-label="Downloads" title="Downloads (Ctrl J)" style="width: 32px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg></button>
-<button aria-label="Atlas menu" style="width: 32px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg></button>
+<button aria-label="Syrinx menu" style="width: 32px; height: 30px; border: 0; padding: 0; border-radius: 8px; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg></button>
 <span style="width: 8px"></span>
 <button aria-label="Minimize" style="width: 46px; height: 36px; border: 0; padding: 0; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 12h16"></path></svg></button>
 <button aria-label="Maximize" style="width: 46px; height: 36px; border: 0; padding: 0; background: transparent; color: inherit; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1"></rect></svg></button>
@@ -44,7 +44,7 @@ button,input{font:inherit;color:inherit}
 
 <header style="display: flex; align-items: center; gap: 12px">
 <span aria-hidden="true" style="width: 30px; height: 30px; border-radius: 9px; background: {{accent}}; display: flex; align-items: center; justify-content: center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{k.badgeText}}" stroke-width="2.3" stroke-linejoin="round"><path d="M12 3.5l6.5 16.5-6.5-4.2-6.5 4.2z"></path></svg></span>
-<h1 style="margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em">Atlas</h1>
+<h1 style="margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em">Syrinx</h1>
 <span style="margin-left: auto; color: {{k.iconDim}}">Friday, October 9</span>
 <button aria-expanded="{{customize}}" style="height: 30px; padding: 0 12px; border: 1px solid {{k.pillLine}}; border-radius: 15px; background: {{custBg}}; color: {{k.text2}}; display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer">
 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><circle cx="16" cy="7" r="2"></circle><circle cx="8" cy="17" r="2"></circle></svg>
@@ -67,9 +67,9 @@ Customize
 </div>
 
 <!-- quick access -->
-<section aria-labelledby="atlas-qa" style="margin-top: 48px; display: flex; flex-direction: column; gap: 16px">
+<section aria-labelledby="syrinx-qa" style="margin-top: 48px; display: flex; flex-direction: column; gap: 16px">
 <div style="display: flex; align-items: center; gap: 16px">
-<h2 id="atlas-qa" style="margin: 0; font-size: 14px; font-weight: 600">Quick access</h2>
+<h2 id="syrinx-qa" style="margin: 0; font-size: 14px; font-weight: 600">Quick access</h2>
 <span style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: {{k.text3}}"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 4px; background: {{accent}}"></span>Integrated app</span>
 <button style="margin-left: auto; height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: {{k.iconDim}}; font-size: 12.5px; cursor: pointer">Edit</button>
 </div>
@@ -95,9 +95,9 @@ Customize
 </section>
 
 <!-- plugins: each card shows where you left off, which the sidebar list cannot -->
-<section aria-labelledby="atlas-plugins" style="margin-top: 36px; display: flex; flex-direction: column; gap: 14px">
+<section aria-labelledby="syrinx-plugins" style="margin-top: 36px; display: flex; flex-direction: column; gap: 14px">
 <div style="display: flex; align-items: baseline; gap: 14px">
-<h2 id="atlas-plugins" style="margin: 0; font-size: 14px; font-weight: 600">Plugins</h2>
+<h2 id="syrinx-plugins" style="margin: 0; font-size: 14px; font-weight: 600">Plugins</h2>
 <span style="font-size: 12px; color: {{k.text3}}">Built in. Each opens as a tab.</span>
 </div>
 <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px">
@@ -190,8 +190,8 @@ Customize
 </div>
 
 <div style="display: flex; align-items: center; gap: 12px; padding-top: 14px; border-top: 1px solid {{k.panelDiv}}">
-<span style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span id="atlas-reduce-transparency" style="font-weight: 500">Reduce transparency</span><span style="font-size: 12px; color: {{k.text3}}">Follows your system setting.</span></span>
-<button role="switch" aria-checked="false" aria-labelledby="atlas-reduce-transparency" style="width: 36px; height: 20px; flex-shrink: 0; box-sizing: border-box; border: 1px solid {{k.key}}; padding: 2px; border-radius: 10px; background: {{k.field}}; display: flex; align-items: center; cursor: pointer"><span aria-hidden="true" style="width: 14px; height: 14px; border-radius: 7px; background: {{k.iconDim}}"></span></button>
+<span style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span id="syrinx-reduce-transparency" style="font-weight: 500">Reduce transparency</span><span style="font-size: 12px; color: {{k.text3}}">Follows your system setting.</span></span>
+<button role="switch" aria-checked="false" aria-labelledby="syrinx-reduce-transparency" style="width: 36px; height: 20px; flex-shrink: 0; box-sizing: border-box; border: 1px solid {{k.key}}; padding: 2px; border-radius: 10px; background: {{k.field}}; display: flex; align-items: center; cursor: pointer"><span aria-hidden="true" style="width: 14px; height: 14px; border-radius: 7px; background: {{k.iconDim}}"></span></button>
 </div>
 </section>
 </sc-if>

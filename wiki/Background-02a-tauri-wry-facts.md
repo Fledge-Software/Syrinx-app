@@ -1,6 +1,6 @@
 > **Research note dated 2026-10-09.** Read for reasoning, not current fact; later decisions in [`docs/decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/decisions.md) and [`docs/architecture-decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/architecture-decisions.md) win.
 >
-> An appendix to note 02. Its wry facts still matter; its Tauri facts were overtaken by D3. Note 08 rechecks the wry details Syrinx depends on. Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri. The product was called Atlas until 2026-10-12; read Atlas here as Syrinx.
+> An appendix to note 02. Its wry facts still matter; its Tauri facts were overtaken by D3. Note 08 rechecks the wry details Syrinx depends on. Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri.
 >
 > Moved from `docs/research/02a-tauri-wry-facts.md` ([original at af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/02a-tauri-wry-facts.md)) on 2026-10-16.
 
@@ -16,7 +16,7 @@ an appendix. Confidence is marked (high, medium, low) as the helper gave it.
 Tabs as child webviews work, but:
 
 - on Linux they don't lay out (child bounds are ignored);
-- app keyboard shortcuts don't reach Atlas while a page has focus, on Windows
+- app keyboard shortcuts don't reach Syrinx while a page has focus, on Windows
   and on macOS;
 - the Svelte UI cannot draw over a tab, because there is no z-order API and a
   child webview always draws above the main one;
@@ -149,7 +149,7 @@ Source: https://v2.tauri.app/plugin/updater/
   running instance. On macOS the running app gets `on_open_url`.
 - **http and https:** Tauri has no desktop API for becoming the http/https
   handler (discussion #9184). Default-browser registry entries on Windows are
-  not covered anywhere, so Atlas writes them through installer hooks.
+  not covered anywhere, so Syrinx writes them through installer hooks.
 
 Sources: https://v2.tauri.app/plugin/deep-linking/,
 https://v2.tauri.app/plugin/single-instance/,
@@ -216,7 +216,7 @@ Source: https://v2.tauri.app/distribute/microsoft-store/
 ## Would block a daily-use browser built on Tauri multiwebview
 
 1. **Linux tabs don't lay out.** Child webview bounds are ignored (#10420).
-2. **App shortcuts don't reach Atlas** while a tab has focus: wry #451 on
+2. **App shortcuts don't reach Syrinx** while a tab has focus: wry #451 on
    Windows; wry #1177 and Tauri #9257 on macOS.
 3. **No z-order and no overlay.** The Svelte UI cannot draw over tab content
    (#11124, #15682), so the palette, the sidebar peek and any menus over a page
@@ -229,6 +229,6 @@ Source: https://v2.tauri.app/distribute/microsoft-store/
    - `on_new_window` can only return a window, not a tab.
 5. **macOS 14 floor** for separate data stores and for the proxy.
 6. **NVDA reads nothing** in frameless windows on Windows (#12901), which
-   matters if Atlas uses a custom title bar.
+   matters if Syrinx uses a custom title bar.
 7. **No maintainer capacity** for the `unstable` multiwebview (stated September
    2025).

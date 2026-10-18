@@ -51,7 +51,8 @@ slice is the owner's one-week daily-driver acceptance.
 **Atlas becomes Syrinx (2026-10-12).** "Atlas" collided with OpenAI's
 ChatGPT Atlas, a browser in the same category. The owner named the product
 Syrinx, after a bird's vocal organ, which fits beside Fledge. Records
-written before then keep the old name.
+written before then said Atlas until 2026-10-17, when the owner had them
+changed to Syrinx.
 
 **GitHub and the licence (2026-10-13).** The repository moved to GitHub
 as `Fledge-Software/Syrinx-app`, Syrinx was licensed under MPL-2.0, and the
@@ -95,14 +96,14 @@ Where one of them disagrees with `docs/decisions.md` or
 
 The eleven research notes now live in this wiki as the Background pages; these links are the originals.
 
-- [`docs/research/01-shell-and-engine.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/01-shell-and-engine.md): Whether Atlas could run on Tauri 2 child webviews; now [Background 01](Background-01-shell-and-engine).
+- [`docs/research/01-shell-and-engine.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/01-shell-and-engine.md): Whether Syrinx could run on Tauri 2 child webviews; now [Background 01](Background-01-shell-and-engine).
 - [`docs/research/02-browser-v1-scope.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/02-browser-v1-scope.md): What a daily browser needs at v1 and what can wait; now [Background 02](Background-02-browser-v1-scope).
 - [`docs/research/02a-tauri-wry-facts.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/02a-tauri-wry-facts.md): What a Tauri 2 and wry tab can and cannot do; now [Background 02a](Background-02a-tauri-wry-facts).
 - [`docs/research/02b-default-browser-import-signing.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/02b-default-browser-import-signing.md): Default-browser registration, bookmark import and code signing; now [Background 02b](Background-02b-default-browser-import-signing).
 - [`docs/research/03-core-architecture.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/03-core-architecture.md): Plugins, the Rust and interface boundary, search, storage, testing and crate layout; now [Background 03](Background-03-core-architecture).
 - [`docs/research/04-forge-and-notes.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/04-forge-and-notes.md): Editor, syntax, language servers, git, terminal and notes for the two plugins; now [Background 04](Background-04-forge-and-notes).
 - [`docs/research/05-fledge-api.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/05-fledge-api.md): Fledge's API surface as the Fledge plugin would see it; now [Background 05](Background-05-fledge-api).
-- [`docs/research/06-engine-and-ui-performance.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/06-engine-and-ui-performance.md): Which engine and interface toolkit Atlas should be built on; now [Background 06](Background-06-engine-and-ui-performance).
+- [`docs/research/06-engine-and-ui-performance.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/06-engine-and-ui-performance.md): Which engine and interface toolkit Syrinx should be built on; now [Background 06](Background-06-engine-and-ui-performance).
 - [`docs/research/07-google-sign-in-and-drm.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/07-google-sign-in-and-drm.md): Google sign-in and protected video in WebView2; now [Background 07](Background-07-google-sign-in-and-drm).
 - [`docs/research/08-gpui-and-wry-on-windows.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/08-gpui-and-wry-on-windows.md): The GPUI and wry facts the Phase 0 spike relied on; now [Background 08](Background-08-gpui-and-wry-on-windows).
 - [`docs/research/09-phase-0-verdict.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/09-phase-0-verdict.md): The Phase 0 verdict: go, with GPUI, on two conditions; now [Background 09](Background-09-phase-0-verdict).
@@ -128,7 +129,7 @@ The four v1 plans the owner approved on 2026-10-10, their readiness review and s
 Notes written so one agent session could pick up where another stopped. The issues replace them.
 
 - [`docs/implementation-status.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/implementation-status.md): The implementation and evidence ledger: each slice's state, merge commit and latest gate against all four plans.
-- [`docs/handoff-2026-10-10.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/handoff-2026-10-10.md): Hand-off prompt to continue Atlas from the Phase 0 verdict.
+- [`docs/handoff-2026-10-10.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/handoff-2026-10-10.md): Hand-off prompt to continue Syrinx from the Phase 0 verdict.
 - [`docs/handoff-integrated-preview-2026-10-10.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/handoff-integrated-preview-2026-10-10.md): Checkpoint for bringing the integrated browser forward under D49 without losing approved foundations.
 - [`docs/handoff-p1-02-2026-10-10.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/handoff-p1-02-2026-10-10.md): P1-02 complete: resume at P1-03.
 - [`docs/handoff-p1-03-2026-10-10.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/handoff-p1-03-2026-10-10.md): Hand-off after the P1-03 storage merge.

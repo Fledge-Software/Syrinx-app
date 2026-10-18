@@ -1,7 +1,7 @@
 {
   "v": 3,
   "createdOnFiles": { "v": 1, "at": "2026-10-09T21:15:00Z" },
-  "title": "Atlas browser design",
+  "title": "Syrinx browser design",
   "launch": { "view": "canvas" },
   "pages": [],
   "boards": {

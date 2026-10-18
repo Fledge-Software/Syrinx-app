@@ -7,12 +7,12 @@ unchanged upstream comments and lint annotations in `vendor/frizbee-0.13.0`.
 The narrow exception is recorded in `AGENTS.md`. Approval changes neither the
 matcher contract nor the independent-review and validation requirements below.
 
-Atlas must accept valid text without manufacturing highlight positions. The
+Syrinx must accept valid text without manufacturing highlight positions. The
 new ASCII-filter differential tests exposed an existing frizbee 0.13.0 defect:
 the query `\0` with one permitted typo gives a nonempty field without a NUL a
 score of 16 and a highlight at its byte length, outside the field. Both the
 filtered and exhaustive catalogue reproduce it. Keep their assertions and
-Atlas's range checks; the filter is not the cause.
+Syrinx's range checks; the filter is not the cause.
 
 The observed evidence is the synthetic-only local artifact
 `target/p1-05-mask-diagnostic.log`. For example, `"needle"` returns index 6,
@@ -162,7 +162,7 @@ only frizbee's registry source/checksum changes; do not shift package versions.
 and for retaining existing upstream comments and lint annotations unchanged
 inside `vendor/frizbee-0.13.0`. The earlier SQLite/wry exceptions and D12/D37
 did not supply this authorization; the owner's explicit frizbee approval does.
-Atlas-authored changes must add no lint suppression or deferred-work markers.
+Syrinx-authored changes must add no lint suppression or deferred-work markers.
 No new licence exception is needed. Approval does not authorize a commit,
 merge, push or upstream message; an upstream-ready patch can be prepared
 locally and submitted only with explicit permission.
@@ -185,9 +185,9 @@ would change the agreed input contract or hide the defect and is not proposed.
   expected results, including zero-penalty scoring. Backend parity alone can
   miss a defect shared by every backend.
 - Reuse existing upstream test infrastructure only after reviewing its test
-  dependencies, or place public-API regressions in Atlas's existing test crate.
-  Do not bring upstream benchmark dependencies into Atlas merely to run them.
-- Run the full unchanged Atlas gate and benchmark. Verify non-NUL benchmark
+  dependencies, or place public-API regressions in Syrinx's existing test crate.
+  Do not bring upstream benchmark dependencies into Syrinx merely to run them.
+- Run the full unchanged Syrinx gate and benchmark. Verify non-NUL benchmark
   membership/counts/checksums against the recorded results and report timing;
   the added mask is not evidence that the outstanding five-millisecond goal
   is met. Any changed non-NUL score needs investigation rather than a new
@@ -233,7 +233,7 @@ This dependency-free harness uses a separate ignored source overlay under
 `target/frizbee-padding-validation`. Independent review verified all 51 source
 files against its manifest. Its only transformations disable 96 upstream
 test-module/helper gates and append the private validation module; vendor
-sources and Atlas's gate tests remain intact. It exercises the available
+sources and Syrinx's gate tests remain intact. It exercises the available
 Windows x86-64 backends rather than claiming cross-platform verification or
 a run of upstream's entire development test suite.
 
@@ -268,7 +268,7 @@ filtered, and all documentation-test stages pass. The reviewed fixture
 correction preserves strict invalid-range validation; both original NUL
 regressions now pass.
 
-The gate rebuilds `target/local/atlas-app.exe` in 18.05 seconds, SHA-256
+The gate rebuilds `target/local/syrinx-app.exe` in 18.05 seconds, SHA-256
 `6edfe4113ccc7b0d5995faccaf7cb23e66541af147712443eb1b17bd9adddf1c`, then fails
 its restricted-context smoke run at the 30-second watchdog. A subsequent
 `Chrome_WidgetWin_0` unregister error reports 1411. This is a failed gate,
