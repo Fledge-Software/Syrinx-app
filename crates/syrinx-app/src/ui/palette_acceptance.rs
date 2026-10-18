@@ -5,10 +5,11 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use gpui::{AsyncWindowContext, WeakEntity};
+use gpui::{AnyWindowHandle, AsyncWindowContext, Pixels, PlatformInput, Point, WeakEntity};
 use syrinx_platform::acceptance::{self as probe_win32, Key};
+use syrinx_ui::SidebarWidthState;
 
-use super::*;
+use super::{peek_state::PeekState, sidebar_tree::TreeId, *};
 use crate::{
     acceptance::{
         AcceptancePlan, BURST_CADENCE, BurstSample, KeySample, OpenSample, PresentProbe, Report,
@@ -208,6 +209,32 @@ impl BrowserView {
         }
     }
 
+    /// Opens the peek as a hover on the edge would, without moving the owner's pointer.
+    fn open_peek_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.peek_state = PeekState::Open;
+        self.request_peek(window, cx);
+    }
+
+    /// The open peek's window and the middle of `tab`'s row in it, once both are drawn.
+    fn peek_row(&self, tab: TabId) -> Option<(AnyWindowHandle, Point<Pixels>)> {
+        let popup = self.peek_window()?;
+        let row = self.sidebar_trees.peek_row_center(TreeId::Tab(tab))?;
+        Some((popup, row))
+    }
+
+    /// How far a requested peek got, for a run that never saw its row.
+    fn peek_progress(&self, tab: TabId) -> String {
+        let row = self.sidebar_trees.peek_row_center(TreeId::Tab(tab));
+        format!(
+            "peek {:?}, opening {:?}, shown {}, sampling {}, target row at {row:?}, status: {}",
+            self.peek_state,
+            self.peek_opening,
+            self.peek_window().is_some(),
+            self.peek_monitoring,
+            self.message
+        )
+    }
+
     /// What the synthetic page's own script last reported about `document.hasFocus()`.
     fn page_focus(&self, id: TabId) -> Option<bool> {
         let title = self.acceptance.as_ref()?.titles.get(&id.get())?;
@@ -277,6 +304,8 @@ impl Run {
     async fn scenario(&mut self) -> Result<(), String> {
         self.wait_until_ready().await?;
         self.open_pages().await?;
+        // First, because a peek click needs no foreground and the palette steps abort without it.
+        self.check_peek_click().await?;
         self.measure_openings().await?;
         self.check_rapid_dismissal().await?;
         self.check_second_open().await?;
@@ -787,6 +816,121 @@ impl Run {
         self.return_to(focus).await
     }
 
+    /// A click on a sidebar peek row must switch to that tab, and the session must still answer
+    /// the next tab command (#10, and the worker stop in #9). The click is dispatched to the
+    /// popup in-process; the owner's own pointer is never moved.
+    async fn check_peek_click(&mut self) -> Result<(), String> {
+        let focus = self.focus_tab()?;
+        let target = self
+            .enter_tab
+            .ok_or_else(|| "The Enter target page is missing.".to_owned())?;
+        let before = self.hide_sidebar().await?;
+        self.with(|view, window, cx| view.open_peek_now(window, cx))?;
+        let shown = self
+            .try_wait(Duration::from_secs(5), |view, _, _| view.peek_row(target))
+            .await?;
+        let Some((popup, row)) = shown else {
+            let state = self.with(|view, _, _| view.peek_progress(target))?;
+            return Err(format!(
+                "Timed out after 5s waiting for the peek's target row: {state}."
+            ));
+        };
+        self.click(popup, row)?;
+        let switched = self
+            .try_wait(Duration::from_secs(5), |view, _, _| {
+                let done = view.peek_window().is_none()
+                    && view.model.active_id == Some(target)
+                    && view.shown == Some(target);
+                done.then_some(())
+            })
+            .await?
+            .is_some();
+        let (peek_open, message) =
+            self.with(|view, _, _| (view.peek_window().is_some(), view.message.clone()))?;
+        self.report.check(
+            "peek_click_activates_row",
+            switched,
+            format!(
+                "target tab active and shown: {switched}; peek still open: {peek_open}; \
+                 status: {message}"
+            ),
+        );
+        self.check_session_answers([focus, target]).await?;
+        self.restore_sidebar(before)?;
+        self.return_to(focus).await
+    }
+
+    /// Hides the sidebar so it can peek, and waits for the hover sampler that hiding starts
+    /// to stop again; a sampler still running would close the peek the run opens.
+    async fn hide_sidebar(&mut self) -> Result<SidebarWidthState, String> {
+        let before = self.with(|view, window, cx| {
+            let before = view.sidebar_sizing.state();
+            if before != SidebarWidthState::Hidden {
+                view.toggle_sidebar(window, cx);
+            }
+            before
+        })?;
+        self.wait_for(
+            Duration::from_secs(3),
+            "the hover sampler to stop",
+            |view, _, _| (!view.peek_monitoring).then_some(()),
+        )
+        .await?;
+        Ok(before)
+    }
+
+    /// Shows the sidebar again if the run hid it.
+    fn restore_sidebar(&mut self, before: SidebarWidthState) -> Result<(), String> {
+        if before == SidebarWidthState::Hidden {
+            return Ok(());
+        }
+        self.with(|view, window, cx| view.toggle_sidebar(window, cx))
+    }
+
+    /// Moves to `at` in `popup`, then presses and releases the left button there.
+    fn click(&mut self, popup: AnyWindowHandle, at: Point<Pixels>) -> Result<(), String> {
+        for event in left_click(at) {
+            self.cx
+                .update_window(popup, |_, window, cx| {
+                    window.dispatch_event(event, cx);
+                })
+                .map_err(|error| {
+                    format!("The peek closed before its row was clicked: {error:#}")
+                })?;
+        }
+        Ok(())
+    }
+
+    /// The tab command after a peek click must still reach a live session worker. It switches
+    /// to whichever of `tabs` is not active, so a click that changed nothing proves nothing.
+    async fn check_session_answers(&mut self, tabs: [TabId; 2]) -> Result<(), String> {
+        let tab = self.with(|view, _, _| {
+            let tab = if view.model.active_id == Some(tabs[0]) {
+                tabs[1]
+            } else {
+                tabs[0]
+            };
+            view.command(SessionCommand::FocusTab(tab));
+            tab
+        })?;
+        let answered = self
+            .try_wait(Duration::from_secs(5), |view, _, _| {
+                (view.model.active_id == Some(tab) && view.shown == Some(tab)).then_some(())
+            })
+            .await?
+            .is_some();
+        let message = self.with(|view, _, _| view.message.clone())?;
+        self.report.check(
+            "peek_click_keeps_session_alive",
+            answered,
+            format!("next tab command applied: {answered}; status: {message}"),
+        );
+        if !answered {
+            return Err("The session stopped answering after the peek click.".to_owned());
+        }
+        Ok(())
+    }
+
     async fn return_to(&mut self, tab: TabId) -> Result<(), String> {
         self.with(|view, _, _| view.command(SessionCommand::FocusTab(tab)))?;
         self.wait_for(Duration::from_secs(5), "the focus page", |view, _, _| {
@@ -1056,6 +1200,30 @@ impl std::fmt::Display for FocusTally {
 enum Typed {
     Character(char),
     Backspace,
+}
+
+/// The pointer events of one left click at `at`, as Windows delivers them to a GPUI window.
+fn left_click(at: Point<Pixels>) -> [PlatformInput; 3] {
+    [
+        PlatformInput::MouseMove(MouseMoveEvent {
+            position: at,
+            pressed_button: None,
+            modifiers: gpui::Modifiers::default(),
+        }),
+        PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Left,
+            position: at,
+            modifiers: gpui::Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        }),
+        PlatformInput::MouseUp(MouseUpEvent {
+            button: MouseButton::Left,
+            position: at,
+            modifiers: gpui::Modifiers::default(),
+            click_count: 1,
+        }),
+    ]
 }
 
 /// Posts one typed key to the open palette's own window.

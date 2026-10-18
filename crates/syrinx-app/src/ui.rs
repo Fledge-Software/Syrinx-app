@@ -518,15 +518,14 @@ impl BrowserView {
                     return;
                 }
             }
-            if update_in_main(&view, cx, |view, window, cx| {
+            let stopped = update_in_main(&view, cx, |view, window, cx| {
                 if !view.session_stopped {
                     view.fail("The session worker stopped unexpectedly.");
                     view.session_event(SessionEvent::Stopped, window, cx);
                 }
-            })
-            .is_err()
-            {
-                eprintln!("Session event stream closed after its window was removed.");
+            });
+            if let Err(error) = stopped {
+                eprintln!("Session event stream closed after its window was removed: {error:#}");
             }
         })
         .detach();
@@ -552,15 +551,14 @@ impl BrowserView {
                     return;
                 }
             }
-            if update_in_main(&view, cx, |view, window, cx| {
+            let stopped = update_in_main(&view, cx, |view, window, cx| {
                 if !view.browser_stopped {
                     view.fail("The page host stopped unexpectedly.");
                     view.browser_event(BrowserEvent::Stopped, window, cx);
                 }
-            })
-            .is_err()
-            {
-                eprintln!("Browser event stream closed after its window was removed.");
+            });
+            if let Err(error) = stopped {
+                eprintln!("Browser event stream closed after its window was removed: {error:#}");
             }
         })
         .detach();
