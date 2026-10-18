@@ -13,15 +13,19 @@ folder names.
 ## 2026-10-18
 
 - **Syrinx takes find, history and zoom keys even over a focused page.**
-  Ctrl F, Ctrl H, Ctrl +, Ctrl − and Ctrl 0 open Syrinx's find bar and
-  history list and change the tab's zoom while a web page has the keyboard
-  focus, as Chrome and Edge do: these are browser commands, not page
-  commands. Before this, a focused page kept them, so Ctrl F opened
-  WebView2's own find bar and Ctrl H did nothing (#21). The cost, accepted,
-  is that a page such as Google Docs no longer sees Ctrl F or Ctrl H for its
-  own find and replace; it keeps its menus for those. Ctrl P stays the
-  page's. This replaces the 2026-10-12 entry "Pages get find, history, print
-  and zoom keys first (P1-13)". Recorded from the owner's comment on #21.
+  The owner decided on #21 that Ctrl F, Ctrl H, Ctrl +, Ctrl − and Ctrl 0 go
+  to Syrinx even while a web page has the keyboard focus, as in Chrome and
+  Edge, because find, history and zoom are browser commands and not page
+  commands; that the existing test asserting these keys reach the page first
+  is changed to the new rule; and that Esc closes History. Before this, a
+  focused page kept these keys, so Ctrl F opened WebView2's own find bar and
+  Ctrl H did nothing (#21). This replaces the 2026-10-12 entry "Pages get
+  find, history, print and zoom keys first (P1-13)" for find, history and
+  zoom only; that entry's print rule (Ctrl P stays the page's) still
+  stands. Implementation note, not part of the owner's decision: the page's
+  own use of these keys (for example Google Docs' find and replace on
+  Ctrl F and Ctrl H) is a consequence nobody has measured; it is an open
+  point for the owner's hand checks.
 
 ## 2026-10-16
 

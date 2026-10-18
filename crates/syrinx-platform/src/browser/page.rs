@@ -608,7 +608,8 @@ fn shortcut_for_modifiers(
         return None;
     }
     // Find, history and zoom are Syrinx's even over a focused page, as in Chrome (owner,
-    // 2026-10-18); Ctrl P stays the page's.
+    // 2026-10-18). Print (Ctrl P) is not part of that decision and stays the page's under
+    // the 2026-10-12 rule.
     if let Some(shortcut) = find_history_or_zoom(key, shift) {
         return Some(shortcut);
     }
@@ -628,8 +629,9 @@ fn shortcut_for_modifiers(
 }
 
 /// Ctrl F, Ctrl H and the zoom keys. Plus and minus also count shifted and on the keypad,
-/// as Chrome's table does; `VK_OEM_PLUS` and `VK_OEM_MINUS` are the + and - keys on every
-/// layout, so Ctrl = on a US keyboard zooms in.
+/// as Chrome's table does; `VK_OEM_PLUS` and `VK_OEM_MINUS` follow Chrome's key-code table, not the printed
+/// keys: Ctrl = zooms in on a US keyboard, and on layouts without - on that key (such as
+/// French AZERTY) Ctrl - falls back to WebView2's own zoom.
 fn find_history_or_zoom(key: u32, shift: bool) -> Option<BrowserShortcut> {
     match (key, shift) {
         (0x46, false) => Some(BrowserShortcut::Find),

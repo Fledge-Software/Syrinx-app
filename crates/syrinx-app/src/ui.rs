@@ -261,6 +261,15 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
     })
 }
 
+/// Whether a palette command hands the keys back to the page once it has run; the others
+/// (edit address, find, history) place focus themselves and must not be overridden.
+fn command_returns_focus_to_page(action: BrowserAction) -> bool {
+    !matches!(
+        action,
+        BrowserAction::EditAddress | BrowserAction::FindInPage | BrowserAction::ShowHistory
+    )
+}
+
 /// Whether a shortcut opens something in Syrinx's chrome, which page fullscreen hides.
 fn needs_chrome(shortcut: BrowserShortcut) -> bool {
     matches!(shortcut, BrowserShortcut::Find | BrowserShortcut::History)
@@ -1219,6 +1228,12 @@ impl BrowserView {
         if self.closing {
             return;
         }
+        // A fullscreen page fills the window, leaving the find bar and History nowhere to show,
+        // so leave fullscreen first and then open them. The accelerator handler cannot know the
+        // fullscreen state, so the key is already taken from the page by the time we get here.
+        if self.fullscreen.is_some() && needs_chrome(shortcut) {
+            self.fullscreen_shortcut(window);
+        }
         match shortcut {
             BrowserShortcut::DismissPeek(generation) => {
                 self.dismiss_peek(generation, window, cx);
@@ -1231,8 +1246,6 @@ impl BrowserView {
             }
             BrowserShortcut::LeavePageBackward => self.leave_page_backward(window, cx),
             BrowserShortcut::Fullscreen => self.fullscreen_shortcut(window),
-            // A fullscreen page fills the window, leaving the find bar and History nowhere to show.
-            _ if self.fullscreen.is_some() && needs_chrome(shortcut) => {}
             BrowserShortcut::Find => self.open_find(window, cx),
             // From a page key, the palette or a menu, the keys were the page's to return.
             BrowserShortcut::History => {
@@ -1445,13 +1458,12 @@ impl BrowserView {
             None if action == BrowserAction::InstallUpdateFromFile => {
                 self.install_update_from_file(window, cx);
             }
-            None => self.check_for_updates(window, cx),
+            None if action == BrowserAction::CheckForUpdates => self.check_for_updates(window, cx),
+            None => {}
         }
-        // Edit address reopens the palette and Find focuses its bar; the rest return to the page.
-        if !matches!(
-            action,
-            BrowserAction::EditAddress | BrowserAction::FindInPage
-        ) {
+        // Edit address reopens the palette, Find focuses its bar and History returns focus to
+        // where it was opened from; the rest return to the page.
+        if command_returns_focus_to_page(action) {
             self.focus_page(window, cx);
         }
     }
@@ -2255,7 +2267,15 @@ mod palette_shortcut_tests {
     }
 
     #[test]
-    fn only_find_and_history_wait_for_page_fullscreen_to_end() {
+    fn history_from_the_palette_keeps_the_focus_it_set() {
+        assert!(!command_returns_focus_to_page(BrowserAction::ShowHistory));
+        assert!(!command_returns_focus_to_page(BrowserAction::FindInPage));
+        assert!(!command_returns_focus_to_page(BrowserAction::EditAddress));
+        assert!(command_returns_focus_to_page(BrowserAction::ZoomIn));
+    }
+
+    #[test]
+    fn only_find_and_history_leave_page_fullscreen_first() {
         assert!(needs_chrome(BrowserShortcut::Find));
         assert!(needs_chrome(BrowserShortcut::History));
         for shortcut in [
