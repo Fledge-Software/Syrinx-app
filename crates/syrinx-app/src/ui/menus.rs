@@ -8,12 +8,11 @@ use std::time::{Duration, Instant};
 use gpui::{KeyDownEvent, MouseDownEvent, Pixels, Point, WeakEntity, prelude::FluentBuilder as _};
 use syrinx_core::{DestinationSurface, Shortcut};
 use syrinx_platform::browser::{
-    BrowserError, OverlayRect, activate_if_foreground, focus_chrome, hide_overlay, show_overlay,
-    syrinx_in_foreground,
+    BrowserError, OverlayRect, focus_chrome, hide_overlay, syrinx_in_foreground,
 };
 
 use super::{
-    owned_popup::{OwnedPopup, OwnedPopupError, PopupSpec, open_owned_popup},
+    owned_popup::{OwnedPopup, OwnedPopupError, PopupSpec, open_owned_popup, show_and_activate},
     *,
 };
 
@@ -334,12 +333,7 @@ impl BrowserView {
             let Ok(true) = view.update(cx, |view, _| view.is_current_menu(generation)) else {
                 return; // The menu closed before it was shown, or the browser is gone.
             };
-            // Syrinx never takes the foreground from another application (owner, 2026-10-12).
-            let shown = if syrinx_in_foreground() {
-                show_overlay(hwnd, rect).and_then(|()| activate_if_foreground(hwnd))
-            } else {
-                Ok(false)
-            };
+            let shown = show_and_activate(hwnd, rect);
             if view
                 .update(cx, |view, cx| view.menu_shown(generation, shown, cx))
                 .is_err()

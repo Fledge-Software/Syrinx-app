@@ -1,6 +1,9 @@
 //! Opens the owned GPUI popups (palette, sidebar peek, menus) that may sit over the page card.
 
 use gpui::AnyView;
+use syrinx_platform::browser::{
+    BrowserError, OverlayRect, activate_if_foreground, show_overlay, syrinx_in_foreground,
+};
 
 use super::*;
 
@@ -78,4 +81,15 @@ fn own_popup(popup: &Window, owner: isize) -> Result<isize, String> {
     set_overlay_owner(hwnd, owner).map_err(|error| error.to_string())?;
     show_app_icon(hwnd);
     Ok(hwnd)
+}
+
+/// Places, shows and activates a kept popup while Syrinx is in front; `Ok(false)` when another
+/// application is, because Syrinx never takes the foreground from it (owner, 2026-10-12).
+/// Call it from a spawned task, outside any GPUI update: Windows delivers the popup's resize,
+/// first frame and activation from these calls, and GPUI drops them while an update holds the app.
+pub(super) fn show_and_activate(hwnd: isize, rect: OverlayRect) -> Result<bool, BrowserError> {
+    if !syrinx_in_foreground() {
+        return Ok(false);
+    }
+    show_overlay(hwnd, rect).and_then(|()| activate_if_foreground(hwnd))
 }

@@ -4,12 +4,10 @@ use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::Pixels;
-use syrinx_platform::browser::{
-    BrowserError, OverlayRect, activate_if_foreground, show_overlay, syrinx_in_foreground,
-};
+use syrinx_platform::browser::{BrowserError, OverlayRect, activate_if_foreground, show_overlay};
 
 use super::{
-    owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup},
+    owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup, show_and_activate},
     *,
 };
 use crate::palette::{PaletteEntry, PaletteNative};
@@ -244,12 +242,7 @@ impl BrowserView {
                 probe.show_started(Instant::now());
                 probe.arm_open();
             }
-            // Syrinx never takes the foreground from another application (owner, 2026-10-12).
-            let shown = if syrinx_in_foreground() {
-                show_overlay(hwnd, rect).and_then(|()| activate_if_foreground(hwnd))
-            } else {
-                Ok(false)
-            };
+            let shown = show_and_activate(hwnd, rect);
             if view
                 .update(cx, |view, cx| view.palette_shown(entry, shown, cx))
                 .is_err()
