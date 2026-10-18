@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gpui::{App, Context, FocusHandle, KeyDownEvent, ScrollHandle, Window};
+use gpui::{App, Context, FocusHandle, KeyDownEvent, Pixels, Point, ScrollHandle, Window};
 use syrinx_core::{
     SavedFolderId, SavedFolderSnapshot, SavedPageId, SavedPageSnapshot, TabId, TabModelSnapshot,
     TabSnapshot,
@@ -353,6 +353,14 @@ impl SidebarTrees {
             schedule_refocus(refocus, window, cx);
         }
         prepared
+    }
+
+    /// The middle of `id`'s row as the peek last laid it out, in the popup's coordinates;
+    /// the palette acceptance run clicks there.
+    pub(super) fn peek_row_center(&self, id: TreeId) -> Option<Point<Pixels>> {
+        let index = self.peek.rows.iter().position(|row| row.id == id)?;
+        let bounds = self.peek.scroll.bounds_for_item(index)?;
+        Some(bounds.center() + self.peek.scroll.offset())
     }
 }
 

@@ -4,7 +4,7 @@ use futures::StreamExt;
 use gpui::{Context, Window};
 use syrinx_platform::instance::{DroppedLinks, InstanceError, LinkFeed, LinkRequest, StopSignal};
 
-use super::BrowserView;
+use super::{BrowserView, main_window::update_in_main};
 use crate::session::SessionCommand;
 
 /// Forwarded addresses waiting for the session, the switch that stops the listener and
@@ -71,7 +71,7 @@ impl BrowserView {
         self.incoming.dropped = dropped;
         cx.spawn_in(window, async move |view, cx| {
             while let Some(request) = requests.next().await {
-                let delivered = view.update_in(cx, |view, window, cx| {
+                let delivered = update_in_main(&view, cx, |view, window, cx| {
                     view.link_request(request, window, cx);
                 });
                 if delivered.is_err() {
