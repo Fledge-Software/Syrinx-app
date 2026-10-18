@@ -1,10 +1,10 @@
 > **Research note dated 2026-10-10.** Read for reasoning, not current fact; later decisions in [`docs/decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/decisions.md) and [`docs/architecture-decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/architecture-decisions.md) win.
 >
-> The spikes it describes were throwaway code (D16) and were never merged. Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri. The product was called Atlas until 2026-10-12; read Atlas here as Syrinx.
+> The spikes it describes were throwaway code (D16) and were never merged. Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri.
 >
 > Moved from `docs/research/09-phase-0-verdict.md` ([original at af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/09-phase-0-verdict.md)) on 2026-10-16.
 
-# Phase 0 verdict: Atlas on Windows 11
+# Phase 0 verdict: Syrinx on Windows 11
 
 Written 2026-10-10 from two throwaway spikes built on 2026-10-09 and the
 owner's own tests. The spikes' code was never merged; their full results are
@@ -24,7 +24,7 @@ conditions are:
    3.75% of one core against the 0.5% bar (D6). The owner allowed a small,
    pinned GPUI patch offered upstream (D37). If the patch can't bring idle
    CPU under 0.5%, GPUI against Tauri goes back to the owner.
-2. **The untested musts are tested before Atlas becomes the daily browser.**
+2. **The untested musts are tested before Syrinx becomes the daily browser.**
    Hulu, the 13 other daily sites, Google sign-in with a password and phone
    prompt, and staying signed in after a restart were not tried in Phase 0.
    They move into plan 1's Phase 2 exit criteria.

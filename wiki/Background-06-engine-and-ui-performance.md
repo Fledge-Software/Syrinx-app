@@ -1,19 +1,19 @@
 > **Research note dated 2026-10-09.** Read for reasoning, not current fact; later decisions in [`docs/decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/decisions.md) and [`docs/architecture-decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/architecture-decisions.md) win.
 >
-> Its Widevine statements are wrong for the WebView2 runtime on the owner's machine; note 07 corrects them, and note 08 corrects its reading of GPUI and wry on Windows. Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri. The product was called Atlas until 2026-10-12; read Atlas here as Syrinx.
+> Its Widevine statements are wrong for the WebView2 runtime on the owner's machine; note 07 corrects them, and note 08 corrects its reading of GPUI and wry on Windows. Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri.
 >
 > Moved from `docs/research/06-engine-and-ui-performance.md` ([original at af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/06-engine-and-ui-performance.md)) on 2026-10-16.
 
-# Engine and UI performance: what Atlas should be built on
+# Engine and UI performance: what Syrinx should be built on
 
 **Date:** 2026-10-09
 
-**Status:** Research note 06. It began as "what could an all-Rust Atlas be built on". The same day the owner corrected the brief: Atlas does not have to be all Rust; TypeScript and Svelte are fine. The deciding criteria are performance, efficiency and web compatibility, not language purity. Two decisions still stand. The engine is embedded, not written, and Rust owns state and logic. Related notes: [`02-browser-v1-scope.md`](Background-02-browser-v1-scope) (what a daily browser needs) and [`02a-tauri-wry-facts.md`](Background-02a-tauri-wry-facts) (Tauri multiwebview detail).
+**Status:** Research note 06. It began as "what could an all-Rust Syrinx be built on". The same day the owner corrected the brief: Syrinx does not have to be all Rust; TypeScript and Svelte are fine. The deciding criteria are performance, efficiency and web compatibility, not language purity. Two decisions still stand. The engine is embedded, not written, and Rust owns state and logic. Related notes: [`02-browser-v1-scope.md`](Background-02-browser-v1-scope) (what a daily browser needs) and [`02a-tauri-wry-facts.md`](Background-02a-tauri-wry-facts) (Tauri multiwebview detail).
 
 **Terms used below.**
 - A **web view** is an embedded browser engine drawing one page.
-- The **chrome** is Atlas's own interface: sidebar, palette and home page.
-- A **child window** is an operating-system window placed inside Atlas's window: an HWND on Windows, an NSView on macOS. The system draws it as its own layer.
+- The **chrome** is Syrinx's own interface: sidebar, palette and home page.
+- A **child window** is an operating-system window placed inside Syrinx's window: an HWND on Windows, an NSView on macOS. The system draws it as its own layer.
 - A **texture** is an image in GPU memory. **Zero-copy** means one GPU hands it to another without a trip through the CPU.
 - **Off-screen rendering (OSR)** means the engine paints into a texture instead of a window, and the app draws that texture itself.
 - A **renderer process** runs one or more sites' pages. **Site isolation** gives each site its own renderer.
@@ -28,7 +28,7 @@
 
 1. Is Servo usable as an embeddable engine in late 2026? Cover how it is released and consumed, its embedding API, platform support, multiple web views, how it renders (WebRender, surfman, ANGLE, rendering to a texture) and how servoshell builds its chrome.
 2. Which of the owner's daily sites work in Servo? How does it score on WPT against Chromium, Gecko and WebKit, and what platform features are missing?
-3. What other Rust engines and renderers exist (Blitz, Verso and others), and what is each good for in Atlas?
+3. What other Rust engines and renderers exist (Blitz, Verso and others), and what is each good for in Syrinx?
 4. Which UI toolkit should draw the chrome and plugin UIs: a Rust toolkit (GPUI, iced, Slint, egui, Dioxus, Makepad, Xilem, Floem) or Svelte in a web view? Where does the web-view option cost measurable performance?
 5. How do the architectures compare on web compatibility, effort, size, memory per tab and at idle, process model, cold start, input-to-paint latency, idle CPU, GPU use, overlays, translucency, accessibility, security updates and licence?
 6. Which is the most efficient stack that still loads the owner's daily sites, and what Phase 0 spike decides it?
@@ -44,7 +44,7 @@
   - Forge's editor. Zed claims under 10 ms typing latency against VS Code's 50 ms or more, but that is the vendor's claim.
 
   It makes no difference to page rendering, scrolling inside a page, or overlays.
-- **The page is always a separate child window**, whether the chrome is Rust or Svelte, with an OS web view or CEF in windowed mode. So nothing in Atlas's window can draw over it.
+- **The page is always a separate child window**, whether the chrome is Rust or Svelte, with an OS web view or CEF in windowed mode. So nothing in Syrinx's window can draw over it.
   - The fix is to put the palette and sidebar peek in borderless popup windows above the page. On Windows 11 the system can give those windows real Acrylic blur.
   - A later fix is WebView2 "visual hosting".
   - Only texture engines (Servo, CEF off-screen) make overlays free, and they cost input, IME and accessibility work.
@@ -125,7 +125,7 @@ What works, per Servo's own posts: Google Photos, lichess, Zulip, Speedtest, Duc
 
 ### 3. Other Rust engines and renderers
 
-- **Blitz** 0.3.0-beta.2 (2026-08-24, MIT or Apache) renders HTML and CSS with Stylo, Taffy, Parley and Vello. It has no JavaScript and is "in a beta state". It is good for rendering Atlas's own HTML natively (a reader view, notes' HTML export, a home page), never for the open web ([DioxusLabs/blitz](https://github.com/DioxusLabs/blitz); high).
+- **Blitz** 0.3.0-beta.2 (2026-08-24, MIT or Apache) renders HTML and CSS with Stylo, Taffy, Parley and Vello. It has no JavaScript and is "in a beta state". It is good for rendering Syrinx's own HTML natively (a reader view, notes' HTML export, a home page), never for the open web ([DioxusLabs/blitz](https://github.com/DioxusLabs/blitz); high).
 - **Verso** (Servo-based) was archived on 2025-10-08: "Verso is currently no longer maintained". Its `tauri-runtime-verso` is effectively dead ([versotile-org/verso](https://github.com/versotile-org/verso); high). Servo's book still points embedders at it (stale).
 - **Ultralight** is proprietary. Its free tier has no JIT, a 60 fps cap and no media. It suits embedded UI, not browsing ([pricing](https://ultralig.ht/pricing/); high). Ladybird is C++ and was not checked.
 - **Stylo, Taffy and Vello** are the reusable pieces. They are useful inside a native UI, but none is a browser engine (high).
@@ -192,7 +192,7 @@ Sources for the table:
 **GPU**
 - **Chromium engines.** WebView2 and CEF composite in Chromium's shared GPU process.
 - **GPUI.** Adds its own D3D11 device and swap chain on Windows.
-- **Servo.** Renders through ANGLE inside Atlas's own process. Slint's bridge does one GPU blit per frame.
+- **Servo.** Renders through ANGLE inside Syrinx's own process. Slint's bridge does one GPU blit per frame.
 - **CEF off-screen.**
   - The off-screen path hands over a D3D11 shared handle, and the frame "must be copied" in the callback.
   - `windowless_frame_rate` defaults to 30 fps.
@@ -203,24 +203,24 @@ Sources for the table:
 - **Windowed web views and CEF.** The web view is a child HWND that "always occludes everything under it" ([wry PR #1762](https://github.com/tauri-apps/wry/pull/1762); high). The same holds for GPUI with gpui-wry and for Tauri ([#15682](https://github.com/tauri-apps/tauri/issues/15682), [#11124](https://github.com/tauri-apps/tauri/issues/11124)). Rust and Svelte chromes are equal here.
 - **Popup windows.** An owned, borderless popup window above the page costs one more swap chain, composed by the Desktop Window Manager (DWM). On Windows 11 build 22621 and later, `DWMSBT_TRANSIENTWINDOW` gives a window Desktop Acrylic ([Microsoft](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type); high). That should blur the page underneath, which a CSS blur cannot (medium; the spike confirms it).
 - **A transparent second web view on top.** WebView2's background alpha can only be 0 or 255, and "transparent" shows "hosting app content". Whether a sibling web view shows through is undocumented ([DefaultBackgroundColor](https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2controller.defaultbackgroundcolor); high and low). It also costs a renderer process.
-- **Visual hosting.** WebView2 draws into a DComp visual that Atlas stacks with its own visuals, but Atlas must forward mouse, touch and pen input ([hosting modes](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/windowed-vs-visual-hosting); high). wry lacks it; PR #1762 is open and unreviewed (high).
-- **Texture engines** (Servo, CEF off-screen). Overlays are free, but Atlas owns input, IME, drag and drop, and accessibility.
+- **Visual hosting.** WebView2 draws into a DComp visual that Syrinx stacks with its own visuals, but Syrinx must forward mouse, touch and pen input ([hosting modes](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/windowed-vs-visual-hosting); high). wry lacks it; PR #1762 is open and unreviewed (high).
+- **Texture engines** (Servo, CEF off-screen). Overlays are free, but Syrinx owns input, IME, drag and drop, and accessibility.
 
 ## Comparison of architectures
 
 | Architecture | Daily sites | Effort, one developer | Added download | Memory and processes | Startup | Overlays above a page | Translucency | Accessibility | Security updates | Licence |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **A.** Rust UI + Servo as a texture (Slint or egui) | Fails Google sign-in, YouTube, Drive, GitHub | Very high: downloads, dialogs, input and accessibility are all Atlas's | About 100 MB, plus GStreamer for media | Single process by default; known bloat bugs | No data | Free: the page is a texture | Full; can blur page pixels | Servo's is basic, behind a pref | Atlas rebuilds monthly or follows LTS (9 months, best effort) | MPL-2.0, plus the toolkit's |
+| **A.** Rust UI + Servo as a texture (Slint or egui) | Fails Google sign-in, YouTube, Drive, GitHub | Very high: downloads, dialogs, input and accessibility are all Syrinx's | About 100 MB, plus GStreamer for media | Single process by default; known bloat bugs | No data | Free: the page is a texture | Full; can blur page pixels | Servo's is basic, behind a pref | Syrinx rebuilds monthly or follows LTS (9 months, best effort) | MPL-2.0, plus the toolkit's |
 | **B.** Rust UI (GPUI) + system web views via wry | Edge-class on Windows, Safari-class on macOS; Google sign-in to test | High for the chrome and editor; the engine is free | About 3 MB; WebView2 ships with Windows 11 | Chromium model; one shared environment; suspend background tabs | Chrome paints before WebView2 is up | Popup windows (Acrylic), later visual hosting | Mica built into GPUI | The page's is native per child window; GPUI's AccessKit is new | Microsoft updates the Evergreen runtime | Apache-2.0 (GPUI), MIT/Apache (wry) |
-| **C.** Rust UI + Chromium via CEF (cef-rs 154) | Chromium everywhere, Linux included; Google's policy names CEF | High; off-screen mode adds input, IME and accessibility forwarding | Large: Linux package 116 MB download, 364 MB installed ([Arch](https://archlinux.org/packages/extra/x86_64/cef/)) | Chromium model; a private copy, not shared with Edge | Its own Chromium cold start | Windowed: as B. Off-screen: free, 30 fps default | Off-screen: full. Windowed: as B | Windowed: Chromium's. Off-screen: Atlas bridges it | Atlas ships each CEF update (about every 4 weeks; extended branches about 8) ([CEF branches](https://chromiumembedded.github.io/cef/branches_and_building); medium) | BSD (CEF), MIT/Apache (cef-rs) |
+| **C.** Rust UI + Chromium via CEF (cef-rs 154) | Chromium everywhere, Linux included; Google's policy names CEF | High; off-screen mode adds input, IME and accessibility forwarding | Large: Linux package 116 MB download, 364 MB installed ([Arch](https://archlinux.org/packages/extra/x86_64/cef/)) | Chromium model; a private copy, not shared with Edge | Its own Chromium cold start | Windowed: as B. Off-screen: free, 30 fps default | Off-screen: full. Windowed: as B | Windowed: Chromium's. Off-screen: Syrinx bridges it | Syrinx ships each CEF update (about every 4 weeks; extended branches about 8) ([CEF branches](https://chromiumembedded.github.io/cef/branches_and_building); medium) | BSD (CEF), MIT/Apache (cef-rs) |
 | **D.** Hybrid: Rust UI, each tab on Servo or the system web view | As B for system-web-view tabs | Highest: two engines | B plus about 100 MB | Both models | As B | Mixed | Mixed | Mixed | Both | Both |
 | **E.** Svelte UI in Tauri 2 + system web views (the spec's plan) | As B | Lowest; CodeMirror and ProseMirror exist | About 3 MB | B plus one renderer and a JS heap for the chrome | Chrome waits for WebView2 (0.44 s hello world, Windows CI) | Separate web view or popup windows; no z-order API | Tauri window effects | Chromium's; NVDA bug in frameless windows | Evergreen | MIT/Apache |
 | **F.** Svelte UI + CEF (Tauri v3 `tauri-runtime-cef`, alpha.5, 2026-10-01) | As C | Low to medium, but alpha | As C | As C, plus the chrome's renderer | As C | As C | As C | As C | As C | As C |
 
-## What this means for Atlas v1
+## What this means for Syrinx v1
 
 **Recommendation: architecture B.** It is the most efficient stack that still loads the owner's sites.
-- **Engine.** Atlas uses the system web view through wry: WebView2 on Windows, WKWebView on macOS.
+- **Engine.** Syrinx uses the system web view through wry: WebView2 on Windows, WKWebView on macOS.
   - All tabs come from one `CoreWebView2Environment`.
   - Hidden tabs get `TrySuspend` after a delay, and inactive ones `MemoryUsageTargetLevel = Low`.
 - **Chrome.** The sidebar, home page and Forge are native GPUI, pinned to gpui-kit's snapshot crate. GPUI gives the window Mica.
@@ -228,7 +228,7 @@ Sources for the table:
 - **Why this beats E.** The chrome is on screen before WebView2 starts, a renderer and a JS heap are saved, and Forge gets a native editor. The engine and its update burden are the same.
 - **Why it beats A, C and D.** A and D fail the owner's sites today. C costs hundreds of megabytes and a monthly security-release duty for no compatibility gain on Windows or macOS.
 
-**Fallback: architecture E**, Tauri 2 with Svelte, on the same engine. Atlas moves to it if GPUI's churn, its accessibility, or a native editor proves too costly for one developer. Its costs are the measurable but modest ones above, plus the multiwebview gaps listed in note 02a. **Contingency engine: CEF via cef-rs** applies only if WebView2 fails a must-have site or Linux becomes a v1 platform.
+**Fallback: architecture E**, Tauri 2 with Svelte, on the same engine. Syrinx moves to it if GPUI's churn, its accessibility, or a native editor proves too costly for one developer. Its costs are the measurable but modest ones above, plus the multiwebview gaps listed in note 02a. **Contingency engine: CEF via cef-rs** applies only if WebView2 fails a must-have site or Linux becomes a v1 platform.
 
 **Where "all Rust" would hurt daily browsing.** A Rust engine today means:
 - no Google sign-in, YouTube playback or Drive, and a broken GitHub;
@@ -245,9 +245,9 @@ Rust everywhere *except* the engine costs nothing in compatibility, because the 
 - **A native WYSIWYG Notes editor.** Notes' rich editor can ship as a local web-view tab first. It costs one renderer only while open.
 
 **Risks**
-- **GPUI.** Breaking changes and snapshot crates, AccessKit only months old, and Zed's editor under GPL, which Atlas must not copy.
+- **GPUI.** Breaking changes and snapshot crates, AccessKit only months old, and Zed's editor under GPL, which Syrinx must not copy.
 - **Google sign-in** in embedded web views, which is the same risk for CEF.
-- **App shortcuts.** They don't reach Atlas while a page has focus (wry #451, note 02a).
+- **App shortcuts.** They don't reach Syrinx while a page has focus (wry #451, note 02a).
 - **Focus hand-off** between a popup overlay and the page.
 - **Effort.** One developer building a native code editor.
 

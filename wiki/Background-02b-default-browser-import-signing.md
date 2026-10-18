@@ -1,6 +1,6 @@
 > **Research note dated 2026-10-09.** Read for reasoning, not current fact; later decisions in [`docs/decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/decisions.md) and [`docs/architecture-decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/architecture-decisions.md) win.
 >
-> An appendix to note 02, written for a Tauri build. Registering Syrinx as a browser is operator work for the owner, not an agent. Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri. The product was called Atlas until 2026-10-12; read Atlas here as Syrinx.
+> An appendix to note 02, written for a Tauri build. Registering Syrinx as a browser is operator work for the owner, not an agent. Notes 07 and 08 correct parts of the earlier notes, and note 03 assumes Tauri.
 >
 > Moved from `docs/research/02b-default-browser-import-signing.md` ([original at af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/02b-default-browser-import-signing.md)) on 2026-10-16.
 
@@ -13,9 +13,9 @@ low. "Inference" marks the helper's reasoning rather than a source's statement.
 
 ## Short answer
 
-- **Default browser.** Atlas can register itself as a browser, but on Windows
+- **Default browser.** Syrinx can register itself as a browser, but on Windows
   11 it cannot make itself the default: the user has to choose it in Settings.
-  Atlas can open the right Settings page directly.
+  Syrinx can open the right Settings page directly.
 - **Import.** Bookmarks and history import cleanly from Chrome, Edge and
   Firefox. Chrome's cookies and newer passwords are bound to Chrome since Chrome
   127, so an importer can't decrypt them, and shouldn't try.
@@ -23,7 +23,7 @@ low. "Inference" marks the helper's reasoning rather than a source's statement.
   builds over weeks. Smart App Control on Windows 11 blocks unsigned
   executables outright.
 - **Microsoft Store.** Store policy says a browser must use the Chromium or
-  Gecko engine, which would rule out a Servo-based Atlas there.
+  Gecko engine, which would rule out a Servo-based Syrinx there.
 
 ## 1. Becoming the default browser on Windows 11
 
@@ -51,7 +51,7 @@ low. "Inference" marks the helper's reasoning rather than a source's statement.
   and a filter driver (UCPD.sys) blocks apps from writing them.
 - **Reading is allowed:** an app may query the current default with
   `IApplicationAssociationRegistration::QueryCurrentDefault`.
-- **The Settings deep link** goes straight to Atlas's page in Settings:
+- **The Settings deep link** goes straight to Syrinx's page in Settings:
   - `ms-settings:defaultapps?registeredAppUser=<escaped name from HKCU\Software\RegisteredApplications>`;
   - `registeredAppMachine=` for HKLM installs;
   - `registeredAUMID=` for packaged apps.

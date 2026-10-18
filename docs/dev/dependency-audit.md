@@ -468,7 +468,7 @@ filtered, and all documentation-test stages pass. The reviewed fixture
 correction preserves strict invalid-range validation; both original NUL
 regressions now pass.
 
-The gate rebuilds `target/local/atlas-app.exe` in 18.05 seconds, SHA-256
+The gate rebuilds `target/local/syrinx-app.exe` in 18.05 seconds, SHA-256
 `6edfe4113ccc7b0d5995faccaf7cb23e66541af147712443eb1b17bd9adddf1c`, then fails
 its restricted-context smoke run at the 30-second watchdog. A subsequent
 `Chrome_WidgetWin_0` unregister error reports 1411. This is a failed gate,
