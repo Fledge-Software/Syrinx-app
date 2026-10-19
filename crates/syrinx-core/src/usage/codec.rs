@@ -94,7 +94,11 @@ impl UsageFile {
     /// current period ends `today`; a completed one on the day it closed.
     pub fn report_text(&self, period: ReportPeriod, today: UsageDate) -> Option<String> {
         match period {
-            ReportPeriod::Current => Some(report(&self.current, today)),
+            ReportPeriod::Current => {
+                // A clock set back must not end the period before a day it already counted.
+                let end = today.max(self.current.last_counted);
+                Some(report(&self.current, end))
+            }
             ReportPeriod::Previous => {
                 let previous = self.previous.as_ref()?;
                 Some(report(previous, previous.closed_on?))
