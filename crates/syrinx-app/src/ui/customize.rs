@@ -7,7 +7,7 @@ use gpui::{
     Stateful, StatefulInteractiveElement, Styled, Subscription, Toggled, Window, div, px,
 };
 use gpui_component::input::{InputEvent, InputState};
-use syrinx_core::{ActivationTarget, PageOrigin, QuickDestinations, TabId};
+use syrinx_core::{ActivationTarget, QuickDestinations, TabId};
 use syrinx_platform::backdrop::{self, Backdrop};
 use syrinx_ui::metrics::{radius, text};
 use syrinx_ui::theme::Material;
@@ -159,12 +159,9 @@ impl BrowserView {
     /// Opens a Home tab for the panel. It is not a palette entry: nobody asked to type, so
     /// its acknowledgement must not open the palette over the panel (#14).
     fn open_home_without_palette(&mut self) {
-        let queued = self.try_command(SessionCommand::NewTab {
+        self.try_command_without_entry(SessionCommand::NewTab {
             address: "about:blank".to_owned(),
         });
-        if queued {
-            self.home_palette.finish_entry();
-        }
     }
 
     /// The first open tab shown as Home, which the Appearance button reuses.
@@ -172,11 +169,7 @@ impl BrowserView {
         self.model
             .tabs
             .iter()
-            .find(|tab| {
-                let adopted = self.popup_pages.contains(&tab.id);
-                tab.metadata
-                    .is_home(PageOrigin::from_adopted_popup(adopted))
-            })
+            .find(|tab| self.tab_is_home(tab))
             .map(|tab| tab.id)
     }
 
@@ -602,7 +595,8 @@ enum AppearanceRoute {
     OpenHome,
 }
 
-/// Chooses the Appearance button's route; it never adds a Home tab while one is open.
+/// Chooses the Appearance button's route, reusing a Home tab already in the model. A Home
+/// still being opened is not in the model yet, so two quick presses can still open two.
 fn appearance_route(
     home_showing: bool,
     customize_open: bool,
