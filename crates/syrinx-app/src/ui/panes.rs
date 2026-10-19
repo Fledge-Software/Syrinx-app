@@ -193,7 +193,7 @@ impl BrowserView {
     }
 
     /// A page that took focus by click or Tab clears GPUI's focus, so no chrome control
-    /// keeps showing a ring while keys go to the page.
+    /// keeps showing a ring while keys go to the page; unless Windows focus stayed on the chrome (#57).
     pub(super) fn page_took_focus(&mut self, id: u64, window: &mut Window, cx: &mut App) {
         let chrome_kept_keys =
             syrinx_platform::browser::chrome_has_keyboard_focus(self.parent_hwnd);

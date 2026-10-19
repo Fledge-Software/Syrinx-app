@@ -178,6 +178,7 @@ fn find_while_typing_in_chrome(
     Ok(())
 }
 
+/// Fails the suite when Windows keyboard focus is no longer on the chrome window.
 fn require_chrome_focus(parent: HWND, moment: &str) -> Result<(), String> {
     if syrinx_platform::browser::chrome_has_keyboard_focus(parent.0 as isize) {
         return Ok(());
