@@ -364,14 +364,20 @@ you found it in the commit message, not here.
   to the window root when focus goes to the page: `focus_page` does, and the
   page's `GotFocus` event (`BrowserEvent::PageFocused`) covers clicks.
   Source: P1-36 (code-confirmed; owner visual check pending).
-- **WebView2 raises `GotFocus` during native find although the keys stay in
-  the chrome.** Clearing GPUI focus on every `PageFocused` pushed the find
-  bar's caret to the window root after the first matches (#57, was DW-71),
-  while Windows focus never left Syrinx's window. `page_took_focus` now
-  clears only when `chrome_has_keyboard_focus` is false; keep that check, and
-  never infer the page holds the keys from the event alone. Source: the
-  native fixture's essentials suite, two such events over five queries with
-  `GetFocus` on the chrome throughout (observed 2026-10-18).
+- **A page's `GotFocus` does not prove the page holds the keys.** Clearing
+  GPUI focus on every `PageFocused` pushed the find bar's caret to the window
+  root while the owner typed (#57, was DW-71). In the native fixture, two
+  `PageFocused` events arrived during five find queries while `GetFocus` was
+  the chrome window at every event and after every result. That WebView2
+  raises them *because of* find is unconfirmed: one may be a late event from
+  the suite's earlier page `Focus`. `page_took_focus` clears only when
+  `chrome_has_keyboard_focus` is false; keep that check, and never infer from
+  the event alone that the page holds the keys. `cargo xtask
+  palette-acceptance` checks both directions in-process
+  (`find_keeps_focus_on_stray_page_focus`, `find_ring_clears_on_real_page_focus`).
+  Source: the essentials suite of `crates/syrinx-platform/examples/page_close`
+  (focus staying on the chrome observed once, 2026-10-18; attribution to find
+  inferred).
 - **GPUI's accessibility tree can panic the `local` build, but only with a
   UI Automation client attached.** The `local` profile keeps debug
   assertions, and the tree builder panics if one `FocusHandle` is tracked by

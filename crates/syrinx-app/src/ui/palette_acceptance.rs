@@ -245,6 +245,41 @@ impl BrowserView {
     }
 }
 
+/// Where focus was around one in-process `PageFocused`, for the find focus checks.
+struct PageFocusOutcome {
+    chrome_had_keys: bool,
+    field_before: bool,
+    field_after: bool,
+}
+
+impl PageFocusOutcome {
+    fn detail(&self) -> String {
+        format!(
+            "Windows focus on the chrome: {}; find field focused before: {}, after: {}",
+            self.chrome_had_keys, self.field_before, self.field_after
+        )
+    }
+}
+
+/// Delivers WebView2's `GotFocus` for `tab` through the page-host event path, as its event
+/// loop does, and notes where Windows and GPUI focus were.
+fn deliver_page_focus(
+    view: &mut BrowserView,
+    tab: TabId,
+    field: &FocusHandle,
+    window: &mut Window,
+    cx: &mut Context<BrowserView>,
+) -> PageFocusOutcome {
+    let chrome_had_keys = syrinx_platform::browser::chrome_has_keyboard_focus(view.parent_hwnd);
+    let field_before = field.is_focused(window);
+    view.browser_event(BrowserEvent::PageFocused { id: tab.get() }, window, cx);
+    PageFocusOutcome {
+        chrome_had_keys,
+        field_before,
+        field_after: field.is_focused(window),
+    }
+}
+
 /// Writes the report, then closes Syrinx with the run's verdict as its exit status.
 fn finish(view: &WeakEntity<BrowserView>, cx: &mut AsyncWindowContext, report: &Report) {
     let plan = update_in_main(view, cx, |view, _, _| {
@@ -306,6 +341,8 @@ impl Run {
         self.open_pages().await?;
         // First, because a peek click needs no foreground and the palette steps abort without it.
         self.check_peek_click().await?;
+        // Also before the palette steps: page focus events are delivered in-process.
+        self.check_find_keeps_focus().await?;
         self.measure_openings().await?;
         self.check_rapid_dismissal().await?;
         self.check_second_open().await?;
@@ -858,6 +895,81 @@ impl Run {
         self.check_session_answers([focus, target]).await?;
         self.restore_sidebar(before)?;
         self.return_to(focus).await
+    }
+
+    /// A page `GotFocus` while Windows focus stays on the chrome must leave the find field
+    /// focused (#57); one while the page really holds the keys must still clear it (P1-36).
+    /// Both events go in-process through `browser_event`, so neither needs the foreground.
+    async fn check_find_keeps_focus(&mut self) -> Result<(), String> {
+        let focus = self.focus_tab()?;
+        let (field, kept) = self.page_focus_while_chrome_holds_keys(focus).await?;
+        self.report.check(
+            "find_keeps_focus_on_stray_page_focus",
+            kept.chrome_had_keys && kept.field_before && kept.field_after,
+            kept.detail(),
+        );
+        let left_chrome = self.move_keys_into_page(focus).await?;
+        let cleared = self.with(|view, window, cx| {
+            window.focus(&field, cx);
+            deliver_page_focus(view, focus, &field, window, cx)
+        })?;
+        self.report.check(
+            "find_ring_clears_on_real_page_focus",
+            left_chrome && !cleared.chrome_had_keys && cleared.field_before && !cleared.field_after,
+            format!(
+                "Windows focus left the chrome: {left_chrome}; {}",
+                cleared.detail()
+            ),
+        );
+        self.with(|view, window, cx| {
+            view.dismiss_find(window);
+            cx.notify();
+        })?;
+        self.return_to(focus).await
+    }
+
+    /// Opens the find bar on the shown `tab` and, once the chrome holds both Windows and GPUI
+    /// focus, delivers a page focus event in the same update, so nothing real slips between.
+    async fn page_focus_while_chrome_holds_keys(
+        &mut self,
+        tab: TabId,
+    ) -> Result<(FocusHandle, PageFocusOutcome), String> {
+        let shown = self.with(|view, _, _| view.shown)?;
+        if shown != Some(tab) {
+            return Err(format!(
+                "The find check needs the focus page shown, not {shown:?}."
+            ));
+        }
+        self.with(|view, window, cx| view.open_find(window, cx))?;
+        self.wait_for(
+            Duration::from_secs(5),
+            "the find field with the keys on the chrome",
+            |view, window, cx| {
+                let field = view.find_field_handle(cx)?;
+                let chrome = syrinx_platform::browser::chrome_has_keyboard_focus(view.parent_hwnd);
+                if !(chrome && field.is_focused(window)) {
+                    // A late page focus from an earlier step took the keys; Ctrl F again.
+                    view.open_find(window, cx);
+                    return None;
+                }
+                let outcome = deliver_page_focus(view, tab, &field, window, cx);
+                Some((field, outcome))
+            },
+        )
+        .await
+    }
+
+    /// Moves Windows focus into `tab`'s page as a click would, without GPUI's involvement;
+    /// false when it never left the chrome.
+    async fn move_keys_into_page(&mut self, tab: TabId) -> Result<bool, String> {
+        self.with(|view, _, _| view.page_command(BrowserCommand::Focus { id: tab.get() }))?;
+        let left = self
+            .try_wait(Duration::from_secs(5), |view, _, _| {
+                let chrome = syrinx_platform::browser::chrome_has_keyboard_focus(view.parent_hwnd);
+                (!chrome).then_some(())
+            })
+            .await?;
+        Ok(left.is_some())
     }
 
     /// Hides the sidebar so it can peek, and waits for the hover sampler that hiding starts

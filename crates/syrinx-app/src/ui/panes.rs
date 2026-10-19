@@ -193,7 +193,8 @@ impl BrowserView {
     }
 
     /// A page that took focus by click or Tab clears GPUI's focus, so no chrome control
-    /// keeps showing a ring while keys go to the page; unless Windows focus stayed on the chrome (#57).
+    /// keeps showing a ring while keys go to the page. A `GotFocus` while Windows focus
+    /// stayed on the chrome changes nothing (#57).
     pub(super) fn page_took_focus(&mut self, id: u64, window: &mut Window, cx: &mut App) {
         let chrome_kept_keys =
             syrinx_platform::browser::chrome_has_keyboard_focus(self.parent_hwnd);
@@ -238,8 +239,8 @@ mod tests {
     use super::page_focus_clears_chrome;
 
     #[test]
-    fn a_find_highlight_focus_event_leaves_the_find_field_focused() {
-        // WebView2 raised GotFocus during native find while Windows focus stayed on the chrome (#57).
+    fn a_shown_page_focus_event_keeps_chrome_focus_while_the_chrome_holds_the_keys() {
+        // #57: WebView2 raised GotFocus while Windows focus stayed on the chrome.
         assert!(!page_focus_clears_chrome(Some(7), 7, true));
     }
 

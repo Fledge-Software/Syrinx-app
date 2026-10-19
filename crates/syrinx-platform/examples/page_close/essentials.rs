@@ -59,12 +59,13 @@ pub(super) fn exercise(
     send(host, BrowserCommand::ShowActive(Some(3000)))?;
     send(host, BrowserCommand::Focus { id: 3000 })?;
     lifecycle::barrier(host, events, deadline)?;
-    // A page that really holds the keys must not read as chrome focus, or #57's filter would keep a stale ring.
+    // A page that really holds the keys must not read as chrome focus, or #57's filter
+    // would keep a stale ring.
     if syrinx_platform::browser::chrome_has_keyboard_focus(parent.0 as isize) {
         return Err("A focused synthetic page still reported chrome keyboard focus.".into());
     }
     syrinx_platform::browser::focus_chrome(parent.0 as isize).map_err(|error| error.to_string())?;
-    if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() } != parent {
+    if !syrinx_platform::browser::chrome_has_keyboard_focus(parent.0 as isize) {
         return Err("Synthetic find focus did not return to the chrome window.".into());
     }
     find_while_typing_in_chrome(host, events, parent, deadline)?;
@@ -173,7 +174,7 @@ fn find_while_typing_in_chrome(
     require_chrome_focus(parent, "the last find result settled")?;
     action(host, PageAction::StopFind)?;
     println!(
-        "Synthetic find kept native focus on the chrome across five queries ({focus_events} page focus events)."
+        "Synthetic find kept focus on the chrome over five queries ({focus_events} page focus events)."
     );
     Ok(())
 }
