@@ -520,7 +520,11 @@ fn open_requested_menu(browser: WeakEntity<BrowserView>, request: MenuRequest, c
     };
     let created = Rc::new(RefCell::new(None));
     let retained = created.clone();
-    let opened = open_owned_popup(spec, cx, move |_, popup, cx| {
+    let opened = open_owned_popup(spec, cx, move |hwnd, popup, cx| {
+        // A failure leaves a square, shadowless menu that still works, so it is only reported.
+        if let Err(error) = syrinx_platform::window_frame::round_with_shadow(hwnd) {
+            eprintln!("Cannot round the menu's corners: {error}");
+        }
         let closing = browser.clone();
         popup.on_window_should_close(cx, move |_, cx| {
             let queued = closing.update(cx, |browser, cx| {

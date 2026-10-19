@@ -77,7 +77,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use syrinx_core::usage::{ErrorCategory, Feature, UsageRecorder};
 use syrinx_core::{
     ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry, PageOrigin,
-    Route, SavedFolderId, TabId, TabModelSnapshot, route,
+    Route, SavedFolderId, TabId, TabModelSnapshot, TabSnapshot, route,
 };
 use syrinx_platform::browser::{
     BrowserCommand, BrowserEvent, BrowserHost, BrowserShortcut, PageBounds, set_overlay_owner,
@@ -1060,6 +1060,16 @@ impl BrowserView {
 
     /// Queues a command for the session worker; returns whether it was queued.
     fn try_command(&mut self, command: SessionCommand) -> bool {
+        self.queue_command(command, HomePaletteIntent::send)
+    }
+
+    /// Queues a command whose Home tab opens no palette, as the settings gear needs (#14).
+    fn try_command_without_entry(&mut self, command: SessionCommand) -> bool {
+        self.queue_command(command, HomePaletteIntent::send_without_entry)
+    }
+
+    /// Queues a command through `send`, which decides what its Home tab does to the palette.
+    fn queue_command(&mut self, command: SessionCommand, send: HomeSend) -> bool {
         let ready = self.session_revision.is_some();
         let Some(session) = &self.session else {
             if session_command_allowed(self.closing, ready, &command) {
@@ -1073,6 +1083,7 @@ impl BrowserView {
             &mut self.home_palette,
             &session.commands,
             command,
+            send,
         ) {
             Ok(queued) => queued,
             Err(_) => {
@@ -1358,8 +1369,8 @@ impl BrowserView {
         self.count_palette_outcome(&event);
         let finishes_entry = event.finishes_entry();
         if finishes_entry {
-            self.pending_query = None;
-            self.home_palette.finish_entry();
+            // The popup is taken here; the arms below only act on the outcome.
+            self.end_palette_entry();
         }
         match event {
             PaletteEvent::Query {
@@ -1386,16 +1397,13 @@ impl BrowserView {
                 text,
                 force_search: false,
             } if import::is_import_command(&text) => {
-                self.palette = None;
                 self.start_bookmark_import(window, cx);
             }
             PaletteEvent::Submit { text, force_search } => {
-                self.palette = None;
                 self.navigate(text, force_search);
                 self.focus_page(window, cx);
             }
             PaletteEvent::Activate(target) => {
-                self.palette = None;
                 match target {
                     Target::Tab(id) => self.activate(ActivationTarget::Tab(id)),
                     Target::Saved(id) => self.activate(ActivationTarget::Saved(id)),
@@ -1407,7 +1415,6 @@ impl BrowserView {
                 self.focus_page(window, cx);
             }
             PaletteEvent::Run(action) => {
-                self.palette = None;
                 self.run_command(action, window, cx);
             }
             PaletteEvent::Shortcut(shortcut) => {
@@ -1417,7 +1424,6 @@ impl BrowserView {
                 });
             }
             PaletteEvent::Closed => {
-                self.palette = None;
                 self.focus_page(window, cx);
             }
         }
@@ -1552,14 +1558,19 @@ impl BrowserView {
             .iter()
             .find(|tab| Some(tab.id) == self.model.active_id)
             .map_or_else(String::new, |tab| {
-                if tab.metadata.is_home(PageOrigin::from_adopted_popup(
-                    self.popup_pages.contains(&tab.id),
-                )) {
+                if self.tab_is_home(tab) {
                     String::new()
                 } else {
                     tab.metadata.address.clone()
                 }
             })
+    }
+
+    /// Whether a tab shows Home; an adopted popup's blank page is a page, not Home.
+    fn tab_is_home(&self, tab: &TabSnapshot) -> bool {
+        let adopted = self.popup_pages.contains(&tab.id);
+        tab.metadata
+            .is_home(PageOrigin::from_adopted_popup(adopted))
     }
 
     pub fn request_close(&mut self, cx: &mut Context<Self>) {
@@ -2121,17 +2132,25 @@ fn session_command_allowed(closing: bool, ready: bool, command: &SessionCommand)
         )
 }
 
+/// How a command reaches the session worker: `HomePaletteIntent::send` or `send_without_entry`.
+type HomeSend = fn(
+    &mut HomePaletteIntent,
+    &std::sync::mpsc::Sender<SessionCommand>,
+    SessionCommand,
+) -> Result<(), std::sync::mpsc::SendError<SessionCommand>>;
+
 fn queue_session_command(
     closing: bool,
     ready: bool,
     home: &mut HomePaletteIntent,
     sender: &std::sync::mpsc::Sender<SessionCommand>,
     command: SessionCommand,
+    send: HomeSend,
 ) -> Result<bool, std::sync::mpsc::SendError<SessionCommand>> {
     if !session_command_allowed(closing, ready, &command) {
         return Ok(false);
     }
-    home.send(sender, command)?;
+    send(home, sender, command)?;
     Ok(true)
 }
 
