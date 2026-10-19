@@ -1,7 +1,7 @@
 //! Keeps find text in Syrinx chrome while WebView2 searches and highlights the document.
 
 use super::*;
-use gpui::Subscription;
+use gpui::{Focusable, Subscription};
 use gpui_component::input::{InputEvent, InputState};
 use syrinx_platform::browser::PageAction;
 
@@ -61,6 +61,12 @@ impl BrowserView {
         });
         self.resize_pages(window);
         cx.notify();
+    }
+
+    /// The open find field's focus handle, if the bar is open.
+    pub(super) fn find_field_focus(&self, cx: &App) -> Option<FocusHandle> {
+        let bar = self.find.as_ref()?;
+        Some(bar.input.read(cx).focus_handle(cx))
     }
 
     fn find_changed(&mut self, cx: &Context<Self>) {
