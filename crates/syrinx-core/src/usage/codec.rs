@@ -91,7 +91,8 @@ pub fn report(period: &Period, period_end: UsageDate) -> String {
 
 impl UsageFile {
     /// One period's exact report text, `None` when there is no previous period yet. The
-    /// current period ends `today`; a completed one on the day it closed.
+    /// current period ends on `today`, or on the last day it counted if the clock was set
+    /// back; a completed one ends on the day it closed.
     pub fn report_text(&self, period: ReportPeriod, today: UsageDate) -> Option<String> {
         match period {
             ReportPeriod::Current => {
