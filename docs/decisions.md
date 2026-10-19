@@ -10,6 +10,23 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+## 2026-10-18
+
+- **Syrinx takes find, history and zoom keys even over a focused page.**
+  The owner decided on #21 that Ctrl F, Ctrl H, Ctrl +, Ctrl − and Ctrl 0 go
+  to Syrinx even while a web page has the keyboard focus, as in Chrome and
+  Edge, because find, history and zoom are browser commands and not page
+  commands; that the existing test asserting these keys reach the page first
+  is changed to the new rule; and that Esc closes History. Before this, a
+  focused page kept these keys, so Ctrl F opened WebView2's own find bar and
+  Ctrl H did nothing (#21). This replaces the 2026-10-12 entry "Pages get
+  find, history, print and zoom keys first (P1-13)" for find, history and
+  zoom only; that entry's print rule (Ctrl P stays the page's) still
+  stands. Implementation note, not part of the owner's decision: the page's
+  own use of these keys (for example Google Docs' find and replace on
+  Ctrl F and Ctrl H) is a consequence nobody has measured; it is an open
+  point for the owner's hand checks.
+
 ## 2026-10-16
 
 - **Planned work lives in GitHub issues; `docs/` holds only the app and its
@@ -553,6 +570,7 @@ folder names.
   print and zoom apply. Syrinx's own find and history stay reachable from
   Ctrl K and the toolbar. Grabbing them first broke Google Docs' in-document
   find and its Ctrl H find and replace. Ctrl T, W, L, K and Tab stay Syrinx's.
+  *(Replaced on 2026-10-18 for find, history and zoom: see that entry.)*
 
 - **Smart App Control is off for development.** Windows Application Control
   repeatedly blocked locally built, unsigned executables (os error 4551),

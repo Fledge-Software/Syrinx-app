@@ -607,6 +607,12 @@ fn shortcut_for_modifiers(
     if !control || alt {
         return None;
     }
+    // Find, history and zoom are Syrinx's even over a focused page, as in Chrome (owner,
+    // 2026-10-18). Print (Ctrl P) is not part of that decision and stays the page's under
+    // the 2026-10-12 rule.
+    if let Some(shortcut) = find_history_or_zoom(key, shift) {
+        return Some(shortcut);
+    }
     match (key, shift) {
         (0x4A, false) => Some(BrowserShortcut::Downloads),
         (0x54, false) => Some(BrowserShortcut::NewTab),
@@ -618,6 +624,21 @@ fn shortcut_for_modifiers(
         (0x52, false) => Some(BrowserShortcut::Reload),
         (0x09, false) => Some(BrowserShortcut::NextTab),
         (0x09, true) => Some(BrowserShortcut::PreviousTab),
+        _ => None,
+    }
+}
+
+/// Ctrl F, Ctrl H and the zoom keys. Plus and minus also count shifted and on the keypad,
+/// as Chrome's table does; `VK_OEM_PLUS` and `VK_OEM_MINUS` follow Chrome's key-code table, not the printed
+/// keys: Ctrl = zooms in on a US keyboard, and on layouts without - on that key (such as
+/// French AZERTY) Ctrl - falls back to WebView2's own zoom.
+fn find_history_or_zoom(key: u32, shift: bool) -> Option<BrowserShortcut> {
+    match (key, shift) {
+        (0x46, false) => Some(BrowserShortcut::Find),
+        (0x48, false) => Some(BrowserShortcut::History),
+        (0xBB | 0x6B, _) => Some(BrowserShortcut::ZoomIn),
+        (0xBD | 0x6D, _) => Some(BrowserShortcut::ZoomOut),
+        (0x30 | 0x60, false) => Some(BrowserShortcut::ZoomReset),
         _ => None,
     }
 }
@@ -763,18 +784,50 @@ mod tests {
     }
 
     #[test]
-    fn find_history_print_and_zoom_keys_reach_the_page_before_the_engine() {
-        // Include shifted plus and the numeric keypad variants.
-        for key in [0x46, 0x48, 0x50, 0xBB, 0x6B, 0xBD, 0x6D, 0x30, 0x60] {
-            for shift in [false, true] {
-                assert_eq!(shortcut_for_modifiers(key, true, shift, false, false), None);
-            }
+    fn find_history_and_zoom_keys_reach_syrinx_before_a_focused_page() {
+        for (key, shift, expected) in [
+            (0x46, false, BrowserShortcut::Find),
+            (0x48, false, BrowserShortcut::History),
+            // Ctrl = and Ctrl + share a key; the keypad has its own.
+            (0xBB, false, BrowserShortcut::ZoomIn),
+            (0xBB, true, BrowserShortcut::ZoomIn),
+            (0x6B, false, BrowserShortcut::ZoomIn),
+            (0x6B, true, BrowserShortcut::ZoomIn),
+            (0xBD, false, BrowserShortcut::ZoomOut),
+            (0xBD, true, BrowserShortcut::ZoomOut),
+            (0x6D, false, BrowserShortcut::ZoomOut),
+            (0x6D, true, BrowserShortcut::ZoomOut),
+            (0x30, false, BrowserShortcut::ZoomReset),
+            (0x60, false, BrowserShortcut::ZoomReset),
+        ] {
+            assert_eq!(
+                shortcut_for_modifiers(key, true, shift, false, false),
+                Some(expected)
+            );
+            // Without Ctrl, or with Alt too (AltGr included), the key stays the page's.
+            assert_eq!(
+                shortcut_for_modifiers(key, false, shift, false, false),
+                None
+            );
+            assert_eq!(shortcut_for_modifiers(key, true, shift, true, false), None);
+            assert_eq!(shortcut_for_modifiers(key, true, shift, true, true), None);
+        }
+    }
+
+    #[test]
+    fn print_and_shifted_find_history_and_reset_stay_with_the_page() {
+        assert_eq!(
+            shortcut_for_modifiers(0x50, true, false, false, false),
+            None
+        );
+        for key in [0x46, 0x48, 0x50, 0x30, 0x60] {
+            assert_eq!(shortcut_for_modifiers(key, true, true, false, false), None);
         }
     }
 
     #[test]
     fn unrelated_and_extra_modified_keys_stay_with_the_page() {
-        for key in [0x41, 0x43, 0x46, 0x53, 0x56, 0x58, 0x5A] {
+        for key in [0x41, 0x43, 0x53, 0x56, 0x58, 0x5A] {
             assert_eq!(shortcut_for_modifiers(key, true, false, false, false), None);
         }
         for key in [0x57, 0x4C, 0x4B, 0x44, 0x52, 0x46, 0x4A, 0x50, 0x48] {
