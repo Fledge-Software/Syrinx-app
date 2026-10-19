@@ -13,17 +13,21 @@ you found it in the commit message, not here.
 ## Page tabs: WebView2 through wry
 
 - **Under a restricted token, WebView2's GPU process stops on a breakpoint.**
-  Run from a sandboxed agent executor, or any launcher that gives Syrinx a
-  restricted token with restricting SIDs, every `--smoke` run left two
-  `0x80000003` (`STATUS_BREAKPOINT`) dumps from `msedgewebview2.exe
-  --type=gpu-process` in its synthetic profile's `Crashpad\reports`, and
-  exited 1 (5 of 5 runs, runtime 155.0.4283.62). A normal launch and a
-  limited-user (LUA) token stayed clean, and `--disable-gpu` removed the
-  dumps. This is the runtime refusing that token, not a Syrinx bug: do not
-  read such a dump as a product crash, and run smoke checks and native
-  fixtures from an ordinary desktop process. Reproduce with
-  `docs/dev/evidence/59-restricted-token/repro.ps1`. Source: #59 (observed
-  2026-10-18).
+  Run smoke checks and native fixtures from an ordinary desktop process, and
+  do not read such a dump as a product crash. Started through a launcher that
+  gives Syrinx this restricted token (the restricting SIDs in
+  `crates/syrinx-platform/examples/restricted_token/repro.ps1`), every
+  `--smoke` run left two `0x80000003` (`STATUS_BREAKPOINT`) dumps from
+  `msedgewebview2.exe --type=gpu-process` at the same offset in its
+  synthetic profile's `Crashpad\reports`, and exited 1 (5 of 5 runs, runtime
+  155.0.4283.62). A normal launch (3 of 3) and a limited-user (LUA) token
+  (3 of 3) stayed clean. With `--disable-gpu` (one run, through
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`) no dump appeared. Suspected, not
+  shown: that the restricted agent executor behind the 2026-10-10 dialog
+  gave Syrinx this token, and that the cause is the runtime's handling of
+  it rather than Syrinx. Reproduce with that script (see
+  `docs/dev/LOCAL-DEV.md`). Source: #59; observed for the scripted token on
+  2026-10-18; the executor link and the cause are inferred.
 - **A repeated response header shows only its first line.** A synthetic page
   sent `Cache-Control: max-age=0` and then `Cache-Control: no-store`; both
   `GetHeaders` and the full `GetIterator` of `WebResourceResponseReceived`
