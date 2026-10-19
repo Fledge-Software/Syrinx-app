@@ -15,5 +15,8 @@ fn a_clock_set_back_cannot_end_the_current_period_before_its_start() {
     let table = read_report(&text).expect("own report reads back");
     let start = table.envelope_value("period_start").expect("start");
     let end = table.envelope_value("period_end").expect("end");
-    assert!(end >= start, "period_end {end} precedes period_start {start}");
+    assert!(
+        end >= start,
+        "period_end {end} precedes period_start {start}"
+    );
 }
