@@ -63,6 +63,12 @@ impl BrowserView {
         cx.notify();
     }
 
+    /// The open find field's focus handle, if the bar is open.
+    pub(super) fn find_field_focus(&self, cx: &App) -> Option<FocusHandle> {
+        let bar = self.find.as_ref()?;
+        Some(bar.input.read(cx).focus_handle(cx))
+    }
+
     fn find_changed(&mut self, cx: &Context<Self>) {
         let Some(bar) = &mut self.find else {
             return;

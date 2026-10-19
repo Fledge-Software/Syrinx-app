@@ -66,6 +66,8 @@ pub struct PageBounds {
 pub enum BrowserShortcut {
     Fullscreen,
     Find,
+    /// Ctrl H: show or hide Syrinx's history list.
+    History,
     Downloads,
     Print,
     ZoomIn,
