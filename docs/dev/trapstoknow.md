@@ -279,6 +279,22 @@ you found it in the commit message, not here.
   bounds, viewport and scale with the last seen values before acting. Source:
   `gpui-pre-0.3.8/src/window.rs`, line 1953, and [`docs/p1-17-peek.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-17-peek.md)
   (code-confirmed and observed with posted activation).
+- **A peek click closes the peek but the tab does not switch, and the session
+  worker can then stop.** GPUI's `update_in` runs in the window that drew a view
+  last, not the one the task was spawned in. The sidebar peek draws
+  `BrowserView` too, so once the popup closed GPUI dropped the view's window and
+  `update_in` failed until the main window drew again; the session event loop
+  stopped on that failure, losing the click's tab switch (#10) and failing the
+  worker's next send (#9). Update the browser view from tasks only through
+  `ui::main_window::update_in_main`. A unit test refuses `.update_in(` under
+  `src/ui` (only `main_window.rs` is exempt), and `cargo xtask
+  palette-acceptance` clicks a peek row (`peek_click_*`). `subscribe_in`,
+  `observe_in` and `defer_in` resolve their window the same way: while the peek
+  is open they get the popup, and once it closes they do nothing. Source:
+  `gpui-pre-0.3.8/src/app.rs`, `App::with_window` (line 2064) and the
+  window-removal cleanup of `current_window_by_entity` (line 3049),
+  `app/context.rs` lines 301-341, and the harness's peek step (observed
+  2026-10-18).
 
 - **A popup's input form can survive after its Enter handler loses its window.**
   `InputState` and `subscribe_in` are tied to the creating window. Do not render

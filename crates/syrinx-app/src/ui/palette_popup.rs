@@ -4,11 +4,12 @@ use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::Pixels;
-use syrinx_platform::browser::{
-    BrowserError, OverlayRect, activate_if_foreground, show_overlay, syrinx_in_foreground,
-};
+use syrinx_platform::browser::{BrowserError, OverlayRect, activate_if_foreground, show_overlay};
 
-use super::*;
+use super::{
+    owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup, show_and_activate},
+    *,
+};
 use crate::palette::{PaletteEntry, PaletteNative};
 
 /// The design's palette is 880 by 560, 72 below the window's top edge.
@@ -18,6 +19,8 @@ const PALETTE_TOP: f32 = 72.;
 /// Narrower windows shrink the palette to this, keeping a 24-pixel margin each side.
 const PALETTE_MIN_WIDTH: f32 = 320.;
 const PALETTE_MARGIN: f32 = 24.;
+/// The status line while an entry is open; ending the entry puts back what it replaced.
+const PALETTE_OPEN_STATUS: &str = "Palette open";
 
 /// The palette popup, created once and hidden between entries.
 #[derive(Clone)]
@@ -33,6 +36,19 @@ pub(super) struct PalettePopup {
     pub(super) view: Entity<PaletteView>,
     pub(super) hwnd: isize,
     entry: u64,
+    /// The status line this entry replaced, shown again when the entry ends (#14).
+    resting_status: String,
+}
+
+/// What ending an entry reads from the open popup; a trait so a test can stand in for it.
+trait RestingStatus {
+    fn resting_status(&self) -> &str;
+}
+
+impl RestingStatus for PalettePopup {
+    fn resting_status(&self) -> &str {
+        &self.resting_status
+    }
 }
 
 impl BrowserView {
@@ -60,7 +76,7 @@ impl BrowserView {
             return;
         }
         self.retire_peek(cx);
-        self.close_menu(cx);
+        self.retire_menu(cx);
         if self.closing || self.session_revision.is_none() {
             return;
         }
@@ -83,7 +99,6 @@ impl BrowserView {
         let Some(entry) = self.begin_entry(kept, address, window, cx) else {
             return;
         };
-        self.message = "Palette open".to_owned();
         if let Some(probe) = self.acceptance_probe() {
             probe.show_requested(Instant::now());
         }
@@ -127,11 +142,14 @@ impl BrowserView {
             .checked_add(1)
             .expect("palette entries exhausted");
         let entry = self.palette_entries;
+        // The status line says the palette is open; the entry keeps what it replaced.
+        let resting_status = std::mem::replace(&mut self.message, PALETTE_OPEN_STATUS.to_owned());
         self.palette = Some(PalettePopup {
             window: kept.window,
             view: kept.view,
             hwnd: kept.hwnd,
             entry,
+            resting_status,
         });
         self.listen_to_palette(entry, receiver, window, cx);
         Some(entry)
@@ -162,8 +180,11 @@ impl BrowserView {
             point(px(0.), px(0.)),
             size(px(PALETTE_WIDTH), px(PALETTE_HEIGHT)),
         );
-        let opened = cx.open_window(
-            WindowOptions {
+        let spec = PopupSpec {
+            title: "Syrinx command palette",
+            noun: "command palette",
+            owner,
+            options: WindowOptions {
                 kind: WindowKind::PopUp,
                 titlebar: None,
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -171,48 +192,32 @@ impl BrowserView {
                 show: false,
                 ..Default::default()
             },
-            move |popup, cx| {
-                popup.set_window_title("Syrinx command palette");
-                let native = native_handle(popup)
-                    .map_err(str::to_owned)
-                    .and_then(|hwnd| {
-                        set_overlay_owner(hwnd, owner).map_err(|error| error.to_string())?;
-                        show_app_icon(hwnd);
-                        Ok(hwnd)
-                    });
-                let native = PaletteNative {
-                    popup: native.as_ref().map_or(0, |hwnd| *hwnd),
-                    owner,
-                };
-                let palette =
-                    cx.new(|cx| PaletteView::new(registry, native, probe, usage, popup, cx));
-                // Closing the popup from Windows ends the entry like Esc; it is only hidden.
-                let closing = palette.downgrade();
-                popup.on_window_should_close(cx, move |popup, cx| {
-                    closing
-                        .update(cx, |palette, cx| palette.dismiss(popup, cx))
-                        .is_err()
-                });
-                *retained.borrow_mut() = Some((palette.clone(), native));
-                cx.new(|cx| Root::new(palette, popup, cx))
-            },
-        );
-        let window = opened.map_err(|_| "Cannot open the command palette.".to_owned())?;
-        let (view, native) = created.borrow_mut().take().expect("created palette view");
-        if native.popup == 0 {
-            let handle: gpui::AnyWindowHandle = window.into();
-            if handle
-                .update(cx, |_, popup, _| popup.remove_window())
-                .is_err()
-            {
+        };
+        let opened = open_owned_popup(spec, cx, move |hwnd, popup, cx| {
+            let native = PaletteNative { popup: hwnd, owner };
+            let palette = cx.new(|cx| PaletteView::new(registry, native, probe, usage, popup, cx));
+            // Closing the popup from Windows ends the entry like Esc; it is only hidden.
+            let closing = palette.downgrade();
+            popup.on_window_should_close(cx, move |popup, cx| {
+                closing
+                    .update(cx, |palette, cx| palette.dismiss(popup, cx))
+                    .is_err()
+            });
+            *retained.borrow_mut() = Some(palette.clone());
+            palette.into()
+        });
+        let popup = match opened {
+            Ok(popup) => popup,
+            Err(OwnedPopupError::Notice(error)) => return Err(error),
+            Err(OwnedPopupError::Orphaned) => {
                 return Err("Cannot close the failed palette window.".to_owned());
             }
-            return Err("Cannot make the command palette an owned window.".to_owned());
-        }
+        };
+        let view = created.borrow_mut().take().expect("created palette view");
         Ok(KeptPalette {
-            window,
+            window: popup.window,
             view,
-            hwnd: native.popup,
+            hwnd: popup.hwnd,
         })
     }
 
@@ -227,7 +232,7 @@ impl BrowserView {
         cx.spawn_in(window, async move |view, cx| {
             while let Some(event) = receiver.next().await {
                 let closed = event.finishes_entry();
-                let delivered = view.update_in(cx, |view, window, cx| {
+                let delivered = update_in_main(&view, cx, |view, window, cx| {
                     if !is_current(view.open_entry(), entry) {
                         return false;
                     }
@@ -254,12 +259,7 @@ impl BrowserView {
                 probe.show_started(Instant::now());
                 probe.arm_open();
             }
-            // Syrinx never takes the foreground from another application (owner, 2026-10-12).
-            let shown = if syrinx_in_foreground() {
-                show_overlay(hwnd, rect).and_then(|()| activate_if_foreground(hwnd))
-            } else {
-                Ok(false)
-            };
+            let shown = show_and_activate(hwnd, rect);
             if view
                 .update(cx, |view, cx| view.palette_shown(entry, shown, cx))
                 .is_err()
@@ -349,10 +349,8 @@ impl BrowserView {
             view.update(cx, |palette, cx| palette.focus_input(popup, cx));
         });
         if refocused.is_err() {
-            self.palette = None;
+            self.end_palette_entry();
             self.kept_palette = None;
-            self.pending_query = None;
-            self.home_palette.finish_entry();
             self.message = "The palette window is no longer available. Open it again.".to_owned();
             cx.notify();
             return;
@@ -372,7 +370,7 @@ impl BrowserView {
             view.update(cx, |palette, cx| palette.dismiss(popup, cx));
         });
         if dismissed.is_err() {
-            self.palette = None;
+            self.end_palette_entry();
             self.kept_palette = None;
         }
     }
@@ -380,9 +378,7 @@ impl BrowserView {
     /// Hides the open entry without an event; the caller decides where focus goes.
     pub(super) fn retire_palette(&mut self, cx: &mut Context<Self>) {
         // Invalidate queued popup events before hiding the popup.
-        self.pending_query = None;
-        self.home_palette.finish_entry();
-        let Some(palette) = self.palette.take() else {
+        let Some(palette) = self.end_palette_entry() else {
             return;
         };
         let view = palette.view.clone();
@@ -393,6 +389,17 @@ impl BrowserView {
             // The popup is already gone; the next Ctrl K builds a new one.
             self.kept_palette = None;
         }
+    }
+
+    /// Ends the open entry on every path (#14): drops its queued replies and Home intent,
+    /// takes the popup and puts back the status line it replaced. Returns the popup to hide.
+    pub(super) fn end_palette_entry(&mut self) -> Option<PalettePopup> {
+        end_entry(
+            &mut self.palette,
+            &mut self.pending_query,
+            &mut self.home_palette,
+            &mut self.message,
+        )
     }
 
     /// Removes the kept popup at shutdown.
@@ -429,6 +436,29 @@ impl BrowserView {
 /// Whether an event or show task for `entry` still belongs to the open entry.
 fn is_current(open: Option<u64>, entry: u64) -> bool {
     open == Some(entry)
+}
+
+/// Ends an entry. The status comes from the popup it takes, so the popup cannot be dropped
+/// before its saved status is put back.
+fn end_entry<P: RestingStatus>(
+    open: &mut Option<P>,
+    pending_query: &mut Option<(u64, u64)>,
+    home: &mut HomePaletteIntent,
+    message: &mut String,
+) -> Option<P> {
+    *pending_query = None;
+    home.finish_entry();
+    let popup = open.take()?;
+    if let Some(status) = status_after_palette(message, popup.resting_status()) {
+        *message = status;
+    }
+    Some(popup)
+}
+
+/// The status line once an entry ends: what it replaced, while "Palette open" still shows.
+/// A notice written during the entry (a failed show, a search error) stays.
+fn status_after_palette(current: &str, resting: &str) -> Option<String> {
+    (current == PALETTE_OPEN_STATUS).then(|| resting.to_owned())
 }
 
 /// The popup to show: only for the current entry, and only while it still takes input,
@@ -488,6 +518,118 @@ mod tests {
             show_target(false, true, 42),
             None,
             "a newer entry owns the popup"
+        );
+    }
+
+    /// Stands in for the open popup, which needs a window.
+    struct OpenEntry(&'static str);
+
+    impl RestingStatus for OpenEntry {
+        fn resting_status(&self) -> &str {
+            self.0
+        }
+    }
+
+    #[test]
+    fn ending_an_entry_takes_the_popup_and_puts_back_its_status() {
+        let mut open = Some(OpenEntry("Saved locally"));
+        let mut pending_query = Some((4, 9));
+        let mut home = HomePaletteIntent::default();
+        let request = queue_new_home(&mut home);
+        let mut message = PALETTE_OPEN_STATUS.to_owned();
+        let ended = end_entry(&mut open, &mut pending_query, &mut home, &mut message);
+        assert!(ended.is_some(), "the caller hides the popup it gets back");
+        assert!(open.is_none());
+        assert_eq!(
+            pending_query, None,
+            "replies to the ended entry are obsolete"
+        );
+        assert_eq!(
+            message, "Saved locally",
+            "Esc must not leave \"Palette open\" (#14)"
+        );
+        let (snapshot, created) = synthetic_home();
+        assert!(
+            !home.acknowledge(&snapshot, &[created], Some(request)),
+            "a Home queued before the entry ended must not reopen the palette"
+        );
+    }
+
+    /// Queues a blank tab, as Ctrl T does, and returns its Home request identity.
+    fn queue_new_home(home: &mut HomePaletteIntent) -> u64 {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        home.send(
+            &sender,
+            SessionCommand::NewTab {
+                address: "about:blank".to_owned(),
+            },
+        )
+        .expect("queue synthetic Home");
+        match receiver.recv().expect("receive synthetic Home") {
+            SessionCommand::HomeEntry { request_id, .. } => request_id,
+            _ => panic!("a blank tab is queued as a Home entry"),
+        }
+    }
+
+    /// A model whose active tab is a freshly created Home.
+    fn synthetic_home() -> (syrinx_core::TabModelSnapshot, TabId) {
+        let mut model = syrinx_core::TabModel::new();
+        let id = model
+            .open(
+                syrinx_core::TabKind::Web,
+                syrinx_core::TabMetadata {
+                    address: "about:blank".into(),
+                    ..syrinx_core::TabMetadata::default()
+                },
+                syrinx_core::Activation::Foreground,
+            )
+            .expect("open synthetic Home");
+        (model.snapshot(), id)
+    }
+
+    #[test]
+    fn ending_an_entry_keeps_a_notice_written_while_it_was_open() {
+        let mut open = Some(OpenEntry("Saved locally"));
+        let mut message = "Cannot show the command palette: synthetic".to_owned();
+        end_entry(
+            &mut open,
+            &mut None,
+            &mut HomePaletteIntent::default(),
+            &mut message,
+        );
+        assert_eq!(message, "Cannot show the command palette: synthetic");
+    }
+
+    #[test]
+    fn ending_with_no_open_entry_still_drops_its_queued_replies() {
+        let mut open: Option<OpenEntry> = None;
+        let mut pending_query = Some((1, 1));
+        let mut message = "Saved locally".to_owned();
+        let ended = end_entry(
+            &mut open,
+            &mut pending_query,
+            &mut HomePaletteIntent::default(),
+            &mut message,
+        );
+        assert!(ended.is_none());
+        assert_eq!(pending_query, None);
+        assert_eq!(message, "Saved locally");
+    }
+
+    #[test]
+    fn an_ended_entry_puts_back_the_status_it_replaced() {
+        assert_eq!(
+            status_after_palette(PALETTE_OPEN_STATUS, "Saved locally").as_deref(),
+            Some("Saved locally"),
+            "Esc must not leave the status line saying the palette is open"
+        );
+        assert_eq!(
+            status_after_palette(
+                "Cannot show the command palette: synthetic",
+                "Saved locally"
+            ),
+            None,
+            "a notice written while the entry was open stays"
         );
     }
 

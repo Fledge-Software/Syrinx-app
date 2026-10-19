@@ -14,6 +14,7 @@ pub mod instance;
 pub mod notice;
 pub mod setup;
 mod storage;
+pub mod window_frame;
 
 pub use storage::{
     DeletionJournal, JournalError, RecoveryError, RecoveryOffer, RecoveryOutcome, StartupStorage,

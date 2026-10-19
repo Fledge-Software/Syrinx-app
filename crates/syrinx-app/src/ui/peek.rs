@@ -7,6 +7,7 @@ use syrinx_platform::browser::{OverlayMonitor, overlay_monitor, overlay_pointer}
 use syrinx_ui::sidebar::{PEEK_EDGE_ZONE, PEEK_WIDTH, in_peek_zone};
 
 use super::{
+    owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup},
     peek_state::{HoverSample, PeekState, SAMPLE_INTERVAL},
     *,
 };
@@ -89,7 +90,7 @@ impl BrowserView {
         let started = Instant::now();
         cx.spawn_in(window, async move |view, cx| {
             loop {
-                let keep_watching = view.update_in(cx, |view, window, cx| {
+                let keep_watching = update_in_main(&view, cx, |view, window, cx| {
                     view.sample_peek(started.elapsed(), window, cx)
                 });
                 match keep_watching {
@@ -167,7 +168,7 @@ impl BrowserView {
     }
 
     /// Places the popup now and opens it after this update ends (see `open_requested_peek`).
-    fn request_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn request_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_peek_editor();
         let main_bounds = window.bounds();
         let scale = window.scale_factor();
@@ -214,7 +215,7 @@ impl BrowserView {
     fn install_peek(
         &mut self,
         generation: u64,
-        opened: Result<PeekPopup, PeekOpenError>,
+        opened: Result<PeekPopup, OwnedPopupError>,
         cx: &mut Context<Self>,
     ) {
         let wanted = self.awaits_peek(generation);
@@ -244,9 +245,11 @@ impl BrowserView {
                 }
                 match error {
                     // A superseded request's failure is no longer the owner's concern.
-                    PeekOpenError::Notice(message) if wanted => self.message = message,
-                    PeekOpenError::Notice(_) => {}
-                    PeekOpenError::Orphaned => self.fail("Cannot close the failed sidebar popup."),
+                    OwnedPopupError::Notice(message) if wanted => self.message = message,
+                    OwnedPopupError::Notice(_) => {}
+                    OwnedPopupError::Orphaned => {
+                        self.fail("Cannot close the failed sidebar popup.")
+                    }
                 }
             }
         }
@@ -273,20 +276,11 @@ impl BrowserView {
             if !cx.windows().contains(&main) {
                 return;
             }
-            if main
-                .update(cx, |_, window, cx| {
-                    if view
-                        .update(cx, |view, cx| {
-                            view.apply_peek_action(generation, action, window, cx)
-                        })
-                        .is_err()
-                    {
-                        eprintln!("Sidebar action arrived after its browser was removed.");
-                    }
-                })
-                .is_err()
-            {
-                eprintln!("Sidebar action could not reach its owner window.");
+            let applied = update_in_main(&view, cx, |view, window, cx| {
+                view.apply_peek_action(generation, action, window, cx)
+            });
+            if let Err(error) = applied {
+                eprintln!("Sidebar action could not reach its browser window: {error:#}");
             }
         });
     }
@@ -367,6 +361,11 @@ impl BrowserView {
         }
     }
 
+    /// The open peek popup's window, if one is on screen.
+    pub(super) fn peek_window(&self) -> Option<gpui::AnyWindowHandle> {
+        self.peek.as_ref().map(|peek| peek.window.into())
+    }
+
     /// Whether `window` is the open peek popup. Unlike `!is_main_window`, it is false while a
     /// peek is still opening or already retired, when no peek action should be queued.
     pub(super) fn is_peek_window(&self, window: &Window) -> bool {
@@ -438,14 +437,6 @@ struct PeekRequest {
     display_id: gpui::DisplayId,
 }
 
-/// Why a requested popup could not be opened.
-enum PeekOpenError {
-    /// Shown to the owner; a later hover can try again.
-    Notice(String),
-    /// A popup without a usable native handle could not be closed.
-    Orphaned,
-}
-
 /// Opens a requested peek outside every entity update. GPUI draws a new window before
 /// `open_window` returns, and that draw updates the browser to render its sidebar.
 fn open_requested_peek(browser: WeakEntity<BrowserView>, request: PeekRequest, cx: &mut App) {
@@ -467,15 +458,13 @@ fn open_peek_window(
     browser: &Entity<BrowserView>,
     request: PeekRequest,
     cx: &mut App,
-) -> Result<PeekPopup, PeekOpenError> {
-    let native = Rc::new(RefCell::new(Err(
-        "Sidebar popup was not created.".to_owned()
-    )));
-    let created_native = native.clone();
-    let parent = request.parent;
+) -> Result<PeekPopup, OwnedPopupError> {
     let browser = browser.clone();
-    let opened = cx.open_window(
-        WindowOptions {
+    let spec = PopupSpec {
+        title: "Syrinx sidebar peek",
+        noun: "sidebar popup",
+        owner: request.parent,
+        options: WindowOptions {
             kind: WindowKind::PopUp,
             titlebar: None,
             window_bounds: Some(WindowBounds::Windowed(request.bounds)),
@@ -485,58 +474,37 @@ fn open_peek_window(
             is_minimizable: false,
             ..Default::default()
         },
-        move |popup, cx| {
-            popup.set_window_title("Syrinx sidebar peek");
-            let closing_browser = browser.downgrade();
-            popup.on_window_should_close(cx, move |window, cx| {
-                if closing_browser
-                    .update(cx, |browser, cx| {
-                        browser.queue_peek_action(PeekAction::Dismiss, window, cx);
-                    })
-                    .is_err()
-                {
-                    return true; // With no owner entity, there is no shutdown work left here.
-                }
-                false
-            });
-            *created_native.borrow_mut() =
-                native_handle(popup)
-                    .map_err(str::to_owned)
-                    .and_then(|hwnd| {
-                        set_overlay_owner(hwnd, parent).map_err(|error| error.to_string())?;
-                        show_app_icon(hwnd);
-                        Ok(hwnd)
-                    });
-            let view = cx.new(|cx: &mut Context<PeekView>| PeekView {
-                browser: browser.downgrade(),
-                focus: cx.focus_handle(),
-                _changes: cx.observe(&browser, |_, _, cx| cx.notify()),
-                _activation: cx.observe_window_activation(popup, |this, popup, cx| {
-                    if popup.is_window_active() {
-                        popup.focus(&this.focus, cx);
-                    }
-                }),
-            });
-            cx.new(|cx| Root::new(view, popup, cx))
-        },
-    );
-    let Ok(handle) = opened else {
-        return Err(PeekOpenError::Notice(
-            "Cannot open the sidebar popup.".to_owned(),
-        ));
     };
-    let native = native.borrow().clone();
-    match native {
-        Ok(hwnd) => Ok(PeekPopup {
-            window: handle,
-            hwnd,
-            generation: request.generation,
-        }),
-        Err(error) => match handle.update(cx, |_, popup, _| popup.remove_window()) {
-            Ok(()) => Err(PeekOpenError::Notice(error)),
-            Err(_) => Err(PeekOpenError::Orphaned),
-        },
-    }
+    let popup = open_owned_popup(spec, cx, move |_, popup, cx| {
+        let closing_browser = browser.downgrade();
+        popup.on_window_should_close(cx, move |window, cx| {
+            if closing_browser
+                .update(cx, |browser, cx| {
+                    browser.queue_peek_action(PeekAction::Dismiss, window, cx);
+                })
+                .is_err()
+            {
+                return true; // With no owner entity, there is no shutdown work left here.
+            }
+            false
+        });
+        cx.new(|cx: &mut Context<PeekView>| PeekView {
+            browser: browser.downgrade(),
+            focus: cx.focus_handle(),
+            _changes: cx.observe(&browser, |_, _, cx| cx.notify()),
+            _activation: cx.observe_window_activation(popup, |this, popup, cx| {
+                if popup.is_window_active() {
+                    popup.focus(&this.focus, cx);
+                }
+            }),
+        })
+        .into()
+    })?;
+    Ok(PeekPopup {
+        window: popup.window,
+        hwnd: popup.hwnd,
+        generation: request.generation,
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]

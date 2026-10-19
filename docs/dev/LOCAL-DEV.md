@@ -428,7 +428,7 @@ builds the `local` app first, serves two synthetic pages on an ephemeral
 `--test-palette-acceptance <report.json> http://127.0.0.1:<port>` on a fresh
 synthetic profile. Syrinx then times palette opening and per-keystroke ranking
 at 1,000, 10,000 and 100,000 in-memory synthetic rows, checks overlay focus and
-stacking, and closes itself. Reports go to `target\p1-33\` as JSON and a
+stacking, clicks a sidebar peek row in-process (#10), and closes itself. Reports go to `target\p1-33\` as JSON and a
 Markdown summary. Run it in the foreground on a quiet machine and leave the
 keyboard and mouse alone: focus checks need Syrinx to be the active app. Method
 and results: [`docs/p1-33-palette-acceptance.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-33-palette-acceptance.md).

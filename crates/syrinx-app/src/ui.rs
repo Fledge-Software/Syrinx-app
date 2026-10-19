@@ -15,9 +15,11 @@ mod home;
 mod home_palette;
 mod import;
 mod incoming_links;
+mod main_window;
 mod menus;
 mod navigation_intents;
 mod navigation_status;
+mod owned_popup;
 mod page_card;
 mod page_lifecycle;
 mod palette_acceptance;
@@ -70,11 +72,12 @@ use gpui::{
     actions, div, point, px, rgb, size,
 };
 use gpui_component::Root;
+use main_window::update_in_main;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use syrinx_core::usage::{ErrorCategory, Feature, UsageRecorder};
 use syrinx_core::{
     ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry, PageOrigin,
-    Route, SavedFolderId, TabId, TabModelSnapshot, route,
+    Route, SavedFolderId, TabId, TabModelSnapshot, TabSnapshot, route,
 };
 use syrinx_platform::browser::{
     BrowserCommand, BrowserEvent, BrowserHost, BrowserShortcut, PageBounds, set_overlay_owner,
@@ -91,6 +94,7 @@ use title_bar::title_bar;
 
 pub(crate) use panes::{FocusNextControl, FocusPreviousControl};
 
+use history_list::ChromeEscape;
 use home_palette::HomePaletteIntent;
 use navigation_intents::NavigationIntents;
 use navigation_status::NavigationStatus;
@@ -233,8 +237,8 @@ fn activation_command(
     }
 }
 
-/// Runs a browser command through the same handler as its keyboard shortcut; history, clear
-/// browsing data and the two update commands have no native page shortcut, so they run directly.
+/// Runs a browser command through the same handler as its keyboard shortcut; clear browsing
+/// data and the two update commands have no native page shortcut, so they run directly.
 fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
     Some(match action {
         BrowserAction::NewTab => BrowserShortcut::NewTab,
@@ -253,11 +257,25 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
         BrowserAction::ZoomIn => BrowserShortcut::ZoomIn,
         BrowserAction::ZoomOut => BrowserShortcut::ZoomOut,
         BrowserAction::ResetZoom => BrowserShortcut::ZoomReset,
-        BrowserAction::ShowHistory
-        | BrowserAction::ClearBrowsingData
+        BrowserAction::ShowHistory => BrowserShortcut::History,
+        BrowserAction::ClearBrowsingData
         | BrowserAction::InstallUpdateFromFile
         | BrowserAction::CheckForUpdates => return None,
     })
+}
+
+/// Whether a palette command hands the keys back to the page once it has run; the others
+/// (edit address, find, history) place focus themselves and must not be overridden.
+fn command_returns_focus_to_page(action: BrowserAction) -> bool {
+    !matches!(
+        action,
+        BrowserAction::EditAddress | BrowserAction::FindInPage | BrowserAction::ShowHistory
+    )
+}
+
+/// Whether a shortcut opens something in Syrinx's chrome, which page fullscreen hides.
+fn needs_chrome(shortcut: BrowserShortcut) -> bool {
+    matches!(shortcut, BrowserShortcut::Find | BrowserShortcut::History)
 }
 
 /// How this launch runs: normally, or as one of the unattended synthetic checks.
@@ -321,9 +339,11 @@ pub struct BrowserView {
     focus: FocusHandle,
     /// The open palette entry; `None` while the kept popup is hidden.
     palette: Option<palette_popup::PalettePopup>,
-    /// The open drop-down menu, if any, and the focus that lets Escape close it.
+    /// The open drop-down menu, if any; it draws in its own popup window (#12).
     menu: Option<menus::OpenMenu>,
-    menu_focus: FocusHandle,
+    menu_generation: u64,
+    /// The menu a press on the main window last closed, so that press does not reopen it.
+    menu_dismissal: Option<menus::MenuDismissal>,
     /// The palette popup, created once and kept hidden between entries (DW-90).
     kept_palette: Option<palette_popup::KeptPalette>,
     palette_entries: u64,
@@ -434,7 +454,8 @@ impl BrowserView {
             focus: cx.focus_handle(),
             palette: None,
             menu: None,
-            menu_focus: cx.focus_handle(),
+            menu_generation: 0,
+            menu_dismissal: None,
             kept_palette: None,
             palette_entries: 0,
             page_focus_on_activation: false,
@@ -508,23 +529,22 @@ impl BrowserView {
         self.session_stopped = false;
         cx.spawn_in(window, async move |view, cx| {
             while let Some(event) = events.next().await {
-                if view
-                    .update_in(cx, |view, window, cx| view.session_event(event, window, cx))
-                    .is_err()
-                {
+                if let Err(error) = update_in_main(&view, cx, |view, window, cx| {
+                    view.session_event(event, window, cx)
+                }) {
+                    // Ending here drops the stream, so its sender fails next; say why (#9).
+                    eprintln!("Session events stopped reaching the browser window: {error:#}");
                     return;
                 }
             }
-            if view
-                .update_in(cx, |view, window, cx| {
-                    if !view.session_stopped {
-                        view.fail_unless_failed("The session worker stopped unexpectedly.");
-                        view.session_event(SessionEvent::Stopped, window, cx);
-                    }
-                })
-                .is_err()
-            {
-                eprintln!("Session event stream closed after its window was removed.");
+            let stopped = update_in_main(&view, cx, |view, window, cx| {
+                if !view.session_stopped {
+                    view.fail_unless_failed("The session worker stopped unexpectedly.");
+                    view.session_event(SessionEvent::Stopped, window, cx);
+                }
+            });
+            if let Err(error) = stopped {
+                eprintln!("Session event stream closed after its window was removed: {error:#}");
             }
         })
         .detach();
@@ -542,23 +562,22 @@ impl BrowserView {
         self.browser_stopped = false;
         cx.spawn_in(window, async move |view, cx| {
             while let Some(event) = events.next().await {
-                if view
-                    .update_in(cx, |view, window, cx| view.browser_event(event, window, cx))
-                    .is_err()
-                {
+                if let Err(error) = update_in_main(&view, cx, |view, window, cx| {
+                    view.browser_event(event, window, cx)
+                }) {
+                    // Ending here drops the stream, so its sender fails next; say why (#9).
+                    eprintln!("Page host events stopped reaching the browser window: {error:#}");
                     return;
                 }
             }
-            if view
-                .update_in(cx, |view, window, cx| {
-                    if !view.browser_stopped {
-                        view.fail("The page host stopped unexpectedly.");
-                        view.browser_event(BrowserEvent::Stopped, window, cx);
-                    }
-                })
-                .is_err()
-            {
-                eprintln!("Browser event stream closed after its window was removed.");
+            let stopped = update_in_main(&view, cx, |view, window, cx| {
+                if !view.browser_stopped {
+                    view.fail("The page host stopped unexpectedly.");
+                    view.browser_event(BrowserEvent::Stopped, window, cx);
+                }
+            });
+            if let Err(error) = stopped {
+                eprintln!("Browser event stream closed after its window was removed: {error:#}");
             }
         })
         .detach();
@@ -1041,6 +1060,16 @@ impl BrowserView {
 
     /// Queues a command for the session worker; returns whether it was queued.
     fn try_command(&mut self, command: SessionCommand) -> bool {
+        self.queue_command(command, HomePaletteIntent::send)
+    }
+
+    /// Queues a command whose Home tab opens no palette, as the settings gear needs (#14).
+    fn try_command_without_entry(&mut self, command: SessionCommand) -> bool {
+        self.queue_command(command, HomePaletteIntent::send_without_entry)
+    }
+
+    /// Queues a command through `send`, which decides what its Home tab does to the palette.
+    fn queue_command(&mut self, command: SessionCommand, send: HomeSend) -> bool {
         let ready = self.session_revision.is_some();
         let Some(session) = &self.session else {
             if session_command_allowed(self.closing, ready, &command) {
@@ -1054,6 +1083,7 @@ impl BrowserView {
             &mut self.home_palette,
             &session.commands,
             command,
+            send,
         ) {
             Ok(queued) => queued,
             Err(_) => {
@@ -1087,6 +1117,11 @@ impl BrowserView {
     }
 
     fn sync_pages(&mut self) {
+        self.sync_pages_and_focus(true);
+    }
+
+    /// Shows the page the model wants; `focus_shown` gives a newly shown page the keys.
+    fn sync_pages_and_focus(&mut self, focus_shown: bool) {
         if self.closing || self.session_revision.is_none() {
             return;
         }
@@ -1138,7 +1173,8 @@ impl BrowserView {
                 self.usage.page_shown(id);
             }
             self.shown = next;
-            if self.palette.is_none()
+            if focus_shown
+                && self.palette.is_none()
                 && self.peek.is_none()
                 && let Some(id) = next
             {
@@ -1191,17 +1227,6 @@ impl BrowserView {
         self.command(SessionCommand::CloseActive);
     }
 
-    /// Shows recent history in the page card, or returns to the active page.
-    fn toggle_history(&mut self) {
-        if self.history.is_open() {
-            self.history.close();
-        } else if !self.closing && self.session_revision.is_some() {
-            let read = self.history.open();
-            self.command(read);
-        }
-        self.sync_pages();
-    }
-
     fn shortcut(&mut self, shortcut: BrowserShortcut, window: &mut Window, cx: &mut Context<Self>) {
         self.browser_action(shortcut, true, window, cx);
     }
@@ -1218,6 +1243,12 @@ impl BrowserView {
         if self.closing {
             return;
         }
+        // A fullscreen page fills the window, leaving the find bar and History nowhere to show,
+        // so leave fullscreen first and then open them. The accelerator handler cannot know the
+        // fullscreen state, so the key is already taken from the page by the time we get here.
+        if self.fullscreen.is_some() && needs_chrome(shortcut) {
+            self.fullscreen_shortcut(window);
+        }
         match shortcut {
             BrowserShortcut::DismissPeek(generation) => {
                 self.dismiss_peek(generation, window, cx);
@@ -1231,6 +1262,10 @@ impl BrowserView {
             BrowserShortcut::LeavePageBackward => self.leave_page_backward(window, cx),
             BrowserShortcut::Fullscreen => self.fullscreen_shortcut(window),
             BrowserShortcut::Find => self.open_find(window, cx),
+            // From a page key, the palette or a menu, the keys were the page's to return.
+            BrowserShortcut::History => {
+                self.toggle_history(history_list::ReturnFocus::Page, window, cx);
+            }
             BrowserShortcut::Downloads
             | BrowserShortcut::Print
             | BrowserShortcut::ZoomIn
@@ -1334,8 +1369,8 @@ impl BrowserView {
         self.count_palette_outcome(&event);
         let finishes_entry = event.finishes_entry();
         if finishes_entry {
-            self.pending_query = None;
-            self.home_palette.finish_entry();
+            // The popup is taken here; the arms below only act on the outcome.
+            self.end_palette_entry();
         }
         match event {
             PaletteEvent::Query {
@@ -1362,16 +1397,13 @@ impl BrowserView {
                 text,
                 force_search: false,
             } if import::is_import_command(&text) => {
-                self.palette = None;
                 self.start_bookmark_import(window, cx);
             }
             PaletteEvent::Submit { text, force_search } => {
-                self.palette = None;
                 self.navigate(text, force_search);
                 self.focus_page(window, cx);
             }
             PaletteEvent::Activate(target) => {
-                self.palette = None;
                 match target {
                     Target::Tab(id) => self.activate(ActivationTarget::Tab(id)),
                     Target::Saved(id) => self.activate(ActivationTarget::Saved(id)),
@@ -1383,7 +1415,6 @@ impl BrowserView {
                 self.focus_page(window, cx);
             }
             PaletteEvent::Run(action) => {
-                self.palette = None;
                 self.run_command(action, window, cx);
             }
             PaletteEvent::Shortcut(shortcut) => {
@@ -1393,7 +1424,6 @@ impl BrowserView {
                 });
             }
             PaletteEvent::Closed => {
-                self.palette = None;
                 self.focus_page(window, cx);
             }
         }
@@ -1439,13 +1469,11 @@ impl BrowserView {
                 self.install_update_from_file(window, cx);
             }
             None if action == BrowserAction::CheckForUpdates => self.check_for_updates(window, cx),
-            None => self.toggle_history(),
+            None => {}
         }
-        // Edit address reopens the palette and Find focuses its bar; the rest return to the page.
-        if !matches!(
-            action,
-            BrowserAction::EditAddress | BrowserAction::FindInPage
-        ) {
+        // Edit address reopens the palette, Find focuses its bar and History returns focus to
+        // where it was opened from; the rest return to the page.
+        if command_returns_focus_to_page(action) {
             self.focus_page(window, cx);
         }
     }
@@ -1511,6 +1539,13 @@ impl BrowserView {
     }
 
     fn focus_shown_page(&mut self) {
+        // A page the card does not show (Home, History, clear data, a crash card) gets no keys.
+        if !self.page_card_shows_web_page() {
+            if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
+                self.message = error.to_string();
+            }
+            return;
+        }
         if let Some(id) = self.shown {
             self.acceptance_mark("page focus sent");
             self.page_command(BrowserCommand::Focus { id: id.get() });
@@ -1523,14 +1558,19 @@ impl BrowserView {
             .iter()
             .find(|tab| Some(tab.id) == self.model.active_id)
             .map_or_else(String::new, |tab| {
-                if tab.metadata.is_home(PageOrigin::from_adopted_popup(
-                    self.popup_pages.contains(&tab.id),
-                )) {
+                if self.tab_is_home(tab) {
                     String::new()
                 } else {
                     tab.metadata.address.clone()
                 }
             })
+    }
+
+    /// Whether a tab shows Home; an adopted popup's blank page is a page, not Home.
+    fn tab_is_home(&self, tab: &TabSnapshot) -> bool {
+        let adopted = self.popup_pages.contains(&tab.id);
+        tab.metadata
+            .is_home(PageOrigin::from_adopted_popup(adopted))
     }
 
     pub fn request_close(&mut self, cx: &mut Context<Self>) {
@@ -1545,6 +1585,7 @@ impl BrowserView {
         self.closing = true;
         self.stop_link_feed();
         self.retire_peek(cx);
+        self.retire_menu(cx);
         self.remove_palette(cx);
         self.close_import_preview(cx);
         self.message = "Saving and closing…".to_owned();
@@ -1907,14 +1948,21 @@ impl Render for BrowserView {
                 this.toggle_sidebar(window, cx);
             }))
             .on_action(cx.listener(|this, _: &DismissPeek, window, cx| {
-                // An open menu is the topmost thing Escape dismisses.
-                if this.close_menu_to_page(window, cx) {
-                    return;
-                }
-                if let Some(generation) = this.peek.as_ref().map(|peek| peek.generation) {
-                    this.dismiss_peek(generation, window, cx);
-                } else {
-                    cx.propagate();
+                // Escape closes the topmost of an open menu, the peek and the history list. A menu
+                // still opening has no keys yet; Escape withdraws it.
+                let peek = this.peek.as_ref().map(|peek| peek.generation);
+                match history_list::chrome_escape(this.menu.is_some(), peek, this.history.is_open())
+                {
+                    ChromeEscape::Menu => {
+                        this.retire_menu(cx);
+                        cx.notify();
+                    }
+                    ChromeEscape::Peek(generation) => this.dismiss_peek(generation, window, cx),
+                    ChromeEscape::History => {
+                        this.close_history(window, cx);
+                        cx.notify();
+                    }
+                    ChromeEscape::Nothing => cx.propagate(),
                 }
             }))
             .on_action(cx.listener(|this, _: &NewTab, _, cx| {
@@ -1958,8 +2006,9 @@ impl Render for BrowserView {
             .on_action(cx.listener(|this, _: &Reload, _, _| {
                 this.shown_page_action(Feature::NavReload, |id| BrowserCommand::Reload { id });
             }))
-            .on_action(cx.listener(|this, _: &ShowHistory, _, cx| {
-                this.toggle_history();
+            .on_action(cx.listener(|this, _: &ShowHistory, window, cx| {
+                let return_focus = this.chrome_return_focus(window, cx);
+                this.toggle_history(return_focus, window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ClearBrowsingData, _, cx| {
@@ -2031,8 +2080,7 @@ impl Render for BrowserView {
                     .text_xs()
                     .text_color(theme::icon())
                     .child(self.failure.as_ref().unwrap_or(&self.message).clone()),
-            )
-            .children(self.menu_overlay(cx));
+            );
         self.essential_actions(chrome, cx)
     }
 }
@@ -2084,17 +2132,25 @@ fn session_command_allowed(closing: bool, ready: bool, command: &SessionCommand)
         )
 }
 
+/// How a command reaches the session worker: `HomePaletteIntent::send` or `send_without_entry`.
+type HomeSend = fn(
+    &mut HomePaletteIntent,
+    &std::sync::mpsc::Sender<SessionCommand>,
+    SessionCommand,
+) -> Result<(), std::sync::mpsc::SendError<SessionCommand>>;
+
 fn queue_session_command(
     closing: bool,
     ready: bool,
     home: &mut HomePaletteIntent,
     sender: &std::sync::mpsc::Sender<SessionCommand>,
     command: SessionCommand,
+    send: HomeSend,
 ) -> Result<bool, std::sync::mpsc::SendError<SessionCommand>> {
     if !session_command_allowed(closing, ready, &command) {
         return Ok(false);
     }
-    home.send(sender, command)?;
+    send(home, sender, command)?;
     Ok(true)
 }
 
@@ -2205,12 +2261,11 @@ mod palette_shortcut_tests {
             let CommandAction::Browser(action) = command.action else {
                 panic!("built-in commands are browser actions");
             };
-            // History, clear data and updates run directly, not through a page shortcut.
+            // Clear data and updates run directly, not through a page shortcut.
             let Some(shortcut) = browser_shortcut(action) else {
                 assert!(matches!(
                     action,
-                    BrowserAction::ShowHistory
-                        | BrowserAction::ClearBrowsingData
+                    BrowserAction::ClearBrowsingData
                         | BrowserAction::InstallUpdateFromFile
                         | BrowserAction::CheckForUpdates
                 ));
@@ -2223,14 +2278,39 @@ mod palette_shortcut_tests {
             shortcuts.push(shortcut);
         }
         // Every native shortcut except the palette, fullscreen and the window's sidebar and
-        // peek keys is reachable as a command: ten navigation actions and six page essentials.
-        assert_eq!(shortcuts.len(), 16);
+        // peek keys is reachable as a command: ten navigation actions, history and six page
+        // essentials.
+        assert_eq!(shortcuts.len(), 17);
+        assert!(shortcuts.contains(&BrowserShortcut::History));
         for window_key in [
             BrowserShortcut::Palette,
             BrowserShortcut::Fullscreen,
             BrowserShortcut::ToggleSidebar,
         ] {
             assert!(!shortcuts.contains(&window_key));
+        }
+    }
+
+    #[test]
+    fn history_from_the_palette_keeps_the_focus_it_set() {
+        assert!(!command_returns_focus_to_page(BrowserAction::ShowHistory));
+        assert!(!command_returns_focus_to_page(BrowserAction::FindInPage));
+        assert!(!command_returns_focus_to_page(BrowserAction::EditAddress));
+        assert!(command_returns_focus_to_page(BrowserAction::ZoomIn));
+    }
+
+    #[test]
+    fn only_find_and_history_leave_page_fullscreen_first() {
+        assert!(needs_chrome(BrowserShortcut::Find));
+        assert!(needs_chrome(BrowserShortcut::History));
+        for shortcut in [
+            BrowserShortcut::ZoomIn,
+            BrowserShortcut::ZoomOut,
+            BrowserShortcut::ZoomReset,
+            BrowserShortcut::Fullscreen,
+            BrowserShortcut::CloseTab,
+        ] {
+            assert!(!needs_chrome(shortcut));
         }
     }
 

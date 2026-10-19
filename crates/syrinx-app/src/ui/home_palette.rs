@@ -57,6 +57,18 @@ impl HomePaletteIntent {
         Ok(())
     }
 
+    /// Queues a command whose Home tab is not a palette entry: the settings gear's Home opens
+    /// the Customize panel, so its acknowledgement must not open the palette over it (#14).
+    pub(super) fn send_without_entry(
+        &mut self,
+        sender: &Sender<SessionCommand>,
+        command: SessionCommand,
+    ) -> Result<(), SendError<SessionCommand>> {
+        self.send(sender, command)?;
+        self.finish_entry();
+        Ok(())
+    }
+
     pub(super) fn finish_entry(&mut self) {
         self.requested = None;
     }
@@ -141,6 +153,25 @@ mod tests {
         assert!(next > second);
         assert!(intent.acknowledge(&home, &[id], Some(next)));
         assert!(!intent.acknowledge(&home, &[id], Some(next)));
+    }
+
+    #[test]
+    fn a_home_opened_for_the_appearance_panel_opens_no_palette() {
+        // The settings gear queues its Home without an entry (#14).
+        let (home, id) = home();
+        let mut intent = HomePaletteIntent::default();
+        let (sender, receiver) = mpsc::channel();
+        intent
+            .send_without_entry(&sender, new_home())
+            .expect("queue synthetic Home");
+        let request = match receiver.recv().expect("receive synthetic Home") {
+            SessionCommand::HomeEntry { request_id, .. } => request_id,
+            _ => panic!("the gear's Home still carries its request identity"),
+        };
+        assert!(!intent.acknowledge(&home, &[id], Some(request)));
+        // Ctrl T afterwards is an ordinary entry again.
+        let next = queue(&mut intent, new_home());
+        assert!(intent.acknowledge(&home, &[id], Some(next)));
     }
 
     #[test]
