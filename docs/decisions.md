@@ -10,6 +10,65 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+## 2026-10-20
+
+- **The Fledge plugin is on hold until Fledge itself is ready (holds the
+  Fledge half of D34).** D34 kept Plan 2 thin: the plugin runtime plus one
+  Fledge action, "New demo lead", on a stand-in client (an in-memory copy
+  of the Fledge client interface that talks to nothing), so the real client
+  could replace it after Fledge's Stage C (D24). The owner decided in chat
+  that the Fledge epic (#32) and its two issues (#33, #34) wait until
+  Fledge's own API is ready and the owner says to resume. The reason is
+  that Fledge's API is still moving: a stand-in written now would encode
+  guesses about leads, money and identifiers that the real API may not
+  keep, so the plugin and its tests would be built against a moving target
+  and then rebuilt. Rejected: keeping Fledge as the second plugin and
+  building it on the stand-in anyway, as D34 and the 2026-10-15 order
+  assumed, because the stand-in would drift from the real API and its
+  proof of the runtime would come from a workload the owner does not use
+  yet. D24, D23 and D26 are unchanged and apply when the work resumes.
+  Implementation note, not part of the owner's decision: #34 carried the
+  owner's acceptance of Plan 2, which the Notes epic (#35) named as its
+  entry gate; with Fledge held, the runtime epic's (#25) own exit is the
+  natural place for that acceptance, and that is the owner's to confirm.
+
+- **The plugin order is now runtime, template, Notes, Forge (replaces the
+  2026-10-15 order).** The plugin runtime (#25: interface, host, palette
+  forms and plugin tabs) comes first, then the plugin template (#30), then
+  Notes (#35), then Forge (#42). Forge starts only after Notes is complete,
+  tested and live as the owner's daily notes tool; the owner's go-ahead
+  for Forge still applies. Notes goes first because the owner will use it
+  every day, so it proves the runtime and the shared document service
+  (the CodeMirror bridge and safe save of D28, built in #37) on a real
+  workload before Forge adds its much heavier host needs: a pseudoterminal
+  for the shell, git (D29), language servers (D30) and tree-sitter.
+  Forge reuses that document service, so a Notes that has survived daily
+  use is a better foundation than one that has only passed its tests.
+  Rejected: starting Forge in parallel with Notes, which would build
+  Forge on a document service and host that daily use has not yet tested,
+  and would split attention across the two largest plugins at once; and
+  the 2026-10-15 order (template, Fledge, Notes, Forge), because Fledge is
+  now on hold (entry above).
+
+- **Plugin research (#26) and the plugin template (#30) may start now,
+  alongside Plan 1's remaining work (narrows 2026-10-15's "no plugin work
+  starts until Plan 1 closes").** The WASM research note (#26, comparing
+  WebAssembly runtimes, the interface definition and host capabilities)
+  and the template repository's contents (#30) are paper and out-of-repo
+  work: the research is reading and writing, and the template lives in its
+  own repository, which the owner creates. Neither changes Syrinx's
+  product crates, so neither can destabilise Plan 1's remaining slices.
+  The plugin host (#28, #29) is different: it adds the interface and host
+  to Syrinx's own crates, so it still waits for Plan 1 to close and, in
+  addition, for the owner to approve the research note. Rejected: holding
+  all plugin work until Plan 1 closes, which would leave the research and
+  template idle although they cannot affect Plan 1; and starting the host
+  now too, which would change product crates while Plan 1 is still being
+  finished and before the runtime choice is approved. Implementation note,
+  not part of the owner's decision: the template's "done" condition (a
+  minimal plugin that loads in Syrinx, #25) can only be met once the host
+  exists, so template work that starts now stops short of loading.
+
 ## 2026-10-18
 
 - **Syrinx takes find, history and zoom keys even over a focused page.**
@@ -61,7 +120,9 @@ folder names.
   theme catches hard-coded colours.
 - **The WASM research note (#26) may start before Plan 1 closes.** It is
   reading and writing, not code; the plugin interface, host and template
-  still wait for Plan 1's exit, as decided on 2026-10-15.
+  still wait for Plan 1's exit, as decided on 2026-10-15. *(The template
+  part is superseded on 2026-10-20: the template may also start now; the
+  interface and host still wait. See that entry.)*
 
 ## 2026-10-15
 
@@ -99,7 +160,10 @@ folder names.
     their contents. Rejected: a template folder inside this repository.
   - *Order.* After Plan 1 closes: the plugin interface and host first, then
     the template, then each plugin. Rejected: starting the interface and
-    template now, ahead of Plan 1.
+    template now, ahead of Plan 1. *(Superseded on 2026-10-20: the plugin
+    order is now runtime, template, Notes, Forge, with Fledge on hold, and
+    the research note and the template may start before Plan 1 closes;
+    the host still waits. See that date's entries.)*
   - *Form.* Each plugin is Rust compiled to WebAssembly (WASM) and run by
     Syrinx in a sandbox (the Zed model). It reaches files, git, processes
     and the network only through host functions its manifest asks for and
