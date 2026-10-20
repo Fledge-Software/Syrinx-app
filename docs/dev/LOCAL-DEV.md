@@ -498,6 +498,21 @@ owner runs it; agents never create, open or name a release key. Its tests
 use in-memory keys only. Format and checks:
 `docs/update-format.md`, "P1-39a: the latest-version statement".
 
+## Restricted-token reproduction (#59)
+
+`crates/syrinx-platform/examples/restricted_token/repro.ps1` reproduces
+#59's `msedgewebview2.exe` breakpoint: it runs `syrinx.exe --smoke` under a
+restricted copy of your token and reads the Crashpad dumps in that run's own
+synthetic profile with `dumpinfo.py` beside it, so it needs `python` on
+`PATH`. It is outside `cargo xtask check`, because the failure belongs to the
+WebView2 runtime under a token Syrinx never gets in daily use. Run it as
+`powershell -File repro.ps1 -Exe <syrinx.exe> [-Mode normal|lua|restricted]
+[-DisableGpu]`. Exit 0 is clean (the profile is deleted), 1 a breakpoint
+dump, 2 cannot analyse (no python, no single new profile, or an unreadable
+dump) and 3 an inconclusive run (a timeout, a non-zero exit or another dump).
+Every non-zero exit keeps the profile; the script deletes only the profile
+its own run created. See the trap in `docs/dev/trapstoknow.md`.
+
 ## Data and artifacts
 
 The scaffold opens no database, browser profile, account, note vault or
