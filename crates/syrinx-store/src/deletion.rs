@@ -40,7 +40,8 @@ impl DeletionRange {
         Ok(Self { start, end })
     }
 
-    /// Every visit Syrinx can store (`visited_at >= 0`), for clearing all history.
+    /// Every visit Syrinx can store, for clearing all history. The range is half-open, so a
+    /// visit stamped `i64::MAX` falls outside it, which is why `record` refuses that stamp.
     pub fn all_time() -> Self {
         Self {
             start: 0,

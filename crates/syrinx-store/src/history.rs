@@ -140,7 +140,8 @@ fn record(
     visited_at: i64,
 ) -> Result<RecordedVisit, StoreError> {
     // Refuse values the table would reject, without reporting their contents.
-    if address.is_empty() || visited_at < 0 {
+    // i64::MAX is refused too: clear-all's half-open range ends there, so it could not clear it.
+    if address.is_empty() || visited_at < 0 || visited_at == i64::MAX {
         return Err(StoreError::InvalidEncoding(EncodingField::History));
     }
     // One row per address; an empty title keeps the title already known for it.

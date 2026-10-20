@@ -273,3 +273,16 @@ fn invalid_preference_writes_change_nothing() {
     store.shutdown().expect("store closes");
     directory.cleanup();
 }
+
+#[test]
+fn a_setting_key_starting_with_nul_is_refused_as_invalid_not_as_a_database_error() {
+    // SQLite's length() stops at NUL, so the table's CHECK would otherwise reject it late.
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store opens");
+    assert_eq!(
+        store.save_settings(settings(&[("\0synthetic", "value")])),
+        Err(StoreError::InvalidEncoding(EncodingField::Setting))
+    );
+    store.shutdown().expect("store closes");
+    directory.cleanup();
+}

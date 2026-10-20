@@ -103,7 +103,8 @@ fn check_change(change: &PreferenceWrite) -> Result<(), StoreError> {
 }
 
 fn check_setting(key: &str, value: &str) -> Result<(), StoreError> {
-    let key_valid = !key.is_empty() && key.len() <= MAX_SETTING_KEY_BYTES;
+    // SQLite's length() stops at NUL, so a key starting with one would fail the table CHECK.
+    let key_valid = !key.is_empty() && key.len() <= MAX_SETTING_KEY_BYTES && !key.starts_with('\0');
     if !key_valid || value.len() > MAX_SETTING_VALUE_BYTES {
         return Err(StoreError::InvalidEncoding(EncodingField::Setting));
     }

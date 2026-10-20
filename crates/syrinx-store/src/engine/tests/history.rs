@@ -567,3 +567,18 @@ fn an_expiry_ends_at_the_cutoff_or_after_at_most_its_limit_of_visits() {
     store.shutdown().expect("store closes");
     directory.cleanup();
 }
+
+#[test]
+fn a_visit_the_clear_all_range_cannot_reach_is_never_stored() {
+    // Clear-all is the half-open range up to i64::MAX, so a visit stamped exactly i64::MAX
+    // would survive "clear all history"; it must be refused when recorded instead.
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store opens");
+    let refused = store.record_visit(FIRST.to_owned(), String::new(), i64::MAX);
+    assert_eq!(
+        refused.map(drop),
+        Err(StoreError::InvalidEncoding(EncodingField::History))
+    );
+    store.shutdown().expect("store closes");
+    directory.cleanup();
+}
