@@ -59,10 +59,16 @@ pub(super) fn exercise(
     send(host, BrowserCommand::ShowActive(Some(3000)))?;
     send(host, BrowserCommand::Focus { id: 3000 })?;
     lifecycle::barrier(host, events, deadline)?;
+    // A page that really holds the keys must not read as chrome focus, or #57's filter
+    // would keep a stale ring.
+    if syrinx_platform::browser::chrome_has_keyboard_focus(parent.0 as isize) {
+        return Err("A focused synthetic page still reported chrome keyboard focus.".into());
+    }
     syrinx_platform::browser::focus_chrome(parent.0 as isize).map_err(|error| error.to_string())?;
-    if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() } != parent {
+    if !syrinx_platform::browser::chrome_has_keyboard_focus(parent.0 as isize) {
         return Err("Synthetic find focus did not return to the chrome window.".into());
     }
+    find_while_typing_in_chrome(host, events, parent, deadline)?;
     send(host, BrowserCommand::Focus { id: 3000 })?;
     for (request, text, expected) in [(1, "syntheticneedle", 2), (2, "", 0)] {
         action(
@@ -129,4 +135,56 @@ pub(super) fn exercise(
 
 fn action(host: &BrowserHost, action: PageAction) -> Result<(), String> {
     send(host, BrowserCommand::PageAction { id: 3000, action })
+}
+
+/// Finds each growing prefix as typing would, while the chrome holds the keys (#57).
+/// WebView2 may raise `GotFocus` meanwhile; Windows focus must still stay on the chrome.
+fn find_while_typing_in_chrome(
+    host: &BrowserHost,
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    parent: HWND,
+    deadline: Instant,
+) -> Result<(), String> {
+    let mut focus_events = 0;
+    for (request, text) in (10..).zip(["s", "sy", "syn", "synthetic", "syntheticneedle"]) {
+        action(
+            host,
+            PageAction::Find {
+                request,
+                text: text.into(),
+            },
+        )?;
+        loop {
+            match checked_event(events, deadline)? {
+                BrowserEvent::PageFocused { id: 3000 } => {
+                    focus_events += 1;
+                    require_chrome_focus(parent, "a page focus event during find")?;
+                }
+                BrowserEvent::FindCompleted {
+                    id: 3000,
+                    request: completed,
+                    ..
+                } if completed == request => break,
+                _ => {}
+            }
+        }
+        require_chrome_focus(parent, "a find result")?;
+    }
+    lifecycle::barrier(host, events, deadline)?;
+    require_chrome_focus(parent, "the last find result settled")?;
+    action(host, PageAction::StopFind)?;
+    println!(
+        "Synthetic find kept focus on the chrome over five queries ({focus_events} page focus events)."
+    );
+    Ok(())
+}
+
+/// Fails the suite when Windows keyboard focus is no longer on the chrome window.
+fn require_chrome_focus(parent: HWND, moment: &str) -> Result<(), String> {
+    if syrinx_platform::browser::chrome_has_keyboard_focus(parent.0 as isize) {
+        return Ok(());
+    }
+    Err(format!(
+        "Native focus left the chrome window after {moment}."
+    ))
 }

@@ -1035,6 +1035,17 @@ pub fn focus_chrome(parent: isize) -> Result<(), BrowserError> {
     Ok(())
 }
 
+/// Whether Windows keyboard focus is on the Syrinx chrome window itself, not a page child.
+/// WebView2 can raise `GotFocus` while the keys never leave the chrome (#57).
+/// `GetFocus` reads the calling thread's input state: call this on the chrome's own thread.
+pub fn chrome_has_keyboard_focus(parent: isize) -> bool {
+    if parent == 0 {
+        return false;
+    }
+    let focused = unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() };
+    focused == HWND(parent as *mut _)
+}
+
 /// Keep GPUI's separate overlay above Syrinx, without making it topmost over other apps.
 pub fn set_overlay_owner(popup: isize, parent: isize) -> Result<(), BrowserError> {
     validate_window(popup)?;

@@ -193,9 +193,12 @@ impl BrowserView {
     }
 
     /// A page that took focus by click or Tab clears GPUI's focus, so no chrome control
-    /// keeps showing a ring while keys go to the page.
+    /// keeps showing a ring while keys go to the page. A `GotFocus` while Windows focus
+    /// stayed on the chrome changes nothing (#57).
     pub(super) fn page_took_focus(&mut self, id: u64, window: &mut Window, cx: &mut App) {
-        if self.shown.map(TabId::get) == Some(id) {
+        let chrome_kept_keys =
+            syrinx_platform::browser::chrome_has_keyboard_focus(self.parent_hwnd);
+        if page_focus_clears_chrome(self.shown.map(TabId::get), id, chrome_kept_keys) {
             window.focus(&self.focus, cx);
         }
     }
@@ -223,5 +226,28 @@ impl BrowserView {
     /// The address field's own focus handle, where F6 lands in the toolbar.
     pub(super) fn address_field_focus(&self) -> &FocusHandle {
         &self.panes.address_field
+    }
+}
+
+/// A shown page's `GotFocus` clears chrome focus only when the keys really left the chrome.
+fn page_focus_clears_chrome(shown: Option<u64>, id: u64, chrome_kept_keys: bool) -> bool {
+    shown == Some(id) && !chrome_kept_keys
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_focus_clears_chrome;
+
+    #[test]
+    fn a_shown_page_focus_event_keeps_chrome_focus_while_the_chrome_holds_the_keys() {
+        // #57: WebView2 raised GotFocus while Windows focus stayed on the chrome.
+        assert!(!page_focus_clears_chrome(Some(7), 7, true));
+    }
+
+    #[test]
+    fn a_real_click_into_the_shown_page_still_clears_the_focus_ring() {
+        assert!(page_focus_clears_chrome(Some(7), 7, false));
+        assert!(!page_focus_clears_chrome(Some(8), 7, false));
+        assert!(!page_focus_clears_chrome(None, 7, false));
     }
 }

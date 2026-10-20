@@ -124,13 +124,18 @@ impl BrowserView {
         }
     }
 
-    fn dismiss_find(&mut self, window: &mut Window) {
+    pub(super) fn dismiss_find(&mut self, window: &mut Window) {
         let Some(id) = self.find.as_ref().map(|bar| bar.id) else {
             return;
         };
         self.forget_find(id, true);
         self.resize_pages(window);
         self.page_command(BrowserCommand::Focus { id });
+    }
+
+    /// The open find field's focus handle, for the acceptance run's focus checks.
+    pub(super) fn find_field_handle(&self, cx: &App) -> Option<FocusHandle> {
+        Some(self.find.as_ref()?.input.read(cx).focus_handle(cx))
     }
 
     pub(super) fn find_height(&self) -> f32 {
