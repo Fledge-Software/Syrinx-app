@@ -72,7 +72,7 @@ use gpui::{
     actions, div, point, px, rgb, size,
 };
 use gpui_component::Root;
-use main_window::update_in_main;
+use main_window::{deliver_session_event, update_in_main};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use syrinx_core::usage::{ErrorCategory, Feature, UsageRecorder};
 use syrinx_core::{
@@ -529,10 +529,8 @@ impl BrowserView {
         self.session_stopped = false;
         cx.spawn_in(window, async move |view, cx| {
             while let Some(event) = events.next().await {
-                if let Err(error) = update_in_main(&view, cx, |view, window, cx| {
-                    view.session_event(event, window, cx)
-                }) {
-                    // Ending here drops the stream, so its sender fails next; say why (#9).
+                // Only a removed view ends this; dropping the stream stops the worker's reports (#9).
+                if let Err(error) = deliver_session_event(&view, cx, event).await {
                     eprintln!("Session events stopped reaching the browser window: {error:#}");
                     return;
                 }

@@ -1,11 +1,13 @@
-//! Names what the session worker was doing when it stopped, and keeps that reason in a
-//! size-capped log beside the database so it is never lost (#9).
+//! Names what the session worker was doing when it stopped, decides which failures it survives,
+//! and keeps both in a size-capped log beside the database so neither is lost (#9).
 
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
     path::Path,
 };
+
+use syrinx_store::{StoreError, StoreOperation};
 
 use super::{SessionCommand, SessionError};
 
@@ -72,10 +74,85 @@ pub(super) fn during(operation: &'static str) -> impl FnOnce(SessionError) -> Se
     }
 }
 
+/// Whether the worker can go on after `error`: one refused write, a busy database, an index
+/// refusal or a window that stopped listening. Lost or untrustworthy storage stops it (#9).
+pub(super) fn survivable(error: &SessionError) -> bool {
+    match error {
+        SessionError::During { error, .. } => survivable(error),
+        SessionError::Store(error) => store_survivable(error),
+        // One refused row, command or clock read, or a window that stopped listening.
+        SessionError::Search(_)
+        | SessionError::EventReceiverClosed
+        | SessionError::Model(_)
+        | SessionError::Destination(_)
+        | SessionError::Deletion(_)
+        | SessionError::Usage(_)
+        | SessionError::NoActiveTab
+        | SessionError::HistoryUnavailable
+        | SessionError::ClockUnavailable => true,
+        _ => false,
+    }
+}
+
+/// Whether the window can no longer hear the worker, so a report has nowhere to go.
+pub(super) fn window_lost(error: &SessionError) -> bool {
+    match error {
+        SessionError::During { error, .. } => window_lost(error),
+        error => *error == SessionError::EventReceiverClosed,
+    }
+}
+
+/// A store failure the next write may pass: anything else means storage is gone, damaged,
+/// changed behind the worker or left inside an unfinished transaction.
+fn store_survivable(error: &StoreError) -> bool {
+    match error {
+        StoreError::Database {
+            operation: StoreOperation::Rollback,
+            ..
+        } => false,
+        StoreError::Database { code, .. } => code.is_none_or(sqlite_code_survivable),
+        StoreError::CleanupFailed { primary, cleanup } => {
+            store_survivable(primary) && store_survivable(cleanup)
+        }
+        StoreError::InvalidEncoding(_)
+        | StoreError::TooManyRecords
+        | StoreError::BackupUnavailable
+        | StoreError::BackupVerificationFailed
+        | StoreError::InvalidBackupPath => true,
+        _ => false,
+    }
+}
+
+/// SQLite's primary result codes for a busy, locked or full database, or one refused row:
+/// BUSY, LOCKED, NOMEM, INTERRUPT, IOERR, FULL, PROTOCOL, SCHEMA, TOOBIG, CONSTRAINT, MISMATCH.
+fn sqlite_code_survivable(code: i32) -> bool {
+    matches!(
+        code & 0xff,
+        5 | 6 | 7 | 9 | 10 | 13 | 15 | 17 | 18 | 19 | 20
+    )
+}
+
 /// The diagnostic line for a stopped worker: the error text and operation name, which may carry
 /// numbers (revisions, SQLite codes) but never an address or page content.
 pub(super) fn stop_line(error: &SessionError) -> String {
     format!("The session worker stopped: {error}")
+}
+
+/// The diagnostic line for a failure the worker skipped and kept running after.
+pub(super) fn survived_line(error: &SessionError) -> String {
+    format!("The session worker skipped an operation and kept running: {error}")
+}
+
+/// Writes a survived failure to stderr and, when `directory` is known, to the stop log.
+pub(super) fn keep_survived(directory: Option<&Path>, error: &SessionError) {
+    let line = survived_line(error);
+    eprintln!("{line}");
+    let Some(directory) = directory else {
+        return;
+    };
+    if let Err(problem) = append_line(directory, &line) {
+        report_log_problem("write", &problem);
+    }
 }
 
 /// Writes the stop reason to stderr, the app's diagnostic stream; a launch from Windows
@@ -94,12 +171,17 @@ pub(super) fn keep_stop(directory: &Path, error: &SessionError) {
 /// Appends one stop line, first moving a full log aside so the pair stays small.
 /// A failed move is reported and the line still appended: one overshoot beats losing it.
 pub(super) fn append_stop(directory: &Path, error: &SessionError) -> io::Result<()> {
+    append_line(directory, &stop_line(error))
+}
+
+/// Appends one line to the log in `directory`, moving a full log aside first.
+fn append_line(directory: &Path, line: &str) -> io::Result<()> {
     let path = directory.join(LOG_NAME);
     if let Err(problem) = rotate_if_full(&path, &directory.join(OLD_LOG_NAME)) {
         report_log_problem("move aside", &problem);
     }
     let mut log = OpenOptions::new().create(true).append(true).open(&path)?;
-    writeln!(log, "{}", stop_line(error))
+    writeln!(log, "{line}")
 }
 
 /// One stderr line naming the failed step, the error kind and the Windows code; no path.
