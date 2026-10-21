@@ -40,6 +40,13 @@ impl SessionCommand {
             Self::CloseActive => "closing the active tab",
             Self::CycleActive { .. } => "moving to the next tab",
             Self::FocusTab(_) => "switching tabs",
+            #[cfg(test)]
+            Self::Duplicate(_) => "duplicating a tab",
+            #[cfg(test)]
+            Self::CloseOthers(_) => "closing other tabs",
+            #[cfg(test)]
+            Self::CloseBelow(_) => "closing tabs below",
+            Self::SaveTab(_) => "saving a page",
             Self::OpenSaved(_) => "opening a saved page",
             Self::SaveActive => "saving the active page",
             Self::Unsave(_) => "removing a saved page",

@@ -46,6 +46,7 @@ impl HomePaletteIntent {
                 | SessionCommand::RememberPermission { .. }
                 | SessionCommand::ObserveMetadata { .. }
                 | SessionCommand::SaveActive
+                | SessionCommand::SaveTab(_)
                 | SessionCommand::Unsave(_)
                 | SessionCommand::Folder(_)
         );

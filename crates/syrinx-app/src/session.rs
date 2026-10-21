@@ -104,8 +104,21 @@ pub enum SessionCommand {
         backwards: bool,
     },
     FocusTab(TabId),
+    // #95's row actions build only with tests until its interface slice sends them; the
+    // owner has not yet confirmed the action list.
+    /// Opens a selected copy of a web tab right after it (#95).
+    #[cfg(test)]
+    Duplicate(TabId),
+    /// Closes every ordinary tab but this one, sparing open saved pages (#95).
+    #[cfg(test)]
+    CloseOthers(TabId),
+    /// Closes the ordinary tabs below this one, sparing open saved pages (#95).
+    #[cfg(test)]
+    CloseBelow(TabId),
     OpenSaved(SavedPageId),
     SaveActive,
+    /// Saves a tab that need not be active, as a row's menu does (#95).
+    SaveTab(TabId),
     Unsave(SavedPageId),
     /// Creates, renames, removes or moves saved folders and pages (P1-21).
     Folder(FolderCommand),
@@ -1312,6 +1325,12 @@ fn counted_feature(command: &SessionCommand) -> Counted {
         | SessionCommand::ObserveClosed(_) => Counted::IfChanged(Feature::TabClosed),
         SessionCommand::SaveActive => Counted::IfChanged(Feature::SavedSaved),
         SessionCommand::Unsave(_) => Counted::IfChanged(Feature::SavedRemoved),
+        // D39's schema has no counter for #95's tab actions until the owner approves one.
+        SessionCommand::SaveTab(_) => Counted::Nothing,
+        #[cfg(test)]
+        SessionCommand::Duplicate(_)
+        | SessionCommand::CloseOthers(_)
+        | SessionCommand::CloseBelow(_) => Counted::Nothing,
         SessionCommand::Folder(FolderCommand::Create { .. }) => {
             Counted::IfChanged(Feature::FolderCreated)
         }
@@ -1393,14 +1412,30 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         }
         SessionCommand::CycleActive { backwards } => cycle_active(model, backwards)?,
         SessionCommand::FocusTab(id) => model.select(id).map_err(SessionError::Model)?,
+        #[cfg(test)]
+        SessionCommand::Duplicate(id) => {
+            model.duplicate(id).map_err(SessionError::Model)?;
+        }
+        #[cfg(test)]
+        SessionCommand::CloseOthers(id) => {
+            model.close_others(id).map_err(SessionError::Model)?;
+        }
+        #[cfg(test)]
+        SessionCommand::CloseBelow(id) => {
+            model.close_below(id).map_err(SessionError::Model)?;
+        }
+        SessionCommand::SaveTab(id) => {
+            model.save_page(id).map_err(SessionError::Model)?;
+        }
         SessionCommand::OpenSaved(id) => {
             model
                 .open_saved(id, Activation::Foreground)
                 .map_err(SessionError::Model)?;
         }
         SessionCommand::SaveActive => {
+            // Resolve the queued save against the worker's selection, then save that tab.
             let id = model.active_id().ok_or(SessionError::NoActiveTab)?;
-            model.save_page(id).map_err(SessionError::Model)?;
+            apply_model(model, SessionCommand::SaveTab(id))?;
         }
         SessionCommand::Unsave(id) => {
             model.remove_saved(id).map_err(SessionError::Model)?;
