@@ -89,6 +89,13 @@ pub(super) fn exercise(
                 "Synthetic find count {count} differs from {expected}."
             ));
         }
+        // ActiveMatchIndex counts from 1, which the bar's "N of M" label relies on.
+        let first = if expected > 0 { 1 } else { -1 };
+        if active != first {
+            return Err(format!(
+                "Synthetic find's active match {active} differs from {first}."
+            ));
+        }
         println!("Synthetic find completed with {expected} matches, active match {active}.");
         if expected > 1 {
             step_to_second_match(host, events, request, active, deadline)?;
