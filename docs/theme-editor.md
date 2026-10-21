@@ -14,7 +14,12 @@ grain. Rather than choose new fixed palettes, the owner asked for an
 editor:
 
 - **Defaults.** Graphite with the orange accent, opaque, is the default.
-  Graphite and Paper are the two presets.
+  Graphite, Paper and Glass are the presets. Glass came back as a preset
+  on 2026-10-21, when the owner asked for "the glass look" in the theme
+  selection (#93): the canvas's Glass under Acrylic, with Transparency
+  55 % (the canvas's `rgba(16,17,24,0.46)` tint, to the nearest step) and
+  Glass edges 24 % (the canvas's edge). Choosing it draws the canvas look
+  with nothing to edit; Reduce transparency turns it into Graphite.
 - **Custom themes.** Everything else is a theme the owner builds and saves
   by name. Several can be saved.
 
@@ -86,7 +91,7 @@ Rules that every theme keeps:
 Themes live in the existing `settings` table. Values hold at most 256
 bytes, so no schema change is needed:
 
-- `appearance.theme`: `graphite`, `paper` or `custom:<slot>`.
+- `appearance.theme`: `graphite`, `paper`, `glass` or `custom:<slot>`.
 - `appearance.custom.<slot>` for slots 1 to 12: one line such as
   `v1;name=…;mode=dark;bg=#141519;…`. An empty value marks a free slot,
   because the table has no delete.
@@ -94,8 +99,13 @@ bytes, so no schema change is needed:
 
 Migration: the old `appearance.palette` key is still read when
 `appearance.theme` is absent. `graphite` and `paper` map to their
-presets. `haze`, `glass` and `tint` become a saved custom theme with the
-same name, so a chosen look is not lost.
+presets, and since 2026-10-21 so does `glass`. `haze` and `tint` become a
+saved custom theme with the same name, so a chosen look is not lost.
+A theme named "Glass" that the earlier migration already saved is left
+exactly as it is, and stays chosen if it was: the owner may have edited
+it, so Syrinx never replaces or deletes it. It is listed under the saved
+themes, beside the preset, and the owner can delete it if it is no
+longer wanted.
 
 ## Customize
 

@@ -25,6 +25,8 @@ pub const MAX_THEMES: usize = 12;
 pub enum ThemeChoice {
     Graphite,
     Paper,
+    /// The canvas's see-through Glass (owner decision 2026-10-21).
+    Glass,
     /// A saved theme, by its slot (0-based).
     Custom(usize),
 }
@@ -47,6 +49,22 @@ impl Default for Appearance {
         }
     }
 }
+
+/// The presets Customize lists above the saved themes, in order: the choice, its name and
+/// the line under it.
+pub const PRESETS: [(ThemeChoice, &str, &str); 3] = [
+    (
+        ThemeChoice::Graphite,
+        "Graphite",
+        "Solid dark. The default.",
+    ),
+    (ThemeChoice::Paper, "Paper", "Light."),
+    (
+        ThemeChoice::Glass,
+        "Glass",
+        "See-through, with light edges.",
+    ),
+];
 
 /// The owner's saved themes, by slot.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -177,6 +195,11 @@ fn read_theme_choice(settings: &BTreeMap<String, String>, loaded: &mut Loaded) {
     match retired {
         Some(PaletteId::Graphite) | None => {}
         Some(PaletteId::Paper) => loaded.appearance.theme = ThemeChoice::Paper,
+        // Glass is a preset again, so an old Glass choice needs no saved theme.
+        Some(PaletteId::Glass) => {
+            loaded.appearance.theme = ThemeChoice::Glass;
+            loaded.carried_over.push(theme_row(ThemeChoice::Glass));
+        }
         Some(id) => carry_over_retired(id, loaded),
     }
 }
@@ -196,7 +219,7 @@ fn carry_over_retired(id: PaletteId, loaded: &mut Loaded) {
 
 fn exists(choice: ThemeChoice, themes: &SavedThemes) -> bool {
     match choice {
-        ThemeChoice::Graphite | ThemeChoice::Paper => true,
+        ThemeChoice::Graphite | ThemeChoice::Paper | ThemeChoice::Glass => true,
         ThemeChoice::Custom(slot) => themes.get(slot).is_some(),
     }
 }
@@ -219,26 +242,33 @@ impl Appearance {
     pub fn custom<'a>(&self, themes: &'a SavedThemes) -> Option<&'a ThemeSpec> {
         match self.theme {
             ThemeChoice::Custom(slot) => themes.get(slot),
-            ThemeChoice::Graphite | ThemeChoice::Paper => None,
+            ThemeChoice::Graphite | ThemeChoice::Paper | ThemeChoice::Glass => None,
+        }
+    }
+
+    /// The theme settings behind the choice: the Glass preset or a saved theme. Graphite and
+    /// Paper are drawn from their palettes directly.
+    fn spec(&self, themes: &SavedThemes) -> Option<ThemeSpec> {
+        match self.theme {
+            ThemeChoice::Glass => Some(ThemeSpec::glass()),
+            _ => self.custom(themes).cloned(),
         }
     }
 
     /// Every colour the window draws with.
     pub fn drawn_palette(self, themes: &SavedThemes) -> Palette {
-        match (self.theme, self.custom(themes)) {
-            (ThemeChoice::Paper, _) => palette(PaletteId::Paper, self.accent),
-            (ThemeChoice::Custom(_), Some(theme)) => {
-                theme.palette(self.accent, self.reduce_transparency)
-            }
-            (ThemeChoice::Graphite | ThemeChoice::Custom(_), _) => {
-                palette(PaletteId::Graphite, self.accent)
-            }
+        if let Some(theme) = self.spec(themes) {
+            return theme.palette(self.accent, self.reduce_transparency);
+        }
+        match self.theme {
+            ThemeChoice::Paper => palette(PaletteId::Paper, self.accent),
+            _ => palette(PaletteId::Graphite, self.accent),
         }
     }
 
     /// The material Windows should draw behind the window, `None` when it is opaque.
     pub fn material(self, themes: &SavedThemes) -> Option<Material> {
-        self.custom(themes)
+        self.spec(themes)
             .filter(|theme| theme.shows_material(self.reduce_transparency))
             .map(|theme| theme.material)
     }
@@ -253,6 +283,7 @@ fn theme_row(choice: ThemeChoice) -> (String, String) {
     let value = match choice {
         ThemeChoice::Graphite => "graphite".to_owned(),
         ThemeChoice::Paper => "paper".to_owned(),
+        ThemeChoice::Glass => "glass".to_owned(),
         ThemeChoice::Custom(slot) => format!("custom:{}", slot + 1),
     };
     (THEME_KEY.to_owned(), value)
@@ -262,6 +293,7 @@ fn parse_choice(text: &str) -> Option<ThemeChoice> {
     match text {
         "graphite" => Some(ThemeChoice::Graphite),
         "paper" => Some(ThemeChoice::Paper),
+        "glass" => Some(ThemeChoice::Glass),
         _ => {
             let number: usize = text.strip_prefix("custom:")?.parse().ok()?;
             (1..=MAX_THEMES)
@@ -324,6 +356,7 @@ mod tests {
         for theme in [
             ThemeChoice::Graphite,
             ThemeChoice::Paper,
+            ThemeChoice::Glass,
             ThemeChoice::Custom(3),
         ] {
             for accent in ACCENT_PRESETS.into_iter().chain([Color::hex(0x12AB9C)]) {
@@ -366,7 +399,7 @@ mod tests {
 
     #[test]
     fn a_retired_palette_becomes_a_saved_theme_of_its_name_once() {
-        for (old, name) in [("haze", "Haze"), ("glass", "Glass"), ("tint", "Tint")] {
+        for (old, name) in [("haze", "Haze"), ("tint", "Tint")] {
             let start = stored(&[(PALETTE_KEY, old)]);
             let first = load(&start);
             assert_eq!(first.appearance.theme, ThemeChoice::Custom(0));
@@ -388,6 +421,76 @@ mod tests {
             load(&stored(&[(PALETTE_KEY, "graphite")])).appearance.theme,
             ThemeChoice::Graphite
         );
+    }
+
+    #[test]
+    fn an_old_glass_choice_becomes_the_glass_preset_without_a_saved_theme() {
+        let start = stored(&[(PALETTE_KEY, "glass")]);
+        let first = load(&start);
+        assert_eq!(first.appearance.theme, ThemeChoice::Glass);
+        assert_eq!(first.themes, SavedThemes::default());
+        assert_eq!(first.carried_over, [theme_row(ThemeChoice::Glass)]);
+        let second = load(&saved(&start, first.carried_over.clone()));
+        assert_eq!(second.appearance, first.appearance);
+        assert!(second.carried_over.is_empty());
+    }
+
+    #[test]
+    fn a_saved_theme_named_glass_stays_the_owners_own() {
+        // The 2026-10-15 migration saved an old Glass choice as a theme. It is kept, and stays
+        // chosen beside the preset, because the owner may have changed it since.
+        let mut themes = SavedThemes::default();
+        let edited = ThemeSpec {
+            transparency: 80,
+            ..ThemeSpec::glass()
+        };
+        let rows = vec![
+            themes.set(0, edited.clone()),
+            theme_row(ThemeChoice::Custom(0)),
+            (PALETTE_KEY.to_owned(), "glass".to_owned()),
+        ];
+        let loaded = load(&saved(&BTreeMap::new(), rows));
+        assert_eq!(loaded.appearance.theme, ThemeChoice::Custom(0));
+        assert_eq!(loaded.themes.get(0), Some(&edited));
+        assert!(loaded.carried_over.is_empty());
+    }
+
+    #[test]
+    fn the_picker_lists_graphite_paper_and_glass() {
+        let names: Vec<_> = PRESETS.iter().map(|(_, name, _)| *name).collect();
+        assert_eq!(names, ["Graphite", "Paper", "Glass"]);
+        let choices: Vec<_> = PRESETS.iter().map(|(choice, _, _)| *choice).collect();
+        assert_eq!(
+            choices,
+            [
+                ThemeChoice::Graphite,
+                ThemeChoice::Paper,
+                ThemeChoice::Glass
+            ]
+        );
+    }
+
+    #[test]
+    fn choosing_the_glass_preset_draws_the_canvas_glass_with_no_editing() {
+        let themes = SavedThemes::default();
+        let glass = Appearance {
+            theme: ThemeChoice::Glass,
+            ..Appearance::default()
+        };
+        let drawn = glass.drawn_palette(&themes);
+        assert_eq!(drawn.id, PaletteId::Glass);
+        assert_eq!(drawn, ThemeSpec::glass().palette(Accent::default(), false));
+        let canvas = palette(PaletteId::Glass, Accent::default());
+        assert_eq!(drawn.shadows, canvas.shadows);
+        assert_eq!(drawn.card, canvas.card);
+        assert_eq!(drawn.pill, canvas.pill);
+        assert_eq!(glass.material(&themes), Some(Material::Acrylic));
+        let reduced = Appearance {
+            reduce_transparency: true,
+            ..glass
+        };
+        assert_eq!(reduced.material(&themes), None);
+        assert_eq!(reduced.drawn_palette(&themes).id, PaletteId::Graphite);
     }
 
     #[test]

@@ -152,6 +152,18 @@ impl ThemeSpec {
         }
     }
 
+    /// The Glass preset (owner decision 2026-10-21): the canvas's Glass under Acrylic, its
+    /// `rgba(16,17,24,0.46)` tint as 55 % Transparency (the nearest step) and its 0.24 edge.
+    pub fn glass() -> Self {
+        Self {
+            background: Color::hex(0x101118),
+            material: Material::Acrylic,
+            transparency: 55,
+            edges: 24,
+            ..Self::new(PaletteId::Glass.name())
+        }
+    }
+
     /// The custom theme that stands in for a retired Haze, Glass or Tint choice; Tint followed
     /// the accent, so its stand-in is built from `accent`.
     pub fn from_retired_palette(id: PaletteId, accent: Accent) -> Option<Self> {
@@ -163,13 +175,7 @@ impl ThemeSpec {
                 transparency: 25,
                 ..base
             }),
-            PaletteId::Glass => Some(Self {
-                background: Color::hex(0x101118),
-                material: Material::Acrylic,
-                transparency: 55,
-                edges: 24,
-                ..base
-            }),
+            PaletteId::Glass => Some(Self::glass()),
             PaletteId::Tint => Some(Self {
                 background: accent.tone(34., 15.),
                 fill: Fill::Gradient {
@@ -595,6 +601,21 @@ mod tests {
                 theme.name
             );
         }
+    }
+
+    #[test]
+    fn the_glass_preset_holds_the_canvas_settings() {
+        let glass = ThemeSpec::glass();
+        assert_eq!(glass.name, "Glass");
+        assert_eq!(glass.mode, Mode::Dark);
+        assert_eq!(glass.background, Color::hex(0x101118));
+        assert_eq!(glass.fill, Fill::Solid);
+        assert_eq!(glass.material, Material::Acrylic);
+        assert_eq!((glass.transparency, glass.edges, glass.grain), (55, 24, 0));
+        assert_eq!(
+            ThemeSpec::from_retired_palette(PaletteId::Glass, Accent::default()),
+            Some(glass)
+        );
     }
 
     #[test]

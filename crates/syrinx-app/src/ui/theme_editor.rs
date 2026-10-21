@@ -10,11 +10,11 @@ use syrinx_ui::metrics::text;
 use syrinx_ui::theme::{
     self, ANGLE, EDGES, Fill, GRAIN, Material, Mode, Range, TRANSPARENCY, ThemeSpec,
 };
-use syrinx_ui::{Color, Palette, PaletteId, palette};
+use syrinx_ui::{Color, Palette};
 
 use super::BrowserView;
 use super::customize::{ThemeRow, group_heading, theme_row, toggled};
-use crate::appearance::{Appearance, MAX_THEMES, ThemeChoice};
+use crate::appearance::{Appearance, MAX_THEMES, PRESETS, ThemeChoice};
 use crate::controls::control;
 use crate::session::SessionCommand;
 use crate::text_field;
@@ -69,9 +69,10 @@ impl BrowserView {
             .flex()
             .flex_col()
             .gap(px(8.))
-            .child(group_heading(palette, "Theme"))
-            .child(self.preset_row(palette, PaletteId::Graphite, "Solid dark. The default.", cx))
-            .child(self.preset_row(palette, PaletteId::Paper, "Light.", cx));
+            .child(group_heading(palette, "Theme"));
+        for (choice, name, description) in PRESETS {
+            rows = rows.child(self.preset_row(palette, choice, (name, description), cx));
+        }
         for (slot, theme) in self.home.themes.iter() {
             rows = rows.child(self.custom_row(palette, slot, theme, cx));
             let editing = self.home.theme_editor.as_ref();
@@ -99,21 +100,22 @@ impl BrowserView {
         rows
     }
 
+    /// One preset's row, its sample drawn exactly as choosing it would draw the window.
     fn preset_row(
         &self,
         panel: &Palette,
-        id: PaletteId,
-        description: &str,
+        choice: ThemeChoice,
+        (name, description): (&'static str, &'static str),
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let choice = match id {
-            PaletteId::Paper => ThemeChoice::Paper,
-            _ => ThemeChoice::Graphite,
-        };
-        let sample = palette(id, self.home.appearance.accent);
+        let sample = Appearance {
+            theme: choice,
+            ..self.home.appearance
+        }
+        .drawn_palette(&self.home.themes);
         let row = ThemeRow {
-            id: id.id().into(),
-            name: id.name(),
+            id: name.to_lowercase().into(),
+            name,
             description,
             sample: &sample,
         };

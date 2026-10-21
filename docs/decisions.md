@@ -10,34 +10,6 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
-## 2026-10-21
-
-- **The Glass theme looks like the canvas's Glass mockups (#93).** In the
-  owner's words: "I WANT THE GLASS LOOK TO THE APP IN THAT THEME
-  SELECTION." Until then a dark theme under Acrylic started from Haze's
-  colours, its Transparency stopped at Home's half-opaque card, and "Glass
-  edges" only whitened six outlines, so the window looked nearly opaque and
-  the edges looked nothing like `design/canvas/project/Main.dc.html`. What
-  changes, with the canvas's values (the `glass` branch of `tokens()`):
-  - A dark theme under Acrylic starts from the canvas's Glass surfaces:
-    white frost fills (field 0.10, selected row 0.16, Home card 0.05,
-    plugin cards 0.08, search pill 0.10) with their lighter outlines.
-  - "Glass edges" draws the canvas's edge, an inset top highlight and a
-    faint inner ring (`inset 0 1px 0` at the edge strength, `inset 0 0 0
-    1px` at 7/24 of it), on fields, selected rows, cards, the pill and the
-    panel, instead of recolouring outlines. At 24 % it is the canvas's own.
-  - Under Acrylic the plugin cards, pill and panel also take the canvas's
-    soft drop shadows; a translucent surface's shadow is drawn only outside
-    it, as CSS draws it, so it does not darken the glass.
-  - Transparency thins the window's tint; under Mica, Home's dark card thins
-    with it, so the material shows through Home as well.
-  - Windows draws Acrylic and Mica in their light form for a light theme
-    (the dark form was forced for every theme).
-
-  Haze stays the starting point under Mica and Mica Alt; whether it should
-  move to Glass's look too is a question for the owner. This does not bring
-  back Glass as a preset (2026-10-15); it is still a saved theme.
-
 ## 2026-10-18
 
 - **Syrinx takes find, history and zoom keys even over a focused page.**
