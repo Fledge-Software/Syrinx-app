@@ -164,7 +164,7 @@ fn find_while_typing_in_chrome(
                     focus_events += 1;
                     require_chrome_focus(parent, "a page focus event during find")?;
                 }
-                BrowserEvent::FindCompleted {
+                BrowserEvent::FindResult {
                     id: 3000,
                     request: completed,
                     ..
@@ -190,7 +190,7 @@ fn find_result(
     deadline: Instant,
 ) -> Result<(i32, i32), String> {
     loop {
-        if let BrowserEvent::FindCompleted {
+        if let BrowserEvent::FindResult {
             id: 3000,
             request: completed,
             count,

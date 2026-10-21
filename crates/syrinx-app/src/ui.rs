@@ -877,7 +877,7 @@ impl BrowserView {
             BrowserEvent::ZoomChanged { id, factor } => {
                 self.zoom_levels.insert(id, factor);
             }
-            BrowserEvent::FindCompleted {
+            BrowserEvent::FindResult {
                 id,
                 request,
                 count,

@@ -636,10 +636,11 @@ fn shortcut_for_modifiers(
     }
 }
 
-/// Ctrl F, Ctrl G (find next, #82), Ctrl H and the zoom keys. Plus and minus also count shifted and on the keypad,
-/// as Chrome's table does; `VK_OEM_PLUS` and `VK_OEM_MINUS` follow Chrome's key-code table, not the printed
-/// keys: Ctrl = zooms in on a US keyboard, and on layouts without - on that key (such as
-/// French AZERTY) Ctrl - falls back to WebView2's own zoom.
+/// Ctrl F, Ctrl G (find next, #82), Ctrl H and the zoom keys. Plus and minus also count
+/// shifted and on the keypad, as Chrome's table does; `VK_OEM_PLUS` and `VK_OEM_MINUS`
+/// follow Chrome's key-code table, not the printed keys: Ctrl = zooms in on a US keyboard,
+/// and on layouts without - on that key (such as French AZERTY) Ctrl - falls back to
+/// WebView2's own zoom.
 fn find_history_or_zoom(key: u32, shift: bool) -> Option<BrowserShortcut> {
     match (key, shift) {
         (0x46, false) => Some(BrowserShortcut::Find),

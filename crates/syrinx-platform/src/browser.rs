@@ -250,7 +250,7 @@ pub enum BrowserEvent {
     },
     /// A find's latest result: when its search completes, and again whenever the active
     /// match or the count changes. `active` is WebView2's `ActiveMatchIndex`, -1 for none.
-    FindCompleted {
+    FindResult {
         id: u64,
         request: u64,
         count: i32,

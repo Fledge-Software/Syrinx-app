@@ -48,6 +48,7 @@ struct FindState {
     current: Cell<Option<u64>>,
     /// The newest request whose `Start` completed.
     settled: Cell<Option<u64>>,
+    /// Whether registering the match-change events has been tried.
     watching: Cell<bool>,
 }
 
@@ -123,7 +124,7 @@ impl Essentials {
             unsafe {
                 find.Stop()?;
             }
-            self.events.emit(BrowserEvent::FindCompleted {
+            self.events.emit(BrowserEvent::FindResult {
                 id: self.id,
                 request,
                 count: 0,
@@ -131,7 +132,13 @@ impl Essentials {
             });
             return Ok(());
         }
-        self.watch_matches(&find)?;
+        // Without change events the bar still gets Start's result, so search regardless.
+        if self.watch_matches(&find).is_err() {
+            self.events.emit(BrowserEvent::Error {
+                tab: Some(self.id),
+                error: BrowserError::EventRegistration,
+            });
+        }
         let environment: ICoreWebView2Environment15 =
             unsafe { core.cast::<ICoreWebView2_2>()?.Environment()? }.cast()?;
         let options = unsafe { environment.CreateFindOptions()? };
@@ -160,24 +167,24 @@ impl Essentials {
     }
 
     /// Registers the active-match and count change events on the first search rather than at
-    /// page creation, so a runtime without `ICoreWebView2_28` still opens pages.
+    /// page creation, so a runtime without `ICoreWebView2_28` still opens pages. Tried once
+    /// only, so a partial failure can never add a second handler for the same event.
     fn watch_matches(&self, find: &ICoreWebView2Find) -> windows::core::Result<()> {
-        if self.search.watching.get() {
+        if self.search.watching.replace(true) {
             return Ok(());
         }
-        let mut token = 0;
+        // The handlers stay for the page's life, so their tokens are never used to remove them.
+        let (mut index_token, mut count_token) = (0, 0);
         unsafe {
             find.add_ActiveMatchIndexChanged(
                 &FindActiveMatchIndexChangedEventHandler::create(self.match_change_handler()),
-                &mut token,
+                &mut index_token,
             )?;
             find.add_MatchCountChanged(
                 &FindMatchCountChangedEventHandler::create(self.match_change_handler()),
-                &mut token,
-            )?;
+                &mut count_token,
+            )
         }
-        self.search.watching.set(true);
-        Ok(())
     }
 
     /// Reports the current match position and count, for the settled search only.
@@ -216,7 +223,7 @@ fn emit_matches(
         find.MatchCount(&mut count)?;
         find.ActiveMatchIndex(&mut active)?;
     }
-    events.emit(BrowserEvent::FindCompleted {
+    events.emit(BrowserEvent::FindResult {
         id,
         request,
         count,
