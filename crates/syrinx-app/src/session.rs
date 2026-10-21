@@ -303,6 +303,8 @@ pub enum SessionError {
         code: Option<i32>,
     },
     WorkerPanicked,
+    /// The worker did not stop within the bound a Windows session end allows (#96).
+    ShutdownTimedOut,
     EventReceiverClosed,
     RecoveryUnavailable,
     /// A synthetic catalogue request asked for fewer rows than present, or too many.
@@ -347,6 +349,9 @@ impl fmt::Display for SessionError {
                 write!(formatter, "Cannot start the session worker ({code:?})")
             }
             Self::WorkerPanicked => formatter.write_str("The session worker stopped unexpectedly"),
+            Self::ShutdownTimedOut => {
+                formatter.write_str("The session worker did not stop in time")
+            }
             Self::EventReceiverClosed => formatter.write_str("The session event receiver closed"),
             Self::RecoveryUnavailable => {
                 formatter.write_str("This recovery decision is no longer available")
@@ -387,6 +392,21 @@ impl SessionHandle {
         self.worker
             .join()
             .map_err(|_| SessionError::WorkerPanicked)?
+    }
+
+    /// Stops the worker when no event loop will deliver `Stopped`, as when Windows ends the
+    /// session (#96). Waits at most `bound`; on a timeout the worker is left to finish alone.
+    pub fn shutdown_within(self, bound: Duration) -> Result<(), SessionError> {
+        // A closed queue means the worker already left its loop; joining reports how.
+        let _already_stopped = self.commands.send(SessionCommand::Shutdown).is_err();
+        let deadline = Instant::now() + bound;
+        while !self.worker.is_finished() {
+            if Instant::now() >= deadline {
+                return Err(SessionError::ShutdownTimedOut);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        self.join()
     }
 }
 
