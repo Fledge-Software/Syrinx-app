@@ -1322,6 +1322,14 @@ fn counted_feature(command: &SessionCommand) -> Counted {
     }
 }
 
+/// Whether tab `id` shows Syrinx's Settings page.
+fn active_is_settings(model: &TabModel, id: TabId) -> bool {
+    model
+        .tabs()
+        .iter()
+        .any(|tab| tab.id() == id && tab.metadata().is_settings())
+}
+
 fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), SessionError> {
     match command {
         SessionCommand::HomeEntry { action, .. } => {
@@ -1400,6 +1408,10 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         }
         SessionCommand::SaveActive => {
             let id = model.active_id().ok_or(SessionError::NoActiveTab)?;
+            // Settings is Syrinx's own page, not a destination, so Ctrl D leaves it unsaved (#91).
+            if active_is_settings(model, id) {
+                return Ok(());
+            }
             model.save_page(id).map_err(SessionError::Model)?;
         }
         SessionCommand::Unsave(id) => {
@@ -1829,6 +1841,31 @@ mod tests {
             .get(Target::Tab(tab))
             .expect("synthetic popup row");
         assert_eq!(row.title, "about:blank");
+        Ok(())
+    }
+
+    #[test]
+    fn saving_the_settings_tab_leaves_it_unsaved_while_a_page_still_saves()
+    -> Result<(), SessionError> {
+        let mut model = TabModel::new();
+        apply_model(
+            &mut model,
+            SessionCommand::NewTab {
+                address: syrinx_core::SETTINGS_ADDRESS.into(),
+            },
+        )?;
+        let before = model.snapshot();
+        apply_model(&mut model, SessionCommand::SaveActive)?;
+        assert_eq!(model.snapshot(), before);
+        assert!(model.snapshot().saved_pages.is_empty());
+        apply_model(
+            &mut model,
+            SessionCommand::NewTab {
+                address: "https://example.test/".into(),
+            },
+        )?;
+        apply_model(&mut model, SessionCommand::SaveActive)?;
+        assert_eq!(model.snapshot().saved_pages.len(), 1);
         Ok(())
     }
 
