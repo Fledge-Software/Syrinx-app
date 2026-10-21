@@ -12,7 +12,10 @@ use std::{
 
 use futures::Stream;
 use syrinx_search::{BlankQuery, BoostWeights};
-use syrinx_store::{BackupOutcome, DirectoryLease, StoredSnapshot, validate_backup};
+use syrinx_store::{
+    BackupOutcome, DirectoryLease, EncodingField, HistoryEntry, RecordedVisit, StoredSnapshot,
+    validate_backup,
+};
 
 use super::*;
 
@@ -939,6 +942,74 @@ fn a_command_that_stops_the_worker_loop_names_its_reason_and_operation() {
     assert!(shown.ends_with("(while closing the active tab)"), "{shown}");
     drop(worker);
     store.shutdown().expect("close synthetic stop store");
+    fixture.cleanup();
+}
+
+#[test]
+fn a_failure_saving_settled_titles_names_that_operation_not_the_running_command() {
+    let fixture = Fixture::new();
+    let lease =
+        Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic title store"));
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let store = Store::open(lease).expect("open synthetic title store");
+    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let (sender, mut events) = unbounded();
+    worker
+        .handle(
+            &store,
+            SessionCommand::NewTab {
+                address: SAVED_ADDRESS.into(),
+            },
+            &sender,
+        )
+        .expect("commit synthetic page");
+    let tab = state(&mut events)
+        .model
+        .active_id
+        .expect("synthetic tab is active");
+
+    // Inject the failure: a settled title names an entry the store refuses to address.
+    let refused = NonZeroU64::new(u64::MAX).expect("synthetic identity is nonzero");
+    let recorded = RecordedVisit {
+        visit: refused,
+        entry: HistoryEntry {
+            id: refused,
+            address: SAVED_ADDRESS.into(),
+            title: String::new(),
+            visit_count: 1,
+            last_visited: 0,
+        },
+    };
+    let settled = Instant::now()
+        .checked_sub(history::TITLE_SETTLE)
+        .expect("synthetic title predates the settle delay");
+    worker
+        .history
+        .hold_settled_title(tab, &recorded, "Synthetic title".into(), settled);
+    let expected = SessionError::During {
+        operation: "saving settled page titles",
+        error: Box::new(SessionError::Store(StoreError::InvalidEncoding(
+            EncodingField::History,
+        ))),
+    };
+    let (commands, receiver) = mpsc::channel();
+    commands
+        .send(SessionCommand::CloseActive)
+        .expect("queue the command that finds the settled title");
+    let (mut usage, _) =
+        UsageCollector::load(Arc::default(), &fixture.0, local_today(), Instant::now());
+
+    // The title is written before the command runs, and its failure is named as such.
+    let result = worker.serve(&store, receiver, &sender, &mut usage);
+    assert_eq!(result, Err(expected.clone()));
+    let shown = expected.to_string();
+    assert!(
+        shown.ends_with("(while saving settled page titles)"),
+        "{shown}"
+    );
+    assert!(!shown.contains("closing the active tab"), "{shown}");
+    drop(worker);
+    store.shutdown().expect("close synthetic title store");
     fixture.cleanup();
 }
 
