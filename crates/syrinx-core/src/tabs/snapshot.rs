@@ -73,8 +73,7 @@ impl fmt::Debug for TabModelSnapshot {
     }
 }
 
-/// Invalid snapshots are rejected without repairing, dropping or logging their contents.
-/// A blank folder title is not a structural fault; restore repairs it instead.
+/// A structural fault that rejects a snapshot without dropping or logging its contents.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SnapshotError {
     DuplicateTabId(TabId),
@@ -181,7 +180,7 @@ impl TabModelSnapshot {
 
     /// Renames every saved folder whose title is blank to "Untitled folder", as restore does.
     /// The model refuses blank names, but losing a session over one is worse (#80).
-    pub fn repair_blank_folder_titles(&mut self) {
+    fn repair_blank_folder_titles(&mut self) {
         for folder in &mut self.saved_folders {
             if is_blank_folder_title(&folder.title) {
                 folder.title = UNTITLED_FOLDER.to_owned();
