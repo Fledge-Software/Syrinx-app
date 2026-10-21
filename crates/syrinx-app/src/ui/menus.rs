@@ -232,6 +232,10 @@ impl BrowserView {
         if !self.is_main_window(window) || self.closing {
             return;
         }
+        // A menu replaces every other popup; a live palette's late close would refocus the
+        // page and close the menu again (#75).
+        self.retire_palette(cx);
+        self.retire_peek(cx);
         self.retire_menu(cx);
         let rows = self.menu_rows(kind);
         let size = menu_size(rows.len());
