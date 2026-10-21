@@ -7,7 +7,9 @@ use super::BrowserView;
 
 /// Handles `emitter`'s events on the browser view inside the main window. GPUI's
 /// `subscribe_in` would hand over the sidebar peek while it is open and drop the event once
-/// it closes, as `update_in` did (#81, traps file).
+/// it closes, as `update_in` did (#81, traps file). The handler always receives the main
+/// window, even for a field drawn in the peek, so it must not use `window` for that field's
+/// focus.
 pub(super) fn subscribe_in_main<Emitter, Event>(
     emitter: &Entity<Emitter>,
     cx: &mut Context<BrowserView>,
@@ -23,7 +25,7 @@ where
             on_event(browser, event, window, cx)
         });
         if let Err(error) = handled {
-            eprintln!("A field's event arrived after the browser window closed: {error:#}");
+            eprintln!("A field's event could not reach the browser window: {error:#}");
         }
     })
 }
