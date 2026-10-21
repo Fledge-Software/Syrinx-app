@@ -776,15 +776,13 @@ fn library_row(labels: bool, cx: &mut Context<BrowserView>) -> Div {
                 cx.notify();
             }),
         ),
-        icon_button(
-            div().id("library-appearance"),
-            glyph::APPEARANCE,
-            "Appearance",
-        )
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.open_appearance();
-            cx.notify();
-        })),
+        // The gear opens Settings in its own tab from any tab (owner, 2026-10-21; #91).
+        icon_button(div().id("library-settings"), glyph::APPEARANCE, "Settings")
+            .aria_keyshortcuts("Ctrl+,")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.open_settings(None);
+                cx.notify();
+            })),
     ];
     let row = div().flex_none().flex().text_color(theme::icon_dim());
     if !labels {

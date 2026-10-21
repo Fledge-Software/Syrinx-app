@@ -1529,7 +1529,7 @@ fn sync_tabs(
     Ok(())
 }
 
-/// Upserts one open tab; a blank tab takes the core's Home title, as in the sidebar. Other
+/// Upserts one open tab; Home and Settings take the core's names, as in the sidebar. Other
 /// titles stay as reported, since the palette falls back to the address itself.
 fn upsert_tab(
     catalogue: &mut Catalogue,
@@ -1538,8 +1538,8 @@ fn upsert_tab(
 ) -> Result<(), SessionError> {
     let origin = PageOrigin::from_adopted_popup(popups.contains(&tab.id));
     let mut row = entry(Target::Tab(tab.id), &tab.metadata, true);
-    if let Some(home) = tab.metadata.home_title(origin) {
-        row.title = home.to_owned();
+    if let Some(name) = tab.metadata.syrinx_title(origin) {
+        row.title = name.to_owned();
     }
     catalogue.upsert(row).map_err(SessionError::Search)
 }

@@ -97,6 +97,11 @@ impl PageOrigin {
 /// What every view calls a blank tab; spelled here and nowhere else.
 const HOME_TITLE: &str = "Home";
 
+/// The address of Syrinx's own Settings page (#91). No web view ever loads it, and the
+/// address bar refuses the scheme, so only Syrinx itself opens a tab here.
+pub const SETTINGS_ADDRESS: &str = "syrinx://settings";
+const SETTINGS_TITLE: &str = "Settings";
+
 impl TabMetadata {
     /// Whether this is a blank tab shown as Home; an adopted popup still awaiting its first
     /// address is not, so its row keeps the address.
@@ -110,11 +115,22 @@ impl TabMetadata {
         self.is_home(origin).then_some(HOME_TITLE)
     }
 
-    /// The one name the sidebar shows for an open tab: Home for a blank tab, otherwise the
-    /// title, or the address when the page has no title.
+    /// Whether this tab shows Syrinx's Settings page rather than a web page.
+    pub fn is_settings(&self) -> bool {
+        self.address == SETTINGS_ADDRESS
+    }
+
+    /// The name Syrinx gives its own pages, Home and Settings, in place of a stored title.
+    pub fn syrinx_title(&self, origin: PageOrigin) -> Option<&'static str> {
+        self.home_title(origin)
+            .or_else(|| self.is_settings().then_some(SETTINGS_TITLE))
+    }
+
+    /// The one name the sidebar shows for an open tab: Syrinx's name for its own pages,
+    /// otherwise the title, or the address when the page has no title.
     pub fn display_title(&self, origin: PageOrigin) -> String {
-        if let Some(home) = self.home_title(origin) {
-            return home.to_owned();
+        if let Some(name) = self.syrinx_title(origin) {
+            return name.to_owned();
         }
         if self.title.is_empty() {
             return self.address.clone();
@@ -667,7 +683,10 @@ impl fmt::Debug for TabModel {
 
 #[cfg(test)]
 mod tests {
-    use super::{Activation, BLANK_ADDRESS, PageOrigin, TabError, TabKind, TabMetadata, TabModel};
+    use super::{
+        Activation, BLANK_ADDRESS, PageOrigin, SETTINGS_ADDRESS, TabError, TabKind, TabMetadata,
+        TabModel,
+    };
 
     #[test]
     fn a_blank_tab_is_called_home_and_other_tabs_use_title_then_address() {
@@ -692,6 +711,36 @@ mod tests {
             metadata("", "https://example.test/").display_title(PageOrigin::Ordinary),
             "https://example.test/"
         );
+    }
+
+    #[test]
+    fn the_settings_address_is_called_settings_whatever_its_stored_title() {
+        let settings = TabMetadata {
+            title: SETTINGS_ADDRESS.to_owned(),
+            address: SETTINGS_ADDRESS.to_owned(),
+            ..TabMetadata::default()
+        };
+        assert!(settings.is_settings());
+        assert!(!settings.is_home(PageOrigin::Ordinary));
+        assert_eq!(settings.display_title(PageOrigin::Ordinary), "Settings");
+        assert_eq!(
+            settings.syrinx_title(PageOrigin::Ordinary),
+            Some("Settings")
+        );
+        let home = TabMetadata {
+            address: BLANK_ADDRESS.to_owned(),
+            ..TabMetadata::default()
+        };
+        assert!(!home.is_settings());
+        assert_eq!(home.syrinx_title(PageOrigin::Ordinary), Some("Home"));
+        // A web page that merely mentions the address is still a web page.
+        let page = TabMetadata {
+            title: "Settings".to_owned(),
+            address: "https://example.test/syrinx://settings".to_owned(),
+            ..TabMetadata::default()
+        };
+        assert!(!page.is_settings());
+        assert_eq!(page.syrinx_title(PageOrigin::Ordinary), None);
     }
 
     #[test]

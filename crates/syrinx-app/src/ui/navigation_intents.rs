@@ -35,6 +35,10 @@ impl NavigationIntents {
         if !smoke && destination == "about:blank" {
             return None;
         }
+        // Syrinx draws its Settings page itself; no web view loads its address (#91).
+        if destination == syrinx_core::SETTINGS_ADDRESS {
+            return None;
+        }
         Some((active, destination.clone()))
     }
 
@@ -178,6 +182,22 @@ mod tests {
         assert_eq!(
             intents.desired_page(&model.snapshot(), true, true),
             Some((id, "about:blank".to_owned()))
+        );
+    }
+
+    #[test]
+    fn the_settings_tab_never_asks_for_a_web_view_even_in_a_smoke_run() {
+        let mut model = TabModel::new();
+        let settings = open_web(&mut model, syrinx_core::SETTINGS_ADDRESS);
+        let mut intents = NavigationIntents::default();
+        for smoke in [false, true] {
+            assert_eq!(intents.desired_page(&model.snapshot(), true, smoke), None);
+        }
+        // Leaving Settings for a page through the address field loads that page as usual.
+        intents.remember(settings, LATEST.to_owned());
+        assert_eq!(
+            intents.desired_page(&model.snapshot(), true, false),
+            Some((settings, LATEST.to_owned()))
         );
     }
 

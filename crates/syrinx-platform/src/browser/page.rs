@@ -624,6 +624,8 @@ fn shortcut_for_modifiers(
         (0x52, false) => Some(BrowserShortcut::Reload),
         (0x09, false) => Some(BrowserShortcut::NextTab),
         (0x09, true) => Some(BrowserShortcut::PreviousTab),
+        // VK_OEM_COMMA: Settings, as in Chrome and Edge (owner, 2026-10-21; #91).
+        (0xBC, false) => Some(BrowserShortcut::Settings),
         _ => None,
     }
 }
@@ -712,6 +714,26 @@ mod tests {
             departure_shortcut(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC),
             None
         );
+    }
+
+    #[test]
+    fn control_comma_opens_settings_over_a_focused_page() {
+        assert_eq!(
+            shortcut_for_modifiers(0xBC, true, false, false, false),
+            Some(BrowserShortcut::Settings)
+        );
+        // Shifted, with Alt or AltGr, or alone, the comma stays the page's.
+        for (control, shift, alt, right_alt) in [
+            (true, true, false, false),
+            (true, false, true, false),
+            (true, false, true, true),
+            (false, false, false, false),
+        ] {
+            assert_eq!(
+                shortcut_for_modifiers(0xBC, control, shift, alt, right_alt),
+                None
+            );
+        }
     }
 
     #[test]

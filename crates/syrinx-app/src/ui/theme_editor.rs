@@ -1,5 +1,5 @@
-//! Customize's Theme section: Graphite and Paper, the owner's saved themes, and the editor
-//! that changes one of them live (`docs/theme-editor.md`).
+//! The Theme section of Customize and Settings: Graphite and Paper, the owner's saved themes,
+//! and the editor that changes one of them live (`docs/theme-editor.md`).
 
 use gpui::{
     AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Role,
