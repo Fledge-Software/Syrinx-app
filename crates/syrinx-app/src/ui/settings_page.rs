@@ -54,6 +54,16 @@ impl SettingsSection {
         }
     }
 
+    /// The section's place in `ALL`, which also picks its entry's focus handle.
+    fn index(self) -> usize {
+        match self {
+            Self::Appearance => 0,
+            Self::Privacy => 1,
+            Self::UsageReport => 2,
+            Self::Updates => 3,
+        }
+    }
+
     fn element_id(self) -> &'static str {
         match self {
             Self::Appearance => "settings-appearance",
@@ -64,20 +74,26 @@ impl SettingsSection {
     }
 }
 
-/// Which section the page shows, which outlives the tab as a browser's settings do, and the
-/// focus of the chosen section's entry in the list.
+/// Which section the page shows, which outlives the tab as a browser's settings do, and one
+/// focus handle per section entry.
 pub(super) struct SettingsPage {
     section: SettingsSection,
-    /// Tracked by the chosen section's tab, so it must be a Tab stop itself (traps).
-    section_focus: FocusHandle,
+    /// Each tracked by its own entry every frame, so focus survives a change of section. A
+    /// tracked handle decides its own Tab stop, so each is one (traps).
+    entry_focus: [FocusHandle; SettingsSection::ALL.len()],
 }
 
 impl SettingsPage {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
             section: SettingsSection::default(),
-            section_focus: cx.focus_handle().tab_stop(true),
+            entry_focus: SettingsSection::ALL.map(|_| cx.focus_handle().tab_stop(true)),
         }
+    }
+
+    /// The focus handle of `section`'s entry in the list.
+    fn entry_focus(&self, section: SettingsSection) -> &FocusHandle {
+        &self.entry_focus[section.index()]
     }
 
     /// Shows `section`; returns whether it changed, which closes the old section's sub-views.
@@ -166,7 +182,8 @@ impl BrowserView {
             return;
         }
         if self.is_main_window(window) {
-            window.focus(&self.settings.section_focus, cx);
+            let chosen = self.settings.entry_focus(self.settings.section).clone();
+            window.focus(&chosen, cx);
         }
     }
 
@@ -274,12 +291,9 @@ impl BrowserView {
         } else {
             (syrinx_ui::Color::rgba(0, 0, 0, 0.), palette.text_secondary)
         };
-        let mut tab = control(div().id(section.element_id()), Role::Tab, section.name());
-        // One element per frame tracks the handle: the chosen section's entry.
-        if selected {
-            tab = tab.track_focus(&self.settings.section_focus);
-        }
-        tab.aria_selected(selected)
+        control(div().id(section.element_id()), Role::Tab, section.name())
+            .track_focus(self.settings.entry_focus(section))
+            .aria_selected(selected)
             .h(px(32.))
             .px(px(10.))
             .rounded(px(radius::CONTROL))
@@ -289,8 +303,11 @@ impl BrowserView {
             .items_center()
             .cursor_pointer()
             .child(section.name())
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
                 this.choose_section(section);
+                // A pointer press keeps the keys on the chosen entry, as Enter and Space do.
+                let chosen = this.settings.entry_focus(section).clone();
+                window.focus(&chosen, cx);
                 cx.notify();
             }))
     }
@@ -570,6 +587,14 @@ mod tests {
         assert!(!settings_tab_closed(&both, &one));
         assert!(settings_tab_closed(&one, &none));
         assert!(!settings_tab_closed(&none, &none));
+    }
+
+    #[test]
+    fn each_section_picks_its_own_entry_focus_handle() {
+        // Distinct indices give each entry its own handle, tracked by that entry alone.
+        for (position, section) in SettingsSection::ALL.into_iter().enumerate() {
+            assert_eq!(section.index(), position);
+        }
     }
 
     #[test]
