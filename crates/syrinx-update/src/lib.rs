@@ -28,6 +28,8 @@ mod tests;
 #[cfg(all(test, feature = "release-tool"))]
 mod tests_release_key;
 #[cfg(test)]
+mod tests_resign;
+#[cfg(test)]
 mod tests_statement;
 
 /// SHA-256 through Windows CNG, for the release tool's file listing.
@@ -48,7 +50,10 @@ pub use ncrypt::{KeyStorage, StoredKey, delete_software_key, import_software_key
 pub use path::{MAX_COMPONENT_BYTES, MAX_COMPONENTS, MAX_PATH_BYTES, PackagePath};
 pub use payload::{Payload, VerifiedFile, VerifiedPayload, read_bounded};
 #[cfg(any(test, feature = "release-tool"))]
-pub use sign::{SignedRelease, Signer, StatementTerms, sign_release};
+pub use sign::{
+    PublishedRelease, SignedRelease, SignedStatement, Signer, StatementTerms, resign_statement,
+    sign_release, verify_published,
+};
 pub use signature::{DetachedSignature, SIGNATURE_BYTES, SignatureKind};
 pub use statement::{MAX_STATEMENT_BYTES, MAX_STATEMENT_LIFETIME_SECONDS, Statement};
 pub use time::{SECONDS_PER_DAY, Timestamp};

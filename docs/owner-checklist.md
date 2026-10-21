@@ -48,6 +48,13 @@ on `main`.
 
 #### Creating the release keys (one time)
 
+First create the environment that holds the secret, so only workflow runs
+on `main` can read it. In GitHub: this repository → Settings →
+Environments → New environment, named exactly `release-signing`. Under
+"Deployment branches and tags" choose "Selected branches and tags" and add
+`main` only. Add no other secret there. The script below then stores the
+primary key in that environment, not as a repository-wide secret.
+
 Close every agent session first. Use a normal PowerShell window in your
 Syrinx-app checkout, on a `main` that includes the merged workflow change,
 with `gh` signed in to an account that may set this repository's secrets.
@@ -63,7 +70,7 @@ gh auth status
 # Optional: a throwaway key through the workflow's own import and delete commands.
 powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\new-release-key.ps1 -Rehearse
 
-# Primary: straight into the Actions secret SYRINX_RELEASE_KEY (gh reads it from standard input).
+# Primary: straight into SYRINX_RELEASE_KEY in the release-signing environment (via standard input).
 powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\new-release-key.ps1 -Role Primary
 
 # Backup: onto the clipboard; paste it into a new secure note named
@@ -71,17 +78,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\new-release-
 powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\new-release-key.ps1 -Role Backup
 
 # Check: lists the secret's name and date, never its value.
-gh secret list --repo Fledge-Software/Syrinx-app
+gh secret list --repo Fledge-Software/Syrinx-app --env release-signing
 ```
 
 Each key run ends with two lines, `<Role> public point: …` (128 hex digits)
 and `<Role> identifier: …` (16 hex digits). They are public: copy both
 pairs into the password manager note as your separate record, and paste
-the four lines to an agent. If Windows clipboard history (Win+V) is on,
-delete the backup's entry there as well. If you ever lose the primary, put
+the four lines to an agent. The backup is marked so Windows keeps it out
+of clipboard history and the cloud clipboard, and the script clears the
+clipboard when you press Enter or Ctrl+C. If you ever lose the primary, put
 the backup's text into the same secret (`gh secret set SYRINX_RELEASE_KEY
---repo Fledge-Software/Syrinx-app`, which asks for the value: paste it and
-press Enter); installed copies already trust it.
+--env release-signing --repo Fledge-Software/Syrinx-app`, which asks for the
+value: paste it and press Enter); installed copies already trust it.
 
 ### 2. Quiet-machine runs (unblock P1-24 and P1-26)
 

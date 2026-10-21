@@ -75,14 +75,18 @@ this workflow change before it is pushed (`AGENTS.md`, "Environment and the
 owner's machine").
 
 **How the key travels.** The secret `SYRINX_RELEASE_KEY` holds the key as
-base64 PKCS#8 text. `signing-ready.sh` first checks that the secret is set
-and that the source being released pins at least one key; otherwise the
-run warns and publishes an unsigned release, as every release did before
-issue #55. When both hold, one step imports the key into the runner's
+base64 PKCS#8 text, stored in the GitHub Environment `release-signing`,
+which the owner limits to `main`; the release and re-sign jobs name that
+environment, so no other branch or workflow can read the key.
+`signing-ready.sh` first asks the source being released which keys it pins
+(`cargo xtask pinned-release-keys`, whose failure fails the run). With none
+pinned, the run warns and publishes an unsigned release, as every release
+did before issue #55. With keys pinned, a missing secret fails the run
+rather than quietly shipping an unsigned update. Then one step imports the key into the runner's
 software key storage under a per-run name, not exportable, with the secret
 in that step's environment only (`cargo xtask import-release-key`).
-`sign-update.sh` then signs with `cargo xtask sign-update` (serial = Unix
-time, 30-day statement) and writes the host files with `cargo xtask
+`sign-update.sh release` then signs with `cargo xtask sign-update` (serial
+= Unix time, 30-day statement) and writes the host files with `cargo xtask
 host-layout`, which first checks everything as an installed Syrinx would.
 An always-run step deletes the key (`cargo xtask delete-release-key`),
 whether signing passed, failed or was cancelled. The key never appears in
@@ -91,13 +95,26 @@ a command line, a file, a log or an artifact. The full design is in
 
 **The weekly re-sign.** A statement expires 30 days after signing, so an
 attacker who freezes the update host can hide a fix for at most that long.
-In a quiet week the `resign` job checks out the latest release's tag,
-downloads its `manifest` and `latest` assets, signs a fresh statement with
-a higher serial and replaces `latest` and `latest.sig` on that release.
-Its `update-site` artifact holds just those two files.
+In a quiet week the `resign` job downloads the latest release's four
+signed assets (`manifest`, `manifest.sig`, `latest`, `latest.sig`). It
+**verifies them before any key exists on the runner**: `cargo xtask
+verify-release` checks the manifest signature, the old statement's
+signature and that the statement names this manifest, against the keys
+pinned in that release's own tag, setting aside only the old statement's
+expiry. Only then is the key imported, and `cargo xtask resign-statement`
+signs nothing but a new statement, with a higher serial, for that verified
+manifest; it never re-signs a manifest, and it verifies again before
+writing. The job then replaces `latest` and, after it, `latest.sig` on the
+release. Its `update-site` artifact holds just those two files. The
+workflow's scripts come from `main`, and the tools and pinned keys from the
+tag, checked out only when the tag has signed assets: a release made before
+signing began (any tag older than this change) has none, so its quiet week
+is skipped with a notice instead of failing on tools the tag lacks.
 
 **Where the files go.** The `update-site` artifact holds exactly what
-belongs under `https://syrinxapp.dev/updates/v1/`. Like the website step,
+belongs under `https://syrinxapp.dev/updates/v1/`. It is public, signed
+data, not a secret: anyone may read it, and its safety rests on the
+signatures, which only the release key can make. Like the website step,
 copying it to the host waits until the repository is public; until then
 the owner decides where, if anywhere, the files are published (issue #55).
 

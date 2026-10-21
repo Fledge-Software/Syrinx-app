@@ -15,7 +15,7 @@ use std::process::{Command, ExitCode, Stdio};
 #[cfg(not(target_os = "windows"))]
 compile_error!("Syrinx's development gate supports Windows 11 only.");
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | sign-update <options> | import-release-key <options> | delete-release-key <options> | pinned-release-keys | host-layout <options> | bench | palette-acceptance>";
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | sign-update <options> | verify-release <options> | resign-statement <options> | import-release-key <options> | delete-release-key <options> | pinned-release-keys | host-layout <options> | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.

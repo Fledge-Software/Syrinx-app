@@ -1,7 +1,7 @@
 # Creates one Syrinx release key (#55) in memory and hands its private half to exactly one place.
 # The owner runs it outside any agent session; it writes nothing to disk. See docs/owner-checklist.md.
 #
-#   -Role Primary   stores the key as the repository's Actions secret through `gh secret set`.
+#   -Role Primary   stores the key as a secret of the release-signing environment (gh secret set).
 #   -Role Backup    puts the key on the clipboard for the password manager, then clears it.
 #   -Rehearse       makes a throwaway key and runs it through the workflow's own import and
 #                   delete commands, so the format is proved before a real key exists.
@@ -10,7 +10,8 @@ param(
     [string] $Role,
     [switch] $Rehearse,
     [string] $Repository = 'Fledge-Software/Syrinx-app',
-    [string] $SecretName = 'SYRINX_RELEASE_KEY'
+    [string] $SecretName = 'SYRINX_RELEASE_KEY',
+    [string] $Environment = 'release-signing'
 )
 
 Set-StrictMode -Version Latest
@@ -53,19 +54,43 @@ function Get-PublicIdentity($Key) {
 function Save-PrimarySecret([string] $Text) {
     & gh auth status *> $null
     if ($LASTEXITCODE -ne 0) { throw 'Sign in with `gh auth login` first.' }
-    $Text | & gh secret set $SecretName --repo $Repository
-    if ($LASTEXITCODE -ne 0) { throw "gh secret set $SecretName failed." }
-    Write-Host "Stored the primary key as the $SecretName secret of $Repository."
+    $Text | & gh secret set $SecretName --env $Environment --repo $Repository
+    if ($LASTEXITCODE -ne 0) { throw "gh secret set $SecretName failed; does the $Environment environment exist?" }
+    Write-Host "Stored the primary key as the $SecretName secret of $Repository's $Environment environment."
 }
 
-# Put the text on the clipboard until the owner has pasted it, then clear it.
+# A DWORD 0 clipboard value, which turns the named clipboard feature off for this entry.
+function New-ClipboardFlag {
+    New-Object System.IO.MemoryStream (, [byte[]](0, 0, 0, 0))
+}
+
+# Clipboard data holding the text, kept out of clipboard monitors, history and cloud clipboard.
+function New-PrivateClipboardData([string] $Text) {
+    Add-Type -AssemblyName System.Windows.Forms
+    $data = New-Object System.Windows.Forms.DataObject
+    $data.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $Text)
+    $data.SetData('ExcludeClipboardContentFromMonitorProcessing', (New-ClipboardFlag))
+    $data.SetData('CanIncludeInClipboardHistory', (New-ClipboardFlag))
+    $data.SetData('CanUploadToCloudClipboard', (New-ClipboardFlag))
+    $data
+}
+
+# Put the text on the clipboard until the owner has pasted it; clear it however the wait ends.
 function Save-BackupByClipboard([string] $Text) {
-    Set-Clipboard -Value $Text
-    Write-Host 'The backup key is on the clipboard. Paste it into a new secure note in your password'
-    Write-Host 'manager named "Syrinx release key (backup)", save it, then press Enter here.'
-    [void](Read-Host)
-    Set-Clipboard -Value ' '
-    Write-Host 'Cleared the clipboard. If Windows clipboard history (Win+V) is on, delete the entry there too.'
+    if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
+        throw 'The clipboard needs a single-threaded PowerShell; run this with powershell.exe.'
+    }
+    $data = New-PrivateClipboardData $Text
+    try {
+        [System.Windows.Forms.Clipboard]::SetDataObject($data, $true)
+        Write-Host 'The backup key is on the clipboard. Paste it into a new secure note in your password'
+        Write-Host 'manager named "Syrinx release key (backup)", save it, then press Enter here.'
+        [void](Read-Host)
+    } finally {
+        # Runs on Enter, on an error and on Ctrl+C alike.
+        [System.Windows.Forms.Clipboard]::Clear()
+        Write-Host 'Cleared the clipboard.'
+    }
 }
 
 # Run a throwaway key through the workflow's import and delete commands, then compare identifiers.
@@ -85,7 +110,11 @@ function Invoke-Rehearsal($Key) {
     } finally {
         Remove-Item "env:$variable"
         & cargo xtask delete-release-key --key $name
+        $deleteStatus = $LASTEXITCODE
         Pop-Location
+        if ($deleteStatus -ne 0) {
+            throw "Could not delete the rehearsal key; run: cargo xtask delete-release-key --key $name"
+        }
     }
 }
 

@@ -61,6 +61,8 @@ jobs:
     if: needs.plan.outputs.release == 'true'
     runs-on: windows-latest
     timeout-minutes: 240
+    # The release key secret lives in this environment, which the owner limits to main (#55).
+    environment: release-signing
     permissions:
       contents: write
     env:
@@ -126,7 +128,7 @@ jobs:
       - name: Sign the update and lay out its host files
         if: steps.signing.outputs.ready == 'true'
         shell: bash
-        run: .github/scripts/sign-update.sh "target/package/${{ steps.package.outputs.folder }}" target/update-site include
+        run: .github/scripts/sign-update.sh release "target/package/${{ steps.package.outputs.folder }}" target/update-site
 
       - name: Delete the release key
         if: always() && steps.signing.outputs.ready == 'true'
@@ -183,60 +185,89 @@ jobs:
     if: needs.plan.outputs.resign == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
+    environment: release-signing
     permissions:
       contents: write
     env:
       TAG: ${{ needs.plan.outputs.latest_tag }}
       GH_TOKEN: ${{ github.token }}
+    # The scripts come from main, so a tag older than signing is skipped cleanly. Only a tag with
+    # signed files was built with the signing tools, and its own source supplies the tools and the
+    # keys its installed copies trust; that checkout lives in tag/.
     steps:
-      # The released source holds the keys that release's installed copies trust.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.plan.outputs.latest_tag }}
+          ref: main
 
       - id: fetch
-        name: Fetch the released manifest and its last statement
+        name: Fetch the release's signed files
         shell: bash
-        run: .github/scripts/fetch-signed-release.sh "$TAG" target/resign
+        run: .github/scripts/fetch-signed-release.sh "$TAG" "$RUNNER_TEMP/resign"
+
+      - uses: actions/checkout@v4
+        if: steps.fetch.outputs.found == 'true'
+        with:
+          ref: ${{ needs.plan.outputs.latest_tag }}
+          path: tag
 
       - uses: ./.github/actions/setup-rust
         if: steps.fetch.outputs.found == 'true'
+
+      - name: Fetch the release's locked dependencies
+        if: steps.fetch.outputs.found == 'true'
+        shell: bash
+        working-directory: tag
+        run: cargo fetch --locked
 
       - id: signing
         name: Check that this run can sign the statement
         if: steps.fetch.outputs.found == 'true'
         shell: bash
+        working-directory: tag
         env:
           HAS_RELEASE_KEY: ${{ secrets.SYRINX_RELEASE_KEY != '' }}
-        run: .github/scripts/signing-ready.sh
+        run: ../.github/scripts/signing-ready.sh
+
+      # Both old signatures and the statement apart from its expiry, before any key exists here.
+      - name: Verify the downloaded release against the tag's pinned keys
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        working-directory: tag
+        run: cargo xtask verify-release --package "$RUNNER_TEMP/resign"
 
       - name: Import the release key for this job
         if: steps.signing.outputs.ready == 'true'
         shell: bash
+        working-directory: tag
         env:
           SYRINX_RELEASE_KEY: ${{ secrets.SYRINX_RELEASE_KEY }}
         run: cargo xtask import-release-key --key "$KEY_NAME" --from-env SYRINX_RELEASE_KEY
 
-      - name: Sign a fresh statement and lay out its host files
+      - name: Sign only a fresh statement and lay out its host files
         if: steps.signing.outputs.ready == 'true'
         shell: bash
-        run: .github/scripts/sign-update.sh target/resign target/update-site omit
+        working-directory: tag
+        run: ../.github/scripts/sign-update.sh resign "$RUNNER_TEMP/resign" "$RUNNER_TEMP/update-site"
 
       - name: Delete the release key
         if: always() && steps.signing.outputs.ready == 'true'
         shell: bash
+        working-directory: tag
         run: cargo xtask delete-release-key --key "$KEY_NAME"
 
+      # Replace `latest` first, then `latest.sig`.
       - name: Replace the statement on the GitHub release
         if: steps.signing.outputs.ready == 'true'
         shell: bash
-        run: gh release upload "$TAG" target/resign/latest target/resign/latest.sig --clobber
+        run: |
+          gh release upload "$TAG" "$RUNNER_TEMP/resign/latest" --clobber
+          gh release upload "$TAG" "$RUNNER_TEMP/resign/latest.sig" --clobber
 
       - uses: actions/upload-artifact@v4
         if: steps.signing.outputs.ready == 'true'
         with:
           name: update-site
-          path: target/update-site/
+          path: ${{ runner.temp }}/update-site/
           if-no-files-found: error
 
   site:

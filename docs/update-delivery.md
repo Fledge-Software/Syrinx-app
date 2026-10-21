@@ -348,6 +348,10 @@ and deletes it again; everything else about signing stays as P1-39a built
 it, including the check that refuses any key `PRODUCTION_KEYS` does not
 pin.
 
+**Where the secret lives.** In the GitHub Environment `release-signing`,
+which the owner creates and limits to `main`. The release and `resign` jobs
+name it, so a workflow run from any other branch cannot read the key.
+
 **The format.** The secret `SYRINX_RELEASE_KEY` holds one P-256 private key
 as base64 PKCS#8 (the standard "private key" encoding, one line of about
 190 characters). The backup in the password manager is the same text for
@@ -361,10 +365,10 @@ so it would add a step without adding protection.
 
 **One job, in order:**
 
-1. *Check.* `signing-ready.sh` signs only when the secret is set and the
-   source being released pins at least one key (`cargo xtask
-   pinned-release-keys`). Until the owner's keys exist the release goes out
-   unsigned, with a warning, exactly as before #55.
+1. *Check.* `signing-ready.sh` asks the source being released which keys
+   it pins (`cargo xtask pinned-release-keys`; a failure fails the run).
+   With none pinned, the release goes out unsigned with a warning, exactly
+   as before #55. With keys pinned, a missing secret fails the run.
 2. *Import.* `cargo xtask import-release-key --key <name> --from-env
    SYRINX_RELEASE_KEY` reads the text from that step's environment only,
    decodes it and imports it into the runner's software key storage under a
@@ -399,11 +403,20 @@ on.
 
 **The weekly re-sign.** A statement lives 30 days, under the 60-day cap. A
 week with a release signs a fresh one. A quiet week (no new commits on
-`main`) runs the `resign` job instead: it checks out the latest release's
-tag, so it signs with the key set that release's installed copies trust,
-downloads that release's `manifest` and `latest` assets, signs a new
-statement for the same manifest with a higher serial, and replaces `latest`
-and `latest.sig` on the GitHub release. Thirty days means four missed
+`main`) runs the `resign` job instead. It downloads the latest release's
+`manifest`, `manifest.sig`, `latest` and `latest.sig` assets and, before
+any key is imported, verifies them with `cargo xtask verify-release`
+against the keys pinned in that release's own tag: both signatures, and
+the statement naming this manifest, setting aside only the old statement's
+expiry. A tampered or substituted download therefore stops the job while
+the runner holds no key. Then `cargo xtask resign-statement` signs only a
+new statement, with a higher serial, for that verified manifest
+(`resign_statement` in `crates/syrinx-update/src/sign.rs` re-verifies the
+release itself and never signs a manifest), and the job replaces `latest`,
+then `latest.sig`, on the GitHub release. Its scripts come from `main`; the
+tools and keys come from the tag, checked out only once the tag is known to
+have signed assets, so a release made before signing began is skipped with
+a notice. Thirty days means four missed
 weeks before installed copies see "the update information has expired",
 which is harmless (no update is offered) and limits how long a stolen copy
 of the site could freeze anyone. A release published before signing began
@@ -411,7 +424,8 @@ has no signed assets, so the job notes that and stops.
 
 **What is published, and where.** Each signed release attaches `manifest`,
 `manifest.sig`, `latest` and `latest.sig` to its GitHub pre-release, and
-uploads the host files as the workflow artifact `update-site`:
+uploads the host files, which are public signed data rather than
+secrets, as the workflow artifact `update-site`:
 `updates/v1/latest`, `latest.sig`, `<version>/manifest`, `manifest.sig` and
 `<version>/files/…`, one file per manifest entry. A re-sign's artifact holds
 only `latest` and `latest.sig`, since nothing else changes. Copying them to

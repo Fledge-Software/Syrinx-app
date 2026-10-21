@@ -59,8 +59,10 @@ pub fn payload_command(folder: &str, output: &str) -> Vec<String> {
 }
 
 /// xtask commands whose options pass unchanged to a release-tool subcommand, which checks them.
-const FORWARDED: [(&str, &str); 5] = [
+const FORWARDED: [(&str, &str); 7] = [
     ("sign-update", "sign"),
+    ("verify-release", "verify-release"),
+    ("resign-statement", "resign"),
     ("import-release-key", "import-key"),
     ("delete-release-key", "delete-key"),
     ("pinned-release-keys", "pinned-keys"),
@@ -172,6 +174,8 @@ mod tests {
             ("delete-release-key", "delete-key"),
             ("pinned-release-keys", "pinned-keys"),
             ("host-layout", "host-layout"),
+            ("verify-release", "verify-release"),
+            ("resign-statement", "resign"),
         ] {
             let forwarded = forwarded_command(command, &key).expect("a forwarded command");
             assert_eq!(&forwarded[..TOOL.len()], TOOL);
