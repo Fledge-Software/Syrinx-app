@@ -11,6 +11,7 @@ use std::{
 const PREFIX: &str = "syrinx-window-smoke-";
 
 /// WebView2's child processes can still hold profile files for a moment after shutdown.
+/// 50 attempts 200 ms apart give up after about 10 s, once the watchdog is already cancelled.
 const REMOVAL_ATTEMPTS: u32 = 50;
 const REMOVAL_PAUSE: Duration = Duration::from_millis(200);
 
@@ -31,9 +32,14 @@ pub(crate) struct GeneratedProfile {
 }
 
 impl GeneratedProfile {
-    /// Creates the folder exclusively, refusing one that already exists.
+    /// Creates the folder exclusively, refusing one that already exists, and names it at once
+    /// so a run the watchdog ends or a crash kills still says where its kept folder is.
     pub(crate) fn reserve(directory: PathBuf) -> Result<Self, &'static str> {
         crate::reserve_smoke_directory(&directory)?;
+        eprintln!(
+            "The smoke run's synthetic profile is {}",
+            directory.display()
+        );
         Ok(Self {
             directory,
             settled: false,
@@ -45,7 +51,10 @@ impl GeneratedProfile {
     pub(crate) fn settle(mut self, passed: bool) {
         self.settled = true;
         if !passed {
-            report_kept(&self.directory);
+            eprintln!(
+                "The smoke run failed; its synthetic profile is kept for diagnosis at {}",
+                self.directory.display()
+            );
             return;
         }
         // Refuse anything that is not this run's own temp folder, whatever the caller passed.
@@ -71,19 +80,15 @@ impl GeneratedProfile {
 }
 
 impl Drop for GeneratedProfile {
-    /// A run that ends before `settle` (an early error or a panic) failed, so keep the evidence.
+    /// A run that ends before `settle` (an early return or a panic) keeps its folder.
     fn drop(&mut self) {
         if !self.settled {
-            report_kept(&self.directory);
+            eprintln!(
+                "The smoke run ended before its checks; its synthetic profile is kept at {}",
+                self.directory.display()
+            );
         }
     }
-}
-
-fn report_kept(directory: &Path) {
-    eprintln!(
-        "The smoke run failed; its synthetic profile is kept for diagnosis at {}",
-        directory.display()
-    );
 }
 
 /// True only for `<temp>\syrinx-window-smoke-<digits>-<digits>`, directly inside `temp`.
@@ -107,8 +112,9 @@ fn is_number(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-/// Retries a removal that WebView2's lingering file handles make fail, then reports the last
-/// error. A folder that is already gone counts as removed.
+/// Retries a removal on any error except NotFound, not only sharing violations: a file that
+/// WebView2 has closed but not yet released is pending deletion and reports access denied.
+/// Reports the last error; a folder that is already gone counts as removed.
 fn remove_with_retries(
     mut remove: impl FnMut() -> io::Result<()>,
     attempts: u32,
