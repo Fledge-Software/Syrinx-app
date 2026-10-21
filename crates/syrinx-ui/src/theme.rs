@@ -5,7 +5,8 @@ use crate::accent::Accent;
 use crate::color::Color;
 use crate::contrast::{self, ContrastCheck};
 use crate::palette::{
-    Ground, HAZE_WALLPAPER, Palette, PaletteId, WindowMaterial, graphite, palette, paper,
+    GLASS_WALLPAPER, Ground, HAZE_WALLPAPER, Palette, PaletteId, WindowMaterial, palette,
+    template_drops,
 };
 
 /// The longest theme name, in characters.
@@ -188,24 +189,34 @@ impl ThemeSpec {
         self.material != Material::None && self.transparency > 0 && !reduce_transparency
     }
 
+    /// The preset whose surfaces and inks this theme starts from: Paper for light themes,
+    /// Graphite for opaque dark ones, the canvas's Glass under Acrylic, and Haze under Mica.
+    pub fn template(&self, reduce_transparency: bool) -> PaletteId {
+        match (self.mode, self.shows_material(reduce_transparency)) {
+            (Mode::Light, _) => PaletteId::Paper,
+            (Mode::Dark, false) => PaletteId::Graphite,
+            (Mode::Dark, true) if self.material == Material::Acrylic => PaletteId::Glass,
+            (Mode::Dark, true) => PaletteId::Haze,
+        }
+    }
+
     /// Every colour role for this theme with `accent` applied.
     pub fn palette(&self, accent: Accent, reduce_transparency: bool) -> Palette {
         let see_through = self.shows_material(reduce_transparency);
-        let mut drawn = match (self.mode, see_through) {
-            (Mode::Light, _) => paper(accent),
-            (Mode::Dark, false) => graphite(accent),
-            // Haze's translucent surfaces and lifted inks suit any dark material.
-            (Mode::Dark, true) => palette(PaletteId::Haze, accent),
-        };
+        let template = self.template(reduce_transparency);
+        let mut drawn = palette(template, accent);
         if Some(self.background) != solid_colour(&drawn.ground) {
             recolour(&mut drawn, self.background, self.mode);
         }
+        let template_ground = drawn.ground;
         drawn.ground = self.ground(see_through);
+        thin_the_card(&mut drawn, &template_ground);
         drawn.badge_ring = self.background;
         keep_text_readable(&mut drawn, accent, self.mode);
         drawn.grain = f32::from(self.grain) / 100.;
         drawn.edges = f32::from(self.edges) / 100.;
-        light_rims(&mut drawn);
+        drawn.shadows =
+            template_drops(template).with_glass_edges(drawn.edges, self.mode == Mode::Light);
         drawn
     }
 
@@ -218,10 +229,15 @@ impl ThemeSpec {
     fn ground(&self, see_through: bool) -> Ground {
         if let (true, Some(material)) = (see_through, self.material.window_material()) {
             let opacity = 1. - f32::from(self.transparency) / 100.;
+            // Acrylic shows the desktop itself, so contrast is checked on Glass's bright discs.
+            let wallpaper_standins: &'static [Color] = match material {
+                WindowMaterial::Acrylic => &GLASS_WALLPAPER,
+                WindowMaterial::Mica | WindowMaterial::MicaAlt => &HAZE_WALLPAPER,
+            };
             return Ground::Material {
                 material,
                 tint: with_alpha(self.background, opacity),
-                wallpaper_standins: &HAZE_WALLPAPER,
+                wallpaper_standins,
             };
         }
         match self.fill {
@@ -407,23 +423,21 @@ fn recolour(drawn: &mut Palette, background: Color, mode: Mode) {
     }
 }
 
-/// Glass edges: outline the chrome's surfaces in white at the edge strength, as light
-/// catching the rim of glass.
-fn light_rims(drawn: &mut Palette) {
-    if drawn.edges <= 0. {
+/// Home's card, when it is a dark tint over the material (Haze's is), thins in step with the
+/// window's tint, so Transparency shows through Home too instead of stopping at its card.
+/// Glass's card is a faint white frost, not a tint, and keeps the canvas's value.
+fn thin_the_card(drawn: &mut Palette, template_ground: &Ground) {
+    let (Ground::Material { tint, .. }, Ground::Material { tint: template, .. }) =
+        (&drawn.ground, template_ground)
+    else {
+        return;
+    };
+    let card = drawn.card;
+    if card.is_opaque() || card.lightness_percent() >= 50. || template.alpha == 0 {
         return;
     }
-    let rim = Color::rgba(255, 255, 255, drawn.edges);
-    for line in [
-        &mut drawn.pill_line,
-        &mut drawn.surface_line,
-        &mut drawn.card_line,
-        &mut drawn.chip_line,
-        &mut drawn.input_line,
-        &mut drawn.panel_line,
-    ] {
-        *line = rim;
-    }
+    let share = (f32::from(tint.alpha) / f32::from(template.alpha)).min(1.);
+    drawn.card = with_alpha(card, f32::from(card.alpha) / 255. * share);
 }
 
 /// Text and icon roles, and how far each may move to stay readable.
@@ -521,7 +535,6 @@ fn mix(from: Color, to: Color, share: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shadow::Shadows;
 
     fn every_kind() -> Vec<ThemeSpec> {
         let mut themes = vec![ThemeSpec::new("Plain")];
@@ -549,14 +562,32 @@ mod tests {
     }
 
     #[test]
-    fn light_themes_take_papers_shadows_and_dark_themes_none() {
+    fn each_kind_of_theme_starts_from_its_preset() {
+        let glass = ThemeSpec::from_retired_palette(PaletteId::Glass, Accent::default());
+        let glass = glass.expect("glass");
+        assert_eq!(glass.template(false), PaletteId::Glass);
+        assert_eq!(glass.template(true), PaletteId::Graphite);
+        let mica = ThemeSpec {
+            material: Material::Mica,
+            ..glass.clone()
+        };
+        assert_eq!(mica.template(false), PaletteId::Haze);
+        let light = ThemeSpec {
+            mode: Mode::Light,
+            ..glass
+        };
+        assert_eq!(light.template(false), PaletteId::Paper);
+        assert_eq!(ThemeSpec::new("Plain").template(false), PaletteId::Graphite);
+    }
+
+    #[test]
+    fn themes_take_their_presets_drops_with_their_own_glass_edges() {
         let accent = Accent::default();
-        let paper_shadows = palette(PaletteId::Paper, accent).shadows;
         for theme in every_kind() {
-            let expected = match theme.mode {
-                Mode::Light => paper_shadows,
-                Mode::Dark => Shadows::NONE,
-            };
+            let template = theme.template(false);
+            let strength = f32::from(theme.edges) / 100.;
+            let expected = crate::palette::template_drops(template)
+                .with_glass_edges(strength, theme.mode == Mode::Light);
             assert_eq!(
                 theme.palette(accent, false).shadows,
                 expected,
@@ -564,6 +595,103 @@ mod tests {
                 theme.name
             );
         }
+    }
+
+    #[test]
+    fn the_glass_theme_draws_the_canvas_glass() {
+        // The canvas's `glass` tokens (design/canvas/project/Main.dc.html, lines 271-293).
+        let accent = Accent::default();
+        let theme = ThemeSpec::from_retired_palette(PaletteId::Glass, accent).expect("glass");
+        let drawn = theme.palette(accent, false);
+        let canvas = palette(PaletteId::Glass, accent);
+        assert_eq!(drawn.id, PaletteId::Glass);
+        assert_eq!(drawn.shadows, canvas.shadows);
+        for (role, ours, theirs) in [
+            ("field", drawn.field, canvas.field),
+            ("row_selected", drawn.row_selected, canvas.row_selected),
+            ("card", drawn.card, canvas.card),
+            ("card_line", drawn.card_line, canvas.card_line),
+            ("surface", drawn.surface, canvas.surface),
+            ("surface_line", drawn.surface_line, canvas.surface_line),
+            ("pill", drawn.pill, canvas.pill),
+            ("pill_line", drawn.pill_line, canvas.pill_line),
+            ("panel", drawn.panel, canvas.panel),
+        ] {
+            assert_eq!(ours, theirs, "{role}");
+        }
+        // `materialBg: rgba(16,17,24,0.46)`; Transparency moves in steps of 5, so 55 % is
+        // the nearest setting, a 0.45 tint.
+        let Ground::Material { material, tint, .. } = drawn.ground else {
+            panic!("Glass shows a material");
+        };
+        assert_eq!(material, WindowMaterial::Acrylic);
+        assert_eq!(tint, Color::rgba(16, 17, 24, 0.45));
+    }
+
+    #[test]
+    fn the_window_tint_thins_as_transparency_rises() {
+        let accent = Accent::default();
+        let glass = ThemeSpec::from_retired_palette(PaletteId::Glass, accent).expect("glass");
+        let mut previous = u8::MAX;
+        for transparency in (TRANSPARENCY.step..=TRANSPARENCY.max).step_by(5) {
+            let theme = ThemeSpec {
+                transparency,
+                ..glass.clone()
+            };
+            let Ground::Material { tint, .. } = theme.palette(accent, false).ground else {
+                panic!("{transparency}: no material");
+            };
+            let expected = Color::rgba(16, 17, 24, 1. - f32::from(transparency) / 100.);
+            assert_eq!(tint, expected, "{transparency}");
+            assert!(tint.alpha < previous, "{transparency}");
+            previous = tint.alpha;
+        }
+    }
+
+    #[test]
+    fn a_mica_themes_home_card_thins_with_its_tint_but_glass_frost_stays() {
+        let accent = Accent::default();
+        let haze = ThemeSpec::from_retired_palette(PaletteId::Haze, accent).expect("haze");
+        let card_at = |theme: &ThemeSpec, transparency| {
+            ThemeSpec {
+                transparency,
+                ..theme.clone()
+            }
+            .palette(accent, false)
+            .card
+        };
+        // At Haze's own 25 % the card is the canvas's `rgba(10,11,14,0.5)`.
+        assert_eq!(card_at(&haze, 25).alpha, Color::rgba(10, 11, 14, 0.5).alpha);
+        assert!(card_at(&haze, 60).alpha < card_at(&haze, 25).alpha);
+        assert!(card_at(&haze, 90).alpha < card_at(&haze, 60).alpha);
+        let glass = ThemeSpec::from_retired_palette(PaletteId::Glass, accent).expect("glass");
+        for transparency in [20, 55, 90] {
+            assert_eq!(
+                card_at(&glass, transparency),
+                Color::rgba(255, 255, 255, 0.05)
+            );
+        }
+    }
+
+    #[test]
+    fn glass_edges_follow_their_setting() {
+        let accent = Accent::default();
+        let glass = ThemeSpec::from_retired_palette(PaletteId::Glass, accent).expect("glass");
+        let field_highlight = |edges| {
+            ThemeSpec {
+                edges,
+                ..glass.clone()
+            }
+            .palette(accent, false)
+            .shadows
+            .field
+            .inset_layers()
+            .next()
+            .map(|layer| layer.color)
+        };
+        assert_eq!(field_highlight(0), None);
+        assert_eq!(field_highlight(24), Some(Color::rgba(255, 255, 255, 0.24)));
+        assert_eq!(field_highlight(40), Some(Color::rgba(255, 255, 255, 0.40)));
     }
 
     #[test]

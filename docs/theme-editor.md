@@ -44,13 +44,21 @@ How the choices combine:
   background colour is painted over it at the chosen transparency, so
   Fill and Grain are hidden. Grain is drawn into an opaque image, which
   would cover the material.
-- Glass edges draw the chrome's outlines (fields, pills, surfaces, cards,
-  chips and popups) in white at the edge strength.
+- Glass edges draw the canvas's glass edge (#93): an inset top highlight
+  at the edge strength and a faint inner ring at 7/24 of it, on fields,
+  selected rows, the Home card, plugin cards, the search pill and the
+  Customize panel. At 24 % it is the canvas's Glass exactly. On a light
+  theme the ring is dark ink.
+- Under a material, Transparency thins the window's tint; a dark tint on
+  Home's card (Haze's) thins with it, so the material shows through Home.
 - Colours are worked out from a starting preset:
   - a light theme starts from Paper;
   - a dark opaque theme starts from Graphite;
-  - a dark see-through theme starts from the old Haze, whose surfaces are
-    translucent.
+  - a dark theme under Acrylic starts from the canvas's Glass: white frost
+    surfaces, its drop shadows (drawn only outside a translucent surface),
+    and its bright wallpaper stand-ins for the contrast check;
+  - a dark theme under Mica or Mica Alt starts from the old Haze, whose
+    surfaces are translucent.
   Its neutral colours then take the background's hue at the same
   lightness. A theme with Graphite's background and no material draws
   exactly Graphite.

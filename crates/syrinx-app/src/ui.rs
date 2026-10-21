@@ -1805,6 +1805,7 @@ impl BrowserView {
             .gap(px(10.))
             .rounded(px(corner))
             .bg(theme::rgba(palette.field))
+            .shadow(theme::shadow(syrinx_ui::ShadowRole::Field))
             .flex()
             .items_center()
             .overflow_hidden()
@@ -1818,9 +1819,9 @@ impl BrowserView {
             field.flex_1()
         };
         if track {
-            field = field
-                .track_focus(self.address_field_focus())
-                .focus(crate::controls::focus_ring);
+            field = field.track_focus(self.address_field_focus()).focus(
+                crate::controls::focus_ring_keeping(syrinx_ui::ShadowRole::Field),
+            );
         }
         if !readable.is_empty() {
             return field
