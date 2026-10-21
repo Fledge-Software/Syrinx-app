@@ -83,7 +83,7 @@ fn own_popup(popup: &Window, owner: isize) -> Result<isize, String> {
     Ok(hwnd)
 }
 
-/// Gives the popup the menus' Windows 11 rounded corners and shadow (#72, #85).
+/// Gives an owned popup Windows 11's rounded corners and system shadow (#72, #85).
 /// A failure leaves a square, shadowless popup that still works, so it is only reported.
 pub(super) fn round_popup_corners(hwnd: isize, noun: &str) {
     if let Err(error) = syrinx_platform::window_frame::round_with_shadow(hwnd) {
