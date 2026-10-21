@@ -506,8 +506,11 @@ impl BrowserHost {
     /// threads send here, which the worker needs to close its pages. On a timeout the worker
     /// is left to finish alone and `StillRunning` is returned.
     pub fn shutdown_within(mut self, bound: Duration) -> Result<(), BrowserError> {
-        if !self.stopped.load(Ordering::Acquire) {
-            self.send(BrowserCommand::Shutdown)?;
+        // A refused request still leaves a worker that may be ending; wait for it either way.
+        if !self.stopped.load(Ordering::Acquire)
+            && let Err(error) = self.send(BrowserCommand::Shutdown)
+        {
+            eprintln!("Syrinx could not ask its page host to stop; waiting for it anyway: {error}");
         }
         let Some(worker) = self.worker.take() else {
             return Ok(());

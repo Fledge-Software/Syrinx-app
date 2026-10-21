@@ -26,14 +26,17 @@ use windows::{
 
 use super::{BrowserError, BrowserState, dispatch};
 
-/// How long shutdown waits for the browser process to save the profile and exit.
-pub(super) const EXIT_BOUND: Duration = Duration::from_secs(5);
+/// How long shutdown waits for the browser process to save the profile and exit. It fits,
+/// with the page host's own teardown, inside the app's 4.5 s session-end budget (#96).
+pub(super) const EXIT_BOUND: Duration = Duration::from_secs(3);
 /// Messages dispatched per wake, so a flood cannot starve the deadline check.
 const MESSAGES_PER_WAKE: usize = 256;
 
 /// Tracks whether the environment's browser process may still hold unsaved profile data.
 pub(super) struct EngineWatch {
     running: Arc<AtomicBool>,
+    environment: ICoreWebView2Environment5,
+    token: i64,
 }
 
 impl EngineWatch {
@@ -51,7 +54,11 @@ impl EngineWatch {
         let mut token = 0;
         unsafe { environment.add_BrowserProcessExited(&handler, &mut token) }
             .map_err(|_| BrowserError::EventRegistration)?;
-        Ok(Self { running })
+        Ok(Self {
+            running,
+            environment,
+            token,
+        })
     }
 
     /// A page was created, so a browser process now holds profile data.
@@ -61,6 +68,15 @@ impl EngineWatch {
 
     fn running(&self) -> bool {
         self.running.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for EngineWatch {
+    fn drop(&mut self) {
+        // Unsubscribe before the environment goes, so no late exit reaches a retired watch.
+        if unsafe { self.environment.remove_BrowserProcessExited(self.token) }.is_err() {
+            eprintln!("Syrinx could not stop watching its page engine's exit.");
+        }
     }
 }
 
@@ -178,6 +194,8 @@ fn pump_messages(remaining: Duration) -> Result<(), BrowserError> {
 pub(super) fn wait_for_thread(thread: HANDLE, bound: Duration) -> Result<bool, BrowserError> {
     let deadline = Instant::now() + bound;
     loop {
+        // Deliver messages already sent, which the wait below would not count as new input.
+        service_sent_messages();
         let remaining = deadline.saturating_duration_since(Instant::now());
         let woke = unsafe {
             MsgWaitForMultipleObjectsEx(
@@ -194,14 +212,17 @@ pub(super) fn wait_for_thread(thread: HANDLE, bound: Duration) -> Result<bool, B
             return Ok(false);
         }
         if woke.0 == WAIT_OBJECT_0.0 + 1 {
-            // Delivers pending sent messages without removing or dispatching posted ones.
-            let mut message = MSG::default();
-            let _posted_waiting =
-                unsafe { PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE) };
             continue;
         }
         return Err(BrowserError::MessageLoop);
     }
+}
+
+/// Delivers pending sent messages without removing or dispatching posted ones.
+fn service_sent_messages() {
+    let mut message = MSG::default();
+    let _posted_waiting =
+        unsafe { PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE) };
 }
 
 /// Rounds up, so a sub-millisecond remainder still sleeps instead of spinning.
@@ -309,7 +330,7 @@ mod tests {
     fn only_a_served_engine_is_reported_and_no_report_names_a_page() {
         assert_eq!(ExitWait::Idle.describe(), None);
         let timed_out = ExitWait::TimedOut.describe().expect("timeouts are logged");
-        assert!(timed_out.contains("did not exit within 5 s"));
+        assert!(timed_out.contains("did not exit within 3 s"));
         let exited = ExitWait::Exited(Duration::from_millis(42))
             .describe()
             .expect("exits are logged");

@@ -384,11 +384,9 @@ pub struct BrowserView {
     outcome: Arc<AtomicU8>,
 }
 
-/// How long a quit without a close request waits for the page host; it covers the engine's
-/// own five seconds to save cookies (#96).
-const QUIT_BROWSER_BOUND: Duration = Duration::from_secs(7);
-/// How long that quit waits for local storage to finish and mark a clean shutdown.
-const QUIT_SESSION_BOUND: Duration = Duration::from_secs(2);
+/// One budget for a quit without a close request to stop both workers. Windows allows about
+/// 5 s after it ends the session; the engine's own save wait (3 s) fits inside (#96).
+const QUIT_BOUND: Duration = Duration::from_millis(4_500);
 
 impl BrowserView {
     pub fn new(
@@ -1593,16 +1591,22 @@ impl BrowserView {
             return;
         }
         self.closing = true;
-        // The page host stops first, as on a normal close, so storage outlives the pages.
+        let deadline = Instant::now() + QUIT_BOUND;
+        // Both workers stop together: no page event can reach storage while this thread waits.
+        if let Some(session) = &self.session {
+            session.request_shutdown();
+        }
         if let Some(browser) = self.browser.take() {
             self.browser_stopped = true;
-            if let Err(error) = browser.shutdown_within(QUIT_BROWSER_BOUND) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if let Err(error) = browser.shutdown_within(remaining) {
                 eprintln!("The page host did not stop cleanly as Syrinx quit: {error}");
             }
         }
         if let Some(session) = self.session.take() {
             self.session_stopped = true;
-            if let Err(error) = session.shutdown_within(QUIT_SESSION_BOUND) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if let Err(error) = session.shutdown_within(remaining) {
                 eprintln!("Local storage did not stop cleanly as Syrinx quit: {error}");
             }
         }

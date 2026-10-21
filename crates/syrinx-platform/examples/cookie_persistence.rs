@@ -62,9 +62,17 @@ enum AfterStop {
     Wait,
     /// Every engine process this harness started is killed, as Windows does when a session ends.
     Terminate,
+    /// The parent's thread stops the host with `shutdown_within`, without pumping, as the
+    /// app's quit hook does when Windows ends the session; then the engine is killed.
+    SessionEnd,
     /// The engine is killed while the page is open, before any shutdown (diagnostic only).
     Abrupt,
 }
+
+/// How long the session-end stop may block the parent's thread, as Syrinx's quit hook allows.
+const SESSION_END_BOUND: Duration = Duration::from_millis(4_500);
+/// "Well inside" that bound: the stop must leave Windows time to spare.
+const SESSION_END_EXPECTED: Duration = Duration::from_millis(3_500);
 
 fn main() -> ExitCode {
     // An independent deadline also catches a stalled native call or message pump.
@@ -129,12 +137,20 @@ fn run() -> Result<(), String> {
     if terminated.is_ok() {
         println!("The cookie survived engine processes killed right after Stopped.");
     }
+    let session_end =
+        reserve_profile().and_then(|profile| persistence(profile, &server, AfterStop::SessionEnd));
+    if session_end.is_ok() {
+        println!("The cookie survived a session-end stop from the parent's thread.");
+    }
     if std::env::args().any(|argument| argument == "--abrupt") {
         let abrupt =
             reserve_profile().and_then(|profile| persistence(profile, &server, AfterStop::Abrupt));
         println!("Diagnostic, not asserted: an engine killed before shutdown: {abrupt:?}");
     }
-    combine(combine(combine(idle, orderly), terminated), server.stop())
+    combine(
+        combine(combine(combine(idle, orderly), terminated), session_end),
+        server.stop(),
+    )
 }
 
 /// Starts and stops a host that never created a page, and bounds how long that took.
@@ -165,11 +181,19 @@ fn persistence(profile: PathBuf, server: &Server, after: AfterStop) -> Result<()
         // The killed engine makes the host report failures; only the cookie is in question.
         let stopped = first.stop();
         trace(|| format!("{after:?}: first host stop after the kill: {stopped:?}"));
+    } else if matches!(after, AfterStop::SessionEnd) {
+        let elapsed = stopped_after(visited, first.end_session())?;
+        trace(|| format!("{after:?}: shutdown_within returned in {elapsed:?}"));
+        if elapsed > SESSION_END_EXPECTED {
+            return Err(format!(
+                "A session-end stop took {elapsed:?}, not well inside {SESSION_END_BOUND:?}."
+            ));
+        }
     } else {
         let elapsed = stopped_after(visited, first.stop())?;
         trace(|| format!("{after:?}: first host stopped in {elapsed:?}"));
     }
-    if matches!(after, AfterStop::Terminate) {
+    if matches!(after, AfterStop::Terminate | AfterStop::SessionEnd) {
         // `Stopped` must mean the engine is gone, so nothing is left for Windows to cut short.
         let killed = terminate_engine()?;
         trace(|| format!("{after:?}: killed {killed} engine processes after Stopped"));
@@ -304,6 +328,21 @@ impl Harness {
         let elapsed = started.elapsed();
         observed = combine(observed, host.join().map_err(|error| error.to_string()));
         combine(observed, destroy_parent(self.parent))?;
+        Ok(elapsed)
+    }
+
+    /// Stops the host the way the quit hook does: one blocking call on this thread, no pump.
+    fn end_session(&mut self) -> Result<Duration, String> {
+        let host = self
+            .host
+            .take()
+            .ok_or_else(|| "Synthetic host already stopped.".to_owned())?;
+        let started = Instant::now();
+        let stopped = host
+            .shutdown_within(SESSION_END_BOUND)
+            .map_err(|error| format!("Session-end stop failed: {error}"));
+        let elapsed = started.elapsed();
+        combine(stopped, destroy_parent(self.parent))?;
         Ok(elapsed)
     }
 

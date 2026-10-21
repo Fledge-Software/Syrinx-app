@@ -394,11 +394,16 @@ impl SessionHandle {
             .map_err(|_| SessionError::WorkerPanicked)?
     }
 
+    /// Asks the worker to stop without waiting, so it can finish alongside other shutdown work.
+    pub fn request_shutdown(&self) {
+        // A closed queue means the worker already left its loop; joining reports how.
+        let _already_stopped = self.commands.send(SessionCommand::Shutdown).is_err();
+    }
+
     /// Stops the worker when no event loop will deliver `Stopped`, as when Windows ends the
     /// session (#96). Waits at most `bound`; on a timeout the worker is left to finish alone.
     pub fn shutdown_within(self, bound: Duration) -> Result<(), SessionError> {
-        // A closed queue means the worker already left its loop; joining reports how.
-        let _already_stopped = self.commands.send(SessionCommand::Shutdown).is_err();
+        self.request_shutdown();
         let deadline = Instant::now() + bound;
         while !self.worker.is_finished() {
             if Instant::now() >= deadline {
