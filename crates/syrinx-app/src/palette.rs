@@ -189,6 +189,11 @@ impl PaletteView {
         self.events.is_some()
     }
 
+    /// Whether the popup has been active since the open entry began.
+    pub fn was_active_this_entry(&self) -> bool {
+        self.active_this_entry
+    }
+
     /// Ends the entry as if Esc were pressed; the browser then returns focus to the page.
     /// The popup is hidden even without an entry, so a stray visible popup can always close.
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -447,6 +447,7 @@ impl BrowserView {
                     }
                     this.watch_peek(window, cx);
                     this.focus_page_after_activation(window, cx);
+                    this.reassert_palette_after_activation(cx);
                 }
             }),
             message: "Opening your workspace…".to_owned(),
@@ -676,6 +677,11 @@ impl BrowserView {
                 if let Some((request, target)) = snapshot.popup {
                     self.commit_popup(request, target);
                 }
+                let unattended =
+                    self.smoke || self.suspended_fixture.enabled() || self.acceptance.is_some();
+                if new_home && !self.closing && !unattended {
+                    self.take_keys_for_new_home();
+                }
                 self.sync_pages();
                 // Work that waited for the session to accept commands.
                 self.open_forwarded_links();
@@ -708,8 +714,6 @@ impl BrowserView {
                         address: "about:blank".to_owned(),
                     });
                 }
-                let unattended =
-                    self.smoke || self.suspended_fixture.enabled() || self.acceptance.is_some();
                 if new_home && !self.closing && !unattended {
                     self.open_palette(false, window, cx);
                 }
@@ -1919,6 +1923,7 @@ impl Render for BrowserView {
             .relative()
             .key_context("Syrinx")
             .child(page_card::window_fill_layer(card, window, cx))
+            .child(self.watch_chrome_presses(cx))
             .text_color(theme::text())
             .text_sm()
             .font_family("Segoe UI Variable Text")
