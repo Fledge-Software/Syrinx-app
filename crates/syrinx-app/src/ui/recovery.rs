@@ -12,6 +12,10 @@ use super::*;
 const PRESERVED_FILES: &str = "Changes made since this backup may be lost. \
 Syrinx keeps the damaged database files instead of deleting them.";
 
+/// The progress line shown once the owner has said yes.
+const RESTORING: &str =
+    "Restoring the backup… Closing Syrinx will wait for this operation to finish.";
+
 pub(super) struct RecoveryCard {
     prompt: RecoveryPrompt,
     /// The backup's date line, formatted once when the offer arrives.
@@ -63,19 +67,27 @@ impl BrowserView {
         } else {
             "Opening your workspace…"
         };
-        let mut card = div()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .max_w(px(620.))
-            .child(div().text_size(px(text::TITLE)).child(title));
+        let mut card = div().flex().flex_col().gap_4().max_w(px(620.)).child(
+            div()
+                .id("startup-title")
+                .role(gpui::Role::Heading)
+                .aria_level(1)
+                .aria_label(title)
+                .text_size(px(text::TITLE))
+                .child(title),
+        );
         if let Some(recovery) = &self.recovery {
             card = card
                 .child(recovery.backup_line.clone())
                 .child(PRESERVED_FILES);
             if recovery.confirming && self.failure.is_none() && !self.session_stopped {
+                // A status node, like the footer's; GPUI exposes no live setting to raise.
                 card = card.child(
-                    "Restoring the backup… Closing Syrinx will wait for this operation to finish.",
+                    div()
+                        .id("restore-progress")
+                        .role(gpui::Role::Status)
+                        .aria_label(RESTORING)
+                        .child(RESTORING),
                 );
             } else if !self.closing && self.failure.is_none() {
                 let offer_id = recovery.prompt.offer_id;
@@ -214,11 +226,14 @@ mod tests {
 
     #[test]
     fn a_new_card_reads_the_backup_time_in_local_time() {
-        // 2026-07-15 12:00 UTC: the local line names its year and still carries the UTC time.
+        // The local part is in the owner's calendar, so only the UTC suffix is fixed text.
         let card = RecoveryCard::new(prompt(1, 1_784_116_800));
-        assert!(card.backup_line.contains("2026"), "{}", card.backup_line);
+        let local = card
+            .backup_line
+            .strip_prefix("Verified backup from ")
+            .and_then(|rest| rest.strip_suffix(" (2026-07-15 12:00 UTC)."));
         assert!(
-            card.backup_line.ends_with("(2026-07-15 12:00 UTC)."),
+            local.is_some_and(|local| !local.is_empty()),
             "{}",
             card.backup_line
         );
@@ -252,16 +267,20 @@ mod tests {
     }
 
     #[test]
-    fn a_renewed_offer_replaces_the_card_and_its_date() {
+    fn a_renewed_offer_gets_an_undecided_card_with_its_own_date_and_offer() {
         let mut first = RecoveryCard::dated(prompt(7, 951_825_600), None);
         assert!(first.confirm(7));
         // The chosen backup failed validation; P1-04 renews the offer with another backup.
         let mut renewed = RecoveryCard::dated(prompt(8, 0), None);
+        assert_ne!(renewed.backup_line, first.backup_line);
         assert_eq!(
             renewed.backup_line,
             "Verified backup from 1970-01-01 00:00 UTC."
         );
-        assert!(!renewed.confirming);
+        assert!(
+            !renewed.confirming,
+            "the first card's yes does not carry over"
+        );
         assert!(
             !renewed.confirm(7),
             "the old button cannot confirm the new offer"
