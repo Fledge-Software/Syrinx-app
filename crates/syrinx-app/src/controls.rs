@@ -3,12 +3,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui::{
-    App, BoxShadow, DispatchPhase, Div, InteractiveElement, MouseDownEvent, ParentElement, Role,
-    SharedString, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, canvas,
-    point, px,
+    App, Bounds, BoxShadow, ContentMask, Corners, DispatchPhase, Div, InteractiveElement,
+    IntoElement, MouseDownEvent, ParentElement, Pixels, Role, SharedString, Stateful,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, canvas, point, px, size,
 };
 use syrinx_ui::focus::{Modality, ModalityInput, RING_INNER_WIDTH, RING_WIDTH};
 use syrinx_ui::metrics::{chrome::ICON_BUTTON, radius, text};
+use syrinx_ui::{Band, Color, ShadowRole, bands_outside};
 
 use crate::theme;
 
@@ -160,15 +161,144 @@ pub(crate) fn text_button(element: Stateful<Div>, label: &'static str) -> Statef
 /// shows only after keys (DW-62); Syrinx tracks that itself, because GPUI's own
 /// `focus_visible` never sees the F6 or Tab that leaves a page.
 pub(crate) fn focus_ring(style: StyleRefinement) -> StyleRefinement {
+    focus_ring_over(style, Vec::new())
+}
+
+/// The focus ring drawn over a surface's own shadow, which the ring would otherwise replace.
+fn focus_ring_over(style: StyleRefinement, mut shadows: Vec<BoxShadow>) -> StyleRefinement {
     if !modality().shows_focus_ring() {
         return style;
     }
     let (ring, inner) = theme::focus_ring();
     // Later shadows paint on top: the inner line first, the wider ring band over it.
-    style.shadow(vec![
-        inset_band(inner, RING_WIDTH + RING_INNER_WIDTH),
-        inset_band(ring, RING_WIDTH),
-    ])
+    shadows.push(inset_band(inner, RING_WIDTH + RING_INNER_WIDTH));
+    shadows.push(inset_band(ring, RING_WIDTH));
+    style.shadow(shadows)
+}
+
+/// Lifts a surface with the palette's shadow for `role` (#94), drawn under and inside it. It
+/// replaces the focus style with the ring over that shadow, so use it on plain controls or
+/// elements without focus. For an opaque or near-opaque fill without an outline; a
+/// translucent glass surface uses [`lifted`]. Only for chrome and Syrinx's own pages: a
+/// shadow over the page card hides the page.
+pub(crate) fn raised<E: Styled + InteractiveElement>(element: E, role: ShadowRole) -> E {
+    with_shadows(element, theme::shadow(role))
+}
+
+/// The focus style for an element carrying `role`'s shadow: the ring drawn over it.
+pub(crate) fn focus_ring_keeping(role: ShadowRole) -> impl Fn(StyleRefinement) -> StyleRefinement {
+    let shadows = theme::shadow(role);
+    move |style| focus_ring_over(style, shadows.clone())
+}
+
+/// The outline every lifted surface draws, in pixels.
+const SURFACE_BORDER: f32 = 1.;
+
+/// How far inside a device pixel's edge a shadow band stops, in device pixels.
+const EDGE_SLACK: f32 = 0.01;
+
+/// A fill at least this opaque hides a drop shadow painted under it.
+const NEAR_OPAQUE: u8 = 0xF0;
+
+/// The look of one lifted surface: its fill, outline and corner radius.
+pub(crate) struct Surface {
+    pub(crate) fill: Color,
+    pub(crate) line: Color,
+    pub(crate) corner: f32,
+}
+
+/// Fills, outlines and rounds a surface, then lifts it with `role`'s shadow as the canvas
+/// draws it (#93). GPUI paints a drop shadow under the whole element, which would darken a
+/// translucent glass fill from inside, so such a fill gets its drop only outside its shape.
+pub(crate) fn lifted(element: Stateful<Div>, role: ShadowRole, surface: Surface) -> Stateful<Div> {
+    let Surface { fill, line, corner } = surface;
+    let element = element
+        .rounded(px(corner))
+        .bg(theme::rgba(fill))
+        .border_1()
+        .border_color(theme::rgba(line));
+    let (drop, edge) = theme::shadow_layers(role, SURFACE_BORDER);
+    let Some(drop) = drop else {
+        return with_shadows(element, edge);
+    };
+    if fill.alpha >= NEAR_OPAQUE {
+        return with_shadows(element, std::iter::once(drop).chain(edge).collect());
+    }
+    with_shadows(element, edge)
+        .relative()
+        .child(drop_outside(drop, corner))
+}
+
+/// Applies `shadows` and keeps them under the focus ring; nothing when there are none.
+fn with_shadows<E: Styled + InteractiveElement>(element: E, shadows: Vec<BoxShadow>) -> E {
+    if shadows.is_empty() {
+        return element;
+    }
+    element
+        .shadow(shadows.clone())
+        .focus(move |style| focus_ring_over(style, shadows))
+}
+
+/// Paints `drop` around its parent's outline but never inside it, by clipping the shadow to
+/// bands that tile the outside of the rounded shape (`syrinx_ui::bands_outside`).
+fn drop_outside(drop: BoxShadow, corner: f32) -> impl IntoElement {
+    let reach = f32::from(drop.offset.y).abs()
+        + 3. * f32::from(drop.blur_radius)
+        + f32::from(drop.spread_radius);
+    canvas(
+        |_, _, _| {},
+        move |bounds, (), window, _| {
+            // Bands are cut on whole device pixels: GPUI widens a mask to cover any pixel it
+            // touches, so fractional edges would paint shared rows twice, as dark stripes.
+            let scale = window.scale_factor();
+            let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+            let corner = corner.min(width / 2.).min(height / 2.);
+            let radii = Corners::all(px(corner));
+            // The shape is widened to whole device pixels, so no shadow lands on the outline.
+            let (origin_x, device_width) = device_span(f32::from(bounds.origin.x), width, scale);
+            let (origin_y, device_height) = device_span(f32::from(bounds.origin.y), height, scale);
+            let device = |logical: f32| (logical * scale).round();
+            let device_corner = device(corner).min((device_width.min(device_height) / 2.).floor());
+            let device_bands =
+                bands_outside(device_width, device_height, device_corner, device(reach));
+            for band in device_bands {
+                let mask = device_mask((origin_x, origin_y), band, scale);
+                window.with_content_mask(Some(mask), |window| {
+                    window.paint_drop_shadows(bounds, radii, std::slice::from_ref(&drop));
+                });
+            }
+        },
+    )
+    .absolute()
+    .top(px(-SURFACE_BORDER))
+    .left(px(-SURFACE_BORDER))
+    .right(px(-SURFACE_BORDER))
+    .bottom(px(-SURFACE_BORDER))
+}
+
+/// A logical span as whole device pixels: its first pixel and how many it touches.
+fn device_span(start: f32, length: f32, scale: f32) -> (f32, f32) {
+    let first = (start * scale).floor();
+    let end = ((start + length) * scale).ceil();
+    (first, end - first)
+}
+
+/// A content mask over `band`, given in device pixels from `origin`, stopping a hair inside
+/// each edge so rounding error never reaches the neighbouring pixel.
+fn device_mask(origin: (f32, f32), band: Band, scale: f32) -> ContentMask<Pixels> {
+    let logical = |device: f32| px(device / scale);
+    ContentMask {
+        bounds: Bounds::new(
+            point(
+                logical(origin.0 + band.x + EDGE_SLACK),
+                logical(origin.1 + band.y + EDGE_SLACK),
+            ),
+            size(
+                logical(band.width - 2. * EDGE_SLACK),
+                logical(band.height - 2. * EDGE_SLACK),
+            ),
+        ),
+    }
 }
 
 fn inset_band(color: gpui::Rgba, width: f32) -> BoxShadow {
@@ -178,5 +308,29 @@ fn inset_band(color: gpui::Rgba, width: f32) -> BoxShadow {
         blur_radius: px(0.),
         spread_radius: px(width),
         inset: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syrinx_ui::theme::{Material, ThemeSpec};
+    use syrinx_ui::{Accent, PaletteId, palette};
+
+    #[test]
+    fn every_panel_is_opaque_enough_to_keep_its_drop_under_its_scrolling_clip() {
+        // `lifted` draws a translucent fill's drop as a child, which a scrolling panel clips.
+        let glass_theme = ThemeSpec {
+            material: Material::Acrylic,
+            ..ThemeSpec::new("Glass")
+        };
+        let mut panels: Vec<_> = PaletteId::ALL
+            .into_iter()
+            .map(|id| palette(id, Accent::default()).panel)
+            .collect();
+        panels.push(glass_theme.palette(Accent::default(), false).panel);
+        for panel in panels {
+            assert!(panel.alpha >= NEAR_OPAQUE, "{panel:?}");
+        }
     }
 }

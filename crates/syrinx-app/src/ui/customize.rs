@@ -11,11 +11,11 @@ use syrinx_core::QuickDestinations;
 use syrinx_platform::backdrop::{self, Backdrop};
 use syrinx_ui::metrics::{radius, text};
 use syrinx_ui::theme::Material;
-use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette};
+use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette, ShadowRole};
 
 use super::BrowserView;
 use crate::appearance::{self, Appearance, accent_hex, parse_accent};
-use crate::controls::control;
+use crate::controls::{Surface, control, lifted};
 use crate::session::SessionCommand;
 use crate::text_field;
 use crate::theme::{self, rgba};
@@ -82,7 +82,11 @@ impl BrowserView {
         self.home.appearance = appearance;
         theme::apply(appearance.drawn_palette(&self.home.themes));
         theme::apply_component_theme(cx);
-        show_material(appearance.material(&self.home.themes), window);
+        show_material(
+            appearance.material(&self.home.themes),
+            !theme::is_light(),
+            window,
+        );
         window.refresh();
     }
 
@@ -102,17 +106,19 @@ impl BrowserView {
             .child(self.accent_choices(palette, window, cx))
             .child(self.transparency_switch(palette, cx))
             .child(self.all_settings_entry(palette, cx));
-        let panel = div()
-            .id("customize-panel")
+        // Near-opaque in every theme, so its drop shadow is drawn under it and survives the
+        // panel's own scrolling clip.
+        let surface = Surface {
+            fill: palette.panel,
+            line: palette.panel_line,
+            corner: 16.,
+        };
+        let panel = lifted(div().id("customize-panel"), ShadowRole::Panel, surface)
             .role(Role::Dialog)
             .aria_label("Customize")
             .occlude()
             .max_h_full()
             .overflow_y_scroll()
-            .rounded(px(16.))
-            .bg(rgba(palette.panel))
-            .border_1()
-            .border_color(rgba(palette.panel_line))
             .p(px(16.))
             .text_color(rgba(palette.text))
             .child(contents);
@@ -331,8 +337,9 @@ impl BrowserView {
     }
 }
 
-/// Ask Windows for the theme's material; an opaque theme keeps Mica under its solid fill.
-fn show_material(material: Option<Material>, window: &Window) {
+/// Ask Windows for the theme's material, light or dark as the theme is; an opaque theme keeps
+/// Mica under its solid fill.
+fn show_material(material: Option<Material>, dark: bool, window: &Window) {
     let backdrop = match material {
         Some(Material::MicaAlt) => Backdrop::MicaAlt,
         Some(Material::Acrylic) => Backdrop::Acrylic,
@@ -340,7 +347,7 @@ fn show_material(material: Option<Material>, window: &Window) {
     };
     let applied = super::native_handle(window)
         .map_err(str::to_owned)
-        .and_then(|hwnd| backdrop::apply(hwnd, backdrop).map_err(|error| error.to_string()));
+        .and_then(|hwnd| backdrop::apply(hwnd, backdrop, dark).map_err(|error| error.to_string()));
     if let Err(error) = applied {
         eprintln!("Syrinx could not set the {backdrop:?} backdrop: {error}");
     }
