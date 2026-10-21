@@ -14,6 +14,7 @@ use syrinx_ui::theme::Material;
 use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette};
 
 use super::BrowserView;
+use super::home_palette::HomePaletteIntent;
 use crate::appearance::{self, Appearance, accent_hex, parse_accent};
 use crate::controls::control;
 use crate::session::SessionCommand;
@@ -139,13 +140,13 @@ impl BrowserView {
     /// The sidebar's Appearance (settings) button: the Customize panel lives on Home, so
     /// another page switches to an open Home tab, or opens one, with the panel open.
     pub(super) fn open_appearance(&mut self) {
-        // The gear supersedes a pending Ctrl T, whose late acknowledgement would otherwise
-        // open the palette over the panel; showing or closing it queues no command (#78).
-        self.home_palette.finish_entry();
-        let route = appearance_route(
-            self.home_showing(),
+        let home_showing = self.home_showing();
+        let open_home = self.first_home_tab();
+        let route = appearance_route_ending_entry(
+            &mut self.home_palette,
+            home_showing,
             self.home.customize_open,
-            self.first_home_tab(),
+            open_home,
         );
         match route {
             AppearanceRoute::Close => {
@@ -618,12 +619,79 @@ fn appearance_route(
     }
 }
 
+/// Ends a pending Ctrl T and chooses the gear's route. The gear supersedes the Ctrl T, whose
+/// late acknowledgement would otherwise open the palette over the panel; showing or closing
+/// the panel queues no command that would end it (#78).
+fn appearance_route_ending_entry(
+    intent: &mut HomePaletteIntent,
+    home_showing: bool,
+    customize_open: bool,
+    open_home: Option<TabId>,
+) -> AppearanceRoute {
+    intent.finish_entry();
+    appearance_route(home_showing, customize_open, open_home)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
+    use syrinx_core::{Activation, TabKind, TabMetadata, TabModel, TabModelSnapshot};
+
     use super::*;
 
     fn tab(id: u64) -> TabId {
         TabId::new(id).expect("synthetic tab ID")
+    }
+
+    /// A model whose active tab is a freshly created blank Home.
+    fn new_home_model() -> (TabModelSnapshot, TabId) {
+        let mut model = TabModel::new();
+        let id = model
+            .open(
+                TabKind::Web,
+                TabMetadata {
+                    address: "about:blank".into(),
+                    ..TabMetadata::default()
+                },
+                Activation::Foreground,
+            )
+            .expect("open synthetic Home");
+        (model.snapshot(), id)
+    }
+
+    /// Queues Ctrl T's blank tab and returns the request ID its acknowledgement carries.
+    fn press_ctrl_t(intent: &mut HomePaletteIntent) -> Option<u64> {
+        let (sender, receiver) = mpsc::channel();
+        let command = SessionCommand::NewTab {
+            address: "about:blank".into(),
+        };
+        intent
+            .send(&sender, command)
+            .expect("queue synthetic Ctrl T");
+        match receiver.recv().expect("receive synthetic Ctrl T") {
+            SessionCommand::HomeEntry { request_id, .. } => Some(request_id),
+            _ => panic!("Ctrl T must carry its Home request identity"),
+        }
+    }
+
+    #[test]
+    fn the_gear_on_home_ends_a_pending_ctrl_t_so_no_palette_opens_over_the_panel() {
+        let (home, id) = new_home_model();
+        // Show (panel closed) and Close (panel open) queue no session command (#78).
+        for (customize_open, expected) in [
+            (false, AppearanceRoute::Show),
+            (true, AppearanceRoute::Close),
+        ] {
+            let mut intent = HomePaletteIntent::default();
+            let pending = press_ctrl_t(&mut intent);
+            let route = appearance_route_ending_entry(&mut intent, true, customize_open, Some(id));
+            assert_eq!(route, expected);
+            assert!(!intent.acknowledge(&home, &[id], pending));
+            // A Ctrl T pressed after the gear is an ordinary palette entry again.
+            let fresh = press_ctrl_t(&mut intent);
+            assert!(intent.acknowledge(&home, &[id], fresh));
+        }
     }
 
     #[test]
