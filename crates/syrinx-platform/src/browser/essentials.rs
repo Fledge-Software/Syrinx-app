@@ -3,19 +3,26 @@
 use std::{cell::Cell, rc::Rc};
 
 use webview2_com::{
+    FindActiveMatchIndexChangedEventHandler, FindMatchCountChangedEventHandler,
     FindStartCompletedHandler, IsDefaultDownloadDialogOpenChangedEventHandler,
     Microsoft::Web::WebView2::Win32::*, ZoomFactorChangedEventHandler,
 };
 use windows::{
     Win32::Foundation::E_POINTER,
-    core::{BOOL, HSTRING, Interface},
+    core::{BOOL, HSTRING, IUnknown, Interface},
 };
 use wry::{WebView, WebViewExtWindows};
 
 use super::{BrowserError, BrowserEvent, EventSink};
 
 pub enum PageAction {
-    Find { request: u64, text: String },
+    /// Searches the page for `text`, matching case only when `case_sensitive`; an empty
+    /// `text` stops the search instead.
+    Find {
+        request: u64,
+        text: String,
+        case_sensitive: bool,
+    },
     FindNext,
     FindPrevious,
     StopFind,
@@ -30,7 +37,18 @@ pub enum PageAction {
 pub(super) struct Essentials {
     id: u64,
     events: EventSink,
-    search: Rc<Cell<Option<u64>>>,
+    search: Rc<FindState>,
+}
+
+/// Which find request is current and which has finished starting, so a late result from an
+/// older search is dropped; and whether the match-change events are registered yet.
+#[derive(Default)]
+struct FindState {
+    /// The newest request; `None` once find stops.
+    current: Cell<Option<u64>>,
+    /// The newest request whose `Start` completed.
+    settled: Cell<Option<u64>>,
+    watching: Cell<bool>,
 }
 
 impl Essentials {
@@ -46,7 +64,7 @@ impl Essentials {
         Ok(Self {
             id,
             events,
-            search: Rc::new(Cell::new(None)),
+            search: Rc::default(),
         })
     }
 
@@ -59,11 +77,15 @@ impl Essentials {
         let core = view.webview();
         unsafe {
             match action {
-                PageAction::Find { request, text } => self.find(&core, request, &text),
+                PageAction::Find {
+                    request,
+                    text,
+                    case_sensitive,
+                } => self.find(&core, request, &text, case_sensitive),
                 PageAction::FindNext => core.cast::<ICoreWebView2_28>()?.Find()?.FindNext(),
                 PageAction::FindPrevious => core.cast::<ICoreWebView2_28>()?.Find()?.FindPrevious(),
                 PageAction::StopFind => {
-                    self.search.set(None);
+                    self.search.current.set(None);
                     core.cast::<ICoreWebView2_28>()?.Find()?.Stop()
                 }
                 PageAction::Downloads => {
@@ -87,8 +109,14 @@ impl Essentials {
         }
     }
 
-    fn find(&self, core: &ICoreWebView2, request: u64, text: &str) -> windows::core::Result<()> {
-        self.search.set(Some(request));
+    fn find(
+        &self,
+        core: &ICoreWebView2,
+        request: u64,
+        text: &str,
+        case_sensitive: bool,
+    ) -> windows::core::Result<()> {
+        self.search.current.set(Some(request));
         let find = unsafe { core.cast::<ICoreWebView2_28>()?.Find()? };
         // Empty Start never completes on the tested runtime. Clearing explicitly stops the search.
         if text.is_empty() {
@@ -99,14 +127,17 @@ impl Essentials {
                 id: self.id,
                 request,
                 count: 0,
+                active: -1,
             });
             return Ok(());
         }
+        self.watch_matches(&find)?;
         let environment: ICoreWebView2Environment15 =
             unsafe { core.cast::<ICoreWebView2_2>()?.Environment()? }.cast()?;
         let options = unsafe { environment.CreateFindOptions()? };
         unsafe {
             options.SetFindTerm(&HSTRING::from(text))?;
+            options.SetIsCaseSensitive(case_sensitive)?;
             options.SetSuppressDefaultFindDialog(true)?;
             options.SetShouldHighlightAllMatches(true)?;
         }
@@ -115,27 +146,98 @@ impl Essentials {
         let id = self.id;
         let search = self.search.clone();
         let handler = FindStartCompletedHandler::create(Box::new(move |result| {
-            if search.get() != Some(request) {
+            if search.current.get() != Some(request) {
                 return Ok(());
             }
-            let result = result.and_then(|()| {
-                let mut count = 0;
-                unsafe {
-                    completed_find.MatchCount(&mut count)?;
-                }
-                events.emit(BrowserEvent::FindCompleted { id, request, count });
-                Ok(())
-            });
-            if result.is_err() {
-                events.emit(BrowserEvent::Error {
-                    tab: Some(id),
-                    error: BrowserError::PageControl,
-                });
-            }
-            result
+            search.settled.set(Some(request));
+            report_on_error(
+                result.and_then(|()| emit_matches(&completed_find, id, request, &events)),
+                id,
+                &events,
+            )
         }));
         unsafe { find.Start(&options, &handler) }
     }
+
+    /// Registers the active-match and count change events on the first search rather than at
+    /// page creation, so a runtime without `ICoreWebView2_28` still opens pages.
+    fn watch_matches(&self, find: &ICoreWebView2Find) -> windows::core::Result<()> {
+        if self.search.watching.get() {
+            return Ok(());
+        }
+        let mut token = 0;
+        unsafe {
+            find.add_ActiveMatchIndexChanged(
+                &FindActiveMatchIndexChangedEventHandler::create(self.match_change_handler()),
+                &mut token,
+            )?;
+            find.add_MatchCountChanged(
+                &FindMatchCountChangedEventHandler::create(self.match_change_handler()),
+                &mut token,
+            )?;
+        }
+        self.search.watching.set(true);
+        Ok(())
+    }
+
+    /// Reports the current match position and count, for the settled search only.
+    fn match_change_handler(&self) -> MatchChangeClosure {
+        let events = self.events.clone();
+        let id = self.id;
+        let search = self.search.clone();
+        Box::new(move |find, _| {
+            let Some(request) = settled_request(search.current.get(), search.settled.get()) else {
+                return Ok(());
+            };
+            let find = find.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+            report_on_error(emit_matches(&find, id, request, &events), id, &events)
+        })
+    }
+}
+
+type MatchChangeClosure =
+    Box<dyn FnMut(Option<ICoreWebView2Find>, Option<IUnknown>) -> windows::core::Result<()>>;
+
+/// The request a match change belongs to: the current one, once its `Start` has completed.
+fn settled_request(current: Option<u64>, settled: Option<u64>) -> Option<u64> {
+    current.filter(|request| settled == Some(*request))
+}
+
+/// Sends the search's match count and the 1-based position of the active match.
+fn emit_matches(
+    find: &ICoreWebView2Find,
+    id: u64,
+    request: u64,
+    events: &EventSink,
+) -> windows::core::Result<()> {
+    let mut count = 0;
+    let mut active = -1;
+    unsafe {
+        find.MatchCount(&mut count)?;
+        find.ActiveMatchIndex(&mut active)?;
+    }
+    events.emit(BrowserEvent::FindCompleted {
+        id,
+        request,
+        count,
+        active,
+    });
+    Ok(())
+}
+
+/// Shows a failed find read as a page-control error, and passes the result on.
+fn report_on_error(
+    result: windows::core::Result<()>,
+    id: u64,
+    events: &EventSink,
+) -> windows::core::Result<()> {
+    if result.is_err() {
+        events.emit(BrowserEvent::Error {
+            tab: Some(id),
+            error: BrowserError::PageControl,
+        });
+    }
+    result
 }
 
 fn register_zoom(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
@@ -215,6 +317,17 @@ fn next_zoom(factor: f64, action: &PageAction) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn match_changes_report_only_for_the_current_settled_search() {
+        // Before the current search's Start completes, a change belongs to an older one.
+        assert_eq!(settled_request(Some(4), Some(3)), None);
+        assert_eq!(settled_request(Some(4), None), None);
+        assert_eq!(settled_request(Some(4), Some(4)), Some(4));
+        // A stopped search reports nothing.
+        assert_eq!(settled_request(None, Some(4)), None);
+        assert_eq!(settled_request(None, None), None);
+    }
 
     #[test]
     fn zoom_steps_boundaries_and_reset_are_predictable() {

@@ -3,7 +3,7 @@
 use super::*;
 use syrinx_platform::browser::PageAction;
 
-const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Essentials fixture</title><link rel=icon href=data:,><p>syntheticneedle syntheticneedle</p><input autofocus aria-label='Synthetic input'>";
+const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Essentials fixture</title><link rel=icon href=data:,><p>syntheticneedle syntheticneedle SYNTHETICNEEDLE</p><input autofocus aria-label='Synthetic input'>";
 
 pub(super) fn response(request: &[u8]) -> Option<&'static str> {
     request.starts_with(b"GET /essentials ").then_some(PAGE)
@@ -70,33 +70,29 @@ pub(super) fn exercise(
     }
     find_while_typing_in_chrome(host, events, parent, deadline)?;
     send(host, BrowserCommand::Focus { id: 3000 })?;
-    for (request, text, expected) in [(1, "syntheticneedle", 2), (2, "", 0)] {
+    for (request, text, case_sensitive, expected) in [
+        (1, "syntheticneedle", false, 3),
+        (2, "syntheticneedle", true, 2),
+        (3, "", false, 0),
+    ] {
         action(
             host,
             PageAction::Find {
                 request,
                 text: text.into(),
+                case_sensitive,
             },
         )?;
-        loop {
-            if let BrowserEvent::FindCompleted {
-                id: 3000,
-                request: completed,
-                count,
-            } = checked_event(events, deadline)?
-            {
-                if completed != request {
-                    continue;
-                }
-                if count != expected {
-                    return Err(format!(
-                        "Synthetic find count {count} differs from {expected}."
-                    ));
-                }
-                break;
-            }
+        let (count, active) = find_result(events, request, deadline)?;
+        if count != expected {
+            return Err(format!(
+                "Synthetic find count {count} differs from {expected}."
+            ));
         }
-        println!("Synthetic find completed with {expected} matches.");
+        println!("Synthetic find completed with {expected} matches, active match {active}.");
+        if expected > 1 {
+            step_to_second_match(host, events, request, active, deadline)?;
+        }
         action(host, PageAction::StopFind)?;
     }
     for (command, expected) in [
@@ -152,6 +148,7 @@ fn find_while_typing_in_chrome(
             PageAction::Find {
                 request,
                 text: text.into(),
+                case_sensitive: false,
             },
         )?;
         loop {
@@ -177,6 +174,50 @@ fn find_while_typing_in_chrome(
         "Synthetic find kept focus on the chrome over five queries ({focus_events} page focus events)."
     );
     Ok(())
+}
+
+/// Waits for the named request's result and returns its count and active match.
+fn find_result(
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    request: u64,
+    deadline: Instant,
+) -> Result<(i32, i32), String> {
+    loop {
+        if let BrowserEvent::FindCompleted {
+            id: 3000,
+            request: completed,
+            count,
+            active,
+        } = checked_event(events, deadline)?
+            && completed == request
+        {
+            return Ok((count, active));
+        }
+    }
+}
+
+/// Find next moves the active match one place on, which shows where WebView2 counts from.
+fn step_to_second_match(
+    host: &BrowserHost,
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    request: u64,
+    first: i32,
+    deadline: Instant,
+) -> Result<(), String> {
+    action(host, PageAction::FindNext)?;
+    loop {
+        let (_, active) = find_result(events, request, deadline)?;
+        if active == first {
+            continue;
+        }
+        if active != first + 1 {
+            return Err(format!(
+                "Find next moved the active match from {first} to {active}."
+            ));
+        }
+        println!("Synthetic find next moved the active match from {first} to {active}.");
+        return Ok(());
+    }
 }
 
 /// Fails the suite when Windows keyboard focus is no longer on the chrome window.

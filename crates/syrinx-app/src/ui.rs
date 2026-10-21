@@ -275,7 +275,13 @@ fn command_returns_focus_to_page(action: BrowserAction) -> bool {
 
 /// Whether a shortcut opens something in Syrinx's chrome, which page fullscreen hides.
 fn needs_chrome(shortcut: BrowserShortcut) -> bool {
-    matches!(shortcut, BrowserShortcut::Find | BrowserShortcut::History)
+    matches!(
+        shortcut,
+        BrowserShortcut::Find
+            | BrowserShortcut::FindNext
+            | BrowserShortcut::FindPrevious
+            | BrowserShortcut::History
+    )
 }
 
 /// How this launch runs: normally, or as one of the unattended synthetic checks.
@@ -871,9 +877,12 @@ impl BrowserView {
             BrowserEvent::ZoomChanged { id, factor } => {
                 self.zoom_levels.insert(id, factor);
             }
-            BrowserEvent::FindCompleted { id, request, count } => {
-                self.find_completed(id, request, count)
-            }
+            BrowserEvent::FindCompleted {
+                id,
+                request,
+                count,
+                active,
+            } => self.find_completed(id, request, count, active),
             BrowserEvent::DownloadDialog { .. } => {}
             BrowserEvent::PermissionRequested {
                 id,
@@ -1262,6 +1271,8 @@ impl BrowserView {
             BrowserShortcut::LeavePageBackward => self.leave_page_backward(window, cx),
             BrowserShortcut::Fullscreen => self.fullscreen_shortcut(window),
             BrowserShortcut::Find => self.open_find(window, cx),
+            BrowserShortcut::FindNext => self.find_next_key(false, window, cx),
+            BrowserShortcut::FindPrevious => self.find_next_key(true, window, cx),
             // From a page key, the palette or a menu, the keys were the page's to return.
             BrowserShortcut::History => {
                 self.toggle_history(history_list::ReturnFocus::Page, window, cx);
@@ -2302,6 +2313,8 @@ mod palette_shortcut_tests {
     #[test]
     fn only_find_and_history_leave_page_fullscreen_first() {
         assert!(needs_chrome(BrowserShortcut::Find));
+        assert!(needs_chrome(BrowserShortcut::FindNext));
+        assert!(needs_chrome(BrowserShortcut::FindPrevious));
         assert!(needs_chrome(BrowserShortcut::History));
         for shortcut in [
             BrowserShortcut::ZoomIn,

@@ -66,6 +66,10 @@ pub struct PageBounds {
 pub enum BrowserShortcut {
     Fullscreen,
     Find,
+    /// F3 or Ctrl G: the next match in Syrinx's find bar, opening it if closed (#82).
+    FindNext,
+    /// Shift F3: the previous match in Syrinx's find bar (#82).
+    FindPrevious,
     /// Ctrl H: show or hide Syrinx's history list.
     History,
     Downloads,
@@ -244,10 +248,13 @@ pub enum BrowserEvent {
         id: u64,
         state: ConnectionState,
     },
+    /// A find's latest result: when its search completes, and again whenever the active
+    /// match or the count changes. `active` is WebView2's `ActiveMatchIndex`, -1 for none.
     FindCompleted {
         id: u64,
         request: u64,
         count: i32,
+        active: i32,
     },
     DownloadDialog {
         id: u64,
