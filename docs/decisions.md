@@ -24,7 +24,11 @@ folder names.
 - **The Glass theme must look like the canvas's Glass mockups (#93).** The
   owner wants Glass and its Transparency setting to show real translucency
   and glass edges, as in `design/canvas/project/Main.dc.html`, not the
-  near-opaque fill Syrinx draws today. The canvas is the target.
+  near-opaque fill Syrinx draws today. The canvas is the target. In the
+  owner's words, the Glass look belongs "in that theme selection", so Glass
+  comes back as a preset beside Graphite and Paper. This replaces the
+  2026-10-15 rule that only Graphite and Paper are presets, for Glass only;
+  every other look is still built in the theme editor.
 - **The cookie-flush fix keeps Google signed in (#96).** The owner checked
   that Google stays signed in after closing and reopening Syrinx with #111,
   so #111 closes #96.
