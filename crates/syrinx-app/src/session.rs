@@ -1322,14 +1322,6 @@ fn counted_feature(command: &SessionCommand) -> Counted {
     }
 }
 
-/// Whether tab `id` shows Syrinx's Settings page.
-fn active_is_settings(model: &TabModel, id: TabId) -> bool {
-    model
-        .tabs()
-        .iter()
-        .any(|tab| tab.id() == id && tab.metadata().is_settings())
-}
-
 fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), SessionError> {
     match command {
         SessionCommand::HomeEntry { action, .. } => {
@@ -1409,7 +1401,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         SessionCommand::SaveActive => {
             let id = model.active_id().ok_or(SessionError::NoActiveTab)?;
             // Settings is Syrinx's own page, not a destination, so Ctrl D leaves it unsaved (#91).
-            if active_is_settings(model, id) {
+            if model.snapshot().active_is_settings() {
                 return Ok(());
             }
             model.save_page(id).map_err(SessionError::Model)?;

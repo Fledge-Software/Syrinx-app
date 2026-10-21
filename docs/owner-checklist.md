@@ -91,16 +91,16 @@ With NVDA installed and running, work through the thirteen checks in
   ring back.
 - **Check 13 (DW-61):** Shift Tab back into the sidebar tree, and the peek.
 
-### 5. Window checks of the new Customize sections
+### 5. Window checks of the Settings sections
 
 On a fresh profile (`cargo syrinx --test-data-dir <new folder>`; the alias already ends
 in `--`, so a second `--` reaches Syrinx and the test profile is not used):
 
-- **Site permissions:** remember a choice on a test site, Forget it, and
+- **Settings › Privacy, site permissions:** remember a choice on a test site, Forget it, and
   see the site ask again.
-- **Usage report (AN-01):** the switch is off; switching on shows
+- **Settings › Usage report (AN-01):** the switch is off; switching on shows
   "Counting since …"; switching off asks first and deletes the counts.
-- **Updates:** the host sentence, Check for updates and Install from file…
+- **Settings › Updates:** the host sentence, Check for updates and Install from file…
   appear. Reset update records appears only with a damaged
   `Updates\state` (DW-66).
 

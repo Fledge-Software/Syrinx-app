@@ -2,7 +2,7 @@
 //! Ctrl , (#91). It draws the sections Customize used to hold rather than copies of them.
 
 use gpui::{
-    Context, Div, FontWeight, InteractiveElement, ParentElement, Role, Stateful,
+    App, Context, Div, FocusHandle, FontWeight, InteractiveElement, ParentElement, Role, Stateful,
     StatefulInteractiveElement, Styled, Window, actions, div, px,
 };
 use syrinx_core::usage::Feature;
@@ -64,10 +64,40 @@ impl SettingsSection {
     }
 }
 
-/// Which section the page shows; it outlives the tab, as a browser's settings do.
-#[derive(Default)]
+/// Which section the page shows, which outlives the tab as a browser's settings do, and the
+/// focus of the chosen section's entry in the list.
 pub(super) struct SettingsPage {
     section: SettingsSection,
+    /// Tracked by the chosen section's tab, so it must be a Tab stop itself (traps).
+    section_focus: FocusHandle,
+}
+
+impl SettingsPage {
+    pub(super) fn new(cx: &mut App) -> Self {
+        Self {
+            section: SettingsSection::default(),
+            section_focus: cx.focus_handle().tab_stop(true),
+        }
+    }
+
+    /// Shows `section`; returns whether it changed, which closes the old section's sub-views.
+    fn choose(&mut self, section: SettingsSection) -> bool {
+        let changed = leaves_section(self.section, section);
+        self.section = section;
+        changed
+    }
+}
+
+/// Whether choosing `chosen` leaves `current`, whose sub-views then close.
+fn leaves_section(current: SettingsSection, chosen: SettingsSection) -> bool {
+    current != chosen
+}
+
+/// Whether the last Settings tab closed between two models, ending its sub-views.
+pub(super) fn settings_tab_closed(before: &TabModelSnapshot, after: &TabModelSnapshot) -> bool {
+    let has_settings =
+        |model: &TabModelSnapshot| model.tabs.iter().any(|tab| tab.metadata.is_settings());
+    has_settings(before) && !has_settings(after)
 }
 
 /// What opening Settings does to the tabs.
@@ -84,7 +114,7 @@ enum SettingsRoute {
 /// Chooses how to show Settings, reusing an open Settings tab. One still being opened is not
 /// in the model yet, so two quick presses can still open two, as with Home.
 fn settings_route(model: &TabModelSnapshot) -> SettingsRoute {
-    if active_is_settings(model) {
+    if model.active_is_settings() {
         return SettingsRoute::Stay;
     }
     match model.tabs.iter().find(|tab| tab.metadata.is_settings()) {
@@ -104,19 +134,11 @@ fn settings_route_ending_entry(
     settings_route(model)
 }
 
-/// Whether the model's active tab is a Settings tab.
-fn active_is_settings(model: &TabModelSnapshot) -> bool {
-    model
-        .tabs
-        .iter()
-        .any(|tab| model.active_id == Some(tab.id) && tab.metadata.is_settings())
-}
-
 impl BrowserView {
     /// The gear and Ctrl , keep the section last shown; Customize's "All settings…" names one.
     pub(super) fn open_settings(&mut self, section: Option<SettingsSection>) {
         if let Some(section) = section {
-            self.settings.section = section;
+            self.choose_section(section);
         }
         match settings_route_ending_entry(&mut self.home_palette, &self.model) {
             SettingsRoute::Stay => return,
@@ -134,9 +156,36 @@ impl BrowserView {
         self.count(Feature::SettingsOpened);
     }
 
+    /// Ctrl , from a focused page: Settings hides the page, so its keys move to the chosen
+    /// section's entry, as History does (`open_history`).
+    pub(super) fn open_settings_from_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(None);
+        // Only Syrinx's own window, which already has the foreground, takes the keys.
+        if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
+            self.message = error.to_string();
+            return;
+        }
+        if self.is_main_window(window) {
+            window.focus(&self.settings.section_focus, cx);
+        }
+    }
+
+    /// Shows `section`, closing the sub-views another section left open.
+    fn choose_section(&mut self, section: SettingsSection) {
+        if self.settings.choose(section) {
+            self.close_settings_subviews();
+        }
+    }
+
+    /// Closes the site-permissions list and the usage report, back to their summaries.
+    pub(super) fn close_settings_subviews(&mut self) {
+        self.home.site_permissions.close();
+        self.usage.report.close();
+    }
+
     /// Whether the active tab is the Settings page.
     pub(super) fn settings_showing(&self) -> bool {
-        active_is_settings(&self.model)
+        self.model.active_is_settings()
     }
 
     /// The page card while Settings is the active tab: the sections, then the chosen one.
@@ -225,8 +274,12 @@ impl BrowserView {
         } else {
             (syrinx_ui::Color::rgba(0, 0, 0, 0.), palette.text_secondary)
         };
-        control(div().id(section.element_id()), Role::Tab, section.name())
-            .aria_selected(selected)
+        let mut tab = control(div().id(section.element_id()), Role::Tab, section.name());
+        // One element per frame tracks the handle: the chosen section's entry.
+        if selected {
+            tab = tab.track_focus(&self.settings.section_focus);
+        }
+        tab.aria_selected(selected)
             .h(px(32.))
             .px(px(10.))
             .rounded(px(radius::CONTROL))
@@ -237,7 +290,7 @@ impl BrowserView {
             .cursor_pointer()
             .child(section.name())
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.settings.section = section;
+                this.choose_section(section);
                 cx.notify();
             }))
     }
@@ -486,6 +539,37 @@ mod tests {
         let mut snapshot = snapshot.clone();
         snapshot.active_id = Some(id);
         snapshot
+    }
+
+    #[test]
+    fn choosing_another_section_closes_sub_views_but_choosing_the_same_one_does_not() {
+        for section in SettingsSection::ALL {
+            assert!(!leaves_section(section, section));
+        }
+        assert!(leaves_section(
+            SettingsSection::Privacy,
+            SettingsSection::UsageReport
+        ));
+        assert!(leaves_section(
+            SettingsSection::UsageReport,
+            SettingsSection::Appearance
+        ));
+    }
+
+    #[test]
+    fn closing_the_last_settings_tab_ends_its_sub_views() {
+        let mut model = TabModel::new();
+        open(&mut model, "https://example.test/", Activation::Foreground);
+        let first = open(&mut model, SETTINGS_ADDRESS, Activation::Foreground);
+        let second = open(&mut model, SETTINGS_ADDRESS, Activation::Foreground);
+        let both = model.snapshot();
+        model.close(first).expect("close one Settings tab");
+        let one = model.snapshot();
+        model.close(second).expect("close the other Settings tab");
+        let none = model.snapshot();
+        assert!(!settings_tab_closed(&both, &one));
+        assert!(settings_tab_closed(&one, &none));
+        assert!(!settings_tab_closed(&none, &none));
     }
 
     #[test]

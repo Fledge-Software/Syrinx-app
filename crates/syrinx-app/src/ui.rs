@@ -373,7 +373,7 @@ pub struct BrowserView {
     home_palette: HomePaletteIntent,
     importer: import::BookmarkImporter,
     home: home::HomeState,
-    /// Keeps keyboard focus as Customize's permission list opens, closes and rereads (DW-7).
+    /// Keeps keyboard focus as Settings' permission list opens, closes and rereads (DW-7).
     site_permission_focus: site_permissions::PermissionFocus,
     incoming: incoming_links::IncomingLinks,
     runtime: runtime_notice::RuntimeNotice,
@@ -387,9 +387,9 @@ pub struct BrowserView {
     smoke_waiting: bool,
     /// P1-33's scripted palette acceptance run; `None` in every other launch.
     acceptance: Option<palette_acceptance::Acceptance>,
-    /// Customize's Updates section and the staged update's handover (P1-39b).
+    /// Settings' Updates section and the staged update's handover (P1-39b).
     updates: updates::UpdatePanel,
-    /// Customize's Usage report section and the window's own measurements (AN-01).
+    /// Settings' Usage report section and the window's own measurements (AN-01).
     usage: usage_report::UsageState,
     outcome: Arc<AtomicU8>,
 }
@@ -437,7 +437,7 @@ impl BrowserView {
             navigation_status: NavigationStatus::default(),
             history: history_list::HistoryList::default(),
             clear_data: clear_data::ClearDataDialog::default(),
-            settings: settings_page::SettingsPage::default(),
+            settings: settings_page::SettingsPage::new(cx),
             shown: None,
             bounds: None,
             sidebar_sizing: SidebarSizing::default(),
@@ -651,6 +651,9 @@ impl BrowserView {
                 if snapshot.model.active_id != self.model.active_id {
                     self.history.close();
                     self.clear_data.close();
+                }
+                if settings_page::settings_tab_closed(&self.model, &snapshot.model) {
+                    self.close_settings_subviews();
                 }
                 self.model = snapshot.model;
                 if initial {
@@ -1265,7 +1268,7 @@ impl BrowserView {
                 self.dismiss_peek(generation, window, cx);
             }
             BrowserShortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
-            BrowserShortcut::Settings => self.open_settings(None),
+            BrowserShortcut::Settings => self.open_settings_from_page(window, cx),
             // Only a focused page sends these; GPUI's own F6 binding covers the chrome.
             BrowserShortcut::FocusNextPane => self.cycle_pane(Direction::Forward, true, window, cx),
             BrowserShortcut::FocusPreviousPane => {

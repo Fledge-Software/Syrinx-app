@@ -624,7 +624,8 @@ fn shortcut_for_modifiers(
         (0x52, false) => Some(BrowserShortcut::Reload),
         (0x09, false) => Some(BrowserShortcut::NextTab),
         (0x09, true) => Some(BrowserShortcut::PreviousTab),
-        // VK_OEM_COMMA: Settings, as in Chrome and Edge (owner, 2026-10-21; #91).
+        // VK_OEM_COMMA opens Settings, following Chrome and Edge (#91). The owner decided the
+        // gear; taking Ctrl , from a focused page awaits the owner's confirmation.
         (0xBC, false) => Some(BrowserShortcut::Settings),
         _ => None,
     }

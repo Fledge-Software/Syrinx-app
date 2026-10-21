@@ -161,6 +161,13 @@ impl fmt::Display for SnapshotError {
 impl std::error::Error for SnapshotError {}
 
 impl TabModelSnapshot {
+    /// Whether the active tab shows Syrinx's Settings page (#91).
+    pub fn active_is_settings(&self) -> bool {
+        self.tabs
+            .iter()
+            .any(|tab| self.active_id == Some(tab.id) && tab.metadata.is_settings())
+    }
+
     /// Checks the complete model contract before a store writes or restores these records.
     /// Watermarks cover this snapshot; comparing older writes is the writer's responsibility.
     pub fn validate(&self) -> Result<(), SnapshotError> {
@@ -371,7 +378,33 @@ impl TabModel {
 #[cfg(test)]
 mod tests {
     use super::{SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot};
-    use crate::{Activation, SavedPageId, TabError, TabId, TabKind, TabMetadata, TabModel};
+    use crate::{
+        Activation, SETTINGS_ADDRESS, SavedPageId, TabError, TabId, TabKind, TabMetadata, TabModel,
+    };
+
+    #[test]
+    fn only_an_active_settings_tab_counts_as_settings_showing() {
+        let open = |model: &mut TabModel, address: &str, activation| {
+            model
+                .open(
+                    TabKind::Web,
+                    TabMetadata {
+                        address: address.to_owned(),
+                        ..TabMetadata::default()
+                    },
+                    activation,
+                )
+                .expect("open synthetic tab")
+        };
+        let mut model = TabModel::new();
+        assert!(!model.snapshot().active_is_settings());
+        let settings = open(&mut model, SETTINGS_ADDRESS, Activation::Foreground);
+        assert!(model.snapshot().active_is_settings());
+        open(&mut model, "https://example.test/", Activation::Foreground);
+        assert!(!model.snapshot().active_is_settings());
+        model.select(settings).expect("select Settings");
+        assert!(model.snapshot().active_is_settings());
+    }
 
     fn metadata(number: u64) -> TabMetadata {
         TabMetadata {
