@@ -3,10 +3,9 @@
 use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedReceiver;
-use gpui::{DispatchPhase, MouseDownEvent, Pixels, canvas};
+use gpui::Pixels;
 use syrinx_platform::browser::{
-    BrowserError, OverlayRect, activate_if_foreground, focus_chrome, show_overlay,
-    syrinx_in_foreground,
+    BrowserError, OverlayRect, activate_if_foreground, show_overlay, syrinx_in_foreground,
 };
 
 use super::{
@@ -445,9 +444,7 @@ impl BrowserView {
         if !syrinx_in_foreground() {
             return;
         }
-        if let Err(error) = focus_chrome(self.parent_hwnd) {
-            self.message = error.to_string();
-        }
+        self.move_keys_to_chrome();
     }
 
     /// The main window became active while the palette shows its caret but never had the
@@ -468,30 +465,20 @@ impl BrowserView {
         }
     }
 
-    /// Notes every mouse press in the main window, toolbar included, for the open entry.
-    /// A raw window listener, because the root's own misses presses on occluding children.
-    pub(super) fn watch_chrome_presses(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Notes a mouse press in the main window, toolbar included, for the open entry; called
+    /// from `controls::watch_pointer_and` on the chrome root.
+    pub(super) fn chrome_press_noter(&self, cx: &mut Context<Self>) -> impl Fn(&mut App) + 'static {
         let browser = cx.weak_entity();
-        canvas(
-            |_, _, _| {},
-            move |_, _, window, _| {
-                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
-                    if phase != DispatchPhase::Capture {
-                        return;
-                    }
-                    let noted = browser.update(cx, |browser, _| {
-                        if let Some(palette) = &mut browser.palette {
-                            palette.chrome_pressed = true;
-                        }
-                    });
-                    if noted.is_err() {
-                        eprintln!("A chrome press arrived after its browser was removed.");
-                    }
-                });
-            },
-        )
-        .absolute()
-        .size_0()
+        move |cx| {
+            let noted = browser.update(cx, |browser, _| {
+                if let Some(palette) = &mut browser.palette {
+                    palette.chrome_pressed = true;
+                }
+            });
+            if noted.is_err() {
+                eprintln!("A chrome press arrived after its browser was removed.");
+            }
+        }
     }
 }
 

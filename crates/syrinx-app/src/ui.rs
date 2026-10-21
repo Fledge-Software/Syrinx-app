@@ -1917,12 +1917,11 @@ impl Render for BrowserView {
         let page_drawn = self.browser_ready && !self.closing && self.page_card_shows_web_page();
         let card = page_drawn.then(|| page_card::card_edges(self.card_frame(window)));
         let sidebar = self.sidebar(window, cx);
-        let chrome = crate::controls::watch_pointer(div())
+        let chrome = crate::controls::watch_pointer_and(div(), self.chrome_press_noter(cx))
             .size_full()
             .relative()
             .key_context("Syrinx")
             .child(page_card::window_fill_layer(card, window, cx))
-            .child(self.watch_chrome_presses(cx))
             .text_color(theme::text())
             .text_sm()
             .font_family("Segoe UI Variable Text")
