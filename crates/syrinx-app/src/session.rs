@@ -127,6 +127,11 @@ pub enum SessionCommand {
     },
     /// Inserts or replaces documented settings keys (`https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-28-29-home-settings.md`).
     SaveSettings(Vec<(String, String)>),
+    /// Saves a site's zoom level by host, or forgets it with `None` at 100% (#90).
+    SiteZoom {
+        host: String,
+        factor: Option<f64>,
+    },
     /// Changes one Quick access or Favorites tile list.
     EditDestinations {
         surface: DestinationSurface,
@@ -220,6 +225,8 @@ pub enum SessionEvent {
     Preferences {
         settings: BTreeMap<String, String>,
         destinations: QuickDestinations,
+        /// Each site's remembered zoom level by host (#90); absent hosts are at 100%.
+        site_zooms: BTreeMap<String, f64>,
     },
     /// The tile lists after an accepted edit.
     Destinations(QuickDestinations),
@@ -701,6 +708,8 @@ struct Worker {
     destinations: QuickDestinations,
     /// The settings read at startup, handed to the window once.
     startup_settings: BTreeMap<String, String>,
+    /// The per-site zoom levels read at startup, handed to the window once (#90).
+    startup_site_zooms: BTreeMap<String, f64>,
     /// P1-33's synthetic rows in the catalogue; non-zero only in an acceptance run.
     synthetic_rows: usize,
     /// Set only by `spawn_acceptance`: synthetic rows are accepted and queries are timed.
@@ -714,6 +723,7 @@ impl Worker {
         // Cleared history must be gone before the catalogue or any list can read it.
         deletions::reconcile(store, &mut deletions)?;
         let mut stored_preferences = preferences::restore(store)?;
+        let site_zooms = preferences::restore_site_zooms(store)?;
         // Expired visits go before the catalogue loads; a large backlog continues while idle.
         let mut schedule = retention::Schedule::take_saved(&mut stored_preferences.settings);
         retention::expire_at_startup(
@@ -751,6 +761,7 @@ impl Worker {
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
             startup_settings: stored_preferences.settings,
+            startup_site_zooms: site_zooms,
             synthetic_rows: 0,
             acceptance: false,
             usage: Arc::default(),
@@ -769,6 +780,7 @@ impl Worker {
             SessionEvent::Preferences {
                 settings: std::mem::take(&mut self.startup_settings),
                 destinations: self.destinations.clone(),
+                site_zooms: std::mem::take(&mut self.startup_site_zooms),
             },
         )
         .map_err(stop::during("sending the saved settings"))?;
@@ -1443,6 +1455,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::OpenHistory(_)
         | SessionCommand::ObserveNavigation { .. }
         | SessionCommand::SaveSettings(_)
+        | SessionCommand::SiteZoom { .. }
         | SessionCommand::EditDestinations { .. }
         | SessionCommand::GrowSyntheticCatalogue { .. }
         | SessionCommand::SnapshotBeforeUpdate

@@ -41,8 +41,8 @@ enum MenuItem {
     Find,
     Downloads,
     Print,
-    ZoomIn,
-    ZoomOut,
+    /// One row with the − / percentage / + stepper, which zooms without closing the menu.
+    Zoom,
     ResetZoom,
     SavePage,
     History,
@@ -51,12 +51,11 @@ enum MenuItem {
     EditFavorites,
 }
 
-const PAGE_ITEMS: [MenuItem; 8] = [
+const PAGE_ITEMS: [MenuItem; 7] = [
     MenuItem::Find,
     MenuItem::Downloads,
     MenuItem::Print,
-    MenuItem::ZoomIn,
-    MenuItem::ZoomOut,
+    MenuItem::Zoom,
     MenuItem::ResetZoom,
     MenuItem::SavePage,
     MenuItem::History,
@@ -89,8 +88,7 @@ impl MenuItem {
             MenuItem::Find => "Find in page",
             MenuItem::Downloads => "Downloads",
             MenuItem::Print => "Print",
-            MenuItem::ZoomIn => "Zoom in",
-            MenuItem::ZoomOut => "Zoom out",
+            MenuItem::Zoom => "Zoom",
             MenuItem::ResetZoom => "Reset zoom",
             MenuItem::SavePage => "Save page",
             MenuItem::History => "History",
@@ -100,15 +98,14 @@ impl MenuItem {
         }
     }
 
-    /// The item's shortcut as the command registry spells it; zoom keys are bound in
-    /// `essentials` because the registry cannot spell `+` or `-`.
+    /// The item's shortcut as the command registry spells it. The Zoom row shows its
+    /// stepper instead; its buttons name Ctrl − and Ctrl +, which `essentials` binds.
     fn shortcut(self) -> Option<String> {
         let keys = match self {
             MenuItem::Find => "ctrl-f",
             MenuItem::Downloads => "ctrl-j",
             MenuItem::Print => "ctrl-p",
-            MenuItem::ZoomIn => return Some("Ctrl +".to_owned()),
-            MenuItem::ZoomOut => return Some("Ctrl −".to_owned()),
+            MenuItem::Zoom => return None,
             MenuItem::ResetZoom => "ctrl-0",
             MenuItem::SavePage => "ctrl-d",
             MenuItem::History => "ctrl-h",
@@ -155,6 +152,8 @@ pub(super) struct MenuDismissal {
 #[derive(Clone, Copy, Debug)]
 enum MenuAction {
     Choose(MenuItem),
+    /// A step on the Zoom row's stepper; the menu stays open, as in Chrome and Edge.
+    Zoom(BrowserShortcut),
     /// Escape or the window's close request: the keys go back to the page.
     Dismiss,
     /// The owner clicked elsewhere or switched away; focus stays where that put it.
@@ -166,6 +165,7 @@ struct MenuRequest {
     generation: u64,
     kind: MenuKind,
     rows: Vec<MenuRow>,
+    zoom: f64,
     rect: OverlayRect,
     parent: isize,
 }
@@ -252,6 +252,7 @@ impl BrowserView {
             generation,
             kind,
             rows,
+            zoom: self.shown_zoom(),
             rect,
             parent: self.parent_hwnd,
         };
@@ -260,19 +261,15 @@ impl BrowserView {
         cx.notify();
     }
 
-    /// The rows of `kind` as they read now: the zoom level and favorites editing included.
+    /// The rows of `kind` as they read now, favorites editing included; the Zoom row reads
+    /// its level from the open menu (`menu_zoom_changed`).
     fn menu_rows(&self, kind: MenuKind) -> Vec<MenuRow> {
-        let zoom = self
-            .shown
-            .and_then(|id| self.zoom_levels.get(&id.get()).copied())
-            .unwrap_or(1.);
         let editing = self.home.editing == Some(DestinationSurface::Favorites);
         kind.items()
             .iter()
             .map(|&item| MenuRow {
                 item,
                 label: match item {
-                    MenuItem::ResetZoom => format!("{} · {:.0}%", item.label(), zoom * 100.),
                     MenuItem::EditFavorites if editing => "Done editing favorites".to_owned(),
                     _ => item.label().to_owned(),
                 },
@@ -382,6 +379,20 @@ impl BrowserView {
         }
     }
 
+    /// The page in view reported a new zoom level; an open page menu's Zoom row shows it.
+    pub(super) fn menu_zoom_changed(&self, factor: f64, cx: &mut Context<Self>) {
+        let Some(view) = self.menu.as_ref().and_then(|menu| menu.view.clone()) else {
+            return;
+        };
+        let updated = view.update(cx, |menu, cx| {
+            menu.zoom = factor;
+            cx.notify();
+        });
+        if updated.is_err() {
+            eprintln!("The menu popup closed before its zoom level changed.");
+        }
+    }
+
     fn is_current_menu(&self, generation: u64) -> bool {
         self.menu
             .as_ref()
@@ -418,6 +429,11 @@ impl BrowserView {
         if self.closing || !self.is_current_menu(generation) {
             return;
         }
+        // A zoom step keeps the menu open, so the owner can step again.
+        if let MenuAction::Zoom(shortcut) = action {
+            self.essential_shortcut(shortcut);
+            return;
+        }
         // A queued key or click must not reactivate Syrinx after Alt Tab.
         let in_front = syrinx_in_foreground();
         let kind = self.menu.as_ref().map(|menu| menu.kind);
@@ -431,7 +447,7 @@ impl BrowserView {
             }
             MenuAction::Dismiss if in_front => self.focus_page(window, cx),
             MenuAction::Choose(item) if in_front => self.run_menu_item(item, window, cx),
-            MenuAction::Dismiss | MenuAction::Choose(_) => {}
+            MenuAction::Dismiss | MenuAction::Choose(_) | MenuAction::Zoom(_) => {}
         }
         cx.notify();
     }
@@ -458,8 +474,8 @@ impl BrowserView {
             MenuItem::Find => self.open_find(window, cx),
             MenuItem::Downloads => self.essential_shortcut(BrowserShortcut::Downloads),
             MenuItem::Print => self.essential_shortcut(BrowserShortcut::Print),
-            MenuItem::ZoomIn => self.essential_shortcut(BrowserShortcut::ZoomIn),
-            MenuItem::ZoomOut => self.essential_shortcut(BrowserShortcut::ZoomOut),
+            // The Zoom row acts through its stepper (`MenuAction::Zoom`), never as a choice.
+            MenuItem::Zoom => {}
             MenuItem::ResetZoom => self.essential_shortcut(BrowserShortcut::ZoomReset),
             MenuItem::SavePage => self.command(SessionCommand::SaveActive),
             MenuItem::History => {
@@ -497,6 +513,7 @@ fn open_requested_menu(browser: WeakEntity<BrowserView>, request: MenuRequest, c
         generation,
         kind,
         rows,
+        zoom,
         rect,
         parent,
     } = request;
@@ -532,7 +549,8 @@ fn open_requested_menu(browser: WeakEntity<BrowserView>, request: MenuRequest, c
             });
             queued.is_err() // With no owner entity, nothing else will close this window.
         });
-        let view = cx.new(|cx| MenuView::new(browser, generation, kind, rows, popup, cx));
+        let menu = MenuContent { kind, rows, zoom };
+        let view = cx.new(|cx| MenuView::new(browser, generation, menu, popup, cx));
         *retained.borrow_mut() = Some(view.downgrade());
         view.into()
     });
@@ -560,12 +578,21 @@ fn remove_menu_window(popup: OwnedPopup, owner: isize, cx: &mut App) {
     }
 }
 
+/// What a menu shows when it opens.
+struct MenuContent {
+    kind: MenuKind,
+    rows: Vec<MenuRow>,
+    /// The page's zoom level, which the Zoom row shows and the browser keeps current.
+    zoom: f64,
+}
+
 /// The popup's content: the rows, the keyboard selection, and the keys and clicks on them.
 struct MenuView {
     browser: WeakEntity<BrowserView>,
     generation: u64,
     kind: MenuKind,
     rows: Vec<MenuRow>,
+    zoom: f64,
     /// The row arrows have moved to; none until the owner presses one or hovers a row.
     selected: Option<usize>,
     focus: FocusHandle,
@@ -578,11 +605,11 @@ impl MenuView {
     fn new(
         browser: WeakEntity<BrowserView>,
         generation: u64,
-        kind: MenuKind,
-        rows: Vec<MenuRow>,
+        menu: MenuContent,
         popup: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let MenuContent { kind, rows, zoom } = menu;
         let activation = cx.observe_window_activation(popup, |this: &mut Self, popup, cx| {
             if popup.is_window_active() {
                 this.was_active = true;
@@ -596,6 +623,7 @@ impl MenuView {
             generation,
             kind,
             rows,
+            zoom,
             selected: None,
             focus: cx.focus_handle(),
             was_active: false,
@@ -621,16 +649,35 @@ impl MenuView {
             cx.notify();
             return;
         }
-        let action = match key {
-            "escape" => MenuAction::Dismiss,
-            "enter" | "space" => match self.selected.and_then(|row| self.rows.get(row)) {
-                Some(row) => MenuAction::Choose(row.item),
-                None => return,
-            },
+        let selected = self
+            .selected
+            .and_then(|row| self.rows.get(row))
+            .map(|row| row.item);
+        let action = match (key, selected) {
+            ("escape", _) => MenuAction::Dismiss,
+            // On the Zoom row, Left and Right step like its − and + buttons.
+            ("left", Some(MenuItem::Zoom)) => MenuAction::Zoom(BrowserShortcut::ZoomOut),
+            ("right", Some(MenuItem::Zoom)) => MenuAction::Zoom(BrowserShortcut::ZoomIn),
+            ("enter" | "space", Some(MenuItem::Zoom) | None) => return,
+            ("enter" | "space", Some(item)) => MenuAction::Choose(item),
             _ => return,
         };
         cx.stop_propagation();
         self.send(action, cx);
+    }
+}
+
+impl MenuView {
+    /// The Zoom row's − / percentage / + stepper; each press zooms the page in view.
+    fn zoom_stepper(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let menu = cx.weak_entity();
+        let label = super::essentials::zoom_percent(self.zoom);
+        super::essentials::zoom_stepper("menu-zoom", label, move |shortcut, _, cx| {
+            let sent = menu.update(cx, |menu, cx| menu.send(MenuAction::Zoom(shortcut), cx));
+            if sent.is_err() {
+                eprintln!("A zoom click arrived after its menu was removed.");
+            }
+        })
     }
 }
 
@@ -658,18 +705,21 @@ impl Render for MenuView {
         for (index, row) in self.rows.iter().enumerate() {
             let item = row.item;
             let selected = self.selected == Some(index);
-            card = card.child(
-                menu_row(index, row, selected, &palette)
-                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        if *hovered && this.selected != Some(index) {
-                            this.selected = Some(index);
-                            cx.notify();
-                        }
-                    }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.send(MenuAction::Choose(item), cx);
-                    })),
-            );
+            let drawn = menu_row(index, row, selected, &palette).on_hover(cx.listener(
+                move |this, hovered: &bool, _, cx| {
+                    if *hovered && this.selected != Some(index) {
+                        this.selected = Some(index);
+                        cx.notify();
+                    }
+                },
+            ));
+            card = card.child(if item == MenuItem::Zoom {
+                drawn.child(self.zoom_stepper(cx))
+            } else {
+                drawn.on_click(cx.listener(move |this, _, _, cx| {
+                    this.send(MenuAction::Choose(item), cx);
+                }))
+            });
         }
         crate::controls::watch_pointer(card)
     }
@@ -826,10 +876,12 @@ mod tests {
     }
 
     #[test]
-    fn every_page_item_shows_its_shortcut() {
+    fn every_page_item_shows_its_shortcut_except_the_zoom_steppers_row() {
         for item in PAGE_ITEMS {
-            assert!(item.shortcut().is_some(), "{item:?}");
+            let expected = item != MenuItem::Zoom;
+            assert_eq!(item.shortcut().is_some(), expected, "{item:?}");
         }
+        assert_eq!(MenuItem::ResetZoom.shortcut().as_deref(), Some("Ctrl 0"));
         assert_eq!(MenuItem::Find.shortcut().as_deref(), Some("Ctrl F"));
     }
 
@@ -855,6 +907,7 @@ mod tests {
 
     #[test]
     fn the_popup_fits_its_rows_exactly() {
+        assert_eq!(menu_size(PAGE_ITEMS.len()), size(px(220.), px(220.)));
         assert_eq!(menu_size(8), size(px(220.), px(250.)));
         assert_eq!(menu_size(3), size(px(220.), px(100.)));
     }

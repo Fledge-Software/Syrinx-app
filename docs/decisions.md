@@ -10,6 +10,19 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+## 2026-10-21
+
+- **Syrinx remembers each site's zoom level.** The owner decided on #90 that
+  Syrinx may store a zoom level per site, as Chrome, Edge and Firefox do, so
+  a site zoomed once opens at that level in every tab and after a restart.
+  The level is keyed by the site's host (`docs.example.test`, without scheme,
+  port or path), kept only in the local database's `site_zoom` table (schema
+  version 7), and only while it is not 100%; Ctrl 0 removes it. The host
+  names are browsing data stored in a new way, so they are never exported,
+  logged, counted (D39) or sent anywhere. Before this, zoom belonged to a tab
+  and was lost when the tab closed or Syrinx exited. Whether Clear browsing
+  data should also remove the levels is still open on #90.
+
 ## 2026-10-18
 
 - **Syrinx takes find, history and zoom keys even over a focused page.**

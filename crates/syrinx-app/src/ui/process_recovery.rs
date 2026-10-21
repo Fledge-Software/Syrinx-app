@@ -90,7 +90,7 @@ impl BrowserView {
         self.forget_find(id, false);
         self.forget_permissions(id);
         self.connections.remove(&id);
-        self.zoom_levels.remove(&id);
+        self.site_zoom.forget_page(id);
         if let Ok(id) = TabId::new(id) {
             self.navigation_status.forget(id);
         }

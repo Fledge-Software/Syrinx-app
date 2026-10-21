@@ -49,6 +49,7 @@ impl SessionCommand {
             Self::ReopenClosed => "reopening a closed tab",
             Self::ImportBookmarks { .. } => "importing bookmarks",
             Self::SaveSettings(_) => "saving settings",
+            Self::SiteZoom { .. } => "saving a site zoom level",
             Self::EditDestinations { .. } => "editing tiles",
             Self::Query { .. } => "searching",
             Self::ObserveNavigation { .. } => "recording a finished navigation",
