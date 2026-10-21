@@ -254,10 +254,10 @@ fn drop_outside(drop: BoxShadow, corner: f32) -> impl IntoElement {
             let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
             let corner = corner.min(width / 2.).min(height / 2.);
             let radii = Corners::all(px(corner));
-            let origin_x = (f32::from(bounds.origin.x) * scale).round();
-            let origin_y = (f32::from(bounds.origin.y) * scale).round();
+            // The shape is widened to whole device pixels, so no shadow lands on the outline.
+            let (origin_x, device_width) = device_span(f32::from(bounds.origin.x), width, scale);
+            let (origin_y, device_height) = device_span(f32::from(bounds.origin.y), height, scale);
             let device = |logical: f32| (logical * scale).round();
-            let (device_width, device_height) = (device(width), device(height));
             let device_corner = device(corner).min((device_width.min(device_height) / 2.).floor());
             let device_bands =
                 bands_outside(device_width, device_height, device_corner, device(reach));
@@ -274,6 +274,13 @@ fn drop_outside(drop: BoxShadow, corner: f32) -> impl IntoElement {
     .left(px(-SURFACE_BORDER))
     .right(px(-SURFACE_BORDER))
     .bottom(px(-SURFACE_BORDER))
+}
+
+/// A logical span as whole device pixels: its first pixel and how many it touches.
+fn device_span(start: f32, length: f32, scale: f32) -> (f32, f32) {
+    let first = (start * scale).floor();
+    let end = ((start + length) * scale).ceil();
+    (first, end - first)
 }
 
 /// A content mask over `band`, given in device pixels from `origin`, stopping a hair inside

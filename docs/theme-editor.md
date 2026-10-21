@@ -19,7 +19,8 @@ editor:
   selection (#93): the canvas's Glass under Acrylic, with Transparency
   55 % (the canvas's `rgba(16,17,24,0.46)` tint, to the nearest step) and
   Glass edges 24 % (the canvas's edge). Choosing it draws the canvas look
-  with nothing to edit; Reduce transparency turns it into Graphite.
+  with nothing to edit; Reduce transparency turns it into Graphite with its
+  edges.
 - **Custom themes.** Everything else is a theme the owner builds and saves
   by name. Several can be saved.
 
@@ -68,6 +69,16 @@ How the choices combine:
   lightness. A theme with Graphite's background and no material draws
   exactly Graphite.
 
+Contrast exceptions: the canvas's Glass fails nine recorded contrast
+pairs, among them muted text on the search pill and on the selected row
+(about 3.2:1). Only the Glass preset keeps them, because it draws the
+canvas exactly. A saved theme that starts from Glass (a dark theme under
+Acrylic, including a saved "Glass") keeps none of them, so all its text
+is lifted to 4.5:1 (#93 review). It does not take Haze's two either,
+because one of those excuses muted text on the selected row. Where even
+white cannot reach 4.5:1, as at 70 % Transparency over a bright wallpaper,
+the editor reports it.
+
 Rules that every theme keeps:
 
 - **Readable text.** Every theme is checked against the 4.5:1 contrast
@@ -104,8 +115,10 @@ saved custom theme with the same name, so a chosen look is not lost.
 A theme named "Glass" that the earlier migration already saved is left
 exactly as it is, and stays chosen if it was: the owner may have edited
 it, so Syrinx never replaces or deletes it. It is listed under the saved
-themes, beside the preset, and the owner can delete it if it is no
-longer wanted.
+themes, beside the preset, as "Glass (saved)" (label and accessible name
+only; the stored name is unchanged), and the owner can delete it if it is
+no longer wanted. Any saved theme whose name matches a preset is shown
+the same way.
 
 ## Customize
 

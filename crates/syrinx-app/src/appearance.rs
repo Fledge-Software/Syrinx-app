@@ -66,6 +66,15 @@ pub const PRESETS: [(ThemeChoice, &str, &str); 3] = [
     ),
 ];
 
+/// The name Customize shows for a saved theme: a name a preset also uses gets " (saved)",
+/// so the two rows can be told apart. Only the label changes; the stored name stays.
+pub fn shown_name(theme: &ThemeSpec) -> String {
+    if PRESETS.iter().any(|(_, name, _)| *name == theme.name) {
+        return format!("{} (saved)", theme.name);
+    }
+    theme.name.clone()
+}
+
 /// The owner's saved themes, by slot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SavedThemes(Vec<Option<ThemeSpec>>);
@@ -257,12 +266,14 @@ impl Appearance {
 
     /// Every colour the window draws with.
     pub fn drawn_palette(self, themes: &SavedThemes) -> Palette {
-        if let Some(theme) = self.spec(themes) {
-            return theme.palette(self.accent, self.reduce_transparency);
-        }
-        match self.theme {
-            ThemeChoice::Paper => palette(PaletteId::Paper, self.accent),
-            _ => palette(PaletteId::Graphite, self.accent),
+        let (accent, reduce) = (self.accent, self.reduce_transparency);
+        match (self.theme, self.custom(themes)) {
+            (ThemeChoice::Glass, _) => ThemeSpec::glass().preset_palette(accent, reduce),
+            (ThemeChoice::Custom(_), Some(theme)) => theme.palette(accent, reduce),
+            (ThemeChoice::Paper, _) => palette(PaletteId::Paper, accent),
+            (ThemeChoice::Graphite | ThemeChoice::Custom(_), _) => {
+                palette(PaletteId::Graphite, accent)
+            }
         }
     }
 
@@ -456,6 +467,15 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_theme_sharing_a_presets_name_is_shown_as_saved() {
+        let saved_glass = ThemeSpec::glass();
+        assert_eq!(shown_name(&saved_glass), "Glass (saved)");
+        assert_eq!(saved_glass.name, "Glass");
+        assert_eq!(shown_name(&ThemeSpec::new("Paper")), "Paper (saved)");
+        assert_eq!(shown_name(&ThemeSpec::new("Glassy")), "Glassy");
+    }
+
+    #[test]
     fn the_picker_lists_graphite_paper_and_glass() {
         let names: Vec<_> = PRESETS.iter().map(|(_, name, _)| *name).collect();
         assert_eq!(names, ["Graphite", "Paper", "Glass"]);
@@ -479,7 +499,14 @@ mod tests {
         };
         let drawn = glass.drawn_palette(&themes);
         assert_eq!(drawn.id, PaletteId::Glass);
-        assert_eq!(drawn, ThemeSpec::glass().palette(Accent::default(), false));
+        assert_eq!(
+            drawn,
+            ThemeSpec::glass().preset_palette(Accent::default(), false)
+        );
+        assert_eq!(
+            drawn.text_muted,
+            palette(PaletteId::Glass, Accent::default()).text_muted
+        );
         let canvas = palette(PaletteId::Glass, Accent::default());
         assert_eq!(drawn.shadows, canvas.shadows);
         assert_eq!(drawn.card, canvas.card);

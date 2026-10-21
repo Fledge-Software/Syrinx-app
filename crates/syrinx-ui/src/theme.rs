@@ -206,19 +206,31 @@ impl ThemeSpec {
         }
     }
 
-    /// Every colour role for this theme with `accent` applied.
+    /// Every colour role for this saved theme with `accent` applied.
     pub fn palette(&self, accent: Accent, reduce_transparency: bool) -> Palette {
+        self.drawn(accent, reduce_transparency, Origin::Saved)
+    }
+
+    /// Every colour role for this theme drawn as a preset: the canvas's own colours, keeping
+    /// the canvas's recorded contrast exceptions. Only the Glass preset is drawn this way.
+    pub fn preset_palette(&self, accent: Accent, reduce_transparency: bool) -> Palette {
+        self.drawn(accent, reduce_transparency, Origin::Preset)
+    }
+
+    fn drawn(&self, accent: Accent, reduce_transparency: bool, origin: Origin) -> Palette {
         let see_through = self.shows_material(reduce_transparency);
         let template = self.template(reduce_transparency);
+        let exempt = exceptions_from(template, origin);
         let mut drawn = palette(template, accent);
-        if Some(self.background) != solid_colour(&drawn.ground) {
+        let canvas_colours = origin == Origin::Preset && template == PaletteId::Glass;
+        if !canvas_colours && Some(self.background) != solid_colour(&drawn.ground) {
             recolour(&mut drawn, self.background, self.mode);
         }
         let template_ground = drawn.ground;
         drawn.ground = self.ground(see_through);
         thin_the_card(&mut drawn, &template_ground);
         drawn.badge_ring = self.background;
-        keep_text_readable(&mut drawn, accent, self.mode);
+        keep_text_readable(&mut drawn, accent, self.mode, exempt);
         drawn.grain = f32::from(self.grain) / 100.;
         drawn.edges = f32::from(self.edges) / 100.;
         drawn.shadows =
@@ -229,7 +241,11 @@ impl ThemeSpec {
     /// The pairs this theme still fails after text was made readable, so the editor can say
     /// which: accent marks and tiles, or text that cannot reach the minimum at all.
     pub fn contrast_problems(&self, accent: Accent) -> Vec<ContrastCheck> {
-        new_failures(&self.palette(accent, false), accent)
+        let exempt = exceptions_from(self.template(false), Origin::Saved);
+        failures_beyond(
+            &self.palette(accent, false),
+            &inherited_failures(exempt, accent),
+        )
     }
 
     fn ground(&self, see_through: bool) -> Ground {
@@ -457,14 +473,33 @@ const READABLE_ROLES: [&str; 7] = [
     "icon_dim",
 ];
 
+/// Whether a theme is drawn as a preset or as one the owner saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Origin {
+    Preset,
+    Saved,
+}
+
+/// The preset whose failing contrast pairs a theme may keep, if any. The canvas's Glass has
+/// nine recorded text exceptions (muted text at about 3:1 on the pill and selected row among
+/// them); only the Glass preset keeps them. A saved theme built on Glass keeps none, so all
+/// its text is lifted to 4.5:1 (#93 review). Haze's two would still excuse muted text on the
+/// selected row (3.97:1), which the review asked to lift too.
+fn exceptions_from(template: PaletteId, origin: Origin) -> Option<PaletteId> {
+    match (template, origin) {
+        (PaletteId::Glass, Origin::Saved) => None,
+        (template, _) => Some(template),
+    }
+}
+
 /// Lighten text on a dark theme, or darken it on a light one, two points of lightness at a
-/// time, until no role fails where its starting preset passes.
-fn keep_text_readable(drawn: &mut Palette, accent: Accent, mode: Mode) {
+/// time, until no role fails beyond the pairs `exempt` already fails.
+fn keep_text_readable(drawn: &mut Palette, accent: Accent, mode: Mode, exempt: Option<PaletteId>) {
     let step = match mode {
         Mode::Dark => 2.,
         Mode::Light => -2.,
     };
-    let inherited = inherited_failures(drawn.id, accent);
+    let inherited = inherited_failures(exempt, accent);
     for _ in 0..50 {
         let mut failing: Vec<&str> = failures_beyond(drawn, &inherited)
             .iter()
@@ -500,14 +535,13 @@ fn text_role<'a>(drawn: &'a mut Palette, role: &str) -> Option<&'a mut Color> {
     }
 }
 
-/// Pairs `drawn` fails that its starting preset passes. Pairs the preset already fails are
-/// recorded design exceptions (`https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-07-design-tokens.md`).
-fn new_failures(drawn: &Palette, accent: Accent) -> Vec<ContrastCheck> {
-    failures_beyond(drawn, &inherited_failures(drawn.id, accent))
-}
-
-/// The (foreground, background) pairs a preset already fails with `accent`.
-fn inherited_failures(id: PaletteId, accent: Accent) -> Vec<(&'static str, &'static str)> {
+/// The (foreground, background) pairs a preset already fails with `accent`: recorded design
+/// exceptions (`https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-07-design-tokens.md`).
+/// No preset means no exceptions.
+fn inherited_failures(id: Option<PaletteId>, accent: Accent) -> Vec<(&'static str, &'static str)> {
+    let Some(id) = id else {
+        return Vec::new();
+    };
     contrast::audit(&palette(id, accent))
         .into_iter()
         .filter(|check| !check.passes())
@@ -601,6 +635,53 @@ mod tests {
                 theme.name
             );
         }
+    }
+
+    /// The lowest ratio `role` reaches on `surface` in `drawn`.
+    fn worst_ratio(drawn: &Palette, role: &str, surface: &str) -> f64 {
+        contrast::audit(drawn)
+            .into_iter()
+            .filter(|check| check.foreground == role && check.background == surface)
+            .map(|check| check.ratio)
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    #[test]
+    fn a_saved_glass_theme_lifts_muted_text_but_the_preset_keeps_the_canvas() {
+        let accent = Accent::default();
+        // Saved themes under Acrylic: the old carried-over Glass and a less clear one.
+        for transparency in [40, 55] {
+            let theme = ThemeSpec {
+                transparency,
+                ..ThemeSpec::glass()
+            };
+            let drawn = theme.palette(accent, false);
+            for surface in ["pill", "row_selected"] {
+                let ratio = worst_ratio(&drawn, "text_muted", surface);
+                assert!(
+                    ratio >= contrast::TEXT_MINIMUM,
+                    "{transparency} {surface}: {ratio}"
+                );
+            }
+        }
+        // Clearer still, even white cannot reach 4.5:1 over the bright stand-in wallpaper,
+        // so the editor reports it instead of hiding it behind the preset's exceptions.
+        let clear = ThemeSpec {
+            transparency: 70,
+            ..ThemeSpec::glass()
+        };
+        assert!(
+            clear
+                .contrast_problems(accent)
+                .iter()
+                .any(|check| check.foreground == "text_muted" && check.background == "pill")
+        );
+        // The preset draws the canvas's own inks, exceptions included.
+        let preset = ThemeSpec::glass().preset_palette(accent, false);
+        let canvas = palette(PaletteId::Glass, accent);
+        assert_eq!(preset.text_muted, canvas.text_muted);
+        assert_eq!(preset.text, canvas.text);
+        assert!(worst_ratio(&preset, "text_muted", "pill") < contrast::TEXT_MINIMUM);
     }
 
     #[test]

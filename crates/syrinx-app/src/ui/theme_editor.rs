@@ -14,7 +14,7 @@ use syrinx_ui::{Color, Palette};
 
 use super::BrowserView;
 use super::customize::{ThemeRow, group_heading, theme_row, toggled};
-use crate::appearance::{Appearance, MAX_THEMES, PRESETS, ThemeChoice};
+use crate::appearance::{Appearance, MAX_THEMES, PRESETS, ThemeChoice, shown_name};
 use crate::controls::control;
 use crate::session::SessionCommand;
 use crate::text_field;
@@ -137,9 +137,11 @@ impl BrowserView {
         let appearance = self.home.appearance;
         let sample = theme.palette(appearance.accent, appearance.reduce_transparency);
         let description = describe(theme);
+        // Shown, never stored: a saved "Glass" reads "Glass (saved)" beside the preset.
+        let name = shown_name(theme);
         let row = ThemeRow {
             id: ("theme-row", slot).into(),
-            name: &theme.name,
+            name: &name,
             description: &description,
             sample: &sample,
         };
@@ -172,7 +174,7 @@ impl BrowserView {
                 .aria_label(format!(
                     "{} {}",
                     if editing { "Done editing" } else { "Edit" },
-                    theme.name
+                    name
                 ))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if editing {
