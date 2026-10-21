@@ -160,8 +160,7 @@ fn exercise_mute(
             suspended: true
         }
     ) {}
-    // A frozen page raises no IsMutedChanged, so only the call is checked while suspended;
-    // its read-back arrives once the page is shown and resumed.
+    // Muting must not wake the page; WebView2 may defer the read-back until it resumes.
     send(
         host,
         BrowserCommand::SetMuted {
@@ -169,12 +168,57 @@ fn exercise_mute(
             muted: true,
         },
     )?;
-    lifecycle::barrier(host, events, deadline)?;
+    let while_suspended = wait_muted_while_suspended(events, deadline)?;
     send(host, BrowserCommand::ShowActive(Some(3001)))?;
-    wait_muted(events, 3001, true, deadline)?;
-    println!("Synthetic mute of a suspended hidden page read back after it resumed.");
+    if !while_suspended {
+        wait_muted(events, 3001, true, deadline)?;
+    }
+    println!(
+        "Synthetic mute of a suspended page read back {}.",
+        if while_suspended {
+            "while it stayed suspended"
+        } else {
+            "only after it was shown"
+        }
+    );
+    for muted in [false, true] {
+        send(host, BrowserCommand::SetMuted { id: 3001, muted })?;
+        wait_muted(events, 3001, muted, deadline)?;
+    }
+    println!("Synthetic unmute and mute read back on the resumed page.");
     send(host, BrowserCommand::Close { id: 3001 })?;
+    // Print, next, needs the essentials page shown and focused again.
+    send(host, BrowserCommand::ShowActive(Some(3000)))?;
+    send(host, BrowserCommand::Focus { id: 3000 })?;
     lifecycle::barrier(host, events, deadline)
+}
+
+/// Waits up to three seconds for the suspended page's mute read-back; `false` when none
+/// came, meaning WebView2 deferred it. Fails if muting resumed the page.
+fn wait_muted_while_suspended(
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    deadline: Instant,
+) -> Result<bool, String> {
+    let window = (Instant::now() + Duration::from_secs(3)).min(deadline);
+    loop {
+        let event = match checked_event(events, window) {
+            Ok(event) => event,
+            Err(_) if Instant::now() >= window && window < deadline => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        match event {
+            BrowserEvent::Suspended {
+                id: 3001,
+                suspended: false,
+            } => return Err("Muting a suspended synthetic page resumed it.".into()),
+            BrowserEvent::AudioChanged {
+                id: 3001,
+                muted: true,
+                ..
+            } => return Ok(true),
+            _ => {}
+        }
+    }
 }
 
 /// Waits for the page's own `IsMuted` to report the requested state.

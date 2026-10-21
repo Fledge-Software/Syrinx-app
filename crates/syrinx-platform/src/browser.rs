@@ -558,6 +558,7 @@ impl EventSink {
                     | BrowserEvent::NavigationCompleted { .. }
                     | BrowserEvent::Fullscreen { .. }
                     | BrowserEvent::Suspended { .. }
+                    | BrowserEvent::AudioChanged { .. }
                     | BrowserEvent::PermissionFinished { .. }
                     | BrowserEvent::PageText { .. }
                     | BrowserEvent::Error { .. }

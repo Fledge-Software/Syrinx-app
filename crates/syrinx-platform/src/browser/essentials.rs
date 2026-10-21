@@ -192,16 +192,34 @@ fn register_audio(view: &WebView, id: u64, events: EventSink) -> windows::core::
     let core: ICoreWebView2_8 = view.webview().cast()?;
     let muted_events = events.clone();
     let muted = IsMutedChangedEventHandler::create(Box::new(move |core, _| {
-        emit_audio(core, id, &muted_events)
+        report_audio(core, id, &muted_events)
     }));
     let playing = IsDocumentPlayingAudioChangedEventHandler::create(Box::new(move |core, _| {
-        emit_audio(core, id, &events)
+        report_audio(core, id, &events)
     }));
-    let mut token = 0;
+    // The handlers live as long as the controller, so their tokens are never removed.
+    let mut muted_token = 0;
+    let mut playing_token = 0;
     unsafe {
-        core.add_IsMutedChanged(&muted, &mut token)?;
-        core.add_IsDocumentPlayingAudioChanged(&playing, &mut token)
+        core.add_IsMutedChanged(&muted, &mut muted_token)?;
+        core.add_IsDocumentPlayingAudioChanged(&playing, &mut playing_token)
     }
+}
+
+/// Emits the page's audio state, or a tab error when it cannot be read.
+fn report_audio(
+    core: Option<ICoreWebView2>,
+    id: u64,
+    events: &EventSink,
+) -> windows::core::Result<()> {
+    let result = emit_audio(core, id, events);
+    if result.is_err() {
+        events.emit(BrowserEvent::Error {
+            tab: Some(id),
+            error: BrowserError::PageControl,
+        });
+    }
+    result
 }
 
 fn emit_audio(

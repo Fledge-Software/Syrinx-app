@@ -301,7 +301,7 @@ impl Page {
             } => self.permissions.resolve(request, allowed),
             BrowserCommand::Navigate { url, .. } => self.navigate(&url),
             BrowserCommand::Focus { .. } => self.view.focus().map_err(|_| BrowserError::Focus),
-            // Not resumed first: muting a suspended page must not wake it.
+            // Not resumed first: muting a suspended page works and leaves it frozen (essentials fixture).
             BrowserCommand::SetMuted { muted, .. } => self.essentials.set_muted(&self.view, muted),
             BrowserCommand::Back { .. } => self.history(true),
             BrowserCommand::Forward { .. } => self.history(false),
