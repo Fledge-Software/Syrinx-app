@@ -610,7 +610,7 @@ impl BrowserView {
                 destinations,
                 site_zooms,
             } => {
-                self.site_zoom.restore(site_zooms);
+                self.site_zoom.restore(site_zooms.0);
                 self.runtime_settings_loaded(&settings);
                 self.restore_folder_expansion(&settings);
                 self.restore_preferences(&settings, destinations, window, cx);
@@ -758,6 +758,9 @@ impl BrowserView {
             }
             SessionEvent::HistoryCleared { request_id, result } => {
                 self.history_cleared(request_id, result);
+            }
+            SessionEvent::SiteZoomsCleared { request_id, result } => {
+                self.site_zooms_cleared(request_id, result);
             }
             SessionEvent::RememberedPermissions { request_id, result } => {
                 self.site_permissions_listed(request_id, result, window, cx);
@@ -999,6 +1002,12 @@ impl BrowserView {
                 }
             }
             BrowserEvent::Error { tab, error } => {
+                // A failed page control may be a zoom Syrinx asked for; stop waiting for it.
+                if let (Some(id), syrinx_platform::browser::BrowserError::PageControl) =
+                    (tab, &error)
+                {
+                    self.site_zoom.abandon_apply(id);
+                }
                 if tab.is_none() {
                     self.fail(error.to_string());
                 } else if tab.is_some_and(|id| self.active_page_feedback(id)) {

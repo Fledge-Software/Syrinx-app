@@ -1,12 +1,12 @@
 //! Persists appearance settings, tile edits and site zoom levels on the session worker.
 
-use std::collections::BTreeMap;
-
 use futures::channel::mpsc::UnboundedSender;
 use syrinx_core::QuickDestinations;
 use syrinx_store::{Store, StoredPreferences};
 
-use super::{SessionCommand, SessionError, SessionEvent, emit};
+use super::{
+    ClearedSiteZooms, SessionCommand, SessionError, SessionEvent, SiteZoomLevels, emit, utc_seconds,
+};
 
 /// Loads the stored preferences once, at startup.
 pub(super) fn restore(store: &Store) -> Result<StoredPreferences, SessionError> {
@@ -14,8 +14,28 @@ pub(super) fn restore(store: &Store) -> Result<StoredPreferences, SessionError> 
 }
 
 /// Loads each site's saved zoom level once, at startup (#90).
-pub(super) fn restore_site_zooms(store: &Store) -> Result<BTreeMap<String, f64>, SessionError> {
-    store.site_zooms().map_err(SessionError::Store)
+pub(super) fn restore_site_zooms(store: &Store) -> Result<SiteZoomLevels, SessionError> {
+    store
+        .site_zooms()
+        .map(SiteZoomLevels)
+        .map_err(SessionError::Store)
+}
+
+/// Forgets the levels changed in `[start, end)`, then reads what is left for the window.
+fn clear_site_zooms(store: &Store, start: i64, end: i64) -> Result<ClearedSiteZooms, SessionError> {
+    let sites = store
+        .clear_site_zooms(start, end)
+        .map_err(SessionError::Store)?;
+    let remaining = restore_site_zooms(store)?;
+    Ok(ClearedSiteZooms { sites, remaining })
+}
+
+/// Saves one site's level, stamped now so a ranged clear can find it.
+fn save_site_zoom(store: &Store, host: String, factor: Option<f64>) -> Result<(), SessionError> {
+    let now = utc_seconds()?;
+    store
+        .save_site_zoom(host, factor, now)
+        .map_err(SessionError::Store)
 }
 
 /// Handles a preference command, or hands any other command back to the tab model.
@@ -33,15 +53,27 @@ pub(super) fn intercept(
         }
         SessionCommand::SiteZoom { host, factor } => {
             // The page already shows the level; a failed save is reported but never stops Syrinx.
-            if let Err(error) = store.save_site_zoom(host, factor) {
+            if let Err(error) = save_site_zoom(store, host, factor) {
                 emit(
                     events,
                     SessionEvent::Failure {
-                        error: SessionError::Store(error),
+                        error,
                         fatal: false,
                     },
                 )?;
             }
+            Ok(None)
+        }
+        SessionCommand::ClearSiteZooms {
+            request_id,
+            start,
+            end,
+        } => {
+            let result = clear_site_zooms(store, start, end);
+            emit(
+                events,
+                SessionEvent::SiteZoomsCleared { request_id, result },
+            )?;
             Ok(None)
         }
         SessionCommand::EditDestinations { surface, edit } => {

@@ -20,8 +20,9 @@ pub(super) struct SiteZoom {
     applying: HashMap<u64, f64>,
 }
 
-/// What to do after a page reported a new zoom level.
-#[derive(Debug, Default, PartialEq)]
+/// What to do after a page reported a new zoom level. Holds a host, so `Debug` is for tests.
+#[cfg_attr(test, derive(Debug))]
+#[derive(Default, PartialEq)]
 pub(super) struct ZoomChoice {
     /// The site to save: its host and its level, `None` at 100%.
     pub(super) save: Option<(String, Option<f64>)>,
@@ -33,6 +34,31 @@ impl SiteZoom {
     /// Takes the levels saved by earlier sessions, sent once at start-up.
     pub(super) fn restore(&mut self, saved: BTreeMap<String, f64>) {
         self.saved = saved.into_iter().collect();
+    }
+
+    /// Replaces the saved levels after a clear. Returns the open pages whose site lost its
+    /// level and that should go back to 100%, now marked as applying it.
+    pub(super) fn replace_saved(&mut self, saved: BTreeMap<String, f64>) -> Vec<(u64, f64)> {
+        self.saved = saved.into_iter().collect();
+        let mut reset: Vec<(u64, f64)> = self
+            .hosts
+            .iter()
+            .filter(|(id, host)| {
+                let shown = self.current.get(id).copied().unwrap_or(1.);
+                !same_level(shown, self.level(host))
+            })
+            .map(|(id, host)| (*id, self.level(host)))
+            .collect();
+        reset.sort_by_key(|(id, _)| *id);
+        for (id, level) in &reset {
+            self.applying.insert(*id, *level);
+        }
+        reset
+    }
+
+    /// Syrinx could not apply a level to page `id`, so its next report is the owner's again.
+    pub(super) fn abandon_apply(&mut self, id: u64) {
+        self.applying.remove(&id);
     }
 
     /// The level page `id` shows; 100% until it reports one.
@@ -272,6 +298,42 @@ mod tests {
             zoom.page_address(3, "https://crash.example.test/"),
             Some(1.75)
         );
+    }
+
+    #[test]
+    fn a_level_that_could_not_be_applied_does_not_block_later_saves() {
+        let mut zoom = saved(&[("stuck.example.test", 1.25)]);
+        zoom.page_reported(4, 1.);
+        assert_eq!(
+            zoom.page_address(4, "https://stuck.example.test/"),
+            Some(1.25)
+        );
+        // The page never took 1.25, so the owner's next change must still be saved.
+        zoom.abandon_apply(4);
+        assert_eq!(
+            zoom.page_reported(4, 1.1),
+            ZoomChoice {
+                save: Some(("stuck.example.test".to_owned(), Some(1.1))),
+                follow: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_clear_returns_open_pages_of_cleared_sites_to_one_hundred_percent() {
+        let mut zoom = saved(&[("cleared.example.test", 1.5), ("kept.example.test", 1.25)]);
+        for (id, address, level) in [
+            (1, "https://cleared.example.test/", 1.5),
+            (2, "https://kept.example.test/", 1.25),
+        ] {
+            zoom.page_reported(id, 1.);
+            zoom.page_address(id, address);
+            zoom.page_reported(id, level);
+        }
+        let remaining = BTreeMap::from([("kept.example.test".to_owned(), 1.25)]);
+        assert_eq!(zoom.replace_saved(remaining), vec![(1, 1.)]);
+        // The reset's acknowledgement is not saved as the owner's choice.
+        assert_eq!(zoom.page_reported(1, 1.), ZoomChoice::default());
     }
 
     #[test]

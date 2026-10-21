@@ -88,11 +88,32 @@ impl BrowserView {
         }
     }
 
+    /// Asks page `id` to take `level`; when the request cannot be sent, the page's later
+    /// reports count as the owner's again.
     fn set_page_zoom(&mut self, id: u64, level: f64) {
-        self.page_command(BrowserCommand::PageAction {
+        let sent = self.page_command(BrowserCommand::PageAction {
             id,
             action: PageAction::SetZoom(level),
         });
+        if !sent {
+            self.site_zoom.abandon_apply(id);
+        }
+    }
+
+    /// A Clear browsing data request removed zoom levels: open pages of cleared sites return
+    /// to 100%, and the dialog learns the outcome.
+    pub(super) fn site_zooms_cleared(
+        &mut self,
+        request: u64,
+        result: Result<crate::session::ClearedSiteZooms, crate::session::SessionError>,
+    ) {
+        let result = result.map(|cleared| {
+            for (page, level) in self.site_zoom.replace_saved(cleared.remaining.0) {
+                self.set_page_zoom(page, level);
+            }
+            cleared.sites
+        });
+        self.site_zooms_cleared_for_dialog(request, result);
     }
 
     /// The title bar's corner keeps only Downloads in view; Find, Print and zoom live in the

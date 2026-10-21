@@ -132,6 +132,13 @@ pub enum SessionCommand {
         host: String,
         factor: Option<f64>,
     },
+    /// Forgets the zoom levels changed in `[start, end)` Unix seconds, with Clear browsing
+    /// data's cookies and site data (#90); answered with `SiteZoomsCleared`.
+    ClearSiteZooms {
+        request_id: u64,
+        start: i64,
+        end: i64,
+    },
     /// Changes one Quick access or Favorites tile list.
     EditDestinations {
         surface: DestinationSurface,
@@ -226,7 +233,7 @@ pub enum SessionEvent {
         settings: BTreeMap<String, String>,
         destinations: QuickDestinations,
         /// Each site's remembered zoom level by host (#90); absent hosts are at 100%.
-        site_zooms: BTreeMap<String, f64>,
+        site_zooms: SiteZoomLevels,
     },
     /// The tile lists after an accepted edit.
     Destinations(QuickDestinations),
@@ -254,6 +261,11 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<Vec<HistoryVisit>, SessionError>,
     },
+    /// What a `ClearSiteZooms` request removed, or why it failed.
+    SiteZoomsCleared {
+        request_id: u64,
+        result: Result<ClearedSiteZooms, SessionError>,
+    },
     /// What a `ClearHistory` request removed, or why it failed.
     HistoryCleared {
         request_id: u64,
@@ -279,6 +291,23 @@ pub enum SessionEvent {
     },
     /// Connections have closed before this event; joining the worker is now safe.
     Stopped,
+}
+
+/// Saved zoom levels by host (#90). Hosts are browsing data, so `Debug` shows only a count.
+#[derive(Clone, Default, PartialEq)]
+pub struct SiteZoomLevels(pub BTreeMap<String, f64>);
+
+impl fmt::Debug for SiteZoomLevels {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "SiteZoomLevels {{ sites: {} }}", self.0.len())
+    }
+}
+
+/// What a zoom clear removed, and the levels left for the window to apply.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClearedSiteZooms {
+    pub sites: usize,
+    pub remaining: SiteZoomLevels,
 }
 
 /// Counts only, so the dialog can say how much went without naming any of it.
@@ -709,7 +738,7 @@ struct Worker {
     /// The settings read at startup, handed to the window once.
     startup_settings: BTreeMap<String, String>,
     /// The per-site zoom levels read at startup, handed to the window once (#90).
-    startup_site_zooms: BTreeMap<String, f64>,
+    startup_site_zooms: SiteZoomLevels,
     /// P1-33's synthetic rows in the catalogue; non-zero only in an acceptance run.
     synthetic_rows: usize,
     /// Set only by `spawn_acceptance`: synthetic rows are accepted and queries are timed.
@@ -1456,6 +1485,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::ObserveNavigation { .. }
         | SessionCommand::SaveSettings(_)
         | SessionCommand::SiteZoom { .. }
+        | SessionCommand::ClearSiteZooms { .. }
         | SessionCommand::EditDestinations { .. }
         | SessionCommand::GrowSyntheticCatalogue { .. }
         | SessionCommand::SnapshotBeforeUpdate
@@ -1905,6 +1935,28 @@ mod tests {
             address: address.to_owned(),
         };
         assert!(!format!("{command:?}").contains(address));
+        // A zoomed site's host stays out of commands and events too (#90).
+        let host = "zoom-sentinel.example.test";
+        let zoom = SessionCommand::SiteZoom {
+            host: host.to_owned(),
+            factor: Some(1.25),
+        };
+        assert!(!format!("{zoom:?}").contains(host));
+        let levels = SiteZoomLevels(BTreeMap::from([(host.to_owned(), 1.25)]));
+        let preferences = SessionEvent::Preferences {
+            settings: BTreeMap::new(),
+            destinations: QuickDestinations::default(),
+            site_zooms: levels.clone(),
+        };
+        assert!(!format!("{preferences:?}").contains(host));
+        let cleared = SessionEvent::SiteZoomsCleared {
+            request_id: 1,
+            result: Ok(ClearedSiteZooms {
+                sites: 0,
+                remaining: levels,
+            }),
+        };
+        assert!(!format!("{cleared:?}").contains(host));
         let mut model = TabModel::new();
         apply_model(&mut model, command)?;
         let event = SessionEvent::State(SessionSnapshot {

@@ -212,7 +212,7 @@ fn a_double_clicked_remove_queued_twice_removes_one_tile() {
 fn site_zooms(events: &mut UnboundedReceiver<SessionEvent>) -> BTreeMap<String, f64> {
     loop {
         match next_any_event(events) {
-            SessionEvent::Preferences { site_zooms, .. } => return site_zooms,
+            SessionEvent::Preferences { site_zooms, .. } => return site_zooms.0,
             SessionEvent::Usage { .. } => continue,
             event => panic!("expected synthetic preferences, got {event:?}"),
         }
@@ -272,6 +272,41 @@ fn a_refused_site_zoom_reports_without_stopping_the_worker() {
         },
     );
     assert_eq!(opened.model.tabs.len(), 1);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+#[test]
+fn clearing_every_site_zoom_reports_the_count_and_what_remains() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    site_zooms(&mut events);
+    state(&mut events);
+    send(&handle, zoom("one.example.test", Some(1.25)));
+    send(&handle, zoom("two.example.test", Some(0.9)));
+    send(
+        &handle,
+        SessionCommand::ClearSiteZooms {
+            request_id: 7,
+            start: 0,
+            end: i64::MAX,
+        },
+    );
+    match next_any_event(&mut events) {
+        SessionEvent::SiteZoomsCleared {
+            request_id: 7,
+            result: Ok(cleared),
+        } => {
+            assert_eq!(cleared.sites, 2);
+            assert!(cleared.remaining.0.is_empty());
+        }
+        event => panic!("expected the synthetic zoom clear, got {event:?}"),
+    }
+    stop(handle, &mut events);
+
+    let (handle, mut events) = fixture.start();
+    assert!(site_zooms(&mut events).is_empty(), "the clear is durable");
+    state(&mut events);
     stop(handle, &mut events);
     fixture.cleanup();
 }

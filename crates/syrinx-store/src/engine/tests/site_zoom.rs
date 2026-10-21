@@ -122,7 +122,7 @@ fn site_zoom_hook_refuses_rows_and_rolls_back_to_the_intact_version_6_schema() {
     let directory = TestDirectory::new();
     let mut connection = permissions_database(&directory);
     let seeded = format!(
-        "{} INSERT INTO site_zoom(host, factor) VALUES ('seeded.example.test', 1.25);",
+        "{} INSERT INTO site_zoom(host, factor, last_modified) VALUES ('seeded.example.test', 1.25, 10);",
         schema::site_zoom_migration()
     );
     let scripts = VersionSixScripts::new();
@@ -153,7 +153,7 @@ fn saved_levels_survive_restart_and_forgetting_one_keeps_the_others() {
     let store = Store::open(directory.lease()).expect("synthetic store");
     let save = |host: &str, factor| {
         store
-            .save_site_zoom(host.to_owned(), factor)
+            .save_site_zoom(host.to_owned(), factor, 100)
             .expect("save synthetic zoom");
     };
     save("zoomed.example.test", Some(1.25));
@@ -170,10 +170,10 @@ fn saved_levels_survive_restart_and_forgetting_one_keeps_the_others() {
         ]))
     );
     store
-        .save_site_zoom("zoomed.example.test".to_owned(), None)
+        .save_site_zoom("zoomed.example.test".to_owned(), None, 100)
         .expect("forget synthetic zoom");
     store
-        .save_site_zoom("never-zoomed.example.test".to_owned(), None)
+        .save_site_zoom("never-zoomed.example.test".to_owned(), None, 100)
         .expect("forgetting an unsaved host is not an error");
     assert_eq!(
         store.site_zooms(),
@@ -197,14 +197,14 @@ fn addresses_defaults_and_impossible_levels_are_refused_without_writing() {
         "space .example.test",
     ] {
         assert_eq!(
-            store.save_site_zoom(host.to_owned(), Some(1.25)),
+            store.save_site_zoom(host.to_owned(), Some(1.25), 100),
             refused,
             "{host:?} is not a canonical host"
         );
     }
     for factor in [1., 1.000_4, 0.2, 5.5, f64::NAN, f64::INFINITY] {
         assert_eq!(
-            store.save_site_zoom("level.example.test".to_owned(), Some(factor)),
+            store.save_site_zoom("level.example.test".to_owned(), Some(factor), 100),
             refused,
             "{factor} is not a storable level"
         );
@@ -219,7 +219,7 @@ fn a_damaged_level_refuses_the_map_instead_of_applying_a_guess() {
     let directory = TestDirectory::new();
     let store = Store::open(directory.lease()).expect("synthetic store");
     store
-        .save_site_zoom("damaged.example.test".to_owned(), Some(1.25))
+        .save_site_zoom("damaged.example.test".to_owned(), Some(1.25), 100)
         .expect("save synthetic zoom");
     let connection = directory.connection();
     connection
@@ -239,7 +239,7 @@ fn saved_levels_survive_a_vacuum_snapshot() {
     let directory = TestDirectory::new();
     let store = Store::open(directory.lease()).expect("synthetic store");
     store
-        .save_site_zoom("backup.example.test".to_owned(), Some(2.))
+        .save_site_zoom("backup.example.test".to_owned(), Some(2.), 100)
         .expect("save synthetic zoom");
     store.shutdown().expect("close synthetic store");
     let connection = directory.connection();
@@ -268,4 +268,67 @@ fn only_hundred_percent_counts_as_the_default() {
     assert!(crate::is_default_zoom(0.999_8));
     assert!(!crate::is_default_zoom(1.1));
     assert!(!crate::is_default_zoom(0.9));
+}
+
+/// Saves synthetic levels changed at 100, 5 000 and 9 000 Unix seconds.
+fn store_with_dated_levels(directory: &TestDirectory) -> Store {
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    for (host, factor, modified_at) in [
+        ("old.example.test", 1.25, 100),
+        ("middle.example.test", 1.5, 5_000),
+        ("recent.example.test", 0.75, 9_000),
+    ] {
+        store
+            .save_site_zoom(host.to_owned(), Some(factor), modified_at)
+            .expect("save synthetic dated zoom");
+    }
+    store
+}
+
+#[test]
+fn a_ranged_clear_removes_only_levels_changed_in_that_range() {
+    let directory = TestDirectory::new();
+    let store = store_with_dated_levels(&directory);
+    // The range ends before 9 000 and starts at 5 000, which it includes.
+    assert_eq!(store.clear_site_zooms(5_000, 9_000), Ok(1));
+    assert_eq!(
+        store.site_zooms(),
+        Ok(zoomed(&[
+            ("old.example.test", 1.25),
+            ("recent.example.test", 0.75)
+        ]))
+    );
+    // Changing a level again moves it into a later range.
+    store
+        .save_site_zoom("old.example.test".to_owned(), Some(2.), 9_500)
+        .expect("change synthetic zoom");
+    assert_eq!(store.clear_site_zooms(9_000, 10_000), Ok(2));
+    assert_eq!(store.site_zooms(), Ok(BTreeMap::new()));
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn an_all_time_clear_removes_every_level_and_survives_restart() {
+    let directory = TestDirectory::new();
+    let store = store_with_dated_levels(&directory);
+    assert_eq!(store.clear_site_zooms(0, i64::MAX), Ok(3));
+    assert_eq!(store.clear_site_zooms(0, i64::MAX), Ok(0));
+    store.shutdown().expect("close first store");
+    let store = Store::open(directory.lease()).expect("reopen synthetic store");
+    assert_eq!(store.site_zooms(), Ok(BTreeMap::new()));
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn a_negative_change_time_is_refused() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    assert_eq!(
+        store.save_site_zoom("time.example.test".to_owned(), Some(1.25), -1),
+        Err(StoreError::InvalidEncoding(EncodingField::SiteZoom))
+    );
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
 }

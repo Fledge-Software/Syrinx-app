@@ -50,6 +50,7 @@ impl SessionCommand {
             Self::ImportBookmarks { .. } => "importing bookmarks",
             Self::SaveSettings(_) => "saving settings",
             Self::SiteZoom { .. } => "saving a site zoom level",
+            Self::ClearSiteZooms { .. } => "clearing site zoom levels",
             Self::EditDestinations { .. } => "editing tiles",
             Self::Query { .. } => "searching",
             Self::ObserveNavigation { .. } => "recording a finished navigation",

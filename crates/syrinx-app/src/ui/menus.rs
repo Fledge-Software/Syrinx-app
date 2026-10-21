@@ -653,17 +653,24 @@ impl MenuView {
             .selected
             .and_then(|row| self.rows.get(row))
             .map(|row| row.item);
-        let action = match (key, selected) {
-            ("escape", _) => MenuAction::Dismiss,
-            // On the Zoom row, Left and Right step like its − and + buttons.
-            ("left", Some(MenuItem::Zoom)) => MenuAction::Zoom(BrowserShortcut::ZoomOut),
-            ("right", Some(MenuItem::Zoom)) => MenuAction::Zoom(BrowserShortcut::ZoomIn),
-            ("enter" | "space", Some(MenuItem::Zoom) | None) => return,
-            ("enter" | "space", Some(item)) => MenuAction::Choose(item),
-            _ => return,
+        let Some(action) = key_action(key, selected) else {
+            return;
         };
         cx.stop_propagation();
         self.send(action, cx);
+    }
+}
+
+/// What a key other than the selection moves does on the selected row, if anything.
+fn key_action(key: &str, selected: Option<MenuItem>) -> Option<MenuAction> {
+    match (key, selected) {
+        ("escape", _) => Some(MenuAction::Dismiss),
+        // On the Zoom row, Left and Right step like its − and + buttons.
+        ("left", Some(MenuItem::Zoom)) => Some(MenuAction::Zoom(BrowserShortcut::ZoomOut)),
+        ("right", Some(MenuItem::Zoom)) => Some(MenuAction::Zoom(BrowserShortcut::ZoomIn)),
+        ("enter" | "space", Some(MenuItem::Zoom) | None) => None,
+        ("enter" | "space", Some(item)) => Some(MenuAction::Choose(item)),
+        _ => None,
     }
 }
 
@@ -714,7 +721,13 @@ impl Render for MenuView {
                 },
             ));
             card = card.child(if item == MenuItem::Zoom {
-                drawn.child(self.zoom_stepper(cx))
+                // Screen readers hear the level with the row, such as "Zoom, 125%".
+                let name = format!(
+                    "{}, {}",
+                    row.label,
+                    super::essentials::zoom_percent(self.zoom)
+                );
+                drawn.aria_label(name).child(self.zoom_stepper(cx))
             } else {
                 drawn.on_click(cx.listener(move |this, _, _, cx| {
                     this.send(MenuAction::Choose(item), cx);
@@ -883,6 +896,33 @@ mod tests {
         }
         assert_eq!(MenuItem::ResetZoom.shortcut().as_deref(), Some("Ctrl 0"));
         assert_eq!(MenuItem::Find.shortcut().as_deref(), Some("Ctrl F"));
+    }
+
+    #[test]
+    fn left_and_right_step_the_zoom_row_and_nothing_else() {
+        let zoom = Some(MenuItem::Zoom);
+        assert!(matches!(
+            key_action("left", zoom),
+            Some(MenuAction::Zoom(BrowserShortcut::ZoomOut))
+        ));
+        assert!(matches!(
+            key_action("right", zoom),
+            Some(MenuAction::Zoom(BrowserShortcut::ZoomIn))
+        ));
+        assert!(
+            key_action("enter", zoom).is_none(),
+            "Enter does not choose the row"
+        );
+        assert!(key_action("left", Some(MenuItem::Find)).is_none());
+        assert!(key_action("right", None).is_none());
+        assert!(matches!(
+            key_action("enter", Some(MenuItem::Find)),
+            Some(MenuAction::Choose(MenuItem::Find))
+        ));
+        assert!(matches!(
+            key_action("escape", zoom),
+            Some(MenuAction::Dismiss)
+        ));
     }
 
     #[test]
