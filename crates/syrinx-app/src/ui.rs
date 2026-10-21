@@ -17,6 +17,7 @@ mod import;
 mod incoming_links;
 mod main_window;
 mod menus;
+mod mute;
 mod navigation_intents;
 mod navigation_status;
 mod owned_popup;
@@ -303,6 +304,8 @@ pub struct BrowserView {
     find: Option<find::FindBar>,
     find_sequence: u64,
     zoom_levels: std::collections::HashMap<u64, f64>,
+    /// Tabs the owner muted in this run; never saved (#95).
+    muted: HashSet<TabId>,
     permissions: Vec<permissions::Prompt>,
     model: TabModelSnapshot,
     session_revision: Option<u64>,
@@ -409,6 +412,7 @@ impl BrowserView {
             find: None,
             find_sequence: 0,
             zoom_levels: std::collections::HashMap::new(),
+            muted: HashSet::new(),
             permissions: Vec::new(),
             model: TabModelSnapshot::default(),
             session_revision: None,
@@ -652,6 +656,8 @@ impl BrowserView {
                 self.crashes.retain(&self.model);
                 self.zoom_levels
                     .retain(|id, _| self.model.tabs.iter().any(|tab| tab.id.get() == *id));
+                self.muted
+                    .retain(|id| self.model.tabs.iter().any(|tab| tab.id == *id));
                 self.navigation_status.retain(&self.model);
                 if !self.closing {
                     if let Some(id) = snapshot.navigate {
@@ -839,6 +845,7 @@ impl BrowserView {
             }
             BrowserEvent::PageRestored { id } => {
                 self.crashes.restored(id);
+                self.reapply_mute(id);
                 self.recovery_focus(window, cx);
             }
             BrowserEvent::RecoveryStarted { sequence, tabs } => {
@@ -871,6 +878,8 @@ impl BrowserView {
             BrowserEvent::ZoomChanged { id, factor } => {
                 self.zoom_levels.insert(id, factor);
             }
+            // Shown by the row's audio badge once slice 4 of #95 draws it.
+            BrowserEvent::AudioChanged { .. } => {}
             BrowserEvent::FindCompleted { id, request, count } => {
                 self.find_completed(id, request, count)
             }
@@ -900,6 +909,7 @@ impl BrowserView {
                 }
             }
             BrowserEvent::Created { id } => {
+                self.reapply_mute(id);
                 if let Ok(id) = TabId::new(id)
                     && page_lifecycle::created(id, &mut self.pending_pages, &mut self.loaded)
                 {
