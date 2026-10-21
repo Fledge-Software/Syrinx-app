@@ -8,16 +8,21 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use syrinx_update::{
-    FileEntry, KeySet, KeyStorage, MAX_FILE_BYTES, MAX_MANIFEST_BYTES, MAX_STATEMENT_BYTES,
-    MAX_STATEMENT_LIFETIME_SECONDS, Manifest, PackagePath, SECONDS_PER_DAY, SignedRelease,
-    Statement, StatementTerms, StoredKey, Timestamp, Version, install, read_bounded, sha256,
-    sign_release,
+    FileEntry, HostFiles, KeyId, KeySet, KeyStorage, MAX_FILE_BYTES, MAX_MANIFEST_BYTES,
+    MAX_STATEMENT_BYTES, MAX_STATEMENT_LIFETIME_SECONDS, Manifest, PRODUCTION_KEYS, PackagePath,
+    SECONDS_PER_DAY, SignedRelease, Statement, StatementTerms, StoredKey, Timestamp, Version,
+    delete_software_key, import_software_key, install, read_bounded, sha256, sign_release,
+    write_host_layout,
 };
 
 const USAGE: &str = "Usage:
   syrinx-update-tool manifest --package <folder> --version <x.y.z> --minimum-version <x.y.z> --file <path>...
   syrinx-update-tool sign --package <folder> --storage <software|smart-card> --key <name> --serial <n> --days <1-60>
-  syrinx-update-tool payload --package <folder> --output <file>";
+  syrinx-update-tool payload --package <folder> --output <file>
+  syrinx-update-tool import-key --key <name> --from-env <variable>
+  syrinx-update-tool delete-key --key <name>
+  syrinx-update-tool pinned-keys
+  syrinx-update-tool host-layout --package <folder> --output <folder> --files <include|omit>";
 
 /// File names the tool reads and writes inside a package folder.
 const MANIFEST: &str = "manifest";
@@ -33,6 +38,27 @@ enum Request {
     Manifest(ManifestRequest),
     Sign(SignRequest),
     Payload(PayloadRequest),
+    ImportKey(ImportKeyRequest),
+    DeleteKey(String),
+    PinnedKeys,
+    HostLayout(HostLayoutRequest),
+}
+
+/// Store the base64 PKCS#8 key held in an environment variable as a named software key.
+///
+/// The key travels by environment variable so it never appears in a command line or a log.
+#[derive(Debug, PartialEq, Eq)]
+struct ImportKeyRequest {
+    key: String,
+    variable: String,
+}
+
+/// Write the host's `updates/v1/` files from a signed package folder.
+#[derive(Debug, PartialEq, Eq)]
+struct HostLayoutRequest {
+    package: PathBuf,
+    output: PathBuf,
+    files: HostFiles,
 }
 
 /// Pack a package folder into the payload `syrinx-setup.exe` carries.
@@ -92,6 +118,14 @@ fn run() -> Result<(), String> {
             println!("Wrote {}.", request.output.display());
             Ok(())
         }
+        Request::ImportKey(request) => import_key(&request),
+        Request::DeleteKey(key) => delete_key(&key),
+        Request::PinnedKeys => print_pinned_keys(),
+        Request::HostLayout(request) => {
+            let root = host_layout(&request)?;
+            println!("Wrote the host files under {}.", root.display());
+            Ok(())
+        }
     }
 }
 
@@ -103,6 +137,12 @@ fn parse_request(arguments: &[String]) -> Result<Request, String> {
         "manifest" => parse_manifest_request(rest).map(Request::Manifest),
         "sign" => parse_sign_request(rest).map(Request::Sign),
         "payload" => parse_payload_request(rest).map(Request::Payload),
+        "import-key" => parse_import_key_request(rest).map(Request::ImportKey),
+        "delete-key" => Options::parse(rest, &["--key"])?
+            .take_one("--key")
+            .map(Request::DeleteKey),
+        "pinned-keys" if rest.is_empty() => Ok(Request::PinnedKeys),
+        "host-layout" => parse_host_layout_request(rest).map(Request::HostLayout),
         _ => Err(USAGE.to_owned()),
     }
 }
@@ -130,6 +170,77 @@ fn parse_payload_request(arguments: &[String]) -> Result<PayloadRequest, String>
         package: PathBuf::from(options.take_one("--package")?),
         output: PathBuf::from(options.take_one("--output")?),
     })
+}
+
+fn parse_import_key_request(arguments: &[String]) -> Result<ImportKeyRequest, String> {
+    let mut options = Options::parse(arguments, &["--key", "--from-env"])?;
+    Ok(ImportKeyRequest {
+        key: options.take_one("--key")?,
+        variable: options.take_one("--from-env")?,
+    })
+}
+
+fn parse_host_layout_request(arguments: &[String]) -> Result<HostLayoutRequest, String> {
+    let mut options = Options::parse(arguments, &["--package", "--output", "--files"])?;
+    let files = match options.take_one("--files")?.as_str() {
+        "include" => HostFiles::Include,
+        "omit" => HostFiles::Omit,
+        other => return Err(format!("Unknown --files {other}; use include or omit.")),
+    };
+    Ok(HostLayoutRequest {
+        package: PathBuf::from(options.take_one("--package")?),
+        output: PathBuf::from(options.take_one("--output")?),
+        files,
+    })
+}
+
+/// Import the key from its variable; only the key's public identifier is printed.
+fn import_key(request: &ImportKeyRequest) -> Result<(), String> {
+    let text = env::var(&request.variable)
+        .ok()
+        .filter(|text| !text.trim().is_empty())
+        .ok_or(format!("{} is not set or is empty.", request.variable))?;
+    let point = import_software_key(&request.key, &text).map_err(|error| {
+        format!(
+            "Could not import the key from {}: {error}.",
+            request.variable
+        )
+    })?;
+    let id = KeyId::of(&point).map_err(describe)?;
+    println!(
+        "Stored key {} as {} in Windows software key storage.",
+        hex(&id.0),
+        request.key
+    );
+    Ok(())
+}
+
+/// Delete the named key; an absent key is reported, not an error, so cleanup can always run.
+fn delete_key(key: &str) -> Result<(), String> {
+    let deleted =
+        delete_software_key(key).map_err(|error| format!("Could not delete {key}: {error}."))?;
+    if deleted {
+        println!("Deleted {key} from Windows software key storage.");
+    } else {
+        println!("No key named {key} was stored; nothing to delete.");
+    }
+    Ok(())
+}
+
+/// Print each pinned key's identifier and public point, one per line; nothing when none is pinned.
+fn print_pinned_keys() -> Result<(), String> {
+    for key in PRODUCTION_KEYS {
+        let id = KeyId::of(key.point()).map_err(describe)?;
+        println!("{} {}", hex(&id.0), hex(key.point()));
+    }
+    Ok(())
+}
+
+/// Verify the signed package folder against the pinned keys now, then lay it out for the host.
+fn host_layout(request: &HostLayoutRequest) -> Result<PathBuf, String> {
+    let keys = KeySet::production().map_err(describe)?;
+    let now = Timestamp::now().map_err(describe)?;
+    write_host_layout(&request.package, &request.output, &keys, now, request.files)
 }
 
 /// Pack the folder, checking every file against its manifest, then write the payload.
@@ -607,6 +718,68 @@ mod tests {
             ]))
             .is_err()
         );
+    }
+
+    #[test]
+    fn key_and_layout_requests_parse_strictly() {
+        assert_eq!(
+            parse_request(&strings(&["import-key", "--key", "k", "--from-env", "V"])),
+            Ok(Request::ImportKey(ImportKeyRequest {
+                key: "k".to_owned(),
+                variable: "V".to_owned(),
+            }))
+        );
+        // The key itself is never an option, so it cannot reach a command line.
+        assert!(parse_request(&strings(&["import-key", "--key", "k", "--secret", "x"])).is_err());
+        assert!(parse_request(&strings(&["import-key", "--key", "k"])).is_err());
+        assert_eq!(
+            parse_request(&strings(&["delete-key", "--key", "k"])),
+            Ok(Request::DeleteKey("k".to_owned()))
+        );
+        assert!(parse_request(&strings(&["delete-key"])).is_err());
+        assert_eq!(
+            parse_request(&strings(&["pinned-keys"])),
+            Ok(Request::PinnedKeys)
+        );
+        assert!(parse_request(&strings(&["pinned-keys", "--all", "yes"])).is_err());
+
+        let layout = |files: &str| {
+            parse_request(&strings(&[
+                "host-layout",
+                "--package",
+                "p",
+                "--output",
+                "o",
+                "--files",
+                files,
+            ]))
+        };
+        assert_eq!(
+            layout("omit"),
+            Ok(Request::HostLayout(HostLayoutRequest {
+                package: PathBuf::from("p"),
+                output: PathBuf::from("o"),
+                files: HostFiles::Omit,
+            }))
+        );
+        assert!(layout("include").is_ok());
+        assert!(layout("some").is_err());
+    }
+
+    #[test]
+    fn a_missing_key_variable_is_refused_before_key_storage() {
+        let request = ImportKeyRequest {
+            key: "never-stored".to_owned(),
+            variable: "SYRINX_TEST_VARIABLE_THAT_IS_NEVER_SET".to_owned(),
+        };
+        let message = import_key(&request).expect_err("an unset variable is refused");
+        assert!(message.contains("is not set or is empty"), "{message}");
+    }
+
+    #[test]
+    fn deleting_an_absent_key_succeeds() {
+        delete_key("syrinx-update-tool-test-key-that-never-existed")
+            .expect("an absent key is reported, not an error");
     }
 
     #[test]

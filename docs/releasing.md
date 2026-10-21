@@ -19,7 +19,9 @@ short script in `.github/scripts/` so it can be read and tested on its own.
    15:00 otherwise. It then compares `main` with the commit the latest
    `v*` tag was built from. No new commits means no release that week. The
    version is the next minor step after the latest tag (`v0.3.0` follows
-   `v0.2.0`); the first release takes the workspace version, `0.1.0`.
+   `v0.2.0`); the first release takes the workspace version, `0.1.0`. A
+   quiet week still runs the **re-sign** job described under "Signed
+   updates" below.
 2. **Release** (Windows). On a GitHub-hosted Windows runner it installs Rust
    1.97.1 and commits the new version into `Cargo.toml` and `Cargo.lock` with
    `set-version.sh`. That commit sits on top of the `main` commit being
@@ -28,6 +30,9 @@ short script in `.github/scripts/` so it can be read and tested on its own.
    including the smoke run) and `cargo xtask package` (P1-37's setup program
    and portable zip).
    A failing gate stops everything: nothing is tagged or published.
+   Next the release job **signs the update** (P1-39d, issue #55; see
+   "Signed updates" below), when the release key secret is set and the
+   source pins a key. A failed signature also stops everything.
 3. **Screenshots** (`capture-screenshots.ps1`). The freshly built
    `syrinx.exe` is launched four times, on brand-new empty profiles under
    `--test-data-dir` and only `https://example.com/`, a reserved example
@@ -41,6 +46,9 @@ short script in `.github/scripts/` so it can be read and tested on its own.
    `SHA256SUMS.txt`. The setup program is the download the website offers:
    people run it to install Syrinx and run a newer one to update (owner,
    2026-10-14). The zip stays for P1-39's updates and the owner-run scripts.
+   A signed release also attaches `manifest`, `manifest.sig`, `latest` and
+   `latest.sig`, and uploads the host's `updates/v1/` files as the
+   workflow artifact `update-site`.
 5. **Website.** If this repository is public, the workflow checks out
    `Fledge-Software/syrinx-public-site`. It runs that repository's
    `scripts/publish-release.mjs` to write the version, download link,
@@ -52,6 +60,46 @@ short script in `.github/scripts/` so it can be read and tested on its own.
 To release outside the schedule, run the workflow from the Actions tab
 ("Run workflow"). Tick **force** to release even when `main` has not
 changed.
+
+## Signed updates
+
+**Why.** An installed Syrinx installs an update only if it is signed by a
+key compiled into it (`PRODUCTION_KEYS` in
+`crates/syrinx-update/src/keys.rs`). That signature is what protects the
+owner if the website or Vercel is broken into, because HTTPS alone only
+stops someone on the network. On 2026-10-14 the owner chose to keep the
+primary release key as an encrypted GitHub Actions secret, so this workflow
+signs every release and re-signs the latest statement every week, and the
+owner keeps no key on a device (`docs/decisions.md`). The owner approves
+this workflow change before it is pushed (`AGENTS.md`, "Environment and the
+owner's machine").
+
+**How the key travels.** The secret `SYRINX_RELEASE_KEY` holds the key as
+base64 PKCS#8 text. `signing-ready.sh` first checks that the secret is set
+and that the source being released pins at least one key; otherwise the
+run warns and publishes an unsigned release, as every release did before
+issue #55. When both hold, one step imports the key into the runner's
+software key storage under a per-run name, not exportable, with the secret
+in that step's environment only (`cargo xtask import-release-key`).
+`sign-update.sh` then signs with `cargo xtask sign-update` (serial = Unix
+time, 30-day statement) and writes the host files with `cargo xtask
+host-layout`, which first checks everything as an installed Syrinx would.
+An always-run step deletes the key (`cargo xtask delete-release-key`),
+whether signing passed, failed or was cancelled. The key never appears in
+a command line, a file, a log or an artifact. The full design is in
+`docs/update-delivery.md`, "How the workflow signs".
+
+**The weekly re-sign.** A statement expires 30 days after signing, so an
+attacker who freezes the update host can hide a fix for at most that long.
+In a quiet week the `resign` job checks out the latest release's tag,
+downloads its `manifest` and `latest` assets, signs a fresh statement with
+a higher serial and replaces `latest` and `latest.sig` on that release.
+Its `update-site` artifact holds just those two files.
+
+**Where the files go.** The `update-site` artifact holds exactly what
+belongs under `https://syrinxapp.dev/updates/v1/`. Like the website step,
+copying it to the host waits until the repository is public; until then
+the owner decides where, if anywhere, the files are published (issue #55).
 
 ## Keeping main releasable
 
@@ -67,10 +115,10 @@ debugger stack run only when a test process actually crashed (a Windows
 
 ## What it does not do
 
-- **It does not sign anything.** Syrinx has no code-signing certificate
-  (D38), so Windows SmartScreen warns before the first run, and the website
-  says so. The P1-38 update packages and their signing key (issue #55) are a
-  separate piece of work; these zips are not update packages.
+- **It does not code-sign anything.** Syrinx has no code-signing
+  certificate (D38), so Windows SmartScreen warns before the first run, and
+  the website says so. The update signature above is a different thing: it
+  is checked only by an installed Syrinx, never by Windows.
 - **It does not install, register or update Syrinx anywhere.** The zip is
   P1-37's portable package; installing it remains a step the person
   downloading it takes.
@@ -92,7 +140,10 @@ These steps need the owner's GitHub account, so no agent does them.
    year; put a reminder in your calendar to renew it.
 3. **Store it as a secret.** In this repository, Settings → Secrets and
    variables → Actions → New repository secret, named `SITE_REPO_TOKEN`.
-4. **Run it once by hand** from the Actions tab, so the first release is
+4. **Create the release keys** (issue #55) with the commands in
+   `docs/owner-checklist.md`, item 1, outside any agent session. Until an
+   agent has pinned both public keys, releases stay unsigned.
+5. **Run it once by hand** from the Actions tab, so the first release is
    watched rather than discovered. The Windows gate takes a long time on a
    clean runner (allow over an hour). If the smoke run or a screenshot fails
    only on the runner, that is a new trap: record it in
@@ -119,5 +170,7 @@ these are listed rather than changed. Checked on 2026-10-13:
   elsewhere (for example `ui-ux-pro-max`). Check that each one's licence
   allows redistribution, or stop tracking them before going public.
 - **Secrets.** No keys, tokens, `.env` or certificate files are tracked, and
-  the P1-38 production key does not exist yet (issue #55). GitHub's secret
+  the P1-38 production keys do not exist yet (issue #55); when they do, the
+  primary lives only in the `SYRINX_RELEASE_KEY` secret and the backup only
+  in the owner's password manager. GitHub's secret
   scanning runs automatically once the repository is public.

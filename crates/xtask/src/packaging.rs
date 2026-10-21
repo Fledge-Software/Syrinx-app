@@ -180,9 +180,11 @@ fn text(path: &Path) -> Result<&str, String> {
         .ok_or_else(|| format!("{} is not a Unicode path.", path.display()))
 }
 
-/// Sign a package's `manifest` and a fresh latest statement with the owner's stored key.
-pub fn sign_update(root: &Path, options: &[String]) -> Result<(), String> {
-    run_tool(root, &update::sign_command(options))
+/// Run a release-tool command (`sign-update` and the workflow's key and host-layout steps).
+///
+/// Returns `None` when `command` is not one, so the caller reports its usage.
+pub fn run_forwarded(root: &Path, command: &str, options: &[String]) -> Option<Result<(), String>> {
+    update::forwarded_command(command, options).map(|arguments| run_tool(root, &arguments))
 }
 
 fn run_tool(root: &Path, command: &[String]) -> Result<(), String> {

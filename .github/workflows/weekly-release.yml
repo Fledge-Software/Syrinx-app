@@ -21,6 +21,12 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # The release key lives in the runner's key storage under this name for one job only (#55).
+  KEY_NAME: syrinx-release-${{ github.run_id }}-${{ github.run_attempt }}
+  # Each statement expires this many days after signing; the weekly re-sign renews it.
+  STATEMENT_DAYS: 30
+
 jobs:
   plan:
     name: Decide whether to release
@@ -31,6 +37,8 @@ jobs:
       previous_tag: ${{ steps.decide.outputs.previous_tag }}
       source: ${{ steps.decide.outputs.source }}
       public: ${{ steps.decide.outputs.public }}
+      resign: ${{ steps.decide.outputs.resign }}
+      latest_tag: ${{ steps.decide.outputs.latest_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -99,6 +107,32 @@ jobs:
         shell: bash
         run: .github/scripts/package-release.sh "$VERSION"
 
+      - id: signing
+        name: Check that this run can sign the update
+        shell: bash
+        env:
+          HAS_RELEASE_KEY: ${{ secrets.SYRINX_RELEASE_KEY != '' }}
+        run: .github/scripts/signing-ready.sh
+
+      # From here to the deletion below, the key exists in this runner's key storage, not
+      # exportable; the secret reaches the tool only through its environment and is never printed.
+      - name: Import the release key for this job
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        env:
+          SYRINX_RELEASE_KEY: ${{ secrets.SYRINX_RELEASE_KEY }}
+        run: cargo xtask import-release-key --key "$KEY_NAME" --from-env SYRINX_RELEASE_KEY
+
+      - name: Sign the update and lay out its host files
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: .github/scripts/sign-update.sh "target/package/${{ steps.package.outputs.folder }}" target/update-site include
+
+      - name: Delete the release key
+        if: always() && steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: cargo xtask delete-release-key --key "$KEY_NAME"
+
       - name: Capture screenshots on synthetic data
         shell: pwsh
         run: ./.github/scripts/capture-screenshots.ps1 -Executable target/local/syrinx.exe -OutputFolder target/screenshots
@@ -115,9 +149,16 @@ jobs:
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             tag -a "$TAG" -m "Syrinx $VERSION preview" -m "Source: $SOURCE"
           git push origin "refs/tags/$TAG"
+          # A signed run also attaches the signed update files, which a quiet week re-signs.
+          signed=()
+          if [ "${{ steps.signing.outputs.ready }}" = "true" ]; then
+            folder="target/package/${{ steps.package.outputs.folder }}"
+            signed=("$folder/manifest" "$folder/manifest.sig" "$folder/latest" "$folder/latest.sig")
+          fi
           gh release create "$TAG" \
             "target/package/${{ steps.package.outputs.asset }}" \
             "target/package/${{ steps.package.outputs.zip }}" target/package/SHA256SUMS.txt \
+            ${signed[@]+"${signed[@]}"} \
             --prerelease --title "Syrinx $VERSION preview" --notes-file target/release-notes.md
 
       - uses: actions/upload-artifact@v4
@@ -126,6 +167,76 @@ jobs:
           path: |
             target/release-notes.md
             target/screenshots/
+          if-no-files-found: error
+
+      # The host's updates/v1/ files; they stay a workflow artifact while the site push is skipped.
+      - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.ready == 'true'
+        with:
+          name: update-site
+          path: target/update-site/
+          if-no-files-found: error
+
+  resign:
+    name: Re-sign the latest statement in a quiet week
+    needs: plan
+    if: needs.plan.outputs.resign == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.plan.outputs.latest_tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # The released source holds the keys that release's installed copies trust.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.latest_tag }}
+
+      - id: fetch
+        name: Fetch the released manifest and its last statement
+        shell: bash
+        run: .github/scripts/fetch-signed-release.sh "$TAG" target/resign
+
+      - uses: ./.github/actions/setup-rust
+        if: steps.fetch.outputs.found == 'true'
+
+      - id: signing
+        name: Check that this run can sign the statement
+        if: steps.fetch.outputs.found == 'true'
+        shell: bash
+        env:
+          HAS_RELEASE_KEY: ${{ secrets.SYRINX_RELEASE_KEY != '' }}
+        run: .github/scripts/signing-ready.sh
+
+      - name: Import the release key for this job
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        env:
+          SYRINX_RELEASE_KEY: ${{ secrets.SYRINX_RELEASE_KEY }}
+        run: cargo xtask import-release-key --key "$KEY_NAME" --from-env SYRINX_RELEASE_KEY
+
+      - name: Sign a fresh statement and lay out its host files
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: .github/scripts/sign-update.sh target/resign target/update-site omit
+
+      - name: Delete the release key
+        if: always() && steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: cargo xtask delete-release-key --key "$KEY_NAME"
+
+      - name: Replace the statement on the GitHub release
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: gh release upload "$TAG" target/resign/latest target/resign/latest.sig --clobber
+
+      - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.ready == 'true'
+        with:
+          name: update-site
+          path: target/update-site/
           if-no-files-found: error
 
   site:

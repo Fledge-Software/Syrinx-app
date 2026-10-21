@@ -29,14 +29,59 @@ workflow signs with a key held as a GitHub Actions secret and re-signs
 manager (`docs/decisions.md`, 2026-10-14). The release fixes are already
 on `main`.
 
-- Wait for the agent slice (a GitHub issue) that adds workflow signing and
-  publishes `https://syrinxapp.dev/updates/v1/` (it returned 404 on
-  2026-10-14). It will give you the commands for the one-time key creation.
-- Then, outside any agent session: create the key, put it in the GitHub
-  secret and the backup in your password manager, and give an agent only
-  the two public points and identifiers to pin (issue #55).
+- **Approve the workflow change first.** The agent half of issue #55 is on
+  the branch `feat/55-workflow-signing`, committed but not pushed, because
+  changing the release workflow needs your yes. It signs each release,
+  re-signs `latest` in quiet weeks and produces the `updates/v1/` files as a
+  workflow artifact (`docs/releasing.md`, "Signed updates"). Publishing those
+  files to `https://syrinxapp.dev/updates/v1/` (404 on 2026-10-14) still
+  waits for your decision on where they go while the repository is private.
+- **Then create the two keys, outside any agent session** (commands below).
+  Until an agent pins them, releases stay unsigned with a warning, so
+  setting the secret first breaks nothing.
+- **Give an agent only the four public lines** the script prints (two
+  points, two identifiers) to pin in `PRODUCTION_KEYS` (issue #55). An
+  independent reviewer recomputes the identifiers and checks them against
+  your record.
 - After the next release, update an installed Syrinx yourself with Check
   for updates; record it in P1-39d's GitHub issue.
+
+#### Creating the release keys (one time)
+
+Close every agent session first. Use a normal PowerShell window in your
+Syrinx-app checkout, on a `main` that includes the merged workflow change,
+with `gh` signed in to an account that may set this repository's secrets.
+`new-release-key.ps1` makes each key in memory, sends its private half to
+exactly one place and writes nothing to disk; read it before running it.
+`-ExecutionPolicy Bypass` applies to that one run only and changes no
+setting.
+
+```powershell
+git pull
+gh auth status
+
+# Optional: a throwaway key through the workflow's own import and delete commands.
+powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\new-release-key.ps1 -Rehearse
+
+# Primary: straight into the Actions secret SYRINX_RELEASE_KEY (gh reads it from standard input).
+powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\new-release-key.ps1 -Role Primary
+
+# Backup: onto the clipboard; paste it into a new secure note named
+# "Syrinx release key (backup)", save, press Enter, and the script clears the clipboard.
+powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\new-release-key.ps1 -Role Backup
+
+# Check: lists the secret's name and date, never its value.
+gh secret list --repo Fledge-Software/Syrinx-app
+```
+
+Each key run ends with two lines, `<Role> public point: …` (128 hex digits)
+and `<Role> identifier: …` (16 hex digits). They are public: copy both
+pairs into the password manager note as your separate record, and paste
+the four lines to an agent. If Windows clipboard history (Win+V) is on,
+delete the backup's entry there as well. If you ever lose the primary, put
+the backup's text into the same secret (`gh secret set SYRINX_RELEASE_KEY
+--repo Fledge-Software/Syrinx-app`, which asks for the value: paste it and
+press Enter); installed copies already trust it.
 
 ### 2. Quiet-machine runs (unblock P1-24 and P1-26)
 

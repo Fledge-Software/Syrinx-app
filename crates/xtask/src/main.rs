@@ -15,7 +15,7 @@ use std::process::{Command, ExitCode, Stdio};
 #[cfg(not(target_os = "windows"))]
 compile_error!("Syrinx's development gate supports Windows 11 only.");
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | sign-update <options> | import-release-key <options> | delete-release-key <options> | pinned-release-keys | host-layout <options> | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.
@@ -37,9 +37,12 @@ fn run() -> Result<(), String> {
     let rest: Vec<_> = arguments.collect();
     let root = workspace_root()?;
 
-    // Only `sign-update` takes options, which the release tool itself checks.
-    if command == "sign-update" {
-        return packaging::sign_update(&root, &unicode_arguments(rest)?);
+    // Only the release-tool commands take options, which the release tool itself checks.
+    if let Some(name) = command.to_str() {
+        let options = unicode_arguments(rest.clone())?;
+        if let Some(result) = packaging::run_forwarded(&root, name, &options) {
+            return result;
+        }
     }
     if !rest.is_empty() {
         return Err(USAGE.to_owned());
