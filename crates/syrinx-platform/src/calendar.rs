@@ -168,11 +168,14 @@ mod tests {
 
     #[test]
     fn a_stored_time_formats_as_a_local_date_and_time() {
-        // 2026-07-15 12:00 UTC falls in 2026 in every time zone.
-        let text = local_date_time(1_784_116_800).expect("Windows formats the stored time");
-        assert!(text.contains("2026"), "{text}");
-        assert!(text.contains(':'), "{text}");
-        assert!(!text.contains('\0'));
+        // The owner's calendar may not be Gregorian, so only the shape is checked: a date, a
+        // separator, a time, and an hour later on the same day reads differently.
+        let noon = local_date_time(1_784_116_800).expect("Windows formats the stored time");
+        let one = local_date_time(1_784_120_400).expect("Windows formats the stored time");
+        let (date, time) = noon.rsplit_once(", ").expect("date and time are joined");
+        assert!(!date.is_empty() && !time.is_empty(), "{noon}");
+        assert_ne!(noon, one);
+        assert!(!noon.contains('\0'));
     }
 
     #[test]
