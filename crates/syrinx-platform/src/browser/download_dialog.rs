@@ -15,13 +15,15 @@ use windows::{
 };
 use wry::{WebView, WebViewExtWindows};
 
-use super::{BrowserEvent, EventSink};
+use super::{BrowserError, BrowserEvent, EventSink};
 
 /// How far, in logical pixels, the ↓ button's right edge sits left of the page card's right
 /// edge. The app's title bar layout owns this number; its test keeps the two in step.
 pub const DOWNLOADS_BUTTON_FROM_CARD_RIGHT: f32 = 138.;
 
 /// A press this soon after the flyout closed is the press that closed it, by taking focus.
+/// 400 ms covers a deliberate click's press-to-release; a later press reopens the flyout.
+/// Whether a click outside the flyout closes it at all is unproven in a real window (#89).
 const DISMISS_GRACE: Duration = Duration::from_millis(400);
 
 /// What a press of ↓ does to the flyout.
@@ -48,7 +50,8 @@ pub(super) fn toggle_step(open: bool, closed_at: Option<Instant>, now: Instant) 
     }
 }
 
-/// The flyout's margin from the card's top-right corner, in the raw pixels WebView2 lays out in.
+/// The flyout's margin from the card's top-right corner. It assumes raw pixels, as the
+/// controller's bounds are; WebView2's docs do not say, and a real window has not shown it (#89).
 pub(super) fn dialog_margin(scale: f64) -> POINT {
     let scale = if scale.is_finite() && scale > 0. {
         scale
@@ -63,31 +66,35 @@ pub(super) fn dialog_margin(scale: f64) -> POINT {
 
 /// One page's flyout: its reported open state and the margin last applied for it.
 pub(super) struct DownloadDialog {
+    id: u64,
+    events: EventSink,
     open: Rc<Cell<bool>>,
     closed_at: Rc<Cell<Option<Instant>>>,
-    margin: Cell<Option<(i32, i32)>>,
+    margin: Cell<Option<POINT>>,
 }
 
 impl DownloadDialog {
-    /// Anchors the flyout and starts following its open state, before the page is first laid out.
+    /// Starts following the flyout's open state and anchors it before the page is first laid
+    /// out. A failed anchor is reported and leaves the flyout in WebView2's corner; it never
+    /// stops the tab opening.
     pub(super) fn register(
         view: &WebView,
         id: u64,
         events: EventSink,
     ) -> windows::core::Result<Self> {
         let dialog = Self {
+            id,
+            events,
             open: Rc::new(Cell::new(false)),
             closed_at: Rc::new(Cell::new(None)),
             margin: Cell::new(None),
         };
         let core: ICoreWebView2_9 = view.webview().cast()?;
-        unsafe {
-            core.SetDefaultDownloadDialogCornerAlignment(
-                COREWEBVIEW2_DEFAULT_DOWNLOAD_DIALOG_CORNER_ALIGNMENT_TOP_RIGHT,
-            )?;
-        }
-        dialog.place(view, &core, false)?;
-        dialog.follow_open_state(&core, id, events)?;
+        dialog.follow_open_state(&core)?;
+        let anchored = dialog
+            .align(&core)
+            .and_then(|()| dialog.place(view, &core, false));
+        dialog.report_placement(anchored);
         Ok(dialog)
     }
 
@@ -98,15 +105,36 @@ impl DownloadDialog {
             DownloadStep::Close => unsafe { core.CloseDefaultDownloadDialog() },
             DownloadStep::Stay => Ok(()),
             DownloadStep::Open => {
-                // The display scale may have changed since the page was created.
-                self.place(view, &core, true)?;
+                // The display scale may have changed since the page was created. A failed
+                // placement is reported, and the flyout still opens where WebView2 last put it.
+                self.report_placement(self.place(view, &core, true));
                 unsafe { core.OpenDefaultDownloadDialog() }
             }
         }
     }
 
+    /// Puts the flyout in the page card's top-right corner, the one below ↓.
+    fn align(&self, core: &ICoreWebView2_9) -> windows::core::Result<()> {
+        unsafe {
+            core.SetDefaultDownloadDialogCornerAlignment(
+                COREWEBVIEW2_DEFAULT_DOWNLOAD_DIALOG_CORNER_ALIGNMENT_TOP_RIGHT,
+            )
+        }
+    }
+
+    /// Tells the app a placement failed, without failing the caller.
+    fn report_placement(&self, result: windows::core::Result<()>) {
+        if result.is_err() {
+            self.events.emit(BrowserEvent::Error {
+                tab: Some(self.id),
+                error: BrowserError::PageControl,
+            });
+        }
+    }
+
     /// Sets the margin for the current display scale. WebView2 applies a new margin only at
-    /// its next layout, so `relayout` repeats the current bounds to cause one.
+    /// its next layout, so `relayout` repeats the current bounds to cause one; whether a
+    /// repeat of the same bounds counts as a layout is unproven in a real window (#89).
     fn place(
         &self,
         view: &WebView,
@@ -121,13 +149,13 @@ impl DownloadDialog {
                 .RasterizationScale(&mut scale)?;
         }
         let margin = dialog_margin(scale);
-        if self.margin.get() == Some((margin.x, margin.y)) {
+        if self.margin.get() == Some(margin) {
             return Ok(());
         }
         unsafe {
             core.SetDefaultDownloadDialogMargin(margin)?;
         }
-        self.margin.set(Some((margin.x, margin.y)));
+        self.margin.set(Some(margin));
         if !relayout {
             return Ok(());
         }
@@ -139,12 +167,8 @@ impl DownloadDialog {
     }
 
     /// Records each open and close, and tells the app; the handler only reads and posts.
-    fn follow_open_state(
-        &self,
-        core: &ICoreWebView2_9,
-        id: u64,
-        events: EventSink,
-    ) -> windows::core::Result<()> {
+    fn follow_open_state(&self, core: &ICoreWebView2_9) -> windows::core::Result<()> {
+        let (id, events) = (self.id, self.events.clone());
         let open_state = self.open.clone();
         let closed_at = self.closed_at.clone();
         let changed =

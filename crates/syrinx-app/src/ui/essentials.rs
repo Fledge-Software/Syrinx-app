@@ -216,11 +216,16 @@ mod tests {
     }
 
     /// Where the title bar puts ↓, measured from the page card's right edge: past the three
-    /// caption buttons, the title bar's 4 px right padding, ☰ and the 4 px gap before it, less
-    /// the card inset.
+    /// caption buttons, the title bar's right padding, ☰ and the gap before it, less the card
+    /// inset.
     fn downloads_button_from_card_right() -> f32 {
         use syrinx_ui::metrics::chrome::{CARD_INSET, ICON_BUTTON, TITLE_BAR_HEIGHT};
-        3. * TITLE_BAR_HEIGHT + 4. + ICON_BUTTON + 4. - CARD_INSET
+        /// `title_contents`' `pr_1`.
+        const TITLE_BAR_RIGHT_PADDING: f32 = 4.;
+        /// The corner's `gap_1` between ↓ and ☰.
+        const CORNER_GAP: f32 = 4.;
+        let caption_buttons = 3. * TITLE_BAR_HEIGHT;
+        caption_buttons + TITLE_BAR_RIGHT_PADDING + ICON_BUTTON + CORNER_GAP - CARD_INSET
     }
 
     #[test]
