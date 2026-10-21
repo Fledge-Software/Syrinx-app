@@ -1,5 +1,6 @@
 //! Keeps find text in Syrinx chrome while WebView2 searches and highlights the document.
 
+use super::main_window::subscribe_in_main;
 use super::*;
 use gpui::{Focusable, Subscription};
 use gpui_component::input::{InputEvent, InputState};
@@ -44,7 +45,7 @@ impl BrowserView {
         self.find_sequence += 1;
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
         input.update(cx, |input, cx| input.focus(window, cx));
-        let subscription = cx.subscribe_in(&input, window, |this, _, event, _, cx| {
+        let subscription = subscribe_in_main(&input, cx, |this, event, _, cx| {
             match event {
                 InputEvent::Change => this.find_changed(cx),
                 InputEvent::PressEnter { .. } => this.find_step(false),
