@@ -11,6 +11,7 @@ use syrinx_ui::Palette;
 use syrinx_ui::metrics::{chrome, radius, text};
 
 use super::BrowserView;
+use super::home_palette::HomePaletteIntent;
 use super::updates::pill;
 use crate::controls::control;
 use crate::session::SessionCommand;
@@ -92,6 +93,17 @@ fn settings_route(model: &TabModelSnapshot) -> SettingsRoute {
     }
 }
 
+/// Ends a pending Ctrl T, then chooses how to show Settings. Opening Settings supersedes the
+/// Ctrl T, whose late acknowledgement would otherwise open the palette over Settings or over a
+/// Home the owner left; staying put queues no command that would end it (#78).
+fn settings_route_ending_entry(
+    intent: &mut HomePaletteIntent,
+    model: &TabModelSnapshot,
+) -> SettingsRoute {
+    intent.finish_entry();
+    settings_route(model)
+}
+
 /// Whether the model's active tab is a Settings tab.
 fn active_is_settings(model: &TabModelSnapshot) -> bool {
     model
@@ -106,7 +118,7 @@ impl BrowserView {
         if let Some(section) = section {
             self.settings.section = section;
         }
-        match settings_route(&self.model) {
+        match settings_route_ending_entry(&mut self.home_palette, &self.model) {
             SettingsRoute::Stay => return,
             SettingsRoute::SwitchTo(id) => self.activate(ActivationTarget::Tab(id)),
             SettingsRoute::Open => {
@@ -363,6 +375,8 @@ fn entry_row(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use syrinx_core::{Activation, TabKind, TabMetadata, TabModel};
 
     use super::*;
@@ -421,6 +435,57 @@ mod tests {
             SettingsRoute::SwitchTo(first)
         );
         assert_ne!(first, second);
+    }
+
+    /// Queues Ctrl T's blank tab and returns the request ID its acknowledgement carries.
+    fn press_ctrl_t(intent: &mut HomePaletteIntent) -> Option<u64> {
+        let (sender, receiver) = mpsc::channel();
+        let command = SessionCommand::NewTab {
+            address: "about:blank".into(),
+        };
+        intent
+            .send(&sender, command)
+            .expect("queue synthetic Ctrl T");
+        match receiver.recv().expect("receive synthetic Ctrl T") {
+            SessionCommand::HomeEntry { request_id, .. } => Some(request_id),
+            _ => panic!("Ctrl T must carry its Home request identity"),
+        }
+    }
+
+    #[test]
+    fn the_gear_and_key_end_a_pending_ctrl_t_so_no_palette_opens_late() {
+        // Ctrl T's Home has arrived as the active tab; Settings is open, shown or absent.
+        let mut model = TabModel::new();
+        let settings = open(&mut model, SETTINGS_ADDRESS, Activation::Background);
+        let home = open(&mut model, "about:blank", Activation::Foreground);
+        let switching = model.snapshot();
+        model.select(settings).expect("show Settings");
+        let staying = model.snapshot();
+        let mut fresh_model = TabModel::new();
+        let fresh_home = open(&mut fresh_model, "about:blank", Activation::Foreground);
+        let opening = fresh_model.snapshot();
+        for (snapshot, home, expected) in [
+            (&switching, home, SettingsRoute::SwitchTo(settings)),
+            (&staying, home, SettingsRoute::Stay),
+            (&opening, fresh_home, SettingsRoute::Open),
+        ] {
+            let mut intent = HomePaletteIntent::default();
+            let pending = press_ctrl_t(&mut intent);
+            let route = settings_route_ending_entry(&mut intent, snapshot);
+            assert_eq!(route, expected);
+            let home_active = model_with_active(snapshot, home);
+            assert!(!intent.acknowledge(&home_active, &[home], pending));
+            // A Ctrl T pressed after Settings opened is an ordinary palette entry again.
+            let fresh = press_ctrl_t(&mut intent);
+            assert!(intent.acknowledge(&home_active, &[home], fresh));
+        }
+    }
+
+    /// The snapshot with `id` active, as when Ctrl T's Home acknowledgement arrives.
+    fn model_with_active(snapshot: &TabModelSnapshot, id: TabId) -> TabModelSnapshot {
+        let mut snapshot = snapshot.clone();
+        snapshot.active_id = Some(id);
+        snapshot
     }
 
     #[test]
