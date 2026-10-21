@@ -10,6 +10,29 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+## 2026-10-21
+
+- **Syrinx remembers each site's zoom level (#90).** The owner said yes to
+  storing per-site zoom, as Chrome, Edge and Firefox do. It is kept only in
+  Syrinx's local database, keyed by site, and is never exported or sent
+  anywhere. Without it, zoom resets on every new tab and restart, which is
+  what #90 reported.
+- **Settings opens from the settings button at the bottom of the sidebar
+  (#91).** The spec already puts settings in the sidebar's bottom row; the
+  owner confirmed that this button is the way into the Settings page, and
+  that themes are reachable from it.
+- **The Glass theme must look like the canvas's Glass mockups (#93).** The
+  owner wants Glass and its Transparency setting to show real translucency
+  and glass edges, as in `design/canvas/project/Main.dc.html`, not the
+  near-opaque fill Syrinx draws today. The canvas is the target.
+- **The cookie-flush fix keeps Google signed in (#96).** The owner checked
+  that Google stays signed in after closing and reopening Syrinx with #111,
+  so #111 closes #96.
+- **The full-text bake-off runs tonight (#52).** The owner meant the
+  2026-10-20 overnight run to include the quiet-machine comparison; it did
+  not run. It is scheduled for the night of 2026-10-21, with every agent
+  build stopped first.
+
 ## 2026-10-18
 
 - **Syrinx takes find, history and zoom keys even over a focused page.**
