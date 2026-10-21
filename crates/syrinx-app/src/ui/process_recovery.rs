@@ -75,10 +75,8 @@ impl BrowserView {
             return;
         }
         window.focus(&self.focus, cx);
-        if window.is_window_active()
-            && let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd)
-        {
-            self.message = error.to_string();
+        if window.is_window_active() {
+            self.move_keys_to_chrome();
         }
     }
 
