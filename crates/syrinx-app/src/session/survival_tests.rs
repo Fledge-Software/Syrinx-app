@@ -1,5 +1,5 @@
-//! Proves that one refused write, a busy database or a window that stopped listening no longer
-//! ends the session worker, while lost or untrustworthy storage still stops it (#9).
+//! Proves that a busy database, one refused setting or a window that stopped listening no
+//! longer ends the session worker, while damaged or lost storage still stops it (#9).
 
 use syrinx_store::{EncodingField, StoreOperation};
 
@@ -9,11 +9,13 @@ use super::*;
 const EXPANDED_FOLDERS_KEY: &str = "sidebar.expanded_folders";
 
 /// A storage failure as the store reports it, with a SQLite result code.
-fn database(operation: StoreOperation, code: i32) -> SessionError {
-    SessionError::Store(StoreError::Database {
-        operation,
-        code: Some(code),
-    })
+fn database(operation: StoreOperation, code: Option<i32>) -> SessionError {
+    SessionError::Store(StoreError::Database { operation, code })
+}
+
+/// SQLITE_BUSY from the store's writer.
+fn busy() -> SessionError {
+    database(StoreOperation::BeginWrite, Some(5))
 }
 
 /// The next event, which must be a failure the worker survived.
@@ -33,6 +35,18 @@ fn cause(error: &SessionError) -> &SessionError {
         SessionError::During { error, .. } => cause(error),
         error => error,
     }
+}
+
+fn is_busy(error: &SessionError) -> bool {
+    matches!(
+        cause(error),
+        SessionError::Store(StoreError::Database { code: Some(code), .. }) if code & 0xff == 5
+    )
+}
+
+fn read_survived_log(fixture: &Fixture) -> Vec<String> {
+    let log = checked_io(fs::read_to_string(fixture.0.join(stop::SURVIVED_LOG_NAME)));
+    log.lines().map(str::to_owned).collect()
 }
 
 /// Holds SQLite's write lock from a second connection, as another writer would.
@@ -55,15 +69,32 @@ fn release_write_lock(connection: rusqlite::Connection) {
         .expect("close the second synthetic connection");
 }
 
+/// A worker on the fixture's folder, driven directly so a test can run its idle step.
+fn direct_worker(fixture: &Fixture) -> (Store, Worker) {
+    let lease =
+        Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let store = Store::open(lease).expect("open synthetic store");
+    let worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    (store, worker)
+}
+
+fn close_direct(fixture: Fixture, store: Store, worker: Worker) {
+    // The worker holds the deletion journal until it is dropped.
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}
+
 #[test]
-fn stop_classification_keeps_lost_storage_fatal_and_one_refused_write_survivable() {
-    // A busy or locked database, a full disk, a refused row and an in-memory index refusal pass.
+fn stop_classification_keeps_damaged_storage_fatal_and_one_refused_write_survivable() {
+    // A busy or locked database, a full disk, a refused setting and an index refusal pass.
     for error in [
-        database(StoreOperation::BeginWrite, 5),
-        database(StoreOperation::Commit, 517),
-        database(StoreOperation::Write, 6),
-        database(StoreOperation::Write, 13),
-        database(StoreOperation::Write, 275),
+        busy(),
+        database(StoreOperation::Commit, Some(517)),
+        database(StoreOperation::Write, Some(6)),
+        database(StoreOperation::Write, Some(13)),
+        database(StoreOperation::Write, Some(275)),
         SessionError::Store(StoreError::InvalidEncoding(EncodingField::Setting)),
         SessionError::Store(StoreError::TooManyRecords),
         SessionError::Search(syrinx_search::SearchError::TooManyEntries),
@@ -74,7 +105,8 @@ fn stop_classification_keeps_lost_storage_fatal_and_one_refused_write_survivable
         assert!(stop::survivable(&error), "{error:?}");
         assert!(stop::survivable(&tagged), "{tagged:?}");
     }
-    // Lost or damaged storage, a stale revision and an unfinished rollback still stop the loop.
+    // Lost, damaged or changed storage, a read-side encoding error, an unknown database error,
+    // an unfinished rollback and a tab model that cannot be saved still stop the loop.
     for error in [
         SessionError::Location(LocationError::StorageBusy),
         SessionError::Store(StoreError::Closed),
@@ -84,14 +116,25 @@ fn stop_classification_keeps_lost_storage_fatal_and_one_refused_write_survivable
             expected: 4,
             actual: 5,
         }),
-        database(StoreOperation::Write, 11),
-        database(StoreOperation::Write, 26),
-        database(StoreOperation::Write, 8),
-        database(StoreOperation::Rollback, 5),
+        SessionError::Store(StoreError::InvalidEncoding(EncodingField::SessionState)),
+        SessionError::Store(StoreError::InvalidEncoding(EncodingField::Metadata)),
+        SessionError::Store(StoreError::InvalidEncoding(EncodingField::Destination)),
+        SessionError::Store(StoreError::InvalidEncoding(EncodingField::History)),
+        database(StoreOperation::Write, None),
+        database(StoreOperation::Write, Some(11)),
+        database(StoreOperation::Write, Some(26)),
+        database(StoreOperation::Write, Some(8)),
+        database(StoreOperation::Read, Some(8202)),
+        database(StoreOperation::Write, Some(8458)),
+        database(StoreOperation::Rollback, Some(5)),
         SessionError::Store(StoreError::CleanupFailed {
             primary: Box::new(StoreError::TooManyRecords),
             cleanup: Box::new(StoreError::Closed),
         }),
+        SessionError::TabsNotSaved {
+            attempts: 3,
+            error: Box::new(busy()),
+        },
         SessionError::WorkerPanicked,
         SessionError::RecoveryUnavailable,
     ] {
@@ -128,9 +171,10 @@ fn an_oversized_setting_is_refused_without_stopping_the_worker() {
     );
     assert_eq!(opened.model.tabs.len(), 1);
     stop(handle, &mut events);
-    let lines = read_stop_log(&fixture);
+    let lines = read_survived_log(&fixture);
     assert_eq!(lines, [stop::survived_line(&refused)]);
     assert!(!lines[0].contains("example.test"), "{lines:?}");
+    assert!(!fixture.0.join(stop::LOG_NAME).exists());
 
     let (restarted, mut events) = fixture.start();
     assert_eq!(state(&mut events).model, opened.model);
@@ -139,7 +183,7 @@ fn an_oversized_setting_is_refused_without_stopping_the_worker() {
 }
 
 #[test]
-fn a_busy_database_delays_saving_without_stopping_the_worker() {
+fn a_busy_database_holds_the_change_until_a_later_save_without_stopping_the_worker() {
     let fixture = Fixture::new();
     let (handle, mut events) = fixture.start();
     state(&mut events);
@@ -168,10 +212,7 @@ fn a_busy_database_delays_saving_without_stopping_the_worker() {
     assert_eq!(shown.revision, opened.revision);
     for _ in ["tab save", "history visit"] {
         let refused = survived(&mut events);
-        assert!(matches!(
-            cause(&refused),
-            SessionError::Store(StoreError::Database { code: Some(code), .. }) if code & 0xff == 5
-        ));
+        assert!(is_busy(&refused), "{refused:?}");
         assert!(
             refused
                 .to_string()
@@ -180,15 +221,146 @@ fn a_busy_database_delays_saving_without_stopping_the_worker() {
     }
     release_write_lock(lock);
 
-    // The next command saves the change the busy database refused, and it survives a restart.
+    // Within the retry delay a command changes only memory, without waiting on the database.
     let focused = change(&handle, &mut events, SessionCommand::FocusTab(id));
-    assert!(focused.revision > opened.revision);
+    assert_eq!(focused.revision, opened.revision);
+    // Shutdown saves the held change, and it survives a restart.
     stop(handle, &mut events);
     let (restarted, mut events) = fixture.start();
     let restored = state(&mut events);
     assert_eq!(restored.model.tabs[0].metadata.address, LIVE_ADDRESS);
     stop(restarted, &mut events);
     fixture.cleanup();
+}
+
+#[test]
+fn the_idle_step_saves_a_change_a_busy_database_refused() {
+    let fixture = Fixture::new();
+    let (store, mut worker) = direct_worker(&fixture);
+    let (sender, mut events) = unbounded();
+    let lock = hold_write_lock(&fixture);
+    worker
+        .handle(
+            &store,
+            SessionCommand::NewTab {
+                address: LIVE_ADDRESS.into(),
+            },
+            &sender,
+        )
+        .expect("a busy save is survived");
+    let shown = state(&mut events);
+    assert!(is_busy(&survived(&mut events)));
+    assert!(worker.unsaved.pending());
+    release_write_lock(lock);
+
+    // Once the delay has passed, the idle wake-up saves the model with no command needed.
+    worker.unsaved.retry_now();
+    worker.idle(&store, &sender).expect("idle retry succeeds");
+    assert!(!worker.unsaved.pending());
+    let stored = store.load().expect("read the retried save");
+    assert_eq!(stored.snapshot, shown.model);
+    close_direct(fixture, store, worker);
+}
+
+#[test]
+fn a_save_still_refused_at_shutdown_stops_the_worker_with_its_reason() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    let lock = hold_write_lock(&fixture);
+    send(
+        &handle,
+        SessionCommand::NewTab {
+            address: LIVE_ADDRESS.into(),
+        },
+    );
+    state(&mut events);
+    assert!(is_busy(&survived(&mut events)));
+
+    // Shutdown is the last chance to save, so its refusal is the reason the worker stops.
+    send(&handle, SessionCommand::Shutdown);
+    let error = match next_event(&mut events) {
+        SessionEvent::Failure { error, fatal: true } => error,
+        event => panic!("expected the shutdown save's stop, got {event:?}"),
+    };
+    // The lock also holds up the store's closing optimisation, reported alongside.
+    let SessionError::CleanupFailed { primary, .. } = &error else {
+        panic!("expected the shutdown save and the busy close, got {error:?}");
+    };
+    assert!(is_busy(primary), "{primary:?}");
+    assert!(
+        primary
+            .to_string()
+            .ends_with("(while saving the tabs at shutdown)")
+    );
+    assert!(matches!(next_event(&mut events), SessionEvent::Stopped));
+    assert_eq!(handle.join(), Err(error.clone()));
+    release_write_lock(lock);
+    // The stop line is written before the store closes, so it names the save itself.
+    assert_eq!(read_stop_log(&fixture), [stop::stop_line(primary)]);
+    fixture.cleanup();
+}
+
+#[test]
+fn an_interrupted_history_clear_is_finished_while_idle() {
+    let fixture = Fixture::new();
+    let (store, mut worker) = direct_worker(&fixture);
+    let (sender, mut events) = unbounded();
+    worker
+        .handle(
+            &store,
+            SessionCommand::NewTab {
+                address: "about:blank".into(),
+            },
+            &sender,
+        )
+        .expect("open a synthetic tab");
+    let id = state(&mut events).model.active_id.expect("tab is active");
+    worker
+        .handle(
+            &store,
+            SessionCommand::ObserveMetadata {
+                id,
+                title: None,
+                address: Some(LIVE_ADDRESS.into()),
+            },
+            &sender,
+        )
+        .expect("record a synthetic visit");
+    state(&mut events);
+    // One row for the tab and one for the remembered address.
+    assert_eq!(worker.catalogue.len(), 2);
+
+    // A busy database interrupts the clear; the dialog hears it and the worker goes on.
+    let lock = hold_write_lock(&fixture);
+    worker
+        .handle(
+            &store,
+            SessionCommand::ClearHistory {
+                request_id: 7,
+                start: 0,
+                end: i64::MAX,
+            },
+            &sender,
+        )
+        .expect("a busy clear is survived");
+    match next_event(&mut events) {
+        SessionEvent::HistoryCleared {
+            request_id: 7,
+            result: Err(error),
+        } => assert!(is_busy(&error), "{error:?}"),
+        event => panic!("expected the refused clear, got {event:?}"),
+    }
+    assert_eq!(worker.catalogue.len(), 2);
+    release_write_lock(lock);
+
+    // The idle wake-up finishes the journaled clear, so the cleared address stops showing.
+    worker
+        .idle(&store, &sender)
+        .expect("idle finishes the clear");
+    assert_eq!(worker.catalogue.len(), 1);
+    assert!(store.recent_visits(10).expect("read history").is_empty());
+    close_direct(fixture, store, worker);
 }
 
 #[test]
@@ -213,7 +385,7 @@ fn the_worker_keeps_saving_after_the_window_stops_listening() {
         .expect("the loop ends only when the commands do");
 
     // The log names the lost window once, with the operation and no address.
-    let lines = read_stop_log(&fixture);
+    let lines = read_survived_log(&fixture);
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].contains("event receiver closed"), "{lines:?}");
     assert!(lines[0].ends_with("(while opening a new tab)"), "{lines:?}");
@@ -229,13 +401,43 @@ fn the_worker_keeps_saving_after_the_window_stops_listening() {
 }
 
 #[test]
+fn a_flood_of_survived_failures_leaves_the_stop_log_intact() {
+    let fixture = Fixture::new();
+    checked_io(fs::create_dir(&fixture.0));
+    let stopped = stop::during("switching tabs")(busy());
+    stop::append_stop(&fixture.0, &stopped).expect("write the earlier stop");
+
+    // Repeats of one failure collapse into a line and a count.
+    let mut survival = stop::Survival::new();
+    survival.keep_in(fixture.0.clone());
+    survival.operation = "saving the tabs";
+    for _ in 0..1_000 {
+        survival
+            .survive_shown(busy())
+            .expect("a busy database is survived");
+    }
+    survival.finish();
+    let first = stop::survived_line(&stop::during("saving the tabs")(busy()));
+    assert_eq!(
+        read_survived_log(&fixture),
+        [first, "The line above repeated 999 more times".to_owned()]
+    );
+
+    // Even distinct lines far past both logs' caps only rotate the survived log.
+    for number in 0..4_000 {
+        let line = format!("synthetic survived failure {number}");
+        stop::append_survived(&fixture.0, &line).expect("append a survived line");
+    }
+    assert_eq!(read_stop_log(&fixture), [stop::stop_line(&stopped)]);
+    assert!(fixture.0.join(stop::OLD_SURVIVED_LOG_NAME).exists());
+    assert!(!fixture.0.join(stop::OLD_LOG_NAME).exists());
+    fixture.cleanup();
+}
+
+#[test]
 fn a_fatal_stop_is_still_kept_in_the_log_beside_the_database() {
     let fixture = Fixture::new();
-    let lease =
-        Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic stop store"));
-    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
-    let store = Store::open(lease).expect("open synthetic stop store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let (store, mut worker) = direct_worker(&fixture);
     let (sender, mut events) = unbounded();
     worker
         .handle(

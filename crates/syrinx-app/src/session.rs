@@ -9,6 +9,7 @@ mod recovery;
 mod retention;
 mod stop;
 mod synthetic;
+mod unsaved;
 mod usage;
 
 pub use folders::FolderCommand;
@@ -318,6 +319,11 @@ pub enum SessionError {
         primary: Box<SessionError>,
         cleanup: StoreError,
     },
+    /// Tab saves kept failing, or failed in a way that will recur; the worker stops (#9).
+    TabsNotSaved {
+        attempts: u32,
+        error: Box<SessionError>,
+    },
     /// The error that ended the worker's loop, with the fixed name of what it was doing.
     During {
         operation: &'static str,
@@ -366,6 +372,12 @@ impl fmt::Display for SessionError {
             }
             Self::CleanupFailed { primary, cleanup } => {
                 write!(formatter, "{primary}; shutdown also failed: {cleanup}")
+            }
+            Self::TabsNotSaved { attempts, error } => {
+                write!(
+                    formatter,
+                    "The tabs could not be saved ({attempts} tries): {error}"
+                )
             }
             Self::During { operation, error } => write!(formatter, "{error} (while {operation})"),
         }
@@ -475,7 +487,7 @@ fn serve_accepted(
     events: &UnboundedSender<SessionEvent>,
     data_dir: &std::path::Path,
 ) -> Result<(), SessionError> {
-    worker.stop_log = Some(data_dir.to_path_buf());
+    worker.survival.keep_in(data_dir.to_path_buf());
     let result = serve_counted(
         &usage,
         startup,
@@ -485,6 +497,7 @@ fn serve_accepted(
         events,
         data_dir,
     );
+    worker.survival.finish();
     if let Err(error) = &result {
         stop::keep_stop(data_dir, error);
     }
@@ -708,14 +721,10 @@ struct Worker {
     acceptance: bool,
     /// The shared usage counters (AN-01); they count only while the owner has them on.
     usage: Arc<UsageRecorder>,
-    /// What the loop is doing, named in each failure it survives or stops on (#9).
-    operation: &'static str,
-    /// The folder of the stop log, which also keeps survived failures; set once serving.
-    stop_log: Option<PathBuf>,
-    /// A tab save was refused while storage stayed usable; the next save retries the model.
-    unsaved: bool,
-    /// Cleared once the window stops taking events, so that is logged only once.
-    window_listening: bool,
+    /// Names what the loop is doing and decides which failures it survives (#9).
+    survival: stop::Survival,
+    /// A tab model a busy database refused, and when to try it again (#9).
+    unsaved: unsaved::Unsaved,
 }
 
 /// The model after a command, and the failures it survived, reported once it is published.
@@ -769,10 +778,8 @@ impl Worker {
             synthetic_rows: 0,
             acceptance: false,
             usage: Arc::default(),
-            operation: "starting",
-            stop_log: None,
-            unsaved: false,
-            window_listening: true,
+            survival: stop::Survival::new(),
+            unsaved: unsaved::Unsaved::default(),
         })
     }
 
@@ -801,29 +808,32 @@ impl Worker {
             } else {
                 delay
             };
+            let wait = match self.unsaved.wait(Instant::now()) {
+                Some(retry) => wait.min(retry),
+                None => wait,
+            };
             let received = commands.recv_timeout(wait);
             // The worker's existing wake-ups carry the five-minute usage write; it adds none,
             // and reads no clock unless a write is waiting.
             if usage.pending()
                 && let Err(error) = usage.write_if_due(Instant::now())
             {
-                self.operation = "reporting a usage write failure";
-                let reported = emit_recoverable(events, SessionError::Usage(error));
-                self.survive_result(reported, events)?;
+                self.survival.operation = "reporting a usage write failure";
+                self.survival.survive(SessionError::Usage(error), events)?;
             }
             match received {
                 Ok(SessionCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return self.finish_serving(store, events);
                 }
                 Ok(SessionCommand::Usage(control)) => {
-                    self.operation = stop::CHANGING_USAGE;
+                    self.survival.operation = stop::CHANGING_USAGE;
                     let (status, problem) = usage.control(control, local_today(), Instant::now());
                     let problem = problem.map(SessionError::Usage);
                     let sent = emit(events, SessionEvent::Usage { status, problem });
-                    self.survive_result(sent, events)?;
+                    self.survival.result(sent, events)?;
                 }
                 Ok(SessionCommand::UsageReport { request_id, period }) => {
-                    self.operation = stop::BUILDING_USAGE_REPORT;
+                    self.survival.operation = stop::BUILDING_USAGE_REPORT;
                     let result = usage
                         .report(period, local_today())
                         .map_err(SessionError::Usage);
@@ -833,21 +843,25 @@ impl Worker {
                         result,
                     };
                     let sent = emit(events, answer);
-                    self.survive_result(sent, events)?;
+                    self.survival.result(sent, events)?;
                 }
                 Ok(command) => {
-                    self.operation = command.operation();
+                    self.survival.operation = command.operation();
                     // Titles that settled before this command name the page they were reported on.
                     let settled = self.settle_titles(store, false);
-                    self.survive_result(settled, events)?;
+                    self.survival.result(settled, events)?;
                     let handled = self.handle(store, command, events);
-                    self.survive_result(handled, events)?;
+                    self.survival.result(handled, events)?;
                     delay = IDLE_DELAY;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
-                    self.operation = "saving settled page titles";
+                    // A due tab retry runs here too, so a passed retry time cannot zero the wait.
+                    self.survival.operation = "saving the tabs";
+                    let retried = self.retry_unsaved(store);
+                    self.survival.result(retried, events)?;
+                    self.survival.operation = "saving settled page titles";
                     let settled = self.settle_titles(store, false);
-                    self.survive_result(settled, events)?;
+                    self.survival.result(settled, events)?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     self.idle(store, events)?;
@@ -863,20 +877,24 @@ impl Worker {
         store: &Store,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        self.operation = "saving the tabs";
+        self.survival.operation = "saving the tabs";
         let retried = self.retry_unsaved(store);
-        self.survive_result(retried, events)?;
+        self.survival.result(retried, events)?;
+        // A clear that a busy database interrupted must not leave cleared history showing (D47).
+        self.survival.operation = "clearing history";
+        let cleared = self.finish_pending_clear(store);
+        self.survival.result(cleared, events)?;
         let now = utc_seconds();
         // A clock failure is reported once, by the backup check below.
         if let Ok(now) = &now {
-            self.operation = "expiring old history";
+            self.survival.operation = "expiring old history";
             let expired = self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events);
-            self.survive_result(expired, events)?;
+            self.survival.result(expired, events)?;
         }
         // The store retains its daily due state; retries remain idle and bounded.
-        self.operation = "taking the daily backup";
+        self.survival.operation = "taking the daily backup";
         let backed_up = backup_while_idle(store, now, &self.usage, events);
-        self.survive_result(backed_up, events)
+        self.survival.result(backed_up, events)
     }
 
     /// Saves what is still held at exit: a model a busy database refused, and held titles.
@@ -886,85 +904,15 @@ impl Worker {
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
         // The last chance to save the tabs, so a refusal here is the reason the loop ends.
-        self.retry_unsaved(store)
-            .map_err(stop::during("saving the tabs at shutdown"))?;
+        if self.unsaved.pending() {
+            let model = self.model.snapshot();
+            self.save_model(store, &model)
+                .map_err(stop::during("saving the tabs at shutdown"))?;
+        }
         // A title still held at exit most likely names the tab's current page.
-        self.operation = "saving page titles at shutdown";
+        self.survival.operation = "saving page titles at shutdown";
         let settled = self.settle_titles(store, true);
-        self.survive_result(settled, events)
-    }
-
-    /// Passes a step's success through, or lets the loop survive its failure if it can.
-    fn survive_result(
-        &mut self,
-        result: Result<(), SessionError>,
-        events: &UnboundedSender<SessionEvent>,
-    ) -> Result<(), SessionError> {
-        match result {
-            Ok(()) => Ok(()),
-            Err(error) => self.survive(error, events),
-        }
-    }
-
-    /// Lets the loop go on after a failure that leaves storage usable (#9): it is logged
-    /// beside the database and shown in the window. Any other failure is returned, named
-    /// with the operation, to stop the loop.
-    fn survive(
-        &mut self,
-        error: SessionError,
-        events: &UnboundedSender<SessionEvent>,
-    ) -> Result<(), SessionError> {
-        let error = self.tagged(error);
-        self.survive_shown(error.clone())?;
-        // A window that stopped listening has nowhere to show it; saving still goes on.
-        if stop::window_lost(&error) {
-            return Ok(());
-        }
-        match emit_recoverable(events, error) {
-            Ok(()) => Ok(()),
-            Err(lost) => self.survive_shown(lost),
-        }
-    }
-
-    /// As `survive`, for a failure the window has already been told about: only logged.
-    fn survive_shown(&mut self, error: SessionError) -> Result<(), SessionError> {
-        let error = self.tagged(error);
-        if !stop::survivable(&error) {
-            return Err(error);
-        }
-        self.keep_survived(&error);
-        Ok(())
-    }
-
-    /// Logs a survived failure; a window that stopped listening is logged the first time only.
-    fn keep_survived(&mut self, error: &SessionError) {
-        if stop::window_lost(error) {
-            if !self.window_listening {
-                return;
-            }
-            self.window_listening = false;
-        }
-        stop::keep_survived(self.stop_log.as_deref(), error);
-    }
-
-    /// Names the operation the loop is running, unless the failure already names one.
-    fn tagged(&self, error: SessionError) -> SessionError {
-        match error {
-            SessionError::During { .. } => error,
-            error => stop::during(self.operation)(error),
-        }
-    }
-
-    /// Reports each failure a command survived, after its state has been published.
-    fn report_refused(
-        &mut self,
-        refused: Vec<SessionError>,
-        events: &UnboundedSender<SessionEvent>,
-    ) -> Result<(), SessionError> {
-        for error in refused {
-            self.survive(error, events)?;
-        }
-        Ok(())
+        self.survival.result(settled, events)
     }
 
     fn settle_titles(&mut self, store: &Store, force: bool) -> Result<(), SessionError> {
@@ -1110,7 +1058,7 @@ impl Worker {
         self.history.retain(&after);
         if let Some(observation) = observation {
             let recorded = self.record_history(store, &after, observation);
-            keep_refused(&mut refused, recorded)?;
+            stop::keep_refused(&mut refused, recorded)?;
         }
         let created: Vec<_> = after
             .tabs
@@ -1123,11 +1071,11 @@ impl Worker {
         let popup = popup_request.map(|request| (request, created.first().copied()));
         if let Some((_, Some(tab))) = popup {
             let registered = self.register_popup_tab(&after, tab);
-            keep_refused(&mut refused, registered)?;
+            stop::keep_refused(&mut refused, registered)?;
         }
         // Survived failures follow the state, so its "Saved locally" cannot hide them.
         let published = self.publish(events, after, created, navigate, home_entry, popup);
-        self.report_refused(refused, events)?;
+        self.survival.report_refused(refused, events)?;
         published
     }
 
@@ -1165,18 +1113,20 @@ impl Worker {
         let after = self.model.snapshot();
         let changed = *before != after;
         let mut refused = Vec::new();
-        if changed || self.unsaved {
+        // While a refused save waits out its delay, commands change only memory (#9).
+        if (changed || self.unsaved.pending()) && self.unsaved.may_save(Instant::now()) {
             let saved = self.save_model(store, &after);
-            keep_refused(&mut refused, saved)?;
+            stop::keep_refused(&mut refused, saved)?;
         }
         if changed {
             let indexed = sync_catalogue(&mut self.catalogue, &self.popup_tabs, before, &after);
-            keep_refused(&mut refused, indexed)?;
+            stop::keep_refused(&mut refused, indexed)?;
         }
         Ok(Persisted { after, refused })
     }
 
-    /// Saves `model` in one store transaction; a failure leaves it marked unsaved (#9).
+    /// Saves `model` in one store transaction; a refusal leaves it waiting to retry, or stops
+    /// the worker once it will recur (#9).
     fn save_model(&mut self, store: &Store, model: &TabModelSnapshot) -> Result<(), SessionError> {
         // The clock is read only while the owner counts usage.
         let started = self.usage.is_enabled().then(Instant::now);
@@ -1184,25 +1134,35 @@ impl Worker {
             Ok(revision) => revision,
             Err(error) => {
                 self.usage.error(ErrorCategory::StorageWrite);
-                self.unsaved = true;
-                return Err(SessionError::Store(error));
+                return Err(self.unsaved.refused(error, Instant::now()));
             }
         };
         self.revision = revision;
-        self.unsaved = false;
+        self.unsaved.saved();
         if let Some(started) = started {
             self.usage.time(Timing::StoreSave, started.elapsed());
         }
         Ok(())
     }
 
-    /// Saves the model again if a busy or refusing database kept its last change from disk.
+    /// Saves the model again, once its delay has passed, if a busy database refused it.
     fn retry_unsaved(&mut self, store: &Store) -> Result<(), SessionError> {
-        if !self.unsaved {
+        if !self.unsaved.pending() || !self.unsaved.may_save(Instant::now()) {
             return Ok(());
         }
         let model = self.model.snapshot();
         self.save_model(store, &model)
+    }
+
+    /// Finishes a history clear that a busy database interrupted, if one is pending.
+    fn finish_pending_clear(&mut self, store: &Store) -> Result<(), SessionError> {
+        deletions::finish_pending(
+            store,
+            &mut self.deletions,
+            &mut self.catalogue,
+            &mut self.history,
+        )
+        .map(drop)
     }
 
     /// Adds the whole import in memory, then commits it with a single save.
@@ -1228,7 +1188,7 @@ impl Worker {
         let result = Ok(commit);
         let published = emit(events, SessionEvent::Imported { request_id, result })
             .and_then(|()| self.publish(events, after, Vec::new(), None, None, None));
-        self.report_refused(refused, events)?;
+        self.survival.report_refused(refused, events)?;
         published
     }
 
@@ -1311,7 +1271,7 @@ impl Worker {
         };
         let delivered = emit(events, SessionEvent::HistoryCleared { request_id, result });
         if let Some(failure) = failure {
-            self.survive_shown(failure)?;
+            self.survival.survive_shown(failure)?;
         }
         delivered
     }
@@ -1343,7 +1303,7 @@ impl Worker {
             Err(error) => {
                 // A journal refusal is shown once a day rather than at every idle check.
                 self.retention.due = now.saturating_add(retention::DAY_SECS);
-                emit_recoverable(events, error)
+                self.survival.survive(error, events)
             }
         }
     }
@@ -1733,22 +1693,6 @@ fn entry(target: Target, metadata: &TabMetadata, open: bool) -> Entry {
             last_used: None,
         },
         open,
-    }
-}
-
-/// Keeps a step's survivable failure in `refused`, to report once the command's state is
-/// published; a failure that must stop the loop is returned at once.
-fn keep_refused(
-    refused: &mut Vec<SessionError>,
-    result: Result<(), SessionError>,
-) -> Result<(), SessionError> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(error) if stop::survivable(&error) => {
-            refused.push(error);
-            Ok(())
-        }
-        Err(error) => Err(error),
     }
 }
 

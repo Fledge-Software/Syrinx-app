@@ -86,6 +86,8 @@ impl Fixture {
             "usage.json.damaged",
             stop::LOG_NAME,
             stop::OLD_LOG_NAME,
+            stop::SURVIVED_LOG_NAME,
+            stop::OLD_SURVIVED_LOG_NAME,
         ] {
             remove_if_present(&self.0.join(name), false);
         }

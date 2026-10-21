@@ -1,11 +1,8 @@
 //! Delivers background work to the browser view in its main window, whichever window drew it last.
 
-use std::time::Duration;
-
-use gpui::{AppContext, AsyncWindowContext, Context, WeakEntity, Window};
+use gpui::{AppContext, Context, WeakEntity, Window};
 
 use super::BrowserView;
-use crate::session::SessionEvent;
 
 /// Runs `update` on the browser view inside the main window. GPUI's `update_in` would use
 /// the window that drew the view last, which fails once the sidebar peek closes (traps file).
@@ -18,41 +15,6 @@ pub(super) fn update_in_main<C: AppContext, R>(
     cx.update_window(main, |_, window, cx| {
         view.update(cx, |browser, cx| update(browser, window, cx))
     })?
-}
-
-/// How long a session event waits before trying a busy main window again.
-const BUSY_RETRY: Duration = Duration::from_millis(16);
-
-/// Hands one session event to the browser view, waiting while the main window cannot be
-/// updated (the app is mid-update), so one busy moment never drops the stream (#9). Fails
-/// only once the view itself is gone.
-pub(super) async fn deliver_session_event(
-    view: &WeakEntity<BrowserView>,
-    cx: &mut AsyncWindowContext,
-    event: SessionEvent,
-) -> gpui::Result<()> {
-    let mut pending = Some(event);
-    let mut waited = false;
-    loop {
-        let result = update_in_main(view, cx, |browser, window, cx| {
-            if let Some(event) = pending.take() {
-                browser.session_event(event, window, cx);
-            }
-        });
-        let error = match result {
-            Ok(()) => return Ok(()),
-            Err(error) => error,
-        };
-        // Delivered before failing, or nobody left to deliver to: nothing to retry.
-        if pending.is_none() || view.upgrade().is_none() {
-            return Err(error);
-        }
-        if !waited {
-            eprintln!("A session event is waiting for the browser window: {error:#}");
-            waited = true;
-        }
-        cx.background_executor().timer(BUSY_RETRY).await;
-    }
 }
 
 #[cfg(test)]
