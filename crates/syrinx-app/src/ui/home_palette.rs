@@ -175,6 +175,17 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_gear_press_cancels_a_pending_ctrl_t_palette() {
+        // Showing or closing the panel on Home queues no command, so the gear finishes the
+        // pending entry itself; the late acknowledgement then opens nothing over it (#78).
+        let (home, id) = home();
+        let mut intent = HomePaletteIntent::default();
+        let request = queue(&mut intent, new_home());
+        intent.finish_entry();
+        assert!(!intent.acknowledge(&home, &[id], Some(request)));
+    }
+
+    #[test]
     fn saved_or_reopened_real_page_cannot_rearm_an_earlier_home_acknowledgment() {
         let (home, id) = home();
         let saved = syrinx_core::SavedPageId::new(1).expect("synthetic saved ID");

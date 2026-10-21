@@ -139,6 +139,9 @@ impl BrowserView {
     /// The sidebar's Appearance (settings) button: the Customize panel lives on Home, so
     /// another page switches to an open Home tab, or opens one, with the panel open.
     pub(super) fn open_appearance(&mut self) {
+        // The gear supersedes a pending Ctrl T, whose late acknowledgement would otherwise
+        // open the palette over the panel; showing or closing it queues no command (#78).
+        self.home_palette.finish_entry();
         let route = appearance_route(
             self.home_showing(),
             self.home.customize_open,
