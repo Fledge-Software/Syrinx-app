@@ -103,11 +103,13 @@ fn sign_bytes(
 
 /// Verify a published release except for its statement's expiry, returning that statement.
 ///
-/// Both signatures must verify against `keys` and the statement must name this manifest, so a
-/// tampered or substituted download is refused before any key is opened.
+/// Both signatures must verify against `keys`, the statement must name this manifest, and both
+/// must be for `expected`, the tag's version, so a tampered download or an older release's
+/// valid files are refused before any key is opened.
 pub fn verify_published(
     release: &PublishedRelease<'_>,
     keys: &KeySet,
+    expected: Version,
 ) -> Result<Statement, UpdateError> {
     // Only signed bytes reach the parser.
     let signature =
@@ -117,8 +119,15 @@ pub fn verify_published(
         .ok_or(UpdateError::UnknownKey)?;
     check_signature(key, release.statement, &signature)?;
     let statement = Statement::parse(release.statement)?;
+    if statement.version() != expected {
+        return Err(UpdateError::UnexpectedVersion {
+            expected,
+            published: statement.version(),
+        });
+    }
 
-    // At its own issue time a statement is fresh, so this sets aside only its expiry.
+    // At its own issue time a statement is fresh, so this sets aside only its expiry. The
+    // manifest check also requires the manifest's version to equal the statement's.
     verify_statement(
         release.statement,
         release.statement_signature,
@@ -135,16 +144,17 @@ pub fn verify_published(
     Ok(statement)
 }
 
-/// Sign only a new statement for a published manifest, after verifying the release.
+/// Sign only a new statement for a published manifest of `expected`, after verifying the release.
 ///
 /// The manifest and its signature are never re-signed; the serial must exceed the old one.
 pub fn resign_statement(
     release: &PublishedRelease<'_>,
     signer: &impl Signer,
     keys: &KeySet,
+    expected: Version,
     terms: StatementTerms,
 ) -> Result<SignedStatement, UpdateError> {
-    let previous = verify_published(release, keys)?;
+    let previous = verify_published(release, keys, expected)?;
     if terms.serial <= previous.serial() {
         return Err(UpdateError::StatementReplayed {
             accepted: previous.serial(),
@@ -152,6 +162,12 @@ pub fn resign_statement(
         });
     }
     let manifest = Manifest::parse(release.manifest)?;
+    if manifest.version() != expected {
+        return Err(UpdateError::UnexpectedVersion {
+            expected,
+            published: manifest.version(),
+        });
+    }
     let key_id = KeyId::of(&signer.public_point()?)?;
     keys.find(key_id).ok_or(UpdateError::UnknownKey)?;
     let statement = statement_bytes(&manifest, release.manifest, terms)?;

@@ -42,6 +42,9 @@ impl Signer for Watched<'_> {
     }
 }
 
+/// The version `released()` publishes, as its tag names it.
+const TAGGED: Version = Version::new(0, 7, 0);
+
 /// A key, the set pinning it, and a release it signed on 2026-11-05.
 struct Released {
     key: TestKeyPair,
@@ -51,7 +54,11 @@ struct Released {
 }
 
 fn released() -> Result<Released, UpdateError> {
-    let key = TestKeyPair::generate()?;
+    released_by(TestKeyPair::generate()?, TAGGED)
+}
+
+/// A release of `version` signed by `key`, which is the only pinned key.
+fn released_by(key: TestKeyPair, version: Version) -> Result<Released, UpdateError> {
     let pinned = KeySet::new(&[PinnedKey::new(key.public_point()?)])?;
     let contents = b"synthetic executable";
     let path = PackagePath::parse("syrinx.exe").map_err(|problem| UpdateError::Manifest {
@@ -59,8 +66,7 @@ fn released() -> Result<Released, UpdateError> {
         problem: crate::ManifestProblem::Path(problem),
     })?;
     let entry = FileEntry::new(path, contents.len() as u64, cng::sha256(contents)?);
-    let manifest =
-        Manifest::new(Version::new(0, 7, 0), Version::new(0, 0, 0), vec![entry])?.to_bytes();
+    let manifest = Manifest::new(version, Version::new(0, 0, 0), vec![entry])?.to_bytes();
     let signed = sign_release(
         &manifest,
         &key,
@@ -98,13 +104,18 @@ fn a_resign_issues_only_a_new_statement_for_the_same_manifest() -> Result<(), Up
     let release = released()?;
     // Two months later the old statement has expired; it is still verified, apart from that.
     let later = at("2027-01-05T15:00:00Z");
-    let previous = verify_published(&release.published(&release.manifest), &release.pinned)?;
+    let previous = verify_published(
+        &release.published(&release.manifest),
+        &release.pinned,
+        TAGGED,
+    )?;
     assert_eq!(previous.serial(), 100);
 
     let renewed = resign_statement(
         &release.published(&release.manifest),
         &release.key,
         &release.pinned,
+        TAGGED,
         terms(101, later),
     )?;
     let verified = verify_statement(
@@ -136,12 +147,13 @@ fn a_tampered_manifest_is_refused_before_anything_is_signed() -> Result<(), Upda
     let last = tampered.len() - 2;
     tampered[last] ^= 0x01;
 
-    assert!(verify_published(&release.published(&tampered), &release.pinned).is_err());
+    assert!(verify_published(&release.published(&tampered), &release.pinned, TAGGED).is_err());
     let watched = release.watched();
     let result = resign_statement(
         &release.published(&tampered),
         &watched,
         &release.pinned,
+        TAGGED,
         terms(101, at("2026-11-12T15:00:00Z")),
     );
     assert!(result.is_err());
@@ -155,7 +167,7 @@ fn a_release_the_pinned_keys_did_not_sign_is_refused() -> Result<(), UpdateError
     let stranger = TestKeyPair::generate()?;
     let other = KeySet::new(&[PinnedKey::new(stranger.public_point()?)])?;
     assert_eq!(
-        verify_published(&release.published(&release.manifest), &other).map(drop),
+        verify_published(&release.published(&release.manifest), &other, TAGGED).map(drop),
         Err(UpdateError::UnknownKey)
     );
 
@@ -174,7 +186,7 @@ fn a_release_the_pinned_keys_did_not_sign_is_refused() -> Result<(), UpdateError
         statement_signature: &forged.statement_signature,
         ..release.published(&release.manifest)
     };
-    assert!(verify_published(&mixed, &release.pinned).is_err());
+    assert!(verify_published(&mixed, &release.pinned, TAGGED).is_err());
     Ok(())
 }
 
@@ -187,6 +199,7 @@ fn a_resign_never_lowers_or_repeats_the_serial() -> Result<(), UpdateError> {
             &release.published(&release.manifest),
             &watched,
             &release.pinned,
+            TAGGED,
             terms(serial, at("2026-11-12T15:00:00Z")),
         );
         assert!(
@@ -195,5 +208,33 @@ fn a_resign_never_lowers_or_repeats_the_serial() -> Result<(), UpdateError> {
         );
         assert!(!watched.signed.get(), "{serial}");
     }
+    Ok(())
+}
+
+#[test]
+fn an_older_release_cannot_be_re_signed_as_the_tagged_one() -> Result<(), UpdateError> {
+    // Validly signed files of 0.6.0, swapped in where the 0.7.0 tag's files belong.
+    let older = released_by(TestKeyPair::generate()?, Version::new(0, 6, 0))?;
+    let published = older.published(&older.manifest);
+    assert_eq!(
+        verify_published(&published, &older.pinned, TAGGED).map(drop),
+        Err(UpdateError::UnexpectedVersion {
+            expected: TAGGED,
+            published: Version::new(0, 6, 0),
+        })
+    );
+    let watched = older.watched();
+    let result = resign_statement(
+        &published,
+        &watched,
+        &older.pinned,
+        TAGGED,
+        terms(101, at("2026-11-12T15:00:00Z")),
+    );
+    assert!(matches!(result, Err(UpdateError::UnexpectedVersion { .. })));
+    assert!(!watched.signed.get(), "the key was asked to sign");
+
+    // The same files still verify as what they are.
+    verify_published(&published, &older.pinned, Version::new(0, 6, 0))?;
     Ok(())
 }

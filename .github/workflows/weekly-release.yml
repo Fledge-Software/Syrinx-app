@@ -228,12 +228,13 @@ jobs:
           HAS_RELEASE_KEY: ${{ secrets.SYRINX_RELEASE_KEY != '' }}
         run: ../.github/scripts/signing-ready.sh
 
-      # Both old signatures and the statement apart from its expiry, before any key exists here.
+      # Both old signatures, and the statement apart from its expiry, as the tag's own version,
+      # before any key exists here; another release's valid files are refused.
       - name: Verify the downloaded release against the tag's pinned keys
         if: steps.signing.outputs.ready == 'true'
         shell: bash
         working-directory: tag
-        run: cargo xtask verify-release --package "$RUNNER_TEMP/resign"
+        run: cargo xtask verify-release --package "$RUNNER_TEMP/resign" --version "${TAG#v}"
 
       - name: Import the release key for this job
         if: steps.signing.outputs.ready == 'true'
@@ -247,7 +248,7 @@ jobs:
         if: steps.signing.outputs.ready == 'true'
         shell: bash
         working-directory: tag
-        run: ../.github/scripts/sign-update.sh resign "$RUNNER_TEMP/resign" "$RUNNER_TEMP/update-site"
+        run: ../.github/scripts/sign-update.sh resign "$RUNNER_TEMP/resign" "$RUNNER_TEMP/update-site" "${TAG#v}"
 
       - name: Delete the release key
         if: always() && steps.signing.outputs.ready == 'true'

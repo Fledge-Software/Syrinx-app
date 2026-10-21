@@ -19,8 +19,8 @@ const USAGE: &str = "Usage:
   syrinx-update-tool manifest --package <folder> --version <x.y.z> --minimum-version <x.y.z> --file <path>...
   syrinx-update-tool sign --package <folder> --storage <software|smart-card> --key <name> --serial <n> --days <1-60>
   syrinx-update-tool payload --package <folder> --output <file>
-  syrinx-update-tool verify-release --package <folder>
-  syrinx-update-tool resign --package <folder> --storage <software|smart-card> --key <name> --serial <n> --days <1-60>
+  syrinx-update-tool verify-release --package <folder> --version <x.y.z>
+  syrinx-update-tool resign --package <folder> --version <x.y.z> --storage <software|smart-card> --key <name> --serial <n> --days <1-60>
   syrinx-update-tool import-key --key <name> --from-env <variable>
   syrinx-update-tool delete-key --key <name>
   syrinx-update-tool pinned-keys
@@ -40,12 +40,26 @@ enum Request {
     Manifest(ManifestRequest),
     Sign(SignRequest),
     Payload(PayloadRequest),
-    VerifyRelease(PathBuf),
-    Resign(SignRequest),
+    VerifyRelease(VerifyRequest),
+    Resign(ResignRequest),
     ImportKey(ImportKeyRequest),
     DeleteKey(String),
     PinnedKeys,
     HostLayout(HostLayoutRequest),
+}
+
+/// Verify a downloaded release, which must be for the tag's `version`.
+#[derive(Debug, PartialEq, Eq)]
+struct VerifyRequest {
+    package: PathBuf,
+    version: Version,
+}
+
+/// Sign only a new statement for the tag's `version`, whose files are in `sign.package`.
+#[derive(Debug, PartialEq, Eq)]
+struct ResignRequest {
+    sign: SignRequest,
+    version: Version,
 }
 
 /// Store the base64 PKCS#8 key held in an environment variable as a named software key.
@@ -122,7 +136,7 @@ fn run() -> Result<(), String> {
             println!("Wrote {}.", request.output.display());
             Ok(())
         }
-        Request::VerifyRelease(package) => verify_release(&package),
+        Request::VerifyRelease(request) => verify_release(&request),
         Request::Resign(request) => resign(&request),
         Request::ImportKey(request) => import_key(&request),
         Request::DeleteKey(key) => delete_key(&key),
@@ -143,10 +157,8 @@ fn parse_request(arguments: &[String]) -> Result<Request, String> {
         "manifest" => parse_manifest_request(rest).map(Request::Manifest),
         "sign" => parse_sign_request(rest).map(Request::Sign),
         "payload" => parse_payload_request(rest).map(Request::Payload),
-        "verify-release" => Options::parse(rest, &["--package"])?
-            .take_one("--package")
-            .map(|package| Request::VerifyRelease(PathBuf::from(package))),
-        "resign" => parse_sign_request(rest).map(Request::Resign),
+        "verify-release" => parse_verify_request(rest).map(Request::VerifyRelease),
+        "resign" => parse_resign_request(rest).map(Request::Resign),
         "import-key" => parse_import_key_request(rest).map(Request::ImportKey),
         "delete-key" => Options::parse(rest, &["--key"])?
             .take_one("--key")
@@ -243,20 +255,20 @@ impl PublishedFiles {
         }
     }
 
-    /// Verify against the pinned keys, apart from the statement's expiry.
-    fn verify(&self) -> Result<Statement, String> {
+    /// Verify against the pinned keys as a release of `version`, apart from the statement's expiry.
+    fn verify(&self, version: Version) -> Result<Statement, String> {
         let keys = KeySet::production().map_err(describe)?;
-        verify_published(&self.release(), &keys)
+        verify_published(&self.release(), &keys, version)
             .map_err(|error| format!("The published release would be refused: {error}."))
     }
 }
 
 /// Check a downloaded release before any key is imported to re-sign it.
-fn verify_release(package: &Path) -> Result<(), String> {
-    let statement = PublishedFiles::read(package)?.verify()?;
+fn verify_release(request: &VerifyRequest) -> Result<(), String> {
+    let statement = PublishedFiles::read(&request.package)?.verify(request.version)?;
     println!(
         "Verified {} {}: statement serial {} names its manifest, and both signatures are pinned.",
-        package.display(),
+        request.package.display(),
         statement.version(),
         statement.serial()
     );
@@ -264,14 +276,16 @@ fn verify_release(package: &Path) -> Result<(), String> {
 }
 
 /// Sign only a fresh statement for the verified manifest; `manifest.sig` is never rewritten.
-fn resign(request: &SignRequest) -> Result<(), String> {
+fn resign(resign: &ResignRequest) -> Result<(), String> {
+    let request = &resign.sign;
     let files = PublishedFiles::read(&request.package)?;
-    // Refuse a tampered download before the key is even opened.
-    files.verify()?;
+    // Refuse a tampered download, or another version's files, before the key is even opened.
+    files.verify(resign.version)?;
     let terms = statement_terms(request, Timestamp::now().map_err(describe)?)?;
     let keys = KeySet::production().map_err(describe)?;
     let signer = StoredKey::open(request.storage, &request.key).map_err(describe)?;
-    let signed = resign_statement(&files.release(), &signer, &keys, terms).map_err(describe)?;
+    let signed = resign_statement(&files.release(), &signer, &keys, resign.version, terms)
+        .map_err(describe)?;
     write_replacing(
         &request.package.join(STATEMENT_SIGNATURE),
         &signed.statement_signature,
@@ -343,11 +357,33 @@ fn write_setup_payload(request: &PayloadRequest) -> Result<(), String> {
         .map_err(|error| format!("Could not write {}: {error}", request.output.display()))
 }
 
+/// The options `sign` takes; `resign` takes these and `--version`.
+const SIGN_OPTIONS: [&str; 5] = ["--package", "--storage", "--key", "--serial", "--days"];
+
 fn parse_sign_request(arguments: &[String]) -> Result<SignRequest, String> {
-    let mut options = Options::parse(
-        arguments,
-        &["--package", "--storage", "--key", "--serial", "--days"],
-    )?;
+    sign_request_from(Options::parse(arguments, &SIGN_OPTIONS)?)
+}
+
+fn parse_resign_request(arguments: &[String]) -> Result<ResignRequest, String> {
+    let mut allowed = SIGN_OPTIONS.to_vec();
+    allowed.push("--version");
+    let mut options = Options::parse(arguments, &allowed)?;
+    let version = parse_version(&options.take_one("--version")?)?;
+    Ok(ResignRequest {
+        sign: sign_request_from(options)?,
+        version,
+    })
+}
+
+fn parse_verify_request(arguments: &[String]) -> Result<VerifyRequest, String> {
+    let mut options = Options::parse(arguments, &["--package", "--version"])?;
+    Ok(VerifyRequest {
+        package: PathBuf::from(options.take_one("--package")?),
+        version: parse_version(&options.take_one("--version")?)?,
+    })
+}
+
+fn sign_request_from(mut options: Options) -> Result<SignRequest, String> {
     let storage = match options.take_one("--storage")?.as_str() {
         "software" => KeyStorage::Software,
         "smart-card" => KeyStorage::SmartCard,
@@ -830,14 +866,26 @@ mod tests {
         );
         assert!(parse_request(&strings(&["delete-key"])).is_err());
         assert_eq!(
-            parse_request(&strings(&["verify-release", "--package", "p"])),
-            Ok(Request::VerifyRelease(PathBuf::from("p")))
+            parse_request(&strings(&[
+                "verify-release",
+                "--package",
+                "p",
+                "--version",
+                "0.7.0"
+            ])),
+            Ok(Request::VerifyRelease(VerifyRequest {
+                package: PathBuf::from("p"),
+                version: Version::new(0, 7, 0),
+            }))
         );
+        assert!(parse_request(&strings(&["verify-release", "--package", "p"])).is_err());
         assert_eq!(
             parse_request(&strings(&[
                 "resign",
                 "--package",
                 "p",
+                "--version",
+                "0.7.0",
                 "--storage",
                 "software",
                 "--key",
@@ -847,13 +895,35 @@ mod tests {
                 "--days",
                 "30"
             ])),
-            Ok(Request::Resign(SignRequest {
-                package: PathBuf::from("p"),
-                storage: KeyStorage::Software,
-                key: "k".to_owned(),
-                serial: 9,
-                days: 30,
+            Ok(Request::Resign(ResignRequest {
+                sign: SignRequest {
+                    package: PathBuf::from("p"),
+                    storage: KeyStorage::Software,
+                    key: "k".to_owned(),
+                    serial: 9,
+                    days: 30,
+                },
+                version: Version::new(0, 7, 0),
             }))
+        );
+        // `sign` never takes a version, and `resign` never goes without one.
+        assert!(
+            parse_request(&strings(&[
+                "sign",
+                "--package",
+                "p",
+                "--version",
+                "0.7.0",
+                "--storage",
+                "software",
+                "--key",
+                "k",
+                "--serial",
+                "9",
+                "--days",
+                "30"
+            ]))
+            .is_err()
         );
         assert!(parse_request(&strings(&["resign", "--package", "p"])).is_err());
         assert_eq!(
@@ -899,16 +969,23 @@ mod tests {
     fn a_resign_refuses_a_folder_without_its_signed_files_before_any_key() {
         let scratch = Scratch::new();
         scratch.write(MANIFEST, b"syrinx-update-manifest 1\n");
-        let request = SignRequest {
+        let request = ResignRequest {
+            sign: SignRequest {
+                package: scratch.root.clone(),
+                storage: KeyStorage::Software,
+                key: "syrinx-update-tool-test-key-that-never-existed".to_owned(),
+                serial: 2,
+                days: 30,
+            },
+            version: Version::new(0, 7, 0),
+        };
+        let verify = VerifyRequest {
             package: scratch.root.clone(),
-            storage: KeyStorage::Software,
-            key: "syrinx-update-tool-test-key-that-never-existed".to_owned(),
-            serial: 2,
-            days: 30,
+            version: Version::new(0, 7, 0),
         };
         let message = resign(&request).expect_err("missing signatures are refused");
         assert!(message.contains("Could not open"), "{message}");
-        assert!(verify_release(&scratch.root).is_err());
+        assert!(verify_release(&verify).is_err());
 
         // With all four files present, an unverifiable release stops before the key is opened.
         scratch.write(MANIFEST_SIGNATURE, &[0; SIGNATURE_BYTES]);
@@ -916,7 +993,7 @@ mod tests {
         scratch.write(STATEMENT_SIGNATURE, &[0; SIGNATURE_BYTES]);
         let message = resign(&request).expect_err("an unverified release is refused");
         assert!(message.contains("would be refused"), "{message}");
-        assert!(verify_release(&scratch.root).is_err());
+        assert!(verify_release(&verify).is_err());
     }
 
     #[test]

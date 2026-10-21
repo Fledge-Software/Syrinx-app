@@ -99,9 +99,11 @@ In a quiet week the `resign` job downloads the latest release's four
 signed assets (`manifest`, `manifest.sig`, `latest`, `latest.sig`). It
 **verifies them before any key exists on the runner**: `cargo xtask
 verify-release` checks the manifest signature, the old statement's
-signature and that the statement names this manifest, against the keys
-pinned in that release's own tag, setting aside only the old statement's
-expiry. Only then is the key imported, and `cargo xtask resign-statement`
+signature, that the statement names this manifest, and that both are for
+the tag's own version, against the keys pinned in that release's own tag,
+setting aside only the old statement's expiry. An older release's validly
+signed files, swapped in, are therefore refused rather than re-signed as
+the latest. Only then is the key imported, and `cargo xtask resign-statement`
 signs nothing but a new statement, with a higher serial, for that verified
 manifest; it never re-signs a manifest, and it verifies again before
 writing. The job then replaces `latest` and, after it, `latest.sig` on the

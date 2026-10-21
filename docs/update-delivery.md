@@ -406,17 +406,23 @@ week with a release signs a fresh one. A quiet week (no new commits on
 `main`) runs the `resign` job instead. It downloads the latest release's
 `manifest`, `manifest.sig`, `latest` and `latest.sig` assets and, before
 any key is imported, verifies them with `cargo xtask verify-release`
-against the keys pinned in that release's own tag: both signatures, and
-the statement naming this manifest, setting aside only the old statement's
-expiry. A tampered or substituted download therefore stops the job while
-the runner holds no key. Then `cargo xtask resign-statement` signs only a
+against the keys pinned in that release's own tag: both signatures, the
+statement naming this manifest, and both naming the tag's own version
+(`--version`, the tag without its `v`), setting aside only the old
+statement's expiry. A tampered download, or an older release's validly
+signed files swapped in so they would be re-signed as the latest,
+therefore stops the job while the runner holds no key. Then `cargo xtask resign-statement` signs only a
 new statement, with a higher serial, for that verified manifest
 (`resign_statement` in `crates/syrinx-update/src/sign.rs` re-verifies the
 release itself and never signs a manifest), and the job replaces `latest`,
 then `latest.sig`, on the GitHub release. Its scripts come from `main`; the
 tools and keys come from the tag, checked out only once the tag is known to
 have signed assets, so a release made before signing began is skipped with
-a notice. Thirty days means four missed
+a notice. Building in that `tag/` checkout runs the tag's own build scripts
+while the job holds a `contents: write` token, though not yet the key. That
+is accepted under the owner's 2026-10-14 trade-off: the tag is a reviewed
+release commit, and whoever could change it already controls the
+repository and the workflow, which can sign updates anyway. Thirty days means four missed
 weeks before installed copies see "the update information has expired",
 which is harmless (no update is offered) and limits how long a stolen copy
 of the site could freeze anyone. A release published before signing began
