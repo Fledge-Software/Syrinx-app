@@ -10,19 +10,6 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
-## 2026-10-21
-
-- **Settings is a page, opened from the sidebar's gear and Ctrl ,.** The
-  owner decided on #91 that the settings button at the bottom of the sidebar
-  opens Syrinx's Settings page, and that Ctrl , opens it too, from any tab and
-  without detouring through Home as the gear did before (#71). Themes stay
-  reachable from Home's Customize as well as from Settings. Implementation
-  note, not part of the owner's decision: following #91's recommendation,
-  Settings is its own Syrinx tab at `syrinx://settings`, so it shows in the
-  sidebar and closes with Ctrl W; the alternative, taking over the current
-  tab as History does, was not chosen. Like Ctrl F and Ctrl H (2026-10-18),
-  Ctrl , is taken from a focused page.
-
 ## 2026-10-18
 
 - **Syrinx takes find, history and zoom keys even over a focused page.**
