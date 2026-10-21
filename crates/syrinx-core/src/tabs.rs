@@ -110,8 +110,8 @@ impl TabMetadata {
         self.is_home(origin).then_some(HOME_TITLE)
     }
 
-    /// The one name the sidebar shows for an open tab: Home for a blank tab, otherwise the
-    /// title, or the address when the page has no title.
+    /// The one name the sidebar shows for an open tab or saved page: Home for a blank one,
+    /// otherwise the title, or the address when the page has no title.
     pub fn display_title(&self, origin: PageOrigin) -> String {
         if let Some(home) = self.home_title(origin) {
             return home.to_owned();
