@@ -102,7 +102,8 @@ that drop does to the parent window is the next question.
 
 `wry-drop-thread-evidence/subclass_probe.ps1` creates a message-only `STATIC`
 window on a helper thread, subclasses it there, and then calls the helpers
-from the main thread. It touches no Syrinx window or profile. Run on this
+from the main thread. It touches no Syrinx window or profile; `Add-Type`
+does write its compiled helper assembly to `%TEMP%`. Run on this
 machine (Windows 11 10.0.26300, comctl32 5.82.26100.8328 from WinSxS), twice, with identical results:
 
 | Call from the other thread | Result |
@@ -110,6 +111,12 @@ machine (Windows 11 10.0.26300, comctl32 5.82.26100.8328 from WinSxS), twice, wi
 | `SetWindowSubclass` | `FALSE`: refused |
 | `RemoveWindowSubclass` of a subclass that exists | `TRUE`: removed, and the procedure stopped receiving messages |
 | `RemoveWindowSubclass` of an id that does not exist | `FALSE`, no effect |
+
+The probe's raw output, the same on both runs:
+
+```
+owner-thread set=True; hits before=1; cross-thread set=False; cross-thread remove=True; hits after=1 (subclass gone); cross-thread remove of absent id=False
+```
 
 So on this machine a cross-thread *removal* does not fail silently, as #83
 supposed; it succeeds. That does not make it safe. It is still unsupported,
@@ -130,9 +137,11 @@ For each closed, crashed or recovered page, on the worker thread:
    GUI thread next retrieves messages. GPUI's window procedure does not
    recognise `0x465` (its own messages are `WM_USER + 1` to `+ 9`,
    `vendor/gpui-pre-windows-0.3.8/src/events.rs:23–31`). It falls through to
-   `DefWindowProcW` (`events.rs:167–172`), and Syrinx's caption subclass
-   (`crates/syrinx-platform/src/caption.rs`) passes it on as well. Nothing
-   happens.
+   `DefWindowProcW` (`events.rs:167–172`). Syrinx's caption subclass, which
+   sits in front of GPUI, passes it on unchanged: every message goes to
+   `DefSubclassProc` (`crates/syrinx-platform/src/caption.rs:115`), and
+   anything other than `WM_NCHITTEST` returns that answer as it is
+   (`caption.rs:116–117`). Nothing happens.
 3. `RemoveWindowSubclass(gpui_window, parent_subclass_proc, …)`: no such
    subclass exists, so it returns `FALSE` with no effect, as the probe's
    third row shows.
@@ -146,7 +155,10 @@ The failure modes, and how likely they are:
   again.
 - **Deadlock on the cross-thread `SendMessageW`.** It needs the GUI thread
   to wait on the worker without retrieving messages while the worker is
-  dropping a page. The only such wait is `BrowserHost::join`
+  dropping a page. There are two such waits. `BrowserHost::spawn` blocks on
+  `ready.recv()` (`browser.rs:465`), but only until the new worker reports
+  its thread ID, before `run` starts and before any page exists, so no drop
+  can be in progress. The other is `BrowserHost::join`
   (`browser.rs:491–499`). It refuses to wait until the worker has set
   `stopped`, which `HostCompletion::drop` (`browser.rs:582`) does only after
   `run` has returned and every page is gone. The UI calls it only on
@@ -173,25 +185,32 @@ thread anyway. Since the subclass is never attached, there is nothing on the
 Syrinx side to fix. No code change.
 
 **(b) A minimal wry patch** (written out, not applied). Detach only what was
-attached, and let the subclass remove itself on its own thread:
+attached, and let the subclass remove itself on its own thread. The diff
+below is real `git diff` output, made against a scratch copy of the vendored
+`src/webview2/mod.rs`, so its line ranges match the file as it is pinned in
+Syrinx (upstream 0.57.0 plus the approved patches). The paths are rewritten
+to wry's own layout, and the patched copy was not compiled:
 
 ```diff
---- wry-0.57.0/src/webview2/mod.rs
-+++ wry-0.57.0/src/webview2/mod.rs
-@@ impl Drop for InnerWebView
-   fn drop(&mut self) {
+diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
+index 7bb5649..e694939 100644
+--- a/src/webview2/mod.rs
++++ b/src/webview2/mod.rs
+@@ -76,8 +76,10 @@ impl Drop for InnerWebView {
      let _ = unsafe { self.controller.Close() };
      if self.is_child {
        let _ = unsafe { DestroyWindow(self.hwnd) };
--    }
--    unsafe { Self::dettach_parent_subclass(*self.parent.borrow()) }
 +    } else {
 +      // Child web views never attach the parent subclass (see new_in_hwnd).
 +      unsafe { Self::dettach_parent_subclass(*self.parent.borrow()) }
-+    }
+     }
+-    unsafe { Self::dettach_parent_subclass(*self.parent.borrow()) }
    }
  }
-@@ unsafe fn dettach_parent_subclass(parent: HWND)
+ 
+@@ -1389,12 +1391,8 @@ impl InnerWebView {
+ 
+   #[inline]
    unsafe fn dettach_parent_subclass(parent: HWND) {
 +    // The subclass removes itself on the parent's thread; the helpers are single-threaded.
      SendMessageW(parent, PARENT_DESTROY_MESSAGE, None, None);
@@ -201,6 +220,8 @@ attached, and let the subclass remove itself on its own thread:
 -      PARENT_SUBCLASS_ID as _,
 -    );
    }
+ 
+   #[inline]
 ```
 
 The first hunk removes both cross-thread calls for child web views, the only
@@ -229,8 +250,8 @@ gets it with the next audited wry update.
 
 Revisit this if Syrinx ever builds a page web view that is not a child, adds
 a second thread that owns windows the web views are parented to, or adds any
-GUI-thread wait on the browser worker other than `BrowserHost::join` after
-`Stopped`.
+GUI-thread wait on the browser worker other than `BrowserHost::spawn`'s
+start-up handshake and `BrowserHost::join` after `Stopped`.
 
 ## What needs the owner
 

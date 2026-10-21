@@ -1,5 +1,6 @@
 # Tests whether comctl32 subclass helpers work across threads, for issue #83 (wry-drop-thread-review.md).
 # Synthetic: a message-only STATIC window on a helper thread; touches no Syrinx profile or window.
+# Add-Type compiles the C# below and writes that temporary assembly to %TEMP%.
 $source = @'
 using System;
 using System.Runtime.InteropServices;
