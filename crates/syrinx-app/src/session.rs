@@ -1807,6 +1807,8 @@ mod tests {
         let saved_row = catalogue.get(Target::Saved(page.id)).expect("saved row");
         assert_eq!(saved_row.title, "Home");
         assert_eq!(page.display_title(), "Home");
+        // Home is only displayed; the stored title is left as the page reported it.
+        assert_ne!(page.metadata.title, "Home");
 
         // Closing the tab leaves only the saved row, which keeps the same name.
         apply_model(&mut model, SessionCommand::CloseTab(tab))?;
