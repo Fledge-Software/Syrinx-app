@@ -104,8 +104,7 @@ pub enum SessionCommand {
         backwards: bool,
     },
     FocusTab(TabId),
-    // #95's row actions build only with tests until its interface slice sends them; the
-    // owner has not yet confirmed the action list.
+    // TODO(#95): send from the row menu, then drop cfg(test).
     /// Opens a selected copy of a web tab right after it (#95).
     #[cfg(test)]
     Duplicate(TabId),
@@ -1325,8 +1324,8 @@ fn counted_feature(command: &SessionCommand) -> Counted {
         | SessionCommand::ObserveClosed(_) => Counted::IfChanged(Feature::TabClosed),
         SessionCommand::SaveActive => Counted::IfChanged(Feature::SavedSaved),
         SessionCommand::Unsave(_) => Counted::IfChanged(Feature::SavedRemoved),
-        // D39's schema has no counter for #95's tab actions until the owner approves one.
-        SessionCommand::SaveTab(_) => Counted::Nothing,
+        SessionCommand::SaveTab(_) => Counted::IfChanged(Feature::SavedSaved),
+        // D39's schema has no counter for duplicating or bulk closes until the owner approves one.
         #[cfg(test)]
         SessionCommand::Duplicate(_)
         | SessionCommand::CloseOthers(_)
@@ -1433,7 +1432,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
                 .map_err(SessionError::Model)?;
         }
         SessionCommand::SaveActive => {
-            // Resolve the queued save against the worker's selection, then save that tab.
+            // Save the worker's current selection.
             let id = model.active_id().ok_or(SessionError::NoActiveTab)?;
             apply_model(model, SessionCommand::SaveTab(id))?;
         }

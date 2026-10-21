@@ -557,22 +557,24 @@ impl TabModel {
         Ok(copy)
     }
 
-    /// Closes every ordinary tab except `keep`, sparing open saved pages; `keep` becomes active.
+    /// Closes every ordinary tab except `keep`, sparing open saved pages. `keep` is selected
+    /// only when something closed; a no-op leaves the selection alone.
     pub fn close_others(&mut self, keep: TabId) -> Result<Vec<Tab>, TabError> {
         self.index_of(keep)?;
-        let targets = self.ordinary_ids_after(0, keep);
+        let targets = self.ordinary_ids_from(0, keep);
         self.close_many(keep, &targets)
     }
 
-    /// Closes the ordinary tabs after `id`, sparing open saved pages; `id` becomes active.
+    /// Closes the ordinary tabs after `id`, sparing open saved pages. `id` is selected only
+    /// when something closed; a no-op leaves the selection alone.
     pub fn close_below(&mut self, id: TabId) -> Result<Vec<Tab>, TabError> {
         let index = self.index_of(id)?;
-        let targets = self.ordinary_ids_after(index + 1, id);
+        let targets = self.ordinary_ids_from(index + 1, id);
         self.close_many(id, &targets)
     }
 
-    /// The ordinary tabs from `start` on, other than `keep`, in display order.
-    fn ordinary_ids_after(&self, start: usize, keep: TabId) -> Vec<TabId> {
+    /// The ordinary tabs from position `start` on, other than `keep`, in display order.
+    fn ordinary_ids_from(&self, start: usize, keep: TabId) -> Vec<TabId> {
         let start = start.max(self.saved_tab_count());
         self.tabs[start..]
             .iter()
@@ -582,13 +584,9 @@ impl TabModel {
     }
 
     /// Closes `targets` bottom-up, so reopening restores them top-down in their old positions.
-    /// Returns the closed tabs in display order and selects `keep`.
+    /// Returns the closed tabs in display order and selects `keep` if any closed. The callers
+    /// have validated `keep` and read `targets` from the model, so every close succeeds.
     fn close_many(&mut self, keep: TabId, targets: &[TabId]) -> Result<Vec<Tab>, TabError> {
-        // Check every identity first so a stale one closes nothing.
-        self.index_of(keep)?;
-        for id in targets {
-            self.index_of(*id)?;
-        }
         let mut closed = Vec::with_capacity(targets.len());
         for id in targets.iter().rev() {
             closed.push(self.close(*id)?);
