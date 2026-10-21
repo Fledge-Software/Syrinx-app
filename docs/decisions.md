@@ -10,6 +10,199 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+## 2026-10-21
+
+- **The WASM plugin runtime research note (#26) is approved, with all
+  fifteen of its decisions exactly as recommended.** The note answers the
+  questions #26 set before #27 re-cuts Plan 2 to 4's slices: which
+  WebAssembly (WASM) runtime Syrinx embeds, what crosses the plugin
+  boundary and how it is versioned, which powers the host offers and how
+  the owner grants them, how a plugin's interface is drawn, and how
+  plugins are packaged, installed and updated. It currently lives at
+  `docs/dev/background-10-wasm-plugin-runtime-draft.md`, because this
+  session cannot push to the wiki; it moves to the wiki as
+  `Background-10` when the owner publishes it, and like every Background
+  page it is then read for reasoning, while the entries below are the
+  decisions. The owner added two decisions of their own (the last two
+  entries of this date). Each entry below names the note's section that
+  argues it; the note's "Conflicts between the five reports" table records
+  how its five source reports were reconciled. This approval lets the
+  plugin host (#28, #29) start once Plan 1 closes, as the 2026-10-20 entry
+  required; it does not itself add a dependency, which #27's audit and
+  #28's slice still do. `AGENTS.md`'s plugin guardrails are updated by a
+  separate proposal, not by these entries.
+
+- **Runtime and pin (decision 1): wasmtime with the component model,
+  pinned exactly `=48.0.x`.** Syrinx embeds wasmtime with the component
+  model and WIT (WebAssembly Interface Types, the typed interface
+  language the owner chose on 2026-10-15), host bindings generated with
+  `wasmtime::component::bindgen!`, pinned with `=` on the 48.x
+  long-term-support line (supported to about 2028-08), with Cranelift, the
+  component model and WASI 0.2, and with Winch, the pooling allocator,
+  `component-model-async`, WASI 0.3 and `wasi-http` off. Syrinx calls
+  plugins synchronously; wasmtime's plain `async` Cargo feature is still
+  compiled in because `wasmtime-wasi` requires it, so the dependency audit
+  covers the graph with it. Security patch releases within 48.0.x are
+  routine pin bumps that pass the gate; a move to another major line still
+  needs the owner. Why: it is the only runtime that meets the WIT decision
+  with a support policy Syrinx can pin to; following wasmtime's monthly
+  majors would mean an owner-approved pin move every two months. Rejected
+  (note, section 1, "Why not wasmi or wasmer"): wasmi, which has no
+  component model and would force the byte-buffer protocol the owner
+  rejected; wasmer, which closed WASI Preview 2 as "not planned", has no
+  component-model API, no published LTS or `SECURITY.md`, and brings
+  licences outside Syrinx's list; and pinning 49.0.4, the documentation
+  some reports cited, instead of the LTS line (section 1, "Reconciled").
+
+- **Approved narrow licence exception (decision 2):** the wasmtime and
+  Cranelift family (about 31 crates in the audited graph, listed in the
+  note's section 1, "Licences of every transitive crate": the
+  `cranelift-*`, `pulley-*`, `wasmtime*` and `wasmtime-internal-*` crates,
+  `regalloc2`, `target-lexicon` and `winx`) may carry
+  `Apache-2.0 WITH LLVM-exception`, at the pinned wasmtime 48.0.x versions
+  and the Cranelift 0.135.x versions they require only. The exception only
+  adds permissions to Apache-2.0, but `AGENTS.md` names permitted licences
+  exactly, so it is approved by name. This does not approve another crate
+  under that licence, a wasmtime line other than 48.0.x, or a general
+  licence-policy expansion; #27's audit reads each crate's `LICENSE` file
+  rather than crates.io metadata. `unicode-ident` stays at the approved
+  1.0.26, and the existing `foldhash 0.2.0` and ICU approvals carry over
+  unchanged; a version they do not cover needs a fresh approval.
+
+- **Measurement (decision 3): #28 runs the Windows measurements, and
+  plugin views are reported separately from D6's budget.** #28 measures
+  runtime start-up, memory, compile time for a realistically sized guest
+  and plugin-view memory on the owner's Windows machine, because every
+  figure in the note is from Linux or unmeasured (section 1, "Cost against
+  D6"; section 4, "Memory per extra web view"). Plugin views are reported
+  separately, with the ten page tabs still within D6's 10%-of-Edge budget.
+  Rejected: counting plugin views inside that budget, which would let a
+  Notes tab push page tabs out of it.
+
+- **Interface rules (decision 4): one `syrinx:plugin@0.1.0` WIT package.**
+  Typed records everywhere except two named JSON channels (view messages
+  and a plugin's own settings); plain ids for anything that persists;
+  resources only for live host capabilities such as a terminal; no WIT
+  async in 0.1.0; static facts (commands, view kinds, feeds, widgets,
+  capability requests) in the manifest, read without running code; pull
+  search feeds whose cursor the host owns; and the host loads the current
+  and previous minor below 1.0. Why: typed calls are checked when a plugin
+  links, so a mismatch fails at load, and a host-owned cursor means no
+  plugin code runs on a keystroke (D48). Rejected (section 2): JSON or
+  byte payloads everywhere, Extism's model, which gives up generated
+  bindings and load-time checks; typed everywhere with no JSON at all;
+  listing commands through exports after activation; and a pushed
+  `submit(batch)` feed, whose plugin cannot know whether the index
+  committed.
+
+- **Palette forms and widgets (decision 5): "draws its interface in HTML"
+  means plugin tabs.** Palette forms stay declarative and are drawn by
+  GPUI; Home widgets start declarative and `@unstable` until #31. Why: a
+  web view inside the palette would add a renderer and a second focus
+  path to its open path (section 4, "Palette forms and Home widgets stay
+  declarative"). This reads the 2026-10-15 entry's "Form" bullet and
+  settles #29's open question.
+
+- **Plugin views (decisions 6 and 7): a separate plugin-view type, and the
+  guardrail says where it applies.** A plugin's interface runs in its own
+  Rust web-view type, in the same WebView2 environment as pages but one
+  separate InPrivate profile, served by wry's custom protocol from the
+  verified package at a per-plugin origin under `.invalid`, with a strict
+  Content Security Policy (`default-src 'none'` with named sources) the
+  host sets, no navigation away and no network from interfaces even with a
+  network grant. It talks only to its own module, through a message bridge
+  Rust validates. #27 states in words that the custom-protocol filter and
+  the message handler are allowed on the plugin-view type only and remain
+  forbidden on page web views and Google's sites. Rejected (section 4,
+  "Environment and profile" and the conflicts table): the pages' default
+  profile, which puts a plugin origin beside Google's cookies; a separate
+  environment, which adds a browser process against D6; one profile per
+  plugin; and the looser `default-src 'self'` policy.
+
+- **Plugin search content (decision 8): each plugin's feeds get their own
+  palette scope chip** (for example "Notes", shown only while that plugin
+  is installed) as well as appearing under Everything, matching the spec's
+  scope chips. Recorded here because it is `design/README.md` territory.
+
+- **Grants (decisions 9 and 10): nothing granted by default, and running
+  programs is named as full trust.** A plugin's `syrinx-plugin.toml` asks
+  for typed, scoped capabilities, each with a one-sentence reason; the
+  owner reviews them on an install sheet, grants optional ones at first
+  use and can revoke any; a fixed deny list, including the profile root,
+  overrides every grant; an update that widens a capability is held
+  inactive while the old version keeps running; and removing a plugin
+  deletes its grants, storage, index contributions and drafts. The host
+  owns every risky service once for all plugins (safe saves, watching,
+  indexing, and later terminals, git, language servers and Tree-sitter).
+  Running a program is worded "Can run programs on your computer with
+  your permissions"; Forge adds a per-project trust question with a
+  read-only restricted mode; third-party plugins cannot get full-trust
+  capabilities until signing and provenance exist. The vault and grant
+  model Notes needs (a folder the owner picks in a system picker, with
+  Windows containment) follows from this. Why: it is the Chrome model the
+  owner named, and a sandbox cannot follow a process it starts. Rejected
+  (section 3, "The split between host and plugin" and "How the owner
+  sees, grants and revokes"): raw WASI folder access and process access
+  with each plugin building its own safe save, watcher and language
+  client; Zed's generic `process:exec` alone; and pausing a plugin whose
+  update widens a capability, which would break a daily tool.
+
+- **Packages, loading and the cache (decisions 11 to 13).** A plugin
+  package is a folder with a signed canonical file list in the shape of
+  Syrinx's update format (`docs/update-format.md`), signed with a P-256
+  key per plugin repository held as an Actions secret, trusted on first
+  use with announced rotation, and with an unsigned developer mode off by
+  default. Built-in packages are bundled in Syrinx's signed release (a
+  release-workflow change, approved here), the owner can "Install plugin
+  from folder…", and Syrinx fetches no plugin over the network in v1.
+  Compiled native code may be cached in the local data folder
+  (`%LOCALAPPDATA%\Syrinx\data\PluginCache\`), never shipped in a
+  package, keyed by the `plugin.wasm` hash, wasmtime's compatibility hash
+  and Syrinx's version, and read with `deserialize` only after a hash
+  check. Why: it reuses reviewed update-format code, adds no archive
+  parser and no network path, and avoids compiling a large guest at every
+  activation. Rejected (section 5): an archive format parsed by Syrinx;
+  fetching from GitHub releases, a second host whose downloads redirect;
+  compiling built-ins into `syrinx.exe` (already rejected on 2026-10-15);
+  `deserialize_file`, which maps a file a later edit could reach; and
+  compiling at every activation.
+
+- **Plugin repositories and the template's CI (decision 14).** Plugin
+  repositories are public, so GitHub's artifact attestations work on any
+  plan, and the template's `ci.yml` (build, lint, contract tests against
+  a published test host on synthetic data, licence and reproducibility
+  checks) and `release.yml` (on a version tag: sign, attest and publish)
+  are approved as described in the note's section 5, "The template's CI
+  (#30)", with every third-party action pinned by full commit SHA.
+  Rejected: private repositories, whose attestations need GitHub
+  Enterprise Cloud, leaving only the package signature and
+  reproducibility.
+
+- **Notes' editor and data (decision 15).** The Notes and Forge editor is
+  a host-provided CodeMirror component with no plugin JavaScript inside it
+  in v1, because D28's checksum-matched save is a property Syrinx must own
+  (section 4, "The Notes and Forge editor"). Rejected: each plugin bundling
+  its own CodeMirror configuration. Recovery drafts live in local app data
+  outside D13's snapshots (section 3). Two points are approved as
+  proposals that the Notes slices test before they are final, because the
+  note proposes them without a full argument: ⚠️ drafts are deleted once
+  the save they protect succeeds or after at most seven days (#37 tests
+  it), and ⚠️ note text in the tier-2 index is a rebuildable cache outside
+  the snapshots, with no seven-day expiry because the files are the truth
+  (#36 tests it). Until those tests report, neither is settled.
+
+- **The owner's acceptance of Plan 2 moves to epic #25's exit (owner's
+  own decision; supersedes the 2026-10-20 implementation note).** The
+  acceptance lived in #34, the Fledge "New demo lead" slice, and gated the
+  start of Notes (#35). With Fledge on hold, #34 is blocked, so the gate
+  now sits in the plugin runtime epic's exit criteria: Notes starts once
+  the owner accepts Plan 2 at #25's exit. Rejected: leaving the gate in
+  #34, which would hold Notes behind Fledge's API.
+
+- **The plugin template repository is MPL-2.0 (owner's own decision),**
+  matching Syrinx's licence (2026-10-13), so code moves between Syrinx and
+  plugins made from the template under one licence.
+
 ## 2026-10-20
 
 - **The Fledge plugin is on hold until Fledge itself is ready (holds the
@@ -31,6 +224,8 @@ folder names.
   owner's acceptance of Plan 2, which the Notes epic (#35) named as its
   entry gate; with Fledge held, the runtime epic's (#25) own exit is the
   natural place for that acceptance, and that is the owner's to confirm.
+  *(Superseded on 2026-10-21: the owner confirmed it; the acceptance is
+  now in #25's exit criteria. See that date's entry.)*
 
 - **The plugin order is now runtime, template, Notes, Forge (replaces the
   2026-10-15 order).** The plugin runtime (#25: interface, host, palette
@@ -60,7 +255,8 @@ folder names.
   product crates, so neither can destabilise Plan 1's remaining slices.
   The plugin host (#28, #29) is different: it adds the interface and host
   to Syrinx's own crates, so it still waits for Plan 1 to close and, in
-  addition, for the owner to approve the research note. Rejected: holding
+  addition, for the owner to approve the research note *(approved on
+  2026-10-21; see that date's entries)*. Rejected: holding
   all plugin work until Plan 1 closes, which would leave the research and
   template idle although they cannot affect Plan 1; and starting the host
   now too, which would change product crates while Plan 1 is still being
