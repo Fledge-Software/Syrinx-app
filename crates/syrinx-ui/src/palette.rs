@@ -313,6 +313,16 @@ pub(crate) const HAZE_WALLPAPER: [Color; 5] = [
     Color::hex(0x9C5637),
 ];
 
+/// Stand-in wallpaper for a light theme's material: Windows draws light Acrylic and Mica with
+/// a white luminosity layer, so what shows through is a pale version of the Haze stand-ins.
+pub(crate) const LIGHT_WALLPAPER: [Color; 5] = [
+    Color::hex(0xE4E7F0),
+    Color::hex(0xC9D1F0),
+    Color::hex(0xDCCDEA),
+    Color::hex(0xC6E3E0),
+    Color::hex(0xEED6CA),
+];
+
 /// The canvas's Glass stand-in wallpaper: four solid discs and three gradient stops.
 const GLASS_WALLPAPER: [Color; 7] = [
     Color::hex(0x4A62D6),

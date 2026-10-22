@@ -10,7 +10,7 @@ use syrinx_ui::metrics::text;
 use syrinx_ui::theme::{
     self, ANGLE, EDGES, Fill, GRAIN, Material, Mode, Range, TRANSPARENCY, ThemeSpec,
 };
-use syrinx_ui::{Color, Palette, PaletteId, palette};
+use syrinx_ui::{Accent, Color, Palette, PaletteId, palette};
 
 use super::BrowserView;
 use super::customize::{ThemeRow, group_heading, theme_row, toggled};
@@ -423,13 +423,8 @@ impl BrowserView {
         if let Some(error) = editor.error {
             view = view.child(note(panel, error));
         }
-        let problems = theme.contrast_problems(self.home.appearance.accent);
-        if !problems.is_empty() {
-            view = view.child(note(
-                panel,
-                "Some marks or tile letters fall below the contrast minimum on this background. \
-                 Text has been lightened or darkened to stay readable.",
-            ));
+        if let Some(warning) = contrast_note(theme, self.home.appearance.accent) {
+            view = view.child(note(panel, warning));
         }
         if material_on {
             view = view.child(note(
@@ -690,6 +685,28 @@ fn turn_listener(
             cx,
         );
     })
+}
+
+/// What the editor says about a theme's contrast: whether text itself still fails, or only
+/// marks and tile letters do while text was adjusted to pass.
+fn contrast_note(theme: &ThemeSpec, accent: Accent) -> Option<&'static str> {
+    let problems = theme.contrast_problems(accent);
+    if problems
+        .iter()
+        .any(|check| theme::is_readable_role(check.foreground))
+    {
+        return Some(
+            "Some text falls below the contrast minimum on this background, even after it was \
+             lightened or darkened. Lower Transparency or choose another background colour.",
+        );
+    }
+    if problems.is_empty() {
+        return None;
+    }
+    Some(
+        "Some marks or tile letters fall below the contrast minimum on this background. Text \
+         has been lightened or darkened to stay readable.",
+    )
 }
 
 /// A short line about a saved theme for its row.

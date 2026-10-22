@@ -5,7 +5,8 @@ use crate::accent::Accent;
 use crate::color::Color;
 use crate::contrast::{self, ContrastCheck};
 use crate::palette::{
-    Ground, HAZE_WALLPAPER, Palette, PaletteId, WindowMaterial, graphite, palette, paper,
+    Ground, HAZE_WALLPAPER, LIGHT_WALLPAPER, Palette, PaletteId, WindowMaterial, graphite, palette,
+    paper,
 };
 
 /// The longest theme name, in characters.
@@ -14,6 +15,10 @@ pub const MAX_NAME_CHARS: usize = 40;
 /// The longest name in UTF-8 bytes: a settings value holds 256 bytes and the other fields of
 /// a stored theme take at most 135, so a name of 40 emoji still fits.
 pub const MAX_NAME_BYTES: usize = 120;
+
+/// The least tint a selected row keeps under it, the slider's old floor: with no tint at all,
+/// text on the row's light fill over a bright window falls below 4.5:1.
+const ROW_TINT_FLOOR: f32 = 0.1;
 
 /// Each stepped choice's range and step, in percent or degrees.
 pub const TRANSPARENCY: Range = Range::new(0, 90, 5);
@@ -204,8 +209,8 @@ impl ThemeSpec {
             recolour(&mut drawn, self.background, self.mode);
         }
         drawn.ground = self.ground(see_through);
-        if see_through && self.see_through_home {
-            drawn.card = with_alpha(drawn.card, alpha_of(drawn.card) * self.tint_opacity());
+        if see_through {
+            self.thin_for_the_material(&mut drawn);
         }
         drawn.badge_ring = self.background;
         keep_text_readable(&mut drawn, accent, self.mode);
@@ -228,12 +233,33 @@ impl ThemeSpec {
         1. - shown / f32::from(TRANSPARENCY.max)
     }
 
+    /// Home's card follows the slider when asked, and a selected row keeps a little tint under
+    /// it however clear the window is.
+    fn thin_for_the_material(&self, drawn: &mut Palette) {
+        let tint = self.tint_opacity();
+        if self.see_through_home {
+            drawn.card = with_alpha(drawn.card, alpha_of(drawn.card) * tint);
+        }
+        if tint < ROW_TINT_FLOOR {
+            // Under the row, (1 - backing)(1 - tint) of the window shows: 1 - the floor.
+            let backing = 1. - (1. - ROW_TINT_FLOOR) / (1. - tint);
+            drawn.row_selected = drawn
+                .row_selected
+                .over(with_alpha(self.background, backing));
+        }
+    }
+
     fn ground(&self, see_through: bool) -> Ground {
         if let (true, Some(material)) = (see_through, self.material.window_material()) {
+            // Windows draws the material light for a light theme, so check text on pale stand-ins.
+            let wallpaper_standins: &'static [Color] = match self.mode {
+                Mode::Dark => &HAZE_WALLPAPER,
+                Mode::Light => &LIGHT_WALLPAPER,
+            };
             return Ground::Material {
                 material,
                 tint: with_alpha(self.background, self.tint_opacity()),
-                wallpaper_standins: &HAZE_WALLPAPER,
+                wallpaper_standins,
             };
         }
         match self.fill {
@@ -453,6 +479,11 @@ fn light_rims(drawn: &mut Palette) {
     }
 }
 
+/// Whether `role` is a text or icon role that is lightened or darkened to stay readable.
+pub fn is_readable_role(role: &str) -> bool {
+    READABLE_ROLES.contains(&role)
+}
+
 /// Text and icon roles, and how far each may move to stay readable.
 const READABLE_ROLES: [&str; 7] = [
     "text",
@@ -476,7 +507,7 @@ fn keep_text_readable(drawn: &mut Palette, accent: Accent, mode: Mode) {
         let mut failing: Vec<&str> = failures_beyond(drawn, &inherited)
             .iter()
             .map(|check| check.foreground)
-            .filter(|role| READABLE_ROLES.contains(role))
+            .filter(|role| is_readable_role(role))
             .collect();
         if failing.is_empty() {
             return;
@@ -779,6 +810,36 @@ mod tests {
         assert_eq!(ThemeSpec::parse(&clear.to_setting()), Ok(clear));
         let bad = format!("{stored};home=foggy");
         assert_eq!(ThemeSpec::parse(&bad), Err(Unreadable));
+    }
+
+    #[test]
+    fn text_stays_readable_at_every_transparency_in_both_modes() {
+        let accent = Accent::default();
+        let modes = [
+            (Mode::Dark, Color::hex(0x141519)),
+            (Mode::Light, Color::hex(0xE7EEF8)),
+        ];
+        for (mode, background) in modes {
+            for see_through_home in [false, true] {
+                for transparency in (0..=TRANSPARENCY.max).step_by(5) {
+                    let theme = ThemeSpec {
+                        mode,
+                        background,
+                        ..acrylic(transparency, see_through_home)
+                    };
+                    let failing: Vec<_> = theme
+                        .contrast_problems(accent)
+                        .into_iter()
+                        .filter(|check| is_readable_role(check.foreground))
+                        .map(|check| check.label())
+                        .collect();
+                    assert!(
+                        failing.is_empty(),
+                        "{mode:?} {transparency} home {see_through_home}: {failing:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
