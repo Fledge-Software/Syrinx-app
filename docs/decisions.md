@@ -34,8 +34,19 @@ folder names.
   so #111 closes #96.
 - **The full-text bake-off runs tonight (#52).** The owner meant the
   2026-10-20 overnight run to include the quiet-machine comparison; it did
-  not run. It is scheduled for the night of 2026-10-21, with every agent
-  build stopped first.
+  not run. It runs on 2026-10-21, once the day's pull requests are
+  merged, with every agent build stopped first.
+- **Clearing "Cookies and site data" also clears saved zoom levels (#90).**
+  This is what Chrome does. Zoom levels are site data, so the owner expects
+  them to go with cookies.
+- **Ctrl , opens Settings even while a web page has the keys (#91).** This
+  follows Chrome and Edge. The cost is that a few web apps, such as
+  github.dev, lose Ctrl , for their own settings.
+- **Settings opens as its own tab (#91).** It does not replace the page
+  the owner is on.
+- **Ctrl D on Home saves nothing (#91).** Home is Syrinx's own page, so
+  bookmarking it would save a blank page. It is refused, as it already is
+  on the Settings tab.
 
 ## 2026-10-18
 
