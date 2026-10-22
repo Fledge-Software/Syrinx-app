@@ -126,6 +126,12 @@ impl TabMetadata {
             .or_else(|| self.is_settings().then_some(SETTINGS_TITLE))
     }
 
+    /// Whether this tab shows one of Syrinx's own pages: exactly those `syrinx_title` names, so
+    /// a page added there is covered here too.
+    pub fn is_syrinx_page(&self, origin: PageOrigin) -> bool {
+        self.syrinx_title(origin).is_some()
+    }
+
     /// The one name the sidebar shows for an open tab: Syrinx's name for its own pages,
     /// otherwise the title, or the address when the page has no title.
     pub fn display_title(&self, origin: PageOrigin) -> String {
@@ -741,6 +747,11 @@ mod tests {
         };
         assert!(!page.is_settings());
         assert_eq!(page.syrinx_title(PageOrigin::Ordinary), None);
+        // Syrinx's own pages are exactly the ones it names.
+        assert!(settings.is_syrinx_page(PageOrigin::Ordinary));
+        assert!(home.is_syrinx_page(PageOrigin::Ordinary));
+        assert!(!home.is_syrinx_page(PageOrigin::AdoptedPopup));
+        assert!(!page.is_syrinx_page(PageOrigin::Ordinary));
     }
 
     #[test]

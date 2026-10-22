@@ -163,19 +163,25 @@ impl std::error::Error for SnapshotError {}
 impl TabModelSnapshot {
     /// Whether the active tab shows Syrinx's Settings page (#91).
     pub fn active_is_settings(&self) -> bool {
-        self.tabs
-            .iter()
-            .any(|tab| self.active_id == Some(tab.id) && tab.metadata.is_settings())
+        self.active_metadata()
+            .is_some_and(|metadata| metadata.is_settings())
     }
 
     /// Whether the active tab shows one of Syrinx's own pages, Home or Settings, which are not
     /// destinations and so are never saved (#91). A blank adopted popup counts too: it has
     /// nothing to save either.
     pub fn active_is_syrinx_page(&self) -> bool {
-        self.tabs.iter().any(|tab| {
-            self.active_id == Some(tab.id)
-                && (tab.metadata.is_home(PageOrigin::Ordinary) || tab.metadata.is_settings())
-        })
+        self.active_metadata()
+            .is_some_and(|metadata| metadata.is_syrinx_page(PageOrigin::Ordinary))
+    }
+
+    /// The active tab's metadata, if a tab is active.
+    fn active_metadata(&self) -> Option<&TabMetadata> {
+        let active_id = self.active_id?;
+        self.tabs
+            .iter()
+            .find(|tab| tab.id == active_id)
+            .map(|tab| &tab.metadata)
     }
 
     /// Checks the complete model contract before a store writes or restores these records.
