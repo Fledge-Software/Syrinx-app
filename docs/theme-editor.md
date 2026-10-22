@@ -32,8 +32,9 @@ accent colours.
 | Background style | Solid, Gradient | Solid |
 | Second colour | Any `#RRGGBB`, used by Gradient | `#2A1838` |
 | Angle | 0–355°, turned 15° per press, used by Gradient | 155° |
-| Material | None, Mica, Mica Alt, Acrylic | None |
+| Material | Off, Mica, Mica Alt, Acrylic | Off |
 | Transparency | 0–90 % in 5 % steps, used with a material | 50 % |
+| Home | Solid, See-through, used with a material | Solid |
 | Glass edges | 0–40 % in 4 % steps | 0 % |
 | Grain | 0–15 % in 1 % steps | 0 % |
 | Accent | As before: a preset or any `#RRGGBB`, shared by every theme | The orange `#FF612E` |
@@ -44,6 +45,14 @@ How the choices combine:
   background colour is painted over it at the chosen transparency, so
   Fill and Grain are hidden. Grain is drawn into an opaque image, which
   would cover the material.
+- Transparency sets the tint's opacity to 1 − Transparency/90 (owner
+  decision 2026-10-22): 0 % is the background colour alone, 90 % is
+  Windows' material alone, so Acrylic shows the windows behind Syrinx
+  frosted. The title bar and sidebar take the window tint. Windows draws
+  the material light for a light theme and dark for a dark one.
+- Home: See-through thins Home's card by the same factor as the tint, so
+  it is clear at 90 %. Solid keeps the starting preset's card. The command
+  palette, menus and the Customize panel stay opaque either way.
 - Glass edges draw the chrome's outlines (fields, pills, surfaces, cards,
   chips and popups) in white at the edge strength.
 - Colours are worked out from a starting preset:
@@ -81,7 +90,9 @@ bytes, so no schema change is needed:
 - `appearance.theme`: `graphite`, `paper` or `custom:<slot>`.
 - `appearance.custom.<slot>` for slots 1 to 12: one line such as
   `v1;name=…;mode=dark;bg=#141519;…`. An empty value marks a free slot,
-  because the table has no delete.
+  because the table has no delete. A theme with Home See-through ends in
+  `;home=see-through`; the field is written only when on, so themes saved
+  before 2026-10-22 read and write unchanged.
 - `appearance.accent` and `appearance.reduce_transparency` are unchanged.
 
 Migration: the old `appearance.palette` key is still read when

@@ -10,6 +10,46 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+## 2026-10-22
+
+- **See-through themes really show what is behind the window.** On
+  2026-10-20 the owner chose Acrylic at 90 % Transparency and saw almost no
+  change (#93). Four things hid the material: Syrinx's own tint never fell
+  below 10 % opacity, Windows was always asked for the dark backdrop, Home's
+  card kept a 50 % dark fill, and the page card is opaque. The owner's
+  decision:
+  - **Acrylic shows the windows behind Syrinx, frosted.** The materials
+    offered are Off (the old "None"), Mica, Mica Alt and Acrylic.
+  - **The Transparency slider (0–90 %) lowers Syrinx's own tint to
+    nothing.** Its opacity is now 1 − Transparency/90, so 90 % draws only
+    Windows' material; the old 1 − Transparency/100 kept a 10 % floor.
+    Mica keeps the same slider and mapping.
+  - **The backdrop is light or dark as the theme is**, instead of always
+    dark.
+  - **Home's card can be see-through too**, as a per-theme choice ("Home:
+    Solid / See-through", shown only with a material). See-through thins it
+    by the same factor as the window tint. A choice was preferred over
+    always thinning it, because Home holds the most text and a busy window
+    behind it can make that harder to read.
+  - **Web pages stay solid. The chrome the theme colours follows
+    Transparency** (window background, title bar, sidebar and, when chosen,
+    Home). The command palette, menus and the Customize panel stay opaque
+    so their text stays readable over any window; the 2026-10-15 rule on
+    opaque pages and palette stands, as does Reduce transparency.
+  - **Saved themes keep working.** The Home choice is stored as
+    `;home=see-through` only when on, so every saved theme reads and writes
+    exactly as before.
+  Rejected: a "Clear" material (an unblurred, fully transparent window),
+  because text over a sharp background cannot be kept readable; and making
+  the whole window, web pages included, see-through, because a transparent
+  page background breaks sites that assume white and any pixel over the
+  page card hides the page (`docs/dev/trapstoknow.md`). This is compatible
+  with PR #124 (the Glass preset): both make the backdrop follow the theme
+  with the same function, but #124's preset would need Transparency 50 %
+  (a 0.44 tint) instead of 55 % to keep the canvas's 0.46 under the new
+  mapping, and its automatic thinning of Haze's card overlaps the Home
+  choice; reconcile both when #124 is merged.
+
 ## 2026-10-21
 
 - **The WASM plugin runtime research note (#26) is approved, with all

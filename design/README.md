@@ -157,6 +157,15 @@ rules below describe the five palettes as first designed. Its see-through
 rules (opaque pages, near-opaque palette, Reduce transparency, measuring
 Acrylic) still hold for custom themes.
 
+**Transparency, decided by the owner on 2026-10-22** (`docs/decisions.md`):
+with Acrylic, a see-through theme shows the windows behind Syrinx, frosted.
+The Transparency slider (0–90 %) lowers Syrinx's own tint until, at 90 %,
+only Windows' material is drawn. The backdrop is light or dark as the theme
+is. The window background, title bar and sidebar follow the slider, and
+Home's card does too when the theme's Home choice is See-through. Web pages,
+the command palette, menus and the Customize panel stay opaque. There is no
+"Clear" (unblurred) material, and the page itself is never see-through.
+
 The base palette is the ground, surfaces and text; the accent is chosen
 separately and sits on top of any of them. All five ship, and all five are
 offered in the Customize panel. Each is named for how it looks, not for the
