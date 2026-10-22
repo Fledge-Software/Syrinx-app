@@ -1097,6 +1097,16 @@ fn home_entry_acknowledgments_follow_their_command_and_do_not_survive_restart() 
     assert_eq!(reopened.home_entry, Some(2));
     assert_eq!(reopened.created, [replacement]);
     assert_eq!(reopened.model.tabs[0].metadata.address, "about:blank");
+    // Home itself is never saved (#91), so the reopened tab navigates before Ctrl D.
+    change(
+        &handle,
+        &mut events,
+        SessionCommand::ObserveMetadata {
+            id: replacement,
+            title: None,
+            address: Some("https://home-entry.example.test/".into()),
+        },
+    );
     let saved = change(&handle, &mut events, SessionCommand::SaveActive);
     let saved_id = saved.model.saved_pages[0].id;
     assert_eq!(saved.home_entry, None);

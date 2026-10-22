@@ -1400,8 +1400,9 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         }
         SessionCommand::SaveActive => {
             let id = model.active_id().ok_or(SessionError::NoActiveTab)?;
-            // Settings is Syrinx's own page, not a destination, so Ctrl D leaves it unsaved (#91).
-            if model.snapshot().active_is_settings() {
+            // Home and Settings are Syrinx's own pages, not destinations, so Ctrl D leaves them
+            // unsaved (#91).
+            if model.snapshot().active_is_syrinx_page() {
                 return Ok(());
             }
             model.save_page(id).map_err(SessionError::Model)?;
@@ -1837,19 +1838,22 @@ mod tests {
     }
 
     #[test]
-    fn saving_the_settings_tab_leaves_it_unsaved_while_a_page_still_saves()
+    fn saving_settings_or_home_leaves_it_unsaved_while_a_page_still_saves()
     -> Result<(), SessionError> {
         let mut model = TabModel::new();
-        apply_model(
-            &mut model,
-            SessionCommand::NewTab {
-                address: syrinx_core::SETTINGS_ADDRESS.into(),
-            },
-        )?;
-        let before = model.snapshot();
-        apply_model(&mut model, SessionCommand::SaveActive)?;
-        assert_eq!(model.snapshot(), before);
-        assert!(model.snapshot().saved_pages.is_empty());
+        // Syrinx's own pages, Settings and Home, each refuse Ctrl D without changing anything.
+        for address in [syrinx_core::SETTINGS_ADDRESS, syrinx_core::BLANK_ADDRESS] {
+            apply_model(
+                &mut model,
+                SessionCommand::NewTab {
+                    address: address.into(),
+                },
+            )?;
+            let before = model.snapshot();
+            apply_model(&mut model, SessionCommand::SaveActive)?;
+            assert_eq!(model.snapshot(), before, "{address} was saved");
+            assert!(model.snapshot().saved_pages.is_empty());
+        }
         apply_model(
             &mut model,
             SessionCommand::NewTab {
