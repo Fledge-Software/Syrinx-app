@@ -49,7 +49,11 @@ How the choices combine:
   decision 2026-10-22): 0 % is the background colour alone, 90 % is
   Windows' material alone, so Acrylic shows the windows behind Syrinx
   frosted. The title bar and sidebar take the window tint. Windows draws
-  the material light for a light theme and dark for a dark one.
+  the material light for a light theme and dark for a dark one, and a
+  light theme's text is checked over pale stand-in wallpapers. A selected
+  row keeps at least a 10 % tint under it, so its text stays at 4.5:1 at
+  90 %. If text still fails, the editor says so instead of claiming it
+  was made readable.
 - Home: See-through thins Home's card by the same factor as the tint, so
   it is clear at 90 %. Solid keeps the starting preset's card. The command
   palette, menus and the Customize panel stay opaque either way.

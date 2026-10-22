@@ -23,9 +23,12 @@ folder names.
   - **The Transparency slider (0–90 %) lowers Syrinx's own tint to
     nothing.** Its opacity is now 1 − Transparency/90, so 90 % draws only
     Windows' material; the old 1 − Transparency/100 kept a 10 % floor.
-    Mica keeps the same slider and mapping.
+    Mica keeps the same slider and mapping. A selected row alone keeps the
+    old 10 % tint under it, because with no tint its light fill over a
+    bright window drops text below 4.5:1.
   - **The backdrop is light or dark as the theme is**, instead of always
-    dark.
+    dark. A light theme's text is checked over pale stand-in wallpapers to
+    match the light material.
   - **Home's card can be see-through too**, as a per-theme choice ("Home:
     Solid / See-through", shown only with a material). See-through thins it
     by the same factor as the window tint. A choice was preferred over
@@ -47,8 +50,10 @@ folder names.
   with PR #124 (the Glass preset): both make the backdrop follow the theme
   with the same function, but #124's preset would need Transparency 50 %
   (a 0.44 tint) instead of 55 % to keep the canvas's 0.46 under the new
-  mapping, and its automatic thinning of Haze's card overlaps the Home
-  choice; reconcile both when #124 is merged.
+  mapping; its test `the_window_tint_thins_as_transparency_rises` expects
+  the old 1 − Transparency/100 and must follow the new mapping; and its
+  automatic thinning of Haze's card overlaps the Home choice. Reconcile
+  all three when #124 is merged.
 
 ## 2026-10-21
 
