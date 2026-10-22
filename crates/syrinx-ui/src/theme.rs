@@ -12,7 +12,7 @@ use crate::palette::{
 pub const MAX_NAME_CHARS: usize = 40;
 
 /// The longest name in UTF-8 bytes: a settings value holds 256 bytes and the other fields of
-/// a stored theme take at most 118, so a name of 40 emoji still fits.
+/// a stored theme take at most 135, so a name of 40 emoji still fits.
 pub const MAX_NAME_BYTES: usize = 120;
 
 /// Each stepped choice's range and step, in percent or degrees.
@@ -79,7 +79,7 @@ impl Material {
 
     pub const fn name(self) -> &'static str {
         match self {
-            Material::None => "None",
+            Material::None => "Off",
             Material::Mica => "Mica",
             Material::MicaAlt => "Mica Alt",
             Material::Acrylic => "Acrylic",
@@ -126,6 +126,8 @@ pub struct ThemeSpec {
     pub material: Material,
     /// Percent of the material that shows through the background colour.
     pub transparency: u16,
+    /// Whether Home's card follows Transparency too, instead of staying as the template draws it.
+    pub see_through_home: bool,
     /// Percent opacity of the glass edge on surfaces.
     pub edges: u16,
     /// Percent opacity of the grain.
@@ -146,6 +148,7 @@ impl ThemeSpec {
             fill: Fill::Solid,
             material: Material::None,
             transparency: 50,
+            see_through_home: false,
             edges: 0,
             grain: 0,
         }
@@ -201,6 +204,9 @@ impl ThemeSpec {
             recolour(&mut drawn, self.background, self.mode);
         }
         drawn.ground = self.ground(see_through);
+        if see_through && self.see_through_home {
+            drawn.card = with_alpha(drawn.card, alpha_of(drawn.card) * self.tint_opacity());
+        }
         drawn.badge_ring = self.background;
         keep_text_readable(&mut drawn, accent, self.mode);
         drawn.grain = f32::from(self.grain) / 100.;
@@ -215,12 +221,18 @@ impl ThemeSpec {
         new_failures(&self.palette(accent, false), accent)
     }
 
+    /// How opaque Syrinx's own tint is over the material: fully at 0 %, not at all at the
+    /// slider's top, so 90 % shows the material alone (owner decision 2026-10-22).
+    pub fn tint_opacity(&self) -> f32 {
+        let shown = f32::from(self.transparency.min(TRANSPARENCY.max));
+        1. - shown / f32::from(TRANSPARENCY.max)
+    }
+
     fn ground(&self, see_through: bool) -> Ground {
         if let (true, Some(material)) = (see_through, self.material.window_material()) {
-            let opacity = 1. - f32::from(self.transparency) / 100.;
             return Ground::Material {
                 material,
-                tint: with_alpha(self.background, opacity),
+                tint: with_alpha(self.background, self.tint_opacity()),
                 wallpaper_standins: &HAZE_WALLPAPER,
             };
         }
@@ -248,8 +260,14 @@ impl ThemeSpec {
             Mode::Dark => "dark",
             Mode::Light => "light",
         };
+        // Written only when on, so a theme without it reads in builds that predate the field.
+        let home = if self.see_through_home {
+            ";home=see-through"
+        } else {
+            ""
+        };
         format!(
-            "{VERSION};name={};mode={mode};bg={};fill={style};bg2={};angle={angle};material={};transparency={};edges={};grain={}",
+            "{VERSION};name={};mode={mode};bg={};fill={style};bg2={};angle={angle};material={};transparency={};edges={};grain={}{home}",
             self.name,
             hex(self.background),
             hex(second),
@@ -283,6 +301,7 @@ impl ThemeSpec {
                 "transparency" => theme.transparency = parse_in(value, TRANSPARENCY)?,
                 "edges" => theme.edges = parse_in(value, EDGES)?,
                 "grain" => theme.grain = parse_in(value, GRAIN)?,
+                "home" => theme.see_through_home = parse_home(value)?,
                 _ => return Err(Unreadable),
             }
         }
@@ -334,6 +353,14 @@ fn parse_mode(text: &str) -> Result<Mode, Unreadable> {
     match text {
         "dark" => Ok(Mode::Dark),
         "light" => Ok(Mode::Light),
+        _ => Err(Unreadable),
+    }
+}
+
+fn parse_home(text: &str) -> Result<bool, Unreadable> {
+    match text {
+        "see-through" => Ok(true),
+        "solid" => Ok(false),
         _ => Err(Unreadable),
     }
 }
@@ -503,6 +530,10 @@ fn failures_beyond(drawn: &Palette, inherited: &[(&str, &str)]) -> Vec<ContrastC
         .collect()
 }
 
+fn alpha_of(color: Color) -> f32 {
+    f32::from(color.alpha) / 255.
+}
+
 fn with_alpha(color: Color, opacity: f32) -> Color {
     Color::rgba(color.red, color.green, color.blue, opacity)
 }
@@ -535,6 +566,12 @@ mod tests {
             material: Material::MicaAlt,
             transparency: 35,
             ..ThemeSpec::new("Light blue glass")
+        });
+        themes.push(ThemeSpec {
+            material: Material::Acrylic,
+            transparency: 60,
+            see_through_home: true,
+            ..ThemeSpec::new("Clear Home")
         });
         themes
     }
@@ -582,6 +619,7 @@ mod tests {
                 },
                 material: Material::MicaAlt,
                 transparency: 90,
+                see_through_home: true,
                 edges: 40,
                 grain: 15,
                 ..ThemeSpec::new(&character.repeat(60))
@@ -646,6 +684,101 @@ mod tests {
             ..ThemeSpec::new("Too bright")
         };
         assert!(!theme.contrast_problems(Accent::default()).is_empty());
+    }
+
+    fn acrylic(transparency: u16, see_through_home: bool) -> ThemeSpec {
+        ThemeSpec {
+            material: Material::Acrylic,
+            transparency,
+            see_through_home,
+            ..ThemeSpec::new("Frosted")
+        }
+    }
+
+    fn tint_of(theme: &ThemeSpec) -> Color {
+        let Ground::Material { tint, .. } = theme.palette(Accent::default(), false).ground else {
+            panic!("{}: no material", theme.transparency);
+        };
+        tint
+    }
+
+    #[test]
+    fn the_slider_thins_the_tint_to_nothing_at_its_top() {
+        assert_eq!(acrylic(0, false).tint_opacity(), 1.);
+        assert_eq!(acrylic(45, false).tint_opacity(), 0.5);
+        assert_eq!(acrylic(90, false).tint_opacity(), 0.);
+        // No floor: at 90 % only Windows' own Acrylic is drawn behind the chrome.
+        assert_eq!(tint_of(&acrylic(90, false)).alpha, 0);
+        let mut previous = u8::MAX;
+        for transparency in (TRANSPARENCY.step..=TRANSPARENCY.max).step_by(5) {
+            let tint = tint_of(&acrylic(transparency, false));
+            assert!(tint.alpha < previous, "{transparency}");
+            previous = tint.alpha;
+        }
+    }
+
+    #[test]
+    fn homes_card_follows_the_slider_only_when_asked() {
+        let accent = Accent::default();
+        let card = |theme: ThemeSpec| theme.palette(accent, false).card;
+        // Off: the template's card, Haze's `rgba(10,11,14,0.5)`, whatever the slider says.
+        let template = Color::rgba(10, 11, 14, 0.5).alpha;
+        assert_eq!(card(acrylic(90, false)).alpha, template);
+        // On: the card thins with the window's tint, and is clear at the top.
+        assert_eq!(
+            card(acrylic(45, true)).alpha,
+            Color::rgba(0, 0, 0, 0.25).alpha
+        );
+        assert_eq!(card(acrylic(90, true)).alpha, 0);
+        // With no material shown the option changes nothing.
+        let opaque = ThemeSpec {
+            material: Material::None,
+            ..acrylic(90, true)
+        };
+        assert_eq!(card(opaque), palette(PaletteId::Graphite, accent).card);
+        // Reduce transparency draws the card opaque again.
+        assert_eq!(
+            acrylic(90, true).palette(accent, true).card,
+            palette(PaletteId::Graphite, accent).card
+        );
+    }
+
+    #[test]
+    fn the_backdrop_is_light_or_dark_as_the_theme_is() {
+        let accent = Accent::default();
+        let light = ThemeSpec {
+            mode: Mode::Light,
+            background: Color::hex(0xE7EEF8),
+            ..acrylic(60, false)
+        };
+        assert!(light.palette(accent, false).is_light());
+        assert!(!acrylic(60, false).palette(accent, false).is_light());
+        assert!(palette(PaletteId::Paper, accent).is_light());
+        assert!(!palette(PaletteId::Graphite, accent).is_light());
+    }
+
+    #[test]
+    fn materials_are_offered_as_off_mica_mica_alt_and_acrylic() {
+        let names: Vec<_> = Material::ALL.into_iter().map(Material::name).collect();
+        assert_eq!(names, ["Off", "Mica", "Mica Alt", "Acrylic"]);
+    }
+
+    #[test]
+    fn themes_saved_before_the_home_option_still_read() {
+        // A value exactly as builds before 2026-10-22 wrote it.
+        let stored = "v1;name=Old;mode=dark;bg=#101118;fill=solid;bg2=#101118;angle=155;\
+                      material=acrylic;transparency=55;edges=24;grain=0";
+        let theme = ThemeSpec::parse(stored).expect("an old theme reads");
+        assert!(!theme.see_through_home);
+        assert_eq!(theme.to_setting(), stored);
+        let clear = ThemeSpec {
+            see_through_home: true,
+            ..theme
+        };
+        assert!(clear.to_setting().ends_with(";home=see-through"));
+        assert_eq!(ThemeSpec::parse(&clear.to_setting()), Ok(clear));
+        let bad = format!("{stored};home=foggy");
+        assert_eq!(ThemeSpec::parse(&bad), Err(Unreadable));
     }
 
     #[test]

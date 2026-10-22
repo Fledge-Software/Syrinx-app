@@ -16,16 +16,19 @@ pub(crate) fn apply(palette: Palette) {
     CURRENT.set(palette);
 }
 
+/// Whether the drawn palette is light: Paper, or a light theme built on it.
+pub(crate) fn is_light() -> bool {
+    CURRENT.with_borrow(Palette::is_light)
+}
+
 /// Gives gpui-component's widgets, such as text fields, the drawn palette's light or dark
-/// theme; Paper is the only light palette.
+/// theme.
 pub(crate) fn apply_component_theme(cx: &mut App) {
-    let mode = CURRENT.with_borrow(|palette| {
-        if palette.id == PaletteId::Paper {
-            ThemeMode::Light
-        } else {
-            ThemeMode::Dark
-        }
-    });
+    let mode = if is_light() {
+        ThemeMode::Light
+    } else {
+        ThemeMode::Dark
+    };
     Theme::change(mode, None, cx);
     // Root must not paint over the native page's rectangle (the Phase 0 stacking trap).
     Theme::update(cx, |theme| {

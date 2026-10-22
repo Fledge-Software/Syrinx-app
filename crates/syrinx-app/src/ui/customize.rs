@@ -82,7 +82,11 @@ impl BrowserView {
         self.home.appearance = appearance;
         theme::apply(appearance.drawn_palette(&self.home.themes));
         theme::apply_component_theme(cx);
-        show_material(appearance.material(&self.home.themes), window);
+        show_material(
+            appearance.material(&self.home.themes),
+            !theme::is_light(),
+            window,
+        );
         window.refresh();
     }
 
@@ -372,8 +376,9 @@ impl BrowserView {
     }
 }
 
-/// Ask Windows for the theme's material; an opaque theme keeps Mica under its solid fill.
-fn show_material(material: Option<Material>, window: &Window) {
+/// Ask Windows for the theme's material, light or dark as the theme is; an opaque theme keeps
+/// Mica under its solid fill.
+fn show_material(material: Option<Material>, dark: bool, window: &Window) {
     let backdrop = match material {
         Some(Material::MicaAlt) => Backdrop::MicaAlt,
         Some(Material::Acrylic) => Backdrop::Acrylic,
@@ -381,7 +386,7 @@ fn show_material(material: Option<Material>, window: &Window) {
     };
     let applied = super::native_handle(window)
         .map_err(str::to_owned)
-        .and_then(|hwnd| backdrop::apply(hwnd, backdrop).map_err(|error| error.to_string()));
+        .and_then(|hwnd| backdrop::apply(hwnd, backdrop, dark).map_err(|error| error.to_string()));
     if let Err(error) = applied {
         eprintln!("Syrinx could not set the {backdrop:?} backdrop: {error}");
     }

@@ -125,7 +125,8 @@ impl ThemeLab {
         &self.variants[self.selected]
     }
 
-    /// Ask Windows for the selected variant's backdrop; Tint covers it with an opaque ground.
+    /// Ask Windows for the selected variant's backdrop, dark like every lab variant; Tint covers
+    /// it with an opaque ground.
     fn apply_backdrop(&self, window: &Window) {
         let backdrop = match self.variant().ground {
             Ground2::Material { backdrop, .. } => backdrop,
@@ -133,7 +134,9 @@ impl ThemeLab {
         };
         let applied = crate::ui::native_handle(window)
             .map_err(str::to_owned)
-            .and_then(|hwnd| backdrop::apply(hwnd, backdrop).map_err(|error| error.to_string()));
+            .and_then(|hwnd| {
+                backdrop::apply(hwnd, backdrop, true).map_err(|error| error.to_string())
+            });
         if let Err(error) = applied {
             eprintln!("theme lab: could not set the {backdrop:?} backdrop: {error}");
         }

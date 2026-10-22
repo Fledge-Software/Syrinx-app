@@ -222,6 +222,14 @@ pub struct Palette {
     pub accent: AccentColors,
 }
 
+impl Palette {
+    /// Whether this palette is light: Paper, or a light theme, which starts from Paper. Windows
+    /// draws the material and widgets in their light form for it.
+    pub fn is_light(&self) -> bool {
+        self.id == PaletteId::Paper
+    }
+}
+
 /// Builds a palette for `id` with the owner's accent applied.
 pub fn palette(id: PaletteId, accent: Accent) -> Palette {
     match id {

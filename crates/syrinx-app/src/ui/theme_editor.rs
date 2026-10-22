@@ -391,7 +391,13 @@ impl BrowserView {
                 self.material_choice(slot, theme, panel, cx),
             ));
         if material_on {
-            view = view.child(self.stepper(slot, TRANSPARENCY_STEPS, theme, panel, cx));
+            view = view
+                .child(self.stepper(slot, TRANSPARENCY_STEPS, theme, panel, cx))
+                .child(labelled(
+                    panel,
+                    "Home",
+                    self.home_choice(slot, theme, panel, cx),
+                ));
         } else {
             view = view.child(labelled(
                 panel,
@@ -474,6 +480,34 @@ impl BrowserView {
                 segment(id, material.name(), theme.material == material, panel).on_click(
                     cx.listener(move |this, _, window, cx| {
                         this.change_theme(slot, |theme| theme.material = material, window, cx);
+                    }),
+                ),
+            );
+        }
+        group
+    }
+
+    /// Whether Home's card stays solid or follows Transparency like the rest of the chrome.
+    fn home_choice(
+        &self,
+        slot: usize,
+        theme: &ThemeSpec,
+        panel: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let options = [(false, "Solid"), (true, "See-through")];
+        let mut group = segmented_group();
+        for (see_through, label) in options {
+            let id = ("theme-home", slot * 10 + usize::from(see_through));
+            group = group.child(
+                segment(id, label, theme.see_through_home == see_through, panel).on_click(
+                    cx.listener(move |this, _, window, cx| {
+                        this.change_theme(
+                            slot,
+                            |theme| theme.see_through_home = see_through,
+                            window,
+                            cx,
+                        );
                     }),
                 ),
             );
@@ -669,7 +703,12 @@ fn describe(theme: &ThemeSpec) -> String {
         (Material::None, Fill::Gradient { .. }) => "gradient".to_owned(),
         (material, _) => format!("{}, {} % see-through", material.name(), theme.transparency),
     };
-    format!("{mode}, {look}.")
+    let home = if theme.see_through_home && theme.material != Material::None {
+        ", Home too"
+    } else {
+        ""
+    };
+    format!("{mode}, {look}{home}.")
 }
 
 fn labelled(panel: &Palette, label: &'static str, control: impl gpui::IntoElement) -> Div {
