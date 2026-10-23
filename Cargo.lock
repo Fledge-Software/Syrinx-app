@@ -6930,6 +6930,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "raw-window-handle",
+ "rusqlite",
  "syrinx-core",
  "syrinx-platform",
  "syrinx-search",

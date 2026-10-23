@@ -1,4 +1,5 @@
 //! Shows the clear-browsing-data dialog in the page card and reports each part's outcome (P1-27).
+//! "Cookies and site data" also forgets the saved per-site zoom levels, as Chrome does (#90).
 
 use gpui::{
     Context, Div, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled, div, px,
@@ -84,6 +85,8 @@ struct Pending {
     kinds: BrowsingDataKinds,
     period: Period,
     history: Option<Option<Result<ClearedHistory, String>>>,
+    /// Saved zoom levels forgotten with cookies and site data: how many sites, or why not.
+    site_zoom: Option<Option<Result<usize, String>>>,
     engine: Option<Option<Result<(), String>>>,
     /// A cleanup failure after the engine part, reported but not counted as a failed clear.
     cleanup: Option<String>,
@@ -91,8 +94,18 @@ struct Pending {
 
 impl Pending {
     fn finished(&self) -> bool {
-        !matches!(self.history, Some(None)) && !matches!(self.engine, Some(None))
+        !matches!(self.history, Some(None))
+            && !matches!(self.site_zoom, Some(None))
+            && !matches!(self.engine, Some(None))
     }
+}
+
+/// The requests one submitted clear sends: to the session for Syrinx's own history and zoom
+/// levels, and to the page engine for WebView2's data.
+struct ClearRequests {
+    history: Option<SessionCommand>,
+    site_zoom: Option<SessionCommand>,
+    engine: BrowserCommand,
 }
 
 /// The dialog's choices and the clear in flight, kept while closed so its outcome still lands.
@@ -145,36 +158,49 @@ impl ClearDataDialog {
     }
 
     /// Starts one clear at `now`, returning the session and page-engine requests to send.
-    fn submit(&mut self, now: i64) -> Option<(Option<SessionCommand>, BrowserCommand)> {
+    fn submit(&mut self, now: i64) -> Option<ClearRequests> {
         if self.pending.is_some() || self.kinds.is_empty() {
             return None;
         }
         self.sequence = self.sequence.wrapping_add(1);
+        let request_id = self.sequence;
         let span = self.period.span(now);
-        // Syrinx's own history is cleared by the session; WebView2's copy by the page engine.
-        let history = self.kinds.history.then(|| {
-            let (start, end) = span.map_or((0, i64::MAX), |span| (span.start, span.end));
-            SessionCommand::ClearHistory {
-                request_id: self.sequence,
-                start,
-                end,
-            }
+        let (start, end) = span.map_or((0, i64::MAX), |span| (span.start, span.end));
+        // Syrinx's own history and zoom levels are cleared by the session; WebView2's data by
+        // the page engine.
+        let history = self.kinds.history.then_some(SessionCommand::ClearHistory {
+            request_id,
+            start,
+            end,
         });
+        let site_zoom =
+            self.kinds
+                .cookies_and_site_data
+                .then_some(SessionCommand::ClearSiteZooms {
+                    request_id,
+                    start,
+                    end,
+                });
         self.pending = Some(Pending {
-            request: self.sequence,
+            request: request_id,
             kinds: self.kinds,
             period: self.period,
             history: history.as_ref().map(|_| None),
+            site_zoom: site_zoom.as_ref().map(|_| None),
             engine: Some(None),
             cleanup: None,
         });
         self.outcome = None;
         let engine = BrowserCommand::ClearData {
-            request: self.sequence,
+            request: request_id,
             kinds: self.kinds,
             span,
         };
-        Some((history, engine))
+        Some(ClearRequests {
+            history,
+            site_zoom,
+            engine,
+        })
     }
 
     /// Records the session's part; returns the finished summary once every part has reported.
@@ -188,6 +214,17 @@ impl ClearDataDialog {
         self.finish()
     }
 
+    /// Records the zoom-level part; returns the summary once every part has reported.
+    fn site_zoom_result(
+        &mut self,
+        request: u64,
+        result: Result<usize, SessionError>,
+    ) -> Option<String> {
+        let pending = self.pending.as_mut().filter(|p| p.request == request)?;
+        pending.site_zoom = Some(Some(result.map_err(|error| error.to_string())));
+        self.finish()
+    }
+
     fn engine_result(&mut self, request: u64, outcome: ClearOutcome) -> Option<String> {
         let pending = self.pending.as_mut().filter(|p| p.request == request)?;
         pending.engine = Some(Some(outcome.cleared.map_err(engine_error)));
@@ -195,13 +232,21 @@ impl ClearDataDialog {
         self.finish()
     }
 
-    /// The session stopped before answering, so its part can no longer arrive.
+    /// The session stopped before answering, so its parts can no longer arrive.
     fn session_lost(&mut self) -> Option<String> {
         let pending = self.pending.as_mut()?;
-        if !matches!(pending.history, Some(None)) {
+        let mut waiting = false;
+        if matches!(pending.history, Some(None)) {
+            pending.history = session_part_lost();
+            waiting = true;
+        }
+        if matches!(pending.site_zoom, Some(None)) {
+            pending.site_zoom = session_part_lost();
+            waiting = true;
+        }
+        if !waiting {
             return None;
         }
-        pending.history = Some(Some(Err(SessionError::StorageUnavailable.to_string())));
         self.finish()
     }
 
@@ -223,6 +268,11 @@ impl ClearDataDialog {
     }
 }
 
+/// A session part that can no longer answer, reported as storage being unavailable.
+fn session_part_lost<T>() -> Option<Option<Result<T, String>>> {
+    Some(Some(Err(SessionError::StorageUnavailable.to_string())))
+}
+
 /// Names what was cleared and, separately, each part that failed and why.
 fn summary(pending: &Pending) -> String {
     let kinds = pending.kinds;
@@ -237,6 +287,12 @@ fn summary(pending: &Pending) -> String {
             Err(error) => failures.push(format!(
                 "Syrinx's browsing history was not cleared: {error}."
             )),
+        }
+    }
+    if let Some(Some(result)) = &pending.site_zoom {
+        match result {
+            Ok(sites) => cleared.push(format!("saved zoom levels ({sites} sites)")),
+            Err(error) => failures.push(format!("Saved zoom levels were not cleared: {error}.")),
         }
     }
     let engine = engine_kinds(kinds);
@@ -321,9 +377,14 @@ impl BrowserView {
                 return;
             }
         };
-        let Some((history, engine)) = self.clear_data.submit(now) else {
+        let Some(requests) = self.clear_data.submit(now) else {
             return;
         };
+        let ClearRequests {
+            history,
+            site_zoom,
+            engine,
+        } = requests;
         let BrowserCommand::ClearData { request, .. } = &engine else {
             return;
         };
@@ -333,6 +394,11 @@ impl BrowserView {
             && !self.try_command(command)
         {
             self.history_cleared(request, Err(SessionError::StorageUnavailable));
+        }
+        if let Some(command) = site_zoom
+            && !self.try_command(command)
+        {
+            self.site_zooms_cleared_for_dialog(request, Err(SessionError::StorageUnavailable));
         }
         if !self.page_command(engine) {
             let refused = ClearOutcome {
@@ -349,6 +415,17 @@ impl BrowserView {
         result: Result<ClearedHistory, SessionError>,
     ) {
         if let Some(summary) = self.clear_data.history_result(request, result) {
+            self.message = summary;
+        }
+    }
+
+    /// The zoom-level part of a clear finished; `site_zooms_cleared` has applied it.
+    pub(super) fn site_zooms_cleared_for_dialog(
+        &mut self,
+        request: u64,
+        result: Result<usize, SessionError>,
+    ) {
+        if let Some(summary) = self.clear_data.site_zoom_result(request, result) {
             self.message = summary;
         }
     }
@@ -540,7 +617,73 @@ mod tests {
     }
 
     fn submitted(dialog: &mut ClearDataDialog) -> (Option<SessionCommand>, BrowserCommand) {
-        dialog.submit(10_000).expect("a clear starts")
+        let requests = dialog.submit(10_000).expect("a clear starts");
+        (requests.history, requests.engine)
+    }
+
+    /// The zoom-level request a submitted clear sends, if any, and its page-engine request id.
+    fn zoom_request(dialog: &mut ClearDataDialog) -> (Option<(u64, i64, i64)>, u64) {
+        let requests = dialog.submit(10_000).expect("a clear starts");
+        let zoom = requests.site_zoom.map(|command| {
+            let SessionCommand::ClearSiteZooms {
+                request_id,
+                start,
+                end,
+            } = command
+            else {
+                panic!("zoom levels are cleared by the session");
+            };
+            (request_id, start, end)
+        });
+        let BrowserCommand::ClearData { request, .. } = requests.engine else {
+            panic!("the page engine clears its own data");
+        };
+        (zoom, request)
+    }
+
+    #[test]
+    fn cookies_and_site_data_also_clear_zoom_levels_over_the_chosen_range() {
+        let mut dialog = ClearDataDialog::default();
+        dialog.show();
+        dialog.toggle(Kind::History);
+        dialog.toggle(Kind::Cookies);
+        dialog.period = Period::LastWeek;
+        let (zoom, request) = zoom_request(&mut dialog);
+        assert_eq!(zoom, Some((request, 10_000 - 7 * 86_400, 10_001)));
+        // Both the engine and the zoom part must report before the clear ends.
+        assert_eq!(dialog.engine_result(request, cleared(Ok(()))), None);
+        let summary = dialog
+            .site_zoom_result(request, Ok(2))
+            .expect("both parts reported");
+        assert_eq!(
+            summary,
+            "Cleared saved zoom levels (2 sites) and cookies and site data from the last 7 days."
+        );
+    }
+
+    #[test]
+    fn an_all_time_cookie_clear_reaches_every_zoom_level_and_reports_a_failure() {
+        let mut dialog = ClearDataDialog::default();
+        dialog.show();
+        dialog.toggle(Kind::History);
+        dialog.toggle(Kind::Cookies);
+        dialog.period = Period::AllTime;
+        let (zoom, request) = zoom_request(&mut dialog);
+        assert_eq!(zoom, Some((request, 0, i64::MAX)));
+        dialog.engine_result(request, cleared(Ok(())));
+        let summary = dialog
+            .site_zoom_result(request, Err(SessionError::StorageUnavailable))
+            .expect("both parts reported");
+        assert!(summary.starts_with("Cleared cookies and site data from all time."));
+        assert!(summary.contains("Saved zoom levels were not cleared"));
+    }
+
+    #[test]
+    fn a_history_only_clear_leaves_zoom_levels_alone() {
+        let mut dialog = ClearDataDialog::default();
+        dialog.show();
+        let (zoom, _) = zoom_request(&mut dialog);
+        assert_eq!(zoom, None);
     }
 
     #[test]
@@ -605,6 +748,7 @@ mod tests {
         };
         assert_eq!(span, None);
         dialog.history_result(request, Ok(ClearedHistory::default()));
+        dialog.site_zoom_result(request, Ok(0));
         let refused = BrowserError::ClearData {
             code: 0x8007_0005_u32 as i32,
         };
@@ -612,7 +756,7 @@ mod tests {
             .engine_result(request, cleared(Err(refused)))
             .expect("both parts reported");
         assert!(summary.starts_with(
-            "Cleared Syrinx's browsing history (0 visits; 0 sites no longer listed) from all time."
+            "Cleared Syrinx's browsing history (0 visits; 0 sites no longer listed) and saved zoom levels (0 sites) from all time."
         ));
         assert!(summary.contains("visited-page records, cookies and site data were not cleared"));
         assert!(summary.contains("error 0x80070005"));

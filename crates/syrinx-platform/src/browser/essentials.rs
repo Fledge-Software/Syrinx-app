@@ -29,6 +29,8 @@ pub enum PageAction {
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    /// Restores a site's remembered level (#90); clamped to WebView2's 25% to 500%.
+    SetZoom(f64),
 }
 
 pub(super) struct Essentials {
@@ -82,7 +84,10 @@ impl Essentials {
                 PageAction::Print => core
                     .cast::<ICoreWebView2_16>()?
                     .ShowPrintUI(COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER),
-                action @ (PageAction::ZoomIn | PageAction::ZoomOut | PageAction::ZoomReset) => {
+                action @ (PageAction::ZoomIn
+                | PageAction::ZoomOut
+                | PageAction::ZoomReset
+                | PageAction::SetZoom(_)) => {
                     let controller = view.controller();
                     let mut factor = 1.;
                     controller.ZoomFactor(&mut factor)?;
@@ -191,6 +196,7 @@ fn next_zoom(factor: f64, action: &PageAction) -> f64 {
             .rev()
             .find(|level| *level < factor - 0.001)
             .unwrap_or(0.25),
+        PageAction::SetZoom(level) if level.is_finite() => level.clamp(0.25, 5.),
         _ => 1.,
     }
 }
@@ -208,5 +214,8 @@ mod tests {
         assert_eq!(next_zoom(5., &PageAction::ZoomIn), 5.);
         assert_eq!(next_zoom(0.25, &PageAction::ZoomOut), 0.25);
         assert_eq!(next_zoom(3., &PageAction::ZoomReset), 1.);
+        assert_eq!(next_zoom(1., &PageAction::SetZoom(1.25)), 1.25);
+        assert_eq!(next_zoom(1., &PageAction::SetZoom(9.)), 5.);
+        assert_eq!(next_zoom(1.5, &PageAction::SetZoom(f64::NAN)), 1.);
     }
 }
