@@ -1608,9 +1608,10 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         SessionCommand::SaveTab(id) => {
             // Home and Settings are Syrinx's own pages, not destinations, so Ctrl D and a row
             // menu leave them unsaved (#91).
-            let syrinx_page = model.tabs().iter().any(|tab| {
-                tab.id() == id && tab.metadata().is_syrinx_page(PageOrigin::Ordinary)
-            });
+            let syrinx_page = model
+                .tabs()
+                .iter()
+                .any(|tab| tab.id() == id && tab.metadata().is_syrinx_page(PageOrigin::Ordinary));
             if syrinx_page {
                 return Ok(());
             }
