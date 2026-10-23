@@ -9,6 +9,7 @@ mod navigation;
 mod palette;
 mod palette_sample;
 mod session;
+mod smoke_profile;
 mod smoke_watchdog;
 mod text_field;
 mod theme;
@@ -29,7 +30,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU8, Ordering},
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use syrinx_core::usage::UsageRecorder;
 use syrinx_platform::{
@@ -67,6 +68,8 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Dropped unsettled on an early return, it names the kept folder as a failed run's evidence.
+    let smoke_profile = options.smoke_profile.take();
     // A second launch on this profile hands its link to the running Syrinx and exits.
     // Unattended runs keep reporting on stderr only, past argument parsing too.
     let unattended = options.smoke || options.acceptance.is_some();
@@ -211,19 +214,48 @@ fn main() -> ExitCode {
     // Held until this process ends, which is how the helper knows Syrinx has exited; nothing
     // after this may wait on the owner.
     let _handoff = hand_off_update(&update_context, unattended);
+    let finished = Finished {
+        smoke: options_smoke,
+        unattended,
+        outcome: outcome.load(Ordering::Acquire),
+    };
+    let passed = run_passed(watchdog, finished, &usage, &usage_file);
+    // A passing smoke run deletes its synthetic profile; a failing one keeps it as evidence.
+    if let Some(profile) = smoke_profile {
+        profile.settle(passed);
+    }
+    if !passed {
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+/// How the window run ended, as `run_passed` judges it.
+struct Finished {
+    smoke: bool,
+    unattended: bool,
+    /// 1 when an unattended check reported success, 2 when the window failed.
+    outcome: u8,
+}
+
+/// The watchdog stopped, a smoke run counted nothing and the window reported no failure.
+fn run_passed(
+    watchdog: Option<smoke_watchdog::SmokeWatchdog>,
+    finished: Finished,
+    usage: &UsageRecorder,
+    usage_file: &Path,
+) -> bool {
     if let Some(watchdog) = watchdog
         && let Err(error) = watchdog.cancel()
     {
         eprintln!("{error}");
-        return ExitCode::FAILURE;
+        return false;
     }
-    if options_smoke && !smoke_counted_nothing(&usage, &usage_file) {
-        return ExitCode::FAILURE;
+    if finished.smoke && !smoke_counted_nothing(usage, usage_file) {
+        return false;
     }
-    if outcome.load(Ordering::Acquire) == 2 || unattended && outcome.load(Ordering::Acquire) != 1 {
-        return ExitCode::FAILURE;
-    }
-    ExitCode::SUCCESS
+    let failed = finished.outcome == 2 || finished.unattended && finished.outcome != 1;
+    !failed
 }
 
 /// A smoke run's fresh profile never switches counting on, so nothing may have been counted or
@@ -310,6 +342,8 @@ struct Options {
     /// Started by the update helper (P1-39b).
     after_update: bool,
     smoke: bool,
+    /// The fresh profile a `--smoke` run created, which only that run may delete (#86).
+    smoke_profile: Option<smoke_profile::GeneratedProfile>,
     /// A checked http(s) link to open, as Windows passes one when Syrinx opens a link.
     link: Option<LinkRequest>,
     /// P1-15's measurement mode: this many synthetic tabs suspended in a fresh profile.
@@ -483,14 +517,7 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
     // Smoke, measurement and acceptance runs always use a fresh synthetic profile.
     let fresh_profile = smoke || suspended_tabs > 0 || acceptance.is_some();
     let directory = if fresh_profile {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| "The system clock is unavailable.")?
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "syrinx-window-smoke-{}-{nonce}",
-            std::process::id()
-        ))
+        smoke_profile::fresh_directory()?
     } else if let Some(directory) = test_directory.clone() {
         directory
     } else {
@@ -499,7 +526,11 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
         )
         .join(DATA_FOLDER)
     };
-    if fresh_profile {
+    // Only a smoke run deletes its profile; measurement and acceptance keep theirs as before.
+    let mut smoke_profile = None;
+    if smoke {
+        smoke_profile = Some(smoke_profile::GeneratedProfile::reserve(directory.clone())?);
+    } else if fresh_profile {
         reserve_smoke_directory(&directory)?;
     }
     Ok(RunMode::Browser(Options {
@@ -507,6 +538,7 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
         test_directory,
         after_update,
         smoke,
+        smoke_profile,
         link,
         suspended_tabs,
         acceptance,
@@ -528,7 +560,11 @@ fn reserve_smoke_directory(directory: &Path) -> Result<(), &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::Write};
+    use std::{
+        fs,
+        io::Write,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use super::*;
 
@@ -656,6 +692,38 @@ mod tests {
             let parsed = parse(arguments);
             assert!(parsed.is_err(), "{arguments:?} gave {parsed:?}");
         }
+    }
+
+    #[test]
+    fn only_a_smoke_run_owns_a_deletable_profile() {
+        let tested = Arguments {
+            test_directory: Some(PathBuf::from(r"C:\Synthetic")),
+            ..Arguments::default()
+        };
+        let Ok(RunMode::Browser(options)) = run_mode(tested) else {
+            panic!("a test profile opens the browser");
+        };
+        assert_eq!(options.directory, PathBuf::from(r"C:\Synthetic"));
+        assert!(options.smoke_profile.is_none());
+
+        let smoke = Arguments {
+            smoke: true,
+            ..Arguments::default()
+        };
+        let Ok(RunMode::Browser(mut options)) = run_mode(smoke) else {
+            panic!("a smoke run opens the browser");
+        };
+        let profile = options
+            .smoke_profile
+            .take()
+            .expect("smoke owns its profile");
+        assert!(options.directory.is_dir());
+        assert_eq!(
+            options.directory.parent(),
+            Some(std::env::temp_dir().as_path())
+        );
+        profile.settle(true);
+        assert!(!options.directory.exists());
     }
 
     #[test]

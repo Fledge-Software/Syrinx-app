@@ -1,4 +1,5 @@
-//! Shows D36's notice when the WebView2 runtime changes, with an explicit open-in-Edge action (P1-35).
+//! Shows D36's notice when the WebView2 runtime changes, with an explicit open-in-Edge action (P1-35),
+//! in development and test builds only; installed builds stay silent.
 
 use std::collections::BTreeMap;
 
@@ -13,6 +14,10 @@ use crate::{session::SessionCommand, theme};
 
 /// The setting holding the last runtime version Syrinx saw (`https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-34-35-instance-runtime.md`).
 pub(super) const RUNTIME_VERSION_SETTING: &str = "webview2.runtime_version";
+
+/// Whether the notice may show. Installed builds are what people download, and the owner keeps
+/// this notice for development and test builds only (owner, 2026-10-20).
+const SHOWS_NOTICE: bool = !cfg!(feature = "installed");
 
 /// The notice strip's height; the page card moves down by this much while it shows.
 pub(super) const NOTICE_HEIGHT: f32 = 36.;
@@ -77,7 +82,8 @@ impl RuntimeNotice {
         if stored.as_ref() == Some(running) {
             return;
         }
-        if let Some(previous) = stored {
+        // The version is still remembered when the notice is off, so turning it on stays quiet.
+        if let Some(previous) = stored.as_ref().filter(|_| SHOWS_NOTICE) {
             self.shown = Some(VersionChange {
                 previous: previous.clone(),
                 current: running.clone(),
@@ -99,7 +105,7 @@ impl BrowserView {
     }
 
     pub(super) fn runtime_version_observed(&mut self, version: Option<String>) {
-        if !self.runtime.observed(version) {
+        if !self.runtime.observed(version) && SHOWS_NOTICE {
             self.message = "Syrinx could not read the WebView2 version, so it cannot tell you \
                             when an update might affect sign-in."
                 .to_owned();
@@ -233,6 +239,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "installed"))]
     fn a_changed_runtime_shows_the_notice_until_dismissed() {
         for settings_first in [true, false] {
             let mut notice = RuntimeNotice::default();
@@ -251,6 +258,16 @@ mod tests {
             notice.dismiss();
             assert_eq!(notice.change(), None);
         }
+    }
+
+    #[test]
+    #[cfg(feature = "installed")]
+    fn an_installed_build_remembers_a_change_without_a_notice() {
+        let mut notice = RuntimeNotice::default();
+        notice.settings_loaded(&settings(Some("140.0.1.2")));
+        assert!(notice.observed(Some("141.0.3.4".to_owned())));
+        assert_eq!(notice.change(), None);
+        assert_eq!(notice.take_save(), saved("141.0.3.4"));
     }
 
     #[test]

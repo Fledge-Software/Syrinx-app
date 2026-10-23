@@ -7,15 +7,16 @@ use gpui::{
     Stateful, StatefulInteractiveElement, Styled, Subscription, Toggled, Window, div, px,
 };
 use gpui_component::input::{InputEvent, InputState};
-use syrinx_core::{ActivationTarget, QuickDestinations, TabId};
+use syrinx_core::QuickDestinations;
 use syrinx_platform::backdrop::{self, Backdrop};
 use syrinx_ui::metrics::{radius, text};
 use syrinx_ui::theme::Material;
-use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette};
+use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette, ShadowRole};
 
 use super::BrowserView;
+use super::main_window::subscribe_in_main;
 use crate::appearance::{self, Appearance, accent_hex, parse_accent};
-use crate::controls::control;
+use crate::controls::{Surface, control, lifted};
 use crate::session::SessionCommand;
 use crate::text_field;
 use crate::theme::{self, rgba};
@@ -82,7 +83,11 @@ impl BrowserView {
         self.home.appearance = appearance;
         theme::apply(appearance.drawn_palette(&self.home.themes));
         theme::apply_component_theme(cx);
-        show_material(appearance.material(&self.home.themes), window);
+        show_material(
+            appearance.material(&self.home.themes),
+            !theme::is_light(),
+            window,
+        );
         window.refresh();
     }
 
@@ -92,34 +97,29 @@ impl BrowserView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let contents = div().flex().flex_col().gap(px(16.));
-        // Managing site permissions replaces the appearance choices, so the panel stays short.
-        let contents = if self.home.site_permissions.is_open() {
-            contents.child(self.site_permissions_view(palette, cx))
-        } else if self.usage.report.is_open() {
-            // The report view replaces the choices in the same way.
-            contents.child(self.usage_report_view(palette, cx))
-        } else {
-            contents
-                .child(self.customize_title(palette, cx))
-                .child(self.theme_choices(palette, window, cx))
-                .child(self.accent_choices(palette, window, cx))
-                .child(self.transparency_switch(palette, cx))
-                .child(self.site_permissions_entry(palette, cx))
-                .child(self.usage_section(palette, cx))
-                .child(self.updates_section(palette, cx))
+        // A quick theme switcher; every other setting lives on the Settings page (#91).
+        let contents = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(self.customize_title(palette, cx))
+            .child(self.theme_choices(palette, window, cx))
+            .child(self.accent_choices(palette, window, cx))
+            .child(self.transparency_switch(palette, cx))
+            .child(self.all_settings_entry(palette, cx));
+        // Near-opaque in every theme, so its drop shadow is drawn under it and survives the
+        // panel's own scrolling clip.
+        let surface = Surface {
+            fill: palette.panel,
+            line: palette.panel_line,
+            corner: 16.,
         };
-        let panel = div()
-            .id("customize-panel")
+        let panel = lifted(div().id("customize-panel"), ShadowRole::Panel, surface)
             .role(Role::Dialog)
             .aria_label("Customize")
             .occlude()
             .max_h_full()
             .overflow_y_scroll()
-            .rounded(px(16.))
-            .bg(rgba(palette.panel))
-            .border_1()
-            .border_color(rgba(palette.panel_line))
             .p(px(16.))
             .text_color(rgba(palette.text))
             .child(contents);
@@ -136,50 +136,11 @@ impl BrowserView {
             .child(panel)
     }
 
-    /// The sidebar's Appearance (settings) button: the Customize panel lives on Home, so
-    /// another page switches to an open Home tab, or opens one, with the panel open.
-    pub(super) fn open_appearance(&mut self) {
-        let route = appearance_route(
-            self.home_showing(),
-            self.home.customize_open,
-            self.first_home_tab(),
-        );
-        match route {
-            AppearanceRoute::Close => {
-                self.close_customize();
-                return;
-            }
-            AppearanceRoute::Show => {}
-            AppearanceRoute::SwitchTo(id) => self.activate(ActivationTarget::Tab(id)),
-            AppearanceRoute::OpenHome => self.open_home_without_palette(),
-        }
-        self.home.customize_open = true;
-    }
-
-    /// Opens a Home tab for the panel. It is not a palette entry: nobody asked to type, so
-    /// its acknowledgement must not open the palette over the panel (#14).
-    fn open_home_without_palette(&mut self) {
-        self.try_command_without_entry(SessionCommand::NewTab {
-            address: "about:blank".to_owned(),
-        });
-    }
-
-    /// The first open tab shown as Home, which the Appearance button reuses.
-    fn first_home_tab(&self) -> Option<TabId> {
-        self.model
-            .tabs
-            .iter()
-            .find(|tab| self.tab_is_home(tab))
-            .map(|tab| tab.id)
-    }
-
-    /// Closes the panel, dropping an unfinished custom accent and the permissions view.
+    /// Closes the panel, dropping an unfinished custom accent and theme edit.
     pub(super) fn close_customize(&mut self) {
         self.home.customize_open = false;
         self.home.custom_accent = None;
         self.home.theme_editor = None;
-        self.home.site_permissions.close();
-        self.usage.report.close();
     }
 
     fn customize_title(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
@@ -216,7 +177,12 @@ impl BrowserView {
             }))
     }
 
-    fn accent_choices(&self, palette: &Palette, window: &Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn accent_choices(
+        &self,
+        palette: &Palette,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let chosen = self.home.appearance;
         let mut swatches = div().flex().items_center().gap(px(12.));
         for (index, color) in ACCENT_PRESETS.into_iter().enumerate() {
@@ -301,7 +267,7 @@ impl BrowserView {
             input.focus(window, cx);
             input.select_all(window, cx);
         });
-        let subscription = cx.subscribe_in(&input, window, |this, _, event, window, cx| {
+        let subscription = subscribe_in_main(&input, cx, |this, event, window, cx| {
             if let InputEvent::PressEnter { .. } = event {
                 this.apply_custom_accent(window, cx);
             }
@@ -333,7 +299,7 @@ impl BrowserView {
         cx.notify();
     }
 
-    fn transparency_switch(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
+    pub(super) fn transparency_switch(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
         let on = self.home.appearance.reduce_transparency;
         let switch = switch_control("reduce-transparency", "Reduce transparency", on, palette)
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -372,8 +338,9 @@ impl BrowserView {
     }
 }
 
-/// Ask Windows for the theme's material; an opaque theme keeps Mica under its solid fill.
-fn show_material(material: Option<Material>, window: &Window) {
+/// Ask Windows for the theme's material, light or dark as the theme is; an opaque theme keeps
+/// Mica under its solid fill.
+fn show_material(material: Option<Material>, dark: bool, window: &Window) {
     let backdrop = match material {
         Some(Material::MicaAlt) => Backdrop::MicaAlt,
         Some(Material::Acrylic) => Backdrop::Acrylic,
@@ -381,7 +348,7 @@ fn show_material(material: Option<Material>, window: &Window) {
     };
     let applied = super::native_handle(window)
         .map_err(str::to_owned)
-        .and_then(|hwnd| backdrop::apply(hwnd, backdrop).map_err(|error| error.to_string()));
+        .and_then(|hwnd| backdrop::apply(hwnd, backdrop, dark).map_err(|error| error.to_string()));
     if let Err(error) = applied {
         eprintln!("Syrinx could not set the {backdrop:?} backdrop: {error}");
     }
@@ -580,79 +547,4 @@ fn custom_accent_field(custom: &CustomAccent, palette: &Palette, window: &Window
         );
     }
     field
-}
-
-/// Where the Appearance button takes the owner.
-#[derive(Debug, PartialEq, Eq)]
-enum AppearanceRoute {
-    /// Home already shows the panel, so a second press closes it.
-    Close,
-    /// Home is showing; open the panel on it.
-    Show,
-    /// Another page is showing and a Home tab is open; switch to it.
-    SwitchTo(TabId),
-    /// No Home tab is open; open one for the panel, without the palette (#14).
-    OpenHome,
-}
-
-/// Chooses the Appearance button's route, reusing a Home tab already in the model. A Home
-/// still being opened is not in the model yet, so two quick presses can still open two.
-fn appearance_route(
-    home_showing: bool,
-    customize_open: bool,
-    open_home: Option<TabId>,
-) -> AppearanceRoute {
-    if home_showing {
-        return if customize_open {
-            AppearanceRoute::Close
-        } else {
-            AppearanceRoute::Show
-        };
-    }
-    match open_home {
-        Some(id) => AppearanceRoute::SwitchTo(id),
-        None => AppearanceRoute::OpenHome,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tab(id: u64) -> TabId {
-        TabId::new(id).expect("synthetic tab ID")
-    }
-
-    #[test]
-    fn appearance_on_home_shows_the_panel_and_a_second_press_closes_it() {
-        assert_eq!(
-            appearance_route(true, false, Some(tab(1))),
-            AppearanceRoute::Show
-        );
-        assert_eq!(
-            appearance_route(true, true, Some(tab(1))),
-            AppearanceRoute::Close
-        );
-    }
-
-    #[test]
-    fn appearance_on_a_page_reuses_an_open_home_tab_instead_of_adding_one() {
-        assert_eq!(
-            appearance_route(false, false, Some(tab(7))),
-            AppearanceRoute::SwitchTo(tab(7))
-        );
-        // The panel was left open on a Home the owner has since moved away from.
-        assert_eq!(
-            appearance_route(false, true, Some(tab(7))),
-            AppearanceRoute::SwitchTo(tab(7))
-        );
-    }
-
-    #[test]
-    fn appearance_with_no_home_tab_opens_one() {
-        assert_eq!(
-            appearance_route(false, false, None),
-            AppearanceRoute::OpenHome
-        );
-    }
 }

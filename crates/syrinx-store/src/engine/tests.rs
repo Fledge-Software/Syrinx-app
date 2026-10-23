@@ -619,3 +619,4 @@ mod import;
 mod lifecycle;
 mod permissions;
 mod preferences;
+mod site_zoom;

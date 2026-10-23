@@ -404,13 +404,18 @@ fn period_from_value(value: Value) -> Result<Period, UsageFileError> {
     }
     let error_keys: Vec<&str> = ErrorCategory::ALL.iter().map(|error| error.key()).collect();
     fill(expect_counts(errors, &error_keys)?);
-    Ok(Period {
+    let period = Period {
         start,
         last_counted,
         closed_on,
         days_used: expect_u32(days)?,
         counts: Counts::from_slots(slots),
-    })
+    };
+    // A day count `start_day` could never have reached means the file was damaged or edited.
+    if !period.days_used_is_possible() {
+        return Err(UsageFileError::Malformed);
+    }
+    Ok(period)
 }
 
 /// The object's values, if its keys are exactly `keys` in that order.

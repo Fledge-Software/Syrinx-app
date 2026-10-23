@@ -1,4 +1,4 @@
-//! Customize's usage report preview and its only two exports, Save report… and Copy report
+//! Settings' usage report preview and its only two exports, Save report… and Copy report
 //! (AN-02); the table is read from the very text that leaves.
 
 use std::{
@@ -277,7 +277,7 @@ impl BrowserView {
         });
     }
 
-    /// Replaces Customize's choices while the owner reads a report.
+    /// Replaces the Usage report section while the owner reads a report.
     pub(super) fn usage_report_view(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
         let report = &self.usage.report;
         let mut view = div()
@@ -311,7 +311,7 @@ impl BrowserView {
         let back = control(
             div().id("usage-report-back"),
             Role::Button,
-            "Back to Customize",
+            "Back to Usage report",
         )
         .size(px(28.))
         .rounded(px(7.))
@@ -325,19 +325,13 @@ impl BrowserView {
             this.usage.report.close();
             cx.notify();
         }));
-        div()
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .child(back)
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(px(text::SUBTITLE))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Usage report"),
-            )
-            .child(self.customize_close_button(palette, cx))
+        div().flex().items_center().gap(px(8.)).child(back).child(
+            div()
+                .flex_1()
+                .text_size(px(text::SUBTITLE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Usage report"),
+        )
     }
 
     /// Current or previous period; the previous one only once a period has closed.
