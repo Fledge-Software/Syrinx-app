@@ -35,6 +35,7 @@ mod recovery;
 mod runtime_notice;
 mod saved_moves;
 mod security;
+mod settings_page;
 mod sidebar_rows;
 mod sidebar_tree;
 mod sidebar_view;
@@ -162,9 +163,14 @@ fn window_bindings() -> Vec<KeyBinding> {
         .collect();
     // The palette is where commands run, so it is not itself a command.
     bindings.push(KeyBinding::new("ctrl-k", Palette, None));
-    // The sidebar toggle and peek dismissal are window keys, not palette commands.
+    // The sidebar toggle, Settings and peek dismissal are window keys, not palette commands.
     bindings.extend([
         KeyBinding::new("ctrl-alt-s", ToggleSidebar, None),
+        KeyBinding::new(
+            settings_page::SETTINGS_KEY,
+            settings_page::OpenSettings,
+            None,
+        ),
         KeyBinding::new("escape", DismissPeek, Some("Syrinx")),
         KeyBinding::new("escape", crate::palette::Dismiss, Some("SyrinxPeek")),
     ]);
@@ -277,7 +283,10 @@ fn command_returns_focus_to_page(action: BrowserAction) -> bool {
 
 /// Whether a shortcut opens something in Syrinx's chrome, which page fullscreen hides.
 fn needs_chrome(shortcut: BrowserShortcut) -> bool {
-    matches!(shortcut, BrowserShortcut::Find | BrowserShortcut::History)
+    matches!(
+        shortcut,
+        BrowserShortcut::Find | BrowserShortcut::History | BrowserShortcut::Settings
+    )
 }
 
 /// How this launch runs: normally, or as one of the unattended synthetic checks.
@@ -323,6 +332,7 @@ pub struct BrowserView {
     navigation_status: NavigationStatus,
     history: history_list::HistoryList,
     clear_data: clear_data::ClearDataDialog,
+    settings: settings_page::SettingsPage,
     shown: Option<TabId>,
     bounds: Option<PageBounds>,
     sidebar_sizing: SidebarSizing,
@@ -365,7 +375,7 @@ pub struct BrowserView {
     home_palette: HomePaletteIntent,
     importer: import::BookmarkImporter,
     home: home::HomeState,
-    /// Keeps keyboard focus as Customize's permission list opens, closes and rereads (DW-7).
+    /// Keeps keyboard focus as Settings' permission list opens, closes and rereads (DW-7).
     site_permission_focus: site_permissions::PermissionFocus,
     incoming: incoming_links::IncomingLinks,
     runtime: runtime_notice::RuntimeNotice,
@@ -379,9 +389,9 @@ pub struct BrowserView {
     smoke_waiting: bool,
     /// P1-33's scripted palette acceptance run; `None` in every other launch.
     acceptance: Option<palette_acceptance::Acceptance>,
-    /// Customize's Updates section and the staged update's handover (P1-39b).
+    /// Settings' Updates section and the staged update's handover (P1-39b).
     updates: updates::UpdatePanel,
-    /// Customize's Usage report section and the window's own measurements (AN-01).
+    /// Settings' Usage report section and the window's own measurements (AN-01).
     usage: usage_report::UsageState,
     outcome: Arc<AtomicU8>,
 }
@@ -433,6 +443,7 @@ impl BrowserView {
             navigation_status: NavigationStatus::default(),
             history: history_list::HistoryList::default(),
             clear_data: clear_data::ClearDataDialog::default(),
+            settings: settings_page::SettingsPage::new(cx),
             shown: None,
             bounds: None,
             sidebar_sizing: SidebarSizing::default(),
@@ -655,6 +666,9 @@ impl BrowserView {
                 if snapshot.model.active_id != self.model.active_id {
                     self.history.close();
                     self.clear_data.close();
+                }
+                if settings_page::settings_tab_closed(&self.model, &snapshot.model) {
+                    self.close_settings_subviews();
                 }
                 self.model = snapshot.model;
                 if initial {
@@ -1283,6 +1297,7 @@ impl BrowserView {
                 self.dismiss_peek(generation, window, cx);
             }
             BrowserShortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
+            BrowserShortcut::Settings => self.open_settings_from_page(window, cx),
             // Only a focused page sends these; GPUI's own F6 binding covers the chrome.
             BrowserShortcut::FocusNextPane => self.cycle_pane(Direction::Forward, true, window, cx),
             BrowserShortcut::FocusPreviousPane => {
@@ -1962,6 +1977,8 @@ impl Render for BrowserView {
                 .child(history_list::render(&self.history, cx))
         } else if let Some(card) = self.crashed_page(cx) {
             card
+        } else if self.shown.is_none() && self.settings_showing() {
+            self.settings_page(window, cx)
         } else if self.shown.is_none() {
             self.home_page(window, cx)
         } else {
@@ -2003,6 +2020,10 @@ impl Render for BrowserView {
             )
             .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
                 this.toggle_sidebar(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &settings_page::OpenSettings, _, cx| {
+                this.open_settings(None);
+                cx.notify();
             }))
             .on_action(cx.listener(|this, _: &DismissPeek, window, cx| {
                 // Escape closes the topmost of an open menu, the peek and the history list. A menu
@@ -2334,15 +2355,16 @@ mod palette_shortcut_tests {
             );
             shortcuts.push(shortcut);
         }
-        // Every native shortcut except the palette, fullscreen and the window's sidebar and
-        // peek keys is reachable as a command: ten navigation actions, history and six page
-        // essentials.
+        // Every native shortcut except the palette, fullscreen, Settings and the window's
+        // sidebar and peek keys is reachable as a command: ten navigation actions, history and
+        // six page essentials.
         assert_eq!(shortcuts.len(), 17);
         assert!(shortcuts.contains(&BrowserShortcut::History));
         for window_key in [
             BrowserShortcut::Palette,
             BrowserShortcut::Fullscreen,
             BrowserShortcut::ToggleSidebar,
+            BrowserShortcut::Settings,
         ] {
             assert!(!shortcuts.contains(&window_key));
         }
@@ -2357,9 +2379,10 @@ mod palette_shortcut_tests {
     }
 
     #[test]
-    fn only_find_and_history_leave_page_fullscreen_first() {
+    fn only_find_history_and_settings_leave_page_fullscreen_first() {
         assert!(needs_chrome(BrowserShortcut::Find));
         assert!(needs_chrome(BrowserShortcut::History));
+        assert!(needs_chrome(BrowserShortcut::Settings));
         for shortcut in [
             BrowserShortcut::ZoomIn,
             BrowserShortcut::ZoomOut,
