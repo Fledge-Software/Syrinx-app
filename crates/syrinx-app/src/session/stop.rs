@@ -64,11 +64,18 @@ impl SessionCommand {
     }
 }
 
+/// Names in one place what the loop and `handle` call before a command runs.
+pub(super) const SAVING_SETTLED_TITLES: &str = "saving settled page titles";
+
 /// Tags an error that ends the worker's loop with the operation that raised it.
+/// An error already tagged keeps its inner, more specific name (#77).
 pub(super) fn during(operation: &'static str) -> impl FnOnce(SessionError) -> SessionError {
-    move |error| SessionError::During {
-        operation,
-        error: Box::new(error),
+    move |error| match error {
+        SessionError::During { .. } => error,
+        error => SessionError::During {
+            operation,
+            error: Box::new(error),
+        },
     }
 }
 

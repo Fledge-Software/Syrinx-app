@@ -823,7 +823,7 @@ impl Worker {
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
                     self.settle_titles(store, false, events)
-                        .map_err(stop::during("saving settled page titles"))?;
+                        .map_err(stop::during(stop::SAVING_SETTLED_TITLES))?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     let now = utc_seconds();
@@ -864,7 +864,8 @@ impl Worker {
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
         // Titles that settled before this command name the page they were reported on.
-        self.settle_titles(store, false, events)?;
+        self.settle_titles(store, false, events)
+            .map_err(stop::during(stop::SAVING_SETTLED_TITLES))?;
         let command = match command {
             SessionCommand::ConfirmRecovery { .. }
             | SessionCommand::ConfirmHistoryRepair { .. } => {
