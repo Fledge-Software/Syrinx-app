@@ -439,6 +439,7 @@ fn new_input(
         InputState::new(window, cx)
             .placeholder("Search tabs and bookmarks, run > commands, or enter an address")
     });
+    // `subscribe_in` is safe here, unlike in src/ui (#81): only the palette popup draws this view.
     let events = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
         InputEvent::Change => this.query(cx),
         InputEvent::PressEnter { .. } => this.submit(false, window, cx),
