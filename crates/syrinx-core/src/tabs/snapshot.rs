@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use super::{
-    SavedEntryId, SavedFolder, SavedFolderId, SavedPage, SavedPageId, SavedPlacement, Tab, TabId,
-    TabKind, TabMetadata, TabModel,
+    PageOrigin, SavedEntryId, SavedFolder, SavedFolderId, SavedPage, SavedPageId, SavedPlacement,
+    Tab, TabId, TabKind, TabMetadata, TabModel,
 };
 
 /// One live session tab; metadata is independent of its optional saved destination.
@@ -161,6 +161,29 @@ impl fmt::Display for SnapshotError {
 impl std::error::Error for SnapshotError {}
 
 impl TabModelSnapshot {
+    /// Whether the active tab shows Syrinx's Settings page (#91).
+    pub fn active_is_settings(&self) -> bool {
+        self.active_metadata()
+            .is_some_and(|metadata| metadata.is_settings())
+    }
+
+    /// Whether the active tab shows one of Syrinx's own pages, Home or Settings, which are not
+    /// destinations and so are never saved (#91). A blank adopted popup counts too: it has
+    /// nothing to save either.
+    pub fn active_is_syrinx_page(&self) -> bool {
+        self.active_metadata()
+            .is_some_and(|metadata| metadata.is_syrinx_page(PageOrigin::Ordinary))
+    }
+
+    /// The active tab's metadata, if a tab is active.
+    fn active_metadata(&self) -> Option<&TabMetadata> {
+        let active_id = self.active_id?;
+        self.tabs
+            .iter()
+            .find(|tab| tab.id == active_id)
+            .map(|tab| &tab.metadata)
+    }
+
     /// Checks the complete model contract before a store writes or restores these records.
     /// Watermarks cover this snapshot; comparing older writes is the writer's responsibility.
     pub fn validate(&self) -> Result<(), SnapshotError> {
@@ -371,7 +394,62 @@ impl TabModel {
 #[cfg(test)]
 mod tests {
     use super::{SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot};
-    use crate::{Activation, SavedPageId, TabError, TabId, TabKind, TabMetadata, TabModel};
+    use crate::{
+        Activation, BLANK_ADDRESS, SETTINGS_ADDRESS, SavedPageId, TabError, TabId, TabKind,
+        TabMetadata, TabModel,
+    };
+
+    #[test]
+    fn only_an_active_settings_tab_counts_as_settings_showing() {
+        let open = |model: &mut TabModel, address: &str, activation| {
+            model
+                .open(
+                    TabKind::Web,
+                    TabMetadata {
+                        address: address.to_owned(),
+                        ..TabMetadata::default()
+                    },
+                    activation,
+                )
+                .expect("open synthetic tab")
+        };
+        let mut model = TabModel::new();
+        assert!(!model.snapshot().active_is_settings());
+        let settings = open(&mut model, SETTINGS_ADDRESS, Activation::Foreground);
+        assert!(model.snapshot().active_is_settings());
+        open(&mut model, "https://example.test/", Activation::Foreground);
+        assert!(!model.snapshot().active_is_settings());
+        model.select(settings).expect("select Settings");
+        assert!(model.snapshot().active_is_settings());
+    }
+
+    #[test]
+    fn only_an_active_home_or_settings_tab_counts_as_a_syrinx_page() {
+        let open = |model: &mut TabModel, address: &str| {
+            model
+                .open(
+                    TabKind::Web,
+                    TabMetadata {
+                        address: address.to_owned(),
+                        ..TabMetadata::default()
+                    },
+                    Activation::Foreground,
+                )
+                .expect("open synthetic tab")
+        };
+        let mut model = TabModel::new();
+        assert!(!model.snapshot().active_is_syrinx_page());
+        let home = open(&mut model, BLANK_ADDRESS);
+        assert!(model.snapshot().active_is_syrinx_page());
+        let settings = open(&mut model, SETTINGS_ADDRESS);
+        assert!(model.snapshot().active_is_syrinx_page());
+        open(&mut model, "https://example.test/");
+        assert!(!model.snapshot().active_is_syrinx_page());
+        for own_page in [home, settings] {
+            model.select(own_page).expect("select Syrinx's own page");
+            assert!(model.snapshot().active_is_syrinx_page());
+        }
+    }
 
     fn metadata(number: u64) -> TabMetadata {
         TabMetadata {

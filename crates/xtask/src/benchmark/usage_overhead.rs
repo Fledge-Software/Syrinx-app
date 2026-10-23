@@ -79,15 +79,16 @@ fn measure_file_load() -> Result<f64, String> {
     Ok(samples[LOADS * 95 / 100])
 }
 
-/// Both periods with every counter at its maximum: the most text a version 1 file can hold.
+/// Both periods with every day used and every counter at its maximum: the most text a
+/// version 1 file can hold.
 fn largest_file() -> Result<String, String> {
     let start = UsageDate::from_ymd(2026, 1, 1).ok_or("Invalid synthetic date.")?;
     let mut file = UsageFile::begin(start);
-    file.start_day(start.plus_days(PERIOD_DAYS));
-    Ok(file
-        .encode()
-        .replace(": 0", ": 4294967295")
-        .replace("\"days_used\": 1,", "\"days_used\": 4294967295,"))
+    // Day 30 closes the first period; every other day is counted in its period.
+    for day in 1..2 * PERIOD_DAYS {
+        file.start_day(start.plus_days(day));
+    }
+    Ok(file.encode().replace(": 0", ": 4294967295"))
 }
 
 fn time_loads(path: &Path) -> Result<Vec<f64>, String> {
@@ -124,4 +125,18 @@ fn measure(update: impl Fn()) -> f64 {
         .collect();
     samples.sort_by(f64::total_cmp);
     samples[BATCHES * 99 / 100]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_largest_file_is_one_the_decoder_accepts() {
+        let text = largest_file().expect("synthetic file");
+        let file = UsageFile::decode(text.as_bytes()).expect("a file the encoder could write");
+        let previous = file.previous.expect("a closed period");
+        assert_eq!(previous.days_used, PERIOD_DAYS as u32);
+        assert_eq!(file.current.days_used, PERIOD_DAYS as u32);
+    }
 }

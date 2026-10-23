@@ -75,7 +75,7 @@ pub(super) fn clear(
     })
 }
 
-fn finish_pending(
+pub(super) fn finish_pending(
     store: &Store,
     journal: &mut DeletionJournal,
     catalogue: &mut Catalogue,
