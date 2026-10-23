@@ -10,6 +10,44 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+## 2026-10-21
+
+- **Syrinx remembers each site's zoom level (#90).** The owner said yes to
+  storing per-site zoom, as Chrome, Edge and Firefox do. It is kept only in
+  Syrinx's local database, keyed by site, and is never exported or sent
+  anywhere. Without it, zoom resets on every new tab and restart, which is
+  what #90 reported.
+- **Settings opens from the settings button at the bottom of the sidebar
+  (#91).** The spec already puts settings in the sidebar's bottom row; the
+  owner confirmed that this button is the way into the Settings page, and
+  that themes are reachable from it.
+- **The Glass theme must look like the canvas's Glass mockups (#93).** The
+  owner wants Glass and its Transparency setting to show real translucency
+  and glass edges, as in `design/canvas/project/Main.dc.html`, not the
+  near-opaque fill Syrinx draws today. The canvas is the target. In the
+  owner's words, the Glass look belongs "in that theme selection", so Glass
+  comes back as a preset beside Graphite and Paper. This replaces the
+  2026-10-15 rule that only Graphite and Paper are presets, for Glass only;
+  every other look is still built in the theme editor.
+- **The cookie-flush fix keeps Google signed in (#96).** The owner checked
+  that Google stays signed in after closing and reopening Syrinx with #111,
+  so #111 closes #96.
+- **The full-text bake-off runs tonight (#52).** The owner meant the
+  2026-10-20 overnight run to include the quiet-machine comparison; it did
+  not run. It runs on 2026-10-21, once the day's pull requests are
+  merged, with every agent build stopped first.
+- **Clearing "Cookies and site data" also clears saved zoom levels (#90).**
+  This is what Chrome does. Zoom levels are site data, so the owner expects
+  them to go with cookies.
+- **Ctrl , opens Settings even while a web page has the keys (#91).** This
+  follows Chrome and Edge. The cost is that a few web apps, such as
+  github.dev, lose Ctrl , for their own settings.
+- **Settings opens as its own tab (#91).** It does not replace the page
+  the owner is on.
+- **Ctrl D on Home saves nothing (#91).** Home is Syrinx's own page, so
+  bookmarking it would save a blank page. It is refused, as it already is
+  on the Settings tab.
+
 ## 2026-10-18
 
 - **Syrinx takes find, history and zoom keys even over a focused page.**

@@ -722,7 +722,7 @@ fn new_tab_row(labels: bool, cx: &mut Context<BrowserView>) -> Stateful<Div> {
             this.command(SessionCommand::NewTab {
                 address: "about:blank".to_owned(),
             });
-            this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
+            this.queue_peek_action(super::peek::PeekAction::NewTab, window, cx);
             cx.notify();
         }));
     let plus = div()

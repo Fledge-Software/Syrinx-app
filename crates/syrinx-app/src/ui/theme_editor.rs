@@ -14,6 +14,7 @@ use syrinx_ui::{Color, Palette};
 
 use super::BrowserView;
 use super::customize::{ThemeRow, group_heading, theme_row, toggled};
+use super::main_window::subscribe_in_main;
 use crate::appearance::{Appearance, MAX_THEMES, PRESETS, ThemeChoice, shown_name};
 use crate::controls::control;
 use crate::session::SessionCommand;
@@ -225,7 +226,7 @@ impl BrowserView {
         let subscriptions = [&name, &background, &second]
             .into_iter()
             .map(|input| {
-                cx.subscribe_in(input, window, |this, _, event, window, cx| {
+                subscribe_in_main(input, cx, |this, event, window, cx| {
                     if let InputEvent::PressEnter { .. } = event {
                         this.apply_theme_text(window, cx);
                     }

@@ -378,6 +378,42 @@ fn recorder_with_all_fields_at_maximum() -> Counts {
 }
 
 #[test]
+fn days_used_must_fit_between_the_start_and_the_last_counted_day() {
+    // A one-day period has used exactly one day.
+    let text = UsageFile::begin(date(2026, 10, 14)).encode();
+    for impossible in ["0", "2", "40"] {
+        let damaged = text.replace("\"days_used\": 1", &format!("\"days_used\": {impossible}"));
+        assert_eq!(
+            UsageFile::decode(damaged.as_bytes()),
+            Err(UsageFileError::Malformed),
+            "{impossible}"
+        );
+    }
+
+    // Every day of a three-day span counted is the most the encoder writes, and decodes.
+    let mut file = UsageFile::begin(date(2026, 10, 14));
+    file.start_day(date(2026, 10, 15));
+    file.start_day(date(2026, 10, 16));
+    let text = file.encode();
+    assert_eq!(UsageFile::decode(text.as_bytes()), Ok(file.clone()));
+    let too_many = text.replace("\"days_used\": 3", "\"days_used\": 4");
+    assert_eq!(
+        UsageFile::decode(too_many.as_bytes()),
+        Err(UsageFileError::Malformed)
+    );
+
+    // A closed period is held to the same rule: its closing day is not a day counted.
+    file.start_day(date(2026, 11, 20));
+    let text = file.encode();
+    assert_eq!(UsageFile::decode(text.as_bytes()), Ok(file.clone()));
+    let previous_too_many = text.replace("\"days_used\": 3", "\"days_used\": 4");
+    assert_eq!(
+        UsageFile::decode(previous_too_many.as_bytes()),
+        Err(UsageFileError::Malformed)
+    );
+}
+
+#[test]
 fn damaged_files_are_refused_without_panicking() {
     let file = UsageFile::begin(date(2026, 10, 14));
     let text = file.encode();
