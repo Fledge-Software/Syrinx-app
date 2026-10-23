@@ -1,5 +1,6 @@
 //! Connects the shared session to browser chrome without running storage or search on the UI thread.
 
+mod chrome_focus;
 mod clear_data;
 mod customize;
 mod essentials;
@@ -1551,9 +1552,7 @@ impl BrowserView {
     fn focus_shown_page(&mut self) {
         // A page the card does not show (Home, History, clear data, a crash card) gets no keys.
         if !self.page_card_shows_web_page() {
-            if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
-                self.message = error.to_string();
-            }
+            self.move_keys_to_chrome();
             return;
         }
         if let Some(id) = self.shown {

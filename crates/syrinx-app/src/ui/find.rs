@@ -30,8 +30,7 @@ impl BrowserView {
         let Some(id) = self.shown.map(TabId::get) else {
             return;
         };
-        if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
-            self.message = error.to_string();
+        if !self.move_keys_to_chrome() {
             return;
         }
         if let Some(bar) = &self.find {

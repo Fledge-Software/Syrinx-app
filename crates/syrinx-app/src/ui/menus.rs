@@ -7,9 +7,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{KeyDownEvent, MouseDownEvent, Pixels, Point, WeakEntity, prelude::FluentBuilder as _};
 use syrinx_core::{DestinationSurface, Shortcut};
-use syrinx_platform::browser::{
-    BrowserError, OverlayRect, focus_chrome, hide_overlay, syrinx_in_foreground,
-};
+use syrinx_platform::browser::{BrowserError, OverlayRect, hide_overlay, syrinx_in_foreground};
 
 use super::{
     owned_popup::{OwnedPopup, OwnedPopupError, PopupSpec, open_owned_popup, show_and_activate},
@@ -453,10 +451,8 @@ impl BrowserView {
 
     /// Does what the chosen item names; the keys go back to the page unless it takes them.
     fn run_menu_item(&mut self, item: MenuItem, window: &mut Window, cx: &mut Context<Self>) {
-        if item.takes_keys()
-            && let Err(error) = focus_chrome(self.parent_hwnd)
-        {
-            self.message = error.to_string();
+        if item.takes_keys() {
+            self.move_keys_to_chrome();
         }
         match item {
             MenuItem::Find => self.open_find(window, cx),

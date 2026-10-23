@@ -44,11 +44,11 @@ pub(super) fn update_in_main<C: AppContext, R>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::path::{Path, PathBuf};
 
     /// Every Rust file of the browser view: `src/ui.rs` and everything under `src/ui/`.
-    fn browser_view_sources() -> Vec<PathBuf> {
+    pub(in crate::ui) fn browser_view_sources() -> Vec<PathBuf> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = vec![root.join("ui.rs")];
         collect_rust_files(&root.join("ui"), &mut files);
