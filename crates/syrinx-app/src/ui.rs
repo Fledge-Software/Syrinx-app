@@ -452,6 +452,7 @@ impl BrowserView {
                     }
                     this.watch_peek(window, cx);
                     this.focus_page_after_activation(window, cx);
+                    this.reassert_palette_after_activation(cx);
                 }
             }),
             message: "Opening your workspace…".to_owned(),
@@ -687,6 +688,11 @@ impl BrowserView {
                 if let Some((request, target)) = snapshot.popup {
                     self.commit_popup(request, target);
                 }
+                let unattended =
+                    self.smoke || self.suspended_fixture.enabled() || self.acceptance.is_some();
+                if new_home && !self.closing && !unattended {
+                    self.take_keys_for_new_home();
+                }
                 self.sync_pages();
                 // Work that waited for the session to accept commands.
                 self.open_forwarded_links();
@@ -719,8 +725,6 @@ impl BrowserView {
                         address: "about:blank".to_owned(),
                     });
                 }
-                let unattended =
-                    self.smoke || self.suspended_fixture.enabled() || self.acceptance.is_some();
                 if new_home && !self.closing && !unattended {
                     self.open_palette(false, window, cx);
                 }
@@ -1952,7 +1956,7 @@ impl Render for BrowserView {
         let page_drawn = self.browser_ready && !self.closing && self.page_card_shows_web_page();
         let card = page_drawn.then(|| page_card::card_edges(self.card_frame(window)));
         let sidebar = self.sidebar(window, cx);
-        let chrome = crate::controls::watch_pointer(div())
+        let chrome = crate::controls::watch_pointer_and(div(), self.chrome_press_noter(cx))
             .size_full()
             .relative()
             .key_context("Syrinx")

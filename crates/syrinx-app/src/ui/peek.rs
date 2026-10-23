@@ -20,6 +20,8 @@ pub(super) struct PeekPopup {
 
 pub(super) enum PeekAction {
     Dismiss,
+    /// Closes the peek after New tab and leaves the keys for its Home palette (#14).
+    NewTab,
     Palette(bool),
     Toggle,
 }
@@ -305,6 +307,7 @@ impl BrowserView {
         }
         match action {
             PeekAction::Dismiss => self.focus_page(window, cx),
+            PeekAction::NewTab => {}
             PeekAction::Palette(address) => self.palette_key(address, window, cx),
             PeekAction::Toggle => self.toggle_sidebar(window, cx),
         }

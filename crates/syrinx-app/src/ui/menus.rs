@@ -124,6 +124,12 @@ impl MenuItem {
             MenuItem::Find | MenuItem::NewFolder | MenuItem::History
         )
     }
+
+    /// Whether the keys go back to the page after the item runs. New tab gives them to its
+    /// Home palette instead: focusing the outgoing page would take them from it (#14).
+    fn returns_keys_to_page(self) -> bool {
+        !self.takes_keys() && self != MenuItem::NewTab
+    }
 }
 
 /// One row as the popup draws it, captured when the menu opens.
@@ -449,7 +455,7 @@ impl BrowserView {
         }
     }
 
-    /// Does what the chosen item names; the keys go back to the page unless it takes them.
+    /// Does what the chosen item names; the keys go back to the page unless it places them.
     fn run_menu_item(&mut self, item: MenuItem, window: &mut Window, cx: &mut Context<Self>) {
         if item.takes_keys() {
             self.move_keys_to_chrome();
@@ -478,7 +484,7 @@ impl BrowserView {
                 };
             }
         }
-        if !item.takes_keys() {
+        if item.returns_keys_to_page() {
             self.focus_page(window, cx);
         }
         cx.notify();
@@ -851,6 +857,13 @@ mod tests {
             taking,
             [MenuItem::Find, MenuItem::History, MenuItem::NewFolder]
         );
+    }
+
+    #[test]
+    fn new_tab_leaves_the_keys_for_its_palette_not_the_page() {
+        assert!(!MenuItem::NewTab.returns_keys_to_page());
+        assert!(MenuItem::Downloads.returns_keys_to_page());
+        assert!(!MenuItem::Find.returns_keys_to_page());
     }
 
     #[test]

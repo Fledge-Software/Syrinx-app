@@ -63,13 +63,22 @@ pub(crate) fn watch_keys(cx: &mut App) {
 /// root's own mouse listener only fires while the root counts as hovered, which an occluding
 /// child (the toolbar) or a preceding key press prevents.
 pub(crate) fn watch_pointer<E: ParentElement>(root: E) -> E {
+    watch_pointer_and(root, |_| {})
+}
+
+/// `watch_pointer`, also calling `on_press` for every press in the window.
+pub(crate) fn watch_pointer_and<E: ParentElement>(
+    root: E,
+    on_press: impl Fn(&mut App) + 'static,
+) -> E {
     root.child(
         canvas(
             |_, _, _| {},
-            |_, _, window, _| {
-                window.on_mouse_event(|_: &MouseDownEvent, phase, window, cx| {
+            move |_, _, window, _| {
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                     if phase == DispatchPhase::Capture {
                         note_input(ModalityInput::PointerPress, window, cx);
+                        on_press(cx);
                     }
                 });
             },
