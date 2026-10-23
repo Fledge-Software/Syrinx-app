@@ -65,6 +65,19 @@ folder names.
   Ctrl F and Ctrl H) is a consequence nobody has measured; it is an open
   point for the owner's hand checks.
 
+## 2026-10-20
+
+- **The WebView2 update notice is for the owner and testing only.** Installed
+  builds (`cargo xtask package`, which the weekly preview ships) never show
+  D36's notice or its "could not read the WebView2 version" message; they
+  still remember the runtime version, so nothing is lost if the notice
+  returns. Development and test builds keep it for now. This narrows D36,
+  which assumed the owner was the only person running Syrinx.
+- **Each weekly release lists the engines underneath it.** The notes name the
+  GPUI, gpui-component, wry and webview2-com versions from `Cargo.lock`,
+  marking any that changed since the previous preview, and the WebView2
+  runtime the release was gated and screenshotted on.
+
 ## 2026-10-16
 
 - **Planned work lives in GitHub issues; `docs/` holds only the app and its
