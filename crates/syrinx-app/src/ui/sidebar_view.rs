@@ -15,14 +15,14 @@ use syrinx_core::{
     SavedFolderSnapshot, SavedPageSnapshot, TabId,
 };
 use syrinx_ui::{
-    SIDEBAR_WIDTH_STATE_KEY, SidebarWidthState,
+    SIDEBAR_WIDTH_STATE_KEY, ShadowRole, SidebarWidthState,
     metrics::chrome::ICON_BUTTON,
     parse_sidebar_setting,
     sidebar::{SIDEBAR_PADDING_LEFT, SIDEBAR_PADDING_RIGHT, draws_content},
     sidebar_setting,
 };
 
-use crate::controls::{control, glyph, icon_button};
+use crate::controls::{control, glyph, icon_button, raised};
 
 use super::{
     BrowserView,
@@ -640,6 +640,11 @@ fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<
         } else {
             theme::ground()
         });
+    let row = if look.active {
+        raised(row, ShadowRole::RowSelected)
+    } else {
+        row
+    };
     let icon = row_icon(&look.icon, look.saved);
     if !labels {
         return row.w(px(ICON_BUTTON)).justify_center().child(icon);
@@ -717,7 +722,7 @@ fn new_tab_row(labels: bool, cx: &mut Context<BrowserView>) -> Stateful<Div> {
             this.command(SessionCommand::NewTab {
                 address: "about:blank".to_owned(),
             });
-            this.queue_peek_action(super::peek::PeekAction::Dismiss, window, cx);
+            this.queue_peek_action(super::peek::PeekAction::NewTab, window, cx);
             cx.notify();
         }));
     let plus = div()
@@ -776,15 +781,13 @@ fn library_row(labels: bool, cx: &mut Context<BrowserView>) -> Div {
                 cx.notify();
             }),
         ),
-        icon_button(
-            div().id("library-appearance"),
-            glyph::APPEARANCE,
-            "Appearance",
-        )
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.open_appearance();
-            cx.notify();
-        })),
+        // The gear opens Settings in its own tab from any tab (owner, 2026-10-21; #91).
+        icon_button(div().id("library-settings"), glyph::APPEARANCE, "Settings")
+            .aria_keyshortcuts("Ctrl+,")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.open_settings(None);
+                cx.notify();
+            })),
     ];
     let row = div().flex_none().flex().text_color(theme::icon_dim());
     if !labels {

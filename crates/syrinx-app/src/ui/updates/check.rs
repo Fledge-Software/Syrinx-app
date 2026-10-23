@@ -185,10 +185,10 @@ impl BrowserView {
         };
         let status = self.updates.finish_check(checked, remote);
         self.show_update_status(status);
-        // The question is answered in Customize, which the palette may not be showing.
+        // The question is answered in Settings, which the palette may not be showing.
         if let Stage::Available { version, bytes } = self.updates.stage {
             self.message = format!(
-                "Syrinx {version} is available ({}). Download it from Customize on Home.",
+                "Syrinx {version} is available ({}). Download it from Settings.",
                 size_text(bytes)
             );
         }

@@ -9,6 +9,7 @@ mod recovery;
 mod retention;
 mod stop;
 mod synthetic;
+mod unsaved;
 mod usage;
 
 pub use folders::FolderCommand;
@@ -127,6 +128,18 @@ pub enum SessionCommand {
     },
     /// Inserts or replaces documented settings keys (`https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-28-29-home-settings.md`).
     SaveSettings(Vec<(String, String)>),
+    /// Saves a site's zoom level by host, or forgets it with `None` at 100% (#90).
+    SiteZoom {
+        host: String,
+        factor: Option<f64>,
+    },
+    /// Forgets the zoom levels changed in `[start, end)` Unix seconds, with Clear browsing
+    /// data's cookies and site data (#90); answered with `SiteZoomsCleared`.
+    ClearSiteZooms {
+        request_id: u64,
+        start: i64,
+        end: i64,
+    },
     /// Changes one Quick access or Favorites tile list.
     EditDestinations {
         surface: DestinationSurface,
@@ -220,6 +233,8 @@ pub enum SessionEvent {
     Preferences {
         settings: BTreeMap<String, String>,
         destinations: QuickDestinations,
+        /// Each site's remembered zoom level by host (#90); absent hosts are at 100%.
+        site_zooms: SiteZoomLevels,
     },
     /// The tile lists after an accepted edit.
     Destinations(QuickDestinations),
@@ -247,6 +262,11 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<Vec<HistoryVisit>, SessionError>,
     },
+    /// What a `ClearSiteZooms` request removed, or why it failed.
+    SiteZoomsCleared {
+        request_id: u64,
+        result: Result<ClearedSiteZooms, SessionError>,
+    },
     /// What a `ClearHistory` request removed, or why it failed.
     HistoryCleared {
         request_id: u64,
@@ -272,6 +292,23 @@ pub enum SessionEvent {
     },
     /// Connections have closed before this event; joining the worker is now safe.
     Stopped,
+}
+
+/// Saved zoom levels by host (#90). Hosts are browsing data, so `Debug` shows only a count.
+#[derive(Clone, Default, PartialEq)]
+pub struct SiteZoomLevels(pub BTreeMap<String, f64>);
+
+impl fmt::Debug for SiteZoomLevels {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "SiteZoomLevels {{ sites: {} }}", self.0.len())
+    }
+}
+
+/// What a zoom clear removed, and the levels left for the window to apply.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClearedSiteZooms {
+    pub sites: usize,
+    pub remaining: SiteZoomLevels,
 }
 
 /// Counts only, so the dialog can say how much went without naming any of it.
@@ -303,6 +340,8 @@ pub enum SessionError {
         code: Option<i32>,
     },
     WorkerPanicked,
+    /// The worker did not stop within the bound a Windows session end allows (#96).
+    ShutdownTimedOut,
     EventReceiverClosed,
     RecoveryUnavailable,
     /// A synthetic catalogue request asked for fewer rows than present, or too many.
@@ -317,6 +356,11 @@ pub enum SessionError {
     CleanupFailed {
         primary: Box<SessionError>,
         cleanup: StoreError,
+    },
+    /// Tab saves kept failing, or failed in a way that will recur; the worker stops (#9).
+    TabsNotSaved {
+        attempts: u32,
+        error: Box<SessionError>,
     },
     /// The error that ended the worker's loop, with the fixed name of what it was doing.
     During {
@@ -347,6 +391,9 @@ impl fmt::Display for SessionError {
                 write!(formatter, "Cannot start the session worker ({code:?})")
             }
             Self::WorkerPanicked => formatter.write_str("The session worker stopped unexpectedly"),
+            Self::ShutdownTimedOut => {
+                formatter.write_str("The session worker did not stop in time")
+            }
             Self::EventReceiverClosed => formatter.write_str("The session event receiver closed"),
             Self::RecoveryUnavailable => {
                 formatter.write_str("This recovery decision is no longer available")
@@ -366,6 +413,12 @@ impl fmt::Display for SessionError {
             }
             Self::CleanupFailed { primary, cleanup } => {
                 write!(formatter, "{primary}; shutdown also failed: {cleanup}")
+            }
+            Self::TabsNotSaved { attempts, error } => {
+                write!(
+                    formatter,
+                    "The tabs could not be saved ({attempts} tries): {error}"
+                )
             }
             Self::During { operation, error } => write!(formatter, "{error} (while {operation})"),
         }
@@ -387,6 +440,26 @@ impl SessionHandle {
         self.worker
             .join()
             .map_err(|_| SessionError::WorkerPanicked)?
+    }
+
+    /// Asks the worker to stop without waiting, so it can finish alongside other shutdown work.
+    pub fn request_shutdown(&self) {
+        // A closed queue means the worker already left its loop; joining reports how.
+        let _already_stopped = self.commands.send(SessionCommand::Shutdown).is_err();
+    }
+
+    /// Stops the worker when no event loop will deliver `Stopped`, as when Windows ends the
+    /// session (#96). Waits at most `bound`; on a timeout the worker is left to finish alone.
+    pub fn shutdown_within(self, bound: Duration) -> Result<(), SessionError> {
+        self.request_shutdown();
+        let deadline = Instant::now() + bound;
+        while !self.worker.is_finished() {
+            if Instant::now() >= deadline {
+                return Err(SessionError::ShutdownTimedOut);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        self.join()
     }
 }
 
@@ -475,6 +548,7 @@ fn serve_accepted(
     events: &UnboundedSender<SessionEvent>,
     data_dir: &std::path::Path,
 ) -> Result<(), SessionError> {
+    worker.survival.keep_in(data_dir.to_path_buf());
     let result = serve_counted(
         &usage,
         startup,
@@ -484,6 +558,7 @@ fn serve_accepted(
         events,
         data_dir,
     );
+    worker.survival.finish();
     if let Err(error) = &result {
         stop::keep_stop(data_dir, error);
     }
@@ -701,12 +776,24 @@ struct Worker {
     destinations: QuickDestinations,
     /// The settings read at startup, handed to the window once.
     startup_settings: BTreeMap<String, String>,
+    /// The per-site zoom levels read at startup, handed to the window once (#90).
+    startup_site_zooms: SiteZoomLevels,
     /// P1-33's synthetic rows in the catalogue; non-zero only in an acceptance run.
     synthetic_rows: usize,
     /// Set only by `spawn_acceptance`: synthetic rows are accepted and queries are timed.
     acceptance: bool,
     /// The shared usage counters (AN-01); they count only while the owner has them on.
     usage: Arc<UsageRecorder>,
+    /// Names what the loop is doing and decides which failures it survives (#9).
+    survival: stop::Survival,
+    /// A tab model a busy database refused, and when to try it again (#9).
+    unsaved: unsaved::Unsaved,
+}
+
+/// The model after a command, and the failures it survived, reported once it is published.
+struct Persisted {
+    after: TabModelSnapshot,
+    refused: Vec<SessionError>,
 }
 
 impl Worker {
@@ -714,6 +801,7 @@ impl Worker {
         // Cleared history must be gone before the catalogue or any list can read it.
         deletions::reconcile(store, &mut deletions)?;
         let mut stored_preferences = preferences::restore(store)?;
+        let site_zooms = preferences::restore_site_zooms(store)?;
         // Expired visits go before the catalogue loads; a large backlog continues while idle.
         let mut schedule = retention::Schedule::take_saved(&mut stored_preferences.settings);
         retention::expire_at_startup(
@@ -751,9 +839,12 @@ impl Worker {
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
             startup_settings: stored_preferences.settings,
+            startup_site_zooms: site_zooms,
             synthetic_rows: 0,
             acceptance: false,
             usage: Arc::default(),
+            survival: stop::Survival::new(),
+            unsaved: unsaved::Unsaved::default(),
         })
     }
 
@@ -769,6 +860,7 @@ impl Worker {
             SessionEvent::Preferences {
                 settings: std::mem::take(&mut self.startup_settings),
                 destinations: self.destinations.clone(),
+                site_zooms: std::mem::take(&mut self.startup_site_zooms),
             },
         )
         .map_err(stop::during("sending the saved settings"))?;
@@ -782,29 +874,32 @@ impl Worker {
             } else {
                 delay
             };
+            let wait = match self.unsaved.wait(Instant::now()) {
+                Some(retry) => wait.min(retry),
+                None => wait,
+            };
             let received = commands.recv_timeout(wait);
             // The worker's existing wake-ups carry the five-minute usage write; it adds none,
             // and reads no clock unless a write is waiting.
             if usage.pending()
                 && let Err(error) = usage.write_if_due(Instant::now())
             {
-                emit_recoverable(events, SessionError::Usage(error))
-                    .map_err(stop::during("reporting a usage write failure"))?;
+                self.survival.operation = "reporting a usage write failure";
+                self.survival.survive(SessionError::Usage(error), events)?;
             }
             match received {
                 Ok(SessionCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    // A title still held at exit most likely names the tab's current page.
-                    return self
-                        .settle_titles(store, true, events)
-                        .map_err(stop::during("saving page titles at shutdown"));
+                    return self.finish_serving(store, events);
                 }
                 Ok(SessionCommand::Usage(control)) => {
+                    self.survival.operation = stop::CHANGING_USAGE;
                     let (status, problem) = usage.control(control, local_today(), Instant::now());
                     let problem = problem.map(SessionError::Usage);
-                    emit(events, SessionEvent::Usage { status, problem })
-                        .map_err(stop::during(stop::CHANGING_USAGE))?;
+                    let sent = emit(events, SessionEvent::Usage { status, problem });
+                    self.survival.result(sent, events)?;
                 }
                 Ok(SessionCommand::UsageReport { request_id, period }) => {
+                    self.survival.operation = stop::BUILDING_USAGE_REPORT;
                     let result = usage
                         .report(period, local_today())
                         .map_err(SessionError::Usage);
@@ -813,48 +908,89 @@ impl Worker {
                         period,
                         result,
                     };
-                    emit(events, answer).map_err(stop::during(stop::BUILDING_USAGE_REPORT))?;
+                    let sent = emit(events, answer);
+                    self.survival.result(sent, events)?;
                 }
                 Ok(command) => {
-                    let operation = command.operation();
-                    self.handle(store, command, events)
-                        .map_err(stop::during(operation))?;
+                    // Titles that settled before this command name the page they were reported on;
+                    // their failure names the title write, not the command (#77).
+                    self.survival.operation = stop::SAVING_SETTLED_TITLES;
+                    let settled = self.settle_titles(store, false);
+                    self.survival.result(settled, events)?;
+                    self.survival.operation = command.operation();
+                    let handled = self.handle(store, command, events);
+                    self.survival.result(handled, events)?;
                     delay = IDLE_DELAY;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
-                    self.settle_titles(store, false, events)
-                        .map_err(stop::during("saving settled page titles"))?;
+                    // A due tab retry runs here too, so a passed retry time cannot zero the wait.
+                    self.survival.operation = "saving the tabs";
+                    let retried = self.retry_unsaved(store);
+                    self.survival.result(retried, events)?;
+                    self.survival.operation = stop::SAVING_SETTLED_TITLES;
+                    let settled = self.settle_titles(store, false);
+                    self.survival.result(settled, events)?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let now = utc_seconds();
-                    // A clock failure is reported once, by the backup check below.
-                    if let Ok(now) = &now {
-                        self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events)
-                            .map_err(stop::during("expiring old history"))?;
-                    }
-                    // The store retains its daily due state; retries remain idle and bounded.
-                    backup_while_idle(store, now, &self.usage, events)
-                        .map_err(stop::during("taking the daily backup"))?;
+                    self.idle(store, events)?;
                     delay = BACKUP_CHECK_INTERVAL;
                 }
             }
         }
     }
 
-    fn settle_titles(
+    /// The idle wake-up: retries a refused tab save, expires old history, takes the backup.
+    fn idle(
         &mut self,
         store: &Store,
-        force: bool,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        let result = self.history.settle(
+        self.survival.operation = "saving the tabs";
+        let retried = self.retry_unsaved(store);
+        self.survival.result(retried, events)?;
+        // A clear that a busy database interrupted must not leave cleared history showing (D47).
+        self.survival.operation = "clearing history";
+        let cleared = self.finish_pending_clear(store);
+        self.survival.result(cleared, events)?;
+        let now = utc_seconds();
+        // A clock failure is reported once, by the backup check below.
+        if let Ok(now) = &now {
+            self.survival.operation = "expiring old history";
+            let expired = self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events);
+            self.survival.result(expired, events)?;
+        }
+        // The store retains its daily due state; retries remain idle and bounded.
+        self.survival.operation = "taking the daily backup";
+        let backed_up = backup_while_idle(store, now, &self.usage, events);
+        self.survival.result(backed_up, events)
+    }
+
+    /// Saves what is still held at exit: a model a busy database refused, and held titles.
+    fn finish_serving(
+        &mut self,
+        store: &Store,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        // The last chance to save the tabs, so a refusal here is the reason the loop ends.
+        if self.unsaved.pending() {
+            let model = self.model.snapshot();
+            self.save_model(store, &model)
+                .map_err(stop::during("saving the tabs at shutdown"))?;
+        }
+        // A title still held at exit most likely names the tab's current page.
+        self.survival.operation = "saving page titles at shutdown";
+        let settled = self.settle_titles(store, true);
+        self.survival.result(settled, events)
+    }
+
+    fn settle_titles(&mut self, store: &Store, force: bool) -> Result<(), SessionError> {
+        self.history.settle(
             store,
             &mut self.catalogue,
             Instant::now(),
             force,
             utc_seconds,
-        );
-        route_history_result(result, events)
+        )
     }
 
     fn handle(
@@ -863,8 +999,6 @@ impl Worker {
         command: SessionCommand,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        // Titles that settled before this command name the page they were reported on.
-        self.settle_titles(store, false, events)?;
         let command = match command {
             SessionCommand::ConfirmRecovery { .. }
             | SessionCommand::ConfirmHistoryRepair { .. } => {
@@ -879,7 +1013,7 @@ impl Worker {
                     Instant::now(),
                     utc_seconds,
                 );
-                return route_history_result(result, events);
+                return result;
             }
             SessionCommand::Query {
                 request_id,
@@ -988,10 +1122,11 @@ impl Worker {
             }
             return emit_recoverable(events, error);
         }
-        let after = self.persist(store, &before)?;
+        let Persisted { after, mut refused } = self.persist(store, &before)?;
         self.history.retain(&after);
         if let Some(observation) = observation {
-            self.record_history(store, &after, observation, events)?;
+            let recorded = self.record_history(store, &after, observation);
+            stop::keep_refused(&mut refused, recorded)?;
         }
         let created: Vec<_> = after
             .tabs
@@ -1003,9 +1138,13 @@ impl Worker {
         let navigate = if navigating { after.active_id } else { None };
         let popup = popup_request.map(|request| (request, created.first().copied()));
         if let Some((_, Some(tab))) = popup {
-            self.register_popup_tab(&after, tab)?;
+            let registered = self.register_popup_tab(&after, tab);
+            stop::keep_refused(&mut refused, registered)?;
         }
-        self.publish(events, after, created, navigate, home_entry, popup)
+        // Survived failures follow the state, so its "Saved locally" cannot hide them.
+        let published = self.publish(events, after, created, navigate, home_entry, popup);
+        self.survival.report_refused(refused, events)?;
+        published
     }
 
     /// Remembers an adopted popup and refreshes its palette row, which `persist` indexed
@@ -1032,27 +1171,66 @@ impl Worker {
         }
     }
 
-    /// Saves the model if it changed since `before`, in one store transaction, then reindexes.
+    /// Saves the model if it changed since `before` or an earlier save was refused, then
+    /// reindexes. Failures that leave storage usable come back in `refused`, to report later.
     fn persist(
         &mut self,
         store: &Store,
         before: &TabModelSnapshot,
-    ) -> Result<TabModelSnapshot, SessionError> {
+    ) -> Result<Persisted, SessionError> {
         let after = self.model.snapshot();
-        if *before != after {
-            // The clock is read only while the owner counts usage.
-            let started = self.usage.is_enabled().then(Instant::now);
-            let saved = store.save(self.revision, after.clone());
-            if saved.is_err() {
-                self.usage.error(ErrorCategory::StorageWrite);
-            }
-            self.revision = saved.map_err(SessionError::Store)?;
-            if let Some(started) = started {
-                self.usage.time(Timing::StoreSave, started.elapsed());
-            }
-            sync_catalogue(&mut self.catalogue, &self.popup_tabs, before, &after)?;
+        let changed = *before != after;
+        let mut refused = Vec::new();
+        // While a refused save waits out its delay, commands change only memory (#9).
+        if (changed || self.unsaved.pending()) && self.unsaved.may_save(Instant::now()) {
+            let saved = self.save_model(store, &after);
+            stop::keep_refused(&mut refused, saved)?;
         }
-        Ok(after)
+        if changed {
+            let indexed = sync_catalogue(&mut self.catalogue, &self.popup_tabs, before, &after);
+            stop::keep_refused(&mut refused, indexed)?;
+        }
+        Ok(Persisted { after, refused })
+    }
+
+    /// Saves `model` in one store transaction; a refusal leaves it waiting to retry, or stops
+    /// the worker once it will recur (#9).
+    fn save_model(&mut self, store: &Store, model: &TabModelSnapshot) -> Result<(), SessionError> {
+        // The clock is read only while the owner counts usage.
+        let started = self.usage.is_enabled().then(Instant::now);
+        let revision = match store.save(self.revision, model.clone()) {
+            Ok(revision) => revision,
+            Err(error) => {
+                self.usage.error(ErrorCategory::StorageWrite);
+                return Err(self.unsaved.refused(error, Instant::now()));
+            }
+        };
+        self.revision = revision;
+        self.unsaved.saved();
+        if let Some(started) = started {
+            self.usage.time(Timing::StoreSave, started.elapsed());
+        }
+        Ok(())
+    }
+
+    /// Saves the model again, once its delay has passed, if a busy database refused it.
+    fn retry_unsaved(&mut self, store: &Store) -> Result<(), SessionError> {
+        if !self.unsaved.pending() || !self.unsaved.may_save(Instant::now()) {
+            return Ok(());
+        }
+        let model = self.model.snapshot();
+        self.save_model(store, &model)
+    }
+
+    /// Finishes a history clear that a busy database interrupted, if one is pending.
+    fn finish_pending_clear(&mut self, store: &Store) -> Result<(), SessionError> {
+        deletions::finish_pending(
+            store,
+            &mut self.deletions,
+            &mut self.catalogue,
+            &mut self.history,
+        )
+        .map(drop)
     }
 
     /// Adds the whole import in memory, then commits it with a single save.
@@ -1073,11 +1251,13 @@ impl Worker {
                 return emit(events, SessionEvent::Imported { request_id, result });
             }
         };
-        let after = self.persist(store, &before)?;
+        let Persisted { after, refused } = self.persist(store, &before)?;
         self.usage.count(Feature::ImportCompleted);
         let result = Ok(commit);
-        emit(events, SessionEvent::Imported { request_id, result })?;
-        self.publish(events, after, Vec::new(), None, None, None)
+        let published = emit(events, SessionEvent::Imported { request_id, result })
+            .and_then(|()| self.publish(events, after, Vec::new(), None, None, None));
+        self.survival.report_refused(refused, events)?;
+        published
     }
 
     fn answer_query(
@@ -1151,13 +1331,17 @@ impl Worker {
             start,
             end,
         );
-        // The dialog always hears the outcome; storage failures still stop the session.
-        let fatal = match &result {
+        // The dialog always hears the outcome. Lost storage still stops the session; a busy
+        // one is logged, and the journal finishes the clear first next time (D47).
+        let failure = match &result {
             Err(SessionError::Store(error)) => Some(SessionError::Store(error.clone())),
             _ => None,
         };
-        emit(events, SessionEvent::HistoryCleared { request_id, result })?;
-        fatal.map_or(Ok(()), Err)
+        let delivered = emit(events, SessionEvent::HistoryCleared { request_id, result });
+        if let Some(failure) = failure {
+            self.survival.survive_shown(failure)?;
+        }
+        delivered
     }
 
     /// Expires history past the retention when due, one bounded batch per idle check.
@@ -1182,12 +1366,12 @@ impl Worker {
         );
         match expired {
             Ok(()) => Ok(()),
-            // Storage failures stop the session, as they do for an owner's clear.
+            // The loop decides on storage failures: lost storage stops it, a busy one retries.
             Err(error @ SessionError::Store(_)) => Err(error),
             Err(error) => {
                 // A journal refusal is shown once a day rather than at every idle check.
                 self.retention.due = now.saturating_add(retention::DAY_SECS);
-                emit_recoverable(events, error)
+                self.survival.survive(error, events)
             }
         }
     }
@@ -1208,17 +1392,15 @@ impl Worker {
         store: &Store,
         model: &TabModelSnapshot,
         observation: Observation,
-        events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        let result = self.history.observe(
+        self.history.observe(
             store,
             &mut self.catalogue,
             model,
             observation,
             Instant::now(),
             utc_seconds,
-        );
-        route_history_result(result, events)
+        )
     }
 
     /// Sends `model`, the snapshot just persisted, so a large saved tree is not copied again.
@@ -1400,6 +1582,11 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         }
         SessionCommand::SaveActive => {
             let id = model.active_id().ok_or(SessionError::NoActiveTab)?;
+            // Home and Settings are Syrinx's own pages, not destinations, so Ctrl D leaves them
+            // unsaved (#91).
+            if model.snapshot().active_is_syrinx_page() {
+                return Ok(());
+            }
             model.save_page(id).map_err(SessionError::Model)?;
         }
         SessionCommand::Unsave(id) => {
@@ -1443,6 +1630,8 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::OpenHistory(_)
         | SessionCommand::ObserveNavigation { .. }
         | SessionCommand::SaveSettings(_)
+        | SessionCommand::SiteZoom { .. }
+        | SessionCommand::ClearSiteZooms { .. }
         | SessionCommand::EditDestinations { .. }
         | SessionCommand::GrowSyntheticCatalogue { .. }
         | SessionCommand::SnapshotBeforeUpdate
@@ -1529,7 +1718,8 @@ fn sync_tabs(
     Ok(())
 }
 
-/// Upserts one open tab.
+/// Upserts one open tab; Home and Settings take the core's names, as in the sidebar. Other
+/// titles stay as reported, since the palette falls back to the address itself.
 fn upsert_tab(
     catalogue: &mut Catalogue,
     popups: &HashSet<TabId>,
@@ -1566,11 +1756,11 @@ fn upsert_saved<'a>(
     Ok(())
 }
 
-/// A catalogue row; a blank page takes the core's Home title, as in the sidebar. Other titles
-/// stay as reported, since the palette falls back to the address itself.
+/// A catalogue row; Home and Settings take the core's names (`syrinx_title`), as in the
+/// sidebar. Other titles stay as reported, since the palette falls back to the address itself.
 fn entry(target: Target, metadata: &TabMetadata, origin: PageOrigin, open: bool) -> Entry {
     let title = metadata
-        .home_title(origin)
+        .syrinx_title(origin)
         .map_or_else(|| metadata.title.clone(), str::to_owned);
     Entry {
         target,
@@ -1581,18 +1771,6 @@ fn entry(target: Target, metadata: &TabMetadata, origin: PageOrigin, open: bool)
             last_used: None,
         },
         open,
-    }
-}
-
-/// Storage failures stop the session as saves do; an unindexable row or clock does not.
-fn route_history_result(
-    result: Result<(), SessionError>,
-    events: &UnboundedSender<SessionEvent>,
-) -> Result<(), SessionError> {
-    match result {
-        Err(SessionError::Store(error)) => Err(SessionError::Store(error)),
-        Err(error) => emit_recoverable(events, error),
-        Ok(()) => Ok(()),
     }
 }
 
@@ -1872,6 +2050,34 @@ mod tests {
     }
 
     #[test]
+    fn saving_settings_or_home_leaves_it_unsaved_while_a_page_still_saves()
+    -> Result<(), SessionError> {
+        let mut model = TabModel::new();
+        // Syrinx's own pages, Settings and Home, each refuse Ctrl D without changing anything.
+        for address in [syrinx_core::SETTINGS_ADDRESS, syrinx_core::BLANK_ADDRESS] {
+            apply_model(
+                &mut model,
+                SessionCommand::NewTab {
+                    address: address.into(),
+                },
+            )?;
+            let before = model.snapshot();
+            apply_model(&mut model, SessionCommand::SaveActive)?;
+            assert_eq!(model.snapshot(), before, "{address} was saved");
+            assert!(model.snapshot().saved_pages.is_empty());
+        }
+        apply_model(
+            &mut model,
+            SessionCommand::NewTab {
+                address: "https://example.test/".into(),
+            },
+        )?;
+        apply_model(&mut model, SessionCommand::SaveActive)?;
+        assert_eq!(model.snapshot().saved_pages.len(), 1);
+        Ok(())
+    }
+
+    #[test]
     fn empty_reopen_and_invalid_commands_preserve_the_model() -> Result<(), SessionError> {
         let mut model = TabModel::new();
         apply_model(&mut model, SessionCommand::ReopenClosed)?;
@@ -1931,6 +2137,28 @@ mod tests {
             address: address.to_owned(),
         };
         assert!(!format!("{command:?}").contains(address));
+        // A zoomed site's host stays out of commands and events too (#90).
+        let host = "zoom-sentinel.example.test";
+        let zoom = SessionCommand::SiteZoom {
+            host: host.to_owned(),
+            factor: Some(1.25),
+        };
+        assert!(!format!("{zoom:?}").contains(host));
+        let levels = SiteZoomLevels(BTreeMap::from([(host.to_owned(), 1.25)]));
+        let preferences = SessionEvent::Preferences {
+            settings: BTreeMap::new(),
+            destinations: QuickDestinations::default(),
+            site_zooms: levels.clone(),
+        };
+        assert!(!format!("{preferences:?}").contains(host));
+        let cleared = SessionEvent::SiteZoomsCleared {
+            request_id: 1,
+            result: Ok(ClearedSiteZooms {
+                sites: 0,
+                remaining: levels,
+            }),
+        };
+        assert!(!format!("{cleared:?}").contains(host));
         let mut model = TabModel::new();
         apply_model(&mut model, command)?;
         let event = SessionEvent::State(SessionSnapshot {

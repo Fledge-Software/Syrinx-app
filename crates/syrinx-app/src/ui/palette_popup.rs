@@ -4,7 +4,9 @@ use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::Pixels;
-use syrinx_platform::browser::{BrowserError, OverlayRect, activate_if_foreground, show_overlay};
+use syrinx_platform::browser::{
+    BrowserError, OverlayRect, activate_if_foreground, show_overlay, syrinx_in_foreground,
+};
 
 use super::{
     owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup, show_and_activate},
@@ -38,6 +40,8 @@ pub(super) struct PalettePopup {
     entry: u64,
     /// The status line this entry replaced, shown again when the entry ends (#14).
     resting_status: String,
+    /// Whether the owner pressed a mouse button in the main window during this entry.
+    chrome_pressed: bool,
 }
 
 /// What ending an entry reads from the open popup; a trait so a test can stand in for it.
@@ -150,6 +154,7 @@ impl BrowserView {
             hwnd: kept.hwnd,
             entry,
             resting_status,
+            chrome_pressed: false,
         });
         self.listen_to_palette(entry, receiver, window, cx);
         Some(entry)
@@ -431,6 +436,62 @@ impl BrowserView {
             .as_ref()
             .is_some_and(|palette| palette.view.read(cx).is_open())
     }
+
+    /// Takes the keys from the outgoing page before a new Home tab hides it: a hidden page
+    /// hands its focus back to the main window late, after the palette has activated (#14).
+    pub(super) fn take_keys_for_new_home(&mut self) {
+        // With another application in front the palette stays closed, so the page keeps them.
+        if !syrinx_in_foreground() {
+            return;
+        }
+        self.move_keys_to_chrome();
+    }
+
+    /// The main window became active while the palette shows its caret but never had the
+    /// keys: give them back to the palette, unless the owner clicked the chrome (#14).
+    pub(super) fn reassert_palette_after_activation(&mut self, cx: &mut Context<Self>) {
+        let Some(palette) = &self.palette else {
+            return;
+        };
+        let view = palette.view.read(cx);
+        let reassert = should_reassert_palette(
+            view.is_open(),
+            view.was_active_this_entry(),
+            syrinx_in_foreground(),
+            palette.chrome_pressed,
+        );
+        if reassert {
+            self.refocus_palette(cx);
+        }
+    }
+
+    /// Notes a mouse press in the main window, toolbar included, for the open entry; called
+    /// from `controls::watch_pointer_and` on the chrome root.
+    pub(super) fn chrome_press_noter(&self, cx: &mut Context<Self>) -> impl Fn(&mut App) + 'static {
+        let browser = cx.weak_entity();
+        move |cx| {
+            let noted = browser.update(cx, |browser, _| {
+                if let Some(palette) = &mut browser.palette {
+                    palette.chrome_pressed = true;
+                }
+            });
+            if noted.is_err() {
+                eprintln!("A chrome press arrived after its browser was removed.");
+            }
+        }
+    }
+}
+
+/// Whether the main window's activation should hand the keys back to the palette: the
+/// entry is live, its popup never had them, Syrinx is in front (it never takes the
+/// foreground from another application) and no chrome click chose the main window.
+fn should_reassert_palette(
+    live: bool,
+    was_active: bool,
+    in_front: bool,
+    chrome_click: bool,
+) -> bool {
+    live && !was_active && in_front && !chrome_click
 }
 
 /// Whether an event or show task for `entry` still belongs to the open entry.
@@ -501,6 +562,27 @@ mod tests {
 
     fn main_window(x: f32, y: f32, width: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(x), px(y)), size(px(width), px(900.)))
+    }
+
+    #[test]
+    fn only_a_live_never_active_entry_takes_the_keys_back_while_syrinx_is_in_front() {
+        assert!(should_reassert_palette(true, false, true, false));
+        assert!(
+            !should_reassert_palette(false, false, true, false),
+            "the entry has ended"
+        );
+        assert!(
+            !should_reassert_palette(true, true, true, false),
+            "the popup had the keys, so losing them ends the entry instead"
+        );
+        assert!(
+            !should_reassert_palette(true, false, false, false),
+            "another application is in front"
+        );
+        assert!(
+            !should_reassert_palette(true, false, true, true),
+            "the owner clicked the chrome"
+        );
     }
 
     #[test]

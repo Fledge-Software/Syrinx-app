@@ -10,13 +10,13 @@ proposal, `docs/usage-report-privacy.md`.
 When counting is on, Syrinx keeps a set of numbers about how its own
 features are used, so that you can later hand them to a model of your choice
 and ask what to improve. Nothing is sent anywhere by Syrinx, at any time.
-Counting is off until you switch it on in Customize ("Count how I use
-Syrinx, on this computer only"), and switching it off deletes every count.
+Counting is off until you switch it on in Settings › Usage report ("Count
+how I use Syrinx, on this computer only"), and switching it off deletes every count.
 
 ## How to see and share it
 
-1. Open Customize and find **Usage report**. With counting on, press
-   **View report**.
+1. Open Settings (the gear at the bottom of the sidebar, or Ctrl ,) and
+   choose **Usage report**. With counting on, press **View report**.
 2. The report view shows the **current period** (from the day counting
    started, or the last Reset, until today) or, once a period has run its
    30 days, the **previous period**. Syrinx keeps at most these two.

@@ -14,7 +14,13 @@ grain. Rather than choose new fixed palettes, the owner asked for an
 editor:
 
 - **Defaults.** Graphite with the orange accent, opaque, is the default.
-  Graphite and Paper are the two presets.
+  Graphite, Paper and Glass are the presets. Glass came back as a preset
+  on 2026-10-21, when the owner asked for "the glass look" in the theme
+  selection (#93): the canvas's Glass under Acrylic, with Transparency
+  55 % (the canvas's `rgba(16,17,24,0.46)` tint, to the nearest step) and
+  Glass edges 24 % (the canvas's edge). Choosing it draws the canvas look
+  with nothing to edit; Reduce transparency turns it into Graphite with its
+  edges.
 - **Custom themes.** Everything else is a theme the owner builds and saves
   by name. Several can be saved.
 
@@ -44,16 +50,34 @@ How the choices combine:
   background colour is painted over it at the chosen transparency, so
   Fill and Grain are hidden. Grain is drawn into an opaque image, which
   would cover the material.
-- Glass edges draw the chrome's outlines (fields, pills, surfaces, cards,
-  chips and popups) in white at the edge strength.
+- Glass edges draw the canvas's glass edge (#93): an inset top highlight
+  at the edge strength and a faint inner ring at 7/24 of it, on fields,
+  selected rows, the Home card, plugin cards, the search pill and the
+  Customize panel. At 24 % it is the canvas's Glass exactly. On a light
+  theme the ring is dark ink.
+- Under a material, Transparency thins the window's tint; a dark tint on
+  Home's card (Haze's) thins with it, so the material shows through Home.
 - Colours are worked out from a starting preset:
   - a light theme starts from Paper;
   - a dark opaque theme starts from Graphite;
-  - a dark see-through theme starts from the old Haze, whose surfaces are
-    translucent.
+  - a dark theme under Acrylic starts from the canvas's Glass: white frost
+    surfaces, its drop shadows (drawn only outside a translucent surface),
+    and its bright wallpaper stand-ins for the contrast check;
+  - a dark theme under Mica or Mica Alt starts from the old Haze, whose
+    surfaces are translucent.
   Its neutral colours then take the background's hue at the same
   lightness. A theme with Graphite's background and no material draws
   exactly Graphite.
+
+Contrast exceptions: the canvas's Glass fails nine recorded contrast
+pairs, among them muted text on the search pill and on the selected row
+(about 3.2:1). Only the Glass preset keeps them, because it draws the
+canvas exactly. A saved theme that starts from Glass (a dark theme under
+Acrylic, including a saved "Glass") keeps none of them, so all its text
+is lifted to 4.5:1 (#93 review). It does not take Haze's two either,
+because one of those excuses muted text on the selected row. Where even
+white cannot reach 4.5:1, as at 70 % Transparency over a bright wallpaper,
+the editor reports it.
 
 Rules that every theme keeps:
 
@@ -78,7 +102,7 @@ Rules that every theme keeps:
 Themes live in the existing `settings` table. Values hold at most 256
 bytes, so no schema change is needed:
 
-- `appearance.theme`: `graphite`, `paper` or `custom:<slot>`.
+- `appearance.theme`: `graphite`, `paper`, `glass` or `custom:<slot>`.
 - `appearance.custom.<slot>` for slots 1 to 12: one line such as
   `v1;name=…;mode=dark;bg=#141519;…`. An empty value marks a free slot,
   because the table has no delete.
@@ -86,8 +110,15 @@ bytes, so no schema change is needed:
 
 Migration: the old `appearance.palette` key is still read when
 `appearance.theme` is absent. `graphite` and `paper` map to their
-presets. `haze`, `glass` and `tint` become a saved custom theme with the
-same name, so a chosen look is not lost.
+presets, and since 2026-10-21 so does `glass`. `haze` and `tint` become a
+saved custom theme with the same name, so a chosen look is not lost.
+A theme named "Glass" that the earlier migration already saved is left
+exactly as it is, and stays chosen if it was: the owner may have edited
+it, so Syrinx never replaces or deletes it. It is listed under the saved
+themes, beside the preset, as "Glass (saved)" (label and accessible name
+only; the stored name is unchanged), and the owner can delete it if it is
+no longer wanted. Any saved theme whose name matches a preset is shown
+the same way.
 
 ## Customize
 

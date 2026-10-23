@@ -12,6 +12,7 @@ use syrinx_core::{
     TabModelSnapshot, saved_folder_contents,
 };
 
+use super::main_window::subscribe_in_main;
 use super::{
     BrowserView,
     saved_moves::{DropTarget, Step, drop_move, keyboard_move},
@@ -256,7 +257,7 @@ impl BrowserView {
             input.focus(window, cx);
             input.select_all(window, cx);
         });
-        let subscription = cx.subscribe_in(&input, window, |this, _, event, _, cx| {
+        let subscription = subscribe_in_main(&input, cx, |this, event, _, cx| {
             if let InputEvent::PressEnter { .. } = event {
                 this.submit_folder_name(cx);
             }

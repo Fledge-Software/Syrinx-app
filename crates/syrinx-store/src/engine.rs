@@ -1,5 +1,6 @@
 //! Serializes durable writes and keeps two read connections behind independent locks.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::num::NonZeroU64;
 use std::sync::{
@@ -234,6 +235,45 @@ impl Store {
         self.read(|connection| crate::permissions::list(connection))
     }
 
+    /// Every saved per-site zoom level by host (#90), read once at start-up.
+    pub fn site_zooms(&self) -> Result<BTreeMap<String, f64>, StoreError> {
+        self.read(|connection| crate::site_zoom::load(connection))
+    }
+
+    /// Saves `host`'s zoom level as changed at `modified_at` Unix seconds, or forgets it with
+    /// `None` so the site opens at 100%. A default (100%) factor is refused: pass `None`.
+    pub fn save_site_zoom(
+        &self,
+        host: String,
+        factor: Option<f64>,
+        modified_at: i64,
+    ) -> Result<(), StoreError> {
+        crate::site_zoom::validate_host(&host)?;
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::SiteZoom {
+                host,
+                factor,
+                modified_at,
+                reply,
+            })
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
+    }
+
+    /// Forgets the zoom levels changed in `[start, end)` Unix seconds; returns how many.
+    pub fn clear_site_zooms(&self, start: i64, end: i64) -> Result<usize, StoreError> {
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::ClearSiteZoom { start, end, reply })
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
+    }
+
     /// Creates a daily validated backup only while idle. This blocks on the existing writer queue.
     pub fn backup_if_due(
         &self,
@@ -425,6 +465,17 @@ enum WriterRequest {
         expected: Option<bool>,
         reply: mpsc::SyncSender<Result<bool, StoreError>>,
     },
+    SiteZoom {
+        host: String,
+        factor: Option<f64>,
+        modified_at: i64,
+        reply: mpsc::SyncSender<Result<(), StoreError>>,
+    },
+    ClearSiteZoom {
+        start: i64,
+        end: i64,
+        reply: mpsc::SyncSender<Result<usize, StoreError>>,
+    },
     Save(SaveRequest),
     /// A committed revision a reader loaded; no reply.
     Remember(StoredSnapshot),
@@ -540,6 +591,20 @@ fn serve_writes(
             } => {
                 let result =
                     crate::permissions::forget(&writer.connection, &origin, kind, expected);
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::SiteZoom {
+                host,
+                factor,
+                modified_at,
+                reply,
+            } => {
+                let result =
+                    crate::site_zoom::write(&writer.connection, &host, factor, modified_at);
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::ClearSiteZoom { start, end, reply } => {
+                let result = crate::site_zoom::clear(&writer.connection, start, end);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
             WriterRequest::Save(request) => {

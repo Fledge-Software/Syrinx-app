@@ -255,7 +255,7 @@ fn helper_command(layout: &UpdateLayout, mode: ApplyMode, relaunch_data: Option<
 pub struct StartupUpdates {
     pub notice: Option<String>,
     pub staged: Option<Version>,
-    /// `Updates\state` cannot be read, so Customize offers "Reset update records" (DW-66).
+    /// `Updates\state` cannot be read, so Settings offers "Reset update records" (DW-66).
     pub records_unreadable: bool,
 }
 
@@ -291,7 +291,7 @@ pub fn staged_message(staged: &Staged) -> String {
     }
 }
 
-/// The host "Check for updates" contacts, which Customize names next to the button.
+/// The host "Check for updates" contacts, which Settings names next to the button.
 pub fn update_host() -> &'static str {
     Endpoint::production().host()
 }
@@ -318,7 +318,7 @@ pub fn size_text(bytes: u64) -> String {
 pub fn refusal_message(error: &InstallError) -> String {
     if is_unreadable_state(error) {
         return format!(
-            "{RECORDS_UNREADABLE} Reset update records in Customize to start them again."
+            "{RECORDS_UNREADABLE} Reset update records in Settings to start them again."
         );
     }
     match error {
@@ -344,7 +344,7 @@ pub fn refusal_message(error: &InstallError) -> String {
     }
 }
 
-/// Customize's line while `Updates\state` cannot be read (DW-66).
+/// Settings' line while `Updates\state` cannot be read (DW-66).
 pub const RECORDS_UNREADABLE: &str =
     "Syrinx can't read its update records, so it won't check for or install updates.";
 
@@ -443,7 +443,7 @@ fn recovery_notice(recovery: &Recovery) -> Option<String> {
 
 /// Start-up removed a staged update because its records could not be read (owner, 2026-10-14).
 pub const DISCARDED_FOR_UNREADABLE_RECORDS: &str = "Syrinx couldn't read its update records, so it removed the update that was waiting to \
-     install. Reset update records in Customize, then check for updates again.";
+     install. Reset update records in Settings, then check for updates again.";
 
 /// What the helper did, told once at the next start; `None` when nothing needs saying.
 pub fn outcome_message(outcome: &Outcome) -> Option<String> {

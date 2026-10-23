@@ -1,4 +1,4 @@
-//! Lists remembered site permissions in Customize and forgets the one the owner picks (DW-7).
+//! Lists remembered site permissions in Settings and forgets the one the owner picks (DW-7).
 
 use std::fmt;
 
@@ -124,7 +124,7 @@ impl PermissionFocus {
     }
 }
 
-/// The site-permissions view inside Customize, with at most one read and one forget in flight.
+/// The site-permissions view inside Settings, with at most one read and one forget in flight.
 #[derive(Default)]
 pub(super) struct SitePermissions {
     open: bool,
@@ -442,7 +442,7 @@ impl BrowserView {
         }
     }
 
-    /// Customize's way in: what the list holds and a Manage button.
+    /// Settings' way in, under Privacy: what the list holds and a Manage button.
     pub(super) fn site_permissions_entry(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
         let manage = control(
             div().id("site-permissions-manage"),
@@ -494,7 +494,7 @@ impl BrowserView {
             .child(manage)
     }
 
-    /// Replaces Customize's choices while the owner manages remembered permissions.
+    /// Replaces the Privacy section while the owner manages remembered permissions.
     pub(super) fn site_permissions_view(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
         let state = &self.home.site_permissions;
         let mut view = div()
@@ -522,7 +522,7 @@ impl BrowserView {
         let back = control(
             div().id("site-permissions-back"),
             Role::Button,
-            "Back to Customize",
+            "Back to Privacy",
         )
         .track_focus(&self.site_permission_focus.back)
         .size(px(28.))
@@ -537,19 +537,13 @@ impl BrowserView {
             this.close_site_permissions(window, cx);
             cx.notify();
         }));
-        div()
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .child(back)
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(px(text::SUBTITLE))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Site permissions"),
-            )
-            .child(self.customize_close_button(palette, cx))
+        div().flex().items_center().gap(px(8.)).child(back).child(
+            div()
+                .flex_1()
+                .text_size(px(text::SUBTITLE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Site permissions"),
+        )
     }
 
     /// The list itself, or a line saying why there is none. The panel scrolls, not the list.
