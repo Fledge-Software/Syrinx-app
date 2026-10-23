@@ -1,6 +1,7 @@
 //! Keeps page WebView2 objects on one Windows thread while Rust UI code exchanges owned commands.
 
 mod clear_data;
+mod engine_exit;
 mod environment;
 mod essentials;
 mod overlay;
@@ -23,6 +24,7 @@ pub use syrinx_core::{Ineligible, PageTextPolicy};
 use std::{
     collections::HashMap,
     fmt,
+    os::windows::io::AsRawHandle,
     path::PathBuf,
     sync::{
         Arc,
@@ -36,7 +38,7 @@ use std::{
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment;
 use windows::Win32::{
-    Foundation::{ERROR_SUCCESS, GetLastError, HWND, LPARAM, SetLastError, WPARAM},
+    Foundation::{ERROR_SUCCESS, GetLastError, HANDLE, HWND, LPARAM, SetLastError, WPARAM},
     System::Threading::GetCurrentThreadId,
     UI::WindowsAndMessaging::{
         DispatchMessageW, GWLP_HWNDPARENT, GetMessageW, HWND_NOTOPMOST, IsWindow, MSG, PM_NOREMOVE,
@@ -500,6 +502,26 @@ impl BrowserHost {
         }
         Ok(())
     }
+
+    /// Stops the host when no event loop will run again, as when Windows ends the session (#96).
+    /// Call it on the parent window's thread: while waiting it services only messages other
+    /// threads send here, which the worker needs to close its pages. On a timeout the worker
+    /// is left to finish alone and `StillRunning` is returned.
+    pub fn shutdown_within(mut self, bound: Duration) -> Result<(), BrowserError> {
+        // A refused request still leaves a worker that may be ending; wait for it either way.
+        if !self.stopped.load(Ordering::Acquire)
+            && let Err(error) = self.send(BrowserCommand::Shutdown)
+        {
+            eprintln!("Syrinx could not ask its page host to stop; waiting for it anyway: {error}");
+        }
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        if !engine_exit::wait_for_thread(HANDLE(worker.as_raw_handle()), bound)? {
+            return Err(BrowserError::StillRunning);
+        }
+        worker.join().map_err(|_| BrowserError::WorkerPanicked)
+    }
 }
 
 impl Drop for BrowserHost {
@@ -623,7 +645,8 @@ fn run(
     let mut state = BrowserState {
         pages: HashMap::new(),
         popups: popups::PopupRequests::default(),
-        environment: Some(environment),
+        environment: None,
+        engine: None,
         profile,
         unavailable: HashMap::new(),
         active: None,
@@ -639,6 +662,7 @@ fn run(
             peek_generation,
         },
     };
+    state.install_environment(environment);
     events.emit(BrowserEvent::Ready);
     events.emit(BrowserEvent::RuntimeVersion(
         state
@@ -647,17 +671,32 @@ fn run(
             .and_then(environment::runtime_version),
     ));
 
+    let served = serve(&incoming, &shortcuts, &mut state, events);
+    // Every way out of the loop, a failure included, lets the engine save before COM goes.
+    if let Some(line) = state.release_engine().describe() {
+        eprintln!("{line}");
+    }
+    served
+}
+
+/// Runs commands and native callbacks until shutdown, a quit or a message-loop failure.
+fn serve(
+    incoming: &Receiver<BrowserCommand>,
+    shortcuts: &Receiver<BrowserEvent>,
+    state: &mut BrowserState,
+    events: &EventSink,
+) -> Result<(), BrowserError> {
     let mut timer = lifecycle::WakeTimer::default();
     loop {
         // Creation pumps messages internally; drain commands before blocking again.
-        if !drain_commands(&incoming, events, |command| {
-            drain_native(&shortcuts, &mut state)?;
+        if !drain_commands(incoming, events, |command| {
+            drain_native(shortcuts, state)?;
             state.apply(command)
         }) {
             return Ok(());
         }
         // Handle native callbacks even when there are no commands to drain.
-        drain_native(&shortcuts, &mut state)?;
+        drain_native(shortcuts, state)?;
         // Rebuilding can consume wake messages while leaving native callbacks queued.
         if state.recovery_tick(std::time::Instant::now()) {
             continue;
@@ -733,6 +772,8 @@ struct BrowserState {
     pages: HashMap<u64, Page>,
     popups: popups::PopupRequests,
     environment: Option<ICoreWebView2Environment>,
+    /// Watches `environment`'s browser process so shutdown can let it save (#96).
+    engine: Option<engine_exit::EngineWatch>,
     profile: PathBuf,
     unavailable: HashMap<u64, recovery::Unavailable>,
     active: Option<u64>,
@@ -762,7 +803,7 @@ impl BrowserState {
     }
 
     fn build_page(&self, id: u64, starts_tainted: bool) -> Result<Page, BrowserError> {
-        Page::new(
+        let page = Page::new(
             id,
             self.parent,
             self.environment.as_ref().ok_or(BrowserError::Environment)?,
@@ -774,7 +815,11 @@ impl BrowserState {
                 text: self.page_text.clone(),
                 starts_tainted,
             },
-        )
+        )?;
+        if let Some(engine) = &self.engine {
+            engine.serving();
+        }
+        Ok(page)
     }
 
     fn apply(&mut self, command: BrowserCommand) -> Result<(), BrowserError> {

@@ -14,6 +14,7 @@ use syrinx_ui::theme::Material;
 use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette, ShadowRole};
 
 use super::BrowserView;
+use super::main_window::subscribe_in_main;
 use crate::appearance::{self, Appearance, accent_hex, parse_accent};
 use crate::controls::{Surface, control, lifted};
 use crate::session::SessionCommand;
@@ -266,7 +267,7 @@ impl BrowserView {
             input.focus(window, cx);
             input.select_all(window, cx);
         });
-        let subscription = cx.subscribe_in(&input, window, |this, _, event, window, cx| {
+        let subscription = subscribe_in_main(&input, cx, |this, event, window, cx| {
             if let InputEvent::PressEnter { .. } = event {
                 this.apply_custom_accent(window, cx);
             }

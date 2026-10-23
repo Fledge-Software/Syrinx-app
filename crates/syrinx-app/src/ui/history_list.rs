@@ -167,9 +167,7 @@ impl BrowserView {
         self.command(read);
         self.sync_pages();
         // The list hides the page, so its keys move to the chrome, where Escape closes it.
-        if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
-            self.message = error.to_string();
-        }
+        self.move_keys_to_chrome();
         if from_page && self.is_main_window(window) {
             window.focus(&self.focus, cx);
         }
@@ -184,9 +182,7 @@ impl BrowserView {
             ReturnFocus::Control(handle) if self.is_main_window(window) => {
                 // Reshow the page without giving it the keys, which go back to the control.
                 self.sync_pages_and_focus(false);
-                if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
-                    self.message = error.to_string();
-                }
+                self.move_keys_to_chrome();
                 window.focus(&handle, cx);
             }
             ReturnFocus::Page | ReturnFocus::Control(_) => {

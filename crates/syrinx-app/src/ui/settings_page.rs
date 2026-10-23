@@ -177,8 +177,7 @@ impl BrowserView {
     pub(super) fn open_settings_from_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_settings(None);
         // Only Syrinx's own window, which already has the foreground, takes the keys.
-        if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
-            self.message = error.to_string();
+        if !self.move_keys_to_chrome() {
             return;
         }
         if self.is_main_window(window) {
