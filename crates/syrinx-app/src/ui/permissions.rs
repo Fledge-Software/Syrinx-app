@@ -67,7 +67,7 @@ impl BrowserView {
         request: u64,
         result: Result<Option<bool>, StoreError>,
     ) {
-        // Only a save can change remembered choices; lookups leave Customize's list alone.
+        // Only a save can change remembered choices; lookups leave Settings' list alone.
         if answers_remember(&self.permissions, id, request) {
             self.site_permissions_changed();
         }

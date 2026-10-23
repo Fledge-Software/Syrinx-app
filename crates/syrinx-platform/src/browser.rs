@@ -91,6 +91,8 @@ pub enum BrowserShortcut {
     Forward,
     Reload,
     ToggleSidebar,
+    /// Ctrl , : open Syrinx's Settings page (#91).
+    Settings,
     DismissPeek(u64),
     /// F6, or Tab past a page's last element: move to Syrinx's next pane (P1-36).
     FocusNextPane,

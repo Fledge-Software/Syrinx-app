@@ -55,7 +55,7 @@ pub(super) struct HomeState {
     /// The owner's saved themes, and the one whose controls are open.
     pub(super) themes: SavedThemes,
     pub(super) theme_editor: Option<ThemeEditor>,
-    /// Customize's list of remembered site permissions (DW-7).
+    /// Settings' list of remembered site permissions, under Privacy (DW-7).
     pub(super) site_permissions: SitePermissions,
 }
 

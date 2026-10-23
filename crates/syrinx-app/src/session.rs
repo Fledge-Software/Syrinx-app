@@ -1582,6 +1582,11 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         }
         SessionCommand::SaveActive => {
             let id = model.active_id().ok_or(SessionError::NoActiveTab)?;
+            // Home and Settings are Syrinx's own pages, not destinations, so Ctrl D leaves them
+            // unsaved (#91).
+            if model.snapshot().active_is_syrinx_page() {
+                return Ok(());
+            }
             model.save_page(id).map_err(SessionError::Model)?;
         }
         SessionCommand::Unsave(id) => {
@@ -1713,7 +1718,7 @@ fn sync_tabs(
     Ok(())
 }
 
-/// Upserts one open tab; a blank tab takes the core's Home title, as in the sidebar. Other
+/// Upserts one open tab; Home and Settings take the core's names, as in the sidebar. Other
 /// titles stay as reported, since the palette falls back to the address itself.
 fn upsert_tab(
     catalogue: &mut Catalogue,
@@ -1722,8 +1727,8 @@ fn upsert_tab(
 ) -> Result<(), SessionError> {
     let origin = PageOrigin::from_adopted_popup(popups.contains(&tab.id));
     let mut row = entry(Target::Tab(tab.id), &tab.metadata, true);
-    if let Some(home) = tab.metadata.home_title(origin) {
-        row.title = home.to_owned();
+    if let Some(name) = tab.metadata.syrinx_title(origin) {
+        row.title = name.to_owned();
     }
     catalogue.upsert(row).map_err(SessionError::Search)
 }
@@ -2001,6 +2006,34 @@ mod tests {
             .get(Target::Tab(tab))
             .expect("synthetic popup row");
         assert_eq!(row.title, "about:blank");
+        Ok(())
+    }
+
+    #[test]
+    fn saving_settings_or_home_leaves_it_unsaved_while_a_page_still_saves()
+    -> Result<(), SessionError> {
+        let mut model = TabModel::new();
+        // Syrinx's own pages, Settings and Home, each refuse Ctrl D without changing anything.
+        for address in [syrinx_core::SETTINGS_ADDRESS, syrinx_core::BLANK_ADDRESS] {
+            apply_model(
+                &mut model,
+                SessionCommand::NewTab {
+                    address: address.into(),
+                },
+            )?;
+            let before = model.snapshot();
+            apply_model(&mut model, SessionCommand::SaveActive)?;
+            assert_eq!(model.snapshot(), before, "{address} was saved");
+            assert!(model.snapshot().saved_pages.is_empty());
+        }
+        apply_model(
+            &mut model,
+            SessionCommand::NewTab {
+                address: "https://example.test/".into(),
+            },
+        )?;
+        apply_model(&mut model, SessionCommand::SaveActive)?;
+        assert_eq!(model.snapshot().saved_pages.len(), 1);
         Ok(())
     }
 
