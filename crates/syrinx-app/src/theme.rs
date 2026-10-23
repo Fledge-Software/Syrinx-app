@@ -2,9 +2,9 @@
 
 use std::cell::RefCell;
 
-use gpui::{App, Background, Rgba, linear_color_stop, linear_gradient};
+use gpui::{App, Background, BoxShadow, Rgba, linear_color_stop, linear_gradient, point, px};
 use gpui_component::{Theme, ThemeMode, ThemeToken};
-use syrinx_ui::{Accent, Color, Ground, Palette, PaletteId, palette};
+use syrinx_ui::{Accent, Color, Ground, Palette, PaletteId, ShadowLayer, ShadowRole, palette};
 
 thread_local! {
     // GPUI draws every Syrinx window on one thread; Customize replaces this palette live.
@@ -123,6 +123,28 @@ pub(crate) fn focus_ring() -> (Rgba, Rgba) {
     })
 }
 
+/// The drawn palette's shadow for `role`, as GPUI layers, bottom first; empty when it has none.
+pub(crate) fn shadow(role: ShadowRole) -> Vec<BoxShadow> {
+    CURRENT.with_borrow(|palette| {
+        palette
+            .shadows
+            .role(role)
+            .layers()
+            .map(box_shadow)
+            .collect()
+    })
+}
+
+fn box_shadow(layer: ShadowLayer) -> BoxShadow {
+    BoxShadow {
+        color: rgba(layer.color).into(),
+        offset: point(px(0.), px(layer.offset_y)),
+        blur_radius: px(layer.gaussian_sigma()),
+        spread_radius: px(layer.spread),
+        inset: layer.inset,
+    }
+}
+
 // The preview's selected-row grey was an opaque stand-in (P1-07). Live palettes need it to
 // follow Paper too, so it now reads the canvas token. The palette's former "Search the web"
 // grey went with P1-30, whose palette reads every colour from `current()`.
@@ -154,8 +176,18 @@ mod tests {
         assert_eq!(text(), rgba(paper.text));
         assert_eq!(preview_row_selected(), rgba(paper.row_selected));
         assert_eq!(current(), paper);
+        // The pill's canvas `0 8px 24px` becomes GPUI's 12-pixel deviation.
+        let pill = shadow(ShadowRole::Pill);
+        assert_eq!(pill.len(), 1);
+        assert_eq!(pill[0].offset, point(px(0.), px(8.)));
+        assert_eq!(pill[0].blur_radius, px(12.));
         // Restore the default for any later test sharing this thread.
         apply(palette(PaletteId::Graphite, Accent::default()));
         assert_eq!(ground(), gpui::rgb(0x141519));
+        assert!(
+            ShadowRole::ALL
+                .into_iter()
+                .all(|role| shadow(role).is_empty())
+        );
     }
 }
