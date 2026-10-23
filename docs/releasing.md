@@ -35,7 +35,10 @@ short script in `.github/scripts/` so it can be read and tested on its own.
    capture that comes out blank is dropped with a warning, and the website
    keeps its previous images.
 4. **Publish.** `release-notes.sh` lists `main`'s first-parent commits since
-   the previous release, which are the reviewed slice merges. The workflow
+   the previous release, which are the reviewed slice merges, then an
+   "Engines" section: the GPUI, gpui-component, wry and webview2-com versions
+   from `Cargo.lock` (marked when they changed since the previous release)
+   and the WebView2 runtime installed on the runner. The workflow
    pushes an annotated tag `v0.N.0` and creates a GitHub pre-release with the
    setup program (`Syrinx-<version>-<commit>-x64-setup.exe`), the zip and
    `SHA256SUMS.txt`. The setup program is the download the website offers:
