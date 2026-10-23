@@ -1973,7 +1973,9 @@ mod tests {
             },
         )?;
         let tab = model.tabs()[0].id();
-        apply_model(&mut model, SessionCommand::SaveActive)?;
+        // Ctrl D refuses Home since #91, so save it through the model, as a page saved
+        // before then is stored.
+        model.save_page(tab).map_err(SessionError::Model)?;
         let saved_open = model.snapshot();
         sync_catalogue(
             &mut catalogue,
