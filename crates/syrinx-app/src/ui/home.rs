@@ -11,7 +11,7 @@ use syrinx_core::{
     BuiltInPlugin, Destination, DestinationEdit, DestinationSurface, QuickDestinations,
 };
 use syrinx_ui::metrics::{chrome, radius, text};
-use syrinx_ui::{Color, Palette};
+use syrinx_ui::{Color, Palette, ShadowRole};
 
 use super::BrowserView;
 use super::customize::CustomAccent;
@@ -20,7 +20,7 @@ use super::theme_editor::ThemeEditor;
 use super::tile_editor::TileEditor;
 use super::tiles::{self, TileAction};
 use crate::appearance::{Appearance, SavedThemes};
-use crate::controls::control;
+use crate::controls::{Surface, control, lifted};
 use crate::session::SessionCommand;
 use crate::theme::{self, rgba};
 
@@ -60,9 +60,12 @@ pub(super) struct HomeState {
 }
 
 impl BrowserView {
-    /// The page card shown when no web page is: the canvas home board.
+    /// The page card shown when no web page is: the canvas home board. On a see-through theme
+    /// its fill is a faint frost or a thinned tint, so the material shows through Home too.
     pub(super) fn home_page(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let palette = theme::current();
+        // The card's glass edge is inset only, so it never reaches past the card.
+        let (_, edge) = theme::shadow_layers(ShadowRole::Card, 1.);
         let mut card = div()
             .relative()
             .size_full()
@@ -70,6 +73,7 @@ impl BrowserView {
             .bg(rgba(palette.card))
             .border_1()
             .border_color(rgba(palette.card_line))
+            .shadow(edge)
             .overflow_hidden()
             .child(
                 div()
@@ -171,16 +175,18 @@ impl BrowserView {
 
     fn search_pill(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
         // The pill opens the palette, so it is a button, not a second text field.
-        let pill = control(div().id("home-search"), Role::Button, "Search")
+        let search = control(div().id("home-search"), Role::Button, "Search");
+        let surface = Surface {
+            fill: palette.pill,
+            line: palette.pill_line,
+            corner: 27.,
+        };
+        let pill = lifted(search, ShadowRole::Pill, surface)
             .aria_description("Search the web, your tabs, notes and plugins")
             .aria_keyshortcuts("Control+K")
             .w_full()
             .max_w(px(SEARCH_PILL_MAX_WIDTH))
             .h(px(54.))
-            .rounded(px(27.))
-            .bg(rgba(palette.pill))
-            .border_1()
-            .border_color(rgba(palette.pill_line))
             .pl(px(22.))
             .pr(px(16.))
             .flex()
@@ -443,13 +449,15 @@ fn plugin_card(palette: &Palette, plugin: BuiltInPlugin) -> Stateful<Div> {
         BuiltInPlugin::Fledge => (palette.plugins.fledge, "Leads, mail, calendar and docs."),
     };
     let name = format!("{} · not available yet", plugin.name());
-    control(div().id(plugin.id()), Role::Button, name)
+    let card = control(div().id(plugin.id()), Role::Button, name);
+    let surface = Surface {
+        fill: palette.surface,
+        line: palette.surface_line,
+        corner: radius::HOME_CARD,
+    };
+    lifted(card, ShadowRole::Surface, surface)
         .aria_description(description)
         .min_w_0()
-        .rounded(px(radius::HOME_CARD))
-        .bg(rgba(palette.surface))
-        .border_1()
-        .border_color(rgba(palette.surface_line))
         .px(px(16.))
         .py(px(14.))
         .flex()
