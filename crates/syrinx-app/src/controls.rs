@@ -123,6 +123,7 @@ pub(crate) mod glyph {
     pub(crate) const DOWNLOADS: &str = "\u{E896}";
     pub(crate) const HISTORY: &str = "\u{E81C}";
     pub(crate) const ADD: &str = "\u{E710}";
+    pub(crate) const REMOVE: &str = "\u{E738}";
 }
 
 /// The design's square icon button: transparent until hovered, with its glyph centred.

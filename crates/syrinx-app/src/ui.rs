@@ -39,6 +39,7 @@ mod sidebar_rows;
 mod sidebar_tree;
 mod sidebar_view;
 mod site_permissions;
+mod site_zoom;
 mod suspended_fixture;
 mod theme_editor;
 mod tile_editor;
@@ -303,7 +304,7 @@ pub struct BrowserView {
     connections: std::collections::HashMap<u64, syrinx_platform::browser::ConnectionState>,
     find: Option<find::FindBar>,
     find_sequence: u64,
-    zoom_levels: std::collections::HashMap<u64, f64>,
+    site_zoom: site_zoom::SiteZoom,
     permissions: Vec<permissions::Prompt>,
     model: TabModelSnapshot,
     session_revision: Option<u64>,
@@ -413,7 +414,7 @@ impl BrowserView {
             connections: std::collections::HashMap::new(),
             find: None,
             find_sequence: 0,
-            zoom_levels: std::collections::HashMap::new(),
+            site_zoom: site_zoom::SiteZoom::default(),
             permissions: Vec::new(),
             model: TabModelSnapshot::default(),
             session_revision: None,
@@ -619,7 +620,9 @@ impl BrowserView {
             SessionEvent::Preferences {
                 settings,
                 destinations,
+                site_zooms,
             } => {
+                self.site_zoom.restore(site_zooms.0);
                 self.runtime_settings_loaded(&settings);
                 self.restore_folder_expansion(&settings);
                 self.restore_preferences(&settings, destinations, window, cx);
@@ -662,8 +665,9 @@ impl BrowserView {
                 self.usage.state_arrived(self.model.active_id, home);
                 self.save_folder_expansion();
                 self.crashes.retain(&self.model);
-                self.zoom_levels
-                    .retain(|id, _| self.model.tabs.iter().any(|tab| tab.id.get() == *id));
+                let tabs = &self.model.tabs;
+                self.site_zoom
+                    .retain_pages(|id| tabs.iter().any(|tab| tab.id.get() == id));
                 self.navigation_status.retain(&self.model);
                 if !self.closing {
                     if let Some(id) = snapshot.navigate {
@@ -769,6 +773,9 @@ impl BrowserView {
             }
             SessionEvent::HistoryCleared { request_id, result } => {
                 self.history_cleared(request_id, result);
+            }
+            SessionEvent::SiteZoomsCleared { request_id, result } => {
+                self.site_zooms_cleared(request_id, result);
             }
             SessionEvent::RememberedPermissions { request_id, result } => {
                 self.site_permissions_listed(request_id, result, window, cx);
@@ -883,9 +890,7 @@ impl BrowserView {
                 self.suspended_fixture.observe(id, suspended)
             }
             BrowserEvent::Connection { id, state } => self.observe_connection(id, state),
-            BrowserEvent::ZoomChanged { id, factor } => {
-                self.zoom_levels.insert(id, factor);
-            }
+            BrowserEvent::ZoomChanged { id, factor } => self.page_zoom_reported(id, factor, cx),
             BrowserEvent::FindCompleted { id, request, count } => {
                 self.find_completed(id, request, count)
             }
@@ -915,6 +920,8 @@ impl BrowserView {
                 }
             }
             BrowserEvent::Created { id } => {
+                // A new controller starts at 100%; its first address applies the site's level.
+                self.site_zoom.forget_page(id);
                 if let Ok(id) = TabId::new(id)
                     && page_lifecycle::created(id, &mut self.pending_pages, &mut self.loaded)
                 {
@@ -985,6 +992,7 @@ impl BrowserView {
             }
             BrowserEvent::Url { id, url } => {
                 self.acceptance_observed(&url);
+                self.page_site_changed(id, &url);
                 self.forget_find(id, true);
                 self.metadata(id, None, Some(url));
             }
@@ -1009,6 +1017,12 @@ impl BrowserView {
                 }
             }
             BrowserEvent::Error { tab, error } => {
+                // A failed page control may be a zoom Syrinx asked for; stop waiting for it.
+                if let (Some(id), syrinx_platform::browser::BrowserError::PageControl) =
+                    (tab, &error)
+                {
+                    self.site_zoom.abandon_apply(id);
+                }
                 if tab.is_none() {
                     self.fail(error.to_string());
                 } else if tab.is_some_and(|id| self.active_page_feedback(id)) {

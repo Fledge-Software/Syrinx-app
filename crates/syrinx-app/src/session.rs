@@ -127,6 +127,18 @@ pub enum SessionCommand {
     },
     /// Inserts or replaces documented settings keys (`https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-28-29-home-settings.md`).
     SaveSettings(Vec<(String, String)>),
+    /// Saves a site's zoom level by host, or forgets it with `None` at 100% (#90).
+    SiteZoom {
+        host: String,
+        factor: Option<f64>,
+    },
+    /// Forgets the zoom levels changed in `[start, end)` Unix seconds, with Clear browsing
+    /// data's cookies and site data (#90); answered with `SiteZoomsCleared`.
+    ClearSiteZooms {
+        request_id: u64,
+        start: i64,
+        end: i64,
+    },
     /// Changes one Quick access or Favorites tile list.
     EditDestinations {
         surface: DestinationSurface,
@@ -220,6 +232,8 @@ pub enum SessionEvent {
     Preferences {
         settings: BTreeMap<String, String>,
         destinations: QuickDestinations,
+        /// Each site's remembered zoom level by host (#90); absent hosts are at 100%.
+        site_zooms: SiteZoomLevels,
     },
     /// The tile lists after an accepted edit.
     Destinations(QuickDestinations),
@@ -247,6 +261,11 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<Vec<HistoryVisit>, SessionError>,
     },
+    /// What a `ClearSiteZooms` request removed, or why it failed.
+    SiteZoomsCleared {
+        request_id: u64,
+        result: Result<ClearedSiteZooms, SessionError>,
+    },
     /// What a `ClearHistory` request removed, or why it failed.
     HistoryCleared {
         request_id: u64,
@@ -272,6 +291,23 @@ pub enum SessionEvent {
     },
     /// Connections have closed before this event; joining the worker is now safe.
     Stopped,
+}
+
+/// Saved zoom levels by host (#90). Hosts are browsing data, so `Debug` shows only a count.
+#[derive(Clone, Default, PartialEq)]
+pub struct SiteZoomLevels(pub BTreeMap<String, f64>);
+
+impl fmt::Debug for SiteZoomLevels {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "SiteZoomLevels {{ sites: {} }}", self.0.len())
+    }
+}
+
+/// What a zoom clear removed, and the levels left for the window to apply.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClearedSiteZooms {
+    pub sites: usize,
+    pub remaining: SiteZoomLevels,
 }
 
 /// Counts only, so the dialog can say how much went without naming any of it.
@@ -726,6 +762,8 @@ struct Worker {
     destinations: QuickDestinations,
     /// The settings read at startup, handed to the window once.
     startup_settings: BTreeMap<String, String>,
+    /// The per-site zoom levels read at startup, handed to the window once (#90).
+    startup_site_zooms: SiteZoomLevels,
     /// P1-33's synthetic rows in the catalogue; non-zero only in an acceptance run.
     synthetic_rows: usize,
     /// Set only by `spawn_acceptance`: synthetic rows are accepted and queries are timed.
@@ -739,6 +777,7 @@ impl Worker {
         // Cleared history must be gone before the catalogue or any list can read it.
         deletions::reconcile(store, &mut deletions)?;
         let mut stored_preferences = preferences::restore(store)?;
+        let site_zooms = preferences::restore_site_zooms(store)?;
         // Expired visits go before the catalogue loads; a large backlog continues while idle.
         let mut schedule = retention::Schedule::take_saved(&mut stored_preferences.settings);
         retention::expire_at_startup(
@@ -776,6 +815,7 @@ impl Worker {
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
             startup_settings: stored_preferences.settings,
+            startup_site_zooms: site_zooms,
             synthetic_rows: 0,
             acceptance: false,
             usage: Arc::default(),
@@ -794,6 +834,7 @@ impl Worker {
             SessionEvent::Preferences {
                 settings: std::mem::take(&mut self.startup_settings),
                 destinations: self.destinations.clone(),
+                site_zooms: std::mem::take(&mut self.startup_site_zooms),
             },
         )
         .map_err(stop::during("sending the saved settings"))?;
@@ -1469,6 +1510,8 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::OpenHistory(_)
         | SessionCommand::ObserveNavigation { .. }
         | SessionCommand::SaveSettings(_)
+        | SessionCommand::SiteZoom { .. }
+        | SessionCommand::ClearSiteZooms { .. }
         | SessionCommand::EditDestinations { .. }
         | SessionCommand::GrowSyntheticCatalogue { .. }
         | SessionCommand::SnapshotBeforeUpdate
@@ -1918,6 +1961,28 @@ mod tests {
             address: address.to_owned(),
         };
         assert!(!format!("{command:?}").contains(address));
+        // A zoomed site's host stays out of commands and events too (#90).
+        let host = "zoom-sentinel.example.test";
+        let zoom = SessionCommand::SiteZoom {
+            host: host.to_owned(),
+            factor: Some(1.25),
+        };
+        assert!(!format!("{zoom:?}").contains(host));
+        let levels = SiteZoomLevels(BTreeMap::from([(host.to_owned(), 1.25)]));
+        let preferences = SessionEvent::Preferences {
+            settings: BTreeMap::new(),
+            destinations: QuickDestinations::default(),
+            site_zooms: levels.clone(),
+        };
+        assert!(!format!("{preferences:?}").contains(host));
+        let cleared = SessionEvent::SiteZoomsCleared {
+            request_id: 1,
+            result: Ok(ClearedSiteZooms {
+                sites: 0,
+                remaining: levels,
+            }),
+        };
+        assert!(!format!("{cleared:?}").contains(host));
         let mut model = TabModel::new();
         apply_model(&mut model, command)?;
         let event = SessionEvent::State(SessionSnapshot {
