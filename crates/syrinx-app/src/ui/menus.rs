@@ -758,8 +758,10 @@ fn menu_row(
         .aria_label(row.label.clone())
         .aria_selected(selected)
         .when(selected, |row| {
-            row.aria_active_descendant()
-                .bg(theme::rgba(palette.row_selected))
+            let row = row
+                .aria_active_descendant()
+                .bg(theme::rgba(palette.row_selected));
+            crate::controls::raised(row, syrinx_ui::ShadowRole::RowSelected)
         })
         .h(px(ITEM_HEIGHT))
         .flex_shrink_0()

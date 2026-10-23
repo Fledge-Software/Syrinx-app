@@ -11,12 +11,12 @@ use syrinx_core::{ActivationTarget, QuickDestinations, TabId};
 use syrinx_platform::backdrop::{self, Backdrop};
 use syrinx_ui::metrics::{radius, text};
 use syrinx_ui::theme::Material;
-use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette};
+use syrinx_ui::{ACCENT_PRESETS, Accent, Color, Palette, ShadowRole};
 
 use super::BrowserView;
 use super::main_window::subscribe_in_main;
 use crate::appearance::{self, Appearance, accent_hex, parse_accent};
-use crate::controls::control;
+use crate::controls::{control, raised};
 use crate::session::SessionCommand;
 use crate::text_field;
 use crate::theme::{self, rgba};
@@ -110,8 +110,7 @@ impl BrowserView {
                 .child(self.usage_section(palette, cx))
                 .child(self.updates_section(palette, cx))
         };
-        let panel = div()
-            .id("customize-panel")
+        let panel = raised(div().id("customize-panel"), ShadowRole::Panel)
             .role(Role::Dialog)
             .aria_label("Customize")
             .occlude()

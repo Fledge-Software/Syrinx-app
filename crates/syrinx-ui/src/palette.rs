@@ -2,11 +2,12 @@
 //!
 //! Source: `design/canvas/project/Sidebar.dc.html` (identical in Main, Palette and
 //! Browsing). Each field names its canvas key so the two can be compared line by line.
-//! Shadows are not yet tokens; they stay in the canvas until a slice draws them.
+//! Only Paper's shadows are tokens so far (#94); the dark palettes draw none.
 
 use crate::accent::{Accent, AccentColors};
 use crate::color::Color;
 use crate::contrast;
+use crate::shadow::{Shadow, Shadows};
 
 /// The palette ids the canvas and Customize panel use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -214,6 +215,8 @@ pub struct Palette {
     pub input_line: Color,
     /// `scrim`: dims the window behind a modal.
     pub scrim: Color,
+    /// `rowOnShadow`, `surfShadow`, `pillShadow` and `panelShadow`.
+    pub shadows: Shadows,
     /// `tiles`: one colour pair per site index, so a site keeps its tile colour everywhere.
     pub tiles: [TileColors; 8],
     /// `plug`
@@ -353,6 +356,8 @@ pub(crate) fn graphite(accent: Accent) -> Palette {
         input: Color::hex(0x101115),
         input_line: Color::hex(0x2C2F36),
         scrim: Color::rgba(6, 7, 9, 0.62),
+        // The canvas gives Graphite a pill and panel shadow too; it keeps its accepted look.
+        shadows: Shadows::NONE,
         tiles: DARK_TILES,
         plugins: DARK_PLUGINS,
         accent: AccentColors::dark(accent),
@@ -497,6 +502,15 @@ fn tint(accent: Accent) -> Palette {
     }
 }
 
+/// Paper's shadows, from the canvas's `paper` tokens in `Main.dc.html` (the same in Sidebar,
+/// Browsing and Forge): they lift the white surfaces off the near-white card.
+const PAPER_SHADOWS: Shadows = Shadows {
+    row_selected: Shadow::drop(1., 2., Color::rgba(20, 22, 30, 0.10)),
+    surface: Shadow::drop(1., 2., Color::rgba(20, 22, 30, 0.05)),
+    pill: Shadow::drop(8., 24., Color::rgba(20, 22, 30, 0.08)),
+    panel: Shadow::drop(30., 80., Color::rgba(20, 22, 30, 0.22)),
+};
+
 pub(crate) fn paper(accent: Accent) -> Palette {
     let ink = |alpha: f32| Color::rgba(20, 22, 30, alpha);
     Palette {
@@ -535,6 +549,7 @@ pub(crate) fn paper(accent: Accent) -> Palette {
         input: Color::hex(0xFFFFFF),
         input_line: Color::hex(0xD0D2D9),
         scrim: Color::rgba(20, 22, 30, 0.26),
+        shadows: PAPER_SHADOWS,
         tiles: LIGHT_TILES,
         plugins: LIGHT_PLUGINS,
         accent: AccentColors::light(accent),
@@ -544,6 +559,7 @@ pub(crate) fn paper(accent: Accent) -> Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shadow::ShadowRole;
 
     const SEE_THROUGH: [PaletteId; 2] = [PaletteId::Haze, PaletteId::Glass];
 
@@ -615,6 +631,57 @@ mod tests {
         assert_eq!(graphite.text, Color::hex(0xECEDF0));
         assert_eq!(graphite.line, Color::hex(0x24262C));
         assert_eq!(graphite.panel, Color::hex(0x1B1C21));
+    }
+
+    #[test]
+    fn paper_gives_every_shadow_role_the_canvas_value() {
+        let shadows = palette(PaletteId::Paper, Accent::default()).shadows;
+        let ink = |alpha| Color::rgba(20, 22, 30, alpha);
+        for role in ShadowRole::ALL {
+            assert!(!shadows.role(role).is_none(), "{role:?}");
+        }
+        assert_eq!(shadows.row_selected, Shadow::drop(1., 2., ink(0.10)));
+        assert_eq!(shadows.surface, Shadow::drop(1., 2., ink(0.05)));
+        assert_eq!(shadows.pill, Shadow::drop(8., 24., ink(0.08)));
+        assert_eq!(shadows.panel, Shadow::drop(30., 80., ink(0.22)));
+    }
+
+    #[test]
+    fn papers_row_shadow_stays_inside_the_sidebar_beside_the_page_card() {
+        // GPUI paints above the page, so a row's shadow must not reach the card (traps).
+        let shadows = palette(PaletteId::Paper, Accent::default()).shadows;
+        for layer in shadows.row_selected.layers() {
+            let sideways = 3. * layer.gaussian_sigma() + layer.spread;
+            assert!(
+                sideways < crate::sidebar::SIDEBAR_PADDING_RIGHT,
+                "{sideways}"
+            );
+        }
+    }
+
+    #[test]
+    fn dark_palettes_keep_drawing_no_shadows() {
+        for id in [
+            PaletteId::Graphite,
+            PaletteId::Haze,
+            PaletteId::Glass,
+            PaletteId::Tint,
+        ] {
+            assert_eq!(
+                palette(id, Accent::default()).shadows,
+                Shadows::NONE,
+                "{id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn paper_keeps_the_canvas_card_tone() {
+        // #94 adds shadows first; a darker card waits for the owner's look.
+        assert_eq!(
+            palette(PaletteId::Paper, Accent::default()).card,
+            Color::hex(0xF7F7F9)
+        );
     }
 
     #[test]
