@@ -545,7 +545,7 @@ impl BrowserView {
                 if let Err(error) = update_in_main(&view, cx, |view, window, cx| {
                     view.session_event(event, window, cx)
                 }) {
-                    // Ending here drops the stream, so its sender fails next; say why (#9).
+                    // Ending drops the stream; the worker keeps saving, unheard by this window (#9).
                     eprintln!("Session events stopped reaching the browser window: {error:#}");
                     return;
                 }

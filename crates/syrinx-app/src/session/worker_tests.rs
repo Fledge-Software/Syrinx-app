@@ -19,6 +19,7 @@ use syrinx_store::{
 
 use super::*;
 
+mod survival_tests;
 mod usage_tests;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -88,6 +89,8 @@ impl Fixture {
             "usage.json.damaged",
             stop::LOG_NAME,
             stop::OLD_LOG_NAME,
+            stop::SURVIVED_LOG_NAME,
+            stop::OLD_SURVIVED_LOG_NAME,
         ] {
             remove_if_present(&self.0.join(name), false);
         }
@@ -1083,34 +1086,6 @@ fn run_in_thread(
 fn read_stop_log(fixture: &Fixture) -> Vec<String> {
     let log = checked_io(fs::read_to_string(fixture.0.join(stop::LOG_NAME)));
     log.lines().map(str::to_owned).collect()
-}
-
-#[test]
-fn run_keeps_the_stop_of_a_command_that_ends_the_loop_in_the_log() {
-    let fixture = Fixture::new();
-    let (commands, receiver) = mpsc::channel();
-    let (sender, mut events) = unbounded();
-    let worker = run_in_thread(&fixture, receiver, sender);
-    // Once the restored tabs arrive the loop is serving; the window then goes away.
-    while !matches!(next_any_event(&mut events), SessionEvent::State(_)) {}
-    drop(events);
-    commands
-        .send(SessionCommand::NewTab {
-            address: LIVE_ADDRESS.into(),
-        })
-        .expect("queue the command whose answer cannot be delivered");
-
-    let error = worker
-        .join()
-        .expect("join the run thread")
-        .expect_err("a lost window stops the loop");
-
-    // The log holds exactly the returned error's line, naming the operation, with no address.
-    let lines = read_stop_log(&fixture);
-    assert_eq!(lines, [stop::stop_line(&error)]);
-    assert!(lines[0].contains("(while "), "{lines:?}");
-    assert!(!lines[0].contains("example.test"), "{lines:?}");
-    fixture.cleanup();
 }
 
 #[test]

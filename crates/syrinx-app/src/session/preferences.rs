@@ -47,7 +47,8 @@ pub(super) fn intercept(
 ) -> Result<Option<SessionCommand>, SessionError> {
     match command {
         SessionCommand::SaveSettings(entries) => {
-            // The window already shows the new appearance; a failed save stops like a tab save.
+            // The window already shows the new appearance; the loop decides whether a refusal
+            // stops the worker (a damaged database) or is reported and skipped (#9).
             store.save_settings(entries).map_err(SessionError::Store)?;
             Ok(None)
         }
