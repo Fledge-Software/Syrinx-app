@@ -57,6 +57,11 @@ impl UsageDate {
             days: self.days.saturating_add(days),
         }
     }
+
+    /// Whole days from `earlier` to this date; negative if `earlier` is later.
+    pub fn days_since(self, earlier: Self) -> i64 {
+        i64::from(self.days) - i64::from(earlier.days)
+    }
 }
 
 impl fmt::Display for UsageDate {
@@ -133,6 +138,13 @@ impl Period {
             closed_on: None,
             counts: Counts::default(),
         }
+    }
+
+    /// Whether `start_day` could have left this many days used: at least the start day, and
+    /// at most every day from the start to the last day counted.
+    pub fn days_used_is_possible(&self) -> bool {
+        let most = self.last_counted.days_since(self.start) + 1;
+        (1..=most).contains(&i64::from(self.days_used))
     }
 }
 

@@ -189,6 +189,11 @@ impl PaletteView {
         self.events.is_some()
     }
 
+    /// Whether the popup has been active since the open entry began.
+    pub fn was_active_this_entry(&self) -> bool {
+        self.active_this_entry
+    }
+
     /// Ends the entry as if Esc were pressed; the browser then returns focus to the page.
     /// The popup is hidden even without an entry, so a stray visible popup can always close.
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -439,6 +444,7 @@ fn new_input(
         InputState::new(window, cx)
             .placeholder("Search tabs and bookmarks, run > commands, or enter an address")
     });
+    // `subscribe_in` is safe here, unlike in src/ui (#81): only the palette popup draws this view.
     let events = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
         InputEvent::Change => this.query(cx),
         InputEvent::PressEnter { .. } => this.submit(false, window, cx),

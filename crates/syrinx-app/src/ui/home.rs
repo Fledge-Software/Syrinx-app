@@ -11,7 +11,7 @@ use syrinx_core::{
     BuiltInPlugin, Destination, DestinationEdit, DestinationSurface, QuickDestinations,
 };
 use syrinx_ui::metrics::{chrome, radius, text};
-use syrinx_ui::{Color, Palette};
+use syrinx_ui::{Color, Palette, ShadowRole};
 
 use super::BrowserView;
 use super::customize::CustomAccent;
@@ -20,7 +20,7 @@ use super::theme_editor::ThemeEditor;
 use super::tile_editor::TileEditor;
 use super::tiles::{self, TileAction};
 use crate::appearance::{Appearance, SavedThemes};
-use crate::controls::control;
+use crate::controls::{control, raised};
 use crate::session::SessionCommand;
 use crate::theme::{self, rgba};
 
@@ -171,7 +171,8 @@ impl BrowserView {
 
     fn search_pill(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
         // The pill opens the palette, so it is a button, not a second text field.
-        let pill = control(div().id("home-search"), Role::Button, "Search")
+        let search = control(div().id("home-search"), Role::Button, "Search");
+        let pill = raised(search, ShadowRole::Pill)
             .aria_description("Search the web, your tabs, notes and plugins")
             .aria_keyshortcuts("Control+K")
             .w_full()
@@ -443,7 +444,8 @@ fn plugin_card(palette: &Palette, plugin: BuiltInPlugin) -> Stateful<Div> {
         BuiltInPlugin::Fledge => (palette.plugins.fledge, "Leads, mail, calendar and docs."),
     };
     let name = format!("{} · not available yet", plugin.name());
-    control(div().id(plugin.id()), Role::Button, name)
+    let card = control(div().id(plugin.id()), Role::Button, name);
+    raised(card, ShadowRole::Surface)
         .aria_description(description)
         .min_w_0()
         .rounded(px(radius::HOME_CARD))

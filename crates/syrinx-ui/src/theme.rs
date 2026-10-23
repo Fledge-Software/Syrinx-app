@@ -521,6 +521,7 @@ fn mix(from: Color, to: Color, share: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shadow::Shadows;
 
     fn every_kind() -> Vec<ThemeSpec> {
         let mut themes = vec![ThemeSpec::new("Plain")];
@@ -545,6 +546,24 @@ mod tests {
         let mut expected = palette(PaletteId::Graphite, accent);
         expected.badge_ring = Color::hex(0x141519);
         assert_eq!(ThemeSpec::new("Mine").palette(accent, false), expected);
+    }
+
+    #[test]
+    fn light_themes_take_papers_shadows_and_dark_themes_none() {
+        let accent = Accent::default();
+        let paper_shadows = palette(PaletteId::Paper, accent).shadows;
+        for theme in every_kind() {
+            let expected = match theme.mode {
+                Mode::Light => paper_shadows,
+                Mode::Dark => Shadows::NONE,
+            };
+            assert_eq!(
+                theme.palette(accent, false).shadows,
+                expected,
+                "{}",
+                theme.name
+            );
+        }
     }
 
     #[test]

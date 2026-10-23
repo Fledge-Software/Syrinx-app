@@ -49,6 +49,7 @@ pub enum EncodingField {
     Destination,
     History,
     Permission,
+    SiteZoom,
 }
 
 /// All diagnostic fields are structural; SQLite's message strings are discarded.

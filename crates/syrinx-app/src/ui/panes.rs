@@ -161,8 +161,7 @@ impl BrowserView {
             self.focus_page(window, cx);
             return;
         }
-        if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
-            self.message = error.to_string();
+        if !self.move_keys_to_chrome() {
             return;
         }
         // Native activation: GPUI's `activate_window` sends a synthetic Alt and forces the

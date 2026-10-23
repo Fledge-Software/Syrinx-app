@@ -13,6 +13,7 @@ use syrinx_ui::Palette;
 use syrinx_ui::metrics::{radius, text};
 
 use super::BrowserView;
+use super::main_window::subscribe_in_main;
 use crate::controls::control;
 use crate::navigation;
 use crate::text_field;
@@ -72,18 +73,15 @@ impl BrowserView {
             input.focus(window, cx);
         });
         address.update(cx, |input, cx| input.set_value(address_text, window, cx));
-        let submit_on_enter = |this: &mut Self,
-                               _: &Entity<InputState>,
-                               event: &InputEvent,
-                               window: &mut Window,
-                               cx: &mut Context<Self>| {
-            if let InputEvent::PressEnter { .. } = event {
-                this.submit_tile_editor(window, cx);
-            }
-        };
+        let submit_on_enter =
+            |this: &mut Self, event: &InputEvent, window: &mut Window, cx: &mut Context<Self>| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.submit_tile_editor(window, cx);
+                }
+            };
         let subscriptions = [
-            cx.subscribe_in(&label, window, submit_on_enter),
-            cx.subscribe_in(&address, window, submit_on_enter),
+            subscribe_in_main(&label, cx, submit_on_enter),
+            subscribe_in_main(&address, cx, submit_on_enter),
         ];
         self.home.editor = Some(TileEditor {
             surface,

@@ -41,6 +41,20 @@ impl HistoryRecorder {
         self.tracker.has_pending_titles()
     }
 
+    /// Holds a settled title for an already stored visit, so a test can choose the entry
+    /// its retitle names, such as one the store refuses.
+    #[cfg(test)]
+    pub(super) fn hold_settled_title(
+        &mut self,
+        id: TabId,
+        recorded: &syrinx_store::RecordedVisit,
+        title: String,
+        at: Instant,
+    ) {
+        self.tracker.title(id, title, at);
+        self.tracker.recorded(id, recorded, at);
+    }
+
     /// A clear removed these addresses and may have removed any recent visit.
     pub(super) fn history_cleared(&mut self, removed: &[std::num::NonZeroU64]) {
         self.tracker.history_cleared(removed);

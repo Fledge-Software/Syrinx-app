@@ -7,6 +7,7 @@ use gpui::{
     SharedString, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, canvas,
     point, px,
 };
+use syrinx_ui::ShadowRole;
 use syrinx_ui::focus::{Modality, ModalityInput, RING_INNER_WIDTH, RING_WIDTH};
 use syrinx_ui::metrics::{chrome::ICON_BUTTON, radius, text};
 
@@ -63,13 +64,22 @@ pub(crate) fn watch_keys(cx: &mut App) {
 /// root's own mouse listener only fires while the root counts as hovered, which an occluding
 /// child (the toolbar) or a preceding key press prevents.
 pub(crate) fn watch_pointer<E: ParentElement>(root: E) -> E {
+    watch_pointer_and(root, |_| {})
+}
+
+/// `watch_pointer`, also calling `on_press` for every press in the window.
+pub(crate) fn watch_pointer_and<E: ParentElement>(
+    root: E,
+    on_press: impl Fn(&mut App) + 'static,
+) -> E {
     root.child(
         canvas(
             |_, _, _| {},
-            |_, _, window, _| {
-                window.on_mouse_event(|_: &MouseDownEvent, phase, window, cx| {
+            move |_, _, window, _| {
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                     if phase == DispatchPhase::Capture {
                         note_input(ModalityInput::PointerPress, window, cx);
+                        on_press(cx);
                     }
                 });
             },
@@ -114,6 +124,7 @@ pub(crate) mod glyph {
     pub(crate) const DOWNLOADS: &str = "\u{E896}";
     pub(crate) const HISTORY: &str = "\u{E81C}";
     pub(crate) const ADD: &str = "\u{E710}";
+    pub(crate) const REMOVE: &str = "\u{E738}";
 }
 
 /// The design's square icon button: transparent until hovered, with its glyph centred.
@@ -160,15 +171,32 @@ pub(crate) fn text_button(element: Stateful<Div>, label: &'static str) -> Statef
 /// shows only after keys (DW-62); Syrinx tracks that itself, because GPUI's own
 /// `focus_visible` never sees the F6 or Tab that leaves a page.
 pub(crate) fn focus_ring(style: StyleRefinement) -> StyleRefinement {
+    focus_ring_over(style, Vec::new())
+}
+
+/// The focus ring drawn over a surface's own shadow, which the ring would otherwise replace.
+fn focus_ring_over(style: StyleRefinement, mut shadows: Vec<BoxShadow>) -> StyleRefinement {
     if !modality().shows_focus_ring() {
         return style;
     }
     let (ring, inner) = theme::focus_ring();
     // Later shadows paint on top: the inner line first, the wider ring band over it.
-    style.shadow(vec![
-        inset_band(inner, RING_WIDTH + RING_INNER_WIDTH),
-        inset_band(ring, RING_WIDTH),
-    ])
+    shadows.push(inset_band(inner, RING_WIDTH + RING_INNER_WIDTH));
+    shadows.push(inset_band(ring, RING_WIDTH));
+    style.shadow(shadows)
+}
+
+/// Lifts a surface with the palette's shadow for `role` (#94). It replaces the focus style
+/// with the ring over that shadow, so use it on plain controls or elements without focus.
+/// Only for chrome and Syrinx's own pages: a shadow over the page card hides the page.
+pub(crate) fn raised<E: Styled + InteractiveElement>(element: E, role: ShadowRole) -> E {
+    let shadows = theme::shadow(role);
+    if shadows.is_empty() {
+        return element;
+    }
+    element
+        .shadow(shadows.clone())
+        .focus(move |style| focus_ring_over(style, shadows))
 }
 
 fn inset_band(color: gpui::Rgba, width: f32) -> BoxShadow {
