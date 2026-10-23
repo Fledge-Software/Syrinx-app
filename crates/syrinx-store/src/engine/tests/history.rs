@@ -208,7 +208,7 @@ fn upgrade_from_folders_schema_keeps_the_session_and_starts_empty_history() {
 
     let connection = directory.connection();
     assert_eq!(user_version(&connection), schema::SCHEMA_VERSION);
-    assert_eq!(schema::SCHEMA_VERSION, 6);
+    assert_eq!(schema::SCHEMA_VERSION, 7);
     close(connection);
     let store = Store::open(directory.lease()).expect("current database reopens");
     assert_eq!(store.load().expect("session reloads").snapshot, fixture());

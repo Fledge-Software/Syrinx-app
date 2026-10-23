@@ -40,8 +40,8 @@ pub use destinations::{
 
 pub use tabs::{
     Activation, AppendedSavedTree, BLANK_ADDRESS, FolderContents, FolderRemoval, NewSavedItem,
-    PageOrigin, RemovedSavedEntries, SavedEntryId, SavedFolder, SavedFolderId, SavedFolderSnapshot,
-    SavedPage, SavedPageId, SavedPageSnapshot, SavedPlacement, SidebarRow, SnapshotError, Tab,
-    TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, TabSnapshot,
-    saved_folder_contents,
+    PageOrigin, RemovedSavedEntries, SETTINGS_ADDRESS, SavedEntryId, SavedFolder, SavedFolderId,
+    SavedFolderSnapshot, SavedPage, SavedPageId, SavedPageSnapshot, SavedPlacement, SidebarRow,
+    SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot,
+    TabSnapshot, saved_folder_contents,
 };

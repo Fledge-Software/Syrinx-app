@@ -1,4 +1,4 @@
-//! Customize's Usage report section and the window's own usage measurements (AN-01).
+//! Settings' Usage report section and the window's own usage measurements (AN-01).
 //!
 //! Counting is off until the owner switches it on; turning it off deletes the counts. The
 //! report view behind "View report" is `usage_preview.rs` (AN-02).
@@ -196,7 +196,7 @@ impl BrowserView {
         self.command(SessionCommand::Usage(control));
     }
 
-    /// Customize's Usage report section: the switch, the period, Reset and View report.
+    /// Settings' Usage report section: the switch, the period, Reset and View report.
     pub(super) fn usage_section(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
         let counting = self.usage.counting();
         let mut section = div()
