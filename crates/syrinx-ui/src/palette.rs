@@ -2,12 +2,13 @@
 //!
 //! Source: `design/canvas/project/Sidebar.dc.html` (identical in Main, Palette and
 //! Browsing). Each field names its canvas key so the two can be compared line by line.
-//! Only Paper's shadows are tokens so far (#94); the dark palettes draw none.
+//! Paper's shadows (#94) and Glass's shadows and glass edges (#93) are tokens; Graphite, Haze
+//! and Tint draw none.
 
 use crate::accent::{Accent, AccentColors};
 use crate::color::Color;
 use crate::contrast;
-use crate::shadow::{Shadow, Shadows};
+use crate::shadow::{CANVAS_EDGE_STRENGTH, Shadow, Shadows};
 
 /// The palette ids the canvas and Customize panel use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -309,7 +310,7 @@ pub(crate) const HAZE_WALLPAPER: [Color; 5] = [
 ];
 
 /// The canvas's Glass stand-in wallpaper: four solid discs and three gradient stops.
-const GLASS_WALLPAPER: [Color; 7] = [
+pub(crate) const GLASS_WALLPAPER: [Color; 7] = [
     Color::hex(0x4A62D6),
     Color::hex(0x9446B0),
     Color::hex(0xC4623B),
@@ -415,7 +416,7 @@ fn glass(accent: Accent) -> Palette {
             wallpaper_standins: &GLASS_WALLPAPER,
         },
         // The canvas's `inset 0 1px 0 rgba(255,255,255,0.24)` glass edge.
-        edges: 0.24,
+        edges: CANVAS_EDGE_STRENGTH,
         text: Color::hex(0xF4F5F8),
         text_secondary: Color::hex(0xE0E2E8),
         text_secondary_bright: Color::hex(0xE6E8ED),
@@ -446,6 +447,7 @@ fn glass(accent: Accent) -> Palette {
         input: Color::rgba(0, 0, 0, 0.28),
         input_line: white(0.14),
         scrim: Color::rgba(6, 7, 12, 0.42),
+        shadows: GLASS_DROPS.with_glass_edges(CANVAS_EDGE_STRENGTH, false),
         tiles: DARK_TILES.map(|tile| TileColors {
             background: tile.background.with_alpha_byte(0xC7),
             ..tile
@@ -509,7 +511,28 @@ const PAPER_SHADOWS: Shadows = Shadows {
     surface: Shadow::drop(1., 2., Color::rgba(20, 22, 30, 0.05)),
     pill: Shadow::drop(8., 24., Color::rgba(20, 22, 30, 0.08)),
     panel: Shadow::drop(30., 80., Color::rgba(20, 22, 30, 0.22)),
+    ..Shadows::NONE
 };
+
+/// Glass's drop shadows, from the canvas's `glass` tokens in `Main.dc.html` (lines 271–293):
+/// `surfShadow` `0 10px 28px rgba(0,0,0,0.18)`, `pillShadow` `0 14px 36px rgba(0,0,0,0.25)`
+/// and `panelShadow` `0 34px 90px rgba(0,0,0,0.5)`. Each also carries the glass edge, which
+/// [`Shadows::with_glass_edges`] adds so the editor's "Glass edges" can scale it.
+const GLASS_DROPS: Shadows = Shadows {
+    surface: Shadow::drop(10., 28., Color::rgba(0, 0, 0, 0.18)),
+    pill: Shadow::drop(14., 36., Color::rgba(0, 0, 0, 0.25)),
+    panel: Shadow::drop(34., 90., Color::rgba(0, 0, 0, 0.5)),
+    ..Shadows::NONE
+};
+
+/// The drop shadows a theme built on `id` starts from, without any glass edge.
+pub(crate) const fn template_drops(id: PaletteId) -> Shadows {
+    match id {
+        PaletteId::Paper => PAPER_SHADOWS,
+        PaletteId::Glass => GLASS_DROPS,
+        PaletteId::Graphite | PaletteId::Haze | PaletteId::Tint => Shadows::NONE,
+    }
+}
 
 pub(crate) fn paper(accent: Accent) -> Palette {
     let ink = |alpha: f32| Color::rgba(20, 22, 30, alpha);
@@ -637,9 +660,8 @@ mod tests {
     fn paper_gives_every_shadow_role_the_canvas_value() {
         let shadows = palette(PaletteId::Paper, Accent::default()).shadows;
         let ink = |alpha| Color::rgba(20, 22, 30, alpha);
-        for role in ShadowRole::ALL {
-            assert!(!shadows.role(role).is_none(), "{role:?}");
-        }
+        // The canvas's Paper keeps `fieldShadow` and `cardShadow` at `none`.
+        assert!(shadows.field.is_none() && shadows.card.is_none());
         assert_eq!(shadows.row_selected, Shadow::drop(1., 2., ink(0.10)));
         assert_eq!(shadows.surface, Shadow::drop(1., 2., ink(0.05)));
         assert_eq!(shadows.pill, Shadow::drop(8., 24., ink(0.08)));
@@ -647,32 +669,73 @@ mod tests {
     }
 
     #[test]
-    fn papers_row_shadow_stays_inside_the_sidebar_beside_the_page_card() {
-        // GPUI paints above the page, so a row's shadow must not reach the card (traps).
-        let shadows = palette(PaletteId::Paper, Accent::default()).shadows;
-        for layer in shadows.row_selected.layers() {
-            let sideways = 3. * layer.gaussian_sigma() + layer.spread;
-            assert!(
-                sideways < crate::sidebar::SIDEBAR_PADDING_RIGHT,
-                "{sideways}"
-            );
+    fn sidebar_shadows_stay_inside_the_sidebar_beside_the_page_card() {
+        // GPUI paints above the page, so a row's or field's shadow must not reach the card.
+        for id in PaletteId::ALL {
+            let shadows = palette(id, Accent::default()).shadows;
+            for role in [ShadowRole::RowSelected, ShadowRole::Field] {
+                for layer in shadows.role(role).layers() {
+                    let sideways = 3. * layer.gaussian_sigma() + layer.spread;
+                    let sideways = if layer.inset { 0. } else { sideways };
+                    assert!(
+                        sideways < crate::sidebar::SIDEBAR_PADDING_RIGHT,
+                        "{id:?} {role:?}: {sideways}"
+                    );
+                }
+            }
         }
     }
 
     #[test]
-    fn dark_palettes_keep_drawing_no_shadows() {
-        for id in [
-            PaletteId::Graphite,
-            PaletteId::Haze,
-            PaletteId::Glass,
-            PaletteId::Tint,
-        ] {
+    fn graphite_haze_and_tint_keep_drawing_no_shadows() {
+        for id in [PaletteId::Graphite, PaletteId::Haze, PaletteId::Tint] {
             assert_eq!(
                 palette(id, Accent::default()).shadows,
                 Shadows::NONE,
                 "{id:?}"
             );
         }
+    }
+
+    #[test]
+    fn glass_gives_every_role_the_canvas_shadow_and_edge() {
+        // design/canvas/project/Main.dc.html, the `glass` branch of `tokens()` (lines 271-293).
+        let shadows = palette(PaletteId::Glass, Accent::default()).shadows;
+        let white = |alpha| Color::rgba(255, 255, 255, alpha);
+        let black = |alpha| Color::rgba(0, 0, 0, alpha);
+        let edge = |highlight, ring| Shadow::NONE.with_edge(white(highlight), white(ring));
+        let lifted = |offset, blur, alpha, highlight, ring| {
+            Shadow::drop(offset, blur, black(alpha)).with_edge(white(highlight), white(ring))
+        };
+        assert_eq!(shadows.field, edge(0.24, 0.07));
+        assert_eq!(shadows.row_selected, edge(0.24, 0.07));
+        assert_eq!(shadows.card, edge(0.18, 0.));
+        assert_eq!(shadows.surface, lifted(10., 28., 0.18, 0.24, 0.07));
+        assert_eq!(shadows.pill, lifted(14., 36., 0.25, 0.24, 0.07));
+        assert_eq!(shadows.panel, lifted(34., 90., 0.5, 0.14, 0.));
+    }
+
+    #[test]
+    fn glass_fills_are_the_canvas_values() {
+        let glass = palette(PaletteId::Glass, Accent::default());
+        let white = |alpha| Color::rgba(255, 255, 255, alpha);
+        assert_eq!(
+            glass.ground,
+            Ground::Material {
+                material: WindowMaterial::Acrylic,
+                tint: Color::rgba(16, 17, 24, 0.46),
+                wallpaper_standins: &GLASS_WALLPAPER,
+            }
+        );
+        assert_eq!(glass.field, white(0.10));
+        assert_eq!(glass.row_selected, white(0.16));
+        assert_eq!(glass.card, white(0.05));
+        assert_eq!(glass.card_line, white(0.16));
+        assert_eq!(glass.surface, white(0.08));
+        assert_eq!(glass.surface_line, white(0.16));
+        assert_eq!(glass.pill, white(0.10));
+        assert_eq!(glass.pill_line, white(0.22));
+        assert_eq!(glass.panel, Color::rgba(28, 30, 42, 0.94));
     }
 
     #[test]

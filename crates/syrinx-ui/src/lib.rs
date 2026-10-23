@@ -17,7 +17,7 @@ pub mod tree_focus;
 pub use accent::{ACCENT_PRESETS, Accent, AccentColors, DEFAULT_ACCENT, FORMER_DEFAULT_ACCENT};
 pub use color::{Color, contrast_ratio};
 pub use palette::{Ground, Palette, PaletteId, PluginColors, TileColors, WindowMaterial, palette};
-pub use shadow::{Shadow, ShadowLayer, ShadowRole, Shadows};
+pub use shadow::{Band, Shadow, ShadowLayer, ShadowRole, Shadows, bands_outside};
 pub use sidebar::{SidebarSizing, SidebarWidthState};
 pub use sidebar_setting::{
     SIDEBAR_WIDTH_STATE_KEY, parse_sidebar_setting, sidebar_setting, sidebar_setting_value,

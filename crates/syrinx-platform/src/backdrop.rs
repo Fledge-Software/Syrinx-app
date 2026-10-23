@@ -2,12 +2,13 @@
 //! GPUI offers only Mica and Mica Alt, and its `Blurred` look is not Acrylic.
 
 use windows::Win32::{
-    Foundation::{HWND, TRUE},
+    Foundation::HWND,
     Graphics::Dwm::{
         DWM_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW,
         DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
     },
 };
+use windows::core::BOOL;
 
 /// The system backdrops Windows 11 (build 22621 and later) can draw behind a window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,13 +31,14 @@ impl Backdrop {
     }
 }
 
-/// Draw `backdrop` in its dark form behind the window `hwnd`.
+/// Draw `backdrop` behind the window `hwnd`, in its dark form for a dark theme and its light
+/// form for a light one; a light theme over dark Acrylic looks muddy (#93).
 ///
 /// The window must leave the backdrop visible, as GPUI's Mica appearance does by clearing
 /// its frame to transparent.
-pub fn apply(hwnd: isize, backdrop: Backdrop) -> windows::core::Result<()> {
+pub fn apply(hwnd: isize, backdrop: Backdrop, dark: bool) -> windows::core::Result<()> {
     let window = HWND(hwnd as *mut _);
-    let dark = TRUE;
+    let dark = BOOL::from(dark);
     let kind = backdrop.system_type();
     unsafe {
         DwmSetWindowAttribute(
