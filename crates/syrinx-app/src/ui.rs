@@ -60,7 +60,7 @@ use std::{
         Arc,
         atomic::{AtomicU8, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use futures::{StreamExt, channel::mpsc::unbounded};
@@ -384,6 +384,10 @@ pub struct BrowserView {
     outcome: Arc<AtomicU8>,
 }
 
+/// One budget for a quit without a close request to stop both workers. Windows allows about
+/// 5 s after it ends the session; the engine's own save wait (3 s) fits inside (#96).
+const QUIT_BOUND: Duration = Duration::from_millis(4_500);
+
 impl BrowserView {
     pub fn new(
         data_dir: PathBuf,
@@ -490,6 +494,12 @@ impl BrowserView {
             usage: usage_report::UsageState::new(usage, launched),
             outcome,
         };
+        // A Windows session end quits GPUI without a close request; stop the workers then (#96).
+        cx.on_app_quit(|view, _cx| {
+            view.stop_workers_on_quit();
+            async {}
+        })
+        .detach();
         window.focus(&view.focus, cx);
         match native_handle(window) {
             Ok(handle) => {
@@ -1571,6 +1581,35 @@ impl BrowserView {
         let adopted = self.popup_pages.contains(&tab.id);
         tab.metadata
             .is_home(PageOrigin::from_adopted_popup(adopted))
+    }
+
+    /// Runs the orderly shutdown synchronously when GPUI quits with workers still running, as
+    /// when Windows ends the session: GPUI exits the process as soon as quit handlers return.
+    /// After a normal close both workers are already gone and this does nothing.
+    fn stop_workers_on_quit(&mut self) {
+        if self.browser.is_none() && self.session.is_none() {
+            return;
+        }
+        self.closing = true;
+        let deadline = Instant::now() + QUIT_BOUND;
+        // Both workers stop together: no page event can reach storage while this thread waits.
+        if let Some(session) = &self.session {
+            session.request_shutdown();
+        }
+        if let Some(browser) = self.browser.take() {
+            self.browser_stopped = true;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if let Err(error) = browser.shutdown_within(remaining) {
+                eprintln!("The page host did not stop cleanly as Syrinx quit: {error}");
+            }
+        }
+        if let Some(session) = self.session.take() {
+            self.session_stopped = true;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if let Err(error) = session.shutdown_within(remaining) {
+                eprintln!("Local storage did not stop cleanly as Syrinx quit: {error}");
+            }
+        }
     }
 
     pub fn request_close(&mut self, cx: &mut Context<Self>) {
