@@ -197,15 +197,17 @@ impl DownloadList {
             .any(|download| download.tab == tab && download.is_active())
     }
 
+    /// Forgets the oldest finished downloads until the list is back within the bound; a list
+    /// that grew past it while every entry was active shrinks again once they finish.
     fn forget_oldest_finished(&mut self) {
-        if self.downloads.len() <= MAX_DOWNLOADS {
-            return;
-        }
-        if let Some(oldest) = self
-            .downloads
-            .iter()
-            .rposition(|download| !download.is_active())
-        {
+        while self.downloads.len() > MAX_DOWNLOADS {
+            let Some(oldest) = self
+                .downloads
+                .iter()
+                .rposition(|download| !download.is_active())
+            else {
+                return;
+            };
             self.downloads.remove(oldest);
         }
     }
@@ -383,6 +385,26 @@ mod tests {
         assert_eq!(list.downloads().len(), MAX_DOWNLOADS);
         assert!(list.downloads().iter().all(|download| download.id != 5));
         assert!(list.downloads().iter().any(|download| download.id == 7));
+    }
+
+    #[test]
+    fn a_list_grown_past_the_bound_while_active_shrinks_back_to_it() {
+        let mut list = DownloadList::default();
+        let overflow = MAX_DOWNLOADS as u64 + 5;
+        for id in 0..overflow {
+            list.add(id, 1, "synthetic.zip", None);
+        }
+        assert_eq!(
+            list.downloads().len(),
+            overflow as usize,
+            "active ones stay"
+        );
+        for id in 0..overflow {
+            list.complete(id, 0);
+        }
+        list.add(overflow, 1, "newest.zip", None);
+        assert_eq!(list.downloads().len(), MAX_DOWNLOADS);
+        assert_eq!(list.downloads()[0].id, overflow);
     }
 
     #[test]
