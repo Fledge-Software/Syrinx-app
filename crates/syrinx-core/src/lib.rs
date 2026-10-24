@@ -39,7 +39,8 @@ pub use destinations::{
     DestinationTarget, MAX_DESTINATIONS, MAX_LABEL_CHARS, QuickDestinations,
 };
 pub use downloads::{
-    Download, DownloadInterruption, DownloadList, DownloadState, MAX_DOWNLOADS, format_size,
+    BlockReason, Download, DownloadControl, DownloadInterruption, DownloadList, DownloadState,
+    MAX_DOWNLOADS, format_size,
 };
 
 pub use tabs::{

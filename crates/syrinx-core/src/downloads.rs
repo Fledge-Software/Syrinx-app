@@ -9,10 +9,10 @@ pub const MAX_DOWNLOADS: usize = 100;
 pub enum DownloadInterruption {
     /// The owner, or the page, cancelled it.
     Cancelled,
-    /// Paused in WebView2's own list; it can resume there.
+    /// Paused from the flyout; it can resume.
     Paused,
-    /// SmartScreen, a virus scan or a policy refused the file.
-    Blocked,
+    /// SmartScreen, a virus scan or a policy refused the file; it can never be resumed.
+    Blocked(BlockReason),
     Network,
     Server,
     /// The disk refused it: no space, no access or a name that is too long.
@@ -20,6 +20,26 @@ pub enum DownloadInterruption {
     /// The browser engine shut down while it ran.
     Shutdown,
     Other,
+}
+
+/// Who refused a blocked file, as WebView2 reports it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlockReason {
+    /// SmartScreen or the virus scan judged the file unsafe.
+    Unsafe,
+    /// The security check (SmartScreen or the virus scan) failed or refused it.
+    SecurityCheck,
+    /// A policy set on this computer blocks such files.
+    Policy,
+}
+
+/// What the owner can do to a download from the flyout. There is deliberately no way to
+/// keep a blocked file: Syrinx never overrides SmartScreen.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DownloadControl {
+    Pause,
+    Resume,
+    Cancel,
 }
 
 /// Where a download stands.
@@ -43,6 +63,8 @@ pub struct Download {
     /// `None` while the server has not said how large the file is.
     pub total: Option<u64>,
     pub state: DownloadState,
+    /// Whether WebView2 says an interrupted download can resume.
+    pub can_resume: bool,
 }
 
 impl Download {
@@ -52,6 +74,19 @@ impl Download {
             self.state,
             DownloadState::InProgress | DownloadState::Interrupted(DownloadInterruption::Paused)
         )
+    }
+
+    /// What the owner may do to it now. A blocked file offers nothing, not even Resume.
+    pub fn controls(&self) -> &'static [DownloadControl] {
+        match self.state {
+            DownloadState::InProgress => &[DownloadControl::Pause, DownloadControl::Cancel],
+            DownloadState::Interrupted(DownloadInterruption::Paused) => {
+                &[DownloadControl::Resume, DownloadControl::Cancel]
+            }
+            DownloadState::Interrupted(DownloadInterruption::Blocked(_)) => &[],
+            DownloadState::Interrupted(_) if self.can_resume => &[DownloadControl::Resume],
+            DownloadState::Interrupted(_) | DownloadState::Completed => &[],
+        }
     }
 
     /// The short status the flyout shows beside the name, such as "1.5 of 4.0 MB".
@@ -99,6 +134,7 @@ impl DownloadList {
                 received: 0,
                 total,
                 state: DownloadState::InProgress,
+                can_resume: false,
             },
         );
         self.forget_oldest_finished();
@@ -134,6 +170,13 @@ impl DownloadList {
     /// A paused download running again.
     pub fn resume(&mut self, id: u64, received: u64) {
         self.change_state(id, DownloadState::InProgress, received);
+    }
+
+    /// Records whether WebView2 says an interrupted download can resume.
+    pub fn set_resumable(&mut self, id: u64, can_resume: bool) {
+        if let Some(download) = self.find_mut(id) {
+            download.can_resume = can_resume;
+        }
     }
 
     /// Applies a state reported by the engine; the same as the named calls above.
@@ -226,7 +269,9 @@ fn interruption_label(reason: DownloadInterruption) -> &'static str {
     match reason {
         DownloadInterruption::Cancelled => "Cancelled",
         DownloadInterruption::Paused => "Paused",
-        DownloadInterruption::Blocked => "Blocked",
+        DownloadInterruption::Blocked(BlockReason::Unsafe) => "Blocked: unsafe file",
+        DownloadInterruption::Blocked(BlockReason::SecurityCheck) => "Blocked: security check",
+        DownloadInterruption::Blocked(BlockReason::Policy) => "Blocked by policy",
         DownloadInterruption::Network => "Failed: network",
         DownloadInterruption::Server => "Failed: server",
         DownloadInterruption::File => "Failed: disk",
@@ -323,6 +368,31 @@ mod tests {
         list.cancel(3, 0);
         let details: Vec<_> = list.downloads().iter().map(Download::detail).collect();
         assert_eq!(details, ["Cancelled", "Failed: network", "Done, 4.0 MB"]);
+    }
+
+    #[test]
+    fn controls_follow_the_state_and_never_resume_a_blocked_file() {
+        let mut list = list_with(1, 10);
+        let controls = |list: &DownloadList| list.downloads()[0].controls();
+        assert_eq!(
+            controls(&list),
+            [DownloadControl::Pause, DownloadControl::Cancel]
+        );
+        list.fail(1, DownloadInterruption::Paused, 0);
+        assert_eq!(
+            controls(&list),
+            [DownloadControl::Resume, DownloadControl::Cancel]
+        );
+        list.fail(1, DownloadInterruption::Network, 0);
+        assert!(controls(&list).is_empty(), "WebView2 said it cannot resume");
+        list.set_resumable(1, true);
+        assert_eq!(controls(&list), [DownloadControl::Resume]);
+        list.fail(1, DownloadInterruption::Blocked(BlockReason::Unsafe), 0);
+        assert!(controls(&list).is_empty(), "never past SmartScreen");
+        assert_eq!(list.downloads()[0].detail(), "Blocked: unsafe file");
+        assert!(!list.downloads()[0].is_active());
+        list.complete(1, 0);
+        assert!(controls(&list).is_empty());
     }
 
     #[test]
