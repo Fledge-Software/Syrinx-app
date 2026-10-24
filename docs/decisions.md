@@ -49,7 +49,11 @@ folder names.
     Rejected: a persisted history like Chrome's, which would keep a
     record of the owner's downloads past the session; and keeping the
     per-view default dialog, which belongs to one tab and does not look
-    like Syrinx.
+    like Syrinx. The owner also approved (2026-10-24) setting `Handled`
+    on `DownloadStarting`, so WebView2's own download flyout no longer
+    appears, on the condition that SmartScreen still checks every
+    download: a file it blocks shows in Syrinx's list as blocked with its
+    reason, and Syrinx never offers a way to keep it.
   - **(3) The downloads flyout matches the existing flyouts' style.**
     Rejected: a new design for it, which would add a look the canvas
     does not have.
