@@ -118,7 +118,54 @@ home and settings, history, clear data, restore after restart).
   after P1-39d and AN-02, with the D6 memory and start-up evidence.
   Install and register with the setup program first (`docs/installing.md`).
 
-### 7. Housekeeping when convenient
+### 7. Downloads and see-through themes (PR #145: #143, #151)
+
+After PR #145 merges and `cargo xtask check` passes on this machine. Record
+each as pass or fail, with the line the fixture prints where one is named,
+in #143 (downloads) or #151 (themes); record the two verdicts in
+`docs/decisions.md` too.
+
+1. **The downloads fixture.** Run
+   `cargo run --package syrinx-platform --example page_close --profile local --offline --locked -- --downloads-only`
+   and read four results:
+   - WebView2's own download dialog never opened.
+   - The self-closing popup's download completed, and the popup then
+     closed.
+   - Case 4's line, "Closing a popup's web view mid-download kept the
+     download" or "... stopped the download". It decides whether a popup
+     stays open until its download ends (`docs/decisions.md`, 2026-10-24,
+     entry (2)): record which.
+   - Case 6's final state and reason for `synthetic-tool.exe`, which shows
+     what SmartScreen does while the dialog is hidden.
+2. **A real Drive download, signed in yourself.** One list only, with
+   progress and then "Done"; then pause, resume and cancel a large
+   download. While a popup's download runs, switch to another tab for more
+   than ten seconds and check the download keeps progressing (a hidden
+   popup is suspended about five seconds after its navigation settles, and
+   nobody yet knows whether a suspended web view keeps downloading).
+3. **A same-tab download link** on any ordinary site: the status line says
+   "Downloading <name>." and never "The page could not be loaded. Try
+   reloading." If the failure message appears, the download navigation is
+   being counted as a failed page load; report it on #143.
+4. **Close a downloading popup with Ctrl W**, then let the download finish:
+   nothing else happens (no tab closes, no message).
+5. **A flyout under a screen reader.** With the P1-36 UI Automation probe
+   or NVDA attached, open the Downloads flyout with two downloads listed:
+   the `local` build does not panic, and each row's buttons are read with
+   their labels.
+6. **An Acrylic theme over a bright window.** Make a theme with Acrylic,
+   Dark, 90 % and Home See-through, with a bright window behind Syrinx: the
+   title bar, sidebar and Home show that window frosted, web pages stay
+   solid, and the selected tab's title and Home's text are readable. Switch
+   to Light: the frost turns light and Home stays readable.
+7. **The dark-Acrylic surface floor.** Under dark Acrylic above about 60 %,
+   the selected row, fields, the search pill and the Solid Home card keep a
+   0.343 backing (`DARK_ACRYLIC_SURFACE_FLOOR`). Accept it or say what to
+   change.
+8. **The presets.** A saved Haze still shows Home Solid at its canvas card
+   tone, and Glass at 50 % looks close enough to the canvas.
+
+### 8. Housekeeping when convenient
 
 - Before making the repository public: the pre-publication checklist in
   `docs/releasing.md`.
