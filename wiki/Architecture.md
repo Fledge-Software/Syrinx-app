@@ -53,9 +53,14 @@ no window and no browser engine. That is what keeps the core model and the
 search index testable, which the spec asks for.
 
 The plugin crates the earlier plans describe (`syrinx-plugin-api`,
-`crates/plugin-*`, `fledge-client`) do not exist. On 2026-10-15 the owner
-decided plugins will be sandboxed WebAssembly in their own repositories
-instead; see [Plugin system](Plugin-system).
+`crates/plugin-*`, `fledge-client`) do not exist; the plans were removed on
+2026-10-16 and are read at `af3de53`. On 2026-10-15 the owner decided
+plugins will be sandboxed WebAssembly in their own repositories instead.
+The runtime is decided too: wasmtime with the component model (research
+note 10, approved on 2026-10-21), hosted by `crates/syrinx-plugin-host`,
+the only crate that will link wasmtime, with the `syrinx:plugin` WIT package
+at `wit/v0_1/` (2026-10-24). Neither exists yet; #28 builds them. See
+[Plugin system](Plugin-system).
 
 Several crates (GPUI, wry, SQLite's wrapper and the fuzzy matcher frizbee)
 are vendored under `vendor/` with small, owner-approved patches. Each patch
@@ -112,9 +117,10 @@ pages are separate records a live tab may be associated with. The sidebar and
 the palette both read this one model, never per-feature code. Changes are
 persisted as they happen, through a session worker, so a crash loses at most
 the last uncommitted change. The one planned exception to "Rust owns state"
-is the text editor for Notes and Forge: CodeMirror 6 in a small local web
-view owns the live buffer while typing, and Rust saves only when both
-copies' checksums match (D28).
+is the text editor for Notes and Forge: one host-provided CodeMirror 6
+component, which Syrinx ships in its own plugin view (2026-10-21), owns the
+live buffer while typing, and Rust saves only when both copies' checksums
+match (D28).
 
 ## Storage
 
@@ -140,8 +146,10 @@ cannot bring back history the owner cleared (D47).
 - **Tier 2, full text.** Page text kept for seven days (D18, D40) so the
   owner can find a page by what it said, excluding Google's sites, banking
   and payment sites, pages sent with `Cache-Control: no-store` and sites the
-  owner excluded (D35). The engine, Tantivy or SQLite FTS5, is being chosen
-  by the P1-23 bake-off. The exclusion rules are in
+  owner excluded (D35). The engine is Tantivy: the P1-23 bake-off chose it
+  over SQLite FTS5 and the owner confirmed it on 2026-10-24 (#52), pinned
+  at 0.27.0. The adapter that indexes into it is #53, not built yet. The
+  exclusion rules are in
   [`docs/page-text-indexing.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/page-text-indexing.md).
 
 ## Updates and releases
