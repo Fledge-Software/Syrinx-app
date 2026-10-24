@@ -367,3 +367,97 @@ fn a_zoom_clear_requested_before_a_crash_finishes_at_the_next_start() {
     );
     fixture.cleanup();
 }
+
+/// A worker whose journal holds a zoom clear that stopped after its request, as a busy
+/// database leaves one: `kept` changed long before the clear's range, `cleared` inside it.
+fn worker_with_pending_zoom_clear(
+    fixture: &Fixture,
+) -> (
+    Worker,
+    Store,
+    UnboundedSender<SessionEvent>,
+    UnboundedReceiver<SessionEvent>,
+) {
+    let lease =
+        Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let store = Store::open(lease).expect("open synthetic store");
+    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let now = utc_seconds().expect("synthetic clock");
+    store
+        .save_site_zoom("kept.example.test".to_owned(), Some(1.25), 100)
+        .expect("save synthetic kept level");
+    store
+        .save_site_zoom("cleared.example.test".to_owned(), Some(0.9), now)
+        .expect("save synthetic cleared level");
+    let range = DeletionRange::new(now - 3_600, now + 1).expect("valid synthetic range");
+    let request = worker
+        .deletions
+        .log()
+        .request(DeletionCategory::SiteZoom, range)
+        .expect("prepare synthetic request");
+    worker
+        .deletions
+        .append(request)
+        .expect("journal synthetic request");
+    let (sender, events) = unbounded();
+    (worker, store, sender, events)
+}
+
+/// The levels the window was handed, among the events already sent.
+fn replaced_levels(events: &mut UnboundedReceiver<SessionEvent>) -> Option<BTreeMap<String, f64>> {
+    while let Ok(Some(event)) = events.try_next() {
+        if let SessionEvent::SiteZoomsReplaced(levels) = event {
+            return Some(levels.0);
+        }
+    }
+    None
+}
+
+fn kept_level() -> Option<BTreeMap<String, f64>> {
+    Some(BTreeMap::from([("kept.example.test".to_owned(), 1.25)]))
+}
+
+#[test]
+fn a_pending_zoom_clear_finished_while_idle_replaces_the_windows_levels() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    // The same branch the idle timer runs, without waiting for it.
+    worker
+        .idle(&store, &sender)
+        .expect("finish the synthetic clear while idle");
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    assert_eq!(worker.deletions.log().pending(), None);
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}
+
+#[test]
+fn a_history_clear_that_finishes_a_pending_zoom_clear_replaces_the_windows_levels() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    worker
+        .handle(
+            &store,
+            SessionCommand::ClearHistory {
+                request_id: 9,
+                start: 0,
+                end: i64::MAX,
+            },
+            &sender,
+        )
+        .expect("clear synthetic history");
+    // The window hears its levels before the dialog hears the history count.
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    assert!(matches!(
+        next_any_event(&mut events),
+        SessionEvent::HistoryCleared {
+            request_id: 9,
+            result: Ok(_),
+        }
+    ));
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}

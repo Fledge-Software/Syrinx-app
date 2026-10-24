@@ -263,6 +263,9 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<Vec<HistoryVisit>, SessionError>,
     },
+    /// The saved zoom levels after a clear the window did not ask for finished (#121): one a
+    /// busy database interrupted, completed while idle or ahead of a later history clear.
+    SiteZoomsReplaced(SiteZoomLevels),
     /// What a `ClearSiteZooms` request removed, or why it failed.
     SiteZoomsCleared {
         request_id: u64,
@@ -947,9 +950,9 @@ impl Worker {
         self.survival.operation = "saving the tabs";
         let retried = self.retry_unsaved(store);
         self.survival.result(retried, events)?;
-        // A clear that a busy database interrupted must not leave cleared history showing (D47).
-        self.survival.operation = "clearing history";
-        let cleared = self.finish_pending_clear(store);
+        // A clear that a busy database interrupted must not leave cleared data showing (D47).
+        self.survival.operation = "finishing an interrupted clear";
+        let cleared = self.finish_pending_clear(store, events);
         self.survival.result(cleared, events)?;
         let now = utc_seconds();
         // A clock failure is reported once, by the backup check below.
@@ -1226,15 +1229,20 @@ impl Worker {
         self.save_model(store, &model)
     }
 
-    /// Finishes a history clear that a busy database interrupted, if one is pending.
-    fn finish_pending_clear(&mut self, store: &Store) -> Result<(), SessionError> {
-        deletions::finish_pending(
+    /// Finishes a clear of either category that a busy database interrupted, if one is pending,
+    /// and hands the window the zoom levels left when that clear removed any (#121).
+    fn finish_pending_clear(
+        &mut self,
+        store: &Store,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let finished = deletions::finish_pending(
             store,
             &mut self.deletions,
             &mut self.catalogue,
             &mut self.history,
-        )
-        .map(drop)
+        )?;
+        deletions::report_replaced_site_zooms(store, &finished, events)
     }
 
     /// Adds the whole import in memory, then commits it with a single save.
@@ -1327,6 +1335,7 @@ impl Worker {
         end: i64,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        // An interrupted zoom clear finished on the way leaves the window's levels stale (#121).
         let result = deletions::clear(
             store,
             &mut self.deletions,
@@ -1334,7 +1343,11 @@ impl Worker {
             &mut self.history,
             start,
             end,
-        );
+        )
+        .and_then(|finished| {
+            deletions::report_replaced_site_zooms(store, &finished, events)?;
+            Ok(finished.history)
+        });
         self.report_cleared(result, events, |result| SessionEvent::HistoryCleared {
             request_id,
             result,
@@ -2151,6 +2164,8 @@ mod tests {
             site_zooms: levels.clone(),
         };
         assert!(!format!("{preferences:?}").contains(host));
+        let replaced = SessionEvent::SiteZoomsReplaced(levels.clone());
+        assert!(!format!("{replaced:?}").contains(host));
         let cleared = SessionEvent::SiteZoomsCleared {
             request_id: 1,
             result: Ok(ClearedSiteZooms {

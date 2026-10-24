@@ -1,6 +1,7 @@
 //! Runs D47 clears of history and site zoom levels through the journal, the store and the
 //! running catalogue (P1-27, #121).
 
+use futures::channel::mpsc::UnboundedSender;
 use syrinx_platform::{DeletionJournal, JournalError};
 use syrinx_search::{Catalogue, Target};
 use syrinx_store::{
@@ -8,23 +9,29 @@ use syrinx_store::{
     deletion::{DeletionCategory, DeletionError, DeletionRange},
 };
 
-use super::{ClearedHistory, ClearedSiteZooms, SessionError, history, preferences};
+use super::{
+    ClearedHistory, ClearedSiteZooms, SessionError, SessionEvent, emit, history, preferences,
+};
 
 /// What finishing journal requests removed, by category, in the counts the dialog shows.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct Finished {
-    history: ClearedHistory,
+    pub(super) history: ClearedHistory,
     site_zooms: usize,
+    /// A `SiteZoom` request was applied, so the window's copy of the levels is stale even when
+    /// a retried clear found nothing left to remove (#121).
+    zoom_applied: bool,
 }
 
 impl Finished {
-    fn from_applied(applied: &AppliedDeletions) -> Self {
+    fn from_applied(applied: &AppliedDeletions, category: DeletionCategory) -> Self {
         Self {
             history: ClearedHistory {
                 visits: applied.history.visits,
                 addresses: applied.history.removed.len(),
             },
             site_zooms: applied.site_zooms,
+            zoom_applied: category == DeletionCategory::SiteZoom,
         }
     }
 
@@ -35,6 +42,7 @@ impl Finished {
                 addresses: self.history.addresses + other.history.addresses,
             },
             site_zooms: self.site_zooms + other.site_zooms,
+            zoom_applied: self.zoom_applied || other.zoom_applied,
         }
     }
 }
@@ -76,7 +84,8 @@ pub(super) fn clear_before_catalogue(
     complete_pending(journal)
 }
 
-/// Clears history visited in `[start, end)` Unix seconds and reports how much went away.
+/// Clears history visited in `[start, end)` Unix seconds and reports how much went away, with
+/// whatever an interrupted earlier clear of either category removed on the way.
 ///
 /// The request is durable before anything is deleted and completion is written after both
 /// the database and the catalogue follow, so a crash in between finishes at the next start.
@@ -87,8 +96,8 @@ pub(super) fn clear(
     recorder: &mut history::HistoryRecorder,
     start: i64,
     end: i64,
-) -> Result<ClearedHistory, SessionError> {
-    let finished = journaled_clear(
+) -> Result<Finished, SessionError> {
+    journaled_clear(
         store,
         journal,
         catalogue,
@@ -96,8 +105,7 @@ pub(super) fn clear(
         DeletionCategory::History,
         start,
         end,
-    )?;
-    Ok(finished.history)
+    )
 }
 
 /// Clears the zoom levels changed in `[start, end)` Unix seconds through the same journal, so
@@ -162,7 +170,22 @@ pub(super) fn finish_pending(
         .map_err(SessionError::Store)?;
     follow(catalogue, recorder, &applied.history)?;
     complete_pending(journal)?;
-    Ok(Finished::from_applied(&applied))
+    Ok(Finished::from_applied(&applied, pending.category()))
+}
+
+/// Hands the window the levels left when a clear it did not ask for removed zoom levels: one a
+/// busy database interrupted, which the idle loop or a later history clear finished (#121). A
+/// clear the window asked for reports its levels in `SiteZoomsCleared` instead.
+pub(super) fn report_replaced_site_zooms(
+    store: &Store,
+    finished: &Finished,
+    events: &UnboundedSender<SessionEvent>,
+) -> Result<(), SessionError> {
+    if !finished.zoom_applied {
+        return Ok(());
+    }
+    let levels = preferences::restore_site_zooms(store)?;
+    emit(events, SessionEvent::SiteZoomsReplaced(levels))
 }
 
 /// Removes or recomputes every catalogue row the clear touched, and the recorder's cursors.

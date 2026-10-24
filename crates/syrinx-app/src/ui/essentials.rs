@@ -108,12 +108,18 @@ impl BrowserView {
         result: Result<crate::session::ClearedSiteZooms, crate::session::SessionError>,
     ) {
         let result = result.map(|cleared| {
-            for (page, level) in self.site_zoom.replace_saved(cleared.remaining.0) {
-                self.set_page_zoom(page, level);
-            }
+            self.replace_site_zooms(cleared.remaining);
             cleared.sites
         });
         self.site_zooms_cleared_for_dialog(request, result);
+    }
+
+    /// The saved levels changed without this window asking, when the session finished a clear
+    /// a busy database had interrupted (#121): open pages of sites no longer saved return to 100%.
+    pub(super) fn replace_site_zooms(&mut self, levels: crate::session::SiteZoomLevels) {
+        for (page, level) in self.site_zoom.replace_saved(levels.0) {
+            self.set_page_zoom(page, level);
+        }
     }
 
     /// The title bar's corner keeps only Downloads in view; Find, Print and zoom live in the
