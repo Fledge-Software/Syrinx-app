@@ -130,6 +130,20 @@ design.
   became one "Zoom" row carrying the same stepper, so zooming does not close
   the menu; Left and Right step it from the keyboard. "Reset zoom" (Ctrl 0)
   stays as its own row. The row follows the existing menu-row style.
+- **Downloads flyout (#143, #89).** ↓, Ctrl J, the ☰ menu's Downloads row and
+  the palette open Syrinx's own list instead of WebView2's per-page dialog, so
+  it opens from any tab, Home included, and keeps a download whose popup has
+  closed. It is the drop-down menu's card and rows at 340px wide, hanging
+  from the title bar's right corner like the ☰ menu, and ↓ closes it again.
+  Each row shows the file name, truncated, with its status dimmed on the
+  right ("1.5 of 4.0 MB", "Done, 4.0 MB", "Blocked"); up to eight rows,
+  newest first, then "Clear finished downloads" and, over a web page,
+  "Pause, cancel or keep a download", which opens WebView2's own list. Rows
+  do not open the file or its folder yet. The list lives in memory for the
+  session only (owner, 2026-10-24). WebView2's own flyout may still appear
+  once when a download starts, because hiding it would also hide
+  SmartScreen's keep-or-delete choice. The canvas has no board for it; adding
+  one is the owner's.
 
 ## Forge
 
