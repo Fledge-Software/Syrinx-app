@@ -230,6 +230,74 @@ folder names.
   Rejected: keeping #124's automatic thinning beside the Home choice, which
   would make one preset ignore the owner's per-theme setting.
 
+- **A saved folder whose title is blank restores as "Untitled folder" (#80,
+  PR #99).** *Recorded by the coordinator from the owner's merge
+  instruction of 2026-10-24; awaiting the owner's confirmation.* A saved
+  session could carry a folder whose title is empty or only whitespace,
+  although the model refuses such a name when the owner creates or renames
+  a folder (2026-10-12, P1-21). On restore, Syrinx renames such a folder
+  "Untitled folder" in memory, before the session is validated
+  (`TabModel::from_snapshot` in `crates/syrinx-core/src/tabs/snapshot.rs`),
+  and the new name reaches disk with the next session save. Rejected:
+  refusing the session, because `syrinx-store` treats a session that fails
+  validation on read as a damaged database, so one cosmetic field would
+  cost the owner the whole session and send recovery looking at backups;
+  and accepting the blank title as it is, which would leave the model
+  holding a state it refuses to create. Implementation note, not part of
+  the owner's decision: the rename is silent, because the loader has no
+  way to report a repair; a status-line notice would be its own issue if
+  the owner wants one.
+
+- **"Home" is a display name only (#76, PR #100).** *Recorded by the
+  coordinator from the owner's merge instruction of 2026-10-24; awaiting
+  the owner's confirmation.* A saved blank page is shown as "Home"
+  everywhere a saved page is shown (the sidebar row, its accessible name
+  and drag ghost, the peek, the palette, the "Delete saved page" card and a
+  Favorites drop), both while its tab is open and after it closes. Its
+  stored title stays what the page reported, `about:blank`: the shown name
+  comes from the rule an open tab already uses
+  (`TabMetadata::display_title`, through `SavedPageSnapshot::display_title`
+  in `crates/syrinx-core/src/tabs/snapshot.rs`). Rejected: "about:blank",
+  which the sidebar showed while the palette and the page itself said
+  Home; and storing "Home" as the saved title, which would rewrite stored
+  rows where a display rule is enough, and could not be changed later
+  without a migration. Implementation note, not part of the owner's
+  decision: since #91, Ctrl D refuses Home, so only a row saved before
+  that shows the name, and the owner has not yet looked at it in a window.
+
+- **The restore-backup screen is drawn in Graphite, whatever theme is
+  chosen (#51, PR #102).** *Recorded by the coordinator from the owner's
+  merge instruction of 2026-10-24; awaiting the owner's confirmation.* When
+  Syrinx offers to replace a damaged database with the newest verified
+  backup (P1-04, D46), the confirmation screen
+  (`crates/syrinx-app/src/ui/recovery.rs`) uses the default Graphite
+  theme's colours and type. The owner's theme is stored in the database
+  that has just failed to open, and Graphite is the default (2026-10-15).
+  Rejected: reading or guessing the owner's theme, which the screen cannot
+  do reliably when the database is damaged. Implementation notes, not part
+  of the owner's decision: the screen shows the backup's date in the
+  owner's local time, followed by UTC; its failure line uses Graphite's
+  orange accent, because `syrinx-ui` has no error colour; its progress
+  line is not yet announced to screen readers (#101); and its wording and
+  its two choices still wait on the owner's own look, which keeps #51
+  open.
+
+- **The palette and the sidebar peek get the menus' Windows 11 rounded
+  corners and shadow (#85, PR #103).** *Recorded by the coordinator from
+  the owner's merge instruction of 2026-10-24; awaiting the owner's
+  confirmation.* #72 gave the ☰ and ⋯ menus Windows 11 rounded corners and
+  a system drop shadow. The command palette and the sidebar peek, which
+  are popup windows of their own, now get the same, so Syrinx's three
+  popups look like one family; one helper, `round_popup_corners` in
+  `crates/syrinx-app/src/ui/owned_popup.rs`, serves all three. Rejected:
+  keeping the palette and the peek square and shadowless, which left
+  Syrinx's own popups inconsistent with each other. Implementation note,
+  not part of the owner's decision: nobody has looked at it in a running
+  window yet. The owner's eye check from PR #103 stands (Ctrl K over a Home
+  tab, and the peek with the sidebar collapsed, in Graphite and Paper:
+  clean corners, a soft shadow, no black corners and no double shadow),
+  and `design/README.md` records the look once the owner confirms it.
+
 ## 2026-10-22
 
 - **See-through themes really show what is behind the window.** On
