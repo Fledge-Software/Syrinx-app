@@ -1,7 +1,7 @@
 //! Feeds every page's downloads into the session's in-memory list and its flyout (#143), and
 //! keeps a popup that asked to close alive until the downloads it started have finished.
 
-use syrinx_core::{DownloadControl, DownloadInterruption, DownloadState};
+use syrinx_core::{DownloadControl, DownloadInterruption, DownloadList, DownloadState};
 
 use super::*;
 
@@ -77,6 +77,12 @@ impl BrowserView {
     }
 }
 
+/// Drops the deferred close of a page whose tab the session has removed, so a download that
+/// finishes later cannot ask to close that tab a second time.
+pub(super) fn forget_removed_page(downloads: &mut DownloadList, tab: TabId) {
+    downloads.forget_close(tab.get());
+}
+
 /// The status line for a download that just finished or stopped; `None` while it runs.
 fn finished_message(state: DownloadState, name: &str) -> Option<String> {
     match state {
@@ -99,7 +105,32 @@ fn finished_message(state: DownloadState, name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use syrinx_core::{Activation, TabKind, TabMetadata, TabModel};
+
     use super::*;
+
+    #[test]
+    fn a_popup_closed_by_hand_while_downloading_is_not_closed_again_later() {
+        let mut model = TabModel::new();
+        let popup = model
+            .open(TabKind::Web, TabMetadata::default(), Activation::Foreground)
+            .expect("open synthetic popup");
+        let mut downloads = DownloadList::default();
+        downloads.add(1, popup.get(), "synthetic.zip", Some(64));
+        assert!(downloads.defer_close(popup.get()));
+
+        // The owner closes the popup (Ctrl W) before its download ends.
+        model.close(popup).expect("commit synthetic close");
+        let loaded = HashSet::from([popup]);
+        let removed = page_lifecycle::removed(&model.snapshot(), &loaded, &HashSet::new());
+        assert_eq!(removed, vec![popup]);
+        for id in removed {
+            forget_removed_page(&mut downloads, id);
+        }
+
+        // Finishing the download then releases no close, so no `ObserveClosed` is sent.
+        assert_eq!(downloads.update(1, DownloadState::Completed, 64), None);
+    }
 
     #[test]
     fn only_a_finished_or_stopped_download_changes_the_status_line() {

@@ -1200,6 +1200,7 @@ impl BrowserView {
         for id in removed {
             self.connections.remove(&id.get());
             self.forget_find(id.get(), false);
+            downloads::forget_removed_page(&mut self.downloads, id);
             if self.page_command(BrowserCommand::Close { id: id.get() }) {
                 self.loaded.remove(&id);
                 self.pending_pages.remove(&id);
