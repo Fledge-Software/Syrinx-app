@@ -9,8 +9,9 @@ use crate::history::HistoryDeletion;
 use crate::records::finish_transaction;
 use crate::{DirectoryLease, StoreError, StoreOperation, history, schema, site_zoom};
 
-/// What one batch of journal requests removed from the live database, by category. It holds
-/// counts and row identities only, never an address or a host.
+/// What one batch of journal requests removed from the live database, by category. Its `Debug`
+/// form prints counts only, so it may be quoted in a message; the struct itself may not, because
+/// `history.changed` carries the recomputed entries, addresses included, that the catalogue needs.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AppliedDeletions {
     pub history: HistoryDeletion,

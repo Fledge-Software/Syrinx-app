@@ -430,6 +430,10 @@ fn a_mixed_batch_applies_both_categories_in_one_call_and_advances_the_generation
     store
         .record_visit("https://mixed.example.test/".to_owned(), String::new(), 100)
         .expect("record synthetic visit");
+    // A later visit outside the range keeps the address, so the clear recomputes its entry.
+    store
+        .record_visit("https://mixed.example.test/".to_owned(), String::new(), 200)
+        .expect("record synthetic later visit");
     store
         .save_site_zoom("mixed.example.test".to_owned(), Some(1.25), 100)
         .expect("save synthetic zoom");
@@ -443,10 +447,14 @@ fn a_mixed_batch_applies_both_categories_in_one_call_and_advances_the_generation
     assert_eq!(replay.len(), 2);
     let applied = store.apply_deletions(replay).expect("mixed batch applies");
     assert_eq!(applied.history.visits, 1);
+    assert_eq!(applied.history.changed.len(), 1);
     assert_eq!(applied.site_zooms, 1);
+    // The recomputed entry names its address, which the Debug form must not repeat.
     assert!(!format!("{applied:?}").contains("example.test"));
     assert_eq!(store.deletion_generation(), Ok(2));
-    assert_eq!(store.history_entries(), Ok(Vec::new()));
+    let kept = store.history_entries().expect("read synthetic history");
+    assert_eq!(kept.len(), 1);
+    assert_eq!((kept[0].visit_count, kept[0].last_visited), (1, 200));
     assert_eq!(store.site_zooms(), Ok(BTreeMap::new()));
     store.shutdown().expect("close synthetic store");
     directory.cleanup();
