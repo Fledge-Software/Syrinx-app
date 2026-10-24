@@ -86,7 +86,7 @@ impl BrowserView {
             return;
         };
         let source = FavoriteSource::Address(page.metadata.address.clone());
-        let title = page.metadata.title.clone();
+        let title = page.display_title();
         self.drop_favorite(&title, &source);
     }
 

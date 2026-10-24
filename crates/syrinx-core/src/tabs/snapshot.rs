@@ -25,6 +25,14 @@ pub struct SavedPageSnapshot {
     pub metadata: TabMetadata,
 }
 
+impl SavedPageSnapshot {
+    /// The name every view shows for this saved page, by the same rule as an open tab, so a
+    /// saved Home page is called Home. A saved page is never an adopted popup.
+    pub fn display_title(&self) -> String {
+        self.metadata.display_title(PageOrigin::Ordinary)
+    }
+}
+
 /// One inline folder, ordered by its position in the snapshot's folder vector.
 #[derive(Clone, Eq, PartialEq)]
 pub struct SavedFolderSnapshot {
@@ -473,6 +481,31 @@ mod tests {
             favicon: Some(format!("https://snapshot-{number}.test/icon.svg")),
             badge: Some(format!("synthetic-badge-{number}")),
         }
+    }
+
+    #[test]
+    fn a_saved_home_page_is_called_home_like_its_tab() {
+        let saved = |title: &str, address: &str| SavedPageSnapshot {
+            id: SavedPageId::new(1).expect("synthetic saved identity"),
+            metadata: TabMetadata {
+                title: title.to_owned(),
+                address: address.to_owned(),
+                ..TabMetadata::default()
+            },
+        };
+        assert_eq!(saved("", crate::BLANK_ADDRESS).display_title(), "Home");
+        assert_eq!(
+            saved("about:blank", crate::BLANK_ADDRESS).display_title(),
+            "Home"
+        );
+        assert_eq!(
+            saved("Example", "https://saved.example.test/").display_title(),
+            "Example"
+        );
+        assert_eq!(
+            saved("", "https://saved.example.test/").display_title(),
+            "https://saved.example.test/"
+        );
     }
 
     fn open(model: &mut TabModel, number: u64) -> TabId {
