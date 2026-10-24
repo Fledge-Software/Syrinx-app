@@ -122,6 +122,18 @@ home and settings, history, clear data, restore after restart).
 - **P1-40 (closes Plan 1):** a week with Syrinx as your default browser,
   after P1-39d and AN-02, with the D6 memory and start-up evidence.
   Install and register with the setup program first (`docs/installing.md`).
+- **#130 (background playback):** with your own accounts, play a YouTube
+  video and a Hulu episode in a background tab for several minutes each,
+  through an ad break; the sound must never stop. Then pause one, wait two
+  minutes and switch back: the page must still be there, paused where you
+  left it (a sleeping tab wakes when shown; nothing in the window marks the
+  sleep itself). The native audio suite proves the timing; run it on a
+  quiet machine:
+  `cargo run --offline --locked --profile local --package syrinx-platform --example page_close -- --audio-only`.
+  It plays a faint 30 Hz tone for about 20 seconds (most speakers cannot
+  reproduce it) and must print that the tone page stayed awake while hidden
+  and then slept about a minute after the tone stopped. Record pass or fail
+  and the printed seconds in #130.
 
 ### 7. Housekeeping when convenient
 

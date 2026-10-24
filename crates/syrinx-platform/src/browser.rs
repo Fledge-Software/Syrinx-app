@@ -8,6 +8,7 @@ mod overlay;
 pub use essentials::PageAction;
 pub const RENDER_PROCESS_UNRESPONSIVE: i32 = webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE.0;
 mod hidden_timer;
+pub use hidden_timer::AUDIO_GRACE;
 mod lifecycle;
 mod page;
 mod page_text;
