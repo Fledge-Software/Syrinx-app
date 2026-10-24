@@ -81,9 +81,15 @@ impl BrowserView {
     }
 }
 
+/// Drops the deferred close of a page whose tab the session has removed, so a download that
+/// finishes later cannot ask to close that tab a second time.
+pub(super) fn forget_removed_page(downloads: &mut DownloadList, tab: TabId) {
+    downloads.forget_close(tab.get());
+}
+
 /// The close a download's change releases, as the session must observe it: `None` while the
 /// page's other downloads run, when no close was deferred, or once the page is already gone
-/// (`sync_pages` calls `forget_close` for a page the saved model dropped, as after Ctrl W).
+/// (`forget_removed_page` ran for it in `sync_pages`, as after Ctrl W).
 fn released_close(
     downloads: &mut DownloadList,
     download: u64,
@@ -117,24 +123,9 @@ fn finished_message(state: DownloadState, name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use syrinx_core::{Activation, TabKind, TabMetadata, TabModel};
 
-    #[test]
-    fn only_a_finished_or_stopped_download_changes_the_status_line() {
-        assert_eq!(
-            finished_message(DownloadState::InProgress, "synthetic.zip"),
-            None
-        );
-        assert_eq!(
-            finished_message(DownloadState::Completed, "synthetic.zip").as_deref(),
-            Some("Downloaded synthetic.zip.")
-        );
-        let stopped = DownloadState::Interrupted(DownloadInterruption::Network);
-        assert!(
-            finished_message(stopped, "synthetic.zip")
-                .is_some_and(|message| message.starts_with("synthetic.zip did not download"))
-        );
-    }
+    use super::*;
 
     fn downloading_popup() -> DownloadList {
         let mut downloads = DownloadList::default();
@@ -144,6 +135,29 @@ mod tests {
             "the popup asked to close mid-download"
         );
         downloads
+    }
+
+    #[test]
+    fn a_popup_closed_by_hand_while_downloading_is_not_closed_again_later() {
+        let mut model = TabModel::new();
+        let popup = model
+            .open(TabKind::Web, TabMetadata::default(), Activation::Foreground)
+            .expect("open synthetic popup");
+        let mut downloads = DownloadList::default();
+        downloads.add(1, popup.get(), "synthetic.zip", Some(64));
+        assert!(downloads.defer_close(popup.get()));
+
+        // The owner closes the popup (Ctrl W) before its download ends.
+        model.close(popup).expect("commit synthetic close");
+        let loaded = HashSet::from([popup]);
+        let removed = page_lifecycle::removed(&model.snapshot(), &loaded, &HashSet::new());
+        assert_eq!(removed, vec![popup]);
+        for id in removed {
+            forget_removed_page(&mut downloads, id);
+        }
+
+        // Finishing the download then releases no close, so no `ObserveClosed` is sent.
+        assert!(released_close(&mut downloads, 1, DownloadState::Completed, 64, false).is_none());
     }
 
     #[test]
@@ -160,16 +174,25 @@ mod tests {
     }
 
     #[test]
-    fn a_popup_the_owner_closed_sends_no_second_close_when_its_download_ends() {
-        let mut downloads = downloading_popup();
-        // Ctrl W: the saved model dropped the page and sync_pages forgot its deferred close.
-        downloads.forget_close(10);
-        assert!(released_close(&mut downloads, 1, DownloadState::Completed, 5, false).is_none());
-    }
-
-    #[test]
     fn a_closing_browser_observes_no_release() {
         let mut downloads = downloading_popup();
         assert!(released_close(&mut downloads, 1, DownloadState::Completed, 5, true).is_none());
+    }
+
+    #[test]
+    fn only_a_finished_or_stopped_download_changes_the_status_line() {
+        assert_eq!(
+            finished_message(DownloadState::InProgress, "synthetic.zip"),
+            None
+        );
+        assert_eq!(
+            finished_message(DownloadState::Completed, "synthetic.zip").as_deref(),
+            Some("Downloaded synthetic.zip.")
+        );
+        let stopped = DownloadState::Interrupted(DownloadInterruption::Network);
+        assert!(
+            finished_message(stopped, "synthetic.zip")
+                .is_some_and(|message| message.starts_with("synthetic.zip did not download"))
+        );
     }
 }

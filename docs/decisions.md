@@ -12,6 +12,29 @@ folder names.
 
 ## 2026-10-24
 
+- **Syrinx's full-text index uses Tantivy, not SQLite's FTS5 (#52).** The
+  quiet-machine bake-off of 2026-10-21 (results on #52) measured the broad
+  corpus at a 95th-percentile query time of 2.3 ms for Tantivy against
+  24.8 ms for FTS5. Expiring a week of pages took 2.2 s against about five
+  minutes, and the index used 55 MB of disk after expiry against 408 MB.
+  FTS5 used 130 to 180 MB less memory, but #52's rule preferred FTS5 only if
+  the two were close, and they were not. The owner confirmed the rule's
+  choice. #53, the production adapter, builds on Tantivy.
+- **Tantivy moves to 0.27.0 before Syrinx ships it (#52).** The tested
+  0.26.2 depends on a version of `lru` covered by RUSTSEC-2026-0253; 0.27.0
+  depends on a fixed one. The owner approved moving the exact pin and the
+  lockfile growth that comes with it. Every new package is audited in
+  `docs/dev/fulltext-audit.md`, and the move stops for the owner if any
+  licence falls outside MIT, Apache-2.0 or BSD. A confirming rerun of the
+  comparison on 0.27.0, on a quiet machine the same day, matched 0.26.2's
+  results (`docs/dev/fulltext-audit.md`).
+- **Signing the weekly update files waits (#55, PR #119).** The owner is
+  not setting up the signing key yet: it adds a monthly cost, and the
+  previews have no users who need it. Weekly previews stay unsigned until
+  the owner does `docs/owner-checklist.md`, item 1.
+- **The Glass look and the Settings page passed the owner's window check
+  (#93, #91).** The owner looked at both on `main` and found them better.
+
 - **Dark Acrylic keeps a minimum tint, and downloads get Syrinx's own
   session list and flyout.** Three approvals, given together:
   - **(1) A dark theme under Acrylic never drops below a 12.5 % tint**
@@ -53,19 +76,20 @@ folder names.
     on `DownloadStarting`, so WebView2's own download flyout no longer
     appears, on the condition that SmartScreen still checks every
     download: a file it blocks shows in Syrinx's list as blocked with its
-    reason, and Syrinx never offers a way to keep it. Implementation
-    note, not part of the owner's decision: a popup that asks to close
-    while one of its downloads is still active stays open, with the
-    status line "The popup closes once its download finishes.", until
-    that download ends or the owner closes the tab, because nobody has
-    yet observed whether WebView2 keeps a download whose web view
-    closes; case 4 of the fixture's downloads suite (`page_close
-    --downloads-only`, the held popup) records that, and its result
-    decides whether the deferral stays. The list keeps at most 100
-    downloads: when a new one would take it past that, the oldest
-    finished ones are forgotten first, and an active download is never
-    forgotten, so the list is longer than 100 only while more than that
-    many are still running.
+    reason, and Syrinx never offers a way to keep it.
+    Implementation notes, not part of the owner's decision: the list
+    keeps at most 100 downloads; when a new one would take it past that,
+    the oldest finished ones are forgotten first, and an active download
+    is never forgotten, so the list is longer than 100 only while more
+    than that many are still running. A popup that asks to close while
+    its download runs stays open, as a blank tab with the status "The
+    popup closes once its download finishes.", until the download ends or
+    the owner closes it, because nobody yet knows whether WebView2 keeps
+    a download when its web view closes. The `page_close` fixture's
+    downloads case 4 measures exactly that ("Closing a popup's web view
+    mid-download kept/stopped the download"); its result on the owner's
+    machine decides whether the deferral stays (`docs/owner-checklist.md`,
+    item 7).
   - **(3) The downloads flyout matches the existing flyouts' style.**
     Rejected: a new design for it, which would add a look the canvas
     does not have.
@@ -399,7 +423,8 @@ folder names.
 - **Plugin search content (decision 8): each plugin's feeds get their own
   palette scope chip** (for example "Notes", shown only while that plugin
   is installed) as well as appearing under Everything, matching the spec's
-  scope chips. Recorded here because it is `design/README.md` territory.
+  scope chips. It is `design/README.md` territory, so it is also recorded
+  there, under "Decisions made after the spec".
 
 - **Grants (decisions 9 and 10): nothing granted by default, and running
   programs is named as full trust.** A plugin's `syrinx-plugin.toml` asks

@@ -1207,8 +1207,7 @@ impl BrowserView {
         for id in removed {
             self.connections.remove(&id.get());
             self.forget_find(id.get(), false);
-            // A popup the owner closed while it waited on a download has nothing left to close.
-            self.downloads.forget_close(id.get());
+            downloads::forget_removed_page(&mut self.downloads, id);
             if self.page_command(BrowserCommand::Close { id: id.get() }) {
                 self.loaded.remove(&id);
                 self.pending_pages.remove(&id);
