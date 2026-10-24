@@ -51,6 +51,7 @@ pub(super) struct PageContext {
     pub(super) events: EventSink,
     pub(super) shortcuts: NativeSink,
     pub(super) popups: super::popups::PopupRequests,
+    pub(super) downloads: super::downloads::DownloadOperations,
     pub(super) text: super::page_text::TextContext,
     /// An adopted popup whose opener showed an excluded or tainted document.
     pub(super) starts_tainted: bool,
@@ -78,6 +79,7 @@ impl Page {
             events,
             shortcuts,
             popups,
+            downloads,
             text: text_context,
             starts_tainted,
         } = context;
@@ -132,7 +134,7 @@ impl Page {
         register_process_failure(&view, id, events.clone(), shortcuts.clone())?;
         let permissions = super::permissions::Permissions::register(&view, id, events.clone())?;
         let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
-        super::downloads::register(&view, id, events.detached())?;
+        super::downloads::register(&view, id, events.detached(), downloads)?;
         register_focus_arrival(&view, id, events.clone())?;
         register_focus_departure(&view, shortcuts.clone(), id, events.clone())?;
         // Observes headers and navigations only while capture is on; never a request filter.

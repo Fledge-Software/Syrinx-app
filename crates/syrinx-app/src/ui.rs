@@ -927,7 +927,8 @@ impl BrowserView {
                 state,
                 received,
                 total,
-            } => self.download_changed(download, state, received, total, window, cx),
+                can_resume,
+            } => self.download_changed(download, state, received, (total, can_resume), window, cx),
             BrowserEvent::PermissionRequested {
                 id,
                 request,

@@ -156,6 +156,11 @@ pub enum BrowserCommand {
     /// being parsed can still report `Captured`, so the receiver re-checks the setting.
     /// Pages already observed keep tracking excluded-site taint with the last lists.
     SetPageTextPolicy(Option<PageTextPolicy>),
+    /// Pauses, resumes or cancels a download from the flyout (#143). It may outlive its tab.
+    ControlDownload {
+        download: u64,
+        control: syrinx_core::DownloadControl,
+    },
     Shutdown,
 }
 
@@ -273,6 +278,8 @@ pub enum BrowserEvent {
         state: syrinx_core::DownloadState,
         received: u64,
         total: Option<u64>,
+        /// Whether WebView2 says an interrupted download can resume.
+        can_resume: bool,
     },
     ZoomChanged {
         id: u64,
@@ -666,6 +673,7 @@ fn run(
     let mut state = BrowserState {
         pages: HashMap::new(),
         popups: popups::PopupRequests::default(),
+        downloads: downloads::DownloadOperations::default(),
         environment: None,
         engine: None,
         profile,
@@ -792,6 +800,7 @@ fn drain_commands(
 struct BrowserState {
     pages: HashMap<u64, Page>,
     popups: popups::PopupRequests,
+    downloads: downloads::DownloadOperations,
     environment: Option<ICoreWebView2Environment>,
     /// Watches `environment`'s browser process so shutdown can let it save (#96).
     engine: Option<engine_exit::EngineWatch>,
@@ -833,6 +842,7 @@ impl BrowserState {
                 events: self.events.clone(),
                 shortcuts: self.shortcuts.clone(),
                 popups: self.popups.clone(),
+                downloads: self.downloads.clone(),
                 text: self.page_text.clone(),
                 starts_tainted,
             },
@@ -907,6 +917,9 @@ impl BrowserState {
             BrowserCommand::SetPageTextPolicy(policy) => {
                 self.page_text.set_policy(policy);
             }
+            BrowserCommand::ControlDownload { download, control } => {
+                self.downloads.control(download, control, &self.events);
+            }
             BrowserCommand::Resize(next) => {
                 next.validate()?;
                 for page in self.pages.values() {
@@ -975,6 +988,7 @@ impl Drop for BrowserState {
     fn drop(&mut self) {
         // Complete pending requests while their openers and the COM apartment still exist.
         self.popups.clear();
+        self.downloads.clear();
     }
 }
 
@@ -1067,6 +1081,7 @@ impl BrowserCommand {
             | Self::Resize(_)
             | Self::ClearData { .. }
             | Self::SetPageTextPolicy(_)
+            | Self::ControlDownload { .. }
             | Self::Shutdown => None,
         }
     }

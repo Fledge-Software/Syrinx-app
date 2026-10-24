@@ -1,8 +1,7 @@
 //! Feeds every page's downloads into the session's in-memory list and its flyout (#143), and
 //! keeps a popup that asked to close alive until the downloads it started have finished.
 
-use syrinx_core::{DownloadInterruption, DownloadState};
-use syrinx_platform::browser::PageAction;
+use syrinx_core::{DownloadControl, DownloadInterruption, DownloadState};
 
 use super::*;
 
@@ -29,11 +28,13 @@ impl BrowserView {
         download: u64,
         state: DownloadState,
         received: u64,
-        total: Option<u64>,
+        progress: (Option<u64>, bool),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let (total, can_resume) = progress;
         self.downloads.progress(download, received, total);
+        self.downloads.set_resumable(download, can_resume);
         if let Some(tab) = self.downloads.update(download, state, received) {
             self.close_requested_page(tab);
         }
@@ -61,16 +62,10 @@ impl BrowserView {
         }
     }
 
-    /// Opens WebView2's own download list on the page in view, for the controls Syrinx's
-    /// flyout does not have.
-    pub(super) fn open_engine_downloads(&mut self) {
-        let Some(id) = self.shown else {
-            return;
-        };
-        self.page_command(BrowserCommand::PageAction {
-            id: id.get(),
-            action: PageAction::Downloads,
-        });
+    /// Pauses, resumes or cancels a download the owner chose in the flyout; the result comes
+    /// back as a `DownloadChanged` event.
+    pub(super) fn control_download(&mut self, download: u64, control: DownloadControl) {
+        self.page_command(BrowserCommand::ControlDownload { download, control });
     }
 
     fn download_name(&self, download: u64) -> String {
@@ -93,6 +88,9 @@ fn finished_message(state: DownloadState, name: &str) -> Option<String> {
         DownloadState::Interrupted(DownloadInterruption::Cancelled) => {
             Some(format!("{name} was cancelled."))
         }
+        DownloadState::Interrupted(DownloadInterruption::Blocked(_)) => Some(format!(
+            "{name} was blocked to keep this computer safe. Open Downloads (Ctrl J) for why."
+        )),
         DownloadState::Interrupted(_) => Some(format!(
             "{name} did not download. Open Downloads (Ctrl J) for details."
         )),

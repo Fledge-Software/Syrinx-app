@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use gpui::{KeyDownEvent, MouseDownEvent, Pixels, Point, WeakEntity, prelude::FluentBuilder as _};
-use syrinx_core::{DestinationSurface, Shortcut};
+use syrinx_core::{DestinationSurface, DownloadControl, Shortcut};
 use syrinx_platform::browser::{BrowserError, OverlayRect, hide_overlay, syrinx_in_foreground};
 
 use super::{
@@ -16,8 +16,8 @@ use super::{
 
 /// The menu's width, narrow enough that the sidebar menu stays inside a wide sidebar.
 const MENU_WIDTH: f32 = 220.;
-/// The Downloads flyout is wider, so a file name and its progress fit on one row.
-const DOWNLOADS_WIDTH: f32 = 340.;
+/// The Downloads flyout is wider, so a file name, its progress and its buttons fit on one row.
+const DOWNLOADS_WIDTH: f32 = 380.;
 /// The flyout lists this many downloads, newest first; the session's list keeps more.
 const MAX_DOWNLOAD_ROWS: usize = 8;
 const ITEM_HEIGHT: f32 = 30.;
@@ -52,15 +52,12 @@ enum MenuItem {
     NewTab,
     NewFolder,
     EditFavorites,
-    /// One download in the Downloads flyout. It shows its state only: Syrinx has no safe
-    /// platform call yet to open the file or its folder.
+    /// One download in the Downloads flyout, with its Pause, Resume and Cancel buttons.
+    /// Syrinx has no safe platform call yet to open the file or its folder.
     Download(u64),
     /// The flyout's only row when nothing has downloaded this session.
     NoDownloads,
     ClearDownloads,
-    /// WebView2's own list on the page in view, which can pause or cancel a download and
-    /// keep or delete a file SmartScreen warned about.
-    EngineDownloads,
 }
 
 const PAGE_ITEMS: [MenuItem; 7] = [
@@ -120,7 +117,6 @@ impl MenuItem {
             MenuItem::Download(_) => "Download",
             MenuItem::NoDownloads => "No downloads this session",
             MenuItem::ClearDownloads => "Clear finished downloads",
-            MenuItem::EngineDownloads => "Pause, cancel or keep a download",
         }
     }
 
@@ -140,8 +136,7 @@ impl MenuItem {
             | MenuItem::EditFavorites
             | MenuItem::Download(_)
             | MenuItem::NoDownloads
-            | MenuItem::ClearDownloads
-            | MenuItem::EngineDownloads => return None,
+            | MenuItem::ClearDownloads => return None,
         };
         Shortcut::new(keys).ok().map(|shortcut| shortcut.label())
     }
@@ -177,6 +172,8 @@ struct MenuRow {
     item: MenuItem,
     label: String,
     shortcut: Option<String>,
+    /// A download row's buttons; empty for every other row.
+    controls: &'static [DownloadControl],
 }
 
 /// The open menu: its popup once the window exists, `None` while it is opening.
@@ -204,6 +201,8 @@ enum MenuAction {
     Dismiss,
     /// The owner clicked elsewhere or switched away; focus stays where that put it.
     Deactivated,
+    /// A download row's Pause, Resume or Cancel; the flyout stays open to show the result.
+    Download(u64, DownloadControl),
 }
 
 /// Where a requested menu opens.
@@ -360,7 +359,7 @@ impl BrowserView {
     /// its level from the open menu (`menu_zoom_changed`).
     fn menu_rows(&self, kind: MenuKind) -> Vec<MenuRow> {
         if kind == MenuKind::Downloads {
-            return download_rows(&self.downloads, self.shown.is_some());
+            return download_rows(&self.downloads);
         }
         let editing = self.home.editing == Some(DestinationSurface::Favorites);
         kind.items()
@@ -372,6 +371,7 @@ impl BrowserView {
                     _ => item.label().to_owned(),
                 },
                 shortcut: item.shortcut(),
+                controls: &[],
             })
             .collect()
     }
@@ -532,6 +532,10 @@ impl BrowserView {
             self.essential_shortcut(shortcut);
             return;
         }
+        if let MenuAction::Download(download, control) = action {
+            self.control_download(download, control);
+            return;
+        }
         // A queued key or click must not reactivate Syrinx after Alt Tab.
         let in_front = syrinx_in_foreground();
         let kind = self.menu.as_ref().map(|menu| menu.kind);
@@ -545,7 +549,10 @@ impl BrowserView {
             }
             MenuAction::Dismiss if in_front => self.focus_page(window, cx),
             MenuAction::Choose(item) if in_front => self.run_menu_item(item, window, cx),
-            MenuAction::Dismiss | MenuAction::Choose(_) | MenuAction::Zoom(_) => {}
+            MenuAction::Dismiss
+            | MenuAction::Choose(_)
+            | MenuAction::Zoom(_)
+            | MenuAction::Download(..) => {}
         }
         cx.notify();
     }
@@ -590,7 +597,6 @@ impl BrowserView {
                 };
             }
             MenuItem::ClearDownloads => self.downloads.clear_finished(),
-            MenuItem::EngineDownloads => self.open_engine_downloads(),
             // Shown for their state only; `is_choosable` keeps them from being chosen.
             MenuItem::Download(_) | MenuItem::NoDownloads => {}
         }
@@ -749,16 +755,33 @@ impl MenuView {
             cx.notify();
             return;
         }
-        let selected = self
-            .selected
-            .and_then(|row| self.rows.get(row))
-            .map(|row| row.item);
-        let Some(action) = key_action(key, selected) else {
+        let selected = self.selected.and_then(|row| self.rows.get(row));
+        let action = selected
+            .and_then(|row| download_key(key, row))
+            .or_else(|| key_action(key, selected.map(|row| row.item)));
+        let Some(action) = action else {
             return;
         };
         cx.stop_propagation();
         self.send(action, cx);
     }
+}
+
+/// On a download row, Enter or Space presses its first button (Pause or Resume) and Delete
+/// cancels it.
+fn download_key(key: &str, row: &MenuRow) -> Option<MenuAction> {
+    let MenuItem::Download(download) = row.item else {
+        return None;
+    };
+    let control = match key {
+        "enter" | "space" => row.controls.first().copied(),
+        "delete" => row
+            .controls
+            .contains(&DownloadControl::Cancel)
+            .then_some(DownloadControl::Cancel),
+        _ => None,
+    }?;
+    Some(MenuAction::Download(download, control))
 }
 
 /// What a key other than the selection moves does on the selected row, if anything.
@@ -774,6 +797,41 @@ fn key_action(key: &str, selected: Option<MenuItem>) -> Option<MenuAction> {
 }
 
 impl MenuView {
+    /// A download row's Pause, Resume and Cancel buttons.
+    fn download_buttons(
+        &self,
+        index: usize,
+        row: &MenuRow,
+        cx: &mut Context<Self>,
+    ) -> Vec<Stateful<Div>> {
+        let MenuItem::Download(download) = row.item else {
+            return Vec::new();
+        };
+        row.controls
+            .iter()
+            .map(|&control| {
+                let (id, glyph, verb) = control_face(control);
+                crate::controls::push_button(div().id((id, index)), format!("{verb} {}", row.label))
+                    .h(px(22.))
+                    .w(px(22.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(11.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::line()))
+                    .font_family(crate::controls::glyph::FONT)
+                    .text_size(px(10.))
+                    .child(glyph)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.send(MenuAction::Download(download, control), cx);
+                    }))
+            })
+            .collect()
+    }
+
     /// The Zoom row's − / percentage / + stepper; each press zooms the page in view.
     fn zoom_stepper(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let menu = cx.weak_entity();
@@ -833,7 +891,9 @@ impl Render for MenuView {
                     Some(detail) => format!("{}, {detail}", row.label),
                     None => row.label.clone(),
                 };
-                drawn.aria_label(name)
+                drawn
+                    .aria_label(name)
+                    .children(self.download_buttons(index, row, cx))
             } else {
                 drawn.on_click(cx.listener(move |this, _, _, cx| {
                     this.send(MenuAction::Choose(item), cx);
@@ -944,13 +1004,23 @@ fn closes_on_reclick(
         })
 }
 
+/// A download button's element id, glyph and spoken verb.
+fn control_face(control: DownloadControl) -> (&'static str, &'static str, &'static str) {
+    match control {
+        DownloadControl::Pause => ("download-pause", "\u{E769}", "Pause"),
+        DownloadControl::Resume => ("download-resume", "\u{E768}", "Resume"),
+        DownloadControl::Cancel => ("download-cancel", "\u{E711}", "Cancel"),
+    }
+}
+
 /// The Downloads flyout's rows: the newest downloads, or a line saying there are none, then
-/// Clear when any has finished and WebView2's own controls when a page is in view.
-fn download_rows(list: &syrinx_core::DownloadList, page_shown: bool) -> Vec<MenuRow> {
+/// Clear when any has finished.
+fn download_rows(list: &syrinx_core::DownloadList) -> Vec<MenuRow> {
     let fixed = |item: MenuItem| MenuRow {
         item,
         label: item.label().to_owned(),
         shortcut: None,
+        controls: &[],
     };
     let mut rows: Vec<MenuRow> = list
         .downloads()
@@ -960,6 +1030,7 @@ fn download_rows(list: &syrinx_core::DownloadList, page_shown: bool) -> Vec<Menu
             item: MenuItem::Download(download.id),
             label: download.file_name.clone(),
             shortcut: Some(download.detail()),
+            controls: download.controls(),
         })
         .collect();
     if rows.is_empty() {
@@ -967,9 +1038,6 @@ fn download_rows(list: &syrinx_core::DownloadList, page_shown: bool) -> Vec<Menu
     }
     if list.has_finished() {
         rows.push(fixed(MenuItem::ClearDownloads));
-    }
-    if page_shown {
-        rows.push(fixed(MenuItem::EngineDownloads));
     }
     rows
 }
@@ -1067,6 +1135,37 @@ mod tests {
             key_action("escape", zoom),
             Some(MenuAction::Dismiss)
         ));
+    }
+
+    #[test]
+    fn download_rows_carry_their_controls_and_keys_press_them() {
+        let mut list = syrinx_core::DownloadList::default();
+        list.add(3, 1, "synthetic.zip", None);
+        let rows = download_rows(&list);
+        assert_eq!(rows.len(), 1, "no Clear row while nothing has finished");
+        let row = &rows[0];
+        assert_eq!(
+            row.controls,
+            [DownloadControl::Pause, DownloadControl::Cancel]
+        );
+        assert!(matches!(
+            download_key("enter", row),
+            Some(MenuAction::Download(3, DownloadControl::Pause))
+        ));
+        assert!(matches!(
+            download_key("delete", row),
+            Some(MenuAction::Download(3, DownloadControl::Cancel))
+        ));
+        assert!(download_key("left", row).is_none());
+        list.fail(
+            3,
+            syrinx_core::DownloadInterruption::Blocked(syrinx_core::BlockReason::Unsafe),
+            0,
+        );
+        let rows = download_rows(&list);
+        assert!(rows[0].controls.is_empty(), "a blocked file is never kept");
+        assert!(download_key("enter", &rows[0]).is_none());
+        assert_eq!(rows[1].item, MenuItem::ClearDownloads);
     }
 
     #[test]
