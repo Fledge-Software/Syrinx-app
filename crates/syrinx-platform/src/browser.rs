@@ -1,6 +1,7 @@
 //! Keeps page WebView2 objects on one Windows thread while Rust UI code exchanges owned commands.
 
 mod clear_data;
+mod downloads;
 mod engine_exit;
 mod environment;
 mod essentials;
@@ -8,6 +9,7 @@ mod overlay;
 pub use essentials::PageAction;
 pub const RENDER_PROCESS_UNRESPONSIVE: i32 = webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE.0;
 mod hidden_timer;
+pub use hidden_timer::AUDIO_GRACE;
 mod lifecycle;
 mod page;
 mod page_text;
@@ -161,6 +163,11 @@ pub enum BrowserCommand {
     /// being parsed can still report `Captured`, so the receiver re-checks the setting.
     /// Pages already observed keep tracking excluded-site taint with the last lists.
     SetPageTextPolicy(Option<PageTextPolicy>),
+    /// Pauses, resumes or cancels a download from the flyout (#143). It may outlive its tab.
+    ControlDownload {
+        download: u64,
+        control: syrinx_core::DownloadControl,
+    },
     Shutdown,
 }
 
@@ -262,6 +269,24 @@ pub enum BrowserEvent {
     DownloadDialog {
         id: u64,
         open: bool,
+    },
+    /// Page `tab`'s navigation became a download (#143). Download events are not tied to the
+    /// page's lifetime: they keep arriving after a popup that started one has closed.
+    DownloadStarted {
+        download: u64,
+        tab: u64,
+        /// The saved file's name only; its folder and source address never leave the platform.
+        file_name: String,
+        total: Option<u64>,
+    },
+    /// A download's state or byte count changed.
+    DownloadChanged {
+        download: u64,
+        state: syrinx_core::DownloadState,
+        received: u64,
+        total: Option<u64>,
+        /// Whether WebView2 says an interrupted download can resume.
+        can_resume: bool,
     },
     ZoomChanged {
         id: u64,
@@ -566,6 +591,10 @@ impl EventSink {
     fn for_page(&self, life: lifecycle::CallbackLife) -> Self {
         Self(self.0.clone(), Some(life))
     }
+    /// A sink whose events outlive the page, for downloads that run on after it closes.
+    fn detached(&self) -> Self {
+        Self(self.0.clone(), None)
+    }
     fn accepts_callbacks(&self) -> bool {
         self.1
             .as_ref()
@@ -658,6 +687,7 @@ fn run(
     let mut state = BrowserState {
         pages: HashMap::new(),
         popups: popups::PopupRequests::default(),
+        downloads: downloads::DownloadOperations::default(),
         environment: None,
         engine: None,
         profile,
@@ -784,6 +814,7 @@ fn drain_commands(
 struct BrowserState {
     pages: HashMap<u64, Page>,
     popups: popups::PopupRequests,
+    downloads: downloads::DownloadOperations,
     environment: Option<ICoreWebView2Environment>,
     /// Watches `environment`'s browser process so shutdown can let it save (#96).
     engine: Option<engine_exit::EngineWatch>,
@@ -825,6 +856,7 @@ impl BrowserState {
                 events: self.events.clone(),
                 shortcuts: self.shortcuts.clone(),
                 popups: self.popups.clone(),
+                downloads: self.downloads.clone(),
                 text: self.page_text.clone(),
                 starts_tainted,
             },
@@ -899,6 +931,9 @@ impl BrowserState {
             BrowserCommand::SetPageTextPolicy(policy) => {
                 self.page_text.set_policy(policy);
             }
+            BrowserCommand::ControlDownload { download, control } => {
+                self.downloads.control(download, control, &self.events);
+            }
             BrowserCommand::Resize(next) => {
                 next.validate()?;
                 for page in self.pages.values() {
@@ -968,6 +1003,7 @@ impl Drop for BrowserState {
     fn drop(&mut self) {
         // Complete pending requests while their openers and the COM apartment still exist.
         self.popups.clear();
+        self.downloads.clear();
     }
 }
 
@@ -1061,6 +1097,7 @@ impl BrowserCommand {
             | Self::Resize(_)
             | Self::ClearData { .. }
             | Self::SetPageTextPolicy(_)
+            | Self::ControlDownload { .. }
             | Self::Shutdown => None,
         }
     }

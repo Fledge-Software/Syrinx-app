@@ -1,7 +1,8 @@
 //! Verifies a synthetic page close stays deferred until the host releases its native view.
 //!
-//! Options: `--suspension-only` runs only the suspension suite; `--stall-first-close` holds
-//! the first close page's body past the hidden-page suspension grace; `--trace` prints
+//! Options: `--suspension-only` runs only the suspension suite; `--audio-only` only the audio
+//! suite (#130); `--downloads-only` only the download suite (#143); `--stall-first-close`
+//! holds the first close page's body past the hidden-page suspension grace; `--trace` prints
 //! timestamped harness commands, page events and loopback requests to stderr.
 
 #[path = "page_close/lifecycle.rs"]
@@ -16,6 +17,11 @@ mod permissions;
 #[path = "page_close/essentials.rs"]
 mod essentials;
 
+#[path = "page_close/downloads.rs"]
+mod downloads;
+
+#[path = "page_close/audio.rs"]
+mod audio;
 #[path = "page_close/security.rs"]
 mod security;
 #[path = "page_close/suspension.rs"]
@@ -61,6 +67,9 @@ type Exercise = fn(
 ) -> Result<(), String>;
 
 const DEADLINE: Duration = Duration::from_secs(45);
+/// `next_event`'s error once a wait's deadline passes; the audio suite tells it from a failure.
+const EVENT_DEADLINE: &str =
+    "Synthetic native event deadline expired; close delivery is not proven.";
 /// Longer than the platform's five-second grace before an idle hidden page is suspended.
 const STALL_PAST_SUSPENSION_GRACE: Duration = Duration::from_secs(6);
 static TRACE: AtomicBool = AtomicBool::new(false);
@@ -71,12 +80,14 @@ const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Synthetic close fi
     <script>addEventListener('load',()=>setTimeout(()=>window.close(),100));</script>";
 
 fn main() -> ExitCode {
-    // An independent deadline also catches a stalled native call or message pump.
+    // An independent deadline also catches a stalled native call or message pump. It sits above
+    // the sum of every suite's budget and shutdown (seven suites at 45 s, the audio suite at
+    // 150 s, eight 10 s shutdowns: about 545 s), so it fires only when the pump itself is stuck.
     let (cancel, cancellation) = mpsc::channel();
     let watchdog = match thread::Builder::new()
         .name("syrinx-close-harness-deadline".into())
         .spawn(
-            move || match cancellation.recv_timeout(Duration::from_secs(300)) {
+            move || match cancellation.recv_timeout(Duration::from_secs(600)) {
                 Ok(()) => {}
                 Err(error) => {
                     eprintln!("Synthetic page-close harness deadline failed: {error}.");
@@ -126,47 +137,72 @@ fn run() -> Result<(), String> {
     let server = Server::start(stall)?;
     if option("--suspension-only") {
         return combine(
-            run_browser(profile, &server.url, suspension::exercise),
+            run_browser(profile, &server.url, suspension::exercise, DEADLINE),
             server.stop(),
         );
     }
-    let result = run_browser(profile, &server.url, exercise);
+    if option("--audio-only") {
+        return combine(
+            run_browser(profile, &server.url, audio::exercise, audio::DEADLINE),
+            server.stop(),
+        );
+    }
+    if option("--downloads-only") {
+        return combine(
+            run_browser(profile, &server.url, downloads::exercise, DEADLINE),
+            server.stop(),
+        );
+    }
+    let result = run_browser(profile, &server.url, exercise, DEADLINE);
     if result.is_ok() {
         println!("Synthetic deferred page close and repeated lifecycle passed.");
     }
     // Run every suite even if one fails; fresh profiles keep their evidence independent.
-    let popup_result =
-        reserve_profile().and_then(|profile| run_browser(profile, &server.url, popups::exercise));
+    let popup_result = reserve_profile()
+        .and_then(|profile| run_browser(profile, &server.url, popups::exercise, DEADLINE));
     if popup_result.is_ok() {
         println!("Synthetic popup opener, message reply and native page focus passed.");
     }
     let permission_result = reserve_profile()
-        .and_then(|profile| run_browser(profile, &server.url, permissions::exercise));
+        .and_then(|profile| run_browser(profile, &server.url, permissions::exercise, DEADLINE));
     if permission_result.is_ok() {
         println!(
             "Synthetic permission deny, allow, repeated prompt and default notification UI passed."
         );
     }
     let essentials_result = reserve_profile()
-        .and_then(|profile| run_browser(profile, &server.url, essentials::exercise));
+        .and_then(|profile| run_browser(profile, &server.url, essentials::exercise, DEADLINE));
     if essentials_result.is_ok() {
         println!("Synthetic native find, download list, zoom and print-preview command passed.");
     }
+    let downloads_result = reserve_profile()
+        .and_then(|profile| run_browser(profile, &server.url, downloads::exercise, DEADLINE));
+    if downloads_result.is_ok() {
+        println!("Synthetic same-tab, popup and self-closing popup downloads passed.");
+    }
     let suspension_result = reserve_profile()
-        .and_then(|profile| run_browser(profile, &server.url, suspension::exercise));
+        .and_then(|profile| run_browser(profile, &server.url, suspension::exercise, DEADLINE));
     let security_result = combine(security::run(&server.url), suspension_result);
     if security_result.is_ok() {
         println!(
             "Synthetic certificate cancellation, repeat rejection and safe navigation recovery passed."
         );
     }
+    let audio_result = reserve_profile()
+        .and_then(|profile| run_browser(profile, &server.url, audio::exercise, audio::DEADLINE));
+    if audio_result.is_ok() {
+        println!("Synthetic tone page stayed awake while playing and slept after the audio grace.");
+    }
     combine(
         combine(
             combine(
-                combine(combine(result, popup_result), permission_result),
-                essentials_result,
+                combine(
+                    combine(combine(result, popup_result), permission_result),
+                    combine(essentials_result, downloads_result),
+                ),
+                security_result,
             ),
-            security_result,
+            audio_result,
         ),
         server.stop(),
     )
@@ -247,7 +283,14 @@ fn report_kept() {
     }
 }
 
-fn run_browser(profile: PathBuf, url: &str, exercise: Exercise) -> Result<(), String> {
+/// Runs one suite in a fresh parent window; `budget` bounds it, since the audio suite needs
+/// longer than `DEADLINE`.
+fn run_browser(
+    profile: PathBuf,
+    url: &str,
+    exercise: Exercise,
+    budget: Duration,
+) -> Result<(), String> {
     let parent = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -269,7 +312,7 @@ fn run_browser(profile: PathBuf, url: &str, exercise: Exercise) -> Result<(), St
         Ok(started) => started,
         Err(error) => return combine(Err(error.to_string()), destroy_parent(parent)),
     };
-    let deadline = Instant::now() + DEADLINE;
+    let deadline = Instant::now() + budget;
     let result = exercise(&host, &mut events, parent, url, deadline);
     let shutdown = shutdown(host, &mut events, Instant::now() + Duration::from_secs(10));
     // A failed shutdown must not explicitly destroy the parent beneath a running browser worker.
@@ -515,9 +558,7 @@ fn next_event(
 ) -> Result<BrowserEvent, String> {
     loop {
         if Instant::now() >= deadline {
-            return Err(
-                "Synthetic native event deadline expired; close delivery is not proven.".into(),
-            );
+            return Err(EVENT_DEADLINE.into());
         }
         let mut message = MSG::default();
         for _ in 0..256 {
@@ -657,11 +698,16 @@ fn respond(mut stream: TcpStream, stall: &mut Option<Duration>) -> Result<(), St
             Err(error) => return Err(io_error("read synthetic request", error)),
         }
     }
+    if let Some(name) = downloads::file(&request[..length]) {
+        return downloads::send_file(&mut stream, name);
+    }
     let suite_page = popups::response(&request[..length])
         .or_else(|| permissions::response(&request[..length]))
         .or_else(|| essentials::response(&request[..length]))
+        .or_else(|| downloads::response(&request[..length]))
         .or_else(|| security::response(&request[..length]))
-        .or_else(|| suspension::response(&request[..length]));
+        .or_else(|| suspension::response(&request[..length]))
+        .or_else(|| audio::response(&request[..length]));
     let page = suite_page.unwrap_or(PAGE);
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",

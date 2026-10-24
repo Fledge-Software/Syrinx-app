@@ -6,6 +6,7 @@ mod address_entry;
 mod bookmark_import;
 mod commands;
 mod destinations;
+mod downloads;
 mod page_text;
 mod tabs;
 pub mod usage;
@@ -36,6 +37,10 @@ pub use commands::{
 pub use destinations::{
     BuiltInPlugin, Destination, DestinationEdit, DestinationError, DestinationSurface,
     DestinationTarget, MAX_DESTINATIONS, MAX_LABEL_CHARS, QuickDestinations,
+};
+pub use downloads::{
+    BlockReason, Download, DownloadControl, DownloadInterruption, DownloadList, DownloadState,
+    MAX_DOWNLOADS, format_size,
 };
 
 pub use tabs::{

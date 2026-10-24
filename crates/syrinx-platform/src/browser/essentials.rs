@@ -4,8 +4,7 @@ use std::{cell::Cell, rc::Rc};
 
 use webview2_com::{
     FindStartCompletedHandler, IsDefaultDownloadDialogOpenChangedEventHandler,
-    IsDocumentPlayingAudioChangedEventHandler, IsMutedChangedEventHandler,
-    Microsoft::Web::WebView2::Win32::*, ZoomFactorChangedEventHandler,
+    IsMutedChangedEventHandler, Microsoft::Web::WebView2::Win32::*, ZoomFactorChangedEventHandler,
 };
 use windows::{
     Win32::Foundation::E_POINTER,
@@ -31,6 +30,9 @@ pub enum PageAction {
     ZoomReset,
     /// Restores a site's remembered level (#90); clamped to WebView2's 25% to 500%.
     SetZoom(f64),
+    /// Points the profile's downloads at a synthetic folder. Only the native fixture sends
+    /// this; Syrinx itself never changes where WebView2 saves files.
+    SetDownloadFolder(std::path::PathBuf),
 }
 
 pub(super) struct Essentials {
@@ -49,8 +51,8 @@ impl Essentials {
         emit_zoom(&view.controller(), id, &events).map_err(|_| BrowserError::PageControl)?;
         register_downloads(view, id, events.clone())
             .map_err(|_| BrowserError::EventRegistration)?;
-        // A runtime without the audio events still opens the page; only its audible state is lost.
-        if register_audio(view, id, events.clone()).is_err() {
+        // A runtime without the mute event still opens the page; only mute changes are lost.
+        if register_mute(view, id, events.clone()).is_err() {
             events.emit(BrowserEvent::Error {
                 tab: Some(id),
                 error: BrowserError::EventRegistration,
@@ -85,6 +87,10 @@ impl Essentials {
                 PageAction::CloseDownloads => {
                     core.cast::<ICoreWebView2_9>()?.CloseDefaultDownloadDialog()
                 }
+                PageAction::SetDownloadFolder(folder) => core
+                    .cast::<ICoreWebView2_13>()?
+                    .Profile()?
+                    .SetDefaultDownloadFolderPath(&HSTRING::from(folder.as_os_str())),
                 PageAction::Print => core
                     .cast::<ICoreWebView2_16>()?
                     .ShowPrintUI(COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER),
@@ -195,23 +201,16 @@ fn emit_zoom(
     Ok(())
 }
 
-/// Reports mute and audible changes as one event, read back from the page each time.
-fn register_audio(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
+/// Reports mute changes as `AudioChanged`, read back from the page each time. Audible changes
+/// reach the same event from the lifecycle's one `IsDocumentPlayingAudioChanged` handler.
+fn register_mute(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
     let core: ICoreWebView2_8 = view.webview().cast()?;
-    let muted_events = events.clone();
     let muted = IsMutedChangedEventHandler::create(Box::new(move |core, _| {
-        report_audio(core, id, &muted_events)
-    }));
-    let playing = IsDocumentPlayingAudioChangedEventHandler::create(Box::new(move |core, _| {
         report_audio(core, id, &events)
     }));
-    // The handlers live as long as the controller, so their tokens are never removed.
-    let mut muted_token = 0;
-    let mut playing_token = 0;
-    unsafe {
-        core.add_IsMutedChanged(&muted, &mut muted_token)?;
-        core.add_IsDocumentPlayingAudioChanged(&playing, &mut playing_token)
-    }
+    // The handler lives as long as the controller, so its token is never removed.
+    let mut token = 0;
+    unsafe { core.add_IsMutedChanged(&muted, &mut token) }
 }
 
 /// Emits the page's audio state, or a tab error when it cannot be read.

@@ -117,8 +117,75 @@ home and settings, history, clear data, restore after restart).
 - **P1-40 (closes Plan 1):** a week with Syrinx as your default browser,
   after P1-39d and AN-02, with the D6 memory and start-up evidence.
   Install and register with the setup program first (`docs/installing.md`).
+- **#130 (background playback):** with your own accounts, play a YouTube
+  video and a Hulu episode in a background tab for several minutes each,
+  through an ad break; the sound must never stop. Then pause one, wait two
+  minutes and switch back: the page must still be there, paused where you
+  left it (a sleeping tab wakes when shown; nothing in the window marks the
+  sleep itself). The native audio suite proves the timing; run it on a
+  quiet machine:
+  `cargo run --offline --locked --profile local --package syrinx-platform --example page_close -- --audio-only`.
+  It plays a faint 30 Hz tone for about 20 seconds (most speakers cannot
+  reproduce it) and must print that the tone page stayed awake while hidden
+  and then slept about a minute after the tone stopped. Record pass or fail
+  and the printed seconds in #130.
 
-### 7. Housekeeping when convenient
+### 7. Downloads and see-through themes (PR #145: #143, #151)
+
+After PR #145 merges and `cargo xtask check` passes on this machine. Record
+each as pass or fail, with the line the fixture prints where one is named,
+in #143 (downloads) or #151 (themes); record the two verdicts in
+`docs/decisions.md` too.
+
+1. **The downloads fixture.** Run
+   `cargo run --package syrinx-platform --example page_close --profile local --offline --locked -- --downloads-only`
+   and read four results:
+   - WebView2's own download dialog never opened.
+   - The self-closing popup's download completed, and the popup then
+     closed.
+   - Case 4's line, "Closing a popup's web view mid-download kept the
+     download" or "... stopped the download". It decides whether a popup
+     stays open until its download ends (`docs/decisions.md`, 2026-10-24,
+     entry (2)): record which.
+   - Case 6's final state and reason for `synthetic-tool.exe`, which shows
+     what SmartScreen does while the dialog is hidden.
+2. **A real Drive download, signed in yourself.** One list only, with
+   progress and then "Done"; then pause, resume and cancel a large
+   download. While a popup's download runs, switch to another tab for more
+   than ten seconds and check the download keeps progressing (a hidden
+   popup is suspended about five seconds after its navigation settles, and
+   nobody yet knows whether a suspended web view keeps downloading).
+3. **A same-tab download link** on any ordinary site: the status line says
+   "Downloading <name>." and never "The page could not be loaded. Try
+   reloading.", and Settings › Usage report counts no navigation failure for
+   it. If either appears, the download navigation is being counted as a
+   failed page load; report it on #143.
+4. **Close a downloading popup with Ctrl W**, then let the download finish:
+   nothing else happens (no tab closes, no message).
+5. **A flyout under a screen reader.** With the P1-36 UI Automation probe
+   or NVDA attached, open the Downloads flyout with two downloads listed:
+   the `local` build does not panic, and each row's buttons are read with
+   their labels.
+6. **An Acrylic theme over a bright window.** Make a theme with Acrylic,
+   Dark, 90 % and Home See-through, with a bright window behind Syrinx: the
+   title bar, sidebar and Home show that window frosted, web pages stay
+   solid, and the selected tab's title and Home's text are readable. Switch
+   to Light: the frost turns light and Home stays readable.
+7. **The dark-Acrylic surface floor.** Under dark Acrylic above about 60 %,
+   the selected row, fields, the search pill and the Solid Home card keep a
+   0.343 backing (`DARK_ACRYLIC_SURFACE_FLOOR`). Accept it or say what to
+   change.
+8. **The presets.** A saved Haze still shows Home Solid at its canvas card
+   tone, and Glass at 50 % looks close enough to the canvas.
+9. **The flyout while its rows change.** With it open, start a second
+   download and let one finish: each change reopens the flyout at the same
+   corner, because its window is sized to its rows. Say whether that flicker
+   is acceptable or should become an in-place resize. Also check that it
+   hangs under the Downloads button at a narrow and a wide window, since its
+   corner is computed from the title bar's layout rather than read from the
+   button.
+
+### 8. Housekeeping when convenient
 
 - Before making the repository public: the pre-publication checklist in
   `docs/releasing.md`.

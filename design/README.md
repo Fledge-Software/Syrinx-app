@@ -84,6 +84,11 @@ them again requires the owner's approval.
   colours only identify a plugin.
 - **The palette always offers "Search the web" (Alt Enter)**, because it is
   also the address bar.
+- **Each installed plugin's feeds get their own palette scope chip** (owner,
+  2026-10-21, research note 10's decision 8), for example "Notes", shown only
+  while that plugin is installed, in addition to Everything (where its
+  results also appear) and the spec's other chips. Where the plugin chips
+  sit in the row is not decided yet; #141 builds them.
 - **Tab moves between form fields** in an inline palette action. "Create and
   open" is Ctrl Enter. This replaces the spec's "Tab for more fields".
 - **The chrome uses the operating system's UI font** (Segoe UI Variable on
@@ -130,6 +135,32 @@ design.
   became one "Zoom" row carrying the same stepper, so zooming does not close
   the menu; Left and Right step it from the keyboard. "Reset zoom" (Ctrl 0)
   stays as its own row. The row follows the existing menu-row style.
+- **Downloads flyout (#143, #89).** ↓, Ctrl J, the ☰ menu's Downloads row and
+  the palette open Syrinx's own list instead of WebView2's per-page dialog, so
+  it opens from any tab, Home included, and keeps a download whose popup has
+  closed. It is the drop-down menu's card and rows at 380px wide, hanging
+  from the title bar's right corner like the ☰ menu, and ↓ closes it again.
+  Each row shows the file name, truncated, with its status dimmed on the
+  right ("1.5 of 4.0 MB", "Done, 4.0 MB", "Blocked: unsafe file") and,
+  while it can act, small round Pause, Resume and Cancel glyph buttons in the
+  zoom stepper's style (Enter or Space presses the first, Delete cancels); up
+  to eight rows, newest first, then "Clear finished downloads". A file
+  SmartScreen blocks shows as blocked with its reason and offers no button:
+  Syrinx never keeps a blocked file. Rows do not open the file or its folder
+  yet. The list lives in memory for the session only, and WebView2's own
+  download flyout no longer appears (owner, 2026-10-24). The canvas has no
+  board for it; adding one is the owner's.
+- **The compact sidebar's close badge (#128).** In the favicon-only sidebar
+  an open tab's row shows a 16 px round ⓧ on its icon's top-right corner,
+  inside the row's 30 px square, while the pointer is over the row or the
+  row shows its focus ring. It is a × in the icon colour on the sidebar
+  ground with the usual 1 px line, and darkens like an icon button when
+  hovered. On an ordinary tab it closes the tab; on a saved page that is open
+  it unloads the page and the saved row stays, as the wide row's × does. An
+  unopened saved page and a folder get none. Clicking the icon beside it
+  still selects the tab. Firefox's vertical tabs are the reference. Open for
+  the owner: whether the active row shows it without hover or focus, and
+  how it reads over a real favicon once favicons land.
 
 ## Forge
 
@@ -171,6 +202,17 @@ transparency, glass edges, grain) and saves them by name. The table and
 rules below describe the five palettes as first designed. Its see-through
 rules (opaque pages, near-opaque palette, Reduce transparency, measuring
 Acrylic) still hold for custom themes.
+
+**Transparency, decided by the owner on 2026-10-22** (`docs/decisions.md`):
+with Acrylic, a see-through theme shows the windows behind Syrinx, frosted.
+The Transparency slider (0–90 %) lowers Syrinx's own tint until, at 90 %,
+only Windows' material is drawn; a dark theme under Acrylic keeps a tint of
+about 12.5 % (32/255, owner decision 2026-10-24) so white text stays at
+4.5:1 over a bright desktop. The backdrop is light or dark as the theme
+is. The window background, title bar and sidebar follow the slider, and
+Home's card does too when the theme's Home choice is See-through. Web pages,
+the command palette, menus and the Customize panel stay opaque. There is no
+"Clear" (unblurred) material, and the page itself is never see-through.
 
 The base palette is the ground, surfaces and text; the accent is chosen
 separately and sits on top of any of them. All five ship, and all five are
