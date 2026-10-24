@@ -51,12 +51,13 @@ fn newest_generation(requests: &[DeletionRequest]) -> Option<u64> {
     requests.iter().map(|request| request.generation()).max()
 }
 
-/// Clears every journal request newer than `recorded_generation` from a guarded staged copy.
+/// Clears every journal request newer than `recorded_generation`, of each category the copy's
+/// schema holds, from a guarded staged copy.
 ///
 /// `recorded_generation` comes from the backup's completion record and must match the copy's
 /// own state. A copy older than schema 5 cannot record its generation; the live startup
 /// reconcile then replays the journal again, which deletes nothing twice.
-pub fn replay_history_deletions(
+pub fn replay_deletions(
     lease: &dyn DirectoryLease,
     log: &DeletionLog,
     recorded_generation: u64,
@@ -115,11 +116,24 @@ fn replay_open(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| database_error(StoreOperation::BeginWrite, error))?;
-    let result = history::delete_ranges(&transaction, requests).and_then(|_visits| {
-        if !generation.has_deletion_state() {
-            return Ok(());
-        }
-        history::record_generation(&transaction, log.last_generation())
-    });
+    let result = replay_requests(&transaction, generation, requests, log.last_generation());
     finish_transaction(transaction, result)
+}
+
+/// Each participant the copy's schema holds takes its own category; a copy that records its
+/// generation then notes the journal's newest, so nothing replays twice once it is live.
+fn replay_requests(
+    connection: &Connection,
+    generation: schema::SchemaGeneration,
+    requests: &[DeletionRequest],
+    last_generation: u64,
+) -> Result<(), StoreError> {
+    history::delete_ranges(connection, requests)?;
+    if generation.has_site_zoom() {
+        site_zoom::delete_ranges(connection, requests)?;
+    }
+    if !generation.has_deletion_state() {
+        return Ok(());
+    }
+    history::record_generation(connection, last_generation)
 }

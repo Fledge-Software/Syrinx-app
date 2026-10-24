@@ -24,5 +24,5 @@ pub use location::{
 };
 pub use permissions::{PermissionKind, RememberedPermission};
 pub use preferences::{MAX_SETTING_KEY_BYTES, MAX_SETTING_VALUE_BYTES, StoredPreferences};
-pub use replay::{AppliedDeletions, replay_history_deletions};
+pub use replay::{AppliedDeletions, replay_deletions};
 pub use site_zoom::{MAX_SITE_ZOOM, MIN_SITE_ZOOM, is_default_zoom};

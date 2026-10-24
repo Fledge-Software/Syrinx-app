@@ -9,8 +9,8 @@ use rusqlite_migration::{M, Migrations};
 use super::{TestDirectory, close, fixture};
 use crate::deletion::{DeletionCategory, DeletionError, DeletionLog, DeletionRange};
 use crate::{
-    EncodingField, HistoryVisit, Store, StoreError, StoreOperation, records,
-    replay_history_deletions, schema,
+    EncodingField, HistoryVisit, Store, StoreError, StoreOperation, records, replay_deletions,
+    schema,
 };
 
 const FIRST: &str = "https://history-first.example.test/";
@@ -452,7 +452,8 @@ fn completed_clear(log: &mut DeletionLog, start: i64, end: i64) {
         .expect("completion recorded");
 }
 
-fn no_sidecars(directory: &TestDirectory) -> bool {
+/// Whether a staged replay left the copy as a single database file, as a recovery bundle needs.
+pub(super) fn no_sidecars(directory: &TestDirectory) -> bool {
     ["syrinx.db-wal", "syrinx.db-shm", "syrinx.db-journal"]
         .iter()
         .all(|name| !directory.path.join(name).exists())
@@ -474,7 +475,7 @@ fn staged_replay_clears_an_older_copy_records_its_generation_and_leaves_no_sidec
     let mut log = DeletionLog::default();
     completed_clear(&mut log, 150, 250);
     completed_clear(&mut log, 290, 310);
-    replay_history_deletions(staged.lease().as_ref(), &log, 0).expect("staged replay applies");
+    replay_deletions(staged.lease().as_ref(), &log, 0).expect("staged replay applies");
     assert!(no_sidecars(&staged));
 
     let restored = Store::open(staged.lease()).expect("replayed copy opens");
@@ -488,15 +489,15 @@ fn staged_replay_clears_an_older_copy_records_its_generation_and_leaves_no_sidec
     // A completion record that disagrees with the copy, or a journal missing its generation,
     // refuses the copy rather than guessing.
     assert_eq!(
-        replay_history_deletions(staged.lease().as_ref(), &log, 0),
+        replay_deletions(staged.lease().as_ref(), &log, 0),
         Err(StoreError::DeletionGenerationMismatch)
     );
     assert_eq!(
-        replay_history_deletions(staged.lease().as_ref(), &DeletionLog::default(), 2),
+        replay_deletions(staged.lease().as_ref(), &DeletionLog::default(), 2),
         Err(StoreError::Deletion(DeletionError::MissingGeneration))
     );
     // A copy that already has every clear is left as it was.
-    replay_history_deletions(staged.lease().as_ref(), &log, 2).expect("nothing to replay");
+    replay_deletions(staged.lease().as_ref(), &log, 2).expect("nothing to replay");
     live.cleanup();
     staged.cleanup();
 }
@@ -520,10 +521,10 @@ fn staged_replay_clears_version_4_history_without_changing_its_schema() {
     completed_clear(&mut log, 15, 25);
     // A version 4 copy predates generation records, so its completion record says zero.
     assert_eq!(
-        replay_history_deletions(directory.lease().as_ref(), &log, 1),
+        replay_deletions(directory.lease().as_ref(), &log, 1),
         Err(StoreError::DeletionGenerationMismatch)
     );
-    replay_history_deletions(directory.lease().as_ref(), &log, 0).expect("version 4 replay");
+    replay_deletions(directory.lease().as_ref(), &log, 0).expect("version 4 replay");
     assert!(no_sidecars(&directory));
     let connection = directory.connection();
     assert_eq!(user_version(&connection), 4);

@@ -2,15 +2,17 @@
 //! their journaled clears (#121).
 
 use std::collections::BTreeMap;
+use std::fs;
 
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
+use super::history::no_sidecars;
 use super::{TestDirectory, close, fixture};
 use crate::deletion::{DeletionCategory, DeletionLog, DeletionRange, DeletionRequest};
 use crate::{
     EncodingField, HistoryDeletion, PermissionKind, Store, StoreError, StoreOperation, records,
-    schema,
+    replay_deletions, schema,
 };
 
 fn user_version(connection: &Connection) -> i64 {
@@ -459,5 +461,84 @@ fn a_negative_change_time_is_refused() {
         Err(StoreError::InvalidEncoding(EncodingField::SiteZoom))
     );
     store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn cleared_zoom_levels_stay_cleared_when_an_older_copy_is_restored_and_replayed() {
+    let live = TestDirectory::new();
+    let older = TestDirectory::new();
+    store_with_dated_levels(&live)
+        .shutdown()
+        .expect("live store closes");
+    // A closed database file stands in for the older daily snapshot.
+    fs::copy(live.database_path(), older.database_path()).expect("copy synthetic recovery point");
+
+    // The live clear is requested, applied, then completed (D47's journal order).
+    let mut log = DeletionLog::default();
+    let pending = requested(&mut log, DeletionCategory::SiteZoom, 5_000, 9_000);
+    let store = Store::open(live.lease()).expect("live store reopens");
+    store
+        .apply_deletions(&[pending])
+        .expect("live zoom clear applies");
+    completed(&mut log);
+    let remaining = store.site_zooms().expect("remaining levels");
+    assert_eq!(
+        remaining,
+        zoomed(&[("old.example.test", 1.25), ("recent.example.test", 0.75)])
+    );
+    store.shutdown().expect("live store closes");
+
+    // The older copy still holds the cleared level until the journal replays onto it.
+    let copy = older.connection();
+    assert_eq!(
+        crate::site_zoom::load(&copy).expect("older levels").len(),
+        3
+    );
+    close(copy);
+    replay_deletions(older.lease().as_ref(), &log, 0).expect("staged replay applies");
+    assert!(no_sidecars(&older));
+    let restored = Store::open(older.lease()).expect("replayed copy opens");
+    assert_eq!(restored.site_zooms(), Ok(remaining));
+    assert_eq!(restored.deletion_generation(), Ok(1));
+    restored.shutdown().expect("replayed copy closes");
+    live.cleanup();
+    older.cleanup();
+}
+
+#[test]
+fn staged_replay_skips_zoom_on_a_version_6_copy_and_leaves_its_schema_at_6() {
+    let directory = TestDirectory::new();
+    close(permissions_database(&directory));
+    let mut log = DeletionLog::default();
+    requested(&mut log, DeletionCategory::SiteZoom, 0, i64::MAX);
+    completed(&mut log);
+
+    // A version 6 copy has no zoom table, so the clear is recorded without touching one.
+    replay_deletions(directory.lease().as_ref(), &log, 0).expect("version 6 replay");
+    assert!(no_sidecars(&directory));
+    let connection = directory.connection();
+    assert_eq!(user_version(&connection), 6);
+    assert!(!object_exists(&connection, "site_zoom"));
+    let applied: i64 = connection
+        .query_row(
+            "SELECT applied_generation FROM history_deletion_state",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read synthetic generation");
+    assert_eq!(applied, 1);
+    close(connection);
+
+    // Opening upgrades it to version 7 with no zoom rows and nothing left to replay.
+    let store = Store::open(directory.lease()).expect("version 6 copy upgrades");
+    assert_eq!(store.deletion_generation(), Ok(1));
+    assert_eq!(store.site_zooms(), Ok(BTreeMap::new()));
+    assert!(
+        log.unapplied(1)
+            .expect("journal covers the copy")
+            .is_empty()
+    );
+    store.shutdown().expect("store closes");
     directory.cleanup();
 }
