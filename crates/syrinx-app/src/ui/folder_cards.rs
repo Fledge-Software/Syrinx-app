@@ -110,11 +110,7 @@ impl BrowserView {
             .saved_pages
             .iter()
             .find(|saved| saved.id == page.id)?;
-        let title = if saved.metadata.title.is_empty() {
-            &saved.metadata.address
-        } else {
-            &saved.metadata.title
-        };
+        let title = saved.display_title();
         let delete = form_button("saved-delete", "Delete", &palette, true)
             .on_click(cx.listener(|this, _, _, cx| this.delete_saved_page(cx)));
         Some(

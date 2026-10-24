@@ -544,13 +544,16 @@ you found it in the commit message, not here.
 
 ## Local search
 
-- **Tantivy prefix matches can produce empty native snippets.** In 0.26.2,
-  `PhrasePrefixQuery::query_terms` omits the suffix term used for prefix
-  matching. `SnippetGenerator::create` therefore cannot highlight that
+- **Tantivy prefix matches can produce empty native snippets.** In 0.26.2 and
+  0.27.0 (whose `phrase_prefix_query.rs` and `SnippetGenerator::create` are
+  identical), `PhrasePrefixQuery::query_terms` omits the suffix term used
+  for prefix matching. `SnippetGenerator::create` therefore cannot highlight that
   expansion by itself. P1-23 expands the body terms inside the query timer
   and rejects empty snippets for its matching body queries; otherwise the
   timing would compare different amounts of work. Source:
-  [`docs/p1-23-fulltext-bakeoff.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-23-fulltext-bakeoff.md), continuation method and focused tests.
+  [`docs/p1-23-fulltext-bakeoff.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-23-fulltext-bakeoff.md),
+  continuation method and focused tests; the 0.27.0 recheck is a source
+  comparison, recorded in `docs/dev/fulltext-audit.md`.
 - **Tantivy deletion alone retains stored bodies in active segments.** D40
   needs segment merging and successful garbage collection after releasing
   old readers, including when only one segment has deletions. P1-23 scans
