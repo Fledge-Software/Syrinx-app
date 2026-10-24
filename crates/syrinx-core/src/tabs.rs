@@ -133,8 +133,8 @@ impl TabMetadata {
         self.syrinx_title(origin).is_some()
     }
 
-    /// The one name the sidebar shows for an open tab: Syrinx's name for its own pages,
-    /// otherwise the title, or the address when the page has no title.
+    /// The one name the sidebar shows for an open tab or saved page: Syrinx's name for its own
+    /// pages, otherwise the title, or the address when the page has no title.
     pub fn display_title(&self, origin: PageOrigin) -> String {
         if let Some(name) = self.syrinx_title(origin) {
             return name.to_owned();
@@ -557,6 +557,68 @@ impl TabModel {
             self.remember_closed(&tab, ordinary_position);
         }
         Ok(tab)
+    }
+
+    /// Opens a selected copy of a web tab right after it; a saved page's copy is unsaved and
+    /// starts the ordinary tabs.
+    pub fn duplicate(&mut self, id: TabId) -> Result<TabId, TabError> {
+        // Validate the source before opening anything, so a refusal changes nothing.
+        let index = self.index_of(id)?;
+        let source = &self.tabs[index];
+        if source.kind != TabKind::Web {
+            return Err(TabError::NotWebTab(id));
+        }
+        let position = match source.saved_page_id {
+            Some(_) => 0,
+            None => index - self.saved_tab_count() + 1,
+        };
+        let metadata = source.metadata.clone();
+
+        // The copy is appended, so its final position always lies inside the ordinary group.
+        let copy = self.open(TabKind::Web, metadata, Activation::Foreground)?;
+        self.move_ordinary(copy, position)?;
+        Ok(copy)
+    }
+
+    /// Closes every ordinary tab except `keep`, sparing open saved pages. `keep` is selected
+    /// only when something closed; a no-op leaves the selection alone.
+    pub fn close_others(&mut self, keep: TabId) -> Result<Vec<Tab>, TabError> {
+        self.index_of(keep)?;
+        let targets = self.ordinary_ids_from(0, keep);
+        self.close_many(keep, &targets)
+    }
+
+    /// Closes the ordinary tabs after `id`, sparing open saved pages. `id` is selected only
+    /// when something closed; a no-op leaves the selection alone.
+    pub fn close_below(&mut self, id: TabId) -> Result<Vec<Tab>, TabError> {
+        let index = self.index_of(id)?;
+        let targets = self.ordinary_ids_from(index + 1, id);
+        self.close_many(id, &targets)
+    }
+
+    /// The ordinary tabs from position `start` on, other than `keep`, in display order.
+    fn ordinary_ids_from(&self, start: usize, keep: TabId) -> Vec<TabId> {
+        let start = start.max(self.saved_tab_count());
+        self.tabs[start..]
+            .iter()
+            .map(Tab::id)
+            .filter(|id| *id != keep)
+            .collect()
+    }
+
+    /// Closes `targets` bottom-up, so reopening restores them top-down in their old positions.
+    /// Returns the closed tabs in display order and selects `keep` if any closed. The callers
+    /// have validated `keep` and read `targets` from the model, so every close succeeds.
+    fn close_many(&mut self, keep: TabId, targets: &[TabId]) -> Result<Vec<Tab>, TabError> {
+        let mut closed = Vec::with_capacity(targets.len());
+        for id in targets.iter().rev() {
+            closed.push(self.close(*id)?);
+        }
+        closed.reverse();
+        if !closed.is_empty() {
+            self.active = Some(keep);
+        }
+        Ok(closed)
     }
 
     /// Selects a saved instance or restores the newest closed ordinary web snapshot.

@@ -511,6 +511,229 @@ fn removing_a_closed_saved_page_cannot_be_undone_by_tab_history() -> Result<(), 
     Ok(())
 }
 
+#[test]
+fn duplicate_places_a_selected_copy_right_after_its_source() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let first = open_web(&mut model, 1)?;
+    let second = open_web(&mut model, 2)?;
+    let third = open_web(&mut model, 3)?;
+    model.select(first)?;
+
+    let copy = model.duplicate(second)?;
+    assert_eq!(open_ids(&model), vec![first, second, copy, third]);
+    assert_eq!(model.active_id(), Some(copy));
+    assert_eq!(model.get(copy).map(Tab::metadata), Some(&metadata(2)));
+    assert_eq!(model.get(copy).and_then(Tab::saved_page_id), None);
+    assert_eq!(model.closed_count(), 0);
+
+    // A copy of the last tab lands at the end of the ordinary group.
+    let last_copy = model.duplicate(third)?;
+    assert_eq!(
+        open_ids(&model),
+        vec![first, second, copy, third, last_copy]
+    );
+    assert_open_invariants(&model);
+    Ok(())
+}
+
+#[test]
+fn a_saved_pages_copy_is_unsaved_and_starts_the_ordinary_tabs() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let ordinary = open_web(&mut model, 1)?;
+    let live = open_web(&mut model, 2)?;
+    let saved = model.save_page(live)?;
+    model.update_metadata(live, metadata(3))?;
+
+    // The copy shows what the live tab shows now, not the saved destination.
+    let copy = model.duplicate(live)?;
+    assert_eq!(open_ids(&model), vec![live, copy, ordinary]);
+    assert_eq!(model.get(copy).and_then(Tab::saved_page_id), None);
+    assert_eq!(model.get(copy).map(Tab::metadata), Some(&metadata(3)));
+    assert_eq!(model.active_id(), Some(copy));
+    assert_eq!(model.saved_pages().len(), 1);
+    assert_eq!(
+        rows(&model),
+        vec![
+            RowIdentity::Saved(saved, Some(live)),
+            RowIdentity::Ordinary(copy),
+            RowIdentity::Ordinary(ordinary),
+        ]
+    );
+    assert_open_invariants(&model);
+    Ok(())
+}
+
+#[test]
+fn duplicating_an_unknown_or_non_web_tab_leaves_the_model_unchanged() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let web = open_web(&mut model, 1)?;
+    let closed = open_web(&mut model, 2)?;
+    model.close(closed)?;
+    model.select(web)?;
+    for kind in [
+        TabKind::PluginView,
+        TabKind::Note,
+        TabKind::File,
+        TabKind::Diff,
+        TabKind::Terminal,
+    ] {
+        let id = model.open(kind, metadata(3), Activation::Background)?;
+        let before = snapshot(&model);
+        assert_eq!(model.duplicate(id), Err(TabError::NotWebTab(id)));
+        assert_eq!(snapshot(&model), before);
+    }
+    let before = snapshot(&model);
+    assert_eq!(model.duplicate(closed), Err(TabError::UnknownTab(closed)));
+    assert_eq!(snapshot(&model), before);
+    assert_open_invariants(&model);
+    Ok(())
+}
+
+#[test]
+fn close_others_keeps_the_chosen_tab_and_open_saved_pages() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let saved_live = open_web(&mut model, 1)?;
+    let saved = model.save_page(saved_live)?;
+    let first = open_web(&mut model, 2)?;
+    let keep = open_web(&mut model, 3)?;
+    let last = open_web(&mut model, 4)?;
+    let note = model.open(TabKind::Note, metadata(5), Activation::Background)?;
+
+    let closed: Vec<_> = model.close_others(keep)?.iter().map(Tab::id).collect();
+    assert_eq!(closed, vec![first, last, note]);
+    assert_eq!(open_ids(&model), vec![saved_live, keep]);
+    assert_eq!(model.active_id(), Some(keep));
+    assert_eq!(rows(&model)[0], RowIdentity::Saved(saved, Some(saved_live)));
+    // Only web tabs enter history, as with a single close.
+    assert_eq!(model.closed_count(), 2);
+
+    // Keeping a saved page closes every ordinary tab and selects the saved page.
+    let other = open_web(&mut model, 6)?;
+    let closed: Vec<_> = model
+        .close_others(saved_live)?
+        .iter()
+        .map(Tab::id)
+        .collect();
+    assert_eq!(closed, vec![keep, other]);
+    assert_eq!(open_ids(&model), vec![saved_live]);
+    assert_eq!(model.active_id(), Some(saved_live));
+    assert_open_invariants(&model);
+    Ok(())
+}
+
+#[test]
+fn close_below_closes_only_later_ordinary_tabs() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let saved_first = open_web(&mut model, 1)?;
+    let saved_second = open_web(&mut model, 2)?;
+    model.save_page(saved_first)?;
+    model.save_page(saved_second)?;
+    let above = open_web(&mut model, 3)?;
+    let keep = open_web(&mut model, 4)?;
+    let below = open_web(&mut model, 5)?;
+    let lowest = open_web(&mut model, 6)?;
+    model.select(above)?;
+
+    let closed: Vec<_> = model.close_below(keep)?.iter().map(Tab::id).collect();
+    assert_eq!(closed, vec![below, lowest]);
+    assert_eq!(
+        open_ids(&model),
+        vec![saved_first, saved_second, above, keep]
+    );
+    assert_eq!(model.active_id(), Some(keep));
+
+    // Below the last tab there is nothing to close, and nothing changes.
+    let before = snapshot(&model);
+    assert!(model.close_below(keep)?.is_empty());
+    assert_eq!(snapshot(&model), before);
+
+    // Below a saved page, the later saved page stays and every ordinary tab closes.
+    let closed: Vec<_> = model
+        .close_below(saved_first)?
+        .iter()
+        .map(Tab::id)
+        .collect();
+    assert_eq!(closed, vec![above, keep]);
+    assert_eq!(open_ids(&model), vec![saved_first, saved_second]);
+    assert_eq!(model.active_id(), Some(saved_first));
+    assert_open_invariants(&model);
+    Ok(())
+}
+
+#[test]
+fn bulk_closes_reject_unknown_tabs_without_changing_anything() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let first = open_web(&mut model, 1)?;
+    let stale = open_web(&mut model, 2)?;
+    open_web(&mut model, 3)?;
+    model.close(stale)?;
+    model.select(first)?;
+    let before = snapshot(&model);
+    assert_eq!(model.close_others(stale), Err(TabError::UnknownTab(stale)));
+    assert_eq!(snapshot(&model), before);
+    assert_eq!(model.close_below(stale), Err(TabError::UnknownTab(stale)));
+    assert_eq!(snapshot(&model), before);
+    Ok(())
+}
+
+#[test]
+fn reopen_after_a_bulk_close_restores_the_newest_first_in_old_positions() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let ids = (0..6)
+        .map(|number| open_web(&mut model, number))
+        .collect::<Result<Vec<_>, _>>()?;
+    model.close_others(ids[2])?;
+    assert_eq!(open_ids(&model), vec![ids[2]]);
+
+    // Closing bottom-up makes the topmost closed tab the newest closure.
+    for number in [0, 1, 3, 4, 5] {
+        let reopened = model.reopen_closed()?.expect("a bulk closure remains");
+        assert_eq!(
+            model.get(reopened).map(Tab::metadata),
+            Some(&metadata(number))
+        );
+        assert_eq!(model.active_id(), Some(reopened));
+    }
+    let restored: Vec<_> = model
+        .tabs()
+        .iter()
+        .map(|tab| tab.metadata().clone())
+        .collect();
+    assert_eq!(restored, (0..6).map(metadata).collect::<Vec<_>>());
+    assert_eq!(model.reopen_closed()?, None);
+    assert_open_invariants(&model);
+    Ok(())
+}
+
+#[test]
+fn a_bulk_close_of_more_than_twenty_tabs_keeps_the_newest_twenty() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let keep = open_web(&mut model, 0)?;
+    for number in 1..=25 {
+        open_web(&mut model, number)?;
+    }
+    assert_eq!(model.close_below(keep)?.len(), 25);
+    assert_eq!(model.closed_count(), 20);
+
+    // Pages 25 to 21 closed first and were evicted; pages 1 to 20 return in order.
+    for number in 1..=20 {
+        let reopened = model.reopen_closed()?.expect("twenty closures remain");
+        assert_eq!(
+            model.get(reopened).map(Tab::metadata),
+            Some(&metadata(number))
+        );
+    }
+    assert_eq!(model.reopen_closed()?, None);
+    let restored: Vec<_> = model
+        .tabs()
+        .iter()
+        .map(|tab| tab.metadata().clone())
+        .collect();
+    assert_eq!(restored, (0..=20).map(metadata).collect::<Vec<_>>());
+    assert_open_invariants(&model);
+    Ok(())
+}
+
 fn assert_stale_tab_is_rejected(model: &mut TabModel, stale: TabId) {
     let before = snapshot(model);
     assert_eq!(model.select(stale), Err(TabError::UnknownTab(stale)));
@@ -528,6 +751,12 @@ fn assert_stale_tab_is_rejected(model: &mut TabModel, stale: TabId) {
         model.move_ordinary(stale, 0),
         Err(TabError::UnknownTab(stale))
     );
+    assert_eq!(snapshot(model), before);
+    assert_eq!(model.duplicate(stale), Err(TabError::UnknownTab(stale)));
+    assert_eq!(snapshot(model), before);
+    assert_eq!(model.close_others(stale), Err(TabError::UnknownTab(stale)));
+    assert_eq!(snapshot(model), before);
+    assert_eq!(model.close_below(stale), Err(TabError::UnknownTab(stale)));
     assert_eq!(snapshot(model), before);
 }
 
@@ -637,7 +866,7 @@ fn exercise_transition(model: &mut TabModel, step: usize) -> Result<(), TabError
         .map(|page| page.id());
 
     // Interleave lifecycle, navigation, saved-row and ordering operations deterministically.
-    match step % 12 {
+    match step % 14 {
         0 | 1 => {
             open_web(model, step)?;
         }
@@ -687,6 +916,16 @@ fn exercise_transition(model: &mut TabModel, step: usize) -> Result<(), TabError
         10 => {
             if let Some(id) = tab {
                 model.select(id)?;
+            }
+        }
+        11 => {
+            if let Some(id) = tab {
+                model.duplicate(id)?;
+            }
+        }
+        12 => {
+            if let Some(id) = tab {
+                model.close_below(id)?;
             }
         }
         _ => {
