@@ -605,8 +605,12 @@ you found it in the commit message, not here.
   clears, so the zoom clears lose their replay protection. Builds before
   schema 7 never get that far: `FutureSchema` refuses the database first.
   When adding a category, expect a downgrade to the previous preview to meet
-  that prompt and say so in the release notes; this build at least names an
-  unknown category as written by a newer Syrinx. Source:
+  that prompt, and warn of it in the merge commit's subject ("going back to
+  an older preview shows the clear-data repair prompt"): the weekly release
+  notes are `main`'s first-parent commit subjects and nothing else
+  (`.github/scripts/release-notes.sh`), so no other text reaches them. This
+  build names an unknown category as written by a newer Syrinx, in the
+  journal message and the repair prompt alike. Source:
   `crates/syrinx-store/src/deletion.rs`, `decode_record`, and
   `crates/syrinx-app/src/session/history_repair.rs`, `repairable`
   (code-confirmed, #121).
