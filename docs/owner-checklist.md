@@ -79,7 +79,9 @@ video under the palette, Alt Tab, a second monitor).
 ### 4. Screen reader and visual checks (P1-36 and its follow-ups)
 
 With NVDA installed and running, work through the thirteen checks in
-[`docs/p1-36-accessibility.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-36-accessibility.md), "Owner checks". The ones that keep rows open:
+[`docs/p1-36-accessibility.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-36-accessibility.md), "Owner checks". The ones that still wait on you, named by
+their items in Plan 1's old deferred-work register (`DW-n`, read at
+`af3de53`):
 
 - **Check 7 (DW-60):** Ctrl K, type, arrow through rows. NVDA should read
   each row once, as "n of m". Also try Shift Tab and decide owner question

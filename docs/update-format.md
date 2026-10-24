@@ -4,7 +4,9 @@ This is the reviewed format and key-handling design of Syrinx's update
 verifier (P1-38), and how the update slices built on it work: the
 latest-version statement (P1-39a), staging and rollback (P1-39b), "Check for
 updates" (P1-39c) and the update-record repairs (DW-66, DW-69). The approved
-delivery design they implement is `docs/update-delivery.md`.
+delivery design they implement is `docs/update-delivery.md`. A `DW-n` name
+is an item of Plan 1's old deferred-work register, read at `af3de53`; open
+deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Why this exists
 

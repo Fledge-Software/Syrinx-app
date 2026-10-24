@@ -8,7 +8,9 @@ pull request, and the Gate workflow runs the same gate on GitHub (see
 "Run and check"). Product commits still require the owner's request. The
 planning baseline is `2c80273`. The sections after "What the architecture
 check protects" also keep each early slice's dated gate record; those
-records describe the code as it was on their date.
+records describe the code as it was on their date. A `DW-n` name is an
+item of Plan 1's old deferred-work register, read at `af3de53`; open
+deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## What exists
 

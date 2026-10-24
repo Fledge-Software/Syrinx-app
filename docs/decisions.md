@@ -10,6 +10,13 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+A `DW-n` name in an older entry is an item of Plan 1's deferred-work
+register, read at
+[af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work).
+Since 2026-10-16 open deferred work is tracked by GitHub issue number
+instead (`docs/dev/deferred-work.md`); where an item became an issue, the
+entry names it.
+
 ## 2026-10-24
 
 - **Syrinx's full-text index uses Tantivy, not SQLite's FTS5 (#52).** The
@@ -746,7 +753,8 @@ folder names.
 ## 2026-10-14
 
 - **The weekly release workflow signs updates; the owner keeps no release
-  key on a device (P1-39d, DW-30; replaces the 2026-10-13 key arrangement).**
+  key on a device (P1-39d, DW-30, now #55; replaces the 2026-10-13 key
+  arrangement).**
   The 2026-10-13 approval had the owner create two offline keys, a primary on
   a hardware key and a backup stored separately. Walking through P1-39d, the
   owner declined to keep a key on any device, because a lost or destroyed
@@ -769,8 +777,9 @@ folder names.
   the secret's value. Building this is an agent slice that changes the
   release workflow; see DW-30 in the plan's ["Deferred work" register](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work).
 
-- **Sidebar rows get their own right-click menu (DW-63 follow-up).** When
-  choosing Ctrl W for DW-63 (recorded under 2026-10-15), the owner also
+- **Sidebar rows get their own right-click menu (DW-63 follow-up, now
+  #58).** When choosing Ctrl W for DW-63 (recorded under 2026-10-15), the
+  owner also
   asked for a per-row right-click menu holding Unload page and the row's
   other actions (Close tab, Remove saved page, Rename and Remove folder),
   each showing its key, so every row action is reachable by mouse as well
@@ -938,7 +947,8 @@ folder names.
   not start. After relaunching for an update, Syrinx does not force itself
   to the front. The owner creates two offline release keys, a primary on a
   hardware key and a backup stored separately, outside the repository and
-  outside every agent session; both public keys are pinned (DW-30), and a
+  outside every agent session; both public keys are pinned (DW-30, now
+  #55), and a
   separate statement-only key was deferred. `cargo xtask check-deps` changes
   only as question 8 lists: `syrinx-app` and `syrinx-update-net` may depend
   on the update verifier; `syrinx-update-net` may use the `windows` crate
@@ -947,7 +957,8 @@ folder names.
   `reqwest` with `rustls` was rejected to keep a TLS stack and `tokio` out
   of Syrinx's own crates. P1-39 is split into P1-39a to P1-39d as the
   proposal's slice table defines, with no other renumbering. The release
-  keys remain the owner's to create, so production updates wait on DW-30.
+  keys remain the owner's to create, so production updates wait on DW-30
+  (now #55).
 
 - **Syrinx is on GitHub at `Fledge-Software/Syrinx-app`.** The owner created
   the repository under the Fledge Software organisation and added it as

@@ -8,7 +8,9 @@ These traps come from research, the Phase 0 spikes and local implementation.
 Each names its source and how sure it is. Update a trap when new evidence
 confirms or disproves it. When a new trap costs you real time, add it in the same shape: one
 bullet, symptom first, then the fix, then the source. Put the story of how
-you found it in the commit message, not here.
+you found it in the commit message, not here. A `DW-n` name below is an
+item of Plan 1's old deferred-work register, read at `af3de53`; open
+deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Page tabs: WebView2 through wry
 
