@@ -58,8 +58,9 @@ entry names it.
     4.5:1 above about 60 %, so under dark Acrylic they keep at least a
     0.343 tint under them (`DARK_ACRYLIC_SURFACE_FLOOR`), the least at
     which white text on the selected row still reaches 4.5:1. This
-    surface floor awaits the owner's look on Windows. Text is now readable at every step for every material,
-    in both modes, with Home Solid or See-through; Mica, Mica Alt and
+    surface floor awaits the owner's look on Windows. Text is now
+    readable at every step for every material, in both modes, with Home
+    Solid or See-through; Mica, Mica Alt and
     light themes keep no window floor, and the Glass preset (50 %) and
     the Haze preset are unchanged. This replaces the implementation note
     below that a saved dark Acrylic theme was readable only up to 55 %.
@@ -229,11 +230,11 @@ entry names it.
   a 0.44 tint, close to the canvas's 0.46; its tint test
   `the_window_tint_thins_as_transparency_rises` is updated to the new
   mapping. This settles the three points the 2026-10-22 entry left for
-  #124's merge. Implementation note, not part of the owner's decision: #124 checks a
-  dark theme under Acrylic over Glass's bright wallpaper discs, where a
-  saved theme's text reached 4.5:1 only up to 55 % (the 10 % row floor
-  covers Mica, Mica Alt and light themes to 90 %); the dark-Acrylic floor
-  approved above has since made it readable to 90 %.
+  #124's merge. Implementation note, not part of the owner's decision:
+  #124 checks a dark theme under Acrylic over Glass's bright wallpaper
+  discs, where a saved theme's text reached 4.5:1 only up to 55 % (the
+  10 % row floor covers Mica, Mica Alt and light themes to 90 %); the
+  dark-Acrylic floor approved above has since made it readable to 90 %.
   Rejected: keeping #124's automatic thinning beside the Home choice, which
   would make one preset ignore the owner's per-theme setting.
 
@@ -1006,10 +1007,12 @@ entry names it.
   is crowded across developer tools. The syrinx is a bird's vocal organ,
   which fits beside Fledge. The owner holds the domain `syrinxapp.dev`.
   Code, crates, the data folder and Windows registration names still say
-  Syrinx until a dedicated rename slice changes them together. That slice
+  Atlas until a dedicated rename slice changes them together. That slice
   must also handle the data folder (`%LOCALAPPDATA%\Atlas\data`) before the
   owner's first real install (P1-37). New work should not spread the old
-  name further than it must.
+  name further than it must. *(Done since: the crates are `syrinx-*`, and
+  the installed app's data folder is `%LOCALAPPDATA%\Syrinx\data`, as the
+  2026-10-14 setup-program entry names it.)*
 - **Finished work merges to main; slices are built in local worktrees.**
   This replaces D41's routing through the integration branch
   `codex/integrated-browser-preview`, which left main at P1-04 while
@@ -1126,6 +1129,8 @@ entry names it.
   small. The owner rejected keeping history forever, a year and 30 days.
 
 - **The installed app keeps its data in `%LOCALAPPDATA%\Atlas\data` (P1-37).**
+  *(Since the rename slice the folder is `%LOCALAPPDATA%\Syrinx\data`; see
+  the naming entry above and the 2026-10-14 setup-program entry.)*
   Development and preview builds keep using `SyrinxProductPreview`, so test
   runs never mix with the owner's real browsing data. Nothing is moved or
   deleted between them; the installed app starts empty and bookmarks are
