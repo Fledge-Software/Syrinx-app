@@ -77,6 +77,18 @@ folder names.
     appears, on the condition that SmartScreen still checks every
     download: a file it blocks shows in Syrinx's list as blocked with its
     reason, and Syrinx never offers a way to keep it.
+    Implementation notes, not part of the owner's decision: the list
+    keeps at most 100 finished downloads, forgetting the oldest finished
+    one beyond that, and always lists every active one, so a page that
+    starts more than 100 at once lists them all until they finish. A
+    popup that asks to close while its download runs stays open, as a
+    blank tab with the status "The popup closes once its download
+    finishes.", until the download ends or the owner closes it, because
+    nobody yet knows whether WebView2 keeps a download when its web view
+    closes. The `page_close` fixture's downloads case 4 measures exactly
+    that ("Closing a popup's web view mid-download kept/stopped the
+    download"); its result on the owner's machine decides whether the
+    deferral stays (`docs/owner-checklist.md`, item 7).
   - **(3) The downloads flyout matches the existing flyouts' style.**
     Rejected: a new design for it, which would add a look the canvas
     does not have.
