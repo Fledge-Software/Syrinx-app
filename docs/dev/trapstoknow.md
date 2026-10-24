@@ -608,7 +608,8 @@ you found it in the commit message, not here.
   that prompt and say so in the release notes; this build at least names an
   unknown category as written by a newer Syrinx. Source:
   `crates/syrinx-store/src/deletion.rs`, `decode_record`, and
-  `session/history_repair.rs`, `repairable` (code-confirmed, #121).
+  `crates/syrinx-app/src/session/history_repair.rs`, `repairable`
+  (code-confirmed, #121).
 - **A retained directory or database can still be renamed despite excluding
   delete sharing.** Windows metadata-only opens do not enforce this sharing
   restriction. Retained directories need `FILE_LIST_DIRECTORY`, and retained

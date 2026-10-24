@@ -453,6 +453,45 @@ fn a_mixed_batch_applies_both_categories_in_one_call_and_advances_the_generation
 }
 
 #[test]
+fn a_zoom_clear_touches_no_history_row() {
+    // A zoom clear shares history's transaction but must not rewrite history's counters on
+    // the way through; a trigger turns any such write into a failed clear.
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    store
+        .record_visit(
+            "https://untouched.example.test/".to_owned(),
+            String::new(),
+            100,
+        )
+        .expect("record synthetic visit");
+    store
+        .save_site_zoom("zoomed.example.test".to_owned(), Some(1.25), 100)
+        .expect("save synthetic zoom");
+    let connection = directory.connection();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER synthetic_history_guard BEFORE UPDATE ON history_urls
+                 BEGIN SELECT RAISE(ABORT, 'synthetic history write'); END;",
+        )
+        .expect("install synthetic history guard");
+
+    let mut log = DeletionLog::default();
+    let pending = requested(&mut log, DeletionCategory::SiteZoom, 0, i64::MAX);
+    let applied = store
+        .apply_deletions(&[pending])
+        .expect("a zoom clear writes no history row");
+    assert_eq!(applied.site_zooms, 1);
+    assert_eq!(applied.history, HistoryDeletion::default());
+    connection
+        .execute_batch("DROP TRIGGER synthetic_history_guard")
+        .expect("remove synthetic history guard");
+    close(connection);
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
 fn a_negative_change_time_is_refused() {
     let directory = TestDirectory::new();
     let store = Store::open(directory.lease()).expect("synthetic store");

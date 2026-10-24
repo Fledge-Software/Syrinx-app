@@ -329,8 +329,13 @@ pub(crate) fn delete_ranges(
     connection: &Connection,
     requests: &[DeletionRequest],
 ) -> Result<usize, StoreError> {
+    // A batch of other categories (a zoom clear, #121) leaves every history row untouched.
+    let mut ranges = history_ranges(requests).peekable();
+    if ranges.peek().is_none() {
+        return Ok(0);
+    }
     let mut visits = 0;
-    for range in history_ranges(requests) {
+    for range in ranges {
         visits += connection
             .execute(
                 "DELETE FROM history_visits WHERE visited_at >= ?1 AND visited_at < ?2",
