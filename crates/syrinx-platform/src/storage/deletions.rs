@@ -41,20 +41,24 @@ impl fmt::Display for JournalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         // The owner reads these; structural detail stays in `Debug`.
         formatter.write_str(match self {
-            Self::Location(_) => "Syrinx could not read or write its record of cleared history",
+            Self::Location(_) => "Syrinx could not read or write its record of cleared data",
             Self::Deletion(DeletionError::MissingGeneration) => {
-                "Syrinx's record of cleared history is missing entries"
+                "Syrinx's record of cleared data is missing entries"
             }
             Self::Deletion(DeletionError::InvalidRange) => "That time range is empty",
             Self::Deletion(
                 DeletionError::PendingClear
                 | DeletionError::NoPendingClear
                 | DeletionError::CompletionMismatch,
-            ) => "Another history clear has not finished; restart Syrinx to finish it",
-            Self::Deletion(_) => "Syrinx's record of cleared history is damaged",
+            ) => "Another clear has not finished; restart Syrinx to finish it",
+            // Only a newer Syrinx writes a category this build does not know (#121).
+            Self::Deletion(DeletionError::UnsupportedCategory) => {
+                "Syrinx's record of cleared data was written by a newer Syrinx"
+            }
+            Self::Deletion(_) => "Syrinx's record of cleared data is damaged",
             Self::ClockUnavailable => "The system clock is unavailable",
             Self::Poisoned => {
-                "Syrinx could not finish writing its record of cleared history; restart Syrinx to finish the clear"
+                "Syrinx could not finish writing its record of cleared data; restart Syrinx to finish the clear"
             }
         })
     }
