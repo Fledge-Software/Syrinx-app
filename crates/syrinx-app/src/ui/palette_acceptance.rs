@@ -52,6 +52,9 @@ const WORDS: [&str; 6] = [
 ];
 const FOCUS_PAGE: &str = "focus-page";
 const ENTER_PAGE: &str = "enter-target";
+/// Plain text searches the web unless it matches exactly (#127). `/` lists open tabs and Enter
+/// opens its top row, so this is how the owner switches to a tab by part of its title.
+const ENTER_QUERY: &str = "/enter-target";
 const CLOSED: &str = "The browser window closed during the acceptance run.";
 
 /// The run's state inside the browser view.
@@ -796,14 +799,14 @@ impl Run {
         self.open_timed().await?;
         self.with(|view, _, cx| {
             let popup = view.palette_hwnd(cx)?;
-            probe_win32::post_text(popup, ENTER_PAGE).map_err(|error| error.to_string())
+            probe_win32::post_text(popup, ENTER_QUERY).map_err(|error| error.to_string())
         })??;
         // Enter only once the full text's own reply selects the target, as the bursts do.
         let target = Target::Tab(enter);
         let selected = self
             .try_wait(Duration::from_secs(3), |view, _, cx| {
                 let palette = view.palette.as_ref()?.view.read(cx);
-                let settled = palette.input_text(cx) == ENTER_PAGE && palette.answered();
+                let settled = palette.input_text(cx) == ENTER_QUERY && palette.answered();
                 (settled && palette.selected_target() == Some(target)).then_some(())
             })
             .await?

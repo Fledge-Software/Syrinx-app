@@ -3,6 +3,7 @@
 mod activation;
 mod address_display;
 mod address_entry;
+mod address_prefix;
 mod bookmark_import;
 mod commands;
 mod destinations;
@@ -13,6 +14,7 @@ mod web_address;
 
 pub use address_display::readable_address;
 pub use address_entry::{EntryError, entry_destination, google_search, recognized_address};
+pub use address_prefix::{AddressPrefix, address_prefix};
 pub use web_address::{WebAddressError, web_address};
 
 pub use page_text::{

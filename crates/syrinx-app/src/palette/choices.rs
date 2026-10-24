@@ -1,5 +1,6 @@
 //! Tracks the palette's rows, selection and request identity so stale replies never replace newer ones.
 
+use syrinx_core::{AddressPrefix, address_prefix};
 use syrinx_search::{SearchHit, SearchResults, Target};
 
 use super::{
@@ -13,6 +14,10 @@ use crate::{navigation, session::SessionError};
 pub(super) struct PaletteChoices {
     pub(super) request_id: u64,
     pub(super) address: Option<String>,
+    /// Plain text in the Everything view leads with a "Search Google" row (#127).
+    pub(super) web_search: bool,
+    /// The trimmed text of the current request, for the search row and exact matches.
+    pub(super) entry: String,
     /// Strong command rows, the worker's rows, then other commands; only the current request
     /// changes them.
     pub(super) results: Vec<SearchHit>,
@@ -38,6 +43,8 @@ pub(super) struct PaletteChoices {
 #[derive(Clone, Copy)]
 enum RefreshSelection {
     Default,
+    /// The owner chose the leading search row.
+    Lead,
     Target(Target),
     Unselected,
 }
@@ -71,8 +78,11 @@ impl PaletteChoices {
     /// Starts a request; only the Everything view can offer the Go to address row.
     pub(super) fn query_scoped(&mut self, text: &str, accepts_address: bool) -> u64 {
         self.begin_query();
-        // Refused input has no address row; submission still uses the existing validator.
-        self.address = match navigation::recognized_address(text) {
+        // Refused input has neither lead row; submission still uses the existing validator.
+        let recognized = navigation::recognized_address(text);
+        self.entry = text.trim().to_owned();
+        self.web_search = accepts_address && matches!(recognized, Ok(None));
+        self.address = match recognized {
             Ok(address) if accepts_address => address,
             Ok(_) => None,
             Err(error) => {
@@ -93,6 +103,9 @@ impl PaletteChoices {
     fn selection(&self) -> RefreshSelection {
         if let Some(hit) = self.selected_hit() {
             return RefreshSelection::Target(hit.target);
+        }
+        if self.moved && self.selected == Some(0) && self.web_search {
+            return RefreshSelection::Lead;
         }
         if self.selected.is_some() {
             RefreshSelection::Default
@@ -115,17 +128,20 @@ impl PaletteChoices {
             self.staged_strong
         };
         self.results = self.staged[..shown].to_vec();
+        // A strong command shown at once is Enter's choice before the reply arrives.
+        if self.refresh_selection.is_none() && !self.moved {
+            self.selected = Some(self.default_row());
+        }
     }
 
     pub(super) fn refresh(&mut self) -> u64 {
         // Repeated model changes retain intent even after the visible rows were invalidated.
         let selection = self.refresh_selection.unwrap_or_else(|| self.selection());
         self.begin_query();
-        self.selected = if matches!(selection, RefreshSelection::Default) && self.address.is_some()
-        {
-            Some(0)
-        } else {
-            None
+        self.selected = match selection {
+            RefreshSelection::Lead => Some(0),
+            RefreshSelection::Default if self.address.is_some() => Some(0),
+            _ => None,
         };
         self.refresh_selection = Some(selection);
         self.request_id
@@ -168,31 +184,56 @@ impl PaletteChoices {
         self.selected = match refresh_selection {
             Some(RefreshSelection::Target(target)) => self.target_row(target),
             Some(RefreshSelection::Unselected) => None,
-            Some(RefreshSelection::Default) if !succeeded && self.address.is_none() => None,
-            Some(RefreshSelection::Default) => Some(0),
-            None if self.address.is_some() || self.moved => selected_target
+            Some(RefreshSelection::Lead) => Some(0),
+            Some(RefreshSelection::Default) if !succeeded && self.lead_rows() == 0 => None,
+            Some(RefreshSelection::Default) => Some(self.default_row()),
+            None if self.moved => selected_target
                 .and_then(|target| self.target_row(target))
                 .or(Some(0)),
-            None => Some(0),
+            None => Some(self.default_row()),
         };
         true
+    }
+
+    /// The row Enter takes while the owner has not moved the selection (#127): a confident
+    /// local match if there is one, otherwise the leading Go to or search row, or the top row.
+    fn default_row(&self) -> usize {
+        self.results
+            .iter()
+            .enumerate()
+            .position(|(index, hit)| self.is_confident(index, hit))
+            .map_or(0, |index| index + self.lead_rows())
+    }
+
+    /// Whether a row matches the typed text letter for letter, so Enter may open it instead of
+    /// searching: a strong command, the start of its address, or an open page's exact title.
+    fn is_confident(&self, index: usize, hit: &SearchHit) -> bool {
+        if self.web_search {
+            return index < self.staged_strong
+                || address_prefix(&self.entry, &hit.address) != AddressPrefix::No
+                || has_exact_title(hit, &self.entry);
+        }
+        // Typed text that only starts a known host, such as `cloud.exam`, beats Go to.
+        self.address.is_some()
+            && address_prefix(&self.entry, &hit.address) == AddressPrefix::PartialHost
     }
 
     fn target_row(&self, target: Target) -> Option<usize> {
         self.results
             .iter()
             .position(|hit| hit.target == target)
-            .map(|index| index + self.address_rows())
+            .map(|index| index + self.lead_rows())
             .or_else(|| self.address.as_ref().map(|_| 0))
     }
 
-    pub(super) fn address_rows(&self) -> usize {
-        usize::from(self.address.is_some())
+    /// The Go to or search row drawn above the results, if any.
+    pub(super) fn lead_rows(&self) -> usize {
+        usize::from(self.address.is_some() || self.web_search)
     }
 
-    /// How many selectable rows are drawn: the Go to row, if any, then the results.
+    /// How many selectable rows are drawn: the lead row, if any, then the results.
     pub(super) fn row_count(&self) -> usize {
-        self.results.len() + self.address_rows()
+        self.results.len() + self.lead_rows()
     }
 
     /// The row a screen reader hears as focused (DW-60): the selection, but only once the
@@ -203,7 +244,7 @@ impl PaletteChoices {
 
     pub(super) fn selected_hit(&self) -> Option<&SearchHit> {
         self.selected
-            .and_then(|selected| selected.checked_sub(self.address_rows()))
+            .and_then(|selected| selected.checked_sub(self.lead_rows()))
             .and_then(|index| self.results.get(index))
     }
 
@@ -228,7 +269,7 @@ impl PaletteChoices {
     }
 
     pub(super) fn previous(&mut self) {
-        if self.results.is_empty() && self.address.is_none() {
+        if self.results.is_empty() && self.lead_rows() == 0 {
             return;
         }
         self.select(
@@ -273,9 +314,12 @@ impl PaletteChoices {
     }
 
     /// Enter waits when the rows it would choose from have not arrived and nothing is chosen.
+    /// Go to is known at once; the search row counts only once the owner picked it, since a
+    /// confident match may still arrive.
     fn must_wait_for_rows(&self, force_search: bool) -> bool {
-        let go_to_selected = self.selected == Some(0) && self.address.is_some();
-        !force_search && self.awaiting_reply && self.selected_hit().is_none() && !go_to_selected
+        let lead_chosen =
+            self.selected == Some(0) && (self.address.is_some() || (self.web_search && self.moved));
+        !force_search && self.awaiting_reply && self.selected_hit().is_none() && !lead_chosen
     }
 
     fn decide(&self, text: String, force_search: bool) -> Option<PaletteEvent> {
@@ -301,6 +345,12 @@ impl PaletteChoices {
         }
         Some(PaletteEvent::Submit { text, force_search })
     }
+}
+
+/// An open tab or saved page whose title is exactly the typed text, ignoring case.
+fn has_exact_title(hit: &SearchHit, entry: &str) -> bool {
+    matches!(hit.target, Target::Tab(_) | Target::Saved(_))
+        && hit.title.trim().to_lowercase() == entry.to_lowercase()
 }
 
 #[cfg(test)]
@@ -347,6 +397,26 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    /// One synthetic hit per `(target, title, address)`, in ranking order.
+    fn ranked(rows: &[(Target, &str, &str)]) -> SearchResults {
+        let targets: Vec<_> = rows.iter().map(|(target, _, _)| *target).collect();
+        let mut results = results(&targets);
+        for (hit, (_, title, address)) in results.hits.iter_mut().zip(rows) {
+            hit.title = (*title).to_owned();
+            hit.address = (*address).to_owned();
+        }
+        results
+    }
+
+    fn history(key: u64) -> Target {
+        Target::History(std::num::NonZeroU64::new(key).expect("synthetic history key"))
+    }
+
+    /// Enter submits the typed text, which `navigation` turns into a Google search.
+    fn assert_search(choices: &mut PaletteChoices, input: &str) {
+        assert_submit(choices, input, false, input);
     }
 
     fn assert_submit(
@@ -455,9 +525,8 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_and_refused_input_keep_existing_submission_behavior() {
+    fn refused_and_empty_input_keep_existing_submission_behavior() {
         for input in [
-            "ordinary search terms",
             "",
             "JAVASCRIPT:1",
             "https://synthetic@example.test/",
@@ -486,6 +555,162 @@ mod tests {
             ));
             assert_submit(&mut choices, input, false, input);
         }
+    }
+
+    #[test]
+    fn plain_text_leads_with_a_web_search_and_keeps_pages_as_choices() {
+        let [tab, saved] = targets();
+        let input = "ordinary search terms";
+        let mut choices = PaletteChoices::default();
+        let request = choices.query(input);
+        assert!(choices.web_search);
+        assert_eq!(choices.entry, input);
+        assert_eq!(choices.address, None);
+        // Enter before the reply waits, since an exact match could still arrive.
+        assert!(choices.submission(input.to_owned(), false).is_none());
+        assert!(choices.receive(request, Ok(results(&[tab, saved]))));
+        assert!(matches!(
+            choices.take_deferred(),
+            Some(PaletteEvent::Submit { text, force_search: false }) if text == input
+        ));
+        assert_eq!(choices.selected, Some(0));
+        assert_eq!(choices.row_count(), 3);
+        assert_search(&mut choices, input);
+        choices.next();
+        assert_target(&mut choices, tab);
+        choices.next();
+        assert_target(&mut choices, saved);
+        choices.previous();
+        choices.previous();
+        assert_search(&mut choices, input);
+    }
+
+    #[test]
+    fn a_frequently_visited_fuzzy_match_never_becomes_enters_target() {
+        let wrong = history(7);
+        let input = "cloudflare";
+        let mut choices = PaletteChoices::default();
+        let request = choices.query(input);
+        let mut rows = ranked(&[(
+            wrong,
+            "Cloud database login",
+            "https://www.database.example.test/",
+        )]);
+        rows.hits[0].score = u32::MAX;
+        assert!(choices.receive(request, Ok(rows)));
+        assert_eq!(
+            choices.selected,
+            Some(0),
+            "the search row stays Enter's target"
+        );
+        assert_search(&mut choices, input);
+        choices.next();
+        assert_target(&mut choices, wrong);
+    }
+
+    #[test]
+    fn the_start_of_a_known_address_is_preselected_below_the_lead_row() {
+        let [tab, saved] = targets();
+        // `www.cloudf` is an address, so it leads with Go to; its partial host still wins.
+        for input in ["cloudf", "CLOUDF", "www.cloudf"] {
+            let mut choices = PaletteChoices::default();
+            let request = choices.query(input);
+            assert_eq!(choices.lead_rows(), 1);
+            assert!(choices.receive(
+                request,
+                Ok(ranked(&[
+                    (
+                        tab,
+                        "Synthetic fuzzy match",
+                        "https://mycloudflare.example/"
+                    ),
+                    (
+                        saved,
+                        "Synthetic docs",
+                        "https://www.cloudflare.example/docs"
+                    ),
+                ]))
+            ));
+            assert_eq!(choices.selected, Some(2), "{input}");
+            assert_target(&mut choices, saved);
+        }
+    }
+
+    #[test]
+    fn a_partial_host_beats_go_to_but_a_complete_host_does_not() {
+        let [tab, _] = targets();
+        let known = "https://cloud.example.test/projects/flare-console";
+        let mut choices = PaletteChoices::default();
+        let request = choices.query("cloud.example");
+        assert_eq!(choices.address.as_deref(), Some("https://cloud.example/"));
+        assert!(choices.receive(request, Ok(ranked(&[(tab, "Synthetic console", known)]))));
+        assert_eq!(choices.selected, Some(1));
+        assert_target(&mut choices, tab);
+
+        let request = choices.query("cloud.example.test");
+        assert!(choices.receive(request, Ok(ranked(&[(tab, "Synthetic console", known)]))));
+        assert_eq!(
+            choices.selected,
+            Some(0),
+            "Go to the typed host stays first"
+        );
+        assert_submit(
+            &mut choices,
+            "cloud.example.test",
+            false,
+            "https://cloud.example.test/",
+        );
+    }
+
+    #[test]
+    fn an_open_pages_exact_title_switches_to_it_but_history_does_not() {
+        let [tab, saved] = targets();
+        let title = "Synthetic Palette Match";
+        for (target, opens) in [(tab, true), (saved, true), (history(3), false)] {
+            let input = "synthetic palette match";
+            let mut choices = PaletteChoices::default();
+            let request = choices.query(input);
+            assert!(choices.receive(
+                request,
+                Ok(ranked(&[(target, title, "https://titles.example.test/")]))
+            ));
+            if opens {
+                assert_target(&mut choices, target);
+            } else {
+                assert_search(&mut choices, input);
+            }
+        }
+    }
+
+    #[test]
+    fn a_chosen_search_row_is_used_at_once_and_survives_a_refresh() {
+        let [tab, saved] = targets();
+        let input = "cloudf";
+        let mut choices = PaletteChoices::default();
+        choices.query(input);
+        // Clicking the search row needs no local rows, so Enter does not wait.
+        choices.select(0);
+        assert_search(&mut choices, input);
+
+        let request = choices.query(input);
+        let rows = || {
+            ranked(&[
+                (tab, "Synthetic fuzzy match", "https://fuzzy.example.test/"),
+                (saved, "Synthetic docs", "https://cloudflare.example/"),
+            ])
+        };
+        assert!(choices.receive(request, Ok(rows())));
+        assert_eq!(choices.selected, Some(2));
+        choices.select(0);
+        let refreshed = choices.refresh();
+        assert_eq!(choices.selected, Some(0));
+        assert!(choices.receive(refreshed, Ok(rows())));
+        assert_eq!(
+            choices.selected,
+            Some(0),
+            "the owner's choice outlives the refresh"
+        );
+        assert_search(&mut choices, input);
     }
 
     #[test]
@@ -535,7 +760,7 @@ mod tests {
             let mut choices = PaletteChoices::default();
             let initial = choices.query(input);
             assert!(choices.receive(initial, Ok(results(&[tab, saved]))));
-            choices.select(choices.address_rows() + 1);
+            choices.select(choices.lead_rows() + 1);
             assert_target(&mut choices, saved);
 
             let first_refresh = choices.refresh();
@@ -550,7 +775,7 @@ mod tests {
             ));
             assert!(choices.receive(latest_refresh, Ok(results(&[saved, tab]))));
             assert_target(&mut choices, saved);
-            assert_eq!(choices.selected, Some(choices.address_rows()));
+            assert_eq!(choices.selected, Some(choices.lead_rows()));
             assert!(matches!(
                 choices.activation(latest_refresh, saved),
                 Some(PaletteEvent::Activate(target)) if target == saved
@@ -565,7 +790,7 @@ mod tests {
             let mut choices = PaletteChoices::default();
             let request = choices.query(input);
             assert!(choices.receive(request, Ok(results(&[tab, saved]))));
-            choices.select(choices.address_rows());
+            choices.select(choices.lead_rows());
             let refresh = choices.refresh();
             assert!(choices.receive(refresh, Ok(results(&[saved]))));
             assert!(choices.activation(request, tab).is_none());
@@ -579,6 +804,8 @@ mod tests {
                 let again = choices.refresh();
                 assert!(choices.receive(again, Ok(results(&[saved]))));
                 assert!(choices.submission(input.to_owned(), false).is_none());
+                choices.next();
+                assert_search(&mut choices, input);
                 choices.next();
             }
             assert_target(&mut choices, saved);
@@ -597,7 +824,12 @@ mod tests {
             Err(SessionError::Search(SearchError::QueryTooLong))
         ));
         assert!(choices.results.is_empty());
-        assert!(choices.submission("synthetic".to_owned(), false).is_none());
+        assert_eq!(
+            choices.selected,
+            Some(0),
+            "the search row needs no local rows"
+        );
+        assert_search(&mut choices, "synthetic");
         assert_submit(&mut choices, "synthetic", true, "synthetic");
 
         // A new input query waits for its own reply, never an earlier one.
@@ -612,7 +844,7 @@ mod tests {
         assert!(choices.receive(current, Ok(results(&[saved]))));
         assert!(matches!(
             choices.take_deferred(),
-            Some(PaletteEvent::Activate(target)) if target == saved
+            Some(PaletteEvent::Submit { text, force_search: false }) if text == "new synthetic query"
         ));
     }
 
@@ -654,6 +886,8 @@ mod tests {
         assert_eq!(choices.status, "1 tabs · 1 saved pages");
         assert_eq!(choices.results[0].title, "Changed synthetic title");
         assert_eq!(choices.results[0].address, "https://changed.example.test/");
+        assert_search(&mut choices, "synthetic");
+        choices.next();
         assert_target(&mut choices, tab);
 
         let removed = choices.refresh();
@@ -702,13 +936,15 @@ mod tests {
         assert_eq!(choices.results.len(), 1);
         assert_eq!(choices.counts.bookmarks, 1);
 
-        // "close" must open a page rather than close the tab: pages lead weak commands.
+        // "close" must never close the tab: Enter searches, and pages lead weak commands.
         let next = choices.query_scoped("synthetic", true);
         choices.stage_commands(staged(&[1], 0), true, false);
         assert!(choices.receive(next, Ok(results(&[tab, saved]))));
         let order: Vec<_> = choices.results.iter().map(|hit| hit.target).collect();
         assert_eq!(order, [tab, saved, command(1)]);
         assert_eq!(choices.counts.everything, 3);
+        assert_search(&mut choices, "synthetic");
+        choices.next();
         assert_target(&mut choices, tab);
 
         // A worker failure keeps the local command rows.
@@ -767,8 +1003,8 @@ mod tests {
         let request = choices.query_scoped("synthetic target", true);
         choices.stage_commands(staged(&[], 0), true, false);
         assert!(choices.receive(request, Ok(results(&[tab, saved]))));
-        assert_eq!(choices.row_count(), 2);
-        // The top row is selected for Enter, but the query field keeps the focus.
+        assert_eq!(choices.row_count(), 3, "the search row, then two pages");
+        // The search row is selected for Enter, but the query field keeps the focus.
         assert_eq!(choices.selected, Some(0));
         assert_eq!(choices.announced_row(), None);
 
@@ -816,24 +1052,40 @@ mod tests {
     }
 
     #[test]
-    fn enter_before_the_reply_opens_its_top_row_instead_of_searching() {
+    fn enter_before_the_reply_waits_then_searches_unless_a_row_matches_exactly() {
         let [tab, saved] = targets();
-        let mut choices = PaletteChoices::default();
-        let request = choices.query_scoped("synthetic target", true);
-        choices.stage_commands(staged(&[], 0), true, false);
-        assert!(
-            choices
-                .submission("synthetic target".to_owned(), false)
-                .is_none()
-        );
-        assert_eq!(choices.status, "Waiting for local results…");
-        assert!(choices.take_deferred().is_none(), "no reply yet");
-        assert!(choices.receive(request, Ok(results(&[tab, saved]))));
-        assert!(matches!(
-            choices.take_deferred(),
-            Some(PaletteEvent::Activate(target)) if target == tab
-        ));
-        assert!(choices.take_deferred().is_none(), "Enter is applied once");
+        for (address, expected) in [
+            ("https://fuzzy.example.test/", None),
+            ("https://shelf.example.test/", Some(saved)),
+        ] {
+            let mut choices = PaletteChoices::default();
+            let request = choices.query_scoped("shelf", true);
+            choices.stage_commands(staged(&[], 0), true, false);
+            assert!(choices.submission("shelf".to_owned(), false).is_none());
+            assert_eq!(choices.status, "Waiting for local results…");
+            assert!(choices.take_deferred().is_none(), "no reply yet");
+            let rows = ranked(&[
+                (tab, "Synthetic shelves", "https://other.example.test/"),
+                (saved, "Synthetic", address),
+            ]);
+            assert!(choices.receive(request, Ok(rows)));
+            match (choices.take_deferred(), expected) {
+                (Some(PaletteEvent::Activate(target)), Some(expected)) => {
+                    assert_eq!(target, expected);
+                }
+                (
+                    Some(PaletteEvent::Submit {
+                        text,
+                        force_search: false,
+                    }),
+                    None,
+                ) => {
+                    assert_eq!(text, "shelf");
+                }
+                _ => panic!("Enter chose the wrong row for {address}"),
+            }
+            assert!(choices.take_deferred().is_none(), "Enter is applied once");
+        }
     }
 
     #[test]
@@ -866,16 +1118,12 @@ mod tests {
     }
 
     #[test]
-    fn enter_waits_through_a_model_refresh_and_opens_the_refreshed_top_row() {
+    fn enter_waits_through_a_model_refresh_and_decides_on_the_refreshed_rows() {
         let [tab, saved] = targets();
         let mut choices = PaletteChoices::default();
-        let first = choices.query_scoped("synthetic target", true);
+        let first = choices.query_scoped("shelf", true);
         choices.stage_commands(staged(&[], 0), true, false);
-        assert!(
-            choices
-                .submission("synthetic target".to_owned(), false)
-                .is_none()
-        );
+        assert!(choices.submission("shelf".to_owned(), false).is_none());
 
         // A committed model change re-runs the same text before the first reply arrives.
         let refreshed = choices.refresh();
@@ -886,10 +1134,14 @@ mod tests {
             "the superseded reply is ignored"
         );
         assert!(choices.take_deferred().is_none(), "Enter still waits");
-        assert!(choices.receive(refreshed, Ok(results(&[tab, saved]))));
+        let rows = ranked(&[
+            (tab, "Synthetic shelves", "https://other.example.test/"),
+            (saved, "Synthetic", "https://shelf.example.test/"),
+        ]);
+        assert!(choices.receive(refreshed, Ok(rows)));
         assert!(matches!(
             choices.take_deferred(),
-            Some(PaletteEvent::Activate(target)) if target == tab
+            Some(PaletteEvent::Activate(target)) if target == saved
         ));
         assert!(choices.take_deferred().is_none(), "Enter is applied once");
     }

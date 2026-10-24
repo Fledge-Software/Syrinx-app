@@ -415,6 +415,9 @@ impl PaletteView {
         {
             return Some(Preview::address(address));
         }
+        if selected == 0 && self.choices.web_search {
+            return Some(Preview::search(&self.choices.entry));
+        }
         let hit = self.choices.selected_hit()?;
         let Some(command) = self.commands.command(hit.target) else {
             return Some(Preview::page(hit));

@@ -135,6 +135,11 @@ fn saved_page_of(
     (live_instance(model, saved) == Some(id)).then_some(saved)
 }
 
+/// The search row's name, shared by the row and its preview.
+pub fn search_label(entry: &str) -> String {
+    format!("Search Google for “{entry}”")
+}
+
 /// What the preview pane says about the selected row.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Preview {
@@ -151,6 +156,16 @@ impl Preview {
             title: highlight(&format!("Go to {address}"), &[], PREVIEW_TEXT_LIMIT),
             detail: None,
             hint: "Enter opens this address in the current tab.".to_owned(),
+        }
+    }
+
+    pub fn search(entry: &str) -> Self {
+        Self {
+            kind: "Web search",
+            title: highlight(&search_label(entry), &[], PREVIEW_TEXT_LIMIT),
+            detail: None,
+            hint: "Enter searches Google in the current tab. Down chooses a page instead."
+                .to_owned(),
         }
     }
 
