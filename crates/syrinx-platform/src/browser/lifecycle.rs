@@ -268,11 +268,16 @@ impl Lifecycle {
         unsafe { core.add_IsDocumentPlayingAudioChanged(&handler, &mut token) }
             .map_err(|_| BrowserError::EventRegistration)?;
         // Seed from the current state: an adopted popup may already be playing. A failed read is
-        // `Metadata` here as in the handler, and a failed mute read `PageControl`; only the
-        // registration itself is `EventRegistration`.
+        // `Metadata` here as in the handler; only the registration itself is `EventRegistration`.
         let playing = playing_audio(&core).map_err(|_| BrowserError::Metadata)?;
-        playback_reported(&self.state, &self.events, self.id, &core, playing)
-            .map_err(|_| BrowserError::PageControl)
+        // As in the handler, an unreadable mute state is reported but still opens the page.
+        if playback_reported(&self.state, &self.events, self.id, &core, playing).is_err() {
+            self.events.emit(BrowserEvent::Error {
+                tab: Some(self.id),
+                error: BrowserError::PageControl,
+            });
+        }
+        Ok(())
     }
 
     pub(super) fn resume(&self, view: &WebView) -> Result<(), BrowserError> {
@@ -389,6 +394,17 @@ fn playback_reported(
         .borrow_mut()
         .timer
         .playback_changed(playing, Instant::now());
+    emit_audio_changed(events, id, core, playing)
+}
+
+/// Emits the sidebar's `AudioChanged` with the page's current `IsMuted`. Both audio handlers,
+/// this file's playback one and the essentials' mute one, report through it.
+pub(super) fn emit_audio_changed(
+    events: &EventSink,
+    id: u64,
+    core: &ICoreWebView2_8,
+    playing: bool,
+) -> windows::core::Result<()> {
     let mut muted = BOOL::default();
     unsafe { core.IsMuted(&mut muted) }?;
     events.emit(BrowserEvent::AudioChanged {
@@ -400,7 +416,7 @@ fn playback_reported(
 }
 
 /// Whether the document is playing audio, muted or not, as WebView2 reports it.
-fn playing_audio(core: &ICoreWebView2_8) -> windows::core::Result<bool> {
+pub(super) fn playing_audio(core: &ICoreWebView2_8) -> windows::core::Result<bool> {
     let mut playing = BOOL::default();
     unsafe { core.IsDocumentPlayingAudio(&mut playing) }?;
     Ok(playing.as_bool())

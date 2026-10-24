@@ -12,7 +12,10 @@ use windows::{
 };
 use wry::{WebView, WebViewExtWindows};
 
-use super::{BrowserError, BrowserEvent, EventSink};
+use super::{
+    BrowserError, BrowserEvent, EventSink,
+    lifecycle::{emit_audio_changed, playing_audio},
+};
 
 pub enum PageAction {
     Find {
@@ -205,50 +208,33 @@ fn emit_zoom(
 /// reach the same event from the lifecycle's one `IsDocumentPlayingAudioChanged` handler.
 fn register_mute(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
     let core: ICoreWebView2_8 = view.webview().cast()?;
-    let muted = IsMutedChangedEventHandler::create(Box::new(move |core, _| {
-        report_audio(core, id, &events)
-    }));
+    let muted =
+        IsMutedChangedEventHandler::create(Box::new(move |core, _| report_mute(core, id, &events)));
     // The handler lives as long as the controller, so its token is never removed.
     let mut token = 0;
     unsafe { core.add_IsMutedChanged(&muted, &mut token) }
 }
 
-/// Emits the page's audio state, or a tab error when it cannot be read.
-fn report_audio(
+/// Reports a mute change: an unreadable audible state is `Metadata`, as in the lifecycle's
+/// playback handler, and an unreadable mute state `PageControl`.
+fn report_mute(
     core: Option<ICoreWebView2>,
     id: u64,
     events: &EventSink,
 ) -> windows::core::Result<()> {
-    let result = emit_audio(core, id, events);
-    if result.is_err() {
+    let report = |error| {
         events.emit(BrowserEvent::Error {
             tab: Some(id),
-            error: BrowserError::PageControl,
-        });
-    }
-    result
-}
-
-fn emit_audio(
-    core: Option<ICoreWebView2>,
-    id: u64,
-    events: &EventSink,
-) -> windows::core::Result<()> {
-    let core: ICoreWebView2_8 = core
-        .ok_or_else(|| windows::core::Error::from(E_POINTER))?
-        .cast()?;
-    let mut muted = BOOL::default();
-    let mut playing = BOOL::default();
-    unsafe {
-        core.IsMuted(&mut muted)?;
-        core.IsDocumentPlayingAudio(&mut playing)?;
-    }
-    events.emit(BrowserEvent::AudioChanged {
-        id,
-        muted: muted.as_bool(),
-        playing: playing.as_bool(),
-    });
-    Ok(())
+            error,
+        })
+    };
+    let (core, playing) = core
+        .ok_or_else(|| windows::core::Error::from(E_POINTER))
+        .and_then(|core| core.cast::<ICoreWebView2_8>())
+        .and_then(|core| playing_audio(&core).map(|playing| (core, playing)))
+        .inspect_err(|_| report(BrowserError::Metadata))?;
+    emit_audio_changed(events, id, &core, playing)
+        .inspect_err(|_| report(BrowserError::PageControl))
 }
 
 fn register_downloads(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
