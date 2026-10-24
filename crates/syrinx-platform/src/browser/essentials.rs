@@ -3,16 +3,15 @@
 use std::{cell::Cell, rc::Rc};
 
 use webview2_com::{
-    FindStartCompletedHandler, IsDefaultDownloadDialogOpenChangedEventHandler,
-    Microsoft::Web::WebView2::Win32::*, ZoomFactorChangedEventHandler,
+    FindStartCompletedHandler, Microsoft::Web::WebView2::Win32::*, ZoomFactorChangedEventHandler,
 };
 use windows::{
     Win32::Foundation::E_POINTER,
-    core::{BOOL, HSTRING, Interface},
+    core::{HSTRING, Interface},
 };
 use wry::{WebView, WebViewExtWindows};
 
-use super::{BrowserError, BrowserEvent, EventSink};
+use super::{BrowserError, BrowserEvent, EventSink, download_dialog::DownloadDialog};
 
 pub enum PageAction {
     Find {
@@ -24,6 +23,8 @@ pub enum PageAction {
     StopFind,
     Downloads,
     CloseDownloads,
+    /// ↓ and Ctrl J: open the flyout under ↓, or close it when it is open.
+    ToggleDownloads,
     Print,
     ZoomIn,
     ZoomOut,
@@ -36,6 +37,7 @@ pub(super) struct Essentials {
     id: u64,
     events: EventSink,
     search: Rc<Cell<Option<u64>>>,
+    downloads: DownloadDialog,
 }
 
 impl Essentials {
@@ -46,12 +48,13 @@ impl Essentials {
     ) -> Result<Self, BrowserError> {
         register_zoom(view, id, events.clone()).map_err(|_| BrowserError::EventRegistration)?;
         emit_zoom(&view.controller(), id, &events).map_err(|_| BrowserError::PageControl)?;
-        register_downloads(view, id, events.clone())
+        let downloads = DownloadDialog::register(view, id, events.clone())
             .map_err(|_| BrowserError::EventRegistration)?;
         Ok(Self {
             id,
             events,
             search: Rc::new(Cell::new(None)),
+            downloads,
         })
     }
 
@@ -77,6 +80,7 @@ impl Essentials {
                 PageAction::CloseDownloads => {
                     core.cast::<ICoreWebView2_9>()?.CloseDefaultDownloadDialog()
                 }
+                PageAction::ToggleDownloads => self.downloads.toggle(view),
                 PageAction::Print => core
                     .cast::<ICoreWebView2_16>()?
                     .ShowPrintUI(COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER),
@@ -176,30 +180,6 @@ fn emit_zoom(
     }
     events.emit(BrowserEvent::ZoomChanged { id, factor });
     Ok(())
-}
-
-fn register_downloads(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
-    // Without wry download callbacks, the engine already owns its progress/cancel UI.
-    let core = view.webview();
-    let mut token = 0;
-    let changed =
-        IsDefaultDownloadDialogOpenChangedEventHandler::create(Box::new(move |core, _| {
-            let core = core.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
-            let core: ICoreWebView2_9 = core.cast()?;
-            let mut open = BOOL::default();
-            unsafe {
-                core.IsDefaultDownloadDialogOpen(&mut open)?;
-            }
-            events.emit(BrowserEvent::DownloadDialog {
-                id,
-                open: open.as_bool(),
-            });
-            Ok(())
-        }));
-    unsafe {
-        core.cast::<ICoreWebView2_9>()?
-            .add_IsDefaultDownloadDialogOpenChanged(&changed, &mut token)
-    }
 }
 
 fn next_zoom(factor: f64, action: &PageAction) -> f64 {

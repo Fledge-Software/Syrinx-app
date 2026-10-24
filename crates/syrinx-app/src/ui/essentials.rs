@@ -31,9 +31,14 @@ impl BrowserView {
         if self.closing {
             return;
         }
-        if let Some(command) = page_action(self.shown.map(TabId::get), shortcut) {
-            self.page_command(command);
-        }
+        let Some(command) = page_action(self.shown.map(TabId::get), shortcut) else {
+            // Off a web page there is no flyout to open; say so instead of doing nothing.
+            if let Some(message) = off_page_message(shortcut) {
+                self.message = message.to_owned();
+            }
+            return;
+        };
+        self.page_command(command);
     }
 
     pub(super) fn essential_actions(&self, element: Div, cx: &mut Context<Self>) -> Div {
@@ -221,10 +226,22 @@ pub(super) fn zoom_percent(factor: f64) -> String {
     format!("{:.0}%", (factor * 100.).round())
 }
 
+/// What the status line says when a shortcut needs a web page and none is shown.
+fn off_page_message(shortcut: BrowserShortcut) -> Option<&'static str> {
+    match shortcut {
+        BrowserShortcut::Downloads => Some(DOWNLOADS_OFF_PAGE),
+        _ => None,
+    }
+}
+
+/// WebView2's downloads flyout belongs to a web page, so Home, History and Clear data have none.
+const DOWNLOADS_OFF_PAGE: &str =
+    "Downloads open over a web page. Switch to a web page tab to see them.";
+
 fn page_action(id: Option<u64>, shortcut: BrowserShortcut) -> Option<BrowserCommand> {
     let id = id?;
     let action = match shortcut {
-        BrowserShortcut::Downloads => PageAction::Downloads,
+        BrowserShortcut::Downloads => PageAction::ToggleDownloads,
         BrowserShortcut::Print => PageAction::Print,
         BrowserShortcut::ZoomIn => PageAction::ZoomIn,
         BrowserShortcut::ZoomOut => PageAction::ZoomOut,
@@ -285,10 +302,48 @@ mod tests {
         assert!(matches!(
             page_action(Some(7), BrowserShortcut::Downloads),
             Some(BrowserCommand::PageAction {
-                action: PageAction::Downloads,
+                action: PageAction::ToggleDownloads,
                 ..
             })
         ));
         assert!(page_action(Some(7), BrowserShortcut::Find).is_none());
+    }
+
+    #[test]
+    fn downloads_off_a_web_page_explain_themselves_instead_of_failing_silently() {
+        assert!(page_action(None, BrowserShortcut::Downloads).is_none());
+        assert_eq!(
+            off_page_message(BrowserShortcut::Downloads),
+            Some(DOWNLOADS_OFF_PAGE)
+        );
+        assert!(DOWNLOADS_OFF_PAGE.contains("web page"));
+        for quiet in [
+            BrowserShortcut::Print,
+            BrowserShortcut::ZoomIn,
+            BrowserShortcut::ZoomReset,
+        ] {
+            assert_eq!(off_page_message(quiet), None);
+        }
+    }
+
+    /// Where the title bar puts ↓, measured from the page card's right edge: past the three
+    /// caption buttons, the title bar's right padding, ☰ and the gap before it, less the card
+    /// inset.
+    fn downloads_button_from_card_right() -> f32 {
+        use syrinx_ui::metrics::chrome::{CARD_INSET, ICON_BUTTON, TITLE_BAR_HEIGHT};
+        /// `title_contents`' `pr_1`.
+        const TITLE_BAR_RIGHT_PADDING: f32 = 4.;
+        /// The corner's `gap_1` between ↓ and ☰.
+        const CORNER_GAP: f32 = 4.;
+        let caption_buttons = 3. * TITLE_BAR_HEIGHT;
+        caption_buttons + TITLE_BAR_RIGHT_PADDING + ICON_BUTTON + CORNER_GAP - CARD_INSET
+    }
+
+    #[test]
+    fn the_flyout_anchor_matches_where_the_title_bar_draws_the_downloads_button() {
+        assert_eq!(
+            downloads_button_from_card_right(),
+            syrinx_platform::browser::DOWNLOADS_BUTTON_FROM_CARD_RIGHT
+        );
     }
 }

@@ -103,13 +103,18 @@ pub(super) fn exercise(
         (PageAction::Downloads, true),
         (PageAction::CloseDownloads, false),
     ] {
-        action(host, command)?;
-        loop {
-            if matches!(checked_event(events, deadline)?, BrowserEvent::DownloadDialog { id: 3000, open } if open == expected)
-            {
-                break;
-            }
-        }
+        downloads_action(host, events, deadline, command, expected)?;
+    }
+    // A toggle within 400 ms of a close counts as the press that closed it, so wait past that.
+    thread::sleep(Duration::from_millis(500));
+    for expected in [true, false] {
+        downloads_action(
+            host,
+            events,
+            deadline,
+            PageAction::ToggleDownloads,
+            expected,
+        )?;
     }
     for (command, expected) in [
         (PageAction::ZoomIn, 1.1),
@@ -187,4 +192,21 @@ fn require_chrome_focus(parent: HWND, moment: &str) -> Result<(), String> {
     Err(format!(
         "Native focus left the chrome window after {moment}."
     ))
+}
+
+/// Sends one downloads action and waits for the flyout to report the expected state.
+fn downloads_action(
+    host: &BrowserHost,
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    deadline: Instant,
+    command: PageAction,
+    expected: bool,
+) -> Result<(), String> {
+    action(host, command)?;
+    loop {
+        if matches!(checked_event(events, deadline)?, BrowserEvent::DownloadDialog { id: 3000, open } if open == expected)
+        {
+            return Ok(());
+        }
+    }
 }

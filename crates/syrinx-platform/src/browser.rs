@@ -1,9 +1,11 @@
 //! Keeps page WebView2 objects on one Windows thread while Rust UI code exchanges owned commands.
 
 mod clear_data;
+mod download_dialog;
 mod engine_exit;
 mod environment;
 mod essentials;
+pub use download_dialog::DOWNLOADS_BUTTON_FROM_CARD_RIGHT;
 mod overlay;
 pub use essentials::PageAction;
 pub const RENDER_PROCESS_UNRESPONSIVE: i32 = webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE.0;
