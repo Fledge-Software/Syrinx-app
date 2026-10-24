@@ -9,12 +9,21 @@ pub(super) const LOADING_LIMIT: Duration = Duration::from_secs(60);
 /// How long a hidden page stays awake after its sound stops, so a pause between tracks or a
 /// short buffer never puts a listening tab to sleep (#130).
 pub const AUDIO_GRACE: Duration = Duration::from_secs(60);
+/// The longest wait between two suspension attempts that WebView2 keeps refusing.
+pub(super) const REFUSAL_CAP: Duration = Duration::from_secs(240);
 
 /// A main-frame navigation WebView2 has reported starting.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Loading {
     id: u64,
     started: Instant,
+}
+
+/// Suspensions WebView2 refused in a row since the page was last shown, navigated or resumed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Refusals {
+    count: u32,
+    last: Instant,
 }
 
 /// When the page may next be suspended: never while shown or playing sound, `GRACE` after it
@@ -33,6 +42,8 @@ pub(super) struct HiddenTimer {
     requested: Option<Instant>,
     /// A suspension was requested or succeeded; only a resume or refusal clears it.
     suspending: bool,
+    /// Refusals in a row; each one doubles the wait before the next attempt.
+    refusals: Option<Refusals>,
     due: Option<Instant>,
 }
 
@@ -46,6 +57,7 @@ impl HiddenTimer {
             loading: None,
             requested: None,
             suspending: false,
+            refusals: None,
             due: Some(now + GRACE),
         }
     }
@@ -74,15 +86,19 @@ impl HiddenTimer {
         self.suspending
     }
 
-    /// The page was shown or hidden.
+    /// The page was shown or hidden. Showing it forgets earlier refusals.
     pub(super) fn shown(&mut self, visible: bool, now: Instant) {
         self.visible = visible;
+        if visible {
+            self.refusals = None;
+        }
         self.rearm(now);
     }
 
     /// Syrinx asked for a navigation; WebView2 reports its id when it starts.
     pub(super) fn navigation_requested(&mut self, now: Instant) {
         self.requested = Some(now);
+        self.refusals = None;
         self.rearm(now);
     }
 
@@ -107,6 +123,7 @@ impl HiddenTimer {
         };
         self.loading = Some(Loading { id, started });
         self.requested = None;
+        self.refusals = None;
         self.rearm(now);
     }
 
@@ -120,12 +137,25 @@ impl HiddenTimer {
         self.rearm(now);
     }
 
-    /// Resuming, or a refused suspension, restarts the countdown, never sooner than `GRACE`.
-    pub(super) fn restart(&mut self, now: Instant) {
+    /// Resuming restarts the countdown and forgets refusals, never sooner than `GRACE`.
+    pub(super) fn resumed(&mut self, now: Instant) {
         self.suspending = false;
+        self.refusals = None;
         self.rearm(now);
-        // A load past its limit would otherwise retry a refused suspension immediately.
+        // A load past its limit would otherwise be asked again immediately.
         self.due = self.due.map(|due| due.max(now + GRACE));
+    }
+
+    /// WebView2 refused or failed a suspension. Each refusal in a row doubles the wait before
+    /// the next attempt, up to `REFUSAL_CAP`, so a refusal Syrinx cannot explain (a capture,
+    /// say) is not retried every five seconds.
+    pub(super) fn suspension_refused(&mut self, now: Instant) {
+        self.suspending = false;
+        let count = self
+            .refusals
+            .map_or(1, |refusals| refusals.count.saturating_add(1));
+        self.refusals = Some(Refusals { count, last: now });
+        self.rearm(now);
     }
 
     /// A suspension request is in progress or done; nothing is due until a resume or refusal.
@@ -158,11 +188,23 @@ impl HiddenTimer {
         self.due = due.map(|due| self.not_before(due));
     }
 
-    /// The earliest a hidden page may be due: never within `AUDIO_GRACE` of its sound stopping.
+    /// The earliest a hidden page may be due: never within `AUDIO_GRACE` of its sound stopping,
+    /// and never within the backoff of its last refusal.
     fn not_before(&self, due: Instant) -> Instant {
-        self.quiet_since
-            .map_or(due, |quiet| due.max(quiet + AUDIO_GRACE))
+        let floors = [
+            self.quiet_since.map(|quiet| quiet + AUDIO_GRACE),
+            self.refusals
+                .map(|refusals| refusals.last + refusal_wait(refusals.count)),
+        ];
+        floors.into_iter().flatten().fold(due, Instant::max)
     }
+}
+
+/// The wait after `count` refusals in a row: `GRACE`, doubled each time, capped at `REFUSAL_CAP`.
+fn refusal_wait(count: u32) -> Duration {
+    2u32.checked_pow(count)
+        .and_then(|factor| GRACE.checked_mul(factor))
+        .map_or(REFUSAL_CAP, |wait| wait.min(REFUSAL_CAP))
 }
 
 #[cfg(test)]
@@ -333,18 +375,19 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_suspension_is_not_due_twice_and_restart_rearms() {
+    fn a_pending_suspension_is_not_due_twice_and_a_resume_rearms() {
         let start = Instant::now();
         let mut timer = HiddenTimer::new(start);
         timer.suspension_requested();
         assert!(!timer.suspension_due(start + LOADING_LIMIT));
-        timer.restart(start + Duration::from_secs(1));
+        timer.resumed(start + Duration::from_secs(1));
         assert_eq!(timer.due(), Some(start + Duration::from_secs(1) + GRACE));
-        // A refused suspension past the loading limit waits a grace before retrying.
+        // A refused suspension past the loading limit waits its backoff before retrying.
         let mut stuck = hidden_loading(start, 1);
         let late = start + LOADING_LIMIT + Duration::from_secs(1);
-        stuck.restart(late);
-        assert_eq!(stuck.due(), Some(late + GRACE));
+        stuck.suspension_requested();
+        stuck.suspension_refused(late);
+        assert_eq!(stuck.due(), Some(late + GRACE * 2));
     }
 
     #[test]
@@ -364,7 +407,7 @@ mod tests {
         timer.shown(false, limit + Duration::from_secs(4));
         assert!(!timer.suspension_due(limit + LOADING_LIMIT * 2));
         let resumed = limit + Duration::from_secs(10);
-        timer.restart(resumed);
+        timer.resumed(resumed);
         assert_eq!(timer.due(), Some(resumed + GRACE));
     }
 
@@ -462,7 +505,7 @@ mod tests {
         assert_eq!(timer.due(), None);
         assert!(timer.suspending());
         // The refusal arrives; the page is playing, so still nothing is due.
-        timer.restart(limit + Duration::from_secs(1));
+        timer.suspension_refused(limit + Duration::from_secs(1));
         assert!(!timer.suspending());
         assert_eq!(timer.due(), None);
         let stopped = limit + Duration::from_secs(5);
@@ -513,5 +556,56 @@ mod tests {
         let hidden = stopped + AUDIO_GRACE + Duration::from_secs(5);
         timer.shown(false, hidden);
         assert_eq!(timer.due(), Some(hidden + GRACE));
+    }
+
+    #[test]
+    fn repeated_refusals_double_the_wait_up_to_the_cap() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        let mut refused = start + GRACE;
+        // WebView2 keeps refusing (a capture, say): 10, 20, 40, 80, 160 s, then the cap holds.
+        for expected in [10, 20, 40, 80, 160, 240, 240] {
+            timer.suspension_requested();
+            timer.suspension_refused(refused);
+            assert_eq!(timer.due(), Some(refused + Duration::from_secs(expected)));
+            refused += Duration::from_secs(expected);
+        }
+    }
+
+    #[test]
+    fn refusal_waits_are_capped_even_after_many_refusals() {
+        assert_eq!(refusal_wait(0), GRACE);
+        assert_eq!(refusal_wait(1), GRACE * 2);
+        assert_eq!(refusal_wait(6), REFUSAL_CAP);
+        assert_eq!(refusal_wait(40), REFUSAL_CAP);
+        assert_eq!(refusal_wait(u32::MAX), REFUSAL_CAP);
+    }
+
+    #[test]
+    fn a_refusal_backoff_resets_on_show_or_navigation() {
+        let start = Instant::now();
+        let second = start + Duration::from_secs(10);
+        let mut shown = HiddenTimer::new(start);
+        shown.suspension_requested();
+        shown.suspension_refused(start);
+        shown.suspension_requested();
+        shown.suspension_refused(second);
+        assert_eq!(shown.due(), Some(second + Duration::from_secs(20)));
+        shown.shown(true, second + Duration::from_secs(2));
+        let hidden = second + Duration::from_secs(3);
+        shown.shown(false, hidden);
+        assert_eq!(shown.due(), Some(hidden + GRACE));
+
+        let mut navigated = HiddenTimer::new(start);
+        navigated.suspension_requested();
+        navigated.suspension_refused(start);
+        navigated.suspension_requested();
+        navigated.suspension_refused(second);
+        let started = second + Duration::from_secs(2);
+        navigated.navigation_started(9, started);
+        assert_eq!(navigated.due(), Some(started + LOADING_LIMIT));
+        let finished = started + Duration::from_secs(1);
+        navigated.navigation_completed(9, finished);
+        assert_eq!(navigated.due(), Some(finished + GRACE));
     }
 }

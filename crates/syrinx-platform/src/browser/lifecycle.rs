@@ -238,7 +238,7 @@ impl Lifecycle {
             let mut state = self.state.borrow_mut();
             state.request += 1;
             state.pending = false;
-            state.timer.restart(Instant::now());
+            state.timer.resumed(Instant::now());
         }
         unsafe { core.Resume() }.map_err(|_| BrowserError::Suspension)?;
         let mut suspended = BOOL::default();
@@ -305,14 +305,14 @@ impl Lifecycle {
                     suspended: true,
                 });
             } else {
-                state.timer.restart(Instant::now());
+                state.timer.suspension_refused(Instant::now());
             }
             Ok(())
         }));
         if unsafe { core.TrySuspend(&completion) }.is_err() {
             let mut state = self.state.borrow_mut();
             state.pending = false;
-            state.timer.restart(Instant::now());
+            state.timer.suspension_refused(Instant::now());
             return Err(BrowserError::Suspension);
         }
         Ok(())
