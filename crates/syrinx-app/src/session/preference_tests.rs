@@ -1,6 +1,8 @@
-//! Proves that appearance settings and tile edits survive a real worker restart.
+//! Proves that appearance settings, tile edits and site zoom levels survive a real worker
+//! restart, and that a zoom clear goes through D47's journal (#121).
 
 use syrinx_core::{BuiltInPlugin, Destination, DestinationTarget};
+use syrinx_store::deletion::{DeletionCategory, DeletionRange};
 
 use super::*;
 
@@ -303,10 +305,65 @@ fn clearing_every_site_zoom_reports_the_count_and_what_remains() {
         event => panic!("expected the synthetic zoom clear, got {event:?}"),
     }
     stop(handle, &mut events);
+    // The clear is journaled, so a restored backup replays it (D47, #121).
+    assert_eq!(
+        completed_clears(&fixture),
+        (1, vec![DeletionCategory::SiteZoom])
+    );
 
     let (handle, mut events) = fixture.start();
     assert!(site_zooms(&mut events).is_empty(), "the clear is durable");
     state(&mut events);
     stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+/// The journal after the worker stopped: its completed generation and every clear's category.
+/// Panics on a pending clear, since a stopped worker leaves none.
+fn completed_clears(fixture: &Fixture) -> (u64, Vec<DeletionCategory>) {
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let journal = DeletionJournal::open(&lease).expect("reopen synthetic journal");
+    assert_eq!(journal.log().pending(), None);
+    let categories = journal
+        .log()
+        .unapplied(0)
+        .expect("every synthetic clear")
+        .iter()
+        .map(|request| request.category())
+        .collect();
+    (journal.log().completed_generation(), categories)
+}
+
+#[test]
+fn a_zoom_clear_requested_before_a_crash_finishes_at_the_next_start() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    site_zooms(&mut events);
+    state(&mut events);
+    send(&handle, zoom("crashed.example.test", Some(1.25)));
+    stop(handle, &mut events);
+
+    // Step 1 alone is durable: the request is journaled, nothing is applied or completed.
+    let now = utc_seconds().expect("synthetic clock");
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let mut journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let range = DeletionRange::new(now - 3_600, now + 1).expect("valid synthetic range");
+    let request = journal
+        .log()
+        .request(DeletionCategory::SiteZoom, range)
+        .expect("prepare synthetic request");
+    journal.append(request).expect("journal synthetic request");
+    drop(journal);
+    drop(lease);
+
+    // The start-up finishes the clear before the window hears any level.
+    let (handle, mut events) = fixture.start();
+    assert!(site_zooms(&mut events).is_empty());
+    state(&mut events);
+    stop(handle, &mut events);
+    assert_eq!(
+        completed_clears(&fixture),
+        (1, vec![DeletionCategory::SiteZoom])
+    );
     fixture.cleanup();
 }

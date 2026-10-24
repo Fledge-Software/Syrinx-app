@@ -134,7 +134,8 @@ pub enum SessionCommand {
         factor: Option<f64>,
     },
     /// Forgets the zoom levels changed in `[start, end)` Unix seconds, with Clear browsing
-    /// data's cookies and site data (#90); answered with `SiteZoomsCleared`.
+    /// data's cookies and site data (#90), through D47's journal so a restored backup cannot
+    /// bring them back (#121); answered with `SiteZoomsCleared`.
     ClearSiteZooms {
         request_id: u64,
         start: i64,
@@ -327,7 +328,7 @@ pub enum SessionError {
     Snapshot(SnapshotError),
     Search(SearchError),
     Destination(DestinationError),
-    /// The history-deletion journal refused or failed a record (D47).
+    /// The deletion journal refused or failed a record (D47).
     Deletion(JournalError),
     /// The usage file could not be read, written or deleted (AN-01); never fatal.
     Usage(UsageError),
@@ -1040,6 +1041,11 @@ impl Worker {
                 start,
                 end,
             } => return self.clear_history(store, request_id, start, end, events),
+            SessionCommand::ClearSiteZooms {
+                request_id,
+                start,
+                end,
+            } => return self.clear_site_zooms(store, request_id, start, end, events),
             SessionCommand::OpenHistory(id) => match self.history_destination(id) {
                 Ok(command) => command,
                 Err(error) => return emit_recoverable(events, error),
@@ -1329,13 +1335,49 @@ impl Worker {
             start,
             end,
         );
+        self.report_cleared(result, events, |result| SessionEvent::HistoryCleared {
+            request_id,
+            result,
+        })
+    }
+
+    /// Clears saved zoom levels through the same journal as history (#121).
+    fn clear_site_zooms(
+        &mut self,
+        store: &Store,
+        request_id: u64,
+        start: i64,
+        end: i64,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let result = deletions::clear_site_zooms(
+            store,
+            &mut self.deletions,
+            &mut self.catalogue,
+            &mut self.history,
+            start,
+            end,
+        );
+        self.report_cleared(result, events, |result| SessionEvent::SiteZoomsCleared {
+            request_id,
+            result,
+        })
+    }
+
+    /// Tells the dialog a clear's outcome, then lets a storage failure decide the session's fate.
+    fn report_cleared<T>(
+        &mut self,
+        result: Result<T, SessionError>,
+        events: &UnboundedSender<SessionEvent>,
+        event: impl FnOnce(Result<T, SessionError>) -> SessionEvent,
+    ) -> Result<(), SessionError> {
         // The dialog always hears the outcome. Lost storage still stops the session; a busy
         // one is logged, and the journal finishes the clear first next time (D47).
         let failure = match &result {
             Err(SessionError::Store(error)) => Some(SessionError::Store(error.clone())),
             _ => None,
         };
-        let delivered = emit(events, SessionEvent::HistoryCleared { request_id, result });
+        let delivered = emit(events, event(result));
         if let Some(failure) = failure {
             self.survival.survive_shown(failure)?;
         }

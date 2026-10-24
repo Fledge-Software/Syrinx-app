@@ -130,7 +130,7 @@ pub(crate) fn delete_ranges(
 }
 
 /// Removes the levels changed in `[start, end)` Unix seconds; returns how many sites were cleared.
-pub(crate) fn clear(connection: &Connection, start: i64, end: i64) -> Result<usize, StoreError> {
+fn clear(connection: &Connection, start: i64, end: i64) -> Result<usize, StoreError> {
     connection
         .execute(
             "DELETE FROM site_zoom WHERE last_modified >= ?1 AND last_modified < ?2",

@@ -263,17 +263,6 @@ impl Store {
         result.recv().map_err(|_| StoreError::WorkerUnavailable)?
     }
 
-    /// Forgets the zoom levels changed in `[start, end)` Unix seconds; returns how many.
-    pub fn clear_site_zooms(&self, start: i64, end: i64) -> Result<usize, StoreError> {
-        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
-        let (reply, result) = mpsc::sync_channel(1);
-        writer
-            .sender
-            .send(WriterRequest::ClearSiteZoom { start, end, reply })
-            .map_err(|_| StoreError::WorkerUnavailable)?;
-        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
-    }
-
     /// Creates a daily validated backup only while idle. This blocks on the existing writer queue.
     pub fn backup_if_due(
         &self,
@@ -478,11 +467,6 @@ enum WriterRequest {
         modified_at: i64,
         reply: mpsc::SyncSender<Result<(), StoreError>>,
     },
-    ClearSiteZoom {
-        start: i64,
-        end: i64,
-        reply: mpsc::SyncSender<Result<usize, StoreError>>,
-    },
     /// D47 journal requests to apply in one transaction, whatever their categories.
     Deletions {
         requests: Vec<DeletionRequest>,
@@ -613,10 +597,6 @@ fn serve_writes(
             } => {
                 let result =
                     crate::site_zoom::write(&writer.connection, &host, factor, modified_at);
-                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
-            }
-            WriterRequest::ClearSiteZoom { start, end, reply } => {
-                let result = crate::site_zoom::clear(&writer.connection, start, end);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
             WriterRequest::Deletions { requests, reply } => {
