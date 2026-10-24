@@ -1121,7 +1121,7 @@ Syrinx made, `Updates\apply`, `incoming` and the staging mark), and reports
 `discarded_for_unreadable_state`. The installed `Programs\Syrinx` is not
 touched, the damaged `state` is left for the reset, and the owner is told
 once: "Syrinx couldn't read its update records, so it removed the update
-that was waiting to install. Reset update records in Customize, then check
+that was waiting to install. Reset update records in Settings, then check
 for updates again." The action is then shown and works, since no `pending`
 remains. Tests: `start_up_discards_a_staged_update_beside_an_unreadable_record`
 and `start_up_keeps_a_staged_update_beside_a_readable_record`

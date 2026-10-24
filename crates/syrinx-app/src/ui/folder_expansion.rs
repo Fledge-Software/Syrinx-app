@@ -88,10 +88,22 @@ pub(super) fn parse_expanded(value: &str) -> Option<BTreeSet<SavedFolderId>> {
         .collect()
 }
 
-/// The setting that records `expanded`.
+/// The setting that records `expanded`. It keeps the newest folders (the highest IDs) that
+/// fit the store's value limit, so a long list is shortened rather than refused (#9).
 pub(super) fn expanded_setting(expanded: &BTreeSet<SavedFolderId>) -> (String, String) {
-    let ids: Vec<String> = expanded.iter().map(|id| id.get().to_string()).collect();
-    (EXPANDED_FOLDERS_KEY.to_owned(), ids.join(" "))
+    let mut kept = Vec::new();
+    let mut length = 0;
+    for id in expanded.iter().rev() {
+        let text = id.get().to_string();
+        let added = text.len() + usize::from(!kept.is_empty());
+        if length + added > syrinx_store::MAX_SETTING_VALUE_BYTES {
+            break;
+        }
+        length += added;
+        kept.push(text);
+    }
+    kept.reverse();
+    (EXPANDED_FOLDERS_KEY.to_owned(), kept.join(" "))
 }
 
 /// Every folder except those stored as expanded starts collapsed.
@@ -119,6 +131,20 @@ mod tests {
             .iter()
             .map(|&value| SavedFolderId::new(value).expect("synthetic folder id"))
             .collect()
+    }
+
+    #[test]
+    fn a_long_list_keeps_the_newest_folders_within_the_store_limit() {
+        let expanded: BTreeSet<_> = ids(&(1_000..1_100).collect::<Vec<_>>())
+            .into_iter()
+            .collect();
+        let (_, value) = expanded_setting(&expanded);
+        assert!(value.len() <= syrinx_store::MAX_SETTING_VALUE_BYTES);
+        let kept = parse_expanded(&value).expect("the shortened setting still parses");
+        // Fifty-one four-digit IDs and their spaces fill 254 bytes; the newest ones stay.
+        assert_eq!(kept.len(), 51);
+        assert_eq!(kept.iter().next_back(), expanded.iter().next_back());
+        assert_eq!(kept.iter().next().map(|id| id.get()), Some(1_049));
     }
 
     #[test]

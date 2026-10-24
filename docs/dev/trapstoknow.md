@@ -290,11 +290,12 @@ you found it in the commit message, not here.
   `update_in` failed until the main window drew again; the session event loop
   stopped on that failure, losing the click's tab switch (#10) and failing the
   worker's next send (#9). Update the browser view from tasks only through
-  `ui::main_window::update_in_main`. A unit test refuses `.update_in(` under
-  `src/ui` (only `main_window.rs` is exempt), and `cargo xtask
-  palette-acceptance` clicks a peek row (`peek_click_*`). `subscribe_in`,
-  `observe_in` and `defer_in` resolve their window the same way: while the peek
-  is open they get the popup, and once it closes they do nothing. Source:
+  `ui::main_window::update_in_main`. `subscribe_in`, `observe_in` and
+  `defer_in` resolve their window the same way: while the peek is open they get
+  the popup, and once it closes they do nothing. Subscribe the browser view
+  through `ui::main_window::subscribe_in_main` instead (#81). A unit test
+  refuses all four under `src/ui` (only `main_window.rs` is exempt), and
+  `cargo xtask palette-acceptance` clicks a peek row (`peek_click_*`). Source:
   `gpui-pre-0.3.8/src/app.rs`, `App::with_window` (line 2064) and the
   window-removal cleanup of `current_window_by_entity` (line 3049),
   `app/context.rs` lines 301-341, and the harness's peek step (observed
@@ -543,13 +544,16 @@ you found it in the commit message, not here.
 
 ## Local search
 
-- **Tantivy prefix matches can produce empty native snippets.** In 0.26.2,
-  `PhrasePrefixQuery::query_terms` omits the suffix term used for prefix
-  matching. `SnippetGenerator::create` therefore cannot highlight that
+- **Tantivy prefix matches can produce empty native snippets.** In 0.26.2 and
+  0.27.0 (whose `phrase_prefix_query.rs` and `SnippetGenerator::create` are
+  identical), `PhrasePrefixQuery::query_terms` omits the suffix term used
+  for prefix matching. `SnippetGenerator::create` therefore cannot highlight that
   expansion by itself. P1-23 expands the body terms inside the query timer
   and rejects empty snippets for its matching body queries; otherwise the
   timing would compare different amounts of work. Source:
-  [`docs/p1-23-fulltext-bakeoff.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-23-fulltext-bakeoff.md), continuation method and focused tests.
+  [`docs/p1-23-fulltext-bakeoff.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-23-fulltext-bakeoff.md),
+  continuation method and focused tests; the 0.27.0 recheck is a source
+  comparison, recorded in `docs/dev/fulltext-audit.md`.
 - **Tantivy deletion alone retains stored bodies in active segments.** D40
   needs segment merging and successful garbage collection after releasing
   old readers, including when only one segment has deletions. P1-23 scans

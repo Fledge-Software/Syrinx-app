@@ -1,4 +1,5 @@
-//! Gives chrome and focused pages the same native browser controls and visible zoom level.
+//! Gives chrome and focused pages the same native browser controls and visible zoom level,
+//! and keeps each site's remembered zoom level on its pages (#90).
 
 use super::*;
 use syrinx_platform::browser::PageAction;
@@ -60,13 +61,66 @@ impl BrowserView {
             }))
     }
 
+    /// The zoom level of the page in view; 100% when no page is shown.
+    pub(super) fn shown_zoom(&self) -> f64 {
+        self.shown.map_or(1., |id| self.site_zoom.factor(id.get()))
+    }
+
+    /// Page `id` moved to `address`: it takes that site's remembered level.
+    pub(super) fn page_site_changed(&mut self, id: u64, address: &str) {
+        if let Some(level) = self.site_zoom.page_address(id, address) {
+            self.set_page_zoom(id, level);
+        }
+    }
+
+    /// Page `id` reports a zoom level: the owner's change is saved for its site and copied
+    /// to the site's other open pages, and an open page menu shows the new level.
+    pub(super) fn page_zoom_reported(&mut self, id: u64, factor: f64, cx: &mut Context<Self>) {
+        let choice = self.site_zoom.page_reported(id, factor);
+        for (page, level) in choice.follow {
+            self.set_page_zoom(page, level);
+        }
+        if let Some((host, factor)) = choice.save {
+            self.command(SessionCommand::SiteZoom { host, factor });
+        }
+        if self.shown.is_some_and(|shown| shown.get() == id) {
+            self.menu_zoom_changed(factor, cx);
+        }
+    }
+
+    /// Asks page `id` to take `level`; when the request cannot be sent, the page's later
+    /// reports count as the owner's again.
+    fn set_page_zoom(&mut self, id: u64, level: f64) {
+        let sent = self.page_command(BrowserCommand::PageAction {
+            id,
+            action: PageAction::SetZoom(level),
+        });
+        if !sent {
+            self.site_zoom.abandon_apply(id);
+        }
+    }
+
+    /// A Clear browsing data request removed zoom levels: open pages of cleared sites return
+    /// to 100%, and the dialog learns the outcome.
+    pub(super) fn site_zooms_cleared(
+        &mut self,
+        request: u64,
+        result: Result<crate::session::ClearedSiteZooms, crate::session::SessionError>,
+    ) {
+        let result = result.map(|cleared| {
+            for (page, level) in self.site_zoom.replace_saved(cleared.remaining.0) {
+                self.set_page_zoom(page, level);
+            }
+            cleared.sites
+        });
+        self.site_zooms_cleared_for_dialog(request, result);
+    }
+
     /// The title bar's corner keeps only Downloads in view; Find, Print and zoom live in the
-    /// page menu and on their keys. The zoom level shows only away from 100%; a click resets it.
+    /// page menu and on their keys. Away from 100% the zoom stepper shows, as in Chrome:
+    /// − and + step the level, and a click on the percentage resets it.
     pub(super) fn essential_controls(&self, cx: &mut Context<Self>) -> Div {
-        let factor = self
-            .shown
-            .and_then(|id| self.zoom_levels.get(&id.get()).copied())
-            .unwrap_or(1.);
+        let factor = self.shown_zoom();
         let downloads = crate::controls::icon_button(
             div().id("downloads"),
             crate::controls::glyph::DOWNLOADS,
@@ -83,31 +137,88 @@ impl BrowserView {
             .items_center()
             .gap_1()
             .children(zoom_label(factor).map(|label| {
-                crate::controls::push_button(div().id("zoom-reset"), "Reset zoom")
-                    .aria_value(label.clone())
-                    .aria_keyshortcuts("Control+0")
-                    .occlude()
-                    .h(px(22.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .rounded(px(11.))
-                    .bg(theme::line())
-                    .text_size(px(syrinx_ui::metrics::text::SMALL))
-                    .cursor_pointer()
-                    .child(label)
-                    .on_click(cx.listener(|this, _, _, _| {
-                        this.essential_shortcut(BrowserShortcut::ZoomReset)
-                    }))
+                let browser = cx.weak_entity();
+                zoom_stepper("title-zoom", label, move |shortcut, _, cx| {
+                    let stepped = browser.update(cx, |view, _| view.essential_shortcut(shortcut));
+                    if stepped.is_err() {
+                        eprintln!("A zoom click arrived after its browser was removed.");
+                    }
+                })
+                .occlude()
+                .bg(theme::line())
             }))
             .child(downloads)
     }
 }
 
+/// The zoom stepper the title bar and the page menu share: − , the percentage, +.
+/// `step` receives Zoom out, Reset zoom (the percentage) or Zoom in.
+pub(super) fn zoom_stepper(
+    id: &'static str,
+    label: String,
+    step: impl Fn(BrowserShortcut, &mut Window, &mut App) + Clone + 'static,
+) -> Stateful<Div> {
+    // Each button's id is the stepper's id and its position: 0 −, 1 the percentage, 2 +.
+    let part = |index: usize, name: &'static str, keys: &'static str| {
+        crate::controls::push_button(div().id((id, index)), name)
+            .aria_keyshortcuts(keys)
+            .h(px(22.))
+            .min_w(px(22.))
+            .px_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(11.))
+            .cursor_pointer()
+            .hover(|style| style.bg(theme::line()))
+    };
+    let on = |shortcut: BrowserShortcut| {
+        let step = step.clone();
+        move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+            cx.stop_propagation();
+            step(shortcut, window, cx);
+        }
+    };
+    div()
+        .id(id)
+        .role(gpui::Role::Group)
+        .aria_label("Zoom")
+        .h(px(22.))
+        .flex()
+        .items_center()
+        .rounded(px(11.))
+        .text_size(px(syrinx_ui::metrics::text::SMALL))
+        .child(
+            part(0, "Zoom out", "Control+-")
+                .font_family(crate::controls::glyph::FONT)
+                .text_size(px(10.))
+                .child(crate::controls::glyph::REMOVE)
+                .on_click(on(BrowserShortcut::ZoomOut)),
+        )
+        .child(
+            part(1, "Reset zoom", "Control+0")
+                .aria_value(label.clone())
+                .child(label)
+                .on_click(on(BrowserShortcut::ZoomReset)),
+        )
+        .child(
+            part(2, "Zoom in", "Control+=")
+                .font_family(crate::controls::glyph::FONT)
+                .text_size(px(10.))
+                .child(crate::controls::glyph::ADD)
+                .on_click(on(BrowserShortcut::ZoomIn)),
+        )
+}
+
 /// The zoom level as a percentage, or `None` at 100%, where nothing needs showing.
 fn zoom_label(factor: f64) -> Option<String> {
-    let percent = (factor * 100.).round();
-    (percent != 100.).then(|| format!("{percent:.0}%"))
+    let percent = zoom_percent(factor);
+    (percent != "100%").then_some(percent)
+}
+
+/// The zoom level as the page menu always shows it, such as "110%".
+pub(super) fn zoom_percent(factor: f64) -> String {
+    format!("{:.0}%", (factor * 100.).round())
 }
 
 fn page_action(id: Option<u64>, shortcut: BrowserShortcut) -> Option<BrowserCommand> {
