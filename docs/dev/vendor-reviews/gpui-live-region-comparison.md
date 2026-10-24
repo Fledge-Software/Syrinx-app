@@ -39,8 +39,8 @@ asked to decide.
   second GPUI package of 161 files and 8.3 MB, with a provenance record, a
   new `[patch.crates-io]` override, and a new `AGENTS.md` exception for the
   upstream deferred-work comments it carries (fifteen upper-case
-  `TODO`/`FIXME`/`HACK` words, twenty-seven counting lower-case `todo`
-  notes).
+  `TODO`/`FIXME`/`HACK` words; twenty-eight whole words of any case, once
+  the lower-case `todo` notes are counted).
 - **Option (b), the move,** has no target. Upstream Zed's `main` as of today
   (`af4948a1`, 2026-10-24) still has no live setter, and neither does the
   newest published snapshot, `gpui-pre 0.3.9`. A move would re-vendor the
@@ -90,10 +90,9 @@ all three are already in the pinned dependencies:
    from the NVDA repository today) and its base handler speaks the node's
    name, ahead of queued speech for `Assertive` (NVDA's `NEXT` priority) and
    at normal priority otherwise (`source/NVDAObjects/__init__.py`, lines
-   1238–1252). Its UI
-   Automation layer drops a repeat of the same text within half a second
-   (`source/NVDAObjects/UIA/__init__.py`, lines 1663–1673), which suits a
-   footer that may set the same message twice.
+   1238–1252). Its UI Automation layer drops a repeat of the same text
+   within half a second (`source/NVDAObjects/UIA/__init__.py`, lines
+   1663–1673), which suits a footer that may set the same message twice.
 
 So the only missing link is the first step on GPUI's side: nothing in Syrinx's
 code path calls `set_live` on the status nodes.
@@ -165,7 +164,10 @@ copy of the published archive, a unified diff with hashes, an
 | Files in the package | 29 | 161 |
 | Bytes | 658,607 | 8,327,520 |
 | Rust source files, lines | 21 files, 13,181 lines | 93 files, 86,912 lines |
-| Upper-case `TODO`/`FIXME`/`HACK` words in `src/` (any case) | 2 (7) | 15 (27) |
+| Upper-case `TODO`/`FIXME`/`HACK` markers in `src/` (any case in brackets) | 2 (7) | 15 (28) |
+
+Both marker rows count whole words (`grep -w`), upper-case first and any
+case in brackets, so a line that holds two markers counts twice.
 
 The gate's marker scan reads only `crates/` (`crates/xtask/src/deferred_work.rs`,
 line 24), so the upstream comments would not fail it, but
@@ -227,8 +229,9 @@ closed unmerged on 2026-04-21), included `aria_live()` among twelve builder
 methods. The design that did merge, PR #56065 ("gpui: Accesskit support",
 2026-05-27), is the one in 0.3.8 and left `live` out. Nine merged pull
 requests in the repository mention AccessKit, seven of them after that
-design landed; the closest in shape to this patch is PR #61926 ("gpui: Expose accessibility identifiers to platform
-clients", 2026-08-07), which added one property (`accessibility_id`) to
+design landed; the closest in shape to this patch is PR #61926 ("gpui:
+Expose accessibility identifiers to platform clients", 2026-08-07), which
+added one property (`accessibility_id`) to
 `AriaProperties` and `write_a11y_info` in exactly the way sketched above. So
 an upstream `aria_live` pull request is plausible and has a precedent, but
 its timing is not Syrinx's to control, and Syrinx would only stop carrying
@@ -285,11 +288,13 @@ Recorded so the owner can weigh a move on its own merits later:
   `events.rs`, `platform.rs`, `window.rs`, `direct_manipulation.rs` and
   `gpui_windows.rs` and adds `frame_demand.rs`; the embedded-shaders patch
   touches `build.rs` and `directx_renderer.rs`. Between the two snapshots
-  upstream changed `crates/gpui_windows/build.rs`, `src/display.rs`,
-  `src/events.rs`, `src/platform.rs` and `src/window.rs` (GitHub compare
-  `279fe070...93d7456`: 128 commits; the file list is capped at 300 entries
-  and this comparison hit the cap, so it is a lower bound). Both patches
-  would need rebasing, the idle measurement rerun against D37's 0.5 % bar,
+  upstream changed `crates/gpui_windows/Cargo.toml`, `build.rs`,
+  `src/display.rs`, `src/events.rs`, `src/platform.rs` and `src/window.rs`
+  (GitHub compare `279fe070...93d7456`: 128 commits; the file list is capped
+  at 300 entries and this comparison hit the cap, so it is a lower bound).
+  The manifest change means the backend's own pins and features would be
+  re-checked, not only its sources. Both patches would need rebasing, the
+  idle measurement rerun against D37's 0.5 % bar,
   and a release zip tested on a machine other than the builder for the
   shader embedding.
 - **Traps pinned to 0.3.8 line numbers** (`docs/dev/trapstoknow.md`, "The
@@ -310,14 +315,21 @@ anything.
 
 ### The sketch
 
-A helper in `crates/syrinx-app`, used by both status elements:
+Two small functions in `crates/syrinx-app`, used by both status elements.
+The first takes the bare node so a unit test can drive it; the second is
+the one-line adapter GPUI's hook calls:
 
 ```rust
-/// Marks the element's own node as a polite live region, so a screen
-/// reader reads its text when it changes. GPUI 0.3.8 has no `aria_live`;
-/// `parent_node` is the element's node while it is being built.
+/// Marks a node as a polite live region, so a screen reader reads its
+/// text when it changes without the owner moving to it.
+fn mark_live(node: &mut gpui::accesskit::Node) {
+    node.set_live(gpui::accesskit::Live::Polite);
+}
+
+/// GPUI 0.3.8 has no `aria_live`; `parent_node` is the element's own node
+/// while it is being built, so the synthetic-children hook marks that.
 fn announce_changes(builder: &mut gpui::A11ySubtreeBuilder) {
-    builder.parent_node().set_live(gpui::accesskit::Live::Polite);
+    mark_live(builder.parent_node());
 }
 ```
 
@@ -345,7 +357,7 @@ error notices ("Saving and closing…", "This popup could not be opened.",
 restore line appears after the owner's own confirmation, so it needs no
 interruption either. `Assertive` maps to NVDA's `NEXT` priority, which
 jumps the speech queue, and would suit the permission bar's `Role::Alert`
-(`ui.rs`, line 2135), which is outside #101 and could reuse the same helper
+(`ui.rs`, line 2133), which is outside #101 and could reuse the same helper
 later.
 
 ### Why it is sound, and where it is a side use
@@ -355,7 +367,15 @@ node GPUI pushed for this element (`element.rs`, lines 370–382 and 428–437;
 `a11y.rs`, lines 459–461); the node is finalised after the closure (line
 439; `a11y.rs`, lines 465–471); the adapter raises `LiveRegionChanged` on
 appearance and on name change (`accesskit_windows/src/adapter.rs`, lines
-257–263 and 315–325); NVDA speaks the name. No step is inferred.
+257–264 and 315–325); NVDA speaks the name. No step is inferred.
+
+One boundary for the implementation slice: the consumer library the adapter
+reads the tree through, `accesskit_consumer 0.38.0`, resolves `live()` by
+falling back to the parent's value when a node sets none (`src/node.rs`,
+lines 889–893), so marking a status node live makes every node under it
+live as well. Neither status element contributes child nodes today, so
+nothing else changes; a future child, such as a synthetic text run, would
+be announced too.
 
 The reservation: `parent_node` is documented only as "A mutable reference to
 the parent node", inside a builder whose documented purpose is adding
@@ -385,12 +405,11 @@ same route for focus reporting.
 Synthetic status text only, on fresh `--test-data-dir` profiles deleted
 afterwards; no capture that shows a tab title or address (the AN-02 trap).
 
-1. **Unit test, in the gate.** The helper is written to take
-   `&mut accesskit::Node` so a test can apply it to
-   `accesskit::Node::new(Role::Status)` and assert
-   `live() == Some(Live::Polite)`; the `A11ySubtreeBuilder` wrapper is a
-   one-line adapter over it, since the builder's constructor is
-   crate-private and cannot be driven from a test.
+1. **Unit test, in the gate.** `mark_live` takes `&mut accesskit::Node`,
+   so a test applies it to `accesskit::Node::new(Role::Status)` and asserts
+   `live() == Some(Live::Polite)`; `announce_changes` is the one-line
+   adapter over it, since the builder's constructor is crate-private and
+   cannot be driven from a test.
 2. **UI Automation probe, by an agent.** As in P1-36 (`docs/p1-36-accessibility.md`
    at af3de53, "The probe"): attach a client to the `local` build and read
    the footer's node. The .NET `System.Windows.Automation` wrapper P1-36 used
@@ -455,9 +474,10 @@ move, it gets its own issue.
 | Source | What it established |
 | --- | --- |
 | `crates/syrinx-app/src/ui.rs`, lines 2149–2160; `crates/syrinx-app/src/ui/recovery.rs`, lines 84–91 | The two status elements: id, `Role::Status`, `aria_label` |
-| `gpui-pre 0.3.8` (registry): `src/elements/div.rs`, lines 1306–1715, 2106–2128, 3530–3604; `src/element.rs`, lines 368–439; `src/window/a11y.rs`, lines 304–368, 447–471; `src/window.rs`, line 69; `src/gpui.rs`, lines 97–99; `src/_accessibility.rs`; `Cargo.toml`, lines 47–50 | No `aria_live`; public `parent_node`; order of node build, synthetic children and finalisation; re-exports; snapshot revision |
+| `gpui-pre 0.3.8` (registry): `src/elements/div.rs`, lines 1306–1715, 2106–2128, 3530–3603; `src/element.rs`, lines 368–439; `src/window/a11y.rs`, lines 304–368, 447–471; `src/window.rs`, line 69; `src/gpui.rs`, lines 97–99; `src/_accessibility.rs`; `Cargo.toml`, lines 47–50 | No `aria_live`; public `parent_node`; order of node build, synthetic children and finalisation; re-exports; snapshot revision |
 | `vendor/gpui-pre-windows-0.3.8/src/window.rs`, lines 1094–1124; `vendor/gpui-pre-windows-0.3.8.provenance.md` | The backend only forwards tree updates; what is vendored today and how |
 | `accesskit 0.24.1`: `src/lib.rs`, lines 584–588, 1687–1705, 2139 | `Live` and `set_live` |
+| `accesskit_consumer 0.38.0`: `src/node.rs`, lines 889–893 | `live()` falls back to the parent's value when a node sets none |
 | `accesskit_windows 0.34.0`: `src/adapter.rs`, lines 245–270, 305–330; `src/node.rs`, lines 194, 365, 404–410, 546–551, 1318 | `LiveSetting` mapping, `LiveRegionChanged` on appearance and name change, name from label, `StatusBar` control type |
 | `windows 0.62.2`: `src/Windows/Win32/UI/Accessibility/mod.rs`, lines 20490–20491, 20592 | Property and event ids 30135, 20024, 50017 |
 | NVDA repository (`nvaccess/nvda`, `main`, read today): `source/UIAHandler/__init__.py`, line 257; `source/NVDAObjects/__init__.py`, lines 1238–1252; `source/NVDAObjects/UIA/__init__.py`, lines 1663–1673 | Event mapping, speech, repeat filter |

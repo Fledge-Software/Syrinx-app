@@ -94,7 +94,7 @@ With NVDA installed and running, work through the thirteen checks in
   `docs/dev/vendor-reviews/gpui-live-region-comparison.md` and choose how the
   footer and restore status lines become live regions; its recommendation
   needs no vendor patch. The NVDA check that they are announced comes with
-  that slice.
+  that slice; record the choice in #101.
 
 ### 5. Window checks of the Settings sections
 
