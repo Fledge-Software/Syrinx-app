@@ -1,4 +1,4 @@
-//! Decides when a hidden page may be suspended, so a page is never frozen mid-load.
+//! Decides when a hidden page may be suspended, so a page is never frozen mid-load or mid-song.
 
 use std::time::{Duration, Instant};
 
@@ -6,6 +6,9 @@ use std::time::{Duration, Instant};
 pub(super) const GRACE: Duration = Duration::from_secs(5);
 /// A load that never finishes must not keep a hidden page awake forever.
 pub(super) const LOADING_LIMIT: Duration = Duration::from_secs(60);
+/// How long a hidden page stays awake after its sound stops, so a pause between tracks or a
+/// short buffer never puts a listening tab to sleep (#130).
+pub const AUDIO_GRACE: Duration = Duration::from_secs(60);
 
 /// A main-frame navigation WebView2 has reported starting.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,11 +17,16 @@ struct Loading {
     started: Instant,
 }
 
-/// When the page may next be suspended: never while shown, `GRACE` after it settles while
-/// hidden, and no later than `LOADING_LIMIT` after a load that is still running began.
+/// When the page may next be suspended: never while shown or playing sound, `GRACE` after it
+/// settles while hidden, no later than `LOADING_LIMIT` after a load that is still running
+/// began, and never within `AUDIO_GRACE` of its sound stopping.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct HiddenTimer {
     visible: bool,
+    /// WebView2 reports the document as playing audio, muted or not.
+    playing: bool,
+    /// When the page's sound last stopped.
+    quiet_since: Option<Instant>,
     /// The confirmed navigation in flight, if any.
     loading: Option<Loading>,
     /// When Syrinx asked for a navigation that WebView2 has not yet reported starting.
@@ -33,6 +41,8 @@ impl HiddenTimer {
     pub(super) fn new(now: Instant) -> Self {
         Self {
             visible: false,
+            playing: false,
+            quiet_since: None,
             loading: None,
             requested: None,
             suspending: false,
@@ -42,6 +52,18 @@ impl HiddenTimer {
 
     pub(super) fn visible(&self) -> bool {
         self.visible
+    }
+
+    /// WebView2 reported that the document started or stopped playing audio. A suspended page
+    /// cannot start sound, so no resume on playback is ever needed.
+    pub(super) fn playback_changed(&mut self, playing: bool, now: Instant) {
+        if playing == self.playing {
+            return;
+        }
+        self.playing = playing;
+        // Only a page that was playing earns the audio grace; a seeded "not playing" does not.
+        self.quiet_since = (!playing).then_some(now);
+        self.rearm(now);
     }
 
     pub(super) fn due(&self) -> Option<Instant> {
@@ -128,11 +150,18 @@ impl HiddenTimer {
             .into_iter()
             .flatten()
             .min();
-        self.due = match (self.visible || self.suspending, in_flight) {
+        let due = match (self.visible || self.suspending || self.playing, in_flight) {
             (true, _) => None,
             (false, Some(started)) => Some(started + LOADING_LIMIT),
             (false, None) => Some(now + GRACE),
         };
+        self.due = due.map(|due| self.not_before(due));
+    }
+
+    /// The earliest a hidden page may be due: never within `AUDIO_GRACE` of its sound stopping.
+    fn not_before(&self, due: Instant) -> Instant {
+        self.quiet_since
+            .map_or(due, |quiet| due.max(quiet + AUDIO_GRACE))
     }
 }
 
@@ -368,5 +397,121 @@ mod tests {
         let finished = start + Duration::from_secs(3);
         timer.navigation_completed(2, finished);
         assert_eq!(timer.due(), Some(finished + GRACE));
+    }
+
+    fn hidden_playing(now: Instant) -> HiddenTimer {
+        let mut timer = HiddenTimer::new(now);
+        timer.playback_changed(true, now);
+        timer
+    }
+
+    #[test]
+    fn a_playing_hidden_page_is_never_due() {
+        let start = Instant::now();
+        let mut timer = hidden_loading(start, 1);
+        timer.playback_changed(true, start);
+        assert_eq!(timer.due(), None);
+        // Not even a load that hangs past its limit puts a playing page to sleep.
+        assert!(!timer.suspension_due(start + LOADING_LIMIT * 2));
+        timer.navigation_completed(1, start + Duration::from_secs(1));
+        assert_eq!(timer.due(), None);
+    }
+
+    #[test]
+    fn sound_stopping_arms_the_audio_grace_from_that_moment() {
+        let start = Instant::now();
+        let mut timer = hidden_playing(start);
+        let stopped = start + Duration::from_secs(10);
+        timer.playback_changed(false, stopped);
+        assert_eq!(timer.due(), Some(stopped + AUDIO_GRACE));
+        assert!(!timer.suspension_due(stopped + AUDIO_GRACE - Duration::from_millis(1)));
+        assert!(timer.suspension_due(stopped + AUDIO_GRACE));
+    }
+
+    #[test]
+    fn sound_restarting_within_the_grace_cancels_the_due_time() {
+        let start = Instant::now();
+        let mut timer = hidden_playing(start);
+        timer.playback_changed(false, start + Duration::from_secs(10));
+        timer.playback_changed(true, start + Duration::from_secs(40));
+        assert_eq!(timer.due(), None);
+        let stopped_again = start + Duration::from_secs(50);
+        timer.playback_changed(false, stopped_again);
+        assert_eq!(timer.due(), Some(stopped_again + AUDIO_GRACE));
+    }
+
+    #[test]
+    fn showing_and_hiding_a_playing_page_arms_nothing() {
+        let start = Instant::now();
+        let mut timer = hidden_playing(start);
+        timer.shown(true, start + Duration::from_secs(1));
+        timer.shown(false, start + Duration::from_secs(2));
+        assert_eq!(timer.due(), None);
+        assert!(!timer.suspension_due(start + LOADING_LIMIT));
+    }
+
+    #[test]
+    fn sound_during_a_pending_suspension_waits_for_the_completion() {
+        let start = Instant::now();
+        let mut timer = hidden_loading(start, 1);
+        let limit = start + LOADING_LIMIT;
+        assert!(timer.suspension_due(limit));
+        timer.suspension_requested();
+        // Audio starts before TrySuspend reports back: nothing changes until it does.
+        timer.playback_changed(true, limit);
+        assert_eq!(timer.due(), None);
+        assert!(timer.suspending());
+        // The refusal arrives; the page is playing, so still nothing is due.
+        timer.restart(limit + Duration::from_secs(1));
+        assert!(!timer.suspending());
+        assert_eq!(timer.due(), None);
+        let stopped = limit + Duration::from_secs(5);
+        timer.playback_changed(false, stopped);
+        assert_eq!(timer.due(), Some(stopped + AUDIO_GRACE));
+    }
+
+    #[test]
+    fn a_muted_page_that_plays_counts_as_playing() {
+        // WebView2 reports IsDocumentPlayingAudio as true even while IsMuted is true, and the
+        // timer has no mute input: the one playback flag decides, so a muted tab keeps its place.
+        let start = Instant::now();
+        let timer = hidden_playing(start);
+        assert_eq!(timer.due(), None);
+        assert!(!timer.suspension_due(start + LOADING_LIMIT * 2));
+    }
+
+    #[test]
+    fn a_pause_while_shown_still_delays_sleep_after_hiding() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.shown(true, start);
+        timer.playback_changed(true, start);
+        // The owner pauses the video, then switches tabs two seconds later.
+        let paused = start + Duration::from_secs(30);
+        timer.playback_changed(false, paused);
+        timer.shown(false, paused + Duration::from_secs(2));
+        assert_eq!(timer.due(), Some(paused + AUDIO_GRACE));
+    }
+
+    #[test]
+    fn a_page_that_never_played_keeps_the_ordinary_grace() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        // Creation seeds the runtime's state; a page that never played has no audio grace.
+        timer.playback_changed(false, start);
+        assert_eq!(timer.due(), Some(start + GRACE));
+    }
+
+    #[test]
+    fn a_quiet_page_hidden_after_the_audio_grace_uses_the_ordinary_grace() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.shown(true, start);
+        timer.playback_changed(true, start);
+        let stopped = start + Duration::from_secs(10);
+        timer.playback_changed(false, stopped);
+        let hidden = stopped + AUDIO_GRACE + Duration::from_secs(5);
+        timer.shown(false, hidden);
+        assert_eq!(timer.due(), Some(hidden + GRACE));
     }
 }
