@@ -26,6 +26,9 @@ impl Progress {
 #[derive(Default)]
 pub(super) struct NavigationStatus {
     pages: HashMap<TabId, Progress>,
+    /// Pages whose navigation became a download (#143). Such a navigation ends with success
+    /// false and no new document, so its completion is not a failed page load.
+    download_navigations: HashSet<TabId>,
 }
 
 impl NavigationStatus {
@@ -43,8 +46,19 @@ impl NavigationStatus {
         let (raw_id, progress) = match event {
             BrowserEvent::Loading { id, loading: true } => (*id, Progress::Loading),
             BrowserEvent::Loading { id, loading: false } => (*id, Progress::Finishing),
+            // The page shown is unchanged by a navigation that became a download, so its
+            // feedback stays as it was; `finish_download_navigation` spends the mark.
+            BrowserEvent::NavigationCompleted {
+                id, success: false, ..
+            } if self.became_download(*id) => return None,
             BrowserEvent::NavigationCompleted { id, success, .. } => {
                 (*id, Progress::Completed(*success))
+            }
+            // WebView2 raises DownloadStarting before it fails the navigation it took over.
+            BrowserEvent::DownloadStarted { tab, .. } => {
+                let id = owned_page(*tab, model, loaded, pending)?;
+                self.download_navigations.insert(id);
+                return None;
             }
             BrowserEvent::Error { tab: Some(id), .. } => {
                 let id = owned_page(*id, model, loaded, pending)?;
@@ -71,10 +85,31 @@ impl NavigationStatus {
     pub(super) fn retain(&mut self, model: &TabModelSnapshot) {
         self.pages
             .retain(|id, _| model.tabs.iter().any(|tab| tab.id == *id));
+        self.download_navigations
+            .retain(|id| model.tabs.iter().any(|tab| tab.id == *id));
     }
 
     pub(super) fn forget(&mut self, id: TabId) {
         self.pages.remove(&id);
+        self.download_navigations.remove(&id);
+    }
+
+    /// Whether page `id`'s completing navigation is one that became a download. The mark is
+    /// spent either way, so the page's next failed navigation is reported as a failure.
+    pub(super) fn finish_download_navigation(&mut self, id: u64) -> bool {
+        let Some(tab) = self
+            .download_navigations
+            .iter()
+            .copied()
+            .find(|tab| tab.get() == id)
+        else {
+            return false;
+        };
+        self.download_navigations.remove(&tab)
+    }
+
+    fn became_download(&self, id: u64) -> bool {
+        self.download_navigations.iter().any(|tab| tab.get() == id)
     }
 
     pub(super) fn active_message(&self, model: &TabModelSnapshot) -> Option<&'static str> {
@@ -423,5 +458,97 @@ mod tests {
             None
         );
         assert_eq!(status.active_message(&snapshot), None);
+    }
+
+    fn download_started(tab: u64) -> BrowserEvent {
+        BrowserEvent::DownloadStarted {
+            download: 1,
+            tab,
+            file_name: "synthetic.zip".into(),
+            total: None,
+        }
+    }
+
+    #[test]
+    fn a_navigation_that_became_a_download_is_not_a_failed_page() {
+        let mut model = TabModel::new();
+        let id = page(&mut model);
+        let snapshot = model.snapshot();
+        let loaded = HashSet::from([id]);
+        let pending = HashSet::new();
+        let mut status = NavigationStatus::default();
+        let completed = |success| BrowserEvent::NavigationCompleted {
+            id: id.get(),
+            success,
+            cancelled: false,
+        };
+        assert_eq!(
+            status.observe(&completed(true), &snapshot, &loaded, &pending, false),
+            Some("Page loaded.")
+        );
+        // A download link raises no ContentLoading or SourceChanged: only DownloadStarting,
+        // then the failed completion of the navigation the download took over.
+        assert_eq!(
+            status.observe(
+                &download_started(id.get()),
+                &snapshot,
+                &loaded,
+                &pending,
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            status.observe(&completed(false), &snapshot, &loaded, &pending, false),
+            None,
+            "no failure is shown"
+        );
+        assert_eq!(status.active_message(&snapshot), Some("Page loaded."));
+        assert!(
+            status.finish_download_navigation(id.get()),
+            "that completion spends the mark"
+        );
+        assert!(!status.finish_download_navigation(id.get()));
+        // The page's next failed navigation is a failure again.
+        assert_eq!(
+            status.observe(&completed(false), &snapshot, &loaded, &pending, false),
+            Some("The page could not be loaded. Try reloading.")
+        );
+    }
+
+    #[test]
+    fn a_download_mark_dies_with_its_page_and_never_marks_an_unknown_one() {
+        let mut model = TabModel::new();
+        let id = page(&mut model);
+        let loaded = HashSet::from([id]);
+        let pending = HashSet::new();
+        let mut status = NavigationStatus::default();
+        assert_eq!(
+            status.observe(
+                &download_started(99),
+                &model.snapshot(),
+                &loaded,
+                &pending,
+                false
+            ),
+            None
+        );
+        assert!(
+            !status.finish_download_navigation(99),
+            "not a page Syrinx owns"
+        );
+        assert_eq!(
+            status.observe(
+                &download_started(id.get()),
+                &model.snapshot(),
+                &loaded,
+                &pending,
+                false
+            ),
+            None
+        );
+        model.close(id).expect("close synthetic page");
+        status.retain(&model.snapshot());
+        assert!(!status.finish_download_navigation(id.get()));
     }
 }

@@ -1,9 +1,9 @@
 //! Verifies a synthetic page close stays deferred until the host releases its native view.
 //!
 //! Options: `--suspension-only` runs only the suspension suite; `--audio-only` only the audio
-//! suite (#130); `--stall-first-close` holds the first close page's body past the hidden-page
-//! suspension grace; `--trace` prints timestamped harness commands, page events and loopback
-//! requests to stderr.
+//! suite (#130); `--downloads-only` only the download suite (#143); `--stall-first-close`
+//! holds the first close page's body past the hidden-page suspension grace; `--trace` prints
+//! timestamped harness commands, page events and loopback requests to stderr.
 
 #[path = "page_close/lifecycle.rs"]
 mod lifecycle;
@@ -16,6 +16,9 @@ mod permissions;
 
 #[path = "page_close/essentials.rs"]
 mod essentials;
+
+#[path = "page_close/downloads.rs"]
+mod downloads;
 
 #[path = "page_close/audio.rs"]
 mod audio;
@@ -78,13 +81,13 @@ const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Synthetic close fi
 
 fn main() -> ExitCode {
     // An independent deadline also catches a stalled native call or message pump. It sits above
-    // the sum of every suite's budget and shutdown (six suites at 45 s, the audio suite at
-    // 150 s, seven 10 s shutdowns: about 490 s), so it fires only when the pump itself is stuck.
+    // the sum of every suite's budget and shutdown (seven suites at 45 s, the audio suite at
+    // 150 s, eight 10 s shutdowns: about 545 s), so it fires only when the pump itself is stuck.
     let (cancel, cancellation) = mpsc::channel();
     let watchdog = match thread::Builder::new()
         .name("syrinx-close-harness-deadline".into())
         .spawn(
-            move || match cancellation.recv_timeout(Duration::from_secs(540)) {
+            move || match cancellation.recv_timeout(Duration::from_secs(600)) {
                 Ok(()) => {}
                 Err(error) => {
                     eprintln!("Synthetic page-close harness deadline failed: {error}.");
@@ -144,6 +147,12 @@ fn run() -> Result<(), String> {
             server.stop(),
         );
     }
+    if option("--downloads-only") {
+        return combine(
+            run_browser(profile, &server.url, downloads::exercise, DEADLINE),
+            server.stop(),
+        );
+    }
     let result = run_browser(profile, &server.url, exercise, DEADLINE);
     if result.is_ok() {
         println!("Synthetic deferred page close and repeated lifecycle passed.");
@@ -166,6 +175,11 @@ fn run() -> Result<(), String> {
     if essentials_result.is_ok() {
         println!("Synthetic native find, download list, zoom and print-preview command passed.");
     }
+    let downloads_result = reserve_profile()
+        .and_then(|profile| run_browser(profile, &server.url, downloads::exercise, DEADLINE));
+    if downloads_result.is_ok() {
+        println!("Synthetic same-tab, popup and self-closing popup downloads passed.");
+    }
     let suspension_result = reserve_profile()
         .and_then(|profile| run_browser(profile, &server.url, suspension::exercise, DEADLINE));
     let security_result = combine(security::run(&server.url), suspension_result);
@@ -184,7 +198,7 @@ fn run() -> Result<(), String> {
             combine(
                 combine(
                     combine(combine(result, popup_result), permission_result),
-                    essentials_result,
+                    combine(essentials_result, downloads_result),
                 ),
                 security_result,
             ),
@@ -681,9 +695,13 @@ fn respond(mut stream: TcpStream, stall: &mut Option<Duration>) -> Result<(), St
             Err(error) => return Err(io_error("read synthetic request", error)),
         }
     }
+    if let Some(name) = downloads::file(&request[..length]) {
+        return downloads::send_file(&mut stream, name);
+    }
     let suite_page = popups::response(&request[..length])
         .or_else(|| permissions::response(&request[..length]))
         .or_else(|| essentials::response(&request[..length]))
+        .or_else(|| downloads::response(&request[..length]))
         .or_else(|| security::response(&request[..length]))
         .or_else(|| suspension::response(&request[..length]))
         .or_else(|| audio::response(&request[..length]));

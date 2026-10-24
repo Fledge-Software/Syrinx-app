@@ -18,7 +18,7 @@ pub(crate) fn apply(palette: Palette) {
 
 /// Whether the drawn palette is light: Paper, or a light theme built on it.
 pub(crate) fn is_light() -> bool {
-    CURRENT.with_borrow(|palette| palette.id == PaletteId::Paper)
+    CURRENT.with_borrow(Palette::is_light)
 }
 
 /// Gives gpui-component's widgets, such as text fields, the drawn palette's light or dark
