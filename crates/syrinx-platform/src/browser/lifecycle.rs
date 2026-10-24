@@ -256,10 +256,7 @@ impl Lifecycle {
                         return Err(error);
                     }
                 };
-                changes
-                    .borrow_mut()
-                    .timer
-                    .playback_changed(playing, Instant::now());
+                playback_reported(&changes, playing);
                 Ok(())
             }));
         let mut token = 0;
@@ -268,10 +265,7 @@ impl Lifecycle {
         // Seed from the current state: an adopted popup may already be playing. A failed read is
         // `Metadata` here as in the handler; only the registration itself is `EventRegistration`.
         let playing = playing_audio(&core).map_err(|_| BrowserError::Metadata)?;
-        self.state
-            .borrow_mut()
-            .timer
-            .playback_changed(playing, Instant::now());
+        playback_reported(&self.state, playing);
         Ok(())
     }
 
@@ -371,6 +365,16 @@ impl Drop for Lifecycle {
         self.state.borrow_mut().alive = false;
         self.life.retire();
     }
+}
+
+/// The one place a page's audio state fans out from, at creation and on every change, so each
+/// page registers `IsDocumentPlayingAudioChanged` once. Today it feeds the keep-awake timer;
+/// #117's sidebar `AudioChanged` event is to be fed from this same call, not a second handler.
+fn playback_reported(state: &Rc<RefCell<HiddenState>>, playing: bool) {
+    state
+        .borrow_mut()
+        .timer
+        .playback_changed(playing, Instant::now());
 }
 
 /// Whether the document is playing audio, muted or not, as WebView2 reports it.
