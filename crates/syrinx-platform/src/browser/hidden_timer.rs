@@ -513,10 +513,12 @@ mod tests {
         assert_eq!(timer.due(), Some(stopped + AUDIO_GRACE));
     }
 
+    /// The timer has no mute input, so this only restates that the one playback flag decides:
+    /// WebView2 documents `IsDocumentPlayingAudio` as true while `IsMuted` is true. The real
+    /// proof, a muted tone page staying awake on this runtime, waits for #157, which needs
+    /// #117's `SetMuted`.
     #[test]
     fn a_muted_page_that_plays_counts_as_playing() {
-        // WebView2 reports IsDocumentPlayingAudio as true even while IsMuted is true, and the
-        // timer has no mute input: the one playback flag decides, so a muted tab keeps its place.
         let start = Instant::now();
         let timer = hidden_playing(start);
         assert_eq!(timer.due(), None);
@@ -607,5 +609,19 @@ mod tests {
         let finished = started + Duration::from_secs(1);
         navigated.navigation_completed(9, finished);
         assert_eq!(navigated.due(), Some(finished + GRACE));
+    }
+
+    #[test]
+    fn a_resume_forgets_refusals() {
+        let start = Instant::now();
+        let mut timer = HiddenTimer::new(start);
+        timer.suspension_requested();
+        timer.suspension_refused(start);
+        timer.suspension_requested();
+        timer.suspension_refused(start + Duration::from_secs(10));
+        // Two refusals would otherwise hold the page until 30 s; a resume starts afresh.
+        let resumed = start + Duration::from_secs(12);
+        timer.resumed(resumed);
+        assert_eq!(timer.due(), Some(resumed + GRACE));
     }
 }
