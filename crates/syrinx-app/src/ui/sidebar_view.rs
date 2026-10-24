@@ -364,7 +364,10 @@ impl BrowserView {
             .flex_col()
             .gap_1();
         for (entry, focus) in entries.iter().zip(prepared.handles) {
-            // A compact row shows its close badge while it shows its focus ring.
+            let tree_id = entry.tree_row().id;
+            // The row's close control, if it has one, and whether the row shows its focus
+            // ring, which also shows a compact row's close badge.
+            let close = row_close(&self.model, tree_id);
             let shows_ring = ring_shown(&focus, window);
             let row = match entry {
                 SidebarEntry::Folder {
@@ -373,16 +376,16 @@ impl BrowserView {
                     expanded,
                 } => self.folder_row(folder, *depth, *expanded, labels, cx),
                 SidebarEntry::Page { page, depth } => {
-                    self.saved_row(page, *depth, labels, shows_ring, cx)
+                    self.saved_row(page, *depth, labels, close, shows_ring, cx)
                 }
                 SidebarEntry::Tab(tab) => {
                     let title = tab.metadata.display_title(PageOrigin::from_adopted_popup(
                         self.popup_pages.contains(&tab.id),
                     ));
-                    self.ordinary_row(tab.id, title, labels, shows_ring, cx)
+                    self.ordinary_row(tab.id, title, labels, close, shows_ring, cx)
                 }
             };
-            rows = rows.child(tree_item(row, entry.tree_row().id, &focus, cx));
+            rows = rows.child(tree_item(row, tree_id, &focus, cx));
         }
         rows
     }
@@ -392,12 +395,12 @@ impl BrowserView {
         page: &SavedPageSnapshot,
         depth: usize,
         labels: bool,
+        close: Option<RowClose>,
         shows_ring: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let saved_id = page.id;
-        // A live page's row offers Unload page; the tab it unloads is the page's live tab.
-        let close = row_close(&self.model, TreeId::Page(saved_id));
+        // Only a live page's row has a close control, and the tab it unloads is the live tab.
         let live = close.map(RowClose::tab);
         let title = title_or_address(&page.metadata.title, &page.metadata.address);
         let look = RowLook {
@@ -443,6 +446,7 @@ impl BrowserView {
         id: TabId,
         title: String,
         labels: bool,
+        close: Option<RowClose>,
         shows_ring: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
@@ -472,11 +476,7 @@ impl BrowserView {
                 this.command(SessionCommand::CloseTab(id));
                 cx.notify();
             }));
-        // A drawn tab is in the model, so this only guards a snapshot that lost it mid-frame.
-        let Some(close) = row_close(&self.model, TreeId::Tab(id)) else {
-            return row;
-        };
-        row.child(close_control(close, labels, shows_ring, cx))
+        row.children(close.map(|close| close_control(close, labels, shows_ring, cx)))
     }
 
     /// A folder row: its arrow toggles the contents. Renaming and removal need the wide

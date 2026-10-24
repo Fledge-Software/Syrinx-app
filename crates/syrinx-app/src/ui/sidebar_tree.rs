@@ -840,13 +840,11 @@ mod tests {
     #[test]
     fn the_close_control_and_ctrl_w_agree_on_every_row() {
         let model = model();
-        let rows = [
-            TreeId::Page(page_id(1)),
-            TreeId::Page(page_id(2)),
-            TreeId::Folder(folder_id(10)),
-            TreeId::Tab(tab_id(200)),
-            TreeId::Tab(tab_id(300)),
-        ];
+        // Every row the sidebar draws, and a tab that has already gone.
+        let rows = tree(&model, &HashSet::new())
+            .into_iter()
+            .map(|row| row.id)
+            .chain([TreeId::Tab(tab_id(300))]);
         for row in rows {
             assert_eq!(
                 row_close(&model, row).map(RowClose::tab),
