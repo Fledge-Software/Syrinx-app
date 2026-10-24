@@ -1726,10 +1726,7 @@ fn upsert_tab(
     tab: &TabSnapshot,
 ) -> Result<(), SessionError> {
     let origin = PageOrigin::from_adopted_popup(popups.contains(&tab.id));
-    let mut row = entry(Target::Tab(tab.id), &tab.metadata, true);
-    if let Some(name) = tab.metadata.syrinx_title(origin) {
-        row.title = name.to_owned();
-    }
+    let row = entry(Target::Tab(tab.id), &tab.metadata, origin, true);
     catalogue.upsert(row).map_err(SessionError::Search)
 }
 
@@ -1751,6 +1748,7 @@ fn upsert_saved<'a>(
             .upsert(entry(
                 Target::Saved(page.id),
                 &page.metadata,
+                PageOrigin::Ordinary,
                 open.contains(&page.id),
             ))
             .map_err(SessionError::Search)?;
@@ -1758,10 +1756,15 @@ fn upsert_saved<'a>(
     Ok(())
 }
 
-fn entry(target: Target, metadata: &TabMetadata, open: bool) -> Entry {
+/// A catalogue row; Home and Settings take the core's names (`syrinx_title`), as in the
+/// sidebar. Other titles stay as reported, since the palette falls back to the address itself.
+fn entry(target: Target, metadata: &TabMetadata, origin: PageOrigin, open: bool) -> Entry {
+    let title = metadata
+        .syrinx_title(origin)
+        .map_or_else(|| metadata.title.clone(), str::to_owned);
     Entry {
         target,
-        title: metadata.title.clone(),
+        title,
         address: metadata.address.clone(),
         usage: Usage {
             visits: 0,
@@ -1955,6 +1958,45 @@ mod tests {
         )?;
         let row = catalogue.get(Target::Tab(tab)).expect("synthetic tab row");
         assert_eq!(row.title, "Home");
+        Ok(())
+    }
+
+    #[test]
+    fn a_saved_home_page_has_one_name_in_the_palette_and_the_sidebar() -> Result<(), SessionError> {
+        let mut model = TabModel::new();
+        let mut catalogue = Catalogue::new();
+        let popups = HashSet::new();
+        apply_model(
+            &mut model,
+            SessionCommand::NewTab {
+                address: "about:blank".to_owned(),
+            },
+        )?;
+        let tab = model.tabs()[0].id();
+        // Ctrl D refuses Home since #91, so save it through the model, as a page saved
+        // before then is stored.
+        model.save_page(tab).map_err(SessionError::Model)?;
+        let saved_open = model.snapshot();
+        sync_catalogue(
+            &mut catalogue,
+            &popups,
+            &TabModelSnapshot::default(),
+            &saved_open,
+        )?;
+        let page = &saved_open.saved_pages[0];
+        let saved_row = catalogue.get(Target::Saved(page.id)).expect("saved row");
+        assert_eq!(saved_row.title, "Home");
+        assert_eq!(page.display_title(), "Home");
+        // Home is only displayed; the stored title is left as the page reported it.
+        assert_ne!(page.metadata.title, "Home");
+
+        // Closing the tab leaves only the saved row, which keeps the same name.
+        apply_model(&mut model, SessionCommand::CloseTab(tab))?;
+        let closed = model.snapshot();
+        sync_catalogue(&mut catalogue, &popups, &saved_open, &closed)?;
+        let saved_row = catalogue.get(Target::Saved(page.id)).expect("saved row");
+        assert_eq!(saved_row.title, "Home");
+        assert_eq!(closed.saved_pages[0].display_title(), "Home");
         Ok(())
     }
 

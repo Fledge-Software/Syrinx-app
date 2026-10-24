@@ -133,8 +133,8 @@ impl TabMetadata {
         self.syrinx_title(origin).is_some()
     }
 
-    /// The one name the sidebar shows for an open tab: Syrinx's name for its own pages,
-    /// otherwise the title, or the address when the page has no title.
+    /// The one name the sidebar shows for an open tab or saved page: Syrinx's name for its own
+    /// pages, otherwise the title, or the address when the page has no title.
     pub fn display_title(&self, origin: PageOrigin) -> String {
         if let Some(name) = self.syrinx_title(origin) {
             return name.to_owned();

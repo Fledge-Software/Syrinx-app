@@ -402,7 +402,7 @@ impl BrowserView {
         let saved_id = page.id;
         // Only a live page's row has a close control, and the tab it unloads is the live tab.
         let live = close.map(RowClose::tab);
-        let title = title_or_address(&page.metadata.title, &page.metadata.address);
+        let title = page.display_title();
         let look = RowLook {
             icon: monogram(&title),
             title: title.clone(),
@@ -895,15 +895,6 @@ fn restored_sidebar_sizing(settings: &BTreeMap<String, String>) -> syrinx_ui::Si
     let mut sizing = syrinx_ui::SidebarSizing::new(visible);
     sizing.set_state(restored_sidebar_state(settings));
     sizing
-}
-
-/// A saved page shows its title, or its address when it has none.
-fn title_or_address(title: &str, address: &str) -> String {
-    if title.is_empty() {
-        address.to_owned()
-    } else {
-        title.to_owned()
-    }
 }
 
 #[cfg(test)]
