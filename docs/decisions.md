@@ -53,7 +53,19 @@ folder names.
     on `DownloadStarting`, so WebView2's own download flyout no longer
     appears, on the condition that SmartScreen still checks every
     download: a file it blocks shows in Syrinx's list as blocked with its
-    reason, and Syrinx never offers a way to keep it.
+    reason, and Syrinx never offers a way to keep it. Implementation
+    note, not part of the owner's decision: a popup that asks to close
+    while one of its downloads is still active stays open, with the
+    status line "The popup closes once its download finishes.", until
+    that download ends or the owner closes the tab, because nobody has
+    yet observed whether WebView2 keeps a download whose web view
+    closes; case 4 of the fixture's downloads suite (`page_close
+    --downloads-only`, the held popup) records that, and its result
+    decides whether the deferral stays. The list keeps at most 100
+    downloads: when a new one would take it past that, the oldest
+    finished ones are forgotten first, and an active download is never
+    forgotten, so the list is longer than 100 only while more than that
+    many are still running.
   - **(3) The downloads flyout matches the existing flyouts' style.**
     Rejected: a new design for it, which would add a look the canvas
     does not have.
@@ -240,6 +252,42 @@ folder names.
   are settled in the 2026-10-24 entry.
 
 ## 2026-10-21
+
+- **Syrinx remembers each site's zoom level (#90).** The owner said yes to
+  storing per-site zoom, as Chrome, Edge and Firefox do. It is kept only in
+  Syrinx's local database, keyed by site, and is never exported or sent
+  anywhere. Without it, zoom resets on every new tab and restart, which is
+  what #90 reported.
+- **Settings opens from the settings button at the bottom of the sidebar
+  (#91).** The spec already puts settings in the sidebar's bottom row; the
+  owner confirmed that this button is the way into the Settings page, and
+  that themes are reachable from it.
+- **The Glass theme must look like the canvas's Glass mockups (#93).** The
+  owner wants Glass and its Transparency setting to show real translucency
+  and glass edges, as in `design/canvas/project/Main.dc.html`, not the
+  near-opaque fill Syrinx draws today. The canvas is the target. In the
+  owner's words, the Glass look belongs "in that theme selection", so Glass
+  comes back as a preset beside Graphite and Paper. This replaces the
+  2026-10-15 rule that only Graphite and Paper are presets, for Glass only;
+  every other look is still built in the theme editor.
+- **The cookie-flush fix keeps Google signed in (#96).** The owner checked
+  that Google stays signed in after closing and reopening Syrinx with #111,
+  so #111 closes #96.
+- **The full-text bake-off runs tonight (#52).** The owner meant the
+  2026-10-20 overnight run to include the quiet-machine comparison; it did
+  not run. It runs on 2026-10-21, once the day's pull requests are
+  merged, with every agent build stopped first.
+- **Clearing "Cookies and site data" also clears saved zoom levels (#90).**
+  This is what Chrome does. Zoom levels are site data, so the owner expects
+  them to go with cookies.
+- **Ctrl , opens Settings even while a web page has the keys (#91).** This
+  follows Chrome and Edge. The cost is that a few web apps, such as
+  github.dev, lose Ctrl , for their own settings.
+- **Settings opens as its own tab (#91).** It does not replace the page
+  the owner is on.
+- **Ctrl D on Home saves nothing (#91).** Home is Syrinx's own page, so
+  bookmarking it would save a blank page. It is refused, as it already is
+  on the Settings tab.
 
 - **The WASM plugin runtime research note (#26) is approved, with all
   fifteen of its decisions exactly as recommended.** The note answers the
@@ -434,6 +482,17 @@ folder names.
 
 ## 2026-10-20
 
+- **The WebView2 update notice is for the owner and testing only.** Installed
+  builds (`cargo xtask package`, which the weekly preview ships) never show
+  D36's notice or its "could not read the WebView2 version" message; they
+  still remember the runtime version, so nothing is lost if the notice
+  returns. Development and test builds keep it for now. This narrows D36,
+  which assumed the owner was the only person running Syrinx.
+- **Each weekly release lists the engines underneath it.** The notes name the
+  GPUI, gpui-component, wry and webview2-com versions from `Cargo.lock`,
+  marking any that changed since the previous preview, and the WebView2
+  runtime the release was gated and screenshotted on.
+
 - **The Fledge plugin is on hold until Fledge itself is ready (holds the
   Fledge half of D34).** D34 kept Plan 2 thin: the plugin runtime plus one
   Fledge action, "New demo lead", on a stand-in client (an in-memory copy
@@ -494,44 +553,6 @@ folder names.
   minimal plugin that loads in Syrinx, #25) can only be met once the host
   exists, so template work that starts now stops short of loading.
 
-## 2026-10-21
-
-- **Syrinx remembers each site's zoom level (#90).** The owner said yes to
-  storing per-site zoom, as Chrome, Edge and Firefox do. It is kept only in
-  Syrinx's local database, keyed by site, and is never exported or sent
-  anywhere. Without it, zoom resets on every new tab and restart, which is
-  what #90 reported.
-- **Settings opens from the settings button at the bottom of the sidebar
-  (#91).** The spec already puts settings in the sidebar's bottom row; the
-  owner confirmed that this button is the way into the Settings page, and
-  that themes are reachable from it.
-- **The Glass theme must look like the canvas's Glass mockups (#93).** The
-  owner wants Glass and its Transparency setting to show real translucency
-  and glass edges, as in `design/canvas/project/Main.dc.html`, not the
-  near-opaque fill Syrinx draws today. The canvas is the target. In the
-  owner's words, the Glass look belongs "in that theme selection", so Glass
-  comes back as a preset beside Graphite and Paper. This replaces the
-  2026-10-15 rule that only Graphite and Paper are presets, for Glass only;
-  every other look is still built in the theme editor.
-- **The cookie-flush fix keeps Google signed in (#96).** The owner checked
-  that Google stays signed in after closing and reopening Syrinx with #111,
-  so #111 closes #96.
-- **The full-text bake-off runs tonight (#52).** The owner meant the
-  2026-10-20 overnight run to include the quiet-machine comparison; it did
-  not run. It runs on 2026-10-21, once the day's pull requests are
-  merged, with every agent build stopped first.
-- **Clearing "Cookies and site data" also clears saved zoom levels (#90).**
-  This is what Chrome does. Zoom levels are site data, so the owner expects
-  them to go with cookies.
-- **Ctrl , opens Settings even while a web page has the keys (#91).** This
-  follows Chrome and Edge. The cost is that a few web apps, such as
-  github.dev, lose Ctrl , for their own settings.
-- **Settings opens as its own tab (#91).** It does not replace the page
-  the owner is on.
-- **Ctrl D on Home saves nothing (#91).** Home is Syrinx's own page, so
-  bookmarking it would save a blank page. It is refused, as it already is
-  on the Settings tab.
-
 ## 2026-10-18
 
 - **Syrinx takes find, history and zoom keys even over a focused page.**
@@ -548,19 +569,6 @@ folder names.
   own use of these keys (for example Google Docs' find and replace on
   Ctrl F and Ctrl H) is a consequence nobody has measured; it is an open
   point for the owner's hand checks.
-
-## 2026-10-20
-
-- **The WebView2 update notice is for the owner and testing only.** Installed
-  builds (`cargo xtask package`, which the weekly preview ships) never show
-  D36's notice or its "could not read the WebView2 version" message; they
-  still remember the runtime version, so nothing is lost if the notice
-  returns. Development and test builds keep it for now. This narrows D36,
-  which assumed the owner was the only person running Syrinx.
-- **Each weekly release lists the engines underneath it.** The notes name the
-  GPUI, gpui-component, wry and webview2-com versions from `Cargo.lock`,
-  marking any that changed since the previous preview, and the WebView2
-  runtime the release was gated and screenshotted on.
 
 ## 2026-10-16
 

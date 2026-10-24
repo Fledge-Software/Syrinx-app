@@ -86,6 +86,12 @@ them again requires the owner's approval.
   also the address bar.
 - **Tab moves between form fields** in an inline palette action. "Create and
   open" is Ctrl Enter. This replaces the spec's "Tab for more fields".
+- **Each installed plugin's search feed gets its own palette scope chip**
+  (owner decision 2026-10-21; `docs/decisions.md`, that date's decision 8).
+  Beside Everything, Tabs, Plugin actions, Bookmarks and History, a chip such
+  as "Notes" lists only that plugin's content. It appears only while the
+  plugin is installed, and the plugin's content still appears under
+  Everything. The canvas shows no plugin chip; drawing one is the owner's.
 - **The chrome uses the operating system's UI font** (Segoe UI Variable on
   Windows, SF on macOS), with a monospace face only for the `>` `@` `/` hints.
 - **Text contrast is at least 4.5:1** in every palette.
