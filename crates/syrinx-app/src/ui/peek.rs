@@ -20,6 +20,8 @@ pub(super) struct PeekPopup {
 
 pub(super) enum PeekAction {
     Dismiss,
+    /// Closes the peek after New tab and leaves the keys for its Home palette (#14).
+    NewTab,
     Palette(bool),
     Toggle,
 }
@@ -305,6 +307,7 @@ impl BrowserView {
         }
         match action {
             PeekAction::Dismiss => self.focus_page(window, cx),
+            PeekAction::NewTab => {}
             PeekAction::Palette(address) => self.palette_key(address, window, cx),
             PeekAction::Toggle => self.toggle_sidebar(window, cx),
         }
@@ -374,7 +377,8 @@ impl BrowserView {
             .is_some_and(|peek| Window::window_handle(window) == peek.window.into())
     }
 
-    /// Input subscriptions belong to their window, so a transient form cannot cross windows.
+    /// An `InputState` is bound to the window that created it, so a transient form cannot
+    /// cross windows and is dropped with its peek.
     fn close_peek_editor(&mut self) {
         self.folder_editor = None;
         if self

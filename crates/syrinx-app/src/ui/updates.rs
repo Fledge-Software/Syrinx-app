@@ -1,4 +1,4 @@
-//! Customize's Updates section, "Install update from file…", "Check for updates" and the
+//! Settings' Updates section, "Install update from file…", "Check for updates" and the
 //! handover on restart or quit (P1-39b, P1-39c). Nothing installs until Syrinx closes after a
 //! D13 snapshot.
 
@@ -69,7 +69,7 @@ enum AfterSnapshot {
 pub(super) struct UpdatePanel {
     context: UpdateContext,
     stage: Stage,
-    /// The last thing to tell the owner, kept in Customize.
+    /// The last thing to tell the owner, kept in Settings.
     status: Option<String>,
     /// Shown once in the status line when the session first loads.
     startup_notice: Option<String>,
@@ -340,7 +340,7 @@ impl BrowserView {
         .detach();
     }
 
-    /// Customize's Updates section: the running version, the staged one and its choices.
+    /// Settings' Updates section: the running version, the staged one and its choices.
     pub(super) fn updates_section(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
         let running = self.updates.context.running().map_or_else(
             || "Syrinx".to_owned(),
@@ -513,7 +513,7 @@ fn section_text(palette: &Palette, running: &str) -> Div {
         )
 }
 
-/// The small outlined button Customize uses for its section actions.
+/// The small outlined button Settings and Customize use for its section actions.
 pub(super) fn pill(palette: &Palette, element: Stateful<Div>) -> Stateful<Div> {
     element
         .h(px(28.))

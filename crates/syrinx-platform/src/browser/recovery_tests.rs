@@ -96,6 +96,7 @@ impl Fixture {
                 pages: HashMap::new(),
                 popups: popups::PopupRequests::default(),
                 environment: Some(environment),
+                engine: None,
                 profile,
                 unavailable: HashMap::new(),
                 active: None,
