@@ -201,7 +201,7 @@ impl TabModelSnapshot {
         }
     }
 
-    /// Renames every saved folder whose title is blank to "Untitled folder", as restore does.
+    /// Renames every blank saved folder title to "Untitled folder" before restore validates.
     /// The model refuses blank names, but losing a session over one is worse (#80).
     fn repair_blank_folder_titles(&mut self) {
         for folder in &mut self.saved_folders {
