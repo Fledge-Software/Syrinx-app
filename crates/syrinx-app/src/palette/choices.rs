@@ -225,14 +225,7 @@ impl PaletteChoices {
         // A removed local selection cannot silently activate the row that inherited its index.
         self.selected = match refresh_selection {
             Some(RefreshSelection::Target(target)) => self.target_row(target),
-            // A match that stopped matching gives way to the lead row; a removed one leaves only
-            // Go to, which needs no local row, as the owner's own choice does.
-            Some(RefreshSelection::Automatic(target)) => self
-                .results
-                .iter()
-                .any(|hit| hit.target == target)
-                .then(|| self.default_row())
-                .or_else(|| self.address.as_ref().map(|_| 0)),
+            Some(RefreshSelection::Automatic(target)) => self.automatic_row(target),
             Some(RefreshSelection::Unselected) => None,
             Some(RefreshSelection::Lead) => Some(0),
             Some(RefreshSelection::Default) if !succeeded && self.lead_rows() == 0 => None,
@@ -243,6 +236,27 @@ impl PaletteChoices {
             None => Some(self.default_row()),
         };
         true
+    }
+
+    /// Where a row the palette chose goes after a refresh: it stays chosen, wherever it moved,
+    /// while it still qualifies; one that stopped matching gives way to the lead row; a removed
+    /// one leaves only Go to, which needs no local row, as the owner's own choice does.
+    fn automatic_row(&self, target: Target) -> Option<usize> {
+        let Some(index) = self.results.iter().position(|hit| hit.target == target) else {
+            return self.address.as_ref().map(|_| 0);
+        };
+        let qualifies = if self.web_search {
+            self.matches_exactly(index, &self.results[index])
+        } else if self.address.is_some() {
+            self.partial_host_row() == Some(index)
+        } else {
+            true
+        };
+        Some(if qualifies {
+            index + self.lead_rows()
+        } else {
+            self.default_row()
+        })
     }
 
     /// The row Enter takes while the owner has not moved the selection (#127): a confident
@@ -811,6 +825,19 @@ mod tests {
             choices.stage_commands(staged(&[], 0), true, prefixed);
             assert!(choices.receive(request, Ok(ranked(&rows))));
             assert_target(&mut choices, first);
+
+            // The chosen tab moves down; Enter during the refresh still opens it, not the new top.
+            let reordered = choices.refresh();
+            assert!(choices.submission(input.to_owned(), false).is_none());
+            let swapped = [rows[1], rows[0]];
+            assert!(choices.receive(reordered, Ok(ranked(&swapped))));
+            assert!(
+                matches!(
+                    choices.take_deferred(),
+                    Some(PaletteEvent::Activate(target)) if target == first
+                ),
+                "{input}"
+            );
 
             // The chosen tab closes; Enter during the refresh waits, then does nothing.
             let refreshed = choices.refresh();

@@ -825,7 +825,7 @@ impl Run {
         let (check, stale_check) = how.checks();
         let Some(query) = self.enter_query(how, enter).await? else {
             let detail = "the target page's settled background title never reached the tab model";
-            self.report.check(check, false, detail.to_owned());
+            self.report_enter_not_run(how, detail.to_owned());
             return Ok(());
         };
         self.open_timed().await?;
@@ -847,7 +847,7 @@ impl Run {
         if !selected {
             let _closed = self.escape_to_page(focus).await?;
             let detail = format!("target row never selected for {query:?}; Enter not pressed");
-            self.report.check(check, false, detail);
+            self.report_enter_not_run(how, detail);
             return Ok(());
         }
         self.with(|view, _, cx| {
@@ -892,6 +892,15 @@ impl Run {
         );
         self.check_no_stale_refocus(stale_check, enter).await?;
         self.return_to(focus).await
+    }
+
+    /// Records both of an Enter check's rows as failed when Enter was never pressed, so the
+    /// report still lists every check.
+    fn report_enter_not_run(&mut self, how: EnterQuery, detail: String) {
+        let (check, stale_check) = how.checks();
+        let skipped = format!("not run: {detail}");
+        self.report.check(check, false, detail);
+        self.report.check(stale_check, false, skipped);
     }
 
     /// The text the Enter check types, or `None` if the exact title never settled. The page's
