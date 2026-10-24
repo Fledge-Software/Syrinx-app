@@ -129,10 +129,11 @@ folder names.
   tie the runtime's acceptance to Notes' release.
 
 - **The Home option stays, and PR #124 is reconciled with it.** The
-  per-theme "Home: Solid / See-through" choice of 2026-10-22 is kept. When
-  PR #124 (the Glass preset) merges, its automatic thinning of the Haze
-  preset's Home card is dropped in favour of that choice, so there is one
-  way to make Home see-through rather than two that overlap. Its Glass
+  per-theme "Home: Solid / See-through" choice of 2026-10-22 is kept. PR
+  #124 (the Glass preset) merged on 2026-10-23, so a follow-up change
+  reconciles it on `main`: its automatic thinning of the Haze preset's Home
+  card is dropped in favour of that choice, so there is one way to make
+  Home see-through rather than two that overlap. Its Glass
   preset uses Transparency 50 %, which under the new 1 − Transparency/90
   mapping gives a 0.44 tint, close to the canvas's 0.46; its tint test
   `the_window_tint_thins_as_transparency_rises` still expects the old
