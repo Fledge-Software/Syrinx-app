@@ -612,3 +612,18 @@ the executable's own icon). GPUI already enables that feature on the same
 version, licence or `Cargo.lock` line changes. The icon itself is compiled by
 the Windows SDK's `rc.exe` from `crates/syrinx-app/build.rs`, which adds no
 Rust dependency (owner decision 2026-10-13; `embed-resource` was rejected).
+
+## #27: the wasmtime 48.0.7 pre-build audit, 2026-10-24
+
+The plugin host that #28 builds adds `wasmtime =48.0.7` and
+`wasmtime-wasi =48.0.7` to `crates/syrinx-plugin-host` only. Because that
+graph adds about fifty crates and a licence the owner approved by name
+(`Apache-2.0 WITH LLVM-exception`, decision 2 of 2026-10-21), its audit has
+its own file, `docs/dev/wasmtime-audit.md`, in the shape of
+`docs/dev/fulltext-audit.md`: the exact pin and resolved features, every
+transitive crate with its licence read from the published archive, the
+advisory check against the RustSec database, the maintenance record of each
+new crate, and which crates are new to this lockfile. It was done under #27
+in a throwaway project outside the repository, so nothing in this workspace
+changes until #28 commits the pin; #28 reruns its `cargo tree` commands
+against the real lockfile and updates that file where they disagree.
