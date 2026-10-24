@@ -1,10 +1,11 @@
-//! Proves Syrinx hears every page's downloads (#143) with synthetic files only: a link in the
-//! same tab, a popup that opens the file, and popups that close themselves, as Drive's does.
+//! Proves Syrinx hears and controls every page's downloads (#143) with synthetic files only:
+//! a link in the same tab, popups (including ones that close themselves, as Drive's does),
+//! pause and cancel, and an executable that SmartScreen may judge.
 
 use std::collections::HashSet;
 
 use super::*;
-use syrinx_core::DownloadState;
+use syrinx_core::{Download, DownloadControl, DownloadInterruption, DownloadList, DownloadState};
 use syrinx_platform::browser::PageAction;
 
 /// The tab every case starts from; adopted popups take the ids after it.
@@ -14,13 +15,16 @@ const SAME_TAB: &str = "synthetic.zip";
 const POPUP: &str = "synthetic-popup.zip";
 const CLOSING: &str = "synthetic-closing.zip";
 const HELD: &str = "synthetic-held.zip";
-/// How long the server holds the held file's body, so its popup closes mid-download.
+const PAUSED: &str = "synthetic-pause.zip";
+/// A few bytes behind an executable's name; not a program, but SmartScreen judges by name too.
+const EXECUTABLE: &str = "synthetic-tool.exe";
+/// How long the server holds a held file's second half, so the case can act mid-download.
 const HOLD: Duration = Duration::from_secs(3);
 /// An empty zip archive's end record: a valid, empty synthetic archive.
 const EMPTY_ZIP: [u8; 22] = [
     0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
-/// The held file's zero padding before its end record, split in half by the hold.
+/// A held file's zero padding before its end record, split in half by the hold.
 const HELD_PADDING: usize = 64 * 1024;
 
 const SAME_TAB_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Download same tab</title>\
@@ -41,6 +45,12 @@ const HELD_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Download held
 const HELD_CHILD: &str = "<!doctype html><meta charset=utf-8><title>Held child</title>\
     <link rel=icon href=data:,><script>location.href='/download/synthetic-held.zip';\
     setTimeout(()=>window.close(),300);</script>";
+const PAUSE_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Download pause</title>\
+    <link rel=icon href=data:,><a id=file href=/download/synthetic-pause.zip>Synthetic file</a>\
+    <script>addEventListener('load',()=>document.getElementById('file').click());</script>";
+const EXECUTABLE_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Download exe</title>\
+    <link rel=icon href=data:,><a id=file href=/download/synthetic-tool.exe>Synthetic tool</a>\
+    <script>addEventListener('load',()=>document.getElementById('file').click());</script>";
 
 /// The suite's HTML pages.
 pub(super) fn response(request: &[u8]) -> Option<&'static str> {
@@ -51,6 +61,8 @@ pub(super) fn response(request: &[u8]) -> Option<&'static str> {
         ("/download-closing-child", CLOSING_CHILD),
         ("/download-held", HELD_PAGE),
         ("/download-held-child", HELD_CHILD),
+        ("/download-pause", PAUSE_PAGE),
+        ("/download-exe", EXECUTABLE_PAGE),
     ]
     .into_iter()
     .find(|(path, _)| request.starts_with(format!("GET {path} ").as_bytes()))
@@ -59,22 +71,22 @@ pub(super) fn response(request: &[u8]) -> Option<&'static str> {
 
 /// The synthetic file a `/download/<name>` request asks for, if it is one of the suite's.
 pub(super) fn file(request: &[u8]) -> Option<&'static str> {
-    [SAME_TAB, POPUP, CLOSING, HELD]
+    [SAME_TAB, POPUP, CLOSING, HELD, PAUSED, EXECUTABLE]
         .into_iter()
         .find(|name| request.starts_with(format!("GET /download/{name} ").as_bytes()))
 }
 
-/// Sends `name` as an attachment. The held file's second half follows only after `HOLD`,
-/// and the browser may hang up meanwhile: that is the outcome the held case measures.
+/// Sends `name` as an attachment. A held file's second half follows only after `HOLD`, and
+/// the browser may hang up meanwhile: the held and pause cases expect that.
 pub(super) fn send_file(stream: &mut TcpStream, name: &str) -> Result<(), String> {
     let body = body(name);
     let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\n\
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
          Content-Disposition: attachment; filename={name}\r\nContent-Length: {}\r\n\
          Cache-Control: no-store\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    let split = if name == HELD {
+    let split = if is_held(name) {
         body.len() / 2
     } else {
         body.len()
@@ -98,8 +110,17 @@ pub(super) fn send_file(stream: &mut TcpStream, name: &str) -> Result<(), String
     Ok(())
 }
 
+fn is_held(name: &str) -> bool {
+    name == HELD || name == PAUSED
+}
+
 fn body(name: &str) -> Vec<u8> {
-    let padding = if name == HELD { HELD_PADDING } else { 0 };
+    if name == EXECUTABLE {
+        let mut body = b"MZ".to_vec();
+        body.resize(64, 0);
+        return body;
+    }
+    let padding = if is_held(name) { HELD_PADDING } else { 0 };
     let mut body = vec![0; padding];
     body.extend_from_slice(&EMPTY_ZIP);
     body
@@ -140,7 +161,10 @@ pub(super) fn exercise(
     popup(&mut watch, events, base, deadline)?;
     closing_popup(&mut watch, events, base, deadline)?;
     held_popup(&mut watch, events, base, deadline)?;
+    pause_and_cancel(&mut watch, events, base, deadline)?;
+    executable(&mut watch, events, base, deadline)?;
     require_saved(&folder, &[SAME_TAB, POPUP, CLOSING])?;
+    report_dialog(&watch);
     send(host, BrowserCommand::Close { id: OPENER })
 }
 
@@ -210,8 +234,8 @@ fn popup(
     watch.close_popups()
 }
 
-/// Case 3: a popup starts the download and closes itself. As in Syrinx, its close waits until
-/// its download has ended; the download is still listed and completes.
+/// Case 3: a popup starts the download and closes itself. As in Syrinx, the shared
+/// `DownloadList` holds its close until its download has ended; the download completes.
 fn closing_popup(
     watch: &mut Watch,
     events: &mut UnboundedReceiver<BrowserEvent>,
@@ -232,7 +256,7 @@ fn closing_popup(
 }
 
 /// Case 4, a measurement: a popup closes itself mid-download and is closed at once, without
-/// Syrinx's deferral. Prints whether WebView2 kept the download; either outcome passes.
+/// the deferral. Prints whether WebView2 kept the download; either outcome passes.
 fn held_popup(
     watch: &mut Watch,
     events: &mut UnboundedReceiver<BrowserEvent>,
@@ -246,10 +270,11 @@ fn held_popup(
             .seen(HELD)
             .is_ok_and(|seen| watch.close_requests.contains(&seen.tab))
     })?;
-    let outcome_deadline = deadline.min(Instant::now() + HOLD + Duration::from_secs(10));
-    let outcome = watch.until(events, outcome_deadline, |watch| watch.finished(HELD));
-    let seen = watch.seen(HELD)?;
-    match (outcome, seen.state) {
+    let outcome = watch.until(events, outcome_deadline(deadline), |watch| {
+        watch.finished(HELD)
+    });
+    let state = watch.seen(HELD)?.state;
+    match (outcome, state) {
         (Ok(()), DownloadState::Completed) => {
             println!("Closing a popup's web view mid-download kept the download: it completed.")
         }
@@ -264,25 +289,119 @@ fn held_popup(
     Ok(())
 }
 
-/// One download as the suite saw it.
-struct Seen {
-    name: String,
-    download: u64,
-    tab: u64,
-    state: DownloadState,
+/// Case 5: the flyout's Pause, Resume and Cancel, sent as Syrinx sends them, while the
+/// server holds the file's second half.
+fn pause_and_cancel(
+    watch: &mut Watch,
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    base: &str,
+    deadline: Instant,
+) -> Result<(), String> {
+    watch.navigate_opener(&format!("{base}/download-pause"))?;
+    watch.until(events, deadline, |watch| watch.seen(PAUSED).is_ok())?;
+    let download = watch.seen(PAUSED)?.id;
+    for (control, expected) in [
+        (
+            DownloadControl::Pause,
+            DownloadState::Interrupted(DownloadInterruption::Paused),
+        ),
+        (DownloadControl::Resume, DownloadState::InProgress),
+        (
+            DownloadControl::Cancel,
+            DownloadState::Interrupted(DownloadInterruption::Cancelled),
+        ),
+    ] {
+        let offered = watch.seen(PAUSED)?.controls();
+        if !offered.contains(&control) {
+            return Err(format!("{PAUSED} did not offer {control:?} ({offered:?})."));
+        }
+        send(
+            watch.host,
+            BrowserCommand::ControlDownload { download, control },
+        )?;
+        watch.until(events, deadline, |watch| {
+            watch.seen(PAUSED).is_ok_and(|seen| seen.state == expected)
+        })?;
+        println!("Synthetic download {control:?} reached {expected:?}.");
+    }
+    if !watch.seen(PAUSED)?.controls().is_empty() {
+        return Err(format!("A cancelled {PAUSED} still offers controls."));
+    }
+    Ok(())
 }
 
-/// Follows the suite's tabs as Syrinx does: adopts popups, shows them, lists downloads and
-/// closes a page that asks, after its active downloads when `defer_closes` is set.
+/// Case 6, a record: an executable's final state and reason, which SmartScreen decides.
+/// Its verdict on a loopback file may vary, so no verdict is asserted; a download still
+/// running afterwards is cancelled, since only SmartScreen's own dialog could keep it.
+fn executable(
+    watch: &mut Watch,
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    base: &str,
+    deadline: Instant,
+) -> Result<(), String> {
+    watch.navigate_opener(&format!("{base}/download-exe"))?;
+    watch.until(events, deadline, |watch| watch.seen(EXECUTABLE).is_ok())?;
+    let outcome = watch.until(events, outcome_deadline(deadline), |watch| {
+        watch.finished(EXECUTABLE)
+    });
+    let seen = watch.seen(EXECUTABLE)?;
+    let (download, state, offered) = (seen.id, seen.state, seen.controls());
+    println!(
+        "Synthetic executable download ended {state:?} ({}); Syrinx offers {offered:?}.",
+        if outcome.is_ok() {
+            "a final state"
+        } else {
+            "still running after the wait"
+        }
+    );
+    if offered.contains(&DownloadControl::Resume)
+        && matches!(
+            state,
+            DownloadState::Interrupted(DownloadInterruption::Blocked(_))
+        )
+    {
+        return Err("A blocked executable offered Resume.".into());
+    }
+    if state != DownloadState::InProgress {
+        return Ok(());
+    }
+    send(
+        watch.host,
+        BrowserCommand::ControlDownload {
+            download,
+            control: DownloadControl::Cancel,
+        },
+    )?;
+    watch.until(events, deadline, |watch| watch.finished(EXECUTABLE))
+}
+
+/// A shorter wait for a measured outcome, within the suite's deadline.
+fn outcome_deadline(deadline: Instant) -> Instant {
+    deadline.min(Instant::now() + HOLD + Duration::from_secs(10))
+}
+
+/// WebView2's own dialog must stay closed, because Syrinx sets Handled on every download.
+fn report_dialog(watch: &Watch) {
+    match watch.dialog_opened {
+        0 => println!("WebView2's own download dialog never opened."),
+        times => println!(
+            "Warning: WebView2's own download dialog opened {times} times despite Handled."
+        ),
+    }
+}
+
+/// Follows the suite's tabs as Syrinx does: adopts popups, shows them, keeps the downloads in
+/// the shared `DownloadList`, and closes a page that asks, after its active downloads unless
+/// `defer_closes` is off.
 struct Watch<'a> {
     host: &'a BrowserHost,
     next_popup: u64,
     created: HashSet<u64>,
     popups: Vec<u64>,
-    downloads: Vec<Seen>,
+    downloads: DownloadList,
     close_requests: Vec<u64>,
-    deferred: Vec<u64>,
     defer_closes: bool,
+    dialog_opened: usize,
 }
 
 impl<'a> Watch<'a> {
@@ -292,10 +411,10 @@ impl<'a> Watch<'a> {
             next_popup: OPENER + 1,
             created: HashSet::new(),
             popups: Vec::new(),
-            downloads: Vec::new(),
+            downloads: DownloadList::default(),
             close_requests: Vec::new(),
-            deferred: Vec::new(),
             defer_closes: true,
+            dialog_opened: 0,
         }
     }
 
@@ -343,16 +462,22 @@ impl<'a> Watch<'a> {
                 download,
                 tab,
                 file_name,
-                ..
-            } => self.downloads.push(Seen {
-                name: file_name,
-                download,
-                tab,
-                state: DownloadState::InProgress,
-            }),
+                total,
+            } => self.downloads.add(download, tab, &file_name, total),
             BrowserEvent::DownloadChanged {
-                download, state, ..
-            } => self.download_changed(download, state)?,
+                download,
+                state,
+                received,
+                total,
+                can_resume,
+            } => {
+                self.downloads.progress(download, received, total);
+                self.downloads.set_resumable(download, can_resume);
+                if let Some(tab) = self.downloads.update(download, state, received) {
+                    self.close(tab)?;
+                }
+            }
+            BrowserEvent::DownloadDialog { open: true, .. } => self.dialog_opened += 1,
             BrowserEvent::CloseRequested { id } => self.close_requested(id)?,
             // A navigation that becomes a download ends without a document.
             BrowserEvent::NavigationCompleted { success: false, .. } => {}
@@ -361,27 +486,9 @@ impl<'a> Watch<'a> {
         Ok(())
     }
 
-    fn download_changed(&mut self, download: u64, state: DownloadState) -> Result<(), String> {
-        let Some(seen) = self
-            .downloads
-            .iter_mut()
-            .find(|seen| seen.download == download)
-        else {
-            return Err(format!("Download {download} changed before it started."));
-        };
-        seen.state = state;
-        let tab = seen.tab;
-        if self.deferred.contains(&tab) && !self.downloading(tab) {
-            self.deferred.retain(|deferred| *deferred != tab);
-            self.close(tab)?;
-        }
-        Ok(())
-    }
-
     fn close_requested(&mut self, id: u64) -> Result<(), String> {
         self.close_requests.push(id);
-        if self.defer_closes && self.downloading(id) {
-            self.deferred.push(id);
+        if self.defer_closes && self.downloads.defer_close(id) {
             return Ok(());
         }
         self.close(id)
@@ -404,30 +511,25 @@ impl<'a> Watch<'a> {
         Ok(())
     }
 
-    fn downloading(&self, tab: u64) -> bool {
-        self.downloads
-            .iter()
-            .any(|seen| seen.tab == tab && seen.state == DownloadState::InProgress)
-    }
-
     fn finished(&self, name: &str) -> bool {
         self.seen(name)
             .is_ok_and(|seen| seen.state != DownloadState::InProgress)
     }
 
-    fn seen(&self, name: &str) -> Result<&Seen, String> {
+    fn seen(&self, name: &str) -> Result<&Download, String> {
         self.downloads
+            .downloads()
             .iter()
-            .find(|seen| seen.name == name)
+            .find(|seen| seen.file_name == name)
             .ok_or_else(|| format!("{name} was never reported."))
     }
 }
 
-fn require_completed(seen: &Seen) -> Result<(), String> {
+fn require_completed(seen: &Download) -> Result<(), String> {
     if seen.state == DownloadState::Completed {
         return Ok(());
     }
-    Err(format!("{} ended {:?}.", seen.name, seen.state))
+    Err(format!("{} ended {:?}.", seen.file_name, seen.state))
 }
 
 /// Each file reached the synthetic folder with every byte the server sent.
