@@ -444,7 +444,7 @@ fn journaled_clear(
     journal.append(request).expect("request is durable");
     let pending = journal.log().pending().expect("clear is pending");
     store
-        .apply_history_deletions(&[pending])
+        .apply_deletions(&[pending])
         .expect("live clear applies");
     let completion = journal.log().completion().expect("prepare completion");
     journal.append(completion).expect("completion is durable");
@@ -505,7 +505,7 @@ fn recovery_replays_every_later_clear_onto_the_restored_copy() {
     let lease =
         WindowsDirectoryLease::prepare(&fixture.root).expect("recovered location opens normally");
     let store = Store::open(Arc::new(lease)).expect("recovered SQLite opens");
-    assert_eq!(store.history_deletion_generation(), Ok(2));
+    assert_eq!(store.deletion_generation(), Ok(2));
     assert_eq!(store.history_entries(), Ok(expected));
     store.shutdown().expect("close recovered store");
 }

@@ -741,9 +741,7 @@ fn open_journal(
     if !repair {
         return DeletionJournal::open(lease).map_err(SessionError::Deletion);
     }
-    let applied = store
-        .history_deletion_generation()
-        .map_err(SessionError::Store)?;
+    let applied = store.deletion_generation().map_err(SessionError::Store)?;
     DeletionJournal::rebuild(lease, applied).map_err(SessionError::Deletion)
 }
 

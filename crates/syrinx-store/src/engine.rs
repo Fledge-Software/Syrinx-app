@@ -18,10 +18,10 @@ use crate::error::{
     EncodingField, StoreError, StoreOperation, combine_results, database_error, with_cleanup,
 };
 use crate::history::{
-    self, HistoryDeletion, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit,
-    HistoryWrite, RecordedVisit,
+    self, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit, HistoryWrite, RecordedVisit,
 };
 use crate::preferences::{self, PreferenceWrite, StoredPreferences};
+use crate::replay::{self, AppliedDeletions};
 use crate::{BackupOutcome, DirectoryLease, ShutdownState};
 use crate::{backup, records, schema};
 
@@ -340,20 +340,27 @@ impl Store {
         self.write_entry(HistoryWrite::RemoveVisit(visit))
     }
 
-    /// Applies D47 history clears and records the newest generation applied, in one
-    /// transaction. Reports what changed so a running catalogue can follow.
-    pub fn apply_history_deletions(
+    /// Applies D47 clears of history and site zoom levels and records the newest generation
+    /// applied, in one transaction. Reports what changed so a running catalogue can follow.
+    pub fn apply_deletions(
         &self,
         requests: &[DeletionRequest],
-    ) -> Result<HistoryDeletion, StoreError> {
-        match self.write_history(HistoryWrite::Delete(requests.to_vec()))? {
-            HistoryOutcome::Deleted(deletion) => Ok(deletion),
-            _ => Err(StoreError::InvalidEncoding(EncodingField::History)),
-        }
+    ) -> Result<AppliedDeletions, StoreError> {
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::Deletions {
+                requests: requests.to_vec(),
+                reply,
+            })
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
     }
 
-    /// The newest D47 clear this database has applied; the journal must reach at least it.
-    pub fn history_deletion_generation(&self) -> Result<u64, StoreError> {
+    /// The newest D47 clear this database has applied, of any category; the journal must
+    /// reach at least it.
+    pub fn deletion_generation(&self) -> Result<u64, StoreError> {
         self.read(|connection| history::applied_generation(connection))
     }
 
@@ -475,6 +482,11 @@ enum WriterRequest {
         start: i64,
         end: i64,
         reply: mpsc::SyncSender<Result<usize, StoreError>>,
+    },
+    /// D47 journal requests to apply in one transaction, whatever their categories.
+    Deletions {
+        requests: Vec<DeletionRequest>,
+        reply: mpsc::SyncSender<Result<AppliedDeletions, StoreError>>,
     },
     Save(SaveRequest),
     /// A committed revision a reader loaded; no reply.
@@ -605,6 +617,10 @@ fn serve_writes(
             }
             WriterRequest::ClearSiteZoom { start, end, reply } => {
                 let result = crate::site_zoom::clear(&writer.connection, start, end);
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::Deletions { requests, reply } => {
+                let result = replay::apply_live(&mut writer.connection, &requests);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
             WriterRequest::Save(request) => {

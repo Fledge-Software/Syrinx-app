@@ -61,7 +61,6 @@ pub(crate) enum HistoryWrite {
         title: String,
     },
     RemoveVisit(NonZeroU64),
-    Delete(Vec<DeletionRequest>),
 }
 
 /// A newly stored visit and its address's updated totals.
@@ -98,7 +97,6 @@ pub(crate) enum HistoryOutcome {
     Recorded(RecordedVisit),
     /// The changed entry, or `None` when it no longer exists.
     Entry(Option<HistoryEntry>),
-    Deleted(HistoryDeletion),
 }
 
 pub(crate) struct HistoryRequest {
@@ -125,9 +123,6 @@ pub(crate) fn write(
         }
         HistoryWrite::RemoveVisit(visit) => {
             remove_visit(&transaction, visit).map(HistoryOutcome::Entry)
-        }
-        HistoryWrite::Delete(requests) => {
-            delete(&transaction, &requests).map(HistoryOutcome::Deleted)
         }
     };
     finish_transaction(transaction, result)
@@ -229,16 +224,15 @@ fn retitle(
         .transpose()
 }
 
-fn delete(
+/// Removes the visits in each `History` request's range inside the caller's transaction and
+/// reports which addresses went or changed. The caller records the applied generation.
+pub(crate) fn delete(
     connection: &Connection,
     requests: &[DeletionRequest],
 ) -> Result<HistoryDeletion, StoreError> {
     // Note the touched addresses first, so the caller learns which rows went or changed.
     let affected = affected_entries(connection, requests)?;
     let visits = delete_ranges(connection, requests)?;
-    if let Some(generation) = requests.iter().map(|request| request.generation()).max() {
-        record_generation(connection, generation)?;
-    }
     let mut deletion = HistoryDeletion {
         visits,
         ..HistoryDeletion::default()

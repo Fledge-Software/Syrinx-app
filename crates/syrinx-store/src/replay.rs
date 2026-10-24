@@ -1,11 +1,55 @@
-//! Applies D47's deletion journal to a staged recovery copy before it can become live.
+//! Applies D47's deletion journal to a database: the live one after a clear or at start-up,
+//! and a staged recovery copy before it can become live.
 
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
-use crate::deletion::DeletionLog;
+use crate::deletion::{DeletionLog, DeletionRequest};
 use crate::error::{database_error, with_cleanup};
+use crate::history::HistoryDeletion;
 use crate::records::finish_transaction;
-use crate::{DirectoryLease, StoreError, StoreOperation, history, schema};
+use crate::{DirectoryLease, StoreError, StoreOperation, history, schema, site_zoom};
+
+/// What one batch of journal requests removed from the live database, by category. It holds
+/// counts and row identities only, never an address or a host.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AppliedDeletions {
+    pub history: HistoryDeletion,
+    /// Sites whose saved zoom level was removed (#121).
+    pub site_zooms: usize,
+}
+
+/// Applies `requests` of every category to the live database in one transaction and records
+/// the newest generation among them, so a restore of this copy replays only later clears.
+pub(crate) fn apply_live(
+    connection: &mut Connection,
+    requests: &[DeletionRequest],
+) -> Result<AppliedDeletions, StoreError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| database_error(StoreOperation::BeginWrite, error))?;
+    let result = apply_requests(&transaction, requests);
+    finish_transaction(transaction, result)
+}
+
+fn apply_requests(
+    connection: &Connection,
+    requests: &[DeletionRequest],
+) -> Result<AppliedDeletions, StoreError> {
+    // Each participant skips the categories it does not own.
+    let history = history::delete(connection, requests)?;
+    let site_zooms = site_zoom::delete_ranges(connection, requests)?;
+    if let Some(generation) = newest_generation(requests) {
+        history::record_generation(connection, generation)?;
+    }
+    Ok(AppliedDeletions {
+        history,
+        site_zooms,
+    })
+}
+
+fn newest_generation(requests: &[DeletionRequest]) -> Option<u64> {
+    requests.iter().map(|request| request.generation()).max()
+}
 
 /// Clears every journal request newer than `recorded_generation` from a guarded staged copy.
 ///

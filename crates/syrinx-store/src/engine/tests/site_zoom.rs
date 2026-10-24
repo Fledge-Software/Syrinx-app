@@ -1,4 +1,5 @@
-//! Proves per-site zoom levels (#90), their version 7 migration and their survival in backups.
+//! Proves per-site zoom levels (#90), their version 7 migration, their survival in backups and
+//! their journaled clears (#121).
 
 use std::collections::BTreeMap;
 
@@ -6,7 +7,11 @@ use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
 use super::{TestDirectory, close, fixture};
-use crate::{EncodingField, PermissionKind, Store, StoreError, StoreOperation, records, schema};
+use crate::deletion::{DeletionCategory, DeletionLog, DeletionRange, DeletionRequest};
+use crate::{
+    EncodingField, HistoryDeletion, PermissionKind, Store, StoreError, StoreOperation, records,
+    schema,
+};
 
 fn user_version(connection: &Connection) -> i64 {
     connection
@@ -285,12 +290,38 @@ fn store_with_dated_levels(directory: &TestDirectory) -> Store {
     store
 }
 
+/// Journals one `category` clear of `[start, end)` and returns the pending request, as the
+/// session does before it asks the store to apply it (D47's request-then-delete order).
+fn requested(
+    log: &mut DeletionLog,
+    category: DeletionCategory,
+    start: i64,
+    end: i64,
+) -> DeletionRequest {
+    let range = DeletionRange::new(start, end).expect("synthetic range");
+    let request = log.request(category, range).expect("request accepted");
+    log.accept(request).expect("request recorded");
+    log.pending().expect("clear is pending")
+}
+
+fn completed(log: &mut DeletionLog) {
+    log.accept(log.completion().expect("completion prepared"))
+        .expect("completion recorded");
+}
+
 #[test]
-fn a_ranged_clear_removes_only_levels_changed_in_that_range() {
+fn a_ranged_zoom_clear_removes_only_levels_changed_in_that_range_and_records_its_generation() {
     let directory = TestDirectory::new();
     let store = store_with_dated_levels(&directory);
+    let mut log = DeletionLog::default();
     // The range ends before 9 000 and starts at 5 000, which it includes.
-    assert_eq!(store.clear_site_zooms(5_000, 9_000), Ok(1));
+    let pending = requested(&mut log, DeletionCategory::SiteZoom, 5_000, 9_000);
+    let applied = store
+        .apply_deletions(&[pending])
+        .expect("zoom clear applies");
+    assert_eq!(applied.site_zooms, 1);
+    assert_eq!(applied.history, HistoryDeletion::default());
+    assert_eq!(store.deletion_generation(), Ok(1));
     assert_eq!(
         store.site_zooms(),
         Ok(zoomed(&[
@@ -298,24 +329,122 @@ fn a_ranged_clear_removes_only_levels_changed_in_that_range() {
             ("recent.example.test", 0.75)
         ]))
     );
+    completed(&mut log);
+
     // Changing a level again moves it into a later range.
     store
         .save_site_zoom("old.example.test".to_owned(), Some(2.), 9_500)
         .expect("change synthetic zoom");
-    assert_eq!(store.clear_site_zooms(9_000, 10_000), Ok(2));
+    let pending = requested(&mut log, DeletionCategory::SiteZoom, 9_000, 10_000);
+    let applied = store
+        .apply_deletions(&[pending])
+        .expect("second zoom clear applies");
+    assert_eq!(applied.site_zooms, 2);
     assert_eq!(store.site_zooms(), Ok(BTreeMap::new()));
+    assert_eq!(store.deletion_generation(), Ok(2));
     store.shutdown().expect("close synthetic store");
     directory.cleanup();
 }
 
 #[test]
-fn an_all_time_clear_removes_every_level_and_survives_restart() {
+fn an_all_time_zoom_clear_removes_every_level_and_survives_restart() {
     let directory = TestDirectory::new();
     let store = store_with_dated_levels(&directory);
-    assert_eq!(store.clear_site_zooms(0, i64::MAX), Ok(3));
-    assert_eq!(store.clear_site_zooms(0, i64::MAX), Ok(0));
+    let mut log = DeletionLog::default();
+    let pending = requested(&mut log, DeletionCategory::SiteZoom, 0, i64::MAX);
+    let applied = store
+        .apply_deletions(&[pending])
+        .expect("zoom clear applies");
+    assert_eq!(applied.site_zooms, 3);
+    // Replaying the same request removes nothing more and never lowers the generation.
+    let repeated = store
+        .apply_deletions(&[pending])
+        .expect("repeated zoom clear applies");
+    assert_eq!(repeated.site_zooms, 0);
+    assert_eq!(store.deletion_generation(), Ok(1));
     store.shutdown().expect("close first store");
+
     let store = Store::open(directory.lease()).expect("reopen synthetic store");
+    assert_eq!(store.site_zooms(), Ok(BTreeMap::new()));
+    assert_eq!(store.deletion_generation(), Ok(1));
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn a_history_clear_leaves_zoom_levels_alone_and_a_zoom_clear_leaves_history_alone() {
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    store
+        .record_visit(
+            "https://visited.example.test/".to_owned(),
+            String::new(),
+            100,
+        )
+        .expect("record synthetic visit");
+    store
+        .save_site_zoom("zoomed.example.test".to_owned(), Some(1.25), 100)
+        .expect("save synthetic zoom");
+    let mut log = DeletionLog::default();
+
+    // A history clear over the same seconds does not touch the zoom table.
+    let history = requested(&mut log, DeletionCategory::History, 0, i64::MAX);
+    let applied = store
+        .apply_deletions(&[history])
+        .expect("history clear applies");
+    assert_eq!(applied.history.visits, 1);
+    assert_eq!(applied.site_zooms, 0);
+    assert_eq!(
+        store.site_zooms(),
+        Ok(zoomed(&[("zoomed.example.test", 1.25)]))
+    );
+    completed(&mut log);
+
+    // A zoom clear over the same seconds does not touch history.
+    store
+        .record_visit(
+            "https://visited-again.example.test/".to_owned(),
+            String::new(),
+            200,
+        )
+        .expect("record a later synthetic visit");
+    let zoom = requested(&mut log, DeletionCategory::SiteZoom, 0, i64::MAX);
+    let applied = store.apply_deletions(&[zoom]).expect("zoom clear applies");
+    assert_eq!(applied.site_zooms, 1);
+    assert_eq!(applied.history, HistoryDeletion::default());
+    assert_eq!(store.history_entries().expect("history kept").len(), 1);
+    assert_eq!(store.site_zooms(), Ok(BTreeMap::new()));
+    assert_eq!(store.deletion_generation(), Ok(2));
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn a_mixed_batch_applies_both_categories_in_one_call_and_advances_the_generation_once() {
+    // A restored copy at generation 0 meets a journal holding a history and a zoom clear,
+    // which the start-up reconcile applies in one call.
+    let directory = TestDirectory::new();
+    let store = Store::open(directory.lease()).expect("synthetic store");
+    store
+        .record_visit("https://mixed.example.test/".to_owned(), String::new(), 100)
+        .expect("record synthetic visit");
+    store
+        .save_site_zoom("mixed.example.test".to_owned(), Some(1.25), 100)
+        .expect("save synthetic zoom");
+    let mut log = DeletionLog::default();
+    requested(&mut log, DeletionCategory::History, 0, 150);
+    completed(&mut log);
+    requested(&mut log, DeletionCategory::SiteZoom, 0, 150);
+    completed(&mut log);
+
+    let replay = log.unapplied(0).expect("every clear");
+    assert_eq!(replay.len(), 2);
+    let applied = store.apply_deletions(replay).expect("mixed batch applies");
+    assert_eq!(applied.history.visits, 1);
+    assert_eq!(applied.site_zooms, 1);
+    assert!(!format!("{applied:?}").contains("example.test"));
+    assert_eq!(store.deletion_generation(), Ok(2));
+    assert_eq!(store.history_entries(), Ok(Vec::new()));
     assert_eq!(store.site_zooms(), Ok(BTreeMap::new()));
     store.shutdown().expect("close synthetic store");
     directory.cleanup();

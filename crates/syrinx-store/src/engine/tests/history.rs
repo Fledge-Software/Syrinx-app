@@ -309,11 +309,11 @@ fn cleared_history_stays_cleared_when_an_older_copy_is_restored_and_replayed() {
     let pending = log.pending().expect("clear is pending");
     let store = Store::open(live.lease()).expect("live store reopens");
     store
-        .apply_history_deletions(&[pending])
+        .apply_deletions(&[pending])
         .expect("live clear applies");
     log.accept(log.completion().expect("completion prepared"))
         .expect("completion recorded");
-    assert_eq!(store.history_deletion_generation(), Ok(1));
+    assert_eq!(store.deletion_generation(), Ok(1));
     let cleared = store.history_entries().expect("cleared entries read");
     let cleared_visits = store.recent_visits(10).expect("cleared visits read");
     assert_eq!(
@@ -328,16 +328,14 @@ fn cleared_history_stays_cleared_when_an_older_copy_is_restored_and_replayed() {
     // The older copy still holds the cleared visits until the completed clears replay.
     let restored = Store::open(older.lease()).expect("older copy opens");
     assert_eq!(restored.history_entries().expect("older entries").len(), 3);
-    assert_eq!(restored.history_deletion_generation(), Ok(0));
+    assert_eq!(restored.deletion_generation(), Ok(0));
     let replay = log.replay_after(0).expect("completed clears replay");
-    restored
-        .apply_history_deletions(replay)
-        .expect("replay applies");
+    restored.apply_deletions(replay).expect("replay applies");
     assert_eq!(restored.history_entries(), Ok(cleared.clone()));
     assert_eq!(restored.recent_visits(10), Ok(cleared_visits.clone()));
     // Replay is idempotent, so an interrupted restore may safely repeat it.
     restored
-        .apply_history_deletions(replay)
+        .apply_deletions(replay)
         .expect("repeated replay applies");
     assert_eq!(restored.history_entries(), Ok(cleared));
     restored.shutdown().expect("restored store closes");
@@ -364,7 +362,7 @@ fn a_clear_reports_removed_and_changed_addresses_and_records_its_generation() {
         .record_visit(THIRD.to_owned(), String::new(), 50)
         .expect("third visit records")
         .entry;
-    assert_eq!(store.history_deletion_generation(), Ok(0));
+    assert_eq!(store.deletion_generation(), Ok(0));
 
     let mut log = DeletionLog::default();
     let range = DeletionRange::new(200, 400).expect("synthetic range");
@@ -374,8 +372,9 @@ fn a_clear_reports_removed_and_changed_addresses_and_records_its_generation() {
     log.accept(request).expect("request recorded");
     let pending = log.pending().expect("clear is pending");
     let deletion = store
-        .apply_history_deletions(&[pending])
-        .expect("clear applies");
+        .apply_deletions(&[pending])
+        .expect("clear applies")
+        .history;
 
     // The second address lost its only visit; the first keeps its older one.
     assert_eq!(deletion.visits, 2);
@@ -390,18 +389,19 @@ fn a_clear_reports_removed_and_changed_addresses_and_records_its_generation() {
         store.history_entries().expect("entries read"),
         [changed.clone(), third]
     );
-    assert_eq!(store.history_deletion_generation(), Ok(1));
+    assert_eq!(store.deletion_generation(), Ok(1));
 
     // Replaying an older request again deletes nothing and never lowers the generation.
     let empty = DeletionLog::default();
     assert!(empty.unapplied(0).expect("empty log").is_empty());
     let repeated = store
-        .apply_history_deletions(&[pending])
-        .expect("repeat applies");
+        .apply_deletions(&[pending])
+        .expect("repeat applies")
+        .history;
     assert!(repeated.removed.is_empty() && repeated.changed.is_empty());
     store.shutdown().expect("store closes");
     let store = Store::open(directory.lease()).expect("store reopens");
-    assert_eq!(store.history_deletion_generation(), Ok(1));
+    assert_eq!(store.deletion_generation(), Ok(1));
     store.shutdown().expect("store closes");
     directory.cleanup();
 }
@@ -430,7 +430,7 @@ fn version_4_history_upgrades_to_an_unapplied_deletion_generation() {
     close(connection);
 
     let store = Store::open(directory.lease()).expect("version 4 database upgrades");
-    assert_eq!(store.history_deletion_generation(), Ok(0));
+    assert_eq!(store.deletion_generation(), Ok(0));
     assert_eq!(store.history_entries().expect("history kept").len(), 1);
     store.shutdown().expect("store closes");
     let connection = directory.connection();
@@ -478,7 +478,7 @@ fn staged_replay_clears_an_older_copy_records_its_generation_and_leaves_no_sidec
     assert!(no_sidecars(&staged));
 
     let restored = Store::open(staged.lease()).expect("replayed copy opens");
-    assert_eq!(restored.history_deletion_generation(), Ok(2));
+    assert_eq!(restored.deletion_generation(), Ok(2));
     assert_eq!(
         timeline(&restored.recent_visits(10).expect("visits read")),
         [(FIRST, 100)]
@@ -535,13 +535,14 @@ fn staged_replay_clears_version_4_history_without_changing_its_schema() {
 
     // Opening migrates it to the latest version at generation zero; startup then replays again harmlessly.
     let store = Store::open(directory.lease()).expect("version 4 copy upgrades");
-    assert_eq!(store.history_deletion_generation(), Ok(0));
+    assert_eq!(store.deletion_generation(), Ok(0));
     let replay = log.unapplied(0).expect("journal covers the copy");
     let repeated = store
-        .apply_history_deletions(replay)
-        .expect("replay repeats");
+        .apply_deletions(replay)
+        .expect("replay repeats")
+        .history;
     assert!(repeated.removed.is_empty());
-    assert_eq!(store.history_deletion_generation(), Ok(1));
+    assert_eq!(store.deletion_generation(), Ok(1));
     store.shutdown().expect("store closes");
     directory.cleanup();
 }

@@ -15,13 +15,11 @@ use super::{ClearedHistory, SessionError, history};
 /// A database ahead of its journal means records were lost, which is refused. A repaired
 /// journal arrives with a requested all-time clear, which this applies and completes.
 pub(super) fn reconcile(store: &Store, journal: &mut DeletionJournal) -> Result<(), SessionError> {
-    let applied = store
-        .history_deletion_generation()
-        .map_err(SessionError::Store)?;
+    let applied = store.deletion_generation().map_err(SessionError::Store)?;
     let missing = journal.log().unapplied(applied).map_err(journal_error)?;
     if !missing.is_empty() {
         store
-            .apply_history_deletions(missing)
+            .apply_deletions(missing)
             .map_err(SessionError::Store)?;
     }
     complete_pending(journal)
@@ -43,7 +41,7 @@ pub(super) fn clear_before_catalogue(
         .pending()
         .ok_or(journal_error(DeletionError::NoPendingClear))?;
     store
-        .apply_history_deletions(&[pending])
+        .apply_deletions(&[pending])
         .map_err(SessionError::Store)?;
     complete_pending(journal)
 }
@@ -85,8 +83,9 @@ pub(super) fn finish_pending(
         return Ok(ClearedHistory::default());
     };
     let deletion = store
-        .apply_history_deletions(&[pending])
-        .map_err(SessionError::Store)?;
+        .apply_deletions(&[pending])
+        .map_err(SessionError::Store)?
+        .history;
     follow(catalogue, recorder, &deletion)?;
     complete_pending(journal)?;
     Ok(ClearedHistory {
