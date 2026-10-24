@@ -58,10 +58,22 @@ pub fn payload_command(folder: &str, output: &str) -> Vec<String> {
     tool_command("payload", &["--package", folder, "--output", output])
 }
 
-/// Cargo arguments that pass the owner's `sign-update` options to the tool's `sign`.
-pub fn sign_command(options: &[String]) -> Vec<String> {
+/// xtask commands whose options pass unchanged to a release-tool subcommand, which checks them.
+const FORWARDED: [(&str, &str); 7] = [
+    ("sign-update", "sign"),
+    ("verify-release", "verify-release"),
+    ("resign-statement", "resign"),
+    ("import-release-key", "import-key"),
+    ("delete-release-key", "delete-key"),
+    ("pinned-release-keys", "pinned-keys"),
+    ("host-layout", "host-layout"),
+];
+
+/// Cargo arguments for a forwarded xtask command, or `None` when `command` is not one.
+pub fn forwarded_command(command: &str, options: &[String]) -> Option<Vec<String>> {
+    let (_, subcommand) = FORWARDED.iter().find(|(name, _)| *name == command)?;
     let options: Vec<&str> = options.iter().map(String::as_str).collect();
-    tool_command("sign", &options)
+    Some(tool_command(subcommand, &options))
 }
 
 fn tool_command(subcommand: &str, arguments: &[&str]) -> Vec<String> {
@@ -149,8 +161,27 @@ mod tests {
     #[test]
     fn sign_update_forwards_the_owner_options_unchanged() {
         let options = ["--serial".to_owned(), "3".to_owned()];
-        let command = sign_command(&options);
+        let command = forwarded_command("sign-update", &options).expect("a forwarded command");
         assert_eq!(&command[..TOOL.len()], TOOL);
         assert_eq!(&command[TOOL.len()..], ["--", "sign", "--serial", "3"]);
+    }
+
+    #[test]
+    fn the_release_key_commands_reach_their_tool_subcommands() {
+        let key = ["--key".to_owned(), "k".to_owned()];
+        for (command, subcommand) in [
+            ("import-release-key", "import-key"),
+            ("delete-release-key", "delete-key"),
+            ("pinned-release-keys", "pinned-keys"),
+            ("host-layout", "host-layout"),
+            ("verify-release", "verify-release"),
+            ("resign-statement", "resign"),
+        ] {
+            let forwarded = forwarded_command(command, &key).expect("a forwarded command");
+            assert_eq!(&forwarded[..TOOL.len()], TOOL);
+            assert_eq!(&forwarded[TOOL.len()..], ["--", subcommand, "--key", "k"]);
+        }
+        assert_eq!(forwarded_command("package", &[]), None);
+        assert_eq!(forwarded_command("sign", &[]), None);
     }
 }

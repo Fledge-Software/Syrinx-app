@@ -441,8 +441,12 @@ non-default `release-tool` feature, which only the release tool requires,
 so Syrinx itself never links code that opens Windows key storage. The gate
 builds and tests that feature (`--features syrinx-update/release-tool`), so
 the tool stays covered by Clippy and the tests. The signing logic is tested
-only with in-memory CNG keys created fresh by each test. No test opens Windows key storage, and the
-repository holds no key.
+only with in-memory CNG keys created fresh by each test, and the
+repository holds no key. The one exception is the workflow's import and
+delete commands (issue #55): their tests import a fresh throwaway key into
+the current user's software key storage under a unique
+`syrinx-update-test-key-…` name and delete it again, even when the test
+fails.
 
 ### How the later slices use the statement and the signing tool
 
@@ -464,7 +468,16 @@ repository holds no key.
 - P1-39c fetches `latest`, `latest.sig` and the package from
   `https://syrinxapp.dev/updates/v1/` (see "P1-39c" below).
 - P1-39d is the owner's key ceremony, the pinning of both public keys
-  (issue #55) and the first real `sign-update`.
+  (issue #55) and the first real `sign-update`. Since the owner's
+  2026-10-14 decision the weekly release workflow runs that command with
+  a key it imports from a GitHub secret for one job; three more release
+  tool commands serve it: `cargo xtask import-release-key` and
+  `delete-release-key`, which put the key into the runner's software key
+  storage and take it out again, and `cargo xtask host-layout`, which
+  writes the host's `updates/v1/` files after checking them as an
+  installed copy would. `cargo xtask pinned-release-keys` prints each
+  pinned key's identifier and point. See `docs/update-delivery.md`, "How
+  the workflow signs".
 
 ## P1-39b: staging, "Install update from file…", the helper and rollback
 

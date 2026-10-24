@@ -220,7 +220,8 @@ Browsing is never affected. An attacker can therefore freeze Syrinx for at
 most the expiry window, and only by also controlling the host or the
 connection. The owner pays for this by re-signing the statement at every
 release and at least every few weeks between releases. That is one short
-command with the key (see "The release key").
+command with the key (see "The release key"). Since #55 the weekly
+workflow does this re-signing itself.
 
 ## Download bounds and staging
 
@@ -332,9 +333,118 @@ P1-39b must check it on this machine (question 6).
 The primary key is an encrypted GitHub Actions secret with which
 `.github/workflows/weekly-release.yml` signs each release and re-signs
 `latest` every week, and the backup is an encrypted file in the owner's
-password manager (`docs/decisions.md`, 2026-10-14). The rest of this section
-records the 2026-10-13 arrangement it replaced; the rule that no agent sees
-the private key still holds.
+password manager (`docs/decisions.md`, 2026-10-14). The next subsection
+says how the workflow does that; the one after it records the 2026-10-13
+arrangement it replaced. The rule that no agent sees the private key still
+holds.
+
+### How the workflow signs (issue #55)
+
+**Why the key has to travel.** `cargo xtask sign-update` asks Windows to
+sign with a key it opens *by name* in Windows key storage, and never reads
+key bytes. A GitHub secret, however, arrives in a job as text. So the
+release job turns the secret into a named key for the length of one job
+and deletes it again; everything else about signing stays as P1-39a built
+it, including the check that refuses any key `PRODUCTION_KEYS` does not
+pin.
+
+**Where the secret lives.** In the GitHub Environment `release-signing`,
+which the owner creates and limits to `main`. The release and `resign` jobs
+name it, so a workflow run from any other branch cannot read the key.
+
+**The format.** The secret `SYRINX_RELEASE_KEY` holds one P-256 private key
+as base64 PKCS#8 (the standard "private key" encoding, one line of about
+190 characters). The backup in the password manager is the same text for
+the second key. The owner makes both with `.github/scripts/new-release-key.ps1`,
+which creates each key in memory, sends the primary straight to
+`gh secret set` through standard input and the backup to the clipboard, and
+prints only the public point and identifier (`docs/owner-checklist.md`,
+item 1). The secret store and the password manager provide the encryption;
+an extra passphrase would have to live beside the key in the same places,
+so it would add a step without adding protection.
+
+**One job, in order:**
+
+1. *Check.* `signing-ready.sh` asks the source being released which keys
+   it pins (`cargo xtask pinned-release-keys`; a failure fails the run).
+   With none pinned, the release goes out unsigned with a warning, exactly
+   as before #55. With keys pinned, a missing secret fails the run.
+2. *Import.* `cargo xtask import-release-key --key <name> --from-env
+   SYRINX_RELEASE_KEY` reads the text from that step's environment only,
+   decodes it and imports it into the runner's software key storage under a
+   per-run name (`syrinx-release-<run id>-<attempt>`). The stored key is
+   not exportable, an existing key of the same name is never replaced, and
+   a key that is not P-256 is deleted again. The decoded bytes are
+   overwritten in memory once Windows holds the key. Only the key's public
+   identifier is printed; the key never appears in a command line, a file,
+   a log or an artifact, and GitHub masks the secret's value in logs as
+   well.
+3. *Sign.* `sign-update.sh` runs `cargo xtask sign-update --storage
+   software` with that name, a serial equal to the current Unix time in
+   seconds, so it always grows between runs, and a 30-day statement. If
+   the backup ever replaces the primary, its text goes into the same
+   secret, so the same serial rule carries on.
+4. *Lay out.* `cargo xtask host-layout` checks the signed folder as an
+   installed Syrinx would, right now: the statement against the pinned
+   keys and the clock, the manifest against the statement, and every
+   copied file against the manifest. Only then does it write the host's
+   `updates/v1/` files (layout below).
+5. *Delete.* `cargo xtask delete-release-key` runs in an always-run step,
+   whether signing passed, failed or was cancelled. A key that was never
+   imported is reported, not treated as an error, so the cleanup itself
+   never fails the run. The runner is a fresh virtual machine that GitHub
+   discards after the job, so even a missed deletion would not outlive it.
+
+`release-tool`, the feature that links the key-storage code, stays out of
+Syrinx itself: `syrinx.exe` and `syrinx-apply.exe` are built and copied
+into the package before any of this runs, by separate Cargo commands
+without the feature, and `check-deps` still refuses any crate that turns it
+on.
+
+**The weekly re-sign.** A statement lives 30 days, under the 60-day cap. A
+week with a release signs a fresh one. A quiet week (no new commits on
+`main`) runs the `resign` job instead. It downloads the latest release's
+`manifest`, `manifest.sig`, `latest` and `latest.sig` assets and, before
+any key is imported, verifies them with `cargo xtask verify-release`
+against the keys pinned in that release's own tag: both signatures, the
+statement naming this manifest, and both naming the tag's own version
+(`--version`, the tag without its `v`), setting aside only the old
+statement's expiry. A tampered download, or an older release's validly
+signed files swapped in so they would be re-signed as the latest,
+therefore stops the job while the runner holds no key. Then `cargo xtask resign-statement` signs only a
+new statement, with a higher serial, for that verified manifest
+(`resign_statement` in `crates/syrinx-update/src/sign.rs` re-verifies the
+release itself and never signs a manifest), and the job replaces `latest`,
+then `latest.sig`, on the GitHub release. Its scripts come from `main`; the
+tools and keys come from the tag, checked out only once the tag is known to
+have signed assets, so a release made before signing began is skipped with
+a notice. Building in that `tag/` checkout runs the tag's own build scripts
+while the job holds a `contents: write` token, though not yet the key. That
+is accepted under the owner's 2026-10-14 trade-off: the tag is a reviewed
+release commit, and whoever could change it already controls the
+repository and the workflow, which can sign updates anyway. Thirty days means four missed
+weeks before installed copies see "the update information has expired",
+which is harmless (no update is offered) and limits how long a stolen copy
+of the site could freeze anyone. A release published before signing began
+has no signed assets, so the job notes that and stops.
+
+**What is published, and where.** Each signed release attaches `manifest`,
+`manifest.sig`, `latest` and `latest.sig` to its GitHub pre-release, and
+uploads the host files, which are public signed data rather than
+secrets, as the workflow artifact `update-site`:
+`updates/v1/latest`, `latest.sig`, `<version>/manifest`, `manifest.sig` and
+`<version>/files/…`, one file per manifest entry. A re-sign's artifact holds
+only `latest` and `latest.sig`, since nothing else changes. Copying them to
+`https://syrinxapp.dev/updates/v1/` is not wired yet: the site push is
+skipped while the repository is private, and where the files go until then
+is the owner's call (issue #55, "Watch").
+
+**What remains the owner's.** Approving this workflow change, creating the
+two keys and the secret, handing an agent the two public points to pin,
+checking that the host serves its full certificate chain, and the first
+real update (issue #55).
+
+### The 2026-10-13 arrangement (replaced)
 
 Only the owner does this, on their own machine, outside this repository
 and outside any agent session. No agent sees, handles, generates or is told
