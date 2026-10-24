@@ -406,7 +406,7 @@ fn worker_with_pending_zoom_clear(
 
 /// The levels the window was handed, among the events already sent.
 fn replaced_levels(events: &mut UnboundedReceiver<SessionEvent>) -> Option<BTreeMap<String, f64>> {
-    while let Ok(Some(event)) = events.try_next() {
+    while let Ok(event) = events.try_recv() {
         if let SessionEvent::SiteZoomsReplaced(levels) = event {
             return Some(levels.0);
         }
