@@ -233,8 +233,7 @@ impl BrowserView {
         if self.toggled_closed(MenuKind::Page, cx) {
             return;
         }
-        let right = f32::from(window.viewport_size().width) - 3. * TITLE_BAR_HEIGHT - 4.;
-        let position = point(px(right), px(TITLE_BAR_HEIGHT));
+        let position = title_bar_corner(window);
         self.show_menu(MenuKind::Page, position, Corner::TopRight, window, cx);
     }
 
@@ -249,8 +248,7 @@ impl BrowserView {
 
     /// Opens the Downloads flyout at its corner, replacing any open menu.
     fn show_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let right = f32::from(window.viewport_size().width) - 3. * TITLE_BAR_HEIGHT - 4.;
-        let position = point(px(right), px(TITLE_BAR_HEIGHT));
+        let position = title_bar_corner(window);
         self.show_menu(MenuKind::Downloads, position, Corner::TopRight, window, cx);
     }
 
@@ -1040,6 +1038,15 @@ fn download_rows(list: &syrinx_core::DownloadList) -> Vec<MenuRow> {
         rows.push(fixed(MenuItem::ClearDownloads));
     }
     rows
+}
+
+/// Where the ☰ menu and the Downloads flyout hang from: the right edge of the title bar's own
+/// controls, left of the three window buttons (each a `TITLE_BAR_HEIGHT` square) and their
+/// 4 px gap. Ctrl J and the palette open the flyout with no button press to measure, so the
+/// corner follows the title bar's layout rather than a button's painted bounds.
+fn title_bar_corner(window: &Window) -> Point<Pixels> {
+    let right = f32::from(window.viewport_size().width) - 3. * TITLE_BAR_HEIGHT - 4.;
+    point(px(right), px(TITLE_BAR_HEIGHT))
 }
 
 /// The popup's logical size for `rows` items of `kind`.

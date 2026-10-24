@@ -115,12 +115,9 @@ fn watch(
     let operation = unsafe { args.DownloadOperation()? };
     let download = NEXT_DOWNLOAD.fetch_add(1, Ordering::Relaxed);
     let path = read_string(|raw| unsafe { args.ResultFilePath(raw) })?;
-    events.emit(BrowserEvent::DownloadStarted {
-        download,
-        tab,
-        file_name: file_name(&path),
-        total: total_bytes(&operation)?,
-    });
+    let total = total_bytes(&operation)?;
+    // Follow the download before announcing it: a row whose state could not be followed would
+    // read "in progress" for good, with buttons that reach nothing.
     follow_state(
         &operation,
         download,
@@ -130,6 +127,12 @@ fn watch(
     )?;
     follow_bytes(&operation, download, tab, events.clone())?;
     operations.hold(download, tab, operation);
+    events.emit(BrowserEvent::DownloadStarted {
+        download,
+        tab,
+        file_name: file_name(&path),
+        total,
+    });
     Ok(())
 }
 
@@ -235,11 +238,16 @@ fn read_change(
     Ok((change, finished))
 }
 
-/// The expected size, or `None` when the server sent no length (WebView2 reports -1).
+/// The expected size, or `None` when the server sent no length.
 fn total_bytes(operation: &ICoreWebView2DownloadOperation) -> windows::core::Result<Option<u64>> {
     let mut total = -1;
     unsafe { operation.TotalBytesToReceive(&mut total)? };
-    Ok(u64::try_from(total).ok())
+    Ok(known_total(total))
+}
+
+/// WebView2 reports -1 for a size the server did not send: a sentinel, not an error.
+fn known_total(total: i64) -> Option<u64> {
+    (total >= 0).then_some(total.unsigned_abs())
 }
 
 fn state(
@@ -372,6 +380,13 @@ mod tests {
             group(COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_DOWNLOAD_PROCESS_CRASHED.0),
             DownloadInterruption::Other
         );
+    }
+
+    #[test]
+    fn an_unknown_total_is_the_minus_one_sentinel_not_an_error() {
+        assert_eq!(known_total(-1), None);
+        assert_eq!(known_total(0), Some(0));
+        assert_eq!(known_total(4 << 20), Some(4 << 20));
     }
 
     #[test]
