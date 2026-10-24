@@ -9,7 +9,9 @@ use syrinx_platform::browser::{
 };
 
 use super::{
-    owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup, show_and_activate},
+    owned_popup::{
+        OwnedPopupError, PopupSpec, open_owned_popup, round_popup_corners, show_and_activate,
+    },
     *,
 };
 use crate::palette::{PaletteEntry, PaletteNative};
@@ -199,6 +201,7 @@ impl BrowserView {
             },
         };
         let opened = open_owned_popup(spec, cx, move |hwnd, popup, cx| {
+            round_popup_corners(hwnd, "command palette");
             let native = PaletteNative { popup: hwnd, owner };
             let palette = cx.new(|cx| PaletteView::new(registry, native, probe, usage, popup, cx));
             // Closing the popup from Windows ends the entry like Esc; it is only hidden.
