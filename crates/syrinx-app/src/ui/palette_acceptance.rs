@@ -822,7 +822,12 @@ impl Run {
         let enter = self
             .enter_tab
             .ok_or_else(|| "The Enter target page is missing.".to_owned())?;
-        let query = self.enter_query(how, enter).await?;
+        let (check, stale_check) = how.checks();
+        let Some(query) = self.enter_query(how, enter).await? else {
+            let detail = "the target page's settled background title never reached the tab model";
+            self.report.check(check, false, detail.to_owned());
+            return Ok(());
+        };
         self.open_timed().await?;
         self.with(|view, _, cx| {
             let popup = view.palette_hwnd(cx)?;
@@ -838,6 +843,13 @@ impl Run {
             })
             .await?
             .is_some();
+        // Enter on anything else could search Google, which an automated run must never do.
+        if !selected {
+            let _closed = self.escape_to_page(focus).await?;
+            let detail = format!("target row never selected for {query:?}; Enter not pressed");
+            self.report.check(check, false, detail);
+            return Ok(());
+        }
         self.with(|view, _, cx| {
             let popup = view.palette_hwnd(cx)?;
             probe_win32::post_key(popup, Key::Enter).map_err(|error| error.to_string())
@@ -869,10 +881,9 @@ impl Run {
                 .map(|tab| tab.metadata.address.clone());
             (active, address, view.message.clone())
         })?;
-        let (check, stale_check) = how.checks();
         self.report.check(
             check,
-            selected && switched && focused,
+            switched && focused,
             format!(
                 "target row selected: {selected}; target tab active: {switched}; \
                  target page reported focus: {focused}; active now: {active:?}; \
@@ -883,26 +894,32 @@ impl Run {
         self.return_to(focus).await
     }
 
-    /// The text the Enter check types. The exact title is read once the background page has
-    /// reported losing focus, since its own script rewrites the title when focus changes.
-    async fn enter_query(&mut self, how: EnterQuery, enter: TabId) -> Result<String, String> {
+    /// The text the Enter check types, or `None` if the exact title never settled. The page's
+    /// own script rewrites its title when focus changes, and the tab model learns it only after
+    /// a session round trip, so the title is read once both agree that the page lost focus.
+    async fn enter_query(
+        &mut self,
+        how: EnterQuery,
+        enter: TabId,
+    ) -> Result<Option<String>, String> {
         if matches!(how, EnterQuery::TabScope) {
-            return Ok(ENTER_QUERY.to_owned());
+            return Ok(Some(ENTER_QUERY.to_owned()));
         }
-        let title = self
-            .try_wait(Duration::from_secs(3), |view, _, _| {
-                if view.page_focus(enter) != Some(false) {
-                    return None;
-                }
-                view.model
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.id == enter)
-                    .map(|tab| tab.metadata.title.clone())
-                    .filter(|title| !title.is_empty())
-            })
-            .await?;
-        title.ok_or_else(|| "The Enter target page never reported its background title.".to_owned())
+        self.try_wait(Duration::from_secs(3), |view, _, _| {
+            if view.page_focus(enter) != Some(false) {
+                return None;
+            }
+            let reported = view.acceptance.as_ref()?.titles.get(&enter.get())?;
+            let modelled = &view
+                .model
+                .tabs
+                .iter()
+                .find(|tab| tab.id == enter)?
+                .metadata
+                .title;
+            (modelled == reported).then(|| modelled.clone())
+        })
+        .await
     }
 
     /// A click on a sidebar peek row must switch to that tab, and the session must still answer

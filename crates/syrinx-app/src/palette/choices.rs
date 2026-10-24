@@ -50,7 +50,11 @@ enum RefreshSelection {
     Default,
     /// The owner chose the leading search row.
     Lead,
+    /// The owner chose this row, so it is followed wherever it moves.
     Target(Target),
+    /// The palette chose this row; it is chosen afresh if still listed, and never replaced by
+    /// whatever row inherits its index once it is gone.
+    Automatic(Target),
     Unselected,
 }
 
@@ -106,17 +110,19 @@ impl PaletteChoices {
     }
 
     fn selection(&self) -> RefreshSelection {
-        // A row chosen automatically is chosen again from the refreshed rows, so a match that
-        // stopped matching gives way to the search row.
+        if let Some(hit) = self.selected_hit() {
+            return if self.moved {
+                RefreshSelection::Target(hit.target)
+            } else {
+                RefreshSelection::Automatic(hit.target)
+            };
+        }
         if !self.moved {
             return if self.selected.is_some() {
                 RefreshSelection::Default
             } else {
                 RefreshSelection::Unselected
             };
-        }
-        if let Some(hit) = self.selected_hit() {
-            return RefreshSelection::Target(hit.target);
         }
         if self.selected == Some(0) && self.web_search {
             return RefreshSelection::Lead;
@@ -219,6 +225,14 @@ impl PaletteChoices {
         // A removed local selection cannot silently activate the row that inherited its index.
         self.selected = match refresh_selection {
             Some(RefreshSelection::Target(target)) => self.target_row(target),
+            // A match that stopped matching gives way to the lead row; a removed one leaves only
+            // Go to, which needs no local row, as the owner's own choice does.
+            Some(RefreshSelection::Automatic(target)) => self
+                .results
+                .iter()
+                .any(|hit| hit.target == target)
+                .then(|| self.default_row())
+                .or_else(|| self.address.as_ref().map(|_| 0)),
             Some(RefreshSelection::Unselected) => None,
             Some(RefreshSelection::Lead) => Some(0),
             Some(RefreshSelection::Default) if !succeeded && self.lead_rows() == 0 => None,
@@ -744,12 +758,16 @@ mod tests {
             "https://example.test.other.invalid/",
         );
         let real = (tab, "Synthetic real site", "https://example.test/");
-        for rows in [vec![look_alike, real], vec![look_alike]] {
-            let mut choices = PaletteChoices::default();
-            let request = choices.query("example.test");
-            assert!(choices.receive(request, Ok(ranked(&rows))));
-            assert_eq!(choices.selected, Some(0));
-            assert_submit(&mut choices, "example.test", false, "https://example.test/");
+        // A trailing dot names the same host, so it is no way around the guard.
+        for input in ["example.test", "example.test."] {
+            for rows in [vec![look_alike, real], vec![look_alike]] {
+                let mut choices = PaletteChoices::default();
+                let request = choices.query(input);
+                let go_to = choices.address.clone().expect("a typed address");
+                assert!(choices.receive(request, Ok(ranked(&rows))));
+                assert_eq!(choices.selected, Some(0), "{input}");
+                assert_submit(&mut choices, input, false, &go_to);
+            }
         }
 
         // A page at exactly the typed host keeps Go to first even beside a partial match.
@@ -763,6 +781,44 @@ mod tests {
             ]))
         ));
         assert_eq!(choices.selected, Some(0));
+    }
+
+    #[test]
+    fn a_removed_automatic_choice_never_activates_its_replacement_row() {
+        let [first, _] = targets();
+        let second = Target::Tab(TabId::new(2).expect("second synthetic tab"));
+        // A prefixed view preselects its top row; Everything preselects an exact title.
+        for (input, accepts_address, prefixed, rows) in [
+            (
+                "/mail",
+                false,
+                true,
+                vec![(first, "Mail one"), (second, "Mail two")],
+            ),
+            (
+                "inbox",
+                true,
+                false,
+                vec![(first, "Inbox"), (second, "Inbox archive")],
+            ),
+        ] {
+            let rows: Vec<_> = rows
+                .into_iter()
+                .map(|(target, title)| (target, title, "https://mail.example.test/"))
+                .collect();
+            let mut choices = PaletteChoices::default();
+            let request = choices.query_scoped(input, accepts_address);
+            choices.stage_commands(staged(&[], 0), true, prefixed);
+            assert!(choices.receive(request, Ok(ranked(&rows))));
+            assert_target(&mut choices, first);
+
+            // The chosen tab closes; Enter during the refresh waits, then does nothing.
+            let refreshed = choices.refresh();
+            assert!(choices.submission(input.to_owned(), false).is_none());
+            assert!(choices.receive(refreshed, Ok(ranked(&rows[1..]))));
+            assert_eq!(choices.selected, None, "{input}");
+            assert!(choices.take_deferred().is_none(), "{input}");
+        }
     }
 
     #[test]

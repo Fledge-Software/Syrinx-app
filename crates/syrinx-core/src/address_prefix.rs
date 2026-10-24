@@ -30,7 +30,7 @@ pub fn address_prefix(typed: &str, address: &str) -> AddressPrefix {
     let Some(host) = address.host_str() else {
         return AddressPrefix::No;
     };
-    let host = without_www(host).to_lowercase();
+    let host = without_www(without_root_dot(host)).to_lowercase();
     // Text without a path may stop anywhere inside the host.
     if typed_path.is_none()
         && let Some(rest) = host.strip_prefix(typed_host.as_str())
@@ -72,12 +72,17 @@ fn typed_parts(typed: &str) -> Option<(String, Option<&str>)> {
         Some(slash) => (&typed[..slash], Some(&typed[slash..])),
         None => (typed, None),
     };
-    let host = without_www(&host.to_lowercase()).to_owned();
+    let host = without_www(without_root_dot(&host.to_lowercase())).to_owned();
     (!host.is_empty()).then_some((host, path))
 }
 
 fn without_www(host: &str) -> &str {
     host.strip_prefix("www.").unwrap_or(host)
+}
+
+/// `example.test.` is the same host as `example.test`; the final dot names the DNS root.
+fn without_root_dot(host: &str) -> &str {
+    host.strip_suffix('.').unwrap_or(host)
 }
 
 #[cfg(test)]
@@ -104,7 +109,6 @@ mod tests {
                 ("www.cloudf", "https://cloudflare.example/"),
                 ("https://cloud", "https://www.cloudflare.example/"),
                 ("cloud.exam", "https://cloud.example.test/projects"),
-                ("example.", "https://example.test/"),
             ],
         );
     }
@@ -119,7 +123,9 @@ mod tests {
                 // Look-alikes: a typed address must never open these.
                 ("example.test", "https://example.test.other.invalid/"),
                 ("example.co", "https://example.co.uk/"),
-                ("example.test", "https://example.test./"),
+                // A trailing dot is the DNS root, never the start of another label.
+                ("example.test.", "https://example.test.other.invalid/"),
+                ("example.", "https://example.test/"),
             ],
         );
     }
@@ -134,6 +140,8 @@ mod tests {
                 ("Example.Test/docs", "https://example.test/docs/intro"),
                 ("cloudflare.example", "https://www.cloudflare.example/login"),
                 ("192.0.2.10", "https://192.0.2.10:8443/admin"),
+                ("example.test", "https://example.test./"),
+                ("example.test.", "https://example.test/"),
             ],
         );
     }
