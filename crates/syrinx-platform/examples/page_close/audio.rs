@@ -10,8 +10,9 @@ pub(super) const DEADLINE: Duration = Duration::from_secs(150);
 const PLAYING_HOLD: Duration = Duration::from_secs(15);
 /// How late after the audio grace the suspension may still arrive before the suite fails.
 const SLEEP_MARGIN: Duration = Duration::from_secs(30);
-/// WebView2 reports the quiet a moment after the key press, so the sleep may come this much
-/// sooner than the grace measured from the press.
+/// `stopped` is taken after the `tone-stopped` title round-trips through `context.close()` and
+/// the event channel, so the runtime may have reported quiet up to this much earlier, and the
+/// sleep may then come this much sooner than `stopped + AUDIO_GRACE`.
 const QUIET_REPORT_SLACK: Duration = Duration::from_secs(2);
 const TONE_ID: u64 = 1600;
 
@@ -228,7 +229,8 @@ fn wait_title(
 }
 
 /// The next current event, or `None` once `until` has passed, which is the hold's own end
-/// rather than a failure; a wait error before then stays an error.
+/// rather than a failure. Only the wait's deadline message means that; an unexpected quit or
+/// a closed event channel stays an error even in the hold's last tick.
 fn next_event_until(
     events: &mut UnboundedReceiver<BrowserEvent>,
     until: Instant,
@@ -241,7 +243,7 @@ fn next_event_until(
             check_event(&event)?;
             Ok(Some(event))
         }
-        Err(_) if Instant::now() >= until => Ok(None),
+        Err(error) if error == EVENT_DEADLINE => Ok(None),
         Err(error) => Err(error),
     }
 }

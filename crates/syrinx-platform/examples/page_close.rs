@@ -64,6 +64,9 @@ type Exercise = fn(
 ) -> Result<(), String>;
 
 const DEADLINE: Duration = Duration::from_secs(45);
+/// `next_event`'s error once a wait's deadline passes; the audio suite tells it from a failure.
+const EVENT_DEADLINE: &str =
+    "Synthetic native event deadline expired; close delivery is not proven.";
 /// Longer than the platform's five-second grace before an idle hidden page is suspended.
 const STALL_PAST_SUSPENSION_GRACE: Duration = Duration::from_secs(6);
 static TRACE: AtomicBool = AtomicBool::new(false);
@@ -74,13 +77,14 @@ const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Synthetic close fi
     <script>addEventListener('load',()=>setTimeout(()=>window.close(),100));</script>";
 
 fn main() -> ExitCode {
-    // An independent deadline also catches a stalled native call or message pump. The audio
-    // suite alone takes about 90 s, so the whole run gets eight minutes.
+    // An independent deadline also catches a stalled native call or message pump. It sits above
+    // the sum of every suite's budget and shutdown (six suites at 45 s, the audio suite at
+    // 150 s, seven 10 s shutdowns: about 490 s), so it fires only when the pump itself is stuck.
     let (cancel, cancellation) = mpsc::channel();
     let watchdog = match thread::Builder::new()
         .name("syrinx-close-harness-deadline".into())
         .spawn(
-            move || match cancellation.recv_timeout(Duration::from_secs(480)) {
+            move || match cancellation.recv_timeout(Duration::from_secs(540)) {
                 Ok(()) => {}
                 Err(error) => {
                     eprintln!("Synthetic page-close harness deadline failed: {error}.");
@@ -537,9 +541,7 @@ fn next_event(
 ) -> Result<BrowserEvent, String> {
     loop {
         if Instant::now() >= deadline {
-            return Err(
-                "Synthetic native event deadline expired; close delivery is not proven.".into(),
-            );
+            return Err(EVENT_DEADLINE.into());
         }
         let mut message = MSG::default();
         for _ in 0..256 {
