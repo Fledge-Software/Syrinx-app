@@ -265,8 +265,9 @@ impl Lifecycle {
         let mut token = 0;
         unsafe { core.add_IsDocumentPlayingAudioChanged(&handler, &mut token) }
             .map_err(|_| BrowserError::EventRegistration)?;
-        // Seed from the current state: an adopted popup may already be playing.
-        let playing = playing_audio(&core).map_err(|_| BrowserError::EventRegistration)?;
+        // Seed from the current state: an adopted popup may already be playing. A failed read is
+        // `Metadata` here as in the handler; only the registration itself is `EventRegistration`.
+        let playing = playing_audio(&core).map_err(|_| BrowserError::Metadata)?;
         self.state
             .borrow_mut()
             .timer
