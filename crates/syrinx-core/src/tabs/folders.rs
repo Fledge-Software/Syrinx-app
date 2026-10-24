@@ -136,9 +136,17 @@ pub struct RemovedSavedEntries {
     pub pages: Vec<SavedPage>,
 }
 
-/// Refuses a folder name that is empty or only whitespace; the title is otherwise kept as given.
+/// The name a folder gets when it arrives with a blank one, from an import or a saved session.
+pub(crate) const UNTITLED_FOLDER: &str = "Untitled folder";
+
+/// The one rule for a blank folder name: empty or only whitespace.
+pub(crate) fn is_blank_folder_title(title: &str) -> bool {
+    title.trim().is_empty()
+}
+
+/// Refuses a blank folder name (2026-10-12); the title is otherwise kept as given.
 pub(super) fn require_folder_title(title: &str) -> Result<(), TabError> {
-    if title.trim().is_empty() {
+    if is_blank_folder_title(title) {
         return Err(TabError::EmptyFolderTitle);
     }
     Ok(())

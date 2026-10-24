@@ -383,6 +383,38 @@ fn damaged_tree_rows_are_refused_without_repair() {
 }
 
 #[test]
+fn a_stored_blank_folder_title_still_loads_and_validates() {
+    // A blank title is repaired by the core on restore, so the store must not refuse it (#80).
+    let directory = TestDirectory::new();
+    let (model, work, _) = tree_model();
+    let store = Store::open(directory.lease()).expect("store opens");
+    store.save(0, model.snapshot()).expect("tree saves");
+    store.shutdown().expect("store closes");
+    let connection = directory.connection();
+    connection
+        .execute(
+            "UPDATE saved_folders SET title = ' \t ' WHERE id = x'0000000000000001'",
+            [],
+        )
+        .expect("blank a synthetic folder title");
+    close(connection);
+
+    let lease = directory.lease();
+    let validated = validate_database(lease.as_ref()).expect("blank title validates");
+    assert_eq!(validated.snapshot.saved_folders[0].id, work);
+    let store = Store::open(directory.lease()).expect("store reopens");
+    let stored = store.load().expect("blank title loads");
+    assert_eq!(stored.snapshot, validated.snapshot);
+    let restored = TabModel::from_snapshot(stored.snapshot).expect("core repairs the title");
+    assert_eq!(
+        restored.get_folder(work).map(|folder| folder.title()),
+        Some("Untitled folder")
+    );
+    store.shutdown().expect("store closes");
+    directory.cleanup();
+}
+
+#[test]
 fn flat_backups_still_validate_as_a_top_level_tree() {
     let directory = TestDirectory::new();
     let connection = flat_database(&directory);
