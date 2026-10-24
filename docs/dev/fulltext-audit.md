@@ -295,3 +295,11 @@ No other package listed above has a RustSec entry. As before, this is a manual s
 | Peak working set | 383 MB | 562 MB | 562 MB |
 
 Tantivy 0.27.0 performs as 0.26.2 did, within run-to-run noise, so #52's choice stands on the version Syrinx will ship. The raw files are `target/p1-23-quiet-0270-2026-10-24-*` on the owner's machine, outside the repository.
+
+## Production use in `syrinx-search`, 2026-10-24 (#53)
+
+**Why.** P1-24 builds Syrinx's full-text index on the engine #52 chose. Until then `crates/xtask/src/dependency_policy.rs` let only the bake-off harness depend on Tantivy; the issue lifts that for `syrinx-search` only, now that the advisory above is resolved by 0.27.0 and the new graph is audited in "Tantivy 0.27.0 move".
+
+**What changed.** The pin moved into the workspace's `[workspace.dependencies]` with the same exact version and the same features (`default-features = false`, `mmap`, `lz4-compression`); `crates/fulltext-bench` and `crates/syrinx-search` both inherit it, so the two cannot drift apart. `Cargo.lock` gains one line, `"tantivy"` in `syrinx-search`'s dependency list: no package is added, removed or moved to another version, so the licence and advisory review of the 0.27.0 graph above covers it unchanged.
+
+**The boundary that remains.** The dependency check now allows Tantivy in exactly two crates, `syrinx-search` and `fulltext-bench`; every other crate reaches the index through `syrinx_search::fulltext`, and nothing may depend on the bake-off. `syrinx-search` stays in the set of headless crates whose resolved graph may not reach a network client, which `cargo xtask check-deps` checks on every gate.
