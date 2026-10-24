@@ -984,12 +984,19 @@ impl BrowserView {
                 success,
                 cancelled,
             } => {
+                // A navigation that became a download ends with success false and no new
+                // document (#143): neither a failure to count nor a visit to retract. The
+                // mark was read by `navigation_status.observe` above and is spent here.
+                let became_download =
+                    self.navigation_status.finish_download_navigation(id) && !success;
                 // A stopped or replaced navigation is not a failure to count.
-                if !success && !cancelled {
+                if !success && !cancelled && !became_download {
                     self.usage.recorder.error(ErrorCategory::NavigationFailed);
                 }
                 // History retracts a visit whose navigation failed.
-                if let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id) {
+                if !became_download
+                    && let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id)
+                {
                     self.command(SessionCommand::ObserveNavigation {
                         id: tab.id,
                         success,
