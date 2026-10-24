@@ -11,7 +11,8 @@ use std::{
     time::Instant,
 };
 use webview2_com::{
-    ContainsFullScreenElementChangedEventHandler, Microsoft::Web::WebView2::Win32::ICoreWebView2_3,
+    ContainsFullScreenElementChangedEventHandler, IsDocumentPlayingAudioChangedEventHandler,
+    Microsoft::Web::WebView2::Win32::{ICoreWebView2_3, ICoreWebView2_8},
     NavigationCompletedEventHandler, NavigationStartingEventHandler, TrySuspendCompletedHandler,
 };
 use windows::{
@@ -228,6 +229,51 @@ impl Lifecycle {
             .map_err(|_| BrowserError::EventRegistration)
     }
 
+    /// Follows WebView2's own audio state, so a page that plays sound is never suspended
+    /// (#130). Only host-side state is read: no script, IPC handler or request filter touches
+    /// the page. A suspended page cannot start sound, so there is no resume on playback.
+    pub(super) fn register_audio(&self, view: &WebView) -> Result<(), BrowserError> {
+        let core: ICoreWebView2_8 = view
+            .webview()
+            .cast()
+            .map_err(|_| BrowserError::EventRegistration)?;
+        let changes = self.state.clone();
+        let events = self.events.clone();
+        let id = self.id;
+        let handler =
+            IsDocumentPlayingAudioChangedEventHandler::create(Box::new(move |core, _| {
+                let playing = match core
+                    .ok_or_else(|| windows::core::Error::from(E_POINTER))
+                    .and_then(|core| core.cast::<ICoreWebView2_8>())
+                    .and_then(|core| playing_audio(&core))
+                {
+                    Ok(playing) => playing,
+                    Err(error) => {
+                        events.emit(BrowserEvent::Error {
+                            tab: Some(id),
+                            error: BrowserError::Metadata,
+                        });
+                        return Err(error);
+                    }
+                };
+                changes
+                    .borrow_mut()
+                    .timer
+                    .playback_changed(playing, Instant::now());
+                Ok(())
+            }));
+        let mut token = 0;
+        unsafe { core.add_IsDocumentPlayingAudioChanged(&handler, &mut token) }
+            .map_err(|_| BrowserError::EventRegistration)?;
+        // Seed from the current state: an adopted popup may already be playing.
+        let playing = playing_audio(&core).map_err(|_| BrowserError::EventRegistration)?;
+        self.state
+            .borrow_mut()
+            .timer
+            .playback_changed(playing, Instant::now());
+        Ok(())
+    }
+
     pub(super) fn resume(&self, view: &WebView) -> Result<(), BrowserError> {
         let core: ICoreWebView2_3 = view
             .webview()
@@ -324,6 +370,13 @@ impl Drop for Lifecycle {
         self.state.borrow_mut().alive = false;
         self.life.retire();
     }
+}
+
+/// Whether the document is playing audio, muted or not, as WebView2 reports it.
+fn playing_audio(core: &ICoreWebView2_8) -> windows::core::Result<bool> {
+    let mut playing = BOOL::default();
+    unsafe { core.IsDocumentPlayingAudio(&mut playing) }?;
+    Ok(playing.as_bool())
 }
 
 /// Reads the `NavigationId` both navigation event argument types carry.
