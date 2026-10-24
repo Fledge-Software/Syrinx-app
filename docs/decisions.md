@@ -410,7 +410,8 @@ folder names.
 - **Plugin search content (decision 8): each plugin's feeds get their own
   palette scope chip** (for example "Notes", shown only while that plugin
   is installed) as well as appearing under Everything, matching the spec's
-  scope chips. Recorded here because it is `design/README.md` territory.
+  scope chips. It is `design/README.md` territory, so it is also recorded
+  there, under "Decisions made after the spec".
 
 - **Grants (decisions 9 and 10): nothing granted by default, and running
   programs is named as full trust.** A plugin's `syrinx-plugin.toml` asks

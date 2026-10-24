@@ -84,6 +84,11 @@ them again requires the owner's approval.
   colours only identify a plugin.
 - **The palette always offers "Search the web" (Alt Enter)**, because it is
   also the address bar.
+- **Each installed plugin's feeds get their own palette scope chip** (owner,
+  2026-10-21, research note 10's decision 8), for example "Notes", shown only
+  while that plugin is installed, in addition to Everything (where its
+  results also appear) and the spec's other chips. Where the plugin chips
+  sit in the row is not decided yet; #141 builds them.
 - **Tab moves between form fields** in an inline palette action. "Create and
   open" is Ctrl Enter. This replaces the spec's "Tab for more fields".
 - **The chrome uses the operating system's UI font** (Segoe UI Variable on
