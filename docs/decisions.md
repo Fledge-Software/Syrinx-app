@@ -12,6 +12,29 @@ folder names.
 
 ## 2026-10-24
 
+- **Syrinx's full-text index uses Tantivy, not SQLite's FTS5 (#52).** The
+  quiet-machine bake-off of 2026-10-21 (results on #52) measured the broad
+  corpus at a 95th-percentile query time of 2.3 ms for Tantivy against
+  24.8 ms for FTS5. Expiring a week of pages took 2.2 s against about five
+  minutes, and the index used 55 MB of disk after expiry against 408 MB.
+  FTS5 used 130 to 180 MB less memory, but #52's rule preferred FTS5 only if
+  the two were close, and they were not. The owner confirmed the rule's
+  choice. #53, the production adapter, builds on Tantivy.
+- **Tantivy moves to 0.27.0 before Syrinx ships it (#52).** The tested
+  0.26.2 depends on a version of `lru` covered by RUSTSEC-2026-0253; 0.27.0
+  depends on a fixed one. The owner approved moving the exact pin and the
+  lockfile growth that comes with it. Every new package is audited in
+  `docs/dev/fulltext-audit.md`, and the move stops for the owner if any
+  licence falls outside MIT, Apache-2.0 or BSD. A confirming rerun of the
+  comparison on 0.27.0, on a quiet machine the same day, matched 0.26.2's
+  results (`docs/dev/fulltext-audit.md`).
+- **Signing the weekly update files waits (#55, PR #119).** The owner is
+  not setting up the signing key yet: it adds a monthly cost, and the
+  previews have no users who need it. Weekly previews stay unsigned until
+  the owner does `docs/owner-checklist.md`, item 1.
+- **The Glass look and the Settings page passed the owner's window check
+  (#93, #91).** The owner looked at both on `main` and found them better.
+
 - **Dark Acrylic keeps a minimum tint, and downloads get Syrinx's own
   session list and flyout.** Three approvals, given together:
   - **(1) A dark theme under Acrylic never drops below a 12.5 % tint**
@@ -241,6 +264,42 @@ folder names.
 
 ## 2026-10-21
 
+- **Syrinx remembers each site's zoom level (#90).** The owner said yes to
+  storing per-site zoom, as Chrome, Edge and Firefox do. It is kept only in
+  Syrinx's local database, keyed by site, and is never exported or sent
+  anywhere. Without it, zoom resets on every new tab and restart, which is
+  what #90 reported.
+- **Settings opens from the settings button at the bottom of the sidebar
+  (#91).** The spec already puts settings in the sidebar's bottom row; the
+  owner confirmed that this button is the way into the Settings page, and
+  that themes are reachable from it.
+- **The Glass theme must look like the canvas's Glass mockups (#93).** The
+  owner wants Glass and its Transparency setting to show real translucency
+  and glass edges, as in `design/canvas/project/Main.dc.html`, not the
+  near-opaque fill Syrinx draws today. The canvas is the target. In the
+  owner's words, the Glass look belongs "in that theme selection", so Glass
+  comes back as a preset beside Graphite and Paper. This replaces the
+  2026-10-15 rule that only Graphite and Paper are presets, for Glass only;
+  every other look is still built in the theme editor.
+- **The cookie-flush fix keeps Google signed in (#96).** The owner checked
+  that Google stays signed in after closing and reopening Syrinx with #111,
+  so #111 closes #96.
+- **The full-text bake-off runs tonight (#52).** The owner meant the
+  2026-10-20 overnight run to include the quiet-machine comparison; it did
+  not run. It runs on 2026-10-21, once the day's pull requests are
+  merged, with every agent build stopped first.
+- **Clearing "Cookies and site data" also clears saved zoom levels (#90).**
+  This is what Chrome does. Zoom levels are site data, so the owner expects
+  them to go with cookies.
+- **Ctrl , opens Settings even while a web page has the keys (#91).** This
+  follows Chrome and Edge. The cost is that a few web apps, such as
+  github.dev, lose Ctrl , for their own settings.
+- **Settings opens as its own tab (#91).** It does not replace the page
+  the owner is on.
+- **Ctrl D on Home saves nothing (#91).** Home is Syrinx's own page, so
+  bookmarking it would save a blank page. It is refused, as it already is
+  on the Settings tab.
+
 - **The WASM plugin runtime research note (#26) is approved, with all
   fifteen of its decisions exactly as recommended.** The note answers the
   questions #26 set before #27 re-cuts Plan 2 to 4's slices: which
@@ -432,7 +491,35 @@ folder names.
   matching Syrinx's licence (2026-10-13), so code moves between Syrinx and
   plugins made from the template under one licence.
 
+## 2026-10-18
+
+- **Syrinx takes find, history and zoom keys even over a focused page.**
+  The owner decided on #21 that Ctrl F, Ctrl H, Ctrl +, Ctrl − and Ctrl 0 go
+  to Syrinx even while a web page has the keyboard focus, as in Chrome and
+  Edge, because find, history and zoom are browser commands and not page
+  commands; that the existing test asserting these keys reach the page first
+  is changed to the new rule; and that Esc closes History. Before this, a
+  focused page kept these keys, so Ctrl F opened WebView2's own find bar and
+  Ctrl H did nothing (#21). This replaces the 2026-10-12 entry "Pages get
+  find, history, print and zoom keys first (P1-13)" for find, history and
+  zoom only; that entry's print rule (Ctrl P stays the page's) still
+  stands. Implementation note, not part of the owner's decision: the page's
+  own use of these keys (for example Google Docs' find and replace on
+  Ctrl F and Ctrl H) is a consequence nobody has measured; it is an open
+  point for the owner's hand checks.
+
 ## 2026-10-20
+
+- **The WebView2 update notice is for the owner and testing only.** Installed
+  builds (`cargo xtask package`, which the weekly preview ships) never show
+  D36's notice or its "could not read the WebView2 version" message; they
+  still remember the runtime version, so nothing is lost if the notice
+  returns. Development and test builds keep it for now. This narrows D36,
+  which assumed the owner was the only person running Syrinx.
+- **Each weekly release lists the engines underneath it.** The notes name the
+  GPUI, gpui-component, wry and webview2-com versions from `Cargo.lock`,
+  marking any that changed since the previous preview, and the WebView2
+  runtime the release was gated and screenshotted on.
 
 - **The Fledge plugin is on hold until Fledge itself is ready (holds the
   Fledge half of D34).** D34 kept Plan 2 thin: the plugin runtime plus one
@@ -493,74 +580,6 @@ folder names.
   not part of the owner's decision: the template's "done" condition (a
   minimal plugin that loads in Syrinx, #25) can only be met once the host
   exists, so template work that starts now stops short of loading.
-
-## 2026-10-21
-
-- **Syrinx remembers each site's zoom level (#90).** The owner said yes to
-  storing per-site zoom, as Chrome, Edge and Firefox do. It is kept only in
-  Syrinx's local database, keyed by site, and is never exported or sent
-  anywhere. Without it, zoom resets on every new tab and restart, which is
-  what #90 reported.
-- **Settings opens from the settings button at the bottom of the sidebar
-  (#91).** The spec already puts settings in the sidebar's bottom row; the
-  owner confirmed that this button is the way into the Settings page, and
-  that themes are reachable from it.
-- **The Glass theme must look like the canvas's Glass mockups (#93).** The
-  owner wants Glass and its Transparency setting to show real translucency
-  and glass edges, as in `design/canvas/project/Main.dc.html`, not the
-  near-opaque fill Syrinx draws today. The canvas is the target. In the
-  owner's words, the Glass look belongs "in that theme selection", so Glass
-  comes back as a preset beside Graphite and Paper. This replaces the
-  2026-10-15 rule that only Graphite and Paper are presets, for Glass only;
-  every other look is still built in the theme editor.
-- **The cookie-flush fix keeps Google signed in (#96).** The owner checked
-  that Google stays signed in after closing and reopening Syrinx with #111,
-  so #111 closes #96.
-- **The full-text bake-off runs tonight (#52).** The owner meant the
-  2026-10-20 overnight run to include the quiet-machine comparison; it did
-  not run. It runs on 2026-10-21, once the day's pull requests are
-  merged, with every agent build stopped first.
-- **Clearing "Cookies and site data" also clears saved zoom levels (#90).**
-  This is what Chrome does. Zoom levels are site data, so the owner expects
-  them to go with cookies.
-- **Ctrl , opens Settings even while a web page has the keys (#91).** This
-  follows Chrome and Edge. The cost is that a few web apps, such as
-  github.dev, lose Ctrl , for their own settings.
-- **Settings opens as its own tab (#91).** It does not replace the page
-  the owner is on.
-- **Ctrl D on Home saves nothing (#91).** Home is Syrinx's own page, so
-  bookmarking it would save a blank page. It is refused, as it already is
-  on the Settings tab.
-
-## 2026-10-18
-
-- **Syrinx takes find, history and zoom keys even over a focused page.**
-  The owner decided on #21 that Ctrl F, Ctrl H, Ctrl +, Ctrl − and Ctrl 0 go
-  to Syrinx even while a web page has the keyboard focus, as in Chrome and
-  Edge, because find, history and zoom are browser commands and not page
-  commands; that the existing test asserting these keys reach the page first
-  is changed to the new rule; and that Esc closes History. Before this, a
-  focused page kept these keys, so Ctrl F opened WebView2's own find bar and
-  Ctrl H did nothing (#21). This replaces the 2026-10-12 entry "Pages get
-  find, history, print and zoom keys first (P1-13)" for find, history and
-  zoom only; that entry's print rule (Ctrl P stays the page's) still
-  stands. Implementation note, not part of the owner's decision: the page's
-  own use of these keys (for example Google Docs' find and replace on
-  Ctrl F and Ctrl H) is a consequence nobody has measured; it is an open
-  point for the owner's hand checks.
-
-## 2026-10-20
-
-- **The WebView2 update notice is for the owner and testing only.** Installed
-  builds (`cargo xtask package`, which the weekly preview ships) never show
-  D36's notice or its "could not read the WebView2 version" message; they
-  still remember the runtime version, so nothing is lost if the notice
-  returns. Development and test builds keep it for now. This narrows D36,
-  which assumed the owner was the only person running Syrinx.
-- **Each weekly release lists the engines underneath it.** The notes name the
-  GPUI, gpui-component, wry and webview2-com versions from `Cargo.lock`,
-  marking any that changed since the previous preview, and the WebView2
-  runtime the release was gated and screenshotted on.
 
 ## 2026-10-16
 
