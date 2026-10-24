@@ -105,8 +105,20 @@ pub enum SessionCommand {
         backwards: bool,
     },
     FocusTab(TabId),
+    // TODO(#95): send from the row menu, then drop cfg(test).
+    /// Opens a selected copy of a web tab right after it (#95).
+    #[cfg(test)]
+    Duplicate(TabId),
+    /// Closes every ordinary tab but this one, sparing open saved pages (#95).
+    #[cfg(test)]
+    CloseOthers(TabId),
+    /// Closes the ordinary tabs below this one, sparing open saved pages (#95).
+    #[cfg(test)]
+    CloseBelow(TabId),
     OpenSaved(SavedPageId),
     SaveActive,
+    /// Saves a tab that need not be active, as a row's menu does (#95).
+    SaveTab(TabId),
     Unsave(SavedPageId),
     /// Creates, renames, removes or moves saved folders and pages (P1-21).
     Folder(FolderCommand),
@@ -1494,6 +1506,12 @@ fn counted_feature(command: &SessionCommand) -> Counted {
         | SessionCommand::ObserveClosed(_) => Counted::IfChanged(Feature::TabClosed),
         SessionCommand::SaveActive => Counted::IfChanged(Feature::SavedSaved),
         SessionCommand::Unsave(_) => Counted::IfChanged(Feature::SavedRemoved),
+        SessionCommand::SaveTab(_) => Counted::IfChanged(Feature::SavedSaved),
+        // D39's schema has no counter for duplicating or bulk closes until the owner approves one.
+        #[cfg(test)]
+        SessionCommand::Duplicate(_)
+        | SessionCommand::CloseOthers(_)
+        | SessionCommand::CloseBelow(_) => Counted::Nothing,
         SessionCommand::Folder(FolderCommand::Create { .. }) => {
             Counted::IfChanged(Feature::FolderCreated)
         }
@@ -1575,19 +1593,39 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         }
         SessionCommand::CycleActive { backwards } => cycle_active(model, backwards)?,
         SessionCommand::FocusTab(id) => model.select(id).map_err(SessionError::Model)?,
+        #[cfg(test)]
+        SessionCommand::Duplicate(id) => {
+            model.duplicate(id).map_err(SessionError::Model)?;
+        }
+        #[cfg(test)]
+        SessionCommand::CloseOthers(id) => {
+            model.close_others(id).map_err(SessionError::Model)?;
+        }
+        #[cfg(test)]
+        SessionCommand::CloseBelow(id) => {
+            model.close_below(id).map_err(SessionError::Model)?;
+        }
+        SessionCommand::SaveTab(id) => {
+            // Home and Settings are Syrinx's own pages, not destinations, so Ctrl D and a row
+            // menu leave them unsaved (#91).
+            let syrinx_page = model
+                .tabs()
+                .iter()
+                .any(|tab| tab.id() == id && tab.metadata().is_syrinx_page(PageOrigin::Ordinary));
+            if syrinx_page {
+                return Ok(());
+            }
+            model.save_page(id).map_err(SessionError::Model)?;
+        }
         SessionCommand::OpenSaved(id) => {
             model
                 .open_saved(id, Activation::Foreground)
                 .map_err(SessionError::Model)?;
         }
         SessionCommand::SaveActive => {
+            // Save the worker's current selection.
             let id = model.active_id().ok_or(SessionError::NoActiveTab)?;
-            // Home and Settings are Syrinx's own pages, not destinations, so Ctrl D leaves them
-            // unsaved (#91).
-            if model.snapshot().active_is_syrinx_page() {
-                return Ok(());
-            }
-            model.save_page(id).map_err(SessionError::Model)?;
+            apply_model(model, SessionCommand::SaveTab(id))?;
         }
         SessionCommand::Unsave(id) => {
             model.remove_saved(id).map_err(SessionError::Model)?;
@@ -1895,6 +1933,22 @@ mod tests {
             model.tabs()[0].metadata().address,
             "https://start.example.test"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn saving_a_home_tab_by_id_leaves_it_unsaved() -> Result<(), SessionError> {
+        // A row menu's SaveTab follows the same #91 rule as Ctrl D's SaveActive.
+        let mut model = TabModel::new();
+        apply_model(
+            &mut model,
+            SessionCommand::NewTab {
+                address: "about:blank".to_owned(),
+            },
+        )?;
+        let home = model.tabs()[0].id();
+        apply_model(&mut model, SessionCommand::SaveTab(home))?;
+        assert!(model.saved_pages().is_empty());
         Ok(())
     }
 
