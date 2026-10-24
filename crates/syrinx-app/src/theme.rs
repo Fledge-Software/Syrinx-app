@@ -2,9 +2,9 @@
 
 use std::cell::RefCell;
 
-use gpui::{App, Background, Rgba, linear_color_stop, linear_gradient};
+use gpui::{App, Background, BoxShadow, Rgba, linear_color_stop, linear_gradient, point, px};
 use gpui_component::{Theme, ThemeMode, ThemeToken};
-use syrinx_ui::{Accent, Color, Ground, Palette, PaletteId, palette};
+use syrinx_ui::{Accent, Color, Ground, Palette, PaletteId, ShadowLayer, ShadowRole, palette};
 
 thread_local! {
     // GPUI draws every Syrinx window on one thread; Customize replaces this palette live.
@@ -126,6 +126,52 @@ pub(crate) fn focus_ring() -> (Rgba, Rgba) {
     })
 }
 
+/// The drawn palette's shadow for `role`, as GPUI layers, bottom first; empty when it has none.
+pub(crate) fn shadow(role: ShadowRole) -> Vec<BoxShadow> {
+    let (drop, edge) = shadow_layers(role, 0.);
+    drop.into_iter().chain(edge).collect()
+}
+
+/// The drawn palette's shadow for `role` on an element outlined `border` pixels wide: its
+/// drop layer, if any, and its glass-edge layers. CSS draws an inset shadow inside the
+/// border, GPUI from the outer edge, so an edge layer is moved in past the border; otherwise
+/// the highlight would sit on the outline instead of just inside it.
+pub(crate) fn shadow_layers(role: ShadowRole, border: f32) -> (Option<BoxShadow>, Vec<BoxShadow>) {
+    CURRENT.with_borrow(|palette| {
+        let shadow = palette.shadows.role(role);
+        let drop = shadow.drop_layer().map(box_shadow);
+        let edge = shadow
+            .inset_layers()
+            .map(|layer| box_shadow(inside_border(layer, border)))
+            .collect();
+        (drop, edge)
+    })
+}
+
+/// An inset layer moved in by `border`: a highlight's offset grows, a ring's spread grows.
+fn inside_border(layer: ShadowLayer, border: f32) -> ShadowLayer {
+    if layer.offset_y == 0. {
+        return ShadowLayer {
+            spread: layer.spread + border,
+            ..layer
+        };
+    }
+    ShadowLayer {
+        offset_y: layer.offset_y + border * layer.offset_y.signum(),
+        ..layer
+    }
+}
+
+fn box_shadow(layer: ShadowLayer) -> BoxShadow {
+    BoxShadow {
+        color: rgba(layer.color).into(),
+        offset: point(px(0.), px(layer.offset_y)),
+        blur_radius: px(layer.gaussian_sigma()),
+        spread_radius: px(layer.spread),
+        inset: layer.inset,
+    }
+}
+
 // The preview's selected-row grey was an opaque stand-in (P1-07). Live palettes need it to
 // follow Paper too, so it now reads the canvas token. The palette's former "Search the web"
 // grey went with P1-30, whose palette reads every colour from `current()`.
@@ -157,8 +203,41 @@ mod tests {
         assert_eq!(text(), rgba(paper.text));
         assert_eq!(preview_row_selected(), rgba(paper.row_selected));
         assert_eq!(current(), paper);
+        // The pill's canvas `0 8px 24px` becomes GPUI's 12-pixel deviation.
+        let pill = shadow(ShadowRole::Pill);
+        assert_eq!(pill.len(), 1);
+        assert_eq!(pill[0].offset, point(px(0.), px(8.)));
+        assert_eq!(pill[0].blur_radius, px(12.));
         // Restore the default for any later test sharing this thread.
         apply(palette(PaletteId::Graphite, Accent::default()));
+        assert!(!is_light());
         assert_eq!(ground(), gpui::rgb(0x141519));
+        assert!(
+            ShadowRole::ALL
+                .into_iter()
+                .all(|role| shadow(role).is_empty())
+        );
+    }
+
+    #[test]
+    fn glass_edges_move_inside_a_surfaces_border() {
+        apply(palette(PaletteId::Glass, Accent::default()));
+        let (drop, edge) = shadow_layers(ShadowRole::Pill, 1.);
+        // `0 14px 36px rgba(0,0,0,0.25)` becomes GPUI's 18-pixel deviation.
+        let drop = drop.expect("the pill has a drop shadow");
+        assert!(!drop.inset);
+        assert_eq!(drop.blur_radius, px(18.));
+        // `inset 0 1px 0` lands just inside the 1px outline, `inset 0 0 0 1px` likewise.
+        assert_eq!(edge.len(), 2);
+        assert!(edge.iter().all(|layer| layer.inset));
+        assert_eq!(edge[0].offset, point(px(0.), px(2.)));
+        assert_eq!(edge[0].spread_radius, px(0.));
+        assert_eq!(edge[1].offset, point(px(0.), px(0.)));
+        assert_eq!(edge[1].spread_radius, px(2.));
+        // Without a border the canvas values pass straight through.
+        let (_, bare) = shadow_layers(ShadowRole::Field, 0.);
+        assert_eq!(bare[0].offset, point(px(0.), px(1.)));
+        assert_eq!(bare[1].spread_radius, px(1.));
+        apply(palette(PaletteId::Graphite, Accent::default()));
     }
 }

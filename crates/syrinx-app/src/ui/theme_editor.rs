@@ -1,5 +1,5 @@
-//! Customize's Theme section: Graphite and Paper, the owner's saved themes, and the editor
-//! that changes one of them live (`docs/theme-editor.md`).
+//! The Theme section of Customize and Settings: Graphite and Paper, the owner's saved themes,
+//! and the editor that changes one of them live (`docs/theme-editor.md`).
 
 use gpui::{
     AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Role,
@@ -10,11 +10,12 @@ use syrinx_ui::metrics::text;
 use syrinx_ui::theme::{
     self, ANGLE, EDGES, Fill, GRAIN, Material, Mode, Range, TRANSPARENCY, ThemeSpec,
 };
-use syrinx_ui::{Accent, Color, Palette, PaletteId, palette};
+use syrinx_ui::{Accent, Color, Palette};
 
 use super::BrowserView;
 use super::customize::{ThemeRow, group_heading, theme_row, toggled};
-use crate::appearance::{Appearance, MAX_THEMES, ThemeChoice};
+use super::main_window::subscribe_in_main;
+use crate::appearance::{Appearance, MAX_THEMES, PRESETS, ThemeChoice, shown_name};
 use crate::controls::control;
 use crate::session::SessionCommand;
 use crate::text_field;
@@ -69,9 +70,10 @@ impl BrowserView {
             .flex()
             .flex_col()
             .gap(px(8.))
-            .child(group_heading(palette, "Theme"))
-            .child(self.preset_row(palette, PaletteId::Graphite, "Solid dark. The default.", cx))
-            .child(self.preset_row(palette, PaletteId::Paper, "Light.", cx));
+            .child(group_heading(palette, "Theme"));
+        for (choice, name, description) in PRESETS {
+            rows = rows.child(self.preset_row(palette, choice, (name, description), cx));
+        }
         for (slot, theme) in self.home.themes.iter() {
             rows = rows.child(self.custom_row(palette, slot, theme, cx));
             let editing = self.home.theme_editor.as_ref();
@@ -99,21 +101,22 @@ impl BrowserView {
         rows
     }
 
+    /// One preset's row, its sample drawn exactly as choosing it would draw the window.
     fn preset_row(
         &self,
         panel: &Palette,
-        id: PaletteId,
-        description: &str,
+        choice: ThemeChoice,
+        (name, description): (&'static str, &'static str),
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let choice = match id {
-            PaletteId::Paper => ThemeChoice::Paper,
-            _ => ThemeChoice::Graphite,
-        };
-        let sample = palette(id, self.home.appearance.accent);
+        let sample = Appearance {
+            theme: choice,
+            ..self.home.appearance
+        }
+        .drawn_palette(&self.home.themes);
         let row = ThemeRow {
-            id: id.id().into(),
-            name: id.name(),
+            id: name.to_lowercase().into(),
+            name,
             description,
             sample: &sample,
         };
@@ -135,9 +138,11 @@ impl BrowserView {
         let appearance = self.home.appearance;
         let sample = theme.palette(appearance.accent, appearance.reduce_transparency);
         let description = describe(theme);
+        // Shown, never stored: a saved "Glass" reads "Glass (saved)" beside the preset.
+        let name = shown_name(theme);
         let row = ThemeRow {
             id: ("theme-row", slot).into(),
-            name: &theme.name,
+            name: &name,
             description: &description,
             sample: &sample,
         };
@@ -170,7 +175,7 @@ impl BrowserView {
                 .aria_label(format!(
                     "{} {}",
                     if editing { "Done editing" } else { "Edit" },
-                    theme.name
+                    name
                 ))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if editing {
@@ -221,7 +226,7 @@ impl BrowserView {
         let subscriptions = [&name, &background, &second]
             .into_iter()
             .map(|input| {
-                cx.subscribe_in(input, window, |this, _, event, window, cx| {
+                subscribe_in_main(input, cx, |this, event, window, cx| {
                     if let InputEvent::PressEnter { .. } = event {
                         this.apply_theme_text(window, cx);
                     }

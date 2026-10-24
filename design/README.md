@@ -116,6 +116,21 @@ them again requires the owner's approval.
   password-manager support is out of scope. The recommendation is to drop it
   until it does.
 
+## Built without a canvas board (awaiting the owner's sign-off)
+
+These controls exist in the app but not on the canvas, so their look follows
+nearby chrome and still needs the owner's approval before it counts as the
+design.
+
+- **Zoom stepper (#90).** Away from 100%, the title bar's corner shows a pill
+  with − , the level (for example "125%") and +, as Chrome does; − and + step
+  the zoom and a click on the percentage resets it. It replaced the earlier
+  reset-only "110%" pill and uses the same pill shape and line colour.
+- **The page menu's Zoom row (#90).** The ☰ menu's Zoom in and Zoom out rows
+  became one "Zoom" row carrying the same stepper, so zooming does not close
+  the menu; Left and Right step it from the keyboard. "Reset zoom" (Ctrl 0)
+  stays as its own row. The row follows the existing menu-row style.
+
 ## Forge
 
 Forge takes PyCharm's workflow, not its look: tool windows docked around the

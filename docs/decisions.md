@@ -130,15 +130,21 @@ folder names.
 
 - **The Home option stays, and PR #124 is reconciled with it.** The
   per-theme "Home: Solid / See-through" choice of 2026-10-22 is kept. PR
-  #124 (the Glass preset) merged on 2026-10-23, so a follow-up change
-  reconciles it on `main`: its automatic thinning of the Haze preset's Home
-  card is dropped in favour of that choice, so there is one way to make
-  Home see-through rather than two that overlap. Its Glass
-  preset uses Transparency 50 %, which under the new 1 − Transparency/90
-  mapping gives a 0.44 tint, close to the canvas's 0.46; its tint test
-  `the_window_tint_thins_as_transparency_rises` still expects the old
-  1 − Transparency/100 and must be updated to the new mapping. This
-  settles the three points the 2026-10-22 entry left for #124's merge.
+  #124 (the Glass preset) merged to `main` on 2026-10-23, and the merge
+  of `main` into this branch reconciles it: its automatic thinning of the
+  Haze preset's Home card is dropped in favour of that choice, so there is
+  one way to make Home see-through rather than two that overlap. A saved
+  Haze keeps Home Solid, so at its own 25 % its card is still the canvas's
+  `rgba(10,11,14,0.5)`, as #124 drew it. Its Glass preset uses
+  Transparency 50 %, which under the new 1 − Transparency/90 mapping gives
+  a 0.44 tint, close to the canvas's 0.46; its tint test
+  `the_window_tint_thins_as_transparency_rises` is updated to the new
+  mapping. This settles the three points the 2026-10-22 entry left for
+  #124's merge. Implementation note, not part of the owner's decision: #124 checks a
+  dark theme under Acrylic over Glass's bright wallpaper discs, where a
+  saved theme's text reaches 4.5:1 only up to 55 % (the 10 % row floor
+  covers Mica, Mica Alt and light themes to 90 %); above that the editor
+  names the failing pairs, as #124 already recorded for 70 %.
   Rejected: keeping #124's automatic thinning beside the Home choice, which
   would make one preset ignore the owner's per-theme setting.
 
@@ -184,8 +190,8 @@ folder names.
   (a 0.44 tint) instead of 55 % to keep the canvas's 0.46 under the new
   mapping; its test `the_window_tint_thins_as_transparency_rises` expects
   the old 1 − Transparency/100 and must follow the new mapping; and its
-  automatic thinning of Haze's card overlaps the Home choice. Reconcile
-  all three when #124 is merged.
+  automatic thinning of Haze's card overlaps the Home choice. All three
+  are settled in the 2026-10-24 entry.
 
 ## 2026-10-21
 
@@ -442,6 +448,44 @@ folder names.
   minimal plugin that loads in Syrinx, #25) can only be met once the host
   exists, so template work that starts now stops short of loading.
 
+## 2026-10-21
+
+- **Syrinx remembers each site's zoom level (#90).** The owner said yes to
+  storing per-site zoom, as Chrome, Edge and Firefox do. It is kept only in
+  Syrinx's local database, keyed by site, and is never exported or sent
+  anywhere. Without it, zoom resets on every new tab and restart, which is
+  what #90 reported.
+- **Settings opens from the settings button at the bottom of the sidebar
+  (#91).** The spec already puts settings in the sidebar's bottom row; the
+  owner confirmed that this button is the way into the Settings page, and
+  that themes are reachable from it.
+- **The Glass theme must look like the canvas's Glass mockups (#93).** The
+  owner wants Glass and its Transparency setting to show real translucency
+  and glass edges, as in `design/canvas/project/Main.dc.html`, not the
+  near-opaque fill Syrinx draws today. The canvas is the target. In the
+  owner's words, the Glass look belongs "in that theme selection", so Glass
+  comes back as a preset beside Graphite and Paper. This replaces the
+  2026-10-15 rule that only Graphite and Paper are presets, for Glass only;
+  every other look is still built in the theme editor.
+- **The cookie-flush fix keeps Google signed in (#96).** The owner checked
+  that Google stays signed in after closing and reopening Syrinx with #111,
+  so #111 closes #96.
+- **The full-text bake-off runs tonight (#52).** The owner meant the
+  2026-10-20 overnight run to include the quiet-machine comparison; it did
+  not run. It runs on 2026-10-21, once the day's pull requests are
+  merged, with every agent build stopped first.
+- **Clearing "Cookies and site data" also clears saved zoom levels (#90).**
+  This is what Chrome does. Zoom levels are site data, so the owner expects
+  them to go with cookies.
+- **Ctrl , opens Settings even while a web page has the keys (#91).** This
+  follows Chrome and Edge. The cost is that a few web apps, such as
+  github.dev, lose Ctrl , for their own settings.
+- **Settings opens as its own tab (#91).** It does not replace the page
+  the owner is on.
+- **Ctrl D on Home saves nothing (#91).** Home is Syrinx's own page, so
+  bookmarking it would save a blank page. It is refused, as it already is
+  on the Settings tab.
+
 ## 2026-10-18
 
 - **Syrinx takes find, history and zoom keys even over a focused page.**
@@ -458,6 +502,19 @@ folder names.
   own use of these keys (for example Google Docs' find and replace on
   Ctrl F and Ctrl H) is a consequence nobody has measured; it is an open
   point for the owner's hand checks.
+
+## 2026-10-20
+
+- **The WebView2 update notice is for the owner and testing only.** Installed
+  builds (`cargo xtask package`, which the weekly preview ships) never show
+  D36's notice or its "could not read the WebView2 version" message; they
+  still remember the runtime version, so nothing is lost if the notice
+  returns. Development and test builds keep it for now. This narrows D36,
+  which assumed the owner was the only person running Syrinx.
+- **Each weekly release lists the engines underneath it.** The notes name the
+  GPUI, gpui-component, wry and webview2-com versions from `Cargo.lock`,
+  marking any that changed since the previous preview, and the WebView2
+  runtime the release was gated and screenshotted on.
 
 ## 2026-10-16
 

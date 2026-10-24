@@ -13,6 +13,7 @@ fn preferences(
             SessionEvent::Preferences {
                 settings,
                 destinations,
+                ..
             } => return (settings, destinations),
             SessionEvent::Usage { .. } => continue,
             event => panic!("expected synthetic preferences, got {event:?}"),
@@ -203,6 +204,109 @@ fn a_double_clicked_remove_queued_twice_removes_one_tile() {
         .map(|tile| tile.label.as_str())
         .collect();
     assert_eq!(labels, ["Synthetic two"]);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+/// The site zoom levels the worker hands the window at start-up (#90).
+fn site_zooms(events: &mut UnboundedReceiver<SessionEvent>) -> BTreeMap<String, f64> {
+    loop {
+        match next_any_event(events) {
+            SessionEvent::Preferences { site_zooms, .. } => return site_zooms.0,
+            SessionEvent::Usage { .. } => continue,
+            event => panic!("expected synthetic preferences, got {event:?}"),
+        }
+    }
+}
+
+fn zoom(host: &str, factor: Option<f64>) -> SessionCommand {
+    SessionCommand::SiteZoom {
+        host: host.to_owned(),
+        factor,
+    }
+}
+
+#[test]
+fn site_zoom_levels_survive_restart_and_a_reset_forgets_one() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    assert!(site_zooms(&mut events).is_empty());
+    state(&mut events);
+    send(&handle, zoom("kept.example.test", Some(1.25)));
+    send(&handle, zoom("reset.example.test", Some(0.75)));
+    send(&handle, zoom("reset.example.test", None));
+    stop(handle, &mut events);
+
+    let (handle, mut events) = fixture.start();
+    let restored = site_zooms(&mut events);
+    assert_eq!(
+        restored.into_iter().collect::<Vec<_>>(),
+        [("kept.example.test".to_owned(), 1.25)]
+    );
+    state(&mut events);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_refused_site_zoom_reports_without_stopping_the_worker() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    site_zooms(&mut events);
+    state(&mut events);
+    send(&handle, zoom("https://address.example.test/", Some(1.25)));
+    assert!(matches!(
+        next_any_event(&mut events),
+        SessionEvent::Failure {
+            error: SessionError::Store(syrinx_store::StoreError::InvalidEncoding(
+                syrinx_store::EncodingField::SiteZoom
+            )),
+            fatal: false,
+        }
+    ));
+    let opened = change(
+        &handle,
+        &mut events,
+        SessionCommand::NewTab {
+            address: "about:blank".to_owned(),
+        },
+    );
+    assert_eq!(opened.model.tabs.len(), 1);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+#[test]
+fn clearing_every_site_zoom_reports_the_count_and_what_remains() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    site_zooms(&mut events);
+    state(&mut events);
+    send(&handle, zoom("one.example.test", Some(1.25)));
+    send(&handle, zoom("two.example.test", Some(0.9)));
+    send(
+        &handle,
+        SessionCommand::ClearSiteZooms {
+            request_id: 7,
+            start: 0,
+            end: i64::MAX,
+        },
+    );
+    match next_any_event(&mut events) {
+        SessionEvent::SiteZoomsCleared {
+            request_id: 7,
+            result: Ok(cleared),
+        } => {
+            assert_eq!(cleared.sites, 2);
+            assert!(cleared.remaining.0.is_empty());
+        }
+        event => panic!("expected the synthetic zoom clear, got {event:?}"),
+    }
+    stop(handle, &mut events);
+
+    let (handle, mut events) = fixture.start();
+    assert!(site_zooms(&mut events).is_empty(), "the clear is durable");
+    state(&mut events);
     stop(handle, &mut events);
     fixture.cleanup();
 }

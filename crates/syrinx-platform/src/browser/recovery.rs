@@ -145,7 +145,8 @@ impl BrowserState {
             self.owner_restart(Instant::now());
         }
         if self.environment.is_none() {
-            self.environment = Some(environment::create(&self.profile)?);
+            let environment = environment::create(&self.profile)?;
+            self.install_environment(environment);
         }
         Ok(())
     }
@@ -232,6 +233,7 @@ impl BrowserState {
         // No old controller or environment may survive into the replacement generation.
         self.popups.clear();
         self.pages.clear();
+        drop(self.engine.take());
         drop(self.environment.take());
         true
     }
@@ -250,7 +252,7 @@ impl BrowserState {
         let mut restored = Vec::new();
         match create(&self.profile) {
             Ok(environment) => {
-                self.environment = Some(environment);
+                self.install_environment(environment);
                 for id in &tabs {
                     match self.restore_page(*id) {
                         Ok(()) => restored.push(*id),
