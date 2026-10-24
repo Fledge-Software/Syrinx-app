@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
+use super::folders::{UNTITLED_FOLDER, is_blank_folder_title};
 use super::{
     PageOrigin, SavedEntryId, SavedFolder, SavedFolderId, SavedPage, SavedPageId, SavedPlacement,
     Tab, TabId, TabKind, TabMetadata, TabModel,
@@ -80,7 +81,7 @@ impl fmt::Debug for TabModelSnapshot {
     }
 }
 
-/// Invalid snapshots are rejected without repairing, dropping or logging their contents.
+/// A structural fault that rejects a snapshot without dropping or logging its contents.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SnapshotError {
     DuplicateTabId(TabId),
@@ -194,6 +195,7 @@ impl TabModelSnapshot {
 
     /// Checks the complete model contract before a store writes or restores these records.
     /// Watermarks cover this snapshot; comparing older writes is the writer's responsibility.
+    /// A blank folder title passes so the store still loads it; `from_snapshot` repairs it.
     pub fn validate(&self) -> Result<(), SnapshotError> {
         // Resolve saved identities once, then validate the tree, live rows and selection.
         let saved_positions = self.saved_positions()?;
@@ -204,6 +206,16 @@ impl TabModelSnapshot {
             Some(id) if !tab_ids.contains(&id) => Err(SnapshotError::UnknownActiveTab(id)),
             None if !tab_ids.is_empty() => Err(SnapshotError::MissingActiveTab),
             _ => Ok(()),
+        }
+    }
+
+    /// Renames every blank saved folder title to "Untitled folder" before restore validates.
+    /// The model refuses blank names, but losing a session over one is worse (#80).
+    fn repair_blank_folder_titles(&mut self) {
+        for folder in &mut self.saved_folders {
+            if is_blank_folder_title(&folder.title) {
+                folder.title = UNTITLED_FOLDER.to_owned();
+            }
         }
     }
 
@@ -359,8 +371,9 @@ impl TabModel {
 
     /// Restores a new model with the persisted logical IDs and allocation watermarks.
     /// Use at startup, not to replace a running model with outstanding page callbacks.
-    pub fn from_snapshot(snapshot: TabModelSnapshot) -> Result<Self, SnapshotError> {
-        // Validate everything before constructing a model; never silently repair records.
+    pub fn from_snapshot(mut snapshot: TabModelSnapshot) -> Result<Self, SnapshotError> {
+        // Repair only blank folder names, then validate everything before constructing a model.
+        snapshot.repair_blank_folder_titles();
         snapshot.validate()?;
         Ok(Self {
             tabs: snapshot
@@ -401,10 +414,12 @@ impl TabModel {
 
 #[cfg(test)]
 mod tests {
-    use super::{SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot};
+    use super::{
+        SavedFolderSnapshot, SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot,
+    };
     use crate::{
-        Activation, BLANK_ADDRESS, SETTINGS_ADDRESS, SavedPageId, TabError, TabId, TabKind,
-        TabMetadata, TabModel,
+        Activation, BLANK_ADDRESS, SETTINGS_ADDRESS, SavedFolderId, SavedPageId, TabError, TabId,
+        TabKind, TabMetadata, TabModel,
     };
 
     #[test]
@@ -597,6 +612,72 @@ mod tests {
             Err(TabError::SavedPageIdExhausted)
         );
         assert_eq!(restored.snapshot(), snapshot);
+    }
+
+    #[test]
+    fn blank_saved_folder_titles_restore_as_untitled_folder() {
+        // A stored blank name is repaired on restore rather than losing the whole session (#80).
+        let mut model = TabModel::new();
+        let empty = model
+            .create_folder("Synthetic folder one".to_owned(), None)
+            .expect("synthetic folder is created");
+        let spaces = model
+            .create_folder("Synthetic folder two".to_owned(), Some(empty))
+            .expect("synthetic folder is created");
+        let padded = model
+            .create_folder("  Synthetic padded folder ".to_owned(), None)
+            .expect("synthetic folder is created");
+        let mut snapshot = model.snapshot();
+        snapshot.saved_folders[0].title = String::new();
+        snapshot.saved_folders[1].title = " \t\u{3000} ".to_owned();
+        assert_eq!(snapshot.validate(), Ok(()));
+
+        let mut restored =
+            TabModel::from_snapshot(snapshot.clone()).expect("blank folder titles are repaired");
+        let titles: Vec<(SavedFolderId, &str)> = restored
+            .saved_folders()
+            .iter()
+            .map(|folder| (folder.id, folder.title.as_str()))
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                (empty, "Untitled folder"),
+                (spaces, "Untitled folder"),
+                (padded, "  Synthetic padded folder "),
+            ]
+        );
+        assert_eq!(restored.saved_layout(), snapshot.saved_layout.as_slice());
+
+        // Creating or renaming to a blank name stays refused (2026-10-12).
+        assert_eq!(
+            restored.rename_folder(padded, "   ".to_owned()),
+            Err(TabError::EmptyFolderTitle)
+        );
+        assert_eq!(
+            restored.create_folder(String::new(), None),
+            Err(TabError::EmptyFolderTitle)
+        );
+    }
+
+    #[test]
+    fn repairing_folder_titles_changes_only_blank_ones() {
+        let mut snapshot = TabModelSnapshot {
+            saved_folders: vec![
+                SavedFolderSnapshot {
+                    id: SavedFolderId::new(1).expect("synthetic ID is nonzero"),
+                    title: "\n".to_owned(),
+                },
+                SavedFolderSnapshot {
+                    id: SavedFolderId::new(2).expect("synthetic ID is nonzero"),
+                    title: "Synthetic kept folder".to_owned(),
+                },
+            ],
+            ..TabModelSnapshot::default()
+        };
+        snapshot.repair_blank_folder_titles();
+        assert_eq!(snapshot.saved_folders[0].title, "Untitled folder");
+        assert_eq!(snapshot.saved_folders[1].title, "Synthetic kept folder");
     }
 
     #[test]
