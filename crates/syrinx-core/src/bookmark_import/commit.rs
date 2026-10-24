@@ -5,12 +5,11 @@ use std::fmt;
 use super::address::skip_reason;
 use super::text::is_bidi_control;
 use super::{BookmarkImport, ImportedBookmark, ImportedFolder, ImportedItem, SkipReason};
+use crate::tabs::{UNTITLED_FOLDER, is_blank_folder_title};
 use crate::{AppendedSavedTree, NewSavedItem, TabError, TabMetadata, TabModel, web_address};
 
 /// The import's folder name when the file name gives none.
 pub const DEFAULT_IMPORT_FOLDER: &str = "Imported bookmarks";
-/// Empty folder names are refused (2026-10-12), so unnamed exported folders get this one.
-const UNTITLED_FOLDER: &str = "Untitled folder";
 /// Longest import folder name kept, in characters, matching the parser's title bound.
 const MAX_FOLDER_TITLE_CHARS: usize = 1_024;
 
@@ -72,7 +71,8 @@ fn convert_items(items: &[ImportedItem], skipped: &mut Vec<RejectedBookmark>) ->
 }
 
 fn convert_folder(folder: &ImportedFolder, skipped: &mut Vec<RejectedBookmark>) -> NewSavedItem {
-    let title = if folder.title.trim().is_empty() {
+    // Empty folder names are refused (2026-10-12), so unnamed exported folders get a default.
+    let title = if is_blank_folder_title(&folder.title) {
         UNTITLED_FOLDER.to_owned()
     } else {
         folder.title.clone()

@@ -8,6 +8,7 @@ pub use folders::{
     FolderContents, FolderRemoval, RemovedSavedEntries, SavedEntryId, SavedFolder, SavedFolderId,
     SavedPlacement, saved_folder_contents,
 };
+pub(crate) use folders::{UNTITLED_FOLDER, is_blank_folder_title};
 pub use import::{AppendedSavedTree, NewSavedItem};
 pub use snapshot::{
     SavedFolderSnapshot, SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot,
