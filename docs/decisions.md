@@ -21,11 +21,14 @@ folder names.
     over Glass's bright wallpaper discs; over the teal one (`#23948A`)
     white text on Graphite's `#141519` reaches 4.5:1 only from that tint
     up. The owner named 12 %; the contrast maths put the exact least
-    value at 32/255, so that is used. Translucent white surfaces (the
-    selected row, fields, the search pill, plugin surfaces and Home's
-    card while Home is Solid) keep at least a 0.343 tint under them,
-    the least at which white text on the selected row still reaches
-    4.5:1 there. Text is now readable at every step for every material,
+    value at 32/255, so that is used. Implementation note, not part of
+    the owner's decision: the window floor alone left the lighter
+    translucent white surfaces (the selected row, fields, the search
+    pill, plugin surfaces and Home's card while Home is Solid) under
+    4.5:1 above about 60 %, so under dark Acrylic they keep at least a
+    0.343 tint under them (`DARK_ACRYLIC_SURFACE_FLOOR`), the least at
+    which white text on the selected row still reaches 4.5:1. This
+    surface floor awaits the owner's look on Windows. Text is now readable at every step for every material,
     in both modes, with Home Solid or See-through; Mica, Mica Alt and
     light themes keep no window floor, and the Glass preset (50 %) and
     the Haze preset are unchanged. This replaces the implementation note
