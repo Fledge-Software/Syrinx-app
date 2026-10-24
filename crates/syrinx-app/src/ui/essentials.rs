@@ -42,8 +42,8 @@ impl BrowserView {
                 this.open_find(window, cx);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &Downloads, _, cx| {
-                this.essential_shortcut(BrowserShortcut::Downloads);
+            .on_action(cx.listener(|this, _: &Downloads, window, cx| {
+                this.toggle_downloads(window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Print, _, cx| {
@@ -128,8 +128,8 @@ impl BrowserView {
         )
         .aria_keyshortcuts("Control+J")
         .occlude()
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.essential_shortcut(BrowserShortcut::Downloads);
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.toggle_downloads(window, cx);
             cx.notify();
         }));
         div()
@@ -224,7 +224,6 @@ pub(super) fn zoom_percent(factor: f64) -> String {
 fn page_action(id: Option<u64>, shortcut: BrowserShortcut) -> Option<BrowserCommand> {
     let id = id?;
     let action = match shortcut {
-        BrowserShortcut::Downloads => PageAction::Downloads,
         BrowserShortcut::Print => PageAction::Print,
         BrowserShortcut::ZoomIn => PageAction::ZoomIn,
         BrowserShortcut::ZoomOut => PageAction::ZoomOut,
@@ -266,7 +265,6 @@ mod tests {
     #[test]
     fn page_focused_actions_target_only_the_shown_live_view() {
         for shortcut in [
-            BrowserShortcut::Downloads,
             BrowserShortcut::Print,
             BrowserShortcut::ZoomIn,
             BrowserShortcut::ZoomOut,
@@ -283,12 +281,14 @@ mod tests {
             assert!(page_action(None, shortcut).is_none());
         }
         assert!(matches!(
-            page_action(Some(7), BrowserShortcut::Downloads),
+            page_action(Some(7), BrowserShortcut::Print),
             Some(BrowserCommand::PageAction {
-                action: PageAction::Downloads,
+                action: PageAction::Print,
                 ..
             })
         ));
+        // Downloads opens Syrinx's own flyout, which needs no page (#143).
+        assert!(page_action(Some(7), BrowserShortcut::Downloads).is_none());
         assert!(page_action(Some(7), BrowserShortcut::Find).is_none());
     }
 }

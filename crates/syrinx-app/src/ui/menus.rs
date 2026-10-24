@@ -1,5 +1,5 @@
-//! The chrome's two drop-down menus: the page menu behind ☰ and the sidebar's ⋯ menu.
-//! Each also opens where the owner right-clicks, and every item shows its shortcut.
+//! The chrome's drop-down menus: the page menu behind ☰, the sidebar's ⋯ menu and the
+//! Downloads flyout behind ↓ (#143). The first two also open where the owner right-clicks.
 //! A menu is its own owned popup window: GPUI content drawn over the page card in the
 //! main window never receives the page's clicks or keys (#12).
 
@@ -16,6 +16,10 @@ use super::{
 
 /// The menu's width, narrow enough that the sidebar menu stays inside a wide sidebar.
 const MENU_WIDTH: f32 = 220.;
+/// The Downloads flyout is wider, so a file name and its progress fit on one row.
+const DOWNLOADS_WIDTH: f32 = 340.;
+/// The flyout lists this many downloads, newest first; the session's list keeps more.
+const MAX_DOWNLOAD_ROWS: usize = 8;
 const ITEM_HEIGHT: f32 = 30.;
 /// The card's padding around its rows and its border, in logical pixels.
 const MENU_PADDING: f32 = 4.;
@@ -31,6 +35,7 @@ const RECLICK_WINDOW: Duration = Duration::from_millis(400);
 pub(super) enum MenuKind {
     Page,
     Sidebar,
+    Downloads,
 }
 
 /// One menu entry.
@@ -47,6 +52,15 @@ enum MenuItem {
     NewTab,
     NewFolder,
     EditFavorites,
+    /// One download in the Downloads flyout. It shows its state only: Syrinx has no safe
+    /// platform call yet to open the file or its folder.
+    Download(u64),
+    /// The flyout's only row when nothing has downloaded this session.
+    NoDownloads,
+    ClearDownloads,
+    /// WebView2's own list on the page in view, which can pause or cancel a download and
+    /// keep or delete a file SmartScreen warned about.
+    EngineDownloads,
 }
 
 const PAGE_ITEMS: [MenuItem; 7] = [
@@ -65,10 +79,12 @@ const SIDEBAR_ITEMS: [MenuItem; 3] = [
 ];
 
 impl MenuKind {
+    /// The fixed items; the Downloads flyout's rows come from the session's list instead.
     fn items(self) -> &'static [MenuItem] {
         match self {
             MenuKind::Page => &PAGE_ITEMS,
             MenuKind::Sidebar => &SIDEBAR_ITEMS,
+            MenuKind::Downloads => &[],
         }
     }
 
@@ -76,6 +92,14 @@ impl MenuKind {
         match self {
             MenuKind::Page => "Page menu",
             MenuKind::Sidebar => "Sidebar menu",
+            MenuKind::Downloads => "Downloads",
+        }
+    }
+
+    fn width(self) -> f32 {
+        match self {
+            MenuKind::Downloads => DOWNLOADS_WIDTH,
+            MenuKind::Page | MenuKind::Sidebar => MENU_WIDTH,
         }
     }
 }
@@ -93,6 +117,10 @@ impl MenuItem {
             MenuItem::NewTab => "New tab",
             MenuItem::NewFolder => "New folder",
             MenuItem::EditFavorites => "Edit favorites",
+            MenuItem::Download(_) => "Download",
+            MenuItem::NoDownloads => "No downloads this session",
+            MenuItem::ClearDownloads => "Clear finished downloads",
+            MenuItem::EngineDownloads => "Pause, cancel or keep a download",
         }
     }
 
@@ -108,7 +136,12 @@ impl MenuItem {
             MenuItem::SavePage => "ctrl-d",
             MenuItem::History => "ctrl-h",
             MenuItem::NewTab => "ctrl-t",
-            MenuItem::NewFolder | MenuItem::EditFavorites => return None,
+            MenuItem::NewFolder
+            | MenuItem::EditFavorites
+            | MenuItem::Download(_)
+            | MenuItem::NoDownloads
+            | MenuItem::ClearDownloads
+            | MenuItem::EngineDownloads => return None,
         };
         Shortcut::new(keys).ok().map(|shortcut| shortcut.label())
     }
@@ -124,8 +157,17 @@ impl MenuItem {
 
     /// Whether the keys go back to the page after the item runs. New tab gives them to its
     /// Home palette instead: focusing the outgoing page would take them from it (#14).
+    /// Downloads gives them to its flyout.
     fn returns_keys_to_page(self) -> bool {
-        !self.takes_keys() && self != MenuItem::NewTab
+        !self.takes_keys() && !matches!(self, MenuItem::NewTab | MenuItem::Downloads)
+    }
+
+    /// Whether Enter, Space or a click runs the item; a download row only shows its state.
+    fn is_choosable(self) -> bool {
+        !matches!(
+            self,
+            MenuItem::Zoom | MenuItem::Download(_) | MenuItem::NoDownloads
+        )
     }
 }
 
@@ -197,6 +239,51 @@ impl BrowserView {
         self.show_menu(MenuKind::Page, position, Corner::TopRight, window, cx);
     }
 
+    /// Opens the Downloads flyout under the title bar's ↓ corner, or closes it as
+    /// `open_page_menu` does. It works from any tab, Home included.
+    pub(super) fn toggle_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.toggled_closed(MenuKind::Downloads, cx) {
+            return;
+        }
+        self.show_downloads(window, cx);
+    }
+
+    /// Opens the Downloads flyout at its corner, replacing any open menu.
+    fn show_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let right = f32::from(window.viewport_size().width) - 3. * TITLE_BAR_HEIGHT - 4.;
+        let position = point(px(right), px(TITLE_BAR_HEIGHT));
+        self.show_menu(MenuKind::Downloads, position, Corner::TopRight, window, cx);
+    }
+
+    /// The session's downloads changed: an open flyout shows the new rows, and reopens in
+    /// place when their number changed, since its window is sized to its rows.
+    pub(super) fn menu_downloads_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = &self.menu else {
+            return;
+        };
+        if menu.kind != MenuKind::Downloads {
+            return;
+        }
+        let Some(view) = menu.view.clone() else {
+            return; // Still opening; its rows were read when it was requested.
+        };
+        let rows = self.menu_rows(MenuKind::Downloads);
+        let reopen = view.update(cx, |menu, cx| {
+            if menu.rows.len() != rows.len() {
+                return true;
+            }
+            menu.rows = rows;
+            cx.notify();
+            false
+        });
+        match reopen {
+            Ok(false) => {}
+            // Opening afresh gives the window its new size.
+            Ok(true) => self.show_downloads(window, cx),
+            Err(_) => eprintln!("The downloads flyout closed before its rows changed."),
+        }
+    }
+
     /// Opens the sidebar menu under its ⋯ button, or closes it as `open_page_menu` does.
     pub(super) fn open_sidebar_menu(
         &mut self,
@@ -242,7 +329,7 @@ impl BrowserView {
         self.retire_peek(cx);
         self.retire_menu(cx);
         let rows = self.menu_rows(kind);
-        let size = menu_size(rows.len());
+        let size = kind_size(kind, rows.len());
         let anchor = MenuAnchor { position, corner };
         let rect = menu_rect(window.bounds(), window.scale_factor(), anchor, size);
         self.menu_generation = self
@@ -272,6 +359,9 @@ impl BrowserView {
     /// The rows of `kind` as they read now, favorites editing included; the Zoom row reads
     /// its level from the open menu (`menu_zoom_changed`).
     fn menu_rows(&self, kind: MenuKind) -> Vec<MenuRow> {
+        if kind == MenuKind::Downloads {
+            return download_rows(&self.downloads, self.shown.is_some());
+        }
         let editing = self.home.editing == Some(DestinationSurface::Favorites);
         kind.items()
             .iter()
@@ -478,7 +568,7 @@ impl BrowserView {
         }
         match item {
             MenuItem::Find => self.open_find(window, cx),
-            MenuItem::Downloads => self.essential_shortcut(BrowserShortcut::Downloads),
+            MenuItem::Downloads => self.toggle_downloads(window, cx),
             MenuItem::Print => self.essential_shortcut(BrowserShortcut::Print),
             // The Zoom row acts through its stepper (`MenuAction::Zoom`), never as a choice.
             MenuItem::Zoom => {}
@@ -499,6 +589,10 @@ impl BrowserView {
                     favorites
                 };
             }
+            MenuItem::ClearDownloads => self.downloads.clear_finished(),
+            MenuItem::EngineDownloads => self.open_engine_downloads(),
+            // Shown for their state only; `is_choosable` keeps them from being chosen.
+            MenuItem::Download(_) | MenuItem::NoDownloads => {}
         }
         if item.returns_keys_to_page() {
             self.focus_page(window, cx);
@@ -532,7 +626,7 @@ fn open_requested_menu(browser: WeakEntity<BrowserView>, request: MenuRequest, c
             titlebar: None,
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 point(px(0.), px(0.)),
-                menu_size(rows.len()),
+                kind_size(kind, rows.len()),
             ))),
             focus: false,
             show: false,
@@ -674,8 +768,7 @@ fn key_action(key: &str, selected: Option<MenuItem>) -> Option<MenuAction> {
         // On the Zoom row, Left and Right step like its − and + buttons.
         ("left", Some(MenuItem::Zoom)) => Some(MenuAction::Zoom(BrowserShortcut::ZoomOut)),
         ("right", Some(MenuItem::Zoom)) => Some(MenuAction::Zoom(BrowserShortcut::ZoomIn)),
-        ("enter" | "space", Some(MenuItem::Zoom) | None) => None,
-        ("enter" | "space", Some(item)) => Some(MenuAction::Choose(item)),
+        ("enter" | "space", Some(item)) if item.is_choosable() => Some(MenuAction::Choose(item)),
         _ => None,
     }
 }
@@ -734,6 +827,13 @@ impl Render for MenuView {
                     super::essentials::zoom_percent(self.zoom)
                 );
                 drawn.aria_label(name).child(self.zoom_stepper(cx))
+            } else if !item.is_choosable() {
+                // A download is heard with its state, such as "synthetic.zip, Done, 1.0 MB".
+                let name = match &row.shortcut {
+                    Some(detail) => format!("{}, {detail}", row.label),
+                    None => row.label.clone(),
+                };
+                drawn.aria_label(name)
             } else {
                 drawn.on_click(cx.listener(move |this, _, _, cx| {
                     this.send(MenuAction::Choose(item), cx);
@@ -771,9 +871,10 @@ fn menu_row(
         .gap_3()
         .rounded(px(6.))
         .cursor_pointer()
-        .child(div().flex_1().child(row.label.clone()))
+        .child(div().flex_1().min_w_0().truncate().child(row.label.clone()))
         .children(row.shortcut.clone().map(|keys| {
             div()
+                .flex_shrink_0()
                 .text_size(px(syrinx_ui::metrics::text::SMALL))
                 .text_color(theme::rgba(palette.text_muted))
                 .child(keys)
@@ -841,6 +942,41 @@ fn closes_on_reclick(
         || dismissed.is_some_and(|dismissal| {
             dismissal.kind == kind && now.saturating_duration_since(dismissal.at) < RECLICK_WINDOW
         })
+}
+
+/// The Downloads flyout's rows: the newest downloads, or a line saying there are none, then
+/// Clear when any has finished and WebView2's own controls when a page is in view.
+fn download_rows(list: &syrinx_core::DownloadList, page_shown: bool) -> Vec<MenuRow> {
+    let fixed = |item: MenuItem| MenuRow {
+        item,
+        label: item.label().to_owned(),
+        shortcut: None,
+    };
+    let mut rows: Vec<MenuRow> = list
+        .downloads()
+        .iter()
+        .take(MAX_DOWNLOAD_ROWS)
+        .map(|download| MenuRow {
+            item: MenuItem::Download(download.id),
+            label: download.file_name.clone(),
+            shortcut: Some(download.detail()),
+        })
+        .collect();
+    if rows.is_empty() {
+        rows.push(fixed(MenuItem::NoDownloads));
+    }
+    if list.has_finished() {
+        rows.push(fixed(MenuItem::ClearDownloads));
+    }
+    if page_shown {
+        rows.push(fixed(MenuItem::EngineDownloads));
+    }
+    rows
+}
+
+/// The popup's logical size for `rows` items of `kind`.
+fn kind_size(kind: MenuKind, rows: usize) -> gpui::Size<Pixels> {
+    size(px(kind.width()), menu_size(rows).height)
 }
 
 /// The popup's logical size for `rows` items.
@@ -956,7 +1092,11 @@ mod tests {
     #[test]
     fn new_tab_leaves_the_keys_for_its_palette_not_the_page() {
         assert!(!MenuItem::NewTab.returns_keys_to_page());
-        assert!(MenuItem::Downloads.returns_keys_to_page());
+        assert!(
+            !MenuItem::Downloads.returns_keys_to_page(),
+            "the downloads flyout takes them"
+        );
+        assert!(MenuItem::Print.returns_keys_to_page());
         assert!(!MenuItem::Find.returns_keys_to_page());
     }
 

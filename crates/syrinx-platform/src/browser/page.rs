@@ -132,6 +132,7 @@ impl Page {
         register_process_failure(&view, id, events.clone(), shortcuts.clone())?;
         let permissions = super::permissions::Permissions::register(&view, id, events.clone())?;
         let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
+        super::downloads::register(&view, id, events.detached())?;
         register_focus_arrival(&view, id, events.clone())?;
         register_focus_departure(&view, shortcuts.clone(), id, events.clone())?;
         // Observes headers and navigations only while capture is on; never a request filter.

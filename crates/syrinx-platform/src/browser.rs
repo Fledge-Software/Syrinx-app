@@ -1,6 +1,7 @@
 //! Keeps page WebView2 objects on one Windows thread while Rust UI code exchanges owned commands.
 
 mod clear_data;
+mod downloads;
 mod engine_exit;
 mod environment;
 mod essentials;
@@ -256,6 +257,22 @@ pub enum BrowserEvent {
     DownloadDialog {
         id: u64,
         open: bool,
+    },
+    /// Page `tab`'s navigation became a download (#143). Download events are not tied to the
+    /// page's lifetime: they keep arriving after a popup that started one has closed.
+    DownloadStarted {
+        download: u64,
+        tab: u64,
+        /// The saved file's name only; its folder and source address never leave the platform.
+        file_name: String,
+        total: Option<u64>,
+    },
+    /// A download's state or byte count changed.
+    DownloadChanged {
+        download: u64,
+        state: syrinx_core::DownloadState,
+        received: u64,
+        total: Option<u64>,
     },
     ZoomChanged {
         id: u64,
@@ -553,6 +570,10 @@ impl BrowserEvent {
 impl EventSink {
     fn for_page(&self, life: lifecycle::CallbackLife) -> Self {
         Self(self.0.clone(), Some(life))
+    }
+    /// A sink whose events outlive the page, for downloads that run on after it closes.
+    fn detached(&self) -> Self {
+        Self(self.0.clone(), None)
     }
     fn accepts_callbacks(&self) -> bool {
         self.1
