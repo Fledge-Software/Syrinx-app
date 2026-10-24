@@ -10,6 +10,31 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+## 2026-10-24
+
+- **Syrinx's full-text index uses Tantivy, not SQLite's FTS5 (#52).** The
+  quiet-machine bake-off of 2026-10-21 (results on #52) measured the broad
+  corpus at a 95th-percentile query time of 2.3 ms for Tantivy against
+  24.8 ms for FTS5. Expiring a week of pages took 2.2 s against about five
+  minutes, and the index used 55 MB of disk after expiry against 408 MB.
+  FTS5 used 130 to 180 MB less memory, but #52's rule preferred FTS5 only if
+  the two were close, and they were not. The owner confirmed the rule's
+  choice. #53, the production adapter, builds on Tantivy.
+- **Tantivy moves to 0.27.0 before Syrinx ships it (#52).** The tested
+  0.26.2 depends on a version of `lru` covered by RUSTSEC-2026-0253; 0.27.0
+  depends on a fixed one. The owner approved moving the exact pin and the
+  lockfile growth that comes with it. Every new package is audited in
+  `docs/dev/fulltext-audit.md`, and the move stops for the owner if any
+  licence falls outside MIT, Apache-2.0 or BSD. A confirming rerun of the
+  comparison on 0.27.0, on a quiet machine the same day, matched 0.26.2's
+  results (`docs/dev/fulltext-audit.md`).
+- **Signing the weekly update files waits (#55, PR #119).** The owner is
+  not setting up the signing key yet: it adds a monthly cost, and the
+  previews have no users who need it. Weekly previews stay unsigned until
+  the owner does `docs/owner-checklist.md`, item 1.
+- **The Glass look and the Settings page passed the owner's window check
+  (#93, #91).** The owner looked at both on `main` and found them better.
+
 ## 2026-10-21
 
 - **Syrinx remembers each site's zoom level (#90).** The owner said yes to

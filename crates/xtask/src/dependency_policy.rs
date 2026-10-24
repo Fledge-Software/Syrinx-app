@@ -284,7 +284,7 @@ fn check_direct_dependencies(
 /// The P1-23 bake-off harness, which no product crate may use.
 const FULLTEXT_BENCH: &str = "fulltext-bench";
 
-/// Approved only for the bake-off until P1-24 chooses an engine and RUSTSEC-2026-0253 is resolved.
+/// Approved only for the bake-off until P1-24's production adapter (#53) brings it into Syrinx.
 const TANTIVY: &str = "tantivy";
 
 fn check_fulltext_quarantine(name: &str, dependency: &str, violations: &mut BTreeSet<String>) {
@@ -296,7 +296,7 @@ fn check_fulltext_quarantine(name: &str, dependency: &str, violations: &mut BTre
     }
     if dependency == TANTIVY && name != FULLTEXT_BENCH {
         violations.insert(format!(
-            "{name} -> {dependency}: only fulltext-bench may depend on Tantivy before P1-24 chooses it"
+            "{name} -> {dependency}: only fulltext-bench may depend on Tantivy until #53 brings it into Syrinx"
         ));
     }
 }
