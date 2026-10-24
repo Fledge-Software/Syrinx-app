@@ -22,7 +22,7 @@ use syrinx_ui::{
     sidebar_setting,
 };
 
-use crate::controls::{control, glyph, icon_button, raised};
+use crate::controls::{control, glyph, icon_button, raised, ring_shown};
 
 use super::{
     BrowserView,
@@ -34,7 +34,7 @@ use super::{
     menus::MenuKind,
     page_card::edge_strip,
     saved_moves::{DropTarget, Step},
-    sidebar_tree::{SidebarEntry, TreeId, active_tree_id, live_tab, sidebar_entries},
+    sidebar_tree::{RowClose, SidebarEntry, TreeId, active_tree_id, row_close, sidebar_entries},
     tiles::{self, monogram},
 };
 use crate::{session::SessionCommand, theme};
@@ -43,6 +43,12 @@ const ROW_HEIGHT: f32 = 36.;
 /// How far each folder level indents its contents in the wide sidebar.
 const FOLDER_INDENT: f32 = 12.;
 const MONOGRAM_SIZE: f32 = 20.;
+/// The compact row's hover group, which shows its close badge (#128).
+const COMPACT_ROW_GROUP: &str = "compact-row";
+/// The compact close badge: its hit target, how far below the row's top it sits, and its ×.
+const BADGE_SIZE: f32 = 16.;
+const BADGE_INSET: f32 = 2.;
+const BADGE_GLYPH_SIZE: f32 = 11.;
 const LAST_VISIBLE_KEY: &str = "sidebar.last_visible_state";
 
 /// What a row shows: its icon letter, title and selection, and how deep it is nested.
@@ -358,18 +364,22 @@ impl BrowserView {
             .flex_col()
             .gap_1();
         for (entry, focus) in entries.iter().zip(prepared.handles) {
+            // A compact row shows its close badge while it shows its focus ring.
+            let shows_ring = ring_shown(&focus, window);
             let row = match entry {
                 SidebarEntry::Folder {
                     folder,
                     depth,
                     expanded,
                 } => self.folder_row(folder, *depth, *expanded, labels, cx),
-                SidebarEntry::Page { page, depth } => self.saved_row(page, *depth, labels, cx),
+                SidebarEntry::Page { page, depth } => {
+                    self.saved_row(page, *depth, labels, shows_ring, cx)
+                }
                 SidebarEntry::Tab(tab) => {
                     let title = tab.metadata.display_title(PageOrigin::from_adopted_popup(
                         self.popup_pages.contains(&tab.id),
                     ));
-                    self.ordinary_row(tab.id, title, labels, cx)
+                    self.ordinary_row(tab.id, title, labels, shows_ring, cx)
                 }
             };
             rows = rows.child(tree_item(row, entry.tree_row().id, &focus, cx));
@@ -382,10 +392,13 @@ impl BrowserView {
         page: &SavedPageSnapshot,
         depth: usize,
         labels: bool,
+        shows_ring: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let saved_id = page.id;
-        let live = live_tab(&self.model, saved_id);
+        // A live page's row offers Unload page; the tab it unloads is the page's live tab.
+        let close = row_close(&self.model, TreeId::Page(saved_id));
+        let live = close.map(RowClose::tab);
         let title = title_or_address(&page.metadata.title, &page.metadata.address);
         let look = RowLook {
             icon: monogram(&title),
@@ -409,21 +422,11 @@ impl BrowserView {
             row
         };
         let mut row = movable_row(row, SavedEntryId::Page(saved_id), title, cx);
+        if let Some(close) = close {
+            row = row.child(close_control(close, labels, shows_ring, cx));
+        }
         if !labels {
             return row;
-        }
-        if let Some(id) = live {
-            row = row.child(
-                row_action(("unload", id.get()), "×", "Unload page")
-                    .aria_keyshortcuts("Control+W")
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.command(SessionCommand::CloseTab(id));
-                        // The row stays, so its keys must not keep applying after the click.
-                        this.release_row_focus(window, cx);
-                        cx.notify();
-                    })),
-            );
         }
         row.child(
             row_action(("unsave", saved_id.get()), "−", "Remove saved page")
@@ -440,6 +443,7 @@ impl BrowserView {
         id: TabId,
         title: String,
         labels: bool,
+        shows_ring: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let look = RowLook {
@@ -468,18 +472,11 @@ impl BrowserView {
                 this.command(SessionCommand::CloseTab(id));
                 cx.notify();
             }));
-        if !labels {
+        // A drawn tab is in the model, so this only guards a snapshot that lost it mid-frame.
+        let Some(close) = row_close(&self.model, TreeId::Tab(id)) else {
             return row;
-        }
-        row.child(
-            row_action(("close", id.get()), "×", "Close tab")
-                .aria_keyshortcuts("Control+W Delete")
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.command(SessionCommand::CloseTab(id));
-                    cx.notify();
-                })),
-        )
+        };
+        row.child(close_control(close, labels, shows_ring, cx))
     }
 
     /// A folder row: its arrow toggles the contents. Renaming and removal need the wide
@@ -647,7 +644,13 @@ fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<
     };
     let icon = row_icon(&look.icon, look.saved);
     if !labels {
-        return row.w(px(ICON_BUTTON)).justify_center().child(icon);
+        // The square anchors its close badge and is the hover group that reveals it.
+        return row
+            .relative()
+            .group(COMPACT_ROW_GROUP)
+            .w(px(ICON_BUTTON))
+            .justify_center()
+            .child(icon);
     }
     let indent = 8. + FOLDER_INDENT * look.depth as f32;
     row.pl(px(indent))
@@ -676,17 +679,84 @@ fn row_icon(letter: &str, saved: bool) -> Div {
         .child(letter.to_owned())
 }
 
-/// A small control at the end of a wide row, named for screen readers. It is not a Tab stop,
-/// so the tree keeps one (DW-61). The row's own keys do what the buttons do: Delete and F2
-/// close, remove and rename, and Ctrl W unloads a saved page or closes a tab (DW-63).
+/// A row's close control: the wide row's × or the compact row's corner badge (#128), with
+/// one click for both. It closes or unloads the tab and, when the row stays, lets go of row
+/// focus so the row's keys do not keep applying after the click.
+fn close_control(
+    close: RowClose,
+    labels: bool,
+    shows_ring: bool,
+    cx: &mut Context<BrowserView>,
+) -> Stateful<Div> {
+    let id = close_control_id(close, labels);
+    let control = if labels {
+        row_action(id, "×", close.name())
+    } else {
+        close_badge(id, close.name(), shows_ring)
+    };
+    control
+        .aria_keyshortcuts(close.keys())
+        .on_click(cx.listener(move |this, _, window, cx| {
+            cx.stop_propagation();
+            this.command(SessionCommand::CloseTab(close.tab()));
+            if close.row_stays() {
+                this.release_row_focus(window, cx);
+            }
+            cx.notify();
+        }))
+}
+
+/// The close control's element id: one per tab and per layout, so it never matches its row,
+/// another row's control or the other layout's. Two role-bearing siblings with one id panic
+/// the accessibility tree (`docs/dev/trapstoknow.md`). The wide ids are the ones the
+/// accessibility probe has already seen.
+fn close_control_id(close: RowClose, labels: bool) -> ElementId {
+    let name = match (close, labels) {
+        (RowClose::Tab(_), true) => "close",
+        (RowClose::Unload(_), true) => "unload",
+        (RowClose::Tab(_), false) => "close-badge",
+        (RowClose::Unload(_), false) => "unload-badge",
+    };
+    ElementId::from((name, close.tab().get()))
+}
+
+/// A named button inside a row. It is not a Tab stop, so the tree keeps one (DW-61), and a
+/// press does not focus it.
+fn row_button(id: impl Into<ElementId>, name: &'static str) -> Stateful<Div> {
+    without_mouse_focus(control(div().id(id), Role::Button, name)).tab_stop(false)
+}
+
+/// A small control at the end of a wide row, named for screen readers. The row's own keys do
+/// what the buttons do: Delete and F2 close, remove and rename, and Ctrl W unloads a saved
+/// page or closes a tab (DW-63).
 fn row_action(id: impl Into<ElementId>, glyph: &'static str, name: &'static str) -> Stateful<Div> {
-    without_mouse_focus(control(
-        div().id(id).px_1().rounded_md(),
-        Role::Button,
-        name,
-    ))
-    .tab_stop(false)
-    .child(glyph)
+    row_button(id, name).px_1().rounded_md().child(glyph)
+}
+
+/// The compact row's close badge (#128): a round × on the icon's top-right corner, kept inside
+/// the row's square so it never reaches the page card. It is hidden until the row is hovered
+/// or `shown` (the row shows its focus ring). Hidden, GPUI paints neither it nor its mouse
+/// listeners, so what the owner sees is what a click hits.
+fn close_badge(id: impl Into<ElementId>, name: &'static str, shown: bool) -> Stateful<Div> {
+    row_button(id, name)
+        .absolute()
+        .top(px(BADGE_INSET))
+        .right(px(0.))
+        .size(px(BADGE_SIZE))
+        .rounded_full()
+        .bg(theme::ground())
+        .border_1()
+        .border_color(theme::line())
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(BADGE_GLYPH_SIZE))
+        .text_color(theme::icon())
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::line()).text_color(theme::text()))
+        .when(!shown, |badge| badge.invisible())
+        .group_hover(COMPACT_ROW_GROUP, |style| style.visible())
+        .child("×")
 }
 
 /// Keeps a mouse press from focusing a row or its buttons, so a right-click, a middle-click
@@ -838,6 +908,8 @@ fn title_or_address(title: &str, address: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use syrinx_ui::{SidebarSizing, sidebar::WIDE_WIDTH};
 
     use super::*;
@@ -888,6 +960,36 @@ mod tests {
         for state in SidebarWidthState::ALL {
             assert_eq!(settled_sidebar_setting(state, state), None);
         }
+    }
+
+    #[test]
+    fn the_close_control_id_differs_per_layout_variant_and_tab() {
+        let tab = |id: u64| TabId::new(id).expect("synthetic tab id");
+        let controls = [
+            RowClose::Tab(tab(7)),
+            RowClose::Unload(tab(7)),
+            RowClose::Tab(tab(8)),
+        ];
+        let ids: Vec<ElementId> = controls
+            .iter()
+            .flat_map(|close| {
+                [
+                    close_control_id(*close, true),
+                    close_control_id(*close, false),
+                ]
+            })
+            .collect();
+        let distinct: HashSet<&ElementId> = ids.iter().collect();
+        assert_eq!(distinct.len(), ids.len(), "{ids:?}");
+        // The wide × keeps the ids the accessibility probe has already seen.
+        assert_eq!(
+            close_control_id(RowClose::Tab(tab(7)), true),
+            ElementId::from(("close", 7u64))
+        );
+        assert_eq!(
+            close_control_id(RowClose::Unload(tab(7)), true),
+            ElementId::from(("unload", 7u64))
+        );
     }
 
     #[test]
