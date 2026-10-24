@@ -21,7 +21,12 @@ Record results as pass/fail and timings only, never account contents.
 
 ## Order
 
-### 1. Finish P1-39d (in progress)
+### 1. Finish P1-39d (paused by you on 2026-10-24)
+
+**Paused 2026-10-24:** you chose not to set up the signing key yet, because
+it adds a monthly cost and the previews have no users who need signed
+updates, so weekly previews stay unsigned until you do this item
+(`docs/decisions.md`, 2026-10-24). The agent half waits as draft PR #119.
 
 **Changed 2026-10-14:** you keep no release key on a device. The weekly
 workflow signs with a key held as a GitHub Actions secret and re-signs
@@ -38,22 +43,16 @@ on `main`.
 - After the next release, update an installed Syrinx yourself with Check
   for updates; record it in P1-39d's GitHub issue.
 
-### 2. Quiet-machine runs (unblock P1-24 and P1-26)
+### 2. Quiet-machine runs
 
 Stop every agent and build first; check with
 `Get-Process cargo,rustc -ErrorAction SilentlyContinue` that nothing is
 listed. Close other heavy programs.
 
-1. **P1-23 full-text bake-off (first; P1-24 and P1-26 wait on it).**
-
-   ```powershell
-   cargo build -p fulltext-bench --profile local --offline --locked
-   powershell -NoProfile -File crates/fulltext-bench/run-comparison.ps1 -Label p1-23-quiet-<date> -QuietWaitMinutes 20
-   ```
-
-   Results land in `target/p1-23-quiet-<date>-*.csv`; note
-   `$env:NUMBER_OF_PROCESSORS` beside them. Details:
-   [`docs/p1-23-fulltext-bakeoff.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-23-fulltext-bakeoff.md).
+1. **P1-23 full-text bake-off: done.** The quiet-machine comparison ran on
+   2026-10-21 (results on #52), and on 2026-10-24 you confirmed its choice,
+   Tantivy, pinned at 0.27.0 (`docs/decisions.md`, 2026-10-24). Nothing is
+   left to run; P1-24 (#53) builds on it.
 2. **P1-05 search (D48) and AN-01's timings.** Run `cargo xtask bench` three
    times, each a fresh process. It reports the 100,000-row search p95
    against 5 ms, and AN-01's per-update overhead (100 ns budget) and file
@@ -86,12 +85,16 @@ With NVDA installed and running, work through the thirteen checks in
   each row once, as "n of m". Also try Shift Tab and decide owner question
   3 (announce rows only after arrows, as built, or after every keystroke).
 - **Check 12 (DW-62):** click a toolbar button, no ring; press Tab or F6
-  from a page, ring appears; in each of the five palettes; also in the
+  from a page, ring appears; in Graphite, Paper and Glass and in one
+  custom theme (the five fixed palettes were replaced on 2026-10-15); also in the
   palette, peek and import windows; Ctrl or Shift alone does not bring the
   ring back.
 - **Check 13 (DW-61):** Shift Tab back into the sidebar tree, and the peek.
 
 ### 5. Window checks of the Settings sections
+
+The Settings page itself passed your window check on 2026-10-24 (#91,
+`docs/decisions.md`); the section checks below are still to do.
 
 On a fresh profile (`cargo syrinx --test-data-dir <new folder>`; the alias already ends
 in `--`, so a second `--` reaches Syrinx and the test profile is not used):
@@ -132,7 +135,8 @@ home and settings, history, clear data, restore after restart).
 
 ### 7. Downloads and see-through themes (PR #145: #143, #151)
 
-After PR #145 merges and `cargo xtask check` passes on this machine. Record
+PR #145 merged on 2026-10-24; do these once `cargo xtask check` passes on
+this machine. Record
 each as pass or fail, with the line the fixture prints where one is named,
 in #143 (downloads) or #151 (themes); record the two verdicts in
 `docs/decisions.md` too.
@@ -149,6 +153,21 @@ in #143 (downloads) or #151 (themes); record the two verdicts in
      entry (2)): record which.
    - Case 6's final state and reason for `synthetic-tool.exe`, which shows
      what SmartScreen does while the dialog is hidden.
+
+   Then run the whole fixture once, the same command without
+   `--downloads-only`, and record how long the run took from start to
+   finish beside its result (for example `$start = Get-Date`, then the
+   command, then `(Get-Date) - $start`, which keeps the fixture's output
+   on screen). The whole run includes #130's audio suite and the
+   certificate suite, which starts `python.exe` from the path. The
+   fixture ends itself after 600 s in case its message pump is stuck. Its
+   suites and shutdowns may use up to 545 s (seven 45 s suites,
+   the 150 s audio suite and eight 10 s shutdowns), but creating the
+   profiles, the WebView2 environments and the synthetic servers is not in
+   that sum, so only a measured run shows how much of the 55 s margin is
+   left. If a full run ever trips the 600 s watchdog, the bound is raised;
+   a suite is never dropped to fit under it (PR #145's re-review and the
+   reply to it, 2026-10-24).
 2. **A real Drive download, signed in yourself.** One list only, with
    progress and then "Done"; then pause, resume and cancel a large
    download. While a popup's download runs, switch to another tab for more
@@ -187,5 +206,8 @@ in #143 (downloads) or #151 (themes); record the two verdicts in
 
 ### 8. Housekeeping when convenient
 
-- Before making the repository public: the pre-publication checklist in
-  `docs/releasing.md`.
+- The repository is public now. The pre-publication checklist in
+  `docs/releasing.md` records what was checked on 2026-10-13 and what has
+  changed since; anything in it that still matters to you, such as the
+  third-party skills under `.claude/skills/` or what the history shows, is
+  yours to decide.
