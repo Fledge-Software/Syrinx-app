@@ -1,7 +1,9 @@
 //! Feeds every page's downloads into the session's in-memory list and its flyout (#143), and
 //! keeps a popup that asked to close alive until the downloads it started have finished.
 
-use syrinx_core::{DownloadControl, DownloadInterruption, DownloadState};
+use syrinx_core::{DownloadControl, DownloadInterruption, DownloadList, DownloadState};
+
+use crate::session::SessionCommand;
 
 use super::*;
 
@@ -35,8 +37,10 @@ impl BrowserView {
         let (total, can_resume) = progress;
         self.downloads.progress(download, received, total);
         self.downloads.set_resumable(download, can_resume);
-        if let Some(tab) = self.downloads.update(download, state, received) {
-            self.close_requested_page(tab);
+        if let Some(command) =
+            released_close(&mut self.downloads, download, state, received, self.closing)
+        {
+            self.command(command);
         }
         if let Some(message) = finished_message(state, &self.download_name(download)) {
             self.message = message;
@@ -75,6 +79,20 @@ impl BrowserView {
             .find(|listed| listed.id == download)
             .map_or_else(|| "a file".to_owned(), |listed| listed.file_name.clone())
     }
+}
+
+/// The close a download's change releases, as the session must observe it: `None` while the
+/// page's other downloads run, when no close was deferred, or once the page is already gone
+/// (`sync_pages` calls `forget_close` for a page the saved model dropped, as after Ctrl W).
+fn released_close(
+    downloads: &mut DownloadList,
+    download: u64,
+    state: DownloadState,
+    received: u64,
+    closing: bool,
+) -> Option<SessionCommand> {
+    let tab = downloads.update(download, state, received)?;
+    page_lifecycle::observed_close(tab, closing)
 }
 
 /// The status line for a download that just finished or stopped; `None` while it runs.
@@ -116,5 +134,42 @@ mod tests {
             finished_message(stopped, "synthetic.zip")
                 .is_some_and(|message| message.starts_with("synthetic.zip did not download"))
         );
+    }
+
+    fn downloading_popup() -> DownloadList {
+        let mut downloads = DownloadList::default();
+        downloads.add(1, 10, "synthetic.zip", None);
+        assert!(
+            downloads.defer_close(10),
+            "the popup asked to close mid-download"
+        );
+        downloads
+    }
+
+    #[test]
+    fn a_deferred_close_is_observed_once_the_download_ends() {
+        let mut downloads = downloading_popup();
+        assert!(
+            released_close(&mut downloads, 1, DownloadState::InProgress, 5, false).is_none(),
+            "still downloading"
+        );
+        assert!(matches!(
+            released_close(&mut downloads, 1, DownloadState::Completed, 5, false),
+            Some(SessionCommand::ObserveClosed(tab)) if tab.get() == 10
+        ));
+    }
+
+    #[test]
+    fn a_popup_the_owner_closed_sends_no_second_close_when_its_download_ends() {
+        let mut downloads = downloading_popup();
+        // Ctrl W: the saved model dropped the page and sync_pages forgot its deferred close.
+        downloads.forget_close(10);
+        assert!(released_close(&mut downloads, 1, DownloadState::Completed, 5, false).is_none());
+    }
+
+    #[test]
+    fn a_closing_browser_observes_no_release() {
+        let mut downloads = downloading_popup();
+        assert!(released_close(&mut downloads, 1, DownloadState::Completed, 5, true).is_none());
     }
 }
