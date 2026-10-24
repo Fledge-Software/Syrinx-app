@@ -276,6 +276,21 @@ you found it in the commit message, not here.
   canvas's paint, as `controls::watch_pointer` does. Source:
   `gpui-pre-0.3.8/src/window.rs`, `HitboxId::is_hovered` (line 782), and
   DW-62's visual probe (observed).
+- **A control revealed by GPUI's hover listener vanishes between press and
+  release.** `on_hover` reports "not hovered" while the element has a pending
+  mouse-down, so a press followed by a one-pixel move hides a control drawn
+  only while the listener says hovered, and the mouse-up then clicks whatever
+  is under it (a sidebar row, which selects instead of closing). Keep such a
+  control in the tree and toggle its `visibility` from a `group_hover` style
+  instead: `Visibility::Hidden` makes `Interactivity::paint` return before it
+  paints the element, its mouse listeners and its accessibility node, so a
+  hidden control can never take a click, while the group-hover wake registered
+  just before that return still redraws it on the next hover. The compact
+  sidebar's close badge (#128) is built this way. Source:
+  `gpui-pre-0.3.8/src/elements/div.rs`, lines 3154–3172 (the hover listener
+  requires no pending mouse-down) and 2533–2537 (the hidden return follows
+  `paint_hover_group_handler`), read for PR #153 (code-confirmed; the owner's
+  window check is pending).
 - **A bounds observer fires on every activation change, not only on a move.**
   GPUI's activation callback calls `bounds_changed`, which runs every
   `observe_window_bounds` observer. The peek's watch closed the peek when it was

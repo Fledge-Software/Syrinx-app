@@ -28,6 +28,7 @@ pub(super) fn run(http_url: &str) -> Result<(), String> {
             directory.join("WebView2"),
             &format!("{url}\n{base}/security-recovery\n{}", log.display()),
             exercise,
+            DEADLINE,
         )
     });
     let stopped = server.stop();
