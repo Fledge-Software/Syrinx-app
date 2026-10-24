@@ -130,6 +130,17 @@ design.
   became one "Zoom" row carrying the same stepper, so zooming does not close
   the menu; Left and Right step it from the keyboard. "Reset zoom" (Ctrl 0)
   stays as its own row. The row follows the existing menu-row style.
+- **The compact sidebar's close badge (#128).** In the favicon-only sidebar
+  an open tab's row shows a 16 px round ⓧ on its icon's top-right corner,
+  inside the row's 30 px square, while the pointer is over the row or the
+  row shows its focus ring. It is a × in the icon colour on the sidebar
+  ground with the usual 1 px line, and darkens like an icon button when
+  hovered. On an ordinary tab it closes the tab; on a saved page that is open
+  it unloads the page and the saved row stays, as the wide row's × does. An
+  unopened saved page and a folder get none. Clicking the icon beside it
+  still selects the tab. Firefox's vertical tabs are the reference. Open for
+  the owner: whether the active row shows it without hover or focus, and
+  how it reads over a real favicon once favicons land.
 
 ## Forge
 
