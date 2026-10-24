@@ -116,7 +116,12 @@ fn a_damaged_complete_record_is_refused_until_an_explicit_rebuild() {
     assert_eq!(fs::read(&path).expect("damage is left alone"), damaged);
     assert_eq!(
         JournalError::Deletion(DeletionError::DamagedRecord).to_string(),
-        "Syrinx's record of cleared history is damaged"
+        "Syrinx's record of cleared data is damaged"
+    );
+    // A category this build does not know means a newer Syrinx wrote the record (#121).
+    assert_eq!(
+        JournalError::Deletion(DeletionError::UnsupportedCategory).to_string(),
+        "Syrinx's record of cleared data was written by a newer Syrinx"
     );
 
     // The confirmed repair keeps the damaged bytes, records two all-time clears and

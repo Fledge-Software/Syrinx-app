@@ -596,6 +596,19 @@ you found it in the commit message, not here.
 
 ## Storage
 
+- **A new deletion-journal category makes a build that predates it refuse
+  the journal and offer the clear-all-history repair.** D47's codec fails
+  closed on a category byte it does not know, by design. A build between
+  #90 (schema 7) and #121 opens the database normally, then meets a
+  `SiteZoom` record in `syrinx.deletions`, reports the record as damaged and
+  offers the repair; confirming it rewrites the journal as all-time history
+  clears, so the zoom clears lose their replay protection. Builds before
+  schema 7 never get that far: `FutureSchema` refuses the database first.
+  When adding a category, expect a downgrade to the previous preview to meet
+  that prompt and say so in the release notes; this build at least names an
+  unknown category as written by a newer Syrinx. Source:
+  `crates/syrinx-store/src/deletion.rs`, `decode_record`, and
+  `session/history_repair.rs`, `repairable` (code-confirmed, #121).
 - **A retained directory or database can still be renamed despite excluding
   delete sharing.** Windows metadata-only opens do not enforce this sharing
   restriction. Retained directories need `FILE_LIST_DIRECTORY`, and retained
