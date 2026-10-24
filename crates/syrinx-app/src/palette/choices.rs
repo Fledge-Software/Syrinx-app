@@ -1,11 +1,14 @@
 //! Tracks the palette's rows, selection and request identity so stale replies never replace newer ones.
 
-use syrinx_core::{AddressPrefix, address_prefix};
+use std::collections::HashSet;
+
+use syrinx_core::{AddressPrefix, SavedPageId, address_prefix, is_bare_host};
 use syrinx_search::{SearchHit, SearchResults, Target};
 
 use super::{
     PaletteEvent,
     commands::CommandMatches,
+    display::Arranged,
     query::{ChipCounts, CommandCounts},
 };
 use crate::{navigation, session::SessionError};
@@ -21,6 +24,8 @@ pub(super) struct PaletteChoices {
     /// Strong command rows, the worker's rows, then other commands; only the current request
     /// changes them.
     pub(super) results: Vec<SearchHit>,
+    /// Saved pages listed in `results` that have a live tab, as the last reply reported them.
+    open_saved: HashSet<SavedPageId>,
     pub(super) selected: Option<usize>,
     refresh_selection: Option<RefreshSelection>,
     pub(super) status: String,
@@ -101,10 +106,19 @@ impl PaletteChoices {
     }
 
     fn selection(&self) -> RefreshSelection {
+        // A row chosen automatically is chosen again from the refreshed rows, so a match that
+        // stopped matching gives way to the search row.
+        if !self.moved {
+            return if self.selected.is_some() {
+                RefreshSelection::Default
+            } else {
+                RefreshSelection::Unselected
+            };
+        }
         if let Some(hit) = self.selected_hit() {
             return RefreshSelection::Target(hit.target);
         }
-        if self.moved && self.selected == Some(0) && self.web_search {
+        if self.selected == Some(0) && self.web_search {
             return RefreshSelection::Lead;
         }
         if self.selected.is_some() {
@@ -145,6 +159,28 @@ impl PaletteChoices {
         };
         self.refresh_selection = Some(selection);
         self.request_id
+    }
+
+    /// Shows a reply arranged against the tab model, remembering which saved pages are open.
+    pub(super) fn receive_arranged(
+        &mut self,
+        request_id: u64,
+        result: Result<Arranged, SessionError>,
+    ) -> bool {
+        if request_id != self.request_id {
+            return false;
+        }
+        let result = match result {
+            Ok(arranged) => {
+                self.open_saved = arranged.open_saved;
+                Ok(arranged.results)
+            }
+            Err(error) => {
+                self.open_saved.clear();
+                Err(error)
+            }
+        };
+        self.receive(request_id, result)
     }
 
     pub(super) fn receive(
@@ -198,24 +234,56 @@ impl PaletteChoices {
     /// The row Enter takes while the owner has not moved the selection (#127): a confident
     /// local match if there is one, otherwise the leading Go to or search row, or the top row.
     fn default_row(&self) -> usize {
-        self.results
-            .iter()
-            .enumerate()
-            .position(|(index, hit)| self.is_confident(index, hit))
-            .map_or(0, |index| index + self.lead_rows())
+        let confident = if self.web_search {
+            self.results
+                .iter()
+                .enumerate()
+                .position(|(index, hit)| self.matches_exactly(index, hit))
+        } else if self.address.is_some() {
+            self.partial_host_row()
+        } else {
+            None
+        };
+        confident.map_or(0, |index| index + self.lead_rows())
     }
 
-    /// Whether a row matches the typed text letter for letter, so Enter may open it instead of
-    /// searching: a strong command, the start of its address, or an open page's exact title.
-    fn is_confident(&self, index: usize, hit: &SearchHit) -> bool {
-        if self.web_search {
-            return index < self.staged_strong
-                || address_prefix(&self.entry, &hit.address) != AddressPrefix::No
-                || has_exact_title(hit, &self.entry);
+    /// For plain text: a strong command, a page whose address starts with the text letter for
+    /// letter, or an open page whose title is exactly the text.
+    fn matches_exactly(&self, index: usize, hit: &SearchHit) -> bool {
+        index < self.staged_strong
+            || address_prefix(&self.entry, &hit.address) != AddressPrefix::No
+            || self.has_exact_title(hit)
+    }
+
+    /// For a typed bare host such as `cloud.exam`: the first page whose host continues the label
+    /// being typed. A page at exactly the typed host keeps Go to first, and whole labels never
+    /// count, so `bank.example` cannot open `bank.example.invalid`.
+    fn partial_host_row(&self) -> Option<usize> {
+        if !is_bare_host(&self.entry) {
+            return None;
         }
-        // Typed text that only starts a known host, such as `cloud.exam`, beats Go to.
-        self.address.is_some()
-            && address_prefix(&self.entry, &hit.address) == AddressPrefix::PartialHost
+        let prefixes: Vec<_> = self
+            .results
+            .iter()
+            .map(|hit| address_prefix(&self.entry, &hit.address))
+            .collect();
+        if prefixes.contains(&AddressPrefix::HostAndPath) {
+            return None;
+        }
+        prefixes
+            .iter()
+            .position(|prefix| *prefix == AddressPrefix::WithinLabel)
+    }
+
+    /// An open tab, or a saved page with a live tab, whose title is exactly the typed text,
+    /// ignoring case. A closed bookmark's title never beats the search.
+    fn has_exact_title(&self, hit: &SearchHit) -> bool {
+        let open = match hit.target {
+            Target::Tab(_) => true,
+            Target::Saved(saved) => self.open_saved.contains(&saved),
+            Target::History(_) | Target::Command(_) => false,
+        };
+        open && hit.title.trim().to_lowercase() == self.entry.to_lowercase()
     }
 
     fn target_row(&self, target: Target) -> Option<usize> {
@@ -262,7 +330,7 @@ impl PaletteChoices {
         if rows == 0 {
             return;
         }
-        self.select(
+        self.move_to(
             self.selected
                 .map_or(0, |selected| selected.saturating_add(1).min(rows - 1)),
         );
@@ -272,10 +340,19 @@ impl PaletteChoices {
         if self.results.is_empty() && self.lead_rows() == 0 {
             return;
         }
-        self.select(
+        self.move_to(
             self.selected
                 .map_or(0, |selected| selected.saturating_sub(1)),
         );
+    }
+
+    /// An arrow key that leaves the selection where it was is not a choice, so Enter still
+    /// waits for a confident match that has not arrived yet.
+    fn move_to(&mut self, row: usize) {
+        if self.selected == Some(row) {
+            return;
+        }
+        self.select(row);
     }
 
     pub(super) fn activation(&self, request_id: u64, target: Target) -> Option<PaletteEvent> {
@@ -314,12 +391,17 @@ impl PaletteChoices {
     }
 
     /// Enter waits when the rows it would choose from have not arrived and nothing is chosen.
-    /// Go to is known at once; the search row counts only once the owner picked it, since a
-    /// confident match may still arrive.
     fn must_wait_for_rows(&self, force_search: bool) -> bool {
-        let lead_chosen =
-            self.selected == Some(0) && (self.address.is_some() || (self.web_search && self.moved));
-        !force_search && self.awaiting_reply && self.selected_hit().is_none() && !lead_chosen
+        !force_search && self.awaiting_reply && self.selected_hit().is_none() && !self.lead_chosen()
+    }
+
+    /// Whether Enter may take the lead row before the reply: the owner picked it, or it is Go to
+    /// an address that no known page could replace (one with a scheme, port or path).
+    fn lead_chosen(&self) -> bool {
+        if self.selected != Some(0) || self.lead_rows() == 0 {
+            return false;
+        }
+        self.moved || (self.address.is_some() && !is_bare_host(&self.entry))
     }
 
     fn decide(&self, text: String, force_search: bool) -> Option<PaletteEvent> {
@@ -345,12 +427,6 @@ impl PaletteChoices {
         }
         Some(PaletteEvent::Submit { text, force_search })
     }
-}
-
-/// An open tab or saved page whose title is exactly the typed text, ignoring case.
-fn has_exact_title(hit: &SearchHit, entry: &str) -> bool {
-    matches!(hit.target, Target::Tab(_) | Target::Saved(_))
-        && hit.title.trim().to_lowercase() == entry.to_lowercase()
 }
 
 #[cfg(test)]
@@ -641,45 +717,168 @@ mod tests {
         let [tab, _] = targets();
         let known = "https://cloud.example.test/projects/flare-console";
         let mut choices = PaletteChoices::default();
-        let request = choices.query("cloud.example");
-        assert_eq!(choices.address.as_deref(), Some("https://cloud.example/"));
+        let request = choices.query("cloud.exam");
+        assert_eq!(choices.address.as_deref(), Some("https://cloud.exam/"));
         assert!(choices.receive(request, Ok(ranked(&[(tab, "Synthetic console", known)]))));
         assert_eq!(choices.selected, Some(1));
         assert_target(&mut choices, tab);
 
-        let request = choices.query("cloud.example.test");
-        assert!(choices.receive(request, Ok(ranked(&[(tab, "Synthetic console", known)]))));
-        assert_eq!(
-            choices.selected,
-            Some(0),
-            "Go to the typed host stays first"
-        );
-        assert_submit(
-            &mut choices,
-            "cloud.example.test",
-            false,
-            "https://cloud.example.test/",
-        );
+        // Whole labels and the complete host keep Go to first.
+        for (input, expected) in [
+            ("cloud.example", "https://cloud.example/"),
+            ("cloud.example.test", "https://cloud.example.test/"),
+        ] {
+            let request = choices.query(input);
+            assert!(choices.receive(request, Ok(ranked(&[(tab, "Synthetic console", known)]))));
+            assert_eq!(choices.selected, Some(0), "Go to {input} stays first");
+            assert_submit(&mut choices, input, false, expected);
+        }
     }
 
     #[test]
-    fn an_open_pages_exact_title_switches_to_it_but_history_does_not() {
+    fn a_look_alike_host_never_captures_a_typed_address() {
+        let [tab, saved] = targets();
+        let look_alike = (
+            saved,
+            "Synthetic look-alike",
+            "https://example.test.other.invalid/",
+        );
+        let real = (tab, "Synthetic real site", "https://example.test/");
+        for rows in [vec![look_alike, real], vec![look_alike]] {
+            let mut choices = PaletteChoices::default();
+            let request = choices.query("example.test");
+            assert!(choices.receive(request, Ok(ranked(&rows))));
+            assert_eq!(choices.selected, Some(0));
+            assert_submit(&mut choices, "example.test", false, "https://example.test/");
+        }
+
+        // A page at exactly the typed host keeps Go to first even beside a partial match.
+        let mut choices = PaletteChoices::default();
+        let request = choices.query("cloud.exam");
+        assert!(choices.receive(
+            request,
+            Ok(ranked(&[
+                (saved, "Synthetic console", "https://cloud.example.test/"),
+                (tab, "Synthetic exact host", "https://cloud.exam/docs"),
+            ]))
+        ));
+        assert_eq!(choices.selected, Some(0));
+    }
+
+    #[test]
+    fn an_open_pages_exact_title_switches_to_it_but_a_closed_one_does_not() {
         let [tab, saved] = targets();
         let title = "Synthetic Palette Match";
-        for (target, opens) in [(tab, true), (saved, true), (history(3), false)] {
-            let input = "synthetic palette match";
+        let input = "synthetic palette match";
+        for (target, open_saved, switches) in [
+            (tab, HashSet::new(), true),
+            (
+                saved,
+                HashSet::from([SavedPageId::new(1).expect("saved")]),
+                true,
+            ),
+            (saved, HashSet::new(), false),
+            (history(3), HashSet::new(), false),
+        ] {
             let mut choices = PaletteChoices::default();
             let request = choices.query(input);
-            assert!(choices.receive(
+            let results = ranked(&[(target, title, "https://titles.example.test/")]);
+            assert!(choices.receive_arranged(
                 request,
-                Ok(ranked(&[(target, title, "https://titles.example.test/")]))
+                Ok(Arranged {
+                    results,
+                    open_saved
+                })
             ));
-            if opens {
+            if switches {
                 assert_target(&mut choices, target);
             } else {
                 assert_search(&mut choices, input);
             }
         }
+    }
+
+    #[test]
+    fn enter_on_a_bare_host_waits_for_a_partial_match_but_an_explicit_address_does_not() {
+        let [tab, _] = targets();
+        let known = "https://cloud.example.test/";
+        let mut choices = PaletteChoices::default();
+        let request = choices.query("cloud.exam");
+        assert!(choices.submission("cloud.exam".to_owned(), false).is_none());
+        assert!(choices.receive(request, Ok(ranked(&[(tab, "Synthetic console", known)]))));
+        assert!(matches!(
+            choices.take_deferred(),
+            Some(PaletteEvent::Activate(target)) if target == tab
+        ));
+
+        // A scheme, port or path cannot be the start of a longer host, so Go to is immediate.
+        for input in ["https://cloud.exam", "cloud.exam:8443", "cloud.exam/docs"] {
+            choices.query(input);
+            assert!(
+                matches!(
+                    choices.submission(input.to_owned(), false),
+                    Some(PaletteEvent::Submit { .. })
+                ),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_arrow_key_that_cannot_move_is_not_a_choice() {
+        let [tab, _] = targets();
+        let mut choices = PaletteChoices::default();
+        let request = choices.query("shelf");
+        // Only the search row exists before the reply, so Down and Up go nowhere.
+        choices.next();
+        choices.previous();
+        assert_eq!(choices.selected, Some(0));
+        assert_eq!(choices.announced_row(), None);
+        assert!(choices.submission("shelf".to_owned(), false).is_none());
+        assert!(choices.receive(
+            request,
+            Ok(ranked(&[(
+                tab,
+                "Synthetic shelves",
+                "https://shelf.example.test/"
+            )]))
+        ));
+        assert!(matches!(
+            choices.take_deferred(),
+            Some(PaletteEvent::Activate(target)) if target == tab
+        ));
+    }
+
+    #[test]
+    fn an_automatic_match_that_stops_matching_gives_way_to_the_search() {
+        let [tab, _] = targets();
+        let input = "inbox";
+        let mut choices = PaletteChoices::default();
+        let request = choices.query(input);
+        assert!(choices.receive(
+            request,
+            Ok(ranked(&[(tab, "Inbox", "https://mail.example.test/")]))
+        ));
+        assert_target(&mut choices, tab);
+        let refreshed = choices.refresh();
+        assert!(choices.receive(
+            refreshed,
+            Ok(ranked(&[(tab, "Inbox (1)", "https://mail.example.test/")]))
+        ));
+        assert_eq!(choices.selected, Some(0));
+        assert_search(&mut choices, input);
+    }
+
+    #[test]
+    fn chip_views_have_no_search_row_and_enter_opens_their_top_row() {
+        let [tab, saved] = targets();
+        let mut choices = PaletteChoices::default();
+        let request = choices.query_scoped("synthetic", false);
+        assert!(!choices.web_search);
+        assert_eq!(choices.lead_rows(), 0);
+        assert!(choices.receive(request, Ok(results(&[tab, saved]))));
+        assert_eq!(choices.row_count(), 2);
+        assert_target(&mut choices, tab);
     }
 
     #[test]

@@ -55,6 +55,31 @@ const ENTER_PAGE: &str = "enter-target";
 /// Plain text searches the web unless it matches exactly (#127). `/` lists open tabs and Enter
 /// opens its top row, so this is how the owner switches to a tab by part of its title.
 const ENTER_QUERY: &str = "/enter-target";
+
+/// What the Enter check types to reach the background page.
+#[derive(Clone, Copy)]
+enum EnterQuery {
+    /// `/` and part of the title: the open-tabs view opens its top row.
+    TabScope,
+    /// The page's whole current title: plain text that switches to an open tab (#127).
+    ExactTitle,
+}
+
+impl EnterQuery {
+    /// The report's names for the switch check and the stale-refocus check that follows it.
+    fn checks(self) -> (&'static str, &'static str) {
+        match self {
+            Self::TabScope => (
+                "enter_activates_selected_tab",
+                "no_stale_refocus_after_enter",
+            ),
+            Self::ExactTitle => (
+                "enter_activates_exact_title",
+                "no_stale_refocus_after_exact_title",
+            ),
+        }
+    }
+}
 const CLOSED: &str = "The browser window closed during the acceptance run.";
 
 /// The run's state inside the browser view.
@@ -349,7 +374,8 @@ impl Run {
         self.measure_openings().await?;
         self.check_rapid_dismissal().await?;
         self.check_second_open().await?;
-        self.check_enter_activation().await?;
+        self.check_enter_activation(EnterQuery::TabScope).await?;
+        self.check_enter_activation(EnterQuery::ExactTitle).await?;
         for size in SIZES {
             self.measure_ranking(size).await?;
         }
@@ -790,23 +816,24 @@ impl Run {
         Ok(())
     }
 
-    /// Typing the background page's title and pressing Enter must switch to that tab.
-    async fn check_enter_activation(&mut self) -> Result<(), String> {
+    /// Typing `how` to reach the background page and pressing Enter must switch to that tab.
+    async fn check_enter_activation(&mut self, how: EnterQuery) -> Result<(), String> {
         let focus = self.focus_tab()?;
         let enter = self
             .enter_tab
             .ok_or_else(|| "The Enter target page is missing.".to_owned())?;
+        let query = self.enter_query(how, enter).await?;
         self.open_timed().await?;
         self.with(|view, _, cx| {
             let popup = view.palette_hwnd(cx)?;
-            probe_win32::post_text(popup, ENTER_QUERY).map_err(|error| error.to_string())
+            probe_win32::post_text(popup, &query).map_err(|error| error.to_string())
         })??;
         // Enter only once the full text's own reply selects the target, as the bursts do.
         let target = Target::Tab(enter);
         let selected = self
             .try_wait(Duration::from_secs(3), |view, _, cx| {
                 let palette = view.palette.as_ref()?.view.read(cx);
-                let settled = palette.input_text(cx) == ENTER_QUERY && palette.answered();
+                let settled = palette.input_text(cx) == query && palette.answered();
                 (settled && palette.selected_target() == Some(target)).then_some(())
             })
             .await?
@@ -842,8 +869,9 @@ impl Run {
                 .map(|tab| tab.metadata.address.clone());
             (active, address, view.message.clone())
         })?;
+        let (check, stale_check) = how.checks();
         self.report.check(
-            "enter_activates_selected_tab",
+            check,
             selected && switched && focused,
             format!(
                 "target row selected: {selected}; target tab active: {switched}; \
@@ -851,9 +879,30 @@ impl Run {
                  active address: {address:?}; status: {message}"
             ),
         );
-        self.check_no_stale_refocus("no_stale_refocus_after_enter", enter)
-            .await?;
+        self.check_no_stale_refocus(stale_check, enter).await?;
         self.return_to(focus).await
+    }
+
+    /// The text the Enter check types. The exact title is read once the background page has
+    /// reported losing focus, since its own script rewrites the title when focus changes.
+    async fn enter_query(&mut self, how: EnterQuery, enter: TabId) -> Result<String, String> {
+        if matches!(how, EnterQuery::TabScope) {
+            return Ok(ENTER_QUERY.to_owned());
+        }
+        let title = self
+            .try_wait(Duration::from_secs(3), |view, _, _| {
+                if view.page_focus(enter) != Some(false) {
+                    return None;
+                }
+                view.model
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == enter)
+                    .map(|tab| tab.metadata.title.clone())
+                    .filter(|title| !title.is_empty())
+            })
+            .await?;
+        title.ok_or_else(|| "The Enter target page never reported its background title.".to_owned())
     }
 
     /// A click on a sidebar peek row must switch to that tab, and the session must still answer

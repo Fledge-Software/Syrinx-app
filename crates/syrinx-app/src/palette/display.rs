@@ -1,8 +1,9 @@
 //! Turns search hits into bounded, safely highlighted palette rows, sections and previews.
 
+use std::collections::HashSet;
 use std::ops::Range;
 
-use syrinx_core::{TabModelSnapshot, live_instance};
+use syrinx_core::{SavedPageId, TabModelSnapshot, live_instance};
 use syrinx_search::{SearchHit, SearchResults, Target};
 
 /// Row text is cut here so one long title cannot stall layout.
@@ -103,18 +104,27 @@ impl Section {
     }
 }
 
+/// Worker results prepared for display, with the saved pages among them that are open.
+pub struct Arranged {
+    pub results: SearchResults,
+    /// Saved rows that stand for a live tab; their exact title switches like a tab's (#127).
+    pub open_saved: HashSet<SavedPageId>,
+}
+
 /// Prepares worker results for display: one row per destination, grouped by section.
 ///
 /// A saved page's live instance appears as its saved row, since activating that row focuses
 /// the same live page (D43); listing both would offer two rows for one destination.
-pub fn arrange(mut results: SearchResults, model: &TabModelSnapshot) -> SearchResults {
-    let mut seen = std::collections::HashSet::new();
+pub fn arrange(mut results: SearchResults, model: &TabModelSnapshot) -> Arranged {
+    let mut seen = HashSet::new();
+    let mut open_saved = HashSet::new();
     let mut hits = Vec::with_capacity(results.hits.len());
     for mut hit in results.hits {
         if let Target::Tab(id) = hit.target
             && let Some(saved) = saved_page_of(model, id)
         {
             hit.target = Target::Saved(saved);
+            open_saved.insert(saved);
         }
         if seen.insert(hit.target) {
             hits.push(hit);
@@ -123,7 +133,10 @@ pub fn arrange(mut results: SearchResults, model: &TabModelSnapshot) -> SearchRe
     // A stable sort keeps the ranking inside each section.
     hits.sort_by_key(|hit| Section::of(hit.target));
     results.hits = hits;
-    results
+    Arranged {
+        results,
+        open_saved,
+    }
 }
 
 fn saved_page_of(
@@ -303,7 +316,12 @@ mod tests {
                 hit(Target::Tab(unknown), "Unknown"),
             ],
         };
-        let arranged = arrange(results, &model.snapshot());
+        let Arranged {
+            results: arranged,
+            open_saved,
+        } = arrange(results, &model.snapshot());
+        // Only the saved page with a live tab counts as open; the other is a closed bookmark.
+        assert_eq!(open_saved, HashSet::from([saved]));
         let targets: Vec<_> = arranged.hits.iter().map(|hit| hit.target).collect();
         assert_eq!(
             targets,
