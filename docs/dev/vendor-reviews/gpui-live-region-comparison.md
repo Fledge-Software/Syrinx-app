@@ -88,8 +88,9 @@ all three are already in the pinned dependencies:
 3. **NVDA speaks on that event.** NVDA maps event 20024 to its
    `liveRegionChange` event (`source/UIAHandler/__init__.py`, line 257, read
    from the NVDA repository today) and its base handler speaks the node's
-   name, at interrupting priority for `Assertive` and normal priority
-   otherwise (`source/NVDAObjects/__init__.py`, lines 1238–1252). Its UI
+   name, ahead of queued speech for `Assertive` (NVDA's `NEXT` priority) and
+   at normal priority otherwise (`source/NVDAObjects/__init__.py`, lines
+   1238–1252). Its UI
    Automation layer drops a repeat of the same text within half a second
    (`source/NVDAObjects/UIA/__init__.py`, lines 1663–1673), which suits a
    footer that may set the same message twice.
@@ -225,8 +226,8 @@ Zed PR #54398 ("gpui: Add accessibility annotation API via AccessKit",
 closed unmerged on 2026-04-21), included `aria_live()` among twelve builder
 methods. The design that did merge, PR #56065 ("gpui: Accesskit support",
 2026-05-27), is the one in 0.3.8 and left `live` out. Nine merged pull
-requests have touched AccessKit in GPUI since; the closest in shape to this
-patch is PR #61926 ("gpui: Expose accessibility identifiers to platform
+requests in the repository mention AccessKit, seven of them after that
+design landed; the closest in shape to this patch is PR #61926 ("gpui: Expose accessibility identifiers to platform
 clients", 2026-08-07), which added one property (`accessibility_id`) to
 `AriaProperties` and `write_a11y_info` in exactly the way sketched above. So
 an upstream `aria_live` pull request is plausible and has a precedent, but
@@ -342,9 +343,10 @@ error notices ("Saving and closing…", "This popup could not be opened.",
 "That tab is no longer open.", the lines assigned to `self.message` in
 `ui.rs`), none of which should interrupt what NVDA is already saying; the
 restore line appears after the owner's own confirmation, so it needs no
-interruption either. `Assertive` maps to NVDA's interrupting priority and
-would suit the permission bar's `Role::Alert` (`ui.rs`, line 2135), which is
-outside #101 and could reuse the same helper later.
+interruption either. `Assertive` maps to NVDA's `NEXT` priority, which
+jumps the speech queue, and would suit the permission bar's `Role::Alert`
+(`ui.rs`, line 2135), which is outside #101 and could reuse the same helper
+later.
 
 ### Why it is sound, and where it is a side use
 
