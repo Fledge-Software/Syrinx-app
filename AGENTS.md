@@ -148,10 +148,6 @@ Some work needs the owner, not an agent:
   never enters, stores or asks for the owner's credentials;
 - checking whether the owner's Google Workspace admin console turns on
   device checks (an open thread, tracked in GitHub issues);
-- creating the GitHub repository and choosing the account or organisation it
-  lives under (D16);
-- making the repository public (the licence, MPL-2.0, was chosen on
-  2026-10-13);
 - anything on Fledge's side. The Fledge-side gaps are a list for the owner,
   not issues or pull requests in Fledge's repositories;
 - installing software system-wide on the owner's machine, and registering
@@ -160,19 +156,23 @@ Some work needs the owner, not an agent:
 If the next task needs one of these, point at it and ask; do not work
 around it.
 
+Two items once on this list are done: the owner created the repository at
+`Fledge-Software/Syrinx-app` (2026-10-13, D16) and made it public under
+MPL-2.0, the licence chosen on 2026-10-13.
+
 ## Work order: follow the phases
 
 **The owner wants development to follow the phases in order**, one at a
 time:
 
-- **Phase 0, the feasibility spike, comes first.** It runs locally on Windows
-  11 and must prove what D6 lists: Google sign-in, YouTube, Disney+ and Hulu,
-  the daily sites, live overlays with correct focus (D7), shortcuts while a
-  page has focus, memory and start-up against Edge, and the GPUI against
-  Tauri + Svelte comparison with the rule written in D4. A measurement
-  protocol is written before the spike. **When it is done, stop and report**
-  what worked, what didn't and what you recommend. Nothing after it starts
-  without the owner's go-ahead.
+- **Phase 0, the feasibility spike, came first and is done.** It ran
+  locally on Windows 11 to prove what D6 lists: Google sign-in, YouTube,
+  Disney+ and Hulu, the daily sites, live overlays with correct focus (D7),
+  shortcuts while a page has focus, memory and start-up against Edge, and
+  the GPUI against Tauri + Svelte comparison with the rule written in D4.
+  Its verdict, go with GPUI on two conditions, is the wiki's Background 09
+  (2026-10-10), and the owner gave the go-ahead by approving the four v1
+  plans the same day.
 - **Then the four v1 plans (D5)**, which follow the spec's phases 1 to 5:
   plan 1, the engine, browser core and command palette (spec phases 1 and 2);
   plan 2, the plugin runtime (spec phase 3, kept thin by D34); plan 3, Notes
@@ -446,10 +446,11 @@ a page card resized, a popup stacked correctly or focus came back to the page.
 
 **In GitHub issues on `Fledge-Software/Syrinx-app`, and nowhere else.**
 Open questions, deferred work and new slices each get an issue, written in
-the Fledge format (an epic per plan or phase, its slices as issues under a
-milestone). Labels follow the wiki's How-we-track-work page; they are kept
-simple on purpose. The plans that held this work before 2026-10-16 are read
-at af3de53, linked from the wiki's History page.
+the Fledge format (an epic per plan or phase, its slices as sub-issues of
+the epic; Syrinx uses no milestones, 2026-10-16). Labels follow the wiki's
+How-we-track-work page; they are kept simple on purpose. The plans that
+held this work before 2026-10-16 are read at af3de53, linked from the
+wiki's History page.
 
 A deferred-work marker (`TODO`, `FIXME`, `HACK`) in Syrinx-authored code is
 allowed only when it names its GitHub issue, as in
