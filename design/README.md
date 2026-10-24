@@ -150,6 +150,17 @@ design.
   yet. The list lives in memory for the session only, and WebView2's own
   download flyout no longer appears (owner, 2026-10-24). The canvas has no
   board for it; adding one is the owner's.
+- **The compact sidebar's close badge (#128).** In the favicon-only sidebar
+  an open tab's row shows a 16 px round ⓧ on its icon's top-right corner,
+  inside the row's 30 px square, while the pointer is over the row or the
+  row shows its focus ring. It is a × in the icon colour on the sidebar
+  ground with the usual 1 px line, and darkens like an icon button when
+  hovered. On an ordinary tab it closes the tab; on a saved page that is open
+  it unloads the page and the saved row stays, as the wide row's × does. An
+  unopened saved page and a folder get none. Clicking the icon beside it
+  still selects the tab. Firefox's vertical tabs are the reference. Open for
+  the owner: whether the active row shows it without hover or focus, and
+  how it reads over a real favicon once favicons land.
 
 ## Forge
 

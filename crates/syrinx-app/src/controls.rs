@@ -3,9 +3,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui::{
-    App, Bounds, BoxShadow, ContentMask, Corners, DispatchPhase, Div, InteractiveElement,
-    IntoElement, MouseDownEvent, ParentElement, Pixels, Role, SharedString, Stateful,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, canvas, point, px, size,
+    App, Bounds, BoxShadow, ContentMask, Corners, DispatchPhase, Div, FocusHandle,
+    InteractiveElement, IntoElement, MouseDownEvent, ParentElement, Pixels, Role, SharedString,
+    Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, canvas, point, px, size,
 };
 use syrinx_ui::focus::{Modality, ModalityInput, RING_INNER_WIDTH, RING_WIDTH};
 use syrinx_ui::metrics::{chrome::ICON_BUTTON, radius, text};
@@ -26,6 +26,12 @@ fn modality() -> Modality {
     } else {
         Modality::Pointer
     }
+}
+
+/// Whether `handle`'s element is drawing its focus ring right now: it is focused and the
+/// owner last used the keyboard (DW-62).
+pub(crate) fn ring_shown(handle: &FocusHandle, window: &Window) -> bool {
+    modality().shows_focus_ring() && handle.is_focused(window)
 }
 
 /// Records what the owner did and, when that shows or hides the ring, redraws `window` now
