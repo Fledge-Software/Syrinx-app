@@ -61,10 +61,15 @@ How the choices combine:
   row keeps at least a 10 % tint under it, so over Mica and Mica Alt, and
   in a light theme, its text stays at 4.5:1 at 90 %. A dark theme under
   Acrylic is checked over Glass's bright wallpaper discs instead (#124),
-  where text stays at 4.5:1 only up to 55 %. If text still fails, the
-  editor says so instead of claiming it was made readable.
-- Home: See-through thins Home's card by the same factor as the tint, so
-  it is clear at 90 %. Solid keeps the starting preset's card. The command
+  so its tint never drops below 32/255, about 12.5 % (owner decision
+  2026-10-24): the least at which white text reaches 4.5:1 over the teal
+  disc. Its white-film surfaces (selected row, fields, pill, surfaces, and
+  Home's card while Home is Solid) keep at least a 0.343 tint under them.
+  Text then stays at 4.5:1 at every step for every material. If a theme's
+  own colours still fail, the editor says so instead of claiming it was
+  made readable.
+- Home: See-through thins Home's card by the slider's own factor,
+  1 − Transparency/90, so it is clear at 90 %. Solid keeps the starting preset's card. The command
   palette, menus and the Customize panel stay opaque either way.
 - Home: See-through is the only thing that thins Home's card; the
   automatic thinning of Haze's dark card that #124 added was dropped for

@@ -20,6 +20,14 @@ pub const MAX_NAME_BYTES: usize = 120;
 /// text on the row's light fill over a bright window falls below 4.5:1.
 const ROW_TINT_FLOOR: f32 = 0.1;
 
+/// The least tint dark Acrylic keeps (owner decision 2026-10-24): 32/255 is the least byte at
+/// which white text on Graphite's #141519 reaches 4.5:1 over #124's teal disc (#23948A).
+const DARK_ACRYLIC_TINT_FLOOR: f32 = 32. / 255.;
+
+/// The least tint under dark Acrylic's white-film surfaces (selected row, field, pill, surface,
+/// card): below it white text on the selected row falls under 4.5:1 over the teal disc.
+const DARK_ACRYLIC_SURFACE_FLOOR: f32 = 0.343;
+
 /// Each stepped choice's range and step, in percent or degrees.
 pub const TRANSPARENCY: Range = Range::new(0, 90, 5);
 pub const EDGES: Range = Range::new(0, 40, 4);
@@ -257,27 +265,61 @@ impl ThemeSpec {
         )
     }
 
-    /// How opaque Syrinx's own tint is over the material: fully at 0 %, not at all at the
-    /// slider's top, so 90 % shows the material alone (owner decision 2026-10-22).
+    /// How opaque Syrinx's own tint is over the material: the slider's opacity, except that
+    /// dark Acrylic never drops below its floor (owner decisions 2026-10-22 and 2026-10-24).
     pub fn tint_opacity(&self) -> f32 {
+        let slider = self.slider_opacity();
+        if self.is_dark_acrylic() {
+            return slider.max(DARK_ACRYLIC_TINT_FLOOR);
+        }
+        slider
+    }
+
+    /// The slider's own opacity: fully at 0 %, not at all at its top.
+    fn slider_opacity(&self) -> f32 {
         let shown = f32::from(self.transparency.min(TRANSPARENCY.max));
         1. - shown / f32::from(TRANSPARENCY.max)
     }
 
-    /// Home's card follows the slider when asked, and a selected row keeps a little tint under
-    /// it however clear the window is.
+    fn is_dark_acrylic(&self) -> bool {
+        self.mode == Mode::Dark && self.material == Material::Acrylic
+    }
+
+    /// Home's card follows the slider when asked, and the light-film surfaces keep a little
+    /// tint under them however clear the window is.
     fn thin_for_the_material(&self, drawn: &mut Palette) {
         let tint = self.tint_opacity();
         if self.see_through_home {
-            drawn.card = with_alpha(drawn.card, alpha_of(drawn.card) * tint);
+            drawn.card = with_alpha(drawn.card, alpha_of(drawn.card) * self.slider_opacity());
         }
-        if tint < ROW_TINT_FLOOR {
-            // Under the row, (1 - backing)(1 - tint) of the window shows: 1 - the floor.
-            let backing = 1. - (1. - ROW_TINT_FLOOR) / (1. - tint);
-            drawn.row_selected = drawn
-                .row_selected
-                .over(with_alpha(self.background, backing));
+        if !self.is_dark_acrylic() {
+            drawn.row_selected = self.backed(drawn.row_selected, ROW_TINT_FLOOR, tint);
+            return;
         }
+        // Acrylic shows the bright desktop, so every white film needs a darker footing.
+        let floor = DARK_ACRYLIC_SURFACE_FLOOR;
+        for surface in [
+            &mut drawn.row_selected,
+            &mut drawn.field,
+            &mut drawn.pill,
+            &mut drawn.surface,
+        ] {
+            *surface = self.backed(*surface, floor, tint);
+        }
+        if !self.see_through_home {
+            drawn.card = self.backed(drawn.card, floor, tint);
+        }
+    }
+
+    /// `layer` over enough of the background that, with the window's tint, at least `floor`
+    /// of tint lies under it.
+    fn backed(&self, layer: Color, floor: f32, tint: f32) -> Color {
+        if tint >= floor {
+            return layer;
+        }
+        // Under the layer, (1 - backing)(1 - tint) of the window shows: 1 - the floor.
+        let backing = 1. - (1. - floor) / (1. - tint);
+        layer.over(with_alpha(self.background, backing))
     }
 
     fn ground(&self, see_through: bool) -> Ground {
@@ -711,17 +753,17 @@ mod tests {
                 );
             }
         }
-        // Clearer still, even white cannot reach 4.5:1 over the bright stand-in wallpaper,
-        // so the editor reports it instead of hiding it behind the preset's exceptions.
-        let clear = ThemeSpec {
-            transparency: 70,
+        // A background too pale for its tint lets white text fall under 4.5:1 over the bright
+        // stand-in wallpaper, so the editor reports it instead of hiding it behind the preset's
+        // exceptions.
+        let pale = ThemeSpec {
+            background: Color::hex(0x8A8E9A),
+            transparency: 90,
             ..ThemeSpec::glass()
         };
         assert!(
-            clear
-                .contrast_problems(accent)
-                .iter()
-                .any(|check| check.foreground == "text_muted" && check.background == "pill")
+            !readable_failures(&pale, accent).is_empty(),
+            "a pale dark Acrylic theme is reported"
         );
         // The preset draws the canvas's own inks, exceptions included.
         let preset = ThemeSpec::glass().preset_palette(accent, false);
@@ -790,9 +832,10 @@ mod tests {
             let Ground::Material { tint, .. } = theme.palette(accent, false).ground else {
                 panic!("{transparency}: no material");
             };
-            let expected = Color::rgba(16, 17, 24, 1. - f32::from(transparency) / 90.);
-            assert_eq!(tint, expected, "{transparency}");
-            assert!(tint.alpha < previous, "{transparency}");
+            // Dark Acrylic keeps its floor at the slider's clear end.
+            let opacity = (1. - f32::from(transparency) / 90.).max(DARK_ACRYLIC_TINT_FLOOR);
+            assert_eq!(tint, Color::rgba(16, 17, 24, opacity), "{transparency}");
+            assert!(tint.alpha <= previous, "{transparency}");
             previous = tint.alpha;
         }
     }
@@ -820,12 +863,13 @@ mod tests {
         assert!(card_at(&haze, 60, true).alpha < card_at(&haze, 25, true).alpha);
         assert!(card_at(&haze, 90, true).alpha < card_at(&haze, 60, true).alpha);
         let glass = ThemeSpec::from_retired_palette(PaletteId::Glass, accent).expect("glass");
-        for transparency in [20, 50, 90] {
-            assert_eq!(
-                card_at(&glass, transparency, false),
-                Color::rgba(255, 255, 255, 0.05)
-            );
+        let frost = Color::rgba(255, 255, 255, 0.05);
+        for transparency in [20, 50] {
+            assert_eq!(card_at(&glass, transparency, false), frost);
         }
+        // Clearer than the surface floor, the frost keeps a dark footing under it.
+        let footed = glass.backed(frost, DARK_ACRYLIC_SURFACE_FLOOR, DARK_ACRYLIC_TINT_FLOOR);
+        assert_eq!(card_at(&glass, 90, false), footed);
     }
 
     #[test]
@@ -978,17 +1022,32 @@ mod tests {
 
     #[test]
     fn the_slider_thins_the_tint_to_nothing_at_its_top() {
-        assert_eq!(acrylic(0, false).tint_opacity(), 1.);
-        assert_eq!(acrylic(45, false).tint_opacity(), 0.5);
-        assert_eq!(acrylic(90, false).tint_opacity(), 0.);
-        // No floor: at 90 % only Windows' own Acrylic is drawn behind the chrome.
-        assert_eq!(tint_of(&acrylic(90, false)).alpha, 0);
+        assert_eq!(mica(0, false).tint_opacity(), 1.);
+        assert_eq!(mica(45, false).tint_opacity(), 0.5);
+        assert_eq!(mica(90, false).tint_opacity(), 0.);
+        // No floor under Mica: at 90 % only Windows' own material is drawn behind the chrome.
+        assert_eq!(tint_of(&mica(90, false)).alpha, 0);
         let mut previous = u8::MAX;
         for transparency in (TRANSPARENCY.step..=TRANSPARENCY.max).step_by(5) {
-            let tint = tint_of(&acrylic(transparency, false));
+            let tint = tint_of(&mica(transparency, false));
             assert!(tint.alpha < previous, "{transparency}");
             previous = tint.alpha;
         }
+    }
+
+    #[test]
+    fn dark_acrylic_keeps_its_tint_floor_and_light_acrylic_does_not() {
+        assert_eq!(acrylic(45, false).tint_opacity(), 0.5);
+        for transparency in [80, 85, 90] {
+            let opacity = acrylic(transparency, false).tint_opacity();
+            assert_eq!(opacity, DARK_ACRYLIC_TINT_FLOOR, "{transparency}");
+        }
+        let light = ThemeSpec {
+            mode: Mode::Light,
+            background: Color::hex(0xE7EEF8),
+            ..acrylic(90, false)
+        };
+        assert_eq!(light.tint_opacity(), 0.);
     }
 
     #[test]
@@ -1052,16 +1111,6 @@ mod tests {
         assert_eq!(ThemeSpec::parse(&bad), Err(Unreadable));
     }
 
-    /// The steps at which every text role must reach 4.5:1. A dark theme under Acrylic is
-    /// checked over Glass's bright wallpaper discs (#124), where white text cannot reach it
-    /// past 55 %; the editor names those failures instead.
-    fn readable_steps(mode: Mode, material: Material) -> u16 {
-        match (mode, material) {
-            (Mode::Dark, Material::Acrylic) => 55,
-            _ => TRANSPARENCY.max,
-        }
-    }
-
     #[test]
     fn text_stays_readable_at_every_transparency_in_both_modes() {
         let accent = Accent::default();
@@ -1073,8 +1122,7 @@ mod tests {
         for (mode, background) in modes {
             for material in materials {
                 for see_through_home in [false, true] {
-                    let top = readable_steps(mode, material);
-                    for transparency in (0..=top).step_by(5) {
+                    for transparency in (0..=TRANSPARENCY.max).step_by(5) {
                         let theme = ThemeSpec {
                             mode,
                             background,
@@ -1090,13 +1138,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn unreachable_text_under_bright_acrylic_is_reported() {
-        let accent = Accent::default();
-        let failing = readable_failures(&acrylic(TRANSPARENCY.max, false), accent);
-        assert!(failing.iter().any(|label| label.contains("row_selected")));
     }
 
     fn readable_failures(theme: &ThemeSpec, accent: Accent) -> Vec<String> {

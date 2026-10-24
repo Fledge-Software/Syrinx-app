@@ -12,6 +12,45 @@ folder names.
 
 ## 2026-10-24
 
+- **Dark Acrylic keeps a minimum tint, and downloads get Syrinx's own
+  session list and flyout.** Three approvals, given together:
+  - **(1) A dark theme under Acrylic never drops below a 12.5 % tint**
+    (`DARK_ACRYLIC_TINT_FLOOR`, 32/255, in
+    `crates/syrinx-ui/src/theme.rs`). The slider still runs 0–90 %, but
+    Acrylic shows the bright desktop, and #124 checks a dark theme's text
+    over Glass's bright wallpaper discs; over the teal one (`#23948A`)
+    white text on Graphite's `#141519` reaches 4.5:1 only from that tint
+    up. The owner named 12 %; the contrast maths put the exact least
+    value at 32/255, so that is used. Translucent white surfaces (the
+    selected row, fields, the search pill, plugin surfaces and Home's
+    card while Home is Solid) keep at least a 0.343 tint under them,
+    the least at which white text on the selected row still reaches
+    4.5:1 there. Text is now readable at every step for every material,
+    in both modes, with Home Solid or See-through; Mica, Mica Alt and
+    light themes keep no window floor, and the Glass preset (50 %) and
+    the Haze preset are unchanged. This replaces the implementation note
+    below that a saved dark Acrylic theme was readable only up to 55 %.
+    Rejected: letting the tint fall to nothing, with a warning above about
+    55 %, because
+    a choice the slider offers should not be one that fails readability;
+    and text shadows, which would change every label's look and still
+    give no measurable contrast guarantee.
+  - **(2) Downloads (#143, #89): Syrinx keeps its own downloads list in
+    memory, for the session only.** Nothing about a download is written
+    to disk by Syrinx, and the list is cleared when Syrinx exits. It is
+    fed by WebView2's `DownloadStarting` event, read from Rust on every
+    page web view. That reads browser events only: it is not an IPC
+    handler, an injected script or a request filter, so the rules for
+    page web views and Google (`AGENTS.md`) still hold. It replaces
+    WebView2's default download dialog, which each tab draws for itself.
+    Rejected: a persisted history like Chrome's, which would keep a
+    record of the owner's downloads past the session; and keeping the
+    per-view default dialog, which belongs to one tab and does not look
+    like Syrinx.
+  - **(3) The downloads flyout matches the existing flyouts' style.**
+    Rejected: a new design for it, which would add a look the canvas
+    does not have.
+
 - **Phase 2 is approved: the plugin runtime (#25) and Notes (#35) are
   re-cut for WASM plugins, and all thirteen recommendations of the
   independent review are accepted as stated.** #27 asked for Plan 2 to 4's
@@ -142,9 +181,9 @@ folder names.
   mapping. This settles the three points the 2026-10-22 entry left for
   #124's merge. Implementation note, not part of the owner's decision: #124 checks a
   dark theme under Acrylic over Glass's bright wallpaper discs, where a
-  saved theme's text reaches 4.5:1 only up to 55 % (the 10 % row floor
-  covers Mica, Mica Alt and light themes to 90 %); above that the editor
-  names the failing pairs, as #124 already recorded for 70 %.
+  saved theme's text reached 4.5:1 only up to 55 % (the 10 % row floor
+  covers Mica, Mica Alt and light themes to 90 %); the dark-Acrylic floor
+  approved above has since made it readable to 90 %.
   Rejected: keeping #124's automatic thinning beside the Home choice, which
   would make one preset ignore the owner's per-theme setting.
 

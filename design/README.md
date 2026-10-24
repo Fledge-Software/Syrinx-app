@@ -175,7 +175,9 @@ Acrylic) still hold for custom themes.
 **Transparency, decided by the owner on 2026-10-22** (`docs/decisions.md`):
 with Acrylic, a see-through theme shows the windows behind Syrinx, frosted.
 The Transparency slider (0–90 %) lowers Syrinx's own tint until, at 90 %,
-only Windows' material is drawn. The backdrop is light or dark as the theme
+only Windows' material is drawn; a dark theme under Acrylic keeps a tint of
+about 12.5 % (32/255, owner decision 2026-10-24) so white text stays at
+4.5:1 over a bright desktop. The backdrop is light or dark as the theme
 is. The window background, title bar and sidebar follow the slider, and
 Home's card does too when the theme's Home choice is See-through. Web pages,
 the command palette, menus and the Customize panel stay opaque. There is no
