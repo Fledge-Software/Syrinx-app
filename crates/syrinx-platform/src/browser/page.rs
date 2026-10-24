@@ -131,6 +131,7 @@ impl Page {
         register_source(&view, id, events.clone(), destination.clone())?;
         register_navigation(&view, id, events.clone())?;
         lifecycle.register_navigation(&view)?;
+        lifecycle.register_audio(&view)?;
         register_process_failure(&view, id, events.clone(), shortcuts.clone())?;
         let permissions = super::permissions::Permissions::register(&view, id, events.clone())?;
         let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
