@@ -83,12 +83,14 @@ impl BrowserView {
         self.home.appearance = appearance;
         theme::apply(appearance.drawn_palette(&self.home.themes));
         theme::apply_component_theme(cx);
-        show_material(
-            appearance.material(&self.home.themes),
-            !theme::is_light(),
-            window,
-        );
+        show_material(self.window_material(), window);
         window.refresh();
+    }
+
+    /// The material Windows draws behind Syrinx's see-through windows, `None` when the drawn
+    /// theme is opaque (Reduce transparency included).
+    pub(super) fn window_material(&self) -> Option<Material> {
+        self.home.appearance.material(&self.home.themes)
     }
 
     pub(super) fn customize_panel(
@@ -338,19 +340,31 @@ impl BrowserView {
     }
 }
 
-/// Ask Windows for the theme's material, light or dark as the theme is; an opaque theme keeps
-/// Mica under its solid fill.
-fn show_material(material: Option<Material>, dark: bool, window: &Window) {
-    let backdrop = match material {
+/// Ask Windows for the theme's material behind the main window.
+fn show_material(material: Option<Material>, window: &Window) {
+    match super::native_handle(window) {
+        Ok(hwnd) => show_backdrop(hwnd, material, "window"),
+        Err(error) => eprintln!("Syrinx could not set the window's backdrop: {error}"),
+    }
+}
+
+/// Ask Windows for the theme's material behind the window `hwnd`, light or dark as the drawn
+/// theme is. The window must clear to transparent (GPUI's Mica appearance) and paint the
+/// theme's fill itself; an opaque theme keeps Mica under that solid fill. A failure leaves
+/// GPUI's Mica, which still shows the fill, so it is only reported.
+pub(super) fn show_backdrop(hwnd: isize, material: Option<Material>, noun: &str) {
+    let backdrop = backdrop_for(material);
+    if let Err(error) = backdrop::apply(hwnd, backdrop, !theme::is_light()) {
+        eprintln!("Syrinx could not set the {noun}'s {backdrop:?} backdrop: {error}");
+    }
+}
+
+/// The Windows backdrop for a theme's material; Mica when none shows.
+fn backdrop_for(material: Option<Material>) -> Backdrop {
+    match material {
         Some(Material::MicaAlt) => Backdrop::MicaAlt,
         Some(Material::Acrylic) => Backdrop::Acrylic,
         Some(Material::Mica | Material::None) | None => Backdrop::Mica,
-    };
-    let applied = super::native_handle(window)
-        .map_err(str::to_owned)
-        .and_then(|hwnd| backdrop::apply(hwnd, backdrop, dark).map_err(|error| error.to_string()));
-    if let Err(error) = applied {
-        eprintln!("Syrinx could not set the {backdrop:?} backdrop: {error}");
     }
 }
 
@@ -547,4 +561,62 @@ fn custom_accent_field(custom: &CustomAccent, palette: &Palette, window: &Window
         );
     }
     field
+}
+
+#[cfg(test)]
+mod backdrop_tests {
+    use syrinx_ui::Ground;
+
+    use super::*;
+    use crate::appearance::{SavedThemes, ThemeChoice};
+
+    fn appearance(theme: ThemeChoice, reduce_transparency: bool) -> Appearance {
+        Appearance {
+            theme,
+            accent: Accent::default(),
+            reduce_transparency,
+        }
+    }
+
+    /// The backdrop every Syrinx window that draws chrome (the main window and the sidebar
+    /// peek) asks for, and whether the fill painted over it hides it completely. The peek
+    /// once cleared to white under a see-through fill, which is how it turned white.
+    fn surface(theme: ThemeChoice, reduce: bool) -> (Backdrop, bool) {
+        let themes = SavedThemes::default();
+        let appearance = appearance(theme, reduce);
+        let ground = appearance.drawn_palette(&themes).ground;
+        let opaque = !matches!(ground, Ground::Material { .. })
+            && ground
+                .presented_colors()
+                .iter()
+                .all(|color| color.alpha == 0xFF);
+        (backdrop_for(appearance.material(&themes)), opaque)
+    }
+
+    #[test]
+    fn opaque_presets_paint_a_solid_fill_over_mica() {
+        for theme in [ThemeChoice::Graphite, ThemeChoice::Paper] {
+            for reduce in [false, true] {
+                assert_eq!(surface(theme, reduce), (Backdrop::Mica, true), "{theme:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn glass_shows_acrylic_unless_transparency_is_reduced() {
+        assert_eq!(
+            surface(ThemeChoice::Glass, false),
+            (Backdrop::Acrylic, false)
+        );
+        assert_eq!(surface(ThemeChoice::Glass, true), (Backdrop::Mica, true));
+    }
+
+    #[test]
+    fn every_material_has_its_own_backdrop() {
+        assert_eq!(backdrop_for(Some(Material::MicaAlt)), Backdrop::MicaAlt);
+        assert_eq!(backdrop_for(Some(Material::Acrylic)), Backdrop::Acrylic);
+        for opaque in [Some(Material::Mica), Some(Material::None), None] {
+            assert_eq!(backdrop_for(opaque), Backdrop::Mica);
+        }
+    }
 }

@@ -2,11 +2,12 @@
 
 use std::time::Instant;
 
-use gpui::{Pixels, WeakEntity};
+use gpui::{Pixels, WeakEntity, WindowBackgroundAppearance};
 use syrinx_platform::browser::{OverlayMonitor, overlay_monitor, overlay_pointer};
 use syrinx_ui::sidebar::{PEEK_EDGE_ZONE, PEEK_WIDTH, in_peek_zone};
 
 use super::{
+    customize::show_backdrop,
     owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup, round_popup_corners},
     peek_state::{HoverSample, PeekState, SAMPLE_INTERVAL},
     *,
@@ -43,8 +44,12 @@ impl Render for PeekView {
             Ok(content) => content,
             Err(_) => div(), // The owner has gone; native ownership also tears down this window.
         };
+        // The window's own fill goes under the rows: the sidebar paints none for a gradient
+        // or see-through theme, and this popup has no main window behind it.
+        let fill = page_card::window_fill_layer(None, window, cx);
         crate::controls::watch_pointer(div())
             .key_context("SyrinxPeek")
+            .relative()
             .size_full()
             .text_color(theme::text())
             .text_sm()
@@ -64,6 +69,7 @@ impl Render for PeekView {
             .on_action(cx.listener(|this, _: &Palette, window, cx| {
                 this.dispatch(PeekAction::Palette(false), window, cx);
             }))
+            .child(fill)
             .child(content)
     }
 }
@@ -464,6 +470,7 @@ fn open_peek_window(
     cx: &mut App,
 ) -> Result<PeekPopup, OwnedPopupError> {
     let browser = browser.clone();
+    let material = browser.read(cx).window_material();
     let spec = PopupSpec {
         title: "Syrinx sidebar peek",
         noun: "sidebar popup",
@@ -476,11 +483,15 @@ fn open_peek_window(
             focus: false,
             is_resizable: false,
             is_minimizable: false,
+            // Like the main window: clear to transparent over a system backdrop, and paint
+            // the theme's fill in `PeekView`, so a later theme change cannot expose a white clear.
+            window_background: WindowBackgroundAppearance::MicaBackdrop,
             ..Default::default()
         },
     };
     let popup = open_owned_popup(spec, cx, move |hwnd, popup, cx| {
         round_popup_corners(hwnd, "sidebar popup");
+        show_backdrop(hwnd, material, "sidebar popup");
         let closing_browser = browser.downgrade();
         popup.on_window_should_close(cx, move |window, cx| {
             if closing_browser
@@ -608,7 +619,7 @@ mod tests {
         let bounds = peek_bounds(main_bounds(-400., 100.), 800., 1., &monitor(-1920, 0, 1.));
         assert_eq!(
             bounds,
-            Bounds::new(point(px(-392.), px(136.)), size(px(264.), px(736.)))
+            Bounds::new(point(px(-392.), px(136.)), size(px(264.), px(750.)))
         );
     }
 
@@ -618,13 +629,13 @@ mod tests {
         let bounds = peek_bounds(main_bounds(1000., 100.), 800., 1.5, &monitor(0, 1920, 1.));
         assert_eq!(
             bounds,
-            Bounds::new(point(px(1512.), px(204.)), size(px(264.), px(1104.)))
+            Bounds::new(point(px(1512.), px(204.)), size(px(264.), px(1125.)))
         );
         // Reverse the scale direction: a 100% owner overlaps a 200% monitor on its left.
         let bounds = peek_bounds(main_bounds(-800., 100.), 800., 1., &monitor(-2560, 0, 2.));
         assert_eq!(
             bounds,
-            Bounds::new(point(px(-396.), px(68.)), size(px(264.), px(368.)))
+            Bounds::new(point(px(-396.), px(68.)), size(px(264.), px(375.)))
         );
     }
 
@@ -632,7 +643,7 @@ mod tests {
     fn placement_near_a_monitor_boundary_keeps_its_center_on_that_monitor() {
         let bounds = peek_bounds(main_bounds(-100., 100.), 800., 1., &monitor(-1920, 0, 1.));
         assert_eq!(bounds.origin, point(px(-264.), px(136.)));
-        assert_eq!(bounds.center(), point(px(-132.), px(504.)));
+        assert_eq!(bounds.center(), point(px(-132.), px(511.)));
     }
 
     #[test]

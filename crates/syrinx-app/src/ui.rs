@@ -111,7 +111,9 @@ use crate::{
     theme,
 };
 
-const FOOTER_HEIGHT: f32 = 28.;
+/// The status line under the page card: one caption line, kept thin so the page gets the room
+/// (owner, 2026-10-25; it was 28).
+const FOOTER_HEIGHT: f32 = 14.;
 
 actions!(
     browser,
@@ -2176,13 +2178,20 @@ impl Render for BrowserView {
                     .role(gpui::Role::Status)
                     .aria_label(self.failure.as_ref().unwrap_or(&self.message).clone())
                     .h(px(FOOTER_HEIGHT))
-                    .px_3()
+                    .px_2()
                     .bg(theme::ground())
                     .flex()
                     .items_center()
-                    .text_xs()
+                    .text_size(px(syrinx_ui::metrics::text::CAPTION))
+                    .line_height(px(FOOTER_HEIGHT))
                     .text_color(theme::icon())
-                    .child(self.failure.as_ref().unwrap_or(&self.message).clone()),
+                    // One line only; a long message ends in an ellipsis, and its label keeps it whole.
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(self.failure.as_ref().unwrap_or(&self.message).clone()),
+                    ),
             );
         self.essential_actions(chrome, cx)
     }
