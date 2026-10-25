@@ -23,7 +23,7 @@ pub(crate) enum SchemaGeneration {
     Preferences,
     /// Version 4 (P1-20): adds browsing history beside the version 3 session and preferences.
     History,
-    /// Version 5 (P1-27): records which D47 history clears this database has applied.
+    /// Version 5 (P1-27): records which D47 clears this database has applied.
     Deletions,
     /// Version 6 (P1-12): adds the owner's remembered site permission choices.
     Permissions,
@@ -60,7 +60,7 @@ impl SchemaGeneration {
     }
 
     /// Whether this generation (version 7 or later) stores per-site zoom levels.
-    fn has_site_zoom(self) -> bool {
+    pub(crate) fn has_site_zoom(self) -> bool {
         self >= Self::SiteZoom
     }
 }
@@ -129,7 +129,8 @@ const HISTORY_VISITS_TABLE: &str = "CREATE TABLE history_visits (
     visited_at INTEGER NOT NULL CHECK(visited_at >= 0)
 ) STRICT";
 
-// The newest D47 clear applied here; a restored copy replays the external journal past it.
+// The newest D47 clear applied here, of any category; a restored copy replays the external
+// journal past it. The name predates the zoom category (#121) and stays: version 5 is frozen.
 const DELETION_STATE_TABLE: &str = "CREATE TABLE history_deletion_state (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     applied_generation INTEGER NOT NULL CHECK(applied_generation >= 0)
