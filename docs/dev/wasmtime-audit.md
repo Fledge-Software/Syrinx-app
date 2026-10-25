@@ -11,6 +11,13 @@ added to Syrinx's `Cargo.toml` or `Cargo.lock`. #28 commits the real pin and
 reruns the two `cargo tree` commands below against its lockfile; where they
 disagree with this file, the lockfile is the truth and this file is updated.
 
+The file was revised the same day after the independent review of #158. The
+review found that the pin as #27 lists it fails Syrinx's own dependency gate
+on D9, the rule that keeps Syrinx off the network, which the first version
+missed; that is now its own section, "Windows networking (D9, DW-68)", and the
+owner's choice it raises is in the report's "Owner decides". It also corrected
+several counts, which are fixed below.
+
 The companion report, `docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md`,
 records the WIT parse-and-load check and the end-to-end run done the same day.
 
@@ -34,10 +41,13 @@ to 49 or later needs the owner.
 `anyhow`, `async`, `component-model`, `cranelift`, `parallel-compilation`,
 `runtime`, `std`, and the internal `once_cell`,
 `wasmtime-jit-icache-coherence` and `wasmtime-unwinder`. `async` is not
-asked for: `wasmtime-wasi 48.0.7` depends on `wasmtime-wasi-io 48.0.7`,
-whose `std` feature turns wasmtime's `async` on unconditionally, so it is
-compiled in and Syrinx simply never enables `Config::async_support` (note 10,
-"Reconciled: no async execution in 0.1.0"). `wasmtime-wasi` resolves with only
+asked for. It is turned on twice over: by `wasmtime-wasi-io 48.0.7`'s own
+dependency declaration on wasmtime (features `component-model`, `async` and
+`runtime`) and by `wasmtime-wasi`'s `p2` feature (`wasmtime/async`). So it is
+compiled in, and Syrinx simply never enables `Config::async_support` (note 10,
+"Reconciled: no async execution in 0.1.0"). Without `wasmtime-wasi`, option (b)
+in the report's "Owner decides", nothing asks for it: wasmtime alone resolves
+exactly #27's six features plus the internal three. `wasmtime-wasi` resolves with only
 `p2`; `wasmtime-wasi-io` with only `std`. Nothing in the lockfile names Winch,
 the pooling allocator, `component-model-async`, WASI 0.3 (`p3`) or
 `wasi-http`: those stay off, which is where most of 2026's advisories sit
@@ -83,17 +93,21 @@ the pooling allocator, `component-model-async`, WASI 0.3 (`p3`) or
 | | Lockfile (all platforms) | Compiled on Windows |
 |---|---|---|
 | Third-party crates in the seeded resolution | 197 | 170 |
-| New crate names against Syrinx's `Cargo.lock` | 54 | 48 |
+| New crates against Syrinx's `Cargo.lock`, as names / name-and-version pairs | 52 / 54 | 47 / 48 (`io-lifetimes` comes at two versions) |
 | New versions of crates Syrinx already has | 4 (`addr2line 0.26.1`, `gimli 0.33.0`, `mach2 0.6.0`, `object 0.39.1`) | 2 (`gimli 0.33.0`, `object 0.39.1`) |
 | Crates under `Apache-2.0 WITH LLVM-exception` alone | 32 | 31 |
 
-The 27 lockfile-only crates that Windows never compiles are the usual
-platform shards (`windows_*` for other targets, `linux-raw-sys`,
-`rustix-linux-procfs`, `memfd`, `mach2`, `r-efi`, `wasi 0.11`) plus
+The 27 lockfile-only crates that Windows never compiles are of two kinds.
+Most are platform shards another target would compile (`windows_*` for other
+targets, `linux-raw-sys`, `rustix-linux-procfs`, `memfd`, `mach2`, `r-efi`,
+`wasi 0.11`). Six are compiled on no platform with these features:
 `wasmtime-internal-jit-debug`, `addr2line`, `cpp_demangle`, `rustc-demangle`,
-`embedded-io` (two versions) and `slab`, which wasmtime's Linux and macOS
-debugging paths pull. Research note 10 counted 59 new name-and-version pairs at
-49.0.4; at 48.0.7 against today's lockfile it is 58 (50 compiled on Windows),
+`embedded-io` (two versions) and `slab`, for which `cargo tree --target all -i`
+prints nothing. They are in the lockfile only because `Cargo.lock` records
+optional dependencies too; `jit-debug`, for example, serves wasmtime's
+`debug-builtins` and `profiling` features, which stay off. Research note 10
+counted 59 new name-and-version pairs at 49.0.4; at 48.0.7 against today's
+lockfile it is 58 (54 new crates and 4 new versions; 50 compiled on Windows),
 the same shape.
 
 ## Licences
@@ -111,11 +125,17 @@ archives below; the findings that matter:
    `pulley-interpreter` and `pulley-macros` at 48.0.7, `wasmtime`,
    `wasmtime-environ`, `wasmtime-wasi`, `wasmtime-wasi-io` and ten
    `wasmtime-internal-*` at 48.0.7, `regalloc2 0.15.2`, `target-lexicon 0.13.5`
-   and `winx 0.36.4`. Decision 2 said "about 31"; the 32nd is
-   `wasmtime-internal-jit-debug`, which the lockfile holds for Linux and macOS
-   and Windows never compiles. No crate outside the family carries the
-   exception alone.
-2. **Fourteen crates of that family ship no licence file in their archive**:
+   and `winx 0.36.4`. Decision 2 said "about 31", counted from the
+   Windows-compiled graph at 49.0.4 (note 10, section 1); the 32nd is
+   `wasmtime-internal-jit-debug`, which the lockfile records but no platform
+   compiles with these features. No crate outside the family carries the
+   exception alone. One reading is made here and should be confirmed: decision
+   2 covers "the pinned wasmtime 48.0.x versions and the Cranelift 0.135.x
+   versions they require", and `regalloc2`, `target-lexicon` and `winx` are on
+   neither line. They are named in the family, so this audit reads them as
+   covered at the versions the 48.0.7 pin requires of them; a later pin bump
+   that moves one of them relies on the same reading and should say so.
+2. **Fifteen crates of that family ship no licence file in their archive**:
    `cranelift-assembler-x64`, `cranelift-assembler-x64-meta`, `cranelift-bitset`,
    `cranelift-isle`, `cranelift-srcgen`, `pulley-interpreter`, `pulley-macros`,
    `wasmtime-internal-component-macro`, `-component-util`, `-core`,
@@ -124,16 +144,18 @@ archives below; the findings that matter:
    `Apache-2.0 WITH LLVM-exception`, and all of them live in the
    `bytecodealliance/wasmtime` repository, whose `LICENSE` at tag `v48.0.7` is
    the Apache License 2.0 with the "LLVM Exceptions to the Apache 2.0 License"
-   appended (fetched through the GitHub API on 2026-10-24). The other eighteen
-   carry the same text in their archive. `regalloc2`, `target-lexicon` and
+   appended (fetched through the GitHub API on 2026-10-24); each archive's
+   `.cargo_vcs_info.json` names commit `c6846e13f6`, which is that tag. The
+   other seventeen carry the same text in their archive. `regalloc2`, `target-lexicon` and
    `winx` carry it in their repositories' `LICENSE` and in their archives.
 3. **Sixteen crates offer `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR
    MIT`; MIT is elected** for each (`rustix`, `cap-primitives`,
    `fs-set-times`, `io-extras`, `io-lifetimes` 2.0.4 and 3.0.1,
    `ambient-authority`, the `wasm-tools` crates `wasmparser`, `wasm-encoder`,
    `wasm-metadata`, `wasmprinter`, `wit-parser` and `wit-component` at 0.254.2,
-   and the Linux-only `linux-raw-sys` and `rustix-linux-procfs`). Their
-   archives carry all three licence files.
+   the Linux-only `linux-raw-sys` and `rustix-linux-procfs`, and
+   `wasi 0.11.1+wasi-snapshot-preview1`, which Syrinx's lockfile already
+   holds). Their archives carry all three licence files.
 4. **The existing narrow approvals hold unchanged in the seeded resolution.**
    `unicode-ident` stays at **1.0.26**; `foldhash` resolves to **0.2.0** only
    (Zlib, through `hashbrown 0.17.1`); the eighteen Unicode-3.0 crates
@@ -153,8 +175,13 @@ archives below; the findings that matter:
 
 A fresh resolution of the same declaration differs from the seeded one in 21
 crates. Three of them touch approvals or advisories, which is why #28 must add
-the dependency without a blanket `cargo update`, and why `xtask`'s dependency
-policy should keep refusing the moves:
+the dependency without a blanket `cargo update`. **Nothing refuses these moves
+today.** Syrinx-app's `cargo xtask check-deps` checks crate boundaries,
+Windows features and network reach; nothing in `crates/xtask` reads a
+`license` field or pins a version, so a `cargo update` that moved
+`unicode-ident` to 1.0.27 would pass the gate. The exact-version approvals are
+enforced only by review until #28 ports the plugin template's licence check
+(the report's "What #28 must do differently", item 3):
 
 | Crate | Seeded (Syrinx today) | Fresh | Why it matters |
 |---|---|---|---|
@@ -162,9 +189,10 @@ policy should keep refusing the moves:
 | `icu_*`, `tinystr`, `yoke`, `zerovec`, `zerovec-derive` | 2.3.0/2.3.1, 0.8.4, 0.8.3, 0.11.8, 0.11.6 | 2.4.0, 0.8.5, 0.8.4, 0.11.9, 0.11.7 | the Unicode-3.0 approval is per exact version (`docs/dev/integrated-preview-dependencies.md`) |
 | `tokio` | 1.53.2 | 1.54.1 | 1.53.2 is in RUSTSEC-2026-0386's range (below); 1.54.1 is patched |
 
-The other moves are ordinary: `cc` 1.7.0 to 1.10.0, `find-msvc-tools` 0.1.14
-to 0.1.15, `crc32fast`, `equivalent`, `libc`, `serde_json`, `smallvec`, `syn`
-and `generic-array` one patch each.
+The other eight moves are ordinary: `cc` 1.7.0 to 1.10.0, `serde_json`
+1.0.151 to 1.0.154 (the workspace pins `=1.0.151` anyway), `syn` 3.0.6 to
+3.0.9 (`syn` 2.0.119 stays), and `find-msvc-tools`, `crc32fast`, `equivalent`,
+`libc` and `smallvec` one patch each.
 
 ## Advisories
 
@@ -181,11 +209,15 @@ the locked versions, and it is Syrinx's own `tokio 1.53.2`, not wasmtime's:**
   (`cargo tree -i tokio --target x86_64-pc-windows-msvc` prints nothing);
   `wasmtime-wasi` would compile it for the first time, with the features
   `rt`, `rt-multi-thread`, `net`, `io-util`, `io-std`, `sync` and `time`.
-  **Recommendation for #28:** move `tokio` to a patched version (a fresh
-  resolution picks 1.54.1) in the same change, so the first build that compiles
-  tokio compiles a clean one; that is a one-crate lockfile move within the
-  approved shape, not a new dependency. RUSTSEC-2026-0384, also on `tokio`,
-  concerns 1.54.0 only and leaves 1.53.2 unaffected.
+  **Recommendation for #28, if it keeps `wasmtime-wasi`:** move `tokio` to
+  **1.53.3** in the same change (`cargo update -p tokio --precise 1.53.3`), so
+  the first build that compiles tokio compiles a clean one. 1.53.3 is the
+  smallest patched version; it has the same dependency list as 1.53.2 and
+  stays off the 1.54 line, whose 1.54.0 was yanked and is the only version
+  RUSTSEC-2026-0384 affects. 1.54.1 is also clean, but that a fresh resolution
+  picks it is no reason to choose it. The move is one crate in the lockfile
+  within the approved shape, not a new dependency. Without `wasmtime-wasi`
+  (option (b)), the host never compiles tokio and #28 does not need the move.
 
 **wasmtime's own record at 48.0.7.** 64 advisories name `wasmtime` and 9 name
 `wasmtime-wasi`; 48.0.7 is inside the patched or unaffected range of every
@@ -203,11 +235,18 @@ here too, because none of those features is in the resolved graph.
 
 One point to carry into #28: `wasmtime-wasi`'s `p2` feature compiles its
 filesystem implementation (`cap-primitives`, `fs-set-times`, `io-extras`,
-`winx`) even though Syrinx gives plugins no preopened directory. The
-filesystem-escape advisories are therefore patched code that is compiled but
-unreachable; note 10's rule that plugins reach files only through Syrinx's own
-host functions is what keeps it unreachable, and the test host's refusal of
-any component importing `wasi:filesystem` is the check that it stays so.
+`winx`) and its sockets implementation, even though Syrinx gives plugins no
+preopened directory and no network. The filesystem-escape advisories are
+therefore patched code that is compiled but unreachable, and refusing a
+component that imports `wasi:filesystem` does not come for free:
+`wasmtime_wasi::p2::add_to_linker_sync` links `wasi:filesystem/types`,
+`wasi:sockets/tcp`, `udp` and `udp-create-socket` along with the rest
+(`wasmtime-wasi-48.0.7/src/p2/mod.rs`, lines 460 to 471). The throwaway shows
+it: a guest that lists `/` loads on that linker and gets "No such file or
+directory" back instead of being refused. A host that keeps `wasmtime-wasi`
+must link the interfaces the standard library needs one by one, so that a
+filesystem or socket import fails at instantiation with its name. Without
+`wasmtime-wasi` (option (b)) that code is not compiled at all.
 
 The remaining 114 matches are older advisories whose patched range contains the
 locked version (`smallvec`, `once_cell`, `hashbrown`, `rand_core`, `mio`,
@@ -215,6 +254,74 @@ locked version (`smallvec`, `once_cell`, `hashbrown`, `rand_core`, `mio`,
 `shlex`, `sha2`, `chacha20`, `generic-array`, `socket2`, `slab`, `bytes`,
 `rand`, `anyhow`, `tracing` and six more on `tokio`). They are listed in the
 appendix in the shape `docs/dev/fulltext-audit.md` used.
+
+## Windows networking (D9, DW-68)
+
+D9 keeps Syrinx off the network except where the owner allowed it, and DW-68
+(2026-10-14, `docs/decisions.md`) made `cargo xtask check-deps` read every
+networking feature Cargo resolves on `windows`, `windows-sys` and `winapi`.
+The owner approved exactly eight entries, each with its requesting crates, in
+`THIRD_PARTY_NETWORK_FEATURES` (`crates/xtask/src/dependency_policy/resolved_windows.rs`);
+any new requester, version or feature fails the gate. Main's own gate, built
+from main's source at `65668b2`, was run against a scratch copy of main with a
+`crates/syrinx-plugin-host` holding the declaration, in four variants:
+
+| The host declares | Host added to `needs_shell_isolation` | `cargo xtask check-deps` |
+|---|---|---|
+| `wasmtime` and `wasmtime-wasi`, as pinned above | no | fails: `windows-sys 0.60.2: resolved feature Win32_Networking_WinSock exposes Windows networking (D9); requested by io-extras 0.19.0` |
+| `wasmtime` and `wasmtime-wasi` | yes | fails with that line and `syrinx-plugin-host -> wasmtime-wasi -> tokio: a headless crate reaches a network client (D9)` |
+| `wasmtime` alone, same features | no | `Dependency boundaries passed.` |
+| `wasmtime` alone | yes | `Dependency boundaries passed.` |
+
+Unmodified main passes too. The second row matters because #28 says the host
+"never depends on GPUI, WebView2 or `syrinx-platform`", and the natural way to
+enforce that is to add the host to `needs_shell_isolation` in
+`crates/xtask/src/dependency_policy.rs`; that one predicate also drives the
+headless network-reach rule, which has no list of approved paths.
+
+**Where the networking comes from**, all of it through `wasmtime-wasi`:
+
+- `io-extras 0.19.0`, reached as `wasmtime-wasi -> cap-primitives 4.0.3 ->
+  io-extras`, asks `windows-sys` (range `>=0.52, <=0.60`, so the 0.60.2 build
+  Syrinx already shares with `notify 8.2.0`) for `Win32_Foundation`,
+  `Win32_Networking_WinSock` and `Win32_System_Console`. No approved entry
+  covers WinSock on that build.
+- `tokio` with `net`, `rt-multi-thread`, `rt`, `time`, `sync`, `io-std` and
+  `io-util`. It brings `mio 1.2.4` and `socket2 0.6.5`, whose WinSock on
+  `windows-sys 0.61.2` is already in the eighth approved entry, so the gate
+  does not flag them.
+- On Windows `wasmtime-wasi` also asks `rustix 1.1.5` for `net`; `rustix
+  1.1.5` is already a requester in the eighth entry.
+
+No feature selection removes them. `wasmtime-wasi 48.0.7`'s features are
+`p0`, `p1`, `p2` and `p3`, its only optional dependency is `wiggle` (for
+`p1`), and `tokio` and `cap-primitives` are unconditional. `wasmtime` alone,
+with #27's features, resolves no networking feature at all.
+
+**Is any of it reachable?** With an empty `WasiCtx`, no:
+`SocketAddrCheck::default()` refuses every address
+(`wasmtime-wasi-48.0.7/src/sockets/mod.rs`, line 161), and TCP, UDP and name
+lookup are each off (`AllowedNetworkUses` derives `Default`, all `false`).
+But `add_to_linker_sync` links the socket interfaces, and the first blocking
+WASI call starts `wasmtime-wasi`'s shared tokio runtime with I/O enabled
+(`src/runtime.rs`, line 28). What keeps plugins offline is then two choices in
+#28's code, what it links and what it grants, rather than the graph the gate
+reads.
+
+**Without `wasmtime-wasi`** (measured in the same scratch workspace, seeded
+from main's lockfile): the host compiles 103 third-party crates on Windows
+instead of 170, of which 37 are new to Syrinx plus the same two new versions
+(`gimli 0.33.0`, `object 0.39.1`); the lockfile gains 47 name-and-version
+pairs instead of 58. The 67 crates that leave the host's Windows build include
+`tokio`, `mio`, `socket2`, `rustix`, `cap-primitives`, `io-extras`, `winx`,
+`url` and the eighteen Unicode-3.0 crates it pulls, and four of the
+LLVM-exception family (`wasmtime-wasi`, `wasmtime-wasi-io`, `winx` and
+`wasmtime-internal-fiber`, the async fiber stack), leaving 27 of them compiled.
+Several of those crates stay in Syrinx's build through other crates; the point
+is that the plugin host no longer needs them.
+
+The owner's options, with the evidence for each and a recommendation, are in
+the report's "Owner decides: WASI and the network gate".
 
 ## Maintenance
 
@@ -295,7 +402,7 @@ Declared licence strings as the archives' `Cargo.toml` state them, with the elec
 
 ## Maintenance of the crates new to Syrinx's lockfile
 
-From crates.io on 2026-10-24. None of the locked versions is yanked. Crates Windows never compiles are marked; they are in the lockfile for other platforms.
+From crates.io on 2026-10-24. None of the locked versions is yanked. Crates Windows never compiles are marked; they are in the lockfile for other platforms or for features left off.
 
 | Crate | Locked | Published | Latest stable | Compiled on Windows | Repository |
 |---|---|---|---|---|---|

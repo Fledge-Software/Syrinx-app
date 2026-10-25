@@ -615,8 +615,8 @@ Rust dependency (owner decision 2026-10-13; `embed-resource` was rejected).
 
 ## #27: the wasmtime 48.0.7 pre-build audit, 2026-10-24
 
-The plugin host that #28 builds adds `wasmtime =48.0.7` and
-`wasmtime-wasi =48.0.7` to `crates/syrinx-plugin-host` only. Because that
+The plugin host that #28 builds adds `wasmtime =48.0.7`, and as #27 lists
+it `wasmtime-wasi =48.0.7`, to `crates/syrinx-plugin-host` only. Because that
 graph adds about fifty crates and a licence the owner approved by name
 (`Apache-2.0 WITH LLVM-exception`, decision 2 of 2026-10-21), its audit has
 its own file, `docs/dev/wasmtime-audit.md`, in the shape of
@@ -627,3 +627,10 @@ new crate, and which crates are new to this lockfile. It was done under #27
 in a throwaway project outside the repository, so nothing in this workspace
 changes until #28 commits the pin; #28 reruns its `cargo tree` commands
 against the real lockfile and updates that file where they disagree.
+
+With `wasmtime-wasi` the pin fails this workspace's D9 network gate
+(`io-extras 0.19.0` asks `windows-sys 0.60.2` for WinSock), so whether
+`wasmtime-wasi` stays is an open owner decision; the audit's "Windows
+networking (D9, DW-68)" section and
+`docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md`, "Owner decides",
+have the evidence and the options.
