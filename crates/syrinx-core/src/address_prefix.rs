@@ -1,6 +1,8 @@
 //! Decides whether typed text is the exact start of a known page's address, so Enter opens that
 //! page only on a letter-for-letter match and searches the web otherwise (#127).
 
+use std::net::IpAddr;
+
 /// How typed text continues into a known page's address.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AddressPrefix {
@@ -19,7 +21,7 @@ pub enum AddressPrefix {
 /// Compares `typed` with `address` after dropping the scheme and one leading `www.` from both.
 /// Hosts ignore case and paths do not; only a prefix counts, so `example` never matches
 /// `myexample.test`. Ports, queries and fragments are never compared, and a Unicode host never
-/// matches the punycode form `url` stores.
+/// matches the punycode form `url` stores. A typed IP address matches only the same address.
 pub fn address_prefix(typed: &str, address: &str) -> AddressPrefix {
     let Some((typed_host, typed_path)) = typed_parts(typed) else {
         return AddressPrefix::No;
@@ -31,8 +33,10 @@ pub fn address_prefix(typed: &str, address: &str) -> AddressPrefix {
         return AddressPrefix::No;
     };
     let host = without_www(without_root_dot(host)).to_lowercase();
-    // Text without a path may stop anywhere inside the host.
+    // Text without a path may stop anywhere inside the host, unless it is an IP address:
+    // `192.0.2.1` is a whole machine, never the start of `192.0.2.10`.
     if typed_path.is_none()
+        && !is_ip_literal(&typed_host)
         && let Some(rest) = host.strip_prefix(typed_host.as_str())
         && !rest.is_empty()
     {
@@ -74,6 +78,12 @@ fn typed_parts(typed: &str) -> Option<(String, Option<&str>)> {
     };
     let host = without_www(without_root_dot(&host.to_lowercase())).to_owned();
     (!host.is_empty()).then_some((host, path))
+}
+
+/// Whether a typed host is an IPv4 or IPv6 address, bracketed or not. A leading `[` counts on
+/// its own, since only an IPv6 address starts with one, even before its `]` is typed.
+fn is_ip_literal(host: &str) -> bool {
+    host.starts_with('[') || host.parse::<IpAddr>().is_ok()
 }
 
 fn without_www(host: &str) -> &str {
@@ -163,6 +173,29 @@ mod tests {
                 ("www.", "https://example.test/"),
                 ("example", "about:blank"),
                 ("example", "not an address"),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_typed_ip_address_is_never_the_start_of_another_ip_address() {
+        // `192.0.2.1` and `192.0.2.10` are different machines, not one host still being typed.
+        assert_prefix(
+            AddressPrefix::No,
+            &[
+                ("192.0.2.1", "https://192.0.2.10/"),
+                ("192.0.2.1", "https://192.0.2.100/admin"),
+                ("[2001:db8::1]", "https://[2001:db8::10]/"),
+                ("[2001:db8::1", "https://[2001:db8::10]/"),
+                ("2001:db8::1", "https://[2001:db8::10]/"),
+            ],
+        );
+        assert_prefix(
+            AddressPrefix::HostAndPath,
+            &[
+                ("192.0.2.1", "https://192.0.2.1/"),
+                ("192.0.2.1/do", "https://192.0.2.1/docs"),
+                ("[2001:db8::1]", "https://[2001:db8::1]/"),
             ],
         );
     }
