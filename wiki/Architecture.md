@@ -118,9 +118,9 @@ the palette both read this one model, never per-feature code. Changes are
 persisted as they happen, through a session worker, so a crash loses at most
 the last uncommitted change. The one planned exception to "Rust owns state"
 is the text editor for Notes and Forge: one host-provided CodeMirror 6
-component, which Syrinx ships in its own plugin view (2026-10-21), owns the
-live buffer while typing, and Rust saves only when both copies' checksums
-match (D28).
+component, which Syrinx ships on its own editor origin (2026-10-21), owns
+the live buffer while typing, and Rust saves only when both copies'
+checksums match (D28).
 
 ## Storage
 

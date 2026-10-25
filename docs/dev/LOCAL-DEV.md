@@ -124,13 +124,13 @@ does not establish D38. Fix formatting with
 `cargo fmt --all`. A passing gate is required before review and merge, and
 it does not replace inspecting a window once a slice introduces UI.
 
-On GitHub, `.github/workflows/gate.yml` runs the same `cargo xtask check`
-on every pull request and every push to `main`, on a `windows-latest`
-runner with the pinned toolchain (Rust 1.97.1) and the locked dependencies
-fetched first, through `.github/scripts/run-gate.sh`, which keeps the log
-and puts its end in the run summary. A separate Linux job checks only
-formatting, so a formatting slip is reported within a minute or two. The
-weekly release runs the gate the same way before it builds anything
+On GitHub, `.github/workflows/gate.yml` runs the same `cargo xtask check` on
+every pull request and every push to `main`, on a `windows-latest` runner
+with the pinned toolchain (Rust 1.97.1) and the locked dependencies fetched
+first, through `.github/scripts/run-gate.sh`, which keeps the log and, when
+the gate fails, puts its end in the run summary. A separate Linux job checks
+only formatting, so a formatting slip is reported within a minute or two.
+The weekly release runs the gate the same way before it builds anything
 (`docs/releasing.md`).
 
 ## Why the profile is explicit
