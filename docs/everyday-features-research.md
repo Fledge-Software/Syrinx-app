@@ -89,9 +89,10 @@ voices may add distribution costs. Do not make a claim of zero operating cost.
 The everyday problem is sending a travel document, receipt or note attachment
 without creating a permanent public copy. Recommend evaluating immutable,
 explicitly selected attachments/exports with expiring and revocable links.
-Keep local file export free. If viable, include a bounded sharing allowance
-within Sync; sell extra capacity only after measuring actual costs rather than
-creating another base subscription.
+Keep local file export free. The owner subsequently approved bounded sharing
+within Sync at no additional subscription charge, and repeatable storage units
+of 30 GB for $2/month. These increase storage only; sharing limits stay fixed.
+The paid-services plan records the authoritative prices and limits.
 
 This requires a separate recipient-access and key protocol. Private Sync alone
 does not support safe public links. Define recipient keys or link secrets,
@@ -111,8 +112,12 @@ rights for Syrinx.
 
 Costs to measure: stored ciphertext and versions, transfer/provider charges,
 request volume, abuse handling, recovery and support. Public downloads can cost
-much more than the subscriber's own device sync. Define a traffic budget and
-failure policy before recommending a price.
+much more than the subscriber's own device sync. Validate costs against the
+approved 50 GB individual / 250 GB household monthly shared-download budgets
+and the paid plan's safe exhaustion policy before launch. R2 holds all encrypted
+Sync content; never store file bytes in Supabase, which holds accounts,
+subscriptions and minimal service metadata. The paid plan recommends device-side
+AES-256-GCM and requires independent protocol and key-management review.
 
 ### 2. Household shared Notes collections
 
