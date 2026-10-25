@@ -4,7 +4,7 @@
 >
 > Moved from `docs/research/04-forge-and-notes.md` ([original at af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/04-forge-and-notes.md)) on 2026-10-16.
 >
-> **Updated 2026-10-25:** the v1 table view this note recommends (sections 10 and "Build first") is no longer part of Notes. The owner moved typed properties, table views and `.base` files to a separate, later plugin (#167) and asked that Notes organise notes in folders instead ([`docs/decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/decisions.md) § 2026-10-25). Section 10 stays as reasoning for that later plugin.
+> **Updated 2026-10-25:** the v1 table view this note recommends (section 10, the "Links and views" point of "Short answer", and the table view under "What this means for Syrinx v1" → "Notes") is no longer part of Notes. The owner moved typed properties, table views and `.base` files to a separate, later plugin (#167) and asked that Notes organise notes in folders instead ([`docs/decisions.md`](https://github.com/Fledge-Software/Syrinx-app/blob/main/docs/decisions.md) § 2026-10-25). Section 10 stays as reasoning for that later plugin.
 
 # Forge and Notes: editor, syntax, language servers, git, terminal, run control and notes
 
