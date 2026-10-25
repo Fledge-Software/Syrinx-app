@@ -14,6 +14,12 @@
 > monthly payments and retain the same monthly allowance; Sync will include
 > passwords once a password manager exists; VPN protection is device-wide,
 > with Guardian the preferred provider to evaluate.
+>
+> **Accounts follow-up, 2026-10-25:** Supabase is the owner's preferred database
+> candidate, using the existing Fledge Software account if suitable. This plan
+> adds the recommended private services repository, account/subscription schema
+> and password-manager security boundaries. No account was inspected and no
+> repository, Supabase project or paid resource was created by this work.
 
 ## 1. How to use this document
 
@@ -230,6 +236,160 @@ Syrinx's backend verifies subscription events and owns service entitlements.
 Never trust a return URL, browser-stored flag or desktop claim of payment.
 Do not put payment or provider secrets in the distributed app.
 
+### Repository and deployment ownership
+
+Recommend a new **private** `Fledge-Software/Syrinx-services` repository for the
+hosted account, subscription and service backend. The name is proposed; the
+owner creates the repository and chooses its final name and location. SVC-01
+also produces an architecture report covering accounts and subscriptions, so
+that reasoning is preserved with the code.
+
+| Location | Contents and responsibility |
+|---|---|
+| Public `Syrinx-app` | Browser service UI, local encryption, permission enforcement and a public versioned client/API contract. |
+| Existing plugin repositories | Notes/Forge behavior and approved host-tool integration; no shared provider secrets. |
+| Proposed private `Syrinx-services` | API implementation, database migrations and access policies, Stripe processing, AI ledger/gateway, sync authorization, Guardian provisioning, synthetic tests and deployment/operations documentation. |
+| Hosted Supabase project | Private customer/service records and managed authentication. The repository holds schema definitions, never production database contents. |
+| Private object storage | Encrypted sync blobs; Supabase Storage and R2 remain alternatives to evaluate for this layer. |
+| Hosting secret manager | Stripe/webhook, model-provider, Guardian, database and Supabase server credentials. No secrets in either public or private Git history. |
+
+Public source visibility is not the security boundary. A modified desktop app
+can claim any subscription, so the backend must authorize each protected
+operation and enforce the authoritative balance. Keeping the backend private
+is an organizational/commercial choice, not a replacement for access controls.
+Guardian's contract may separately constrain publication of its components.
+
+Keep the existing public plan and issue tracking in `Syrinx-app` unless the
+owner later changes the tracking policy. Private implementation pull requests
+can reference those issues; public issue bodies and CI output contain only
+sanitized architecture and synthetic evidence. No work is placed in a Fledge
+application repository. Backend API compatibility is versioned so public
+browser releases do not require users to read the private repository.
+
+### Supabase recommendation and project isolation
+
+Recommend **Supabase Auth plus managed PostgreSQL** for the initial service.
+The combined identity and relational database fit accounts with several
+subscriptions, billing-event reconciliation and transactional usage budgets.
+Keep the choice provisional until SVC-01 confirms deployment region, auth
+flows, costs, recovery and the service API runtime. The alternative is a
+managed PostgreSQL service with separate identity and API hosting; that offers
+more independent choices but adds integration and operations work. There is
+no identified requirement in this plan that justifies that extra work yet.
+
+The owner reports an existing free Supabase account for Fledge Software.
+Use that administrative account/organization if capacity and permissions allow,
+but create a **dedicated Syrinx project**. Do not share Fledge's database,
+`auth.users`, credentials, storage buckets or migrations. Sharing an
+organization still shares some administrative and billing exposure; review
+membership and billing before selecting it. No project-slot availability or
+account plan has been independently verified.
+
+Separate synthetic development/staging from production. Start with local or
+dedicated development infrastructure; no production customer data is copied
+into fixtures, previews or agent environments. Project creation, paid upgrades,
+email/domain setup and secret installation are owner/operator tasks.
+
+Supabase's published Free plan currently includes two active projects,
+500 MB database storage, 50,000 monthly active users, 1 GB file storage and
+5 GB egress plus 5 GB cached egress. Inactive free projects can pause after
+one week. These are platform quotas, not per-customer entitlements; Free's
+1 GB does not fund the proposed 10 GB per Sync subscriber. [Source S9](#9-sources)
+
+Use Free for development and validation. For paid production, recommend
+budgeting **Pro from $25/month**, with the first project included and additional
+projects starting at $10/month under the current pricing. Region, compute,
+usage and organization-level billing affect the actual bill. This is part of,
+not an addition to, the earlier $25–$100 shared-backend planning allowance.
+SMTP email, API hosting, encrypted object storage, AI and VPN costs need
+separate estimates; upgrading is not authorized by writing this plan.
+[Source S9](#9-sources)
+
+Configure a production email sender for confirmation/recovery messages.
+Supabase's default SMTP is intended for testing and restricts recipients and
+volume. A paid Supabase plan alone does not configure production email.
+[Source S12](#9-sources)
+
+### Account and subscription data model
+
+These are proposed logical records, not an approved migration. Use a stable
+internal account ID linked to the Supabase Auth user ID. Email may change and
+must not be the subscription ownership key. An account can simultaneously hold
+annual Sync, monthly AI and VPN with a different billing period.
+
+| Logical record | Purpose | Authority |
+|---|---|---|
+| Account | Auth-user linkage, account state and minimum profile data. | Supabase establishes identity; the service controls lifecycle fields. |
+| Billing customer | Stable account-to-Stripe-customer mapping. | Backend only; never accept a client-chosen Stripe customer as proof of ownership. |
+| Subscription | Service, Stripe subscription/item and price IDs, currency, interval, status, period dates and cancellation. | Verified Stripe state reconciled by the backend. |
+| Entitlement | Service/tier access and effective expiry or grace policy. | Backend only; never user-editable profile metadata. |
+| AI allowance period | Exact retail allowance, monthly boundary and plan version. | Backend; annual payment creates monthly periods, not an immediate annual balance. |
+| AI usage entry/reservation | Idempotent debit, reserved amount, settled provider cost and rate-card version. | Transactional backend ledger; no prompts or tool-result bodies. |
+| Device/session grant | Device authorization, public key where needed, revocation and expiry. | Backend plus approved device-pairing protocol; no raw bearer secrets in logs. |
+| Sync object/version | Ownership, opaque object ID, encrypted-object reference, version/deletion state and quota usage. | Backend verifies ownership; sensitive content/metadata remains client-encrypted. |
+| VPN provisioning | Provider reference and activation/revocation state. | Backend with protected credentials. |
+| Billing event receipt | Provider event ID, processing outcome and reconciliation state. | Backend; unique event IDs prevent replayed grants. |
+
+Do not store payment-card details, browsing history, note plaintext, master
+passwords or vault decryption keys in these records. Define retained billing
+metadata and account-deletion behavior before migrations; a blanket cascading
+delete must not destroy records required for reconciliation or create orphaned
+paid services. Store the minimum operational event metadata needed for recovery.
+
+### Authorization and authentication controls
+
+Enable Row Level Security (RLS), PostgreSQL policies restricting which rows a
+user can access, on every client-exposed table. Combine it with explicit schema,
+table, column and function privileges. Deny unauthenticated access by default.
+Clients may see only their permitted records and must never write subscription
+state, entitlements, rate cards or usage balances. Keep administrative tables
+out of exposed schemas where possible. [Source S10](#9-sources)
+
+Supabase publishable keys can be distributed; they identify the project, not a
+trusted user. Server secret keys and legacy `service_role` keys bypass RLS and
+must remain server-side. Privileged handlers therefore perform their own
+account/resource checks even when database RLS tests pass. [Source S11](#9-sources)
+
+The API verifies token signatures, issuer, audience, expiry and subject, and
+checks current authorization/revocation for sensitive operations. Do not trust
+editable user metadata, a request's account ID, or stale token plan claims.
+Bind checkout and billing-portal sessions to the authenticated internal account.
+Use transactional reservations and unique idempotency keys for concurrent AI
+requests. Test table access, database functions, object storage and service APIs
+with two synthetic users, anonymous access, expired tokens and forged identifiers.
+
+Design desktop sign-in using a reviewed authorization-code/PKCE flow (Proof Key
+for Code Exchange), explicit redirect allowlists and per-attempt state. Keep
+the verifier bound to the initiating device/attempt; verify compatibility with
+the chosen Supabase flow rather than copying a web-only SDK example. Secure
+refresh tokens through Windows credential protection and rotate/revoke sessions.
+Configure signup/recovery abuse limits and multi-factor authentication for
+administrators; approve the customer MFA policy before launch. [Source S14](#9-sources)
+
+Require private buckets and ownership-checked, short-lived object access.
+Encrypted blobs still need authorization, quotas and deletion controls. RLS and
+TLS do not replace end-to-end encryption: Supabase authentication must never
+give the service plaintext access to a password vault.
+
+### Recovery and production readiness
+
+Test database restoration and encrypted-object restoration as separate paths.
+Supabase database backups do not include the bytes stored through its Storage
+API, only their metadata. Recovery must reconcile metadata, blobs, deletion
+markers and billing/provider state before reopening access. Publish recovery
+targets and backup-expiry limits; deleting a live record is not immediate
+erasure from every backup. [Source S13](#9-sources)
+
+SVC-07 defines the production acceptance report: access-isolation results,
+restore drill, email delivery, rate limits, key rotation, spending alerts and
+measured capacity. Database-at-rest encryption is not a substitute for the
+client-side encryption design in SYN-01 and PWS-01.
+
+The foundation's dependency order is SVC-01, SVC-05, SVC-06, SVC-02, SVC-03,
+SVC-04, then SVC-07. Identifiers remain stable for conversion; their numeric
+order does not override these dependencies. Service adapters can be developed
+once their prerequisites pass, but paid production releases also require SVC-07.
+
 ### Done when
 
 Synthetic sandbox purchases, renewals, failures, refunds, cancellation and
@@ -246,12 +406,14 @@ retention that the current local-only analytics approval does not cover.
 **What exists today:** `docs/decisions.md`, D39 and the usage-report documents
 define local aggregate analytics. No hosted architecture is approved here.
 
-**Work:** compare hosting and authentication options, define record categories
+**Work:** write the accounts/subscriptions architecture report described above;
+evaluate Supabase as the preferred option, define record categories
 and retention, prepare costs and account-recovery design, and decide refund,
 tax presentation, selling-region and cancellation policies. Recommend minimum
 service metadata rather than collecting browsing telemetry.
 
-**Acceptance criteria:** an owner-reviewed decision names the hosting boundary,
+**Acceptance criteria:** an owner-reviewed decision confirms or rejects the
+Supabase recommendation above and names the hosting boundary,
 data flows, minimum records, deletion process and itemized budget. It explicitly
 excludes browsing content from operational logs and explains tradeoffs.
 
@@ -274,7 +436,7 @@ recovery from decryption-key recovery and prevent cross-account access.
 records; expired/revoked sessions fail; local browsing works signed out and
 during an outage; secrets do not appear in logs or exports.
 
-**Blocked by:** SVC-01. **Parent:** Services. **Priority/size:** P1 / M.
+**Blocked by:** SVC-01 and SVC-06. **Parent:** Services. **Priority/size:** P1 / M.
 
 #### SVC-03 — Verify Stripe events and maintain service entitlements
 
@@ -309,6 +471,63 @@ explains cloud deletion and its retention limits; supporter purchases do not
 grant service entitlements. Verify desktop accessibility and required themes.
 
 **Blocked by:** SVC-03. **Parent:** Services. **Priority/size:** P1 / M.
+
+#### SVC-05 — Establish the private services repository and isolated environments
+
+**Why this matters:** accounts and supplier credentials need clear ownership
+without coupling Syrinx's deployments or customer records to Fledge's systems.
+
+**Work:** prepare the proposed `Syrinx-services` repository structure, public API
+contract boundary, synthetic configuration and operator setup instructions. The
+owner creates the private repository and dedicated Supabase project(s); confirm
+existing organization capacity and paid-plan implications first. Document
+development/production separation and where secrets are installed.
+
+**Acceptance criteria:** repository name, private visibility and ownership are
+confirmed; project identifiers belong to Syrinx, not a reused Fledge project;
+environment documentation contains no secrets or customer data; synthetic setup
+is reproducible; no upgrade or live deployment occurs without authorization.
+
+**Blocked by:** SVC-01 and owner/operator provisioning. **Parent:** Services.
+**Type:** operator/scaffold. **Priority/size:** P1 / M.
+
+#### SVC-06 — Add account and billing schema with enforced access boundaries
+
+**Why this matters:** an authenticated customer must not read another account's
+records or grant themselves a paid plan through a direct database request.
+
+**Work:** create reviewed migrations in the private backend repository for the
+logical records above. Define foreign keys, uniqueness, lifecycle rules, private
+schemas, RLS, privileges and safe database functions. Build two-user and anonymous
+access tests, including the privileged service API's own authorization checks.
+
+**Acceptance criteria:** migrations work on a fresh synthetic database; one
+account can hold multiple independently billed services; client writes cannot
+change subscriptions, entitlements or usage balances; forged account/Stripe IDs
+are rejected; concurrent ledger reservations cannot exceed an allowance;
+account deletion follows the approved retention/reconciliation policy.
+
+**Blocked by:** SVC-01 and SVC-05. **Parent:** Services. **Priority/size:** P0 / M;
+split schema and authorization changes before implementation if needed.
+
+#### SVC-07 — Prove account-service recovery and production readiness
+
+**Why this matters:** functioning signup and checkout do not prove recoverable
+billing, reliable account recovery or safe operation when storage is restored.
+
+**Work:** configure authorized production email and operational controls;
+exercise key/session revocation, backup restoration, object/metadata consistency,
+Stripe reconciliation, rate limits and spend alerts using synthetic data. Record
+actual costs and obtain approval before a paid production deployment.
+
+**Acceptance criteria:** restoration cannot resurrect deleted content or grant
+stale paid access; account reset cannot decrypt a vault; backup limits and data
+retention are documented; email/recovery and abuse-limit tests pass; Free-plan
+pausing and quotas are not relied on for the paid production service. Subsequent
+Sync, AI and VPN releases rerun the relevant checks with their own adapters.
+
+**Blocked by:** SVC-04, SVC-06 and owner-approved production configuration.
+**Parent:** Services. **Priority/size:** P0 / M.
 
 ## 6. Epic: Sync — Encrypted personal data
 
@@ -812,10 +1031,18 @@ not permanent contracts. Recheck before procurement or publication.
 | S6 | [Guardian partnerships](https://guardianapp.com/company/partners/) | Existing partnerships; no public Syrinx quote or SDK grant. |
 | S7 | [Brave premium](https://brave.com/premium/) | VPN retail comparison. |
 | S8 | [Stripe subscription webhooks](https://docs.stripe.com/billing/subscriptions/webhooks) | Asynchronous payment and subscription lifecycle events. |
+| S9 | [Supabase pricing](https://supabase.com/pricing) | Free quotas/pausing and Pro starting price; account capacity is unverified. |
+| S10 | [Supabase Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security) | Database row authorization; still requires appropriate grants and API authorization. |
+| S11 | [Supabase API keys](https://supabase.com/docs/guides/getting-started/api-keys) | Publishable versus server credentials and RLS bypass. |
+| S12 | [Supabase production email](https://supabase.com/docs/guides/auth/auth-smtp) | Default SMTP restrictions and need for production delivery configuration. |
+| S13 | [Supabase database backups](https://supabase.com/docs/guides/platform/backups) | Database backups exclude Storage object bytes. |
+| S14 | [Supabase PKCE](https://supabase.com/docs/guides/auth/sessions/pkce-flow) | Code-verifier binding; desktop callback implementation still needs review. |
+| S15 | [Supabase Vault](https://supabase.com/docs/guides/database/vault) | Server-side secrets can be decrypted through SQL; this is distinct from client-side password-vault encryption. |
 
 The owner messages in this session set AI prices, annual parity, plugin-aware
-AI, device-wide VPN and future password sync. All other limits, cancellation
-terms and supplier choices remain proposals until explicitly accepted.
+AI, device-wide VPN and future password sync, and identify Supabase as the
+preferred candidate. Other limits, cancellation terms and final supplier
+configuration remain proposals until explicitly accepted.
 
 ## 10. Epic: Sync — Password vault extension
 
@@ -844,6 +1071,58 @@ final storage/device limits remain subject to the service policy decision.
 Already downloaded vault data cannot be remotely erased merely by revoking a
 device. Explain that limit and rotate access for future data as designed.
 
+### Password-manager and account security requirements
+
+These requirements apply to the separately approved password manager before
+password sync ships, as well as to the sync adapter. The manager's own
+implementation still needs its existing scope and review process.
+
+1. **Separate sign-in from unlocking.** Supabase proves the user owns an account;
+   it must not know the vault decryption secret. An account-password reset,
+   billing administrator or support agent cannot decrypt existing vault records.
+   A lost recovery secret may make the vault unrecoverable; explain that before
+   onboarding rather than introducing a hidden recovery backdoor.
+2. **Encrypt before upload.** Use a reviewed key hierarchy and authenticated
+   encryption with separate vault and note access boundaries. Encrypt protected
+   record fields and sensitive metadata on the device. If a vault passphrase is
+   chosen, use a reviewed memory-hard key derivation scheme with random salts
+   and calibrated parameters. Design independent recovery and migration; never
+   derive the only vault key directly from a Supabase login password or token.
+3. **Protect local unlock material.** Use appropriate Windows credential/key
+   protection for device-held secrets, with explicit locking and unlock rules.
+   Limit plaintext lifetime in memory, clear sensitive UI on lock and prevent
+   secrets entering diagnostics. Local operating-system protection is not a
+   portable encryption scheme for syncing keys between machines, and cannot
+   promise protection after the device itself is compromised.
+4. **Review device enrollment and revocation.** Pair new devices through an
+   existing trusted device or the approved recovery process. Account MFA helps
+   protect enrollment but is not a substitute for vault encryption. Revoke
+   future access and rotate keys as designed; do not promise remote erasure of
+   old downloaded copies or revocation of passwords already learned.
+5. **Treat filling and copying as sensitive actions.** The password-manager
+   prerequisite must review exact site/origin matching, deceptive domains,
+   frames, explicit user gestures and clipboard exposure. Clipboard clearing
+   is best-effort and cannot retract copies made elsewhere. Autofill is a
+   separately approved page-content interaction; this document does not waive
+   Syrinx's page-view or Google restrictions or enable WebView2 password saving.
+6. **Keep credentials out of AI and general plugins.** Vault plaintext, master
+   keys and recovery secrets are unavailable to model context, generic search,
+   exports used for analytics and unrelated plugin capabilities. Test every
+   context-building and tool-result path, not just the visible AI screen.
+7. **Make restore and cancellation safe.** Authenticate record versions and
+   review rollback/replay behavior. Restore cannot silently resurrect deleted
+   credentials. Subscription cancellation preserves the local manager and
+   local vault access; cloud expiry follows a disclosed policy. Recovery drills
+   use synthetic credentials and cover both database metadata and encrypted
+   blobs, including backup deletion limits.
+
+Do not put vault plaintext or unwrapped decryption keys in Supabase PostgreSQL,
+Storage, Edge Function memory, service logs or a server-side secrets product.
+Supabase's server-side "Vault" feature is not the customer's end-to-end
+encrypted password vault. [Source S15](#9-sources) Any encrypted key envelopes stored remotely must
+remain undecryptable to the service under the reviewed threat model. Independent
+review covers these boundaries before customer passwords are accepted.
+
 ### Done when
 
 Two authorized Windows devices synchronize synthetic vault records through
@@ -860,12 +1139,15 @@ findings are resolved before release.
 an unintended way to unlock saved passwords.
 
 **Work:** review the implemented password manager's vault interface and threat
-model; specify key separation, lock state, device pairing, recovery, rotation,
-deletion and how vault metadata is protected. Document AI exclusion explicitly.
+model against all seven requirements above; specify key separation, lock state,
+device pairing, recovery, rotation, deletion and how vault metadata is protected.
+Document AI exclusion and account-reset versus vault-unlock separation explicitly.
 
 **Acceptance criteria:** an owner-reviewed security design references the actual
 password-manager implementation; lost-key and revoked-device limits are clear;
-no plaintext vault interface is available to AI or generic plugin tools.
+no plaintext vault interface is available to AI or generic plugin tools; the
+password-manager prerequisite has evidence for local locking, safe filling and
+clipboard limits; Supabase administrators cannot recover vault plaintext.
 
 **Blocked by:** separately approved and implemented password manager, SYN-05.
 **Parent:** Password sync. **Priority/size:** P0 / M.
@@ -891,7 +1173,8 @@ deletion does not silently resurrect; cancellation preserves local vault use.
 
 **Work:** obtain independent review and exercise compromised/revoked devices,
 recovery, rollback, lock/unlock, deletion and cross-account access with synthetic
-vault data. Verify the exclusion from every AI/tool context route.
+vault data. Verify the exclusion from every AI/tool context route, account-reset
+and new-device takeover scenarios, and database/object backup restoration.
 
 **Acceptance criteria:** no unresolved critical findings; vault recovery and
 revocation claims match measured behavior; logs and provider requests contain
@@ -908,7 +1191,7 @@ Proposed storage limits, cancellation terms and supplier choices go into
 decision issues rather than being silently accepted by implementation.
 
 Creation order: Services, Sync, AI, VPN, Password sync. Publish the five epic
-bodies from their What/Why/Shape/Guardrails/Done sections, then the 26 work or
+bodies from their What/Why/Shape/Guardrails/Done sections, then the 29 work or
 decision drafts beneath their appropriate epic. Attach native sub-issues and
 translate draft dependency keys into issue links. One milestone assignment per
 issue; other prerequisites are blocking links. Do not create Fledge-side work.
