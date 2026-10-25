@@ -48,7 +48,7 @@ pub(super) struct PaletteChoices {
 #[derive(Clone, Copy)]
 enum RefreshSelection {
     Default,
-    /// The owner chose the leading search row.
+    /// The owner chose the leading Go to or search row.
     Lead,
     /// The owner chose this row, so it is followed wherever it moves.
     Target(Target),
@@ -124,7 +124,8 @@ impl PaletteChoices {
                 RefreshSelection::Unselected
             };
         }
-        if self.selected == Some(0) && self.web_search {
+        // Go to counts as much as the search row: a refresh must not move off either.
+        if self.selected == Some(0) && self.lead_rows() > 0 {
             return RefreshSelection::Lead;
         }
         if self.selected.is_some() {
@@ -353,15 +354,20 @@ impl PaletteChoices {
         }
     }
 
+    /// Down moves one row. With nothing selected it starts at the top, except while a refresh
+    /// waits for its reply: then it enters the list below the lead row, and does nothing until a
+    /// row is listed there, so it never turns into a choice of the lead row.
     pub(super) fn next(&mut self) {
         let rows = self.row_count();
-        if rows == 0 {
+        let row = match self.selected {
+            Some(selected) => selected.saturating_add(1).min(rows.saturating_sub(1)),
+            None if self.awaiting_reply => self.lead_rows(),
+            None => 0,
+        };
+        if row >= rows {
             return;
         }
-        self.move_to(
-            self.selected
-                .map_or(0, |selected| selected.saturating_add(1).min(rows - 1)),
-        );
+        self.move_to(row);
     }
 
     pub(super) fn previous(&mut self) {
@@ -795,6 +801,131 @@ mod tests {
             ]))
         ));
         assert_eq!(choices.selected, Some(0));
+    }
+
+    #[test]
+    fn a_typed_ip_address_never_opens_a_different_machine() {
+        let [tab, _] = targets();
+        for (input, known, go_to) in [
+            ("192.0.2.1", "https://192.0.2.10/", "https://192.0.2.1/"),
+            (
+                "[2001:db8::1]",
+                "https://[2001:db8::10]/",
+                "https://[2001:db8::1]/",
+            ),
+        ] {
+            let mut choices = PaletteChoices::default();
+            let request = choices.query(input);
+            assert_eq!(choices.address.as_deref(), Some(go_to), "{input}");
+            assert!(choices.receive(request, Ok(ranked(&[(tab, "Synthetic device", known)]))));
+            assert_eq!(choices.selected, Some(0), "Go to {input} stays first");
+            assert_submit(&mut choices, input, false, go_to);
+        }
+
+        // An IPv6 address still missing its `]` is searched, never completed to another machine.
+        let input = "[2001:db8::1";
+        let mut choices = PaletteChoices::default();
+        let request = choices.query(input);
+        assert_eq!(choices.address, None);
+        assert!(choices.receive(
+            request,
+            Ok(ranked(&[(
+                tab,
+                "Synthetic device",
+                "https://[2001:db8::10]/"
+            )]))
+        ));
+        assert_eq!(choices.selected, Some(0));
+        assert_search(&mut choices, input);
+    }
+
+    #[test]
+    fn go_to_chosen_over_a_partial_host_survives_a_refresh() {
+        let [tab, _] = targets();
+        let rows = || {
+            ranked(&[(
+                tab,
+                "Synthetic console",
+                "https://cloud.example.test/projects",
+            )])
+        };
+        let mut choices = PaletteChoices::default();
+        let request = choices.query("cloud.exam");
+        assert!(choices.receive(request, Ok(rows())));
+        assert_eq!(choices.selected, Some(1), "the partial host is preselected");
+
+        // The owner moves up to Go to; a model change then re-runs the same text.
+        choices.previous();
+        assert_eq!(choices.selected, Some(0));
+        let refreshed = choices.refresh();
+        assert_submit(&mut choices, "cloud.exam", false, "https://cloud.exam/");
+        assert!(choices.receive(refreshed, Ok(rows())));
+        assert_eq!(choices.selected, Some(0), "the owner's Go to outlives it");
+        assert_submit(&mut choices, "cloud.exam", false, "https://cloud.exam/");
+    }
+
+    #[test]
+    fn alt_enter_searches_even_when_a_confident_match_is_preselected() {
+        let [tab, _] = targets();
+        // A plain word leads with the search row; a bare host leads with Go to.
+        for (input, known) in [
+            ("cloudf", "https://cloudflare.example/"),
+            ("cloud.exam", "https://cloud.example.test/"),
+        ] {
+            let mut choices = PaletteChoices::default();
+            let request = choices.query(input);
+            assert!(choices.receive(request, Ok(ranked(&[(tab, "Synthetic match", known)]))));
+            assert_eq!(choices.selected, Some(1), "{input} preselects its match");
+            assert_submit(&mut choices, input, true, input);
+        }
+    }
+
+    #[test]
+    fn a_waiting_enter_searches_the_web_when_the_worker_fails() {
+        let input = "shelf";
+        let mut choices = PaletteChoices::default();
+        let request = choices.query(input);
+        choices.stage_commands(staged(&[], 0), true, false);
+        assert!(choices.submission(input.to_owned(), false).is_none());
+        assert!(choices.receive(
+            request,
+            Err(SessionError::Search(SearchError::QueryTooLong))
+        ));
+        assert!(matches!(
+            choices.take_deferred(),
+            Some(PaletteEvent::Submit { text, force_search: false }) if text == input
+        ));
+    }
+
+    #[test]
+    fn down_during_a_refresh_with_nothing_selected_never_chooses_the_search_row() {
+        let [tab, saved] = targets();
+        let input = "synthetic";
+        let rows = || {
+            ranked(&[
+                (tab, "Synthetic one", "https://one.example.test/"),
+                (saved, "Synthetic two", "https://two.example.test/"),
+            ])
+        };
+        let mut choices = PaletteChoices::default();
+        let request = choices.query(input);
+        assert!(choices.receive(request, Ok(rows())));
+        choices.select(2);
+
+        // No rows are listed yet, so Down has nowhere to go and the owner's row stays chosen.
+        let refreshed = choices.refresh();
+        assert_eq!(choices.selected, None);
+        choices.next();
+        assert!(choices.receive(refreshed, Ok(rows())));
+        assert_target(&mut choices, saved);
+
+        // A strong command listed during the refresh is where Down goes, below the search row.
+        let refreshed = choices.refresh();
+        choices.stage_commands(staged(&[7], 1), true, false);
+        choices.next();
+        assert_eq!(choices.selected, Some(1));
+        assert!(choices.receive(refreshed, Ok(rows())));
+        assert_target(&mut choices, command(7));
     }
 
     #[test]
