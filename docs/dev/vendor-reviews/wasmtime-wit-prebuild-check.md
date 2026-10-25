@@ -474,7 +474,12 @@ fewer crates. Filesystem and socket imports are refused at instantiation by
 construction. The price is about 300 lines of mostly constant host code that
 #28's contract tests exercise anyway, and the real Notes 1 component already
 runs on it. It changes #27's list in one place: the pin becomes
-`wasmtime =48.0.7` alone.
+`wasmtime =48.0.7` alone. It also touches the wording of decision 1 of
+2026-10-21, which keeps "the component model and WASI 0.2" (unchanged under
+(b): the shim implements WASI 0.2, and plugins still target `wasm32-wasip2`)
+but explains `async` as "compiled in because `wasmtime-wasi` requires it".
+Under (b) `async` is off and that sentence no longer holds, so choosing (b) is
+the owner amending that sentence, which this report does not do itself.
 
 ## What #28 must do differently, or write down
 
@@ -552,7 +557,9 @@ runs on it. It changes #27's list in one place: the pin becomes
 1. **How the host provides WASI** ("Owner decides"): (b), drop
    `wasmtime-wasi` and let Syrinx's host provide the sixteen interfaces, is
    recommended over (c), approving a ninth network entry and a change to the
-   headless network rule. This comes first, because it decides the pin.
+   headless network rule. This comes first, because it decides the pin;
+   (b) also means amending decision 1's sentence on why `async` is compiled
+   in.
 2. **Confirm the pin** (#27's last box): `wasmtime =48.0.7` alone under (b),
    or with `wasmtime-wasi =48.0.7` under (c). 48.0.7 is the newest 48.x on
    the live index and the first 48.x patched against RUSTSEC-2026-0378 and
