@@ -18,6 +18,10 @@ covers optional cloud Sync, hosted AI and a device-wide VPN separately.
 The owner has requested this plan; the defaults and delivery date below remain
 proposals for review.
 
+Other candidate conveniences are recorded separately in the
+[everyday-feature research](everyday-features-research.md); they do not expand
+this blocking milestone's scope.
+
 Blocking in this plan applies to Syrinx's browsing traffic. It does not provide
 device-wide filtering, hide an IP address, replace the VPN, or guarantee that
 all advertisements and tracking disappear. It also does not add Chrome
@@ -41,6 +45,15 @@ post-v1 work; scheduling it earlier or changing those decisions needs the
 owner's explicit approval. It does not jump the existing browser/plugin/Notes/
 Forge work order. Research and issue preparation do not authorize a prototype
 that intercepts real browsing.
+
+Review baseline: `origin/main` at `b2825da` on 2026-10-25. The existing
+[dependency policy](../crates/xtask/src/dependency_policy.rs) still restricts
+desktop networking; `syrinx-update-net` is a narrow application-update
+exception. BPR-07 must propose and obtain approval for the rule-feed transport
+and its exact gate changes, not treat the updater as general network access.
+Keep the matcher and core model free of networking. A future page-filter gate
+change must remain narrow enough to keep remote-page IPC, initialization
+scripts and plugin custom protocols forbidden on ordinary page views.
 
 Brave's Shields combines ad/tracker blocking with other protections. Its filter
 lists and browser integration are a useful reference, not proof that WebView2
@@ -66,6 +79,15 @@ filters are attached to multiple views. Attribution and lifecycle need an
 explicit design before per-site exceptions can be trusted.
 [Request handling](https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/webresourcerequested),
 [source-kind API](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_22)
+
+The API's URI pattern matches the whole normalized URI, not just its hostname;
+a host-looking glob can also match text in a query. Treat patterns as event
+selection, never proof of origin authorization. Microsoft also requires filters
+before navigation for complete coverage and describes worker events across
+views in the environment. BPR-03 must measure these constraints with Syrinx's
+page and isolated plugin profiles; timing a filter attachment after navigation
+cannot be assumed to preserve both coverage and the Google exclusion.
+[Microsoft filter semantics](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_22?view=webview2-1.0.3595.46)
 
 WebView2 enables tracking prevention by default, normally at Balanced or the
 profile's persisted level. The environment and profile APIs have different
@@ -98,6 +120,11 @@ shared profile's prevention off.
 - The browser host owns protection; sandboxed WASM plugins get no general
   traffic-inspection capability. Do not revive the old native-plugin layout
   or broaden the WIT interface merely to install an ad blocker.
+- Protection callbacks must not intercept local plugin assets or create a
+  route into their isolated profiles. Approved account, AI, Sync, VPN and rule
+  update transports are separate host services; a site toggle cannot authorize
+  those services or change their security policy. Test mixed page/plugin views
+  in the shared WebView2 environment, not just two ordinary tabs.
 
 ### Code, lists and public-source boundaries
 
@@ -159,6 +186,10 @@ default-on versus opt-in filtering, first/third-party matching, site exceptions,
 protected origins, unsupported traffic and failure behavior. Recommend a
 conservative default after compatibility testing; defer an aggressive mode.
 Name any exact policy change needed and obtain approval before changing it.
+Distinguish top-level document origin, requesting frame/worker and destination;
+define how each participates in protected-origin exclusion and site exceptions.
+Specify fail-open versus fail-closed behavior for each failure class and visible
+status; neither choice may be silently selected by an implementation callback.
 
 **Acceptance criteria:** every proposed default has an owner decision or remains
 explicitly blocked; runtime tracking prevention and Syrinx filtering have
@@ -199,6 +230,10 @@ worker lifetime. Investigate WebSocket/WebRTC coverage rather than claiming
 all traffic is intercepted. Test transitions into protected origins before any
 filter attaches. Record API availability and any separately required binding
 or wry change. Measure callback latency, memory and page-load overhead.
+Test deceptive URI globs, redirects before the first callback, local plugin
+assets, mixed profiles and a worker that outlives its originating tab. If the
+required exclusions cannot be guaranteed, stop at the report and reduce scope
+or seek a specific policy decision rather than starting BP2.
 
 **Acceptance criteria:** a matrix marks each case supported, unsupported or
 unproven; shared-profile/worker attribution and duplicate callbacks are resolved;
@@ -241,11 +276,16 @@ and reviewed domain normalization. Bound file size, rule count, parsing time
 and memory; reject or visibly classify unsupported rules. Keep matching free of
 network access and disk writes. Associate matches with ad/tracker categories
 without counting a request twice.
+Allow only the reviewed block/exception subset. Reject redirect resources,
+scriptlets, HTML/CSS injection, header/CSP changes and parameter rewriting even
+if the selected engine or list syntax supports them. Parse URLs structurally
+for policy decisions; an arbitrary string suffix is not a domain boundary.
 
 **Acceptance criteria:** synthetic tests cover exceptions, domain boundaries,
 internationalized names, malformed lists and overlapping rules; rules cannot
 invoke scripts or load external resources; benchmarks meet BPR-03 budgets;
-known-good rules remain usable when a new set fails validation.
+known-good rules remain usable when a new set fails validation; unsupported
+modifiers cannot degrade into a broader rule that blocks unrelated requests.
 
 **Blocked by:** BPR-02 and BPR-03. **Parent:** BP2. **Type:** implementation.
 **Priority/size:** P1 / M.
@@ -260,12 +300,18 @@ callback teardown, bounded processing and safe rule-snapshot swaps. Handle tab
 close, navigation changes and worker lifetime. Keep downloads and parsing off
 the request callback. Preserve existing runtime tracking prevention and use its
 supported APIs only for approved profile settings. No blanket global fallback.
+Define the blocked response/error semantics for each supported resource type;
+do not synthesize executable pages, rewrite allowed response headers or change
+the certificate/security state. Release every native callback/deferral on
+cancel, view destruction and error without retaining dead COM objects.
 
 **Acceptance criteria:** synthetic servers confirm blocked requests do not arrive;
 allowed traffic still works; no stale tab or exception state crosses contexts;
 protected origins are never intercepted by a prohibited route; unsupported API
 or matcher failure produces the approved degraded state, never a false active
 indicator; the UI does not change profile-wide protection for one site.
+Test the approved failure policy under matcher panic/error, deadline expiry,
+controller replacement and filter-snapshot changes with requests in flight.
 
 **Blocked by:** BPR-04. **Parent:** BP2. **Type:** implementation.
 **Priority/size:** P1 / M.
@@ -323,6 +369,10 @@ jitter, caching, user controls, retention, publisher access and key rotation.
 Estimate cost from compressed update size multiplied by active installs and
 refresh frequency, plus hosting, review and incident-response time. Do not
 invent a per-subscriber supplier fee or couple updates to Supabase sign-in.
+Name the client transport crate and narrowly scoped dependency-policy amendment;
+do not implement the feed inside the matcher or rely on the app updater's
+existing network exception. Reuse verification concepts only after checking
+that application packages and rule-data packages cannot be confused.
 
 **Acceptance criteria:** the report has explicit traffic assumptions and an
 owner-approved budget; no URL/history/account identifiers enter requests;
@@ -344,12 +394,19 @@ snapshot. Define anti-rollback policy with an authenticated emergency rollback
 path, interrupted downloads, offline operation and stale-list warnings. Review
 new source/syntax changes before publishing. Keep credentials in runtime secret
 storage, not in the client, fixtures or repository.
+Allowlist fetch origins and validate redirects; rules cannot add download
+destinations. Bound compressed and expanded size, parsing work and disk use.
+Separate rule-package identity and trusted signing authority from executable
+updates. Test signing-key rotation and a compromised-key response, not only a
+normal snapshot rollback.
 
 **Acceptance criteria:** tampered, oversized, truncated and unauthorized old
 snapshots are rejected; interrupted updates retain usable rules; authorized
 rollback works; content cannot execute code; offline browsing still works;
 status accurately reports stale or missing protection; no new release or CI
 configuration changes occur without their required approval.
+Application packages cannot be installed as filter data or vice versa, and
+decompression bombs and redirects outside approved origins fail safely.
 
 **Blocked by:** BPR-06 and BPR-07. **Parent:** BP3. **Type:** implementation.
 **Priority/size:** P1 / M.

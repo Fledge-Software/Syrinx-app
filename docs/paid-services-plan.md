@@ -33,6 +33,10 @@ proposes free ad and tracker blocking, with its own feasibility, licensing and
 compatibility milestones. Those browser features require no paid entitlement
 and do not change the prices or service scope below.
 
+The [everyday-feature research](everyday-features-research.md) records additional
+included and paid opportunities. Those recommendations are not added scope for
+these milestones until the owner selects them.
+
 This is the owner-requested preparation document, rather than a second live
 backlog. Its format follows the repository's
 [Fledge issue format](../.claude/skills/planissues/issue-format.md) and the local
@@ -78,6 +82,16 @@ direct calls into plugin storage. Existing tracking references are #25 for the
 plugin runtime, #32 for Fledge (on hold), #35 for Notes and #42 for Forge;
 recheck their current status before scheduling.
 
+The architecture review for this plan checked `origin/main` at `b2825da`
+(2026-10-25), including #158's
+[WIT pre-build findings](https://github.com/Fledge-Software/Syrinx-app/blob/b2825da/docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md).
+The host is still prerequisite work: that report leaves a WASI/network-gate
+choice for the owner. It also demonstrates that new exports, or functions in
+existing exports, break older components even with `@since` annotations. Any
+AI or Sync interface addition must distinguish host imports from guest exports,
+use the approved compatibility track and test old/new host-plugin pairs. This
+plan neither settles those open choices nor treats the WIT as already shipped.
+
 The existing work order remains binding: finish the earlier approved browser
 work, then the plugin host and template, then Notes; Forge waits until Notes
 is live as the owner's daily notes tool, as decided on 2026-10-20.
@@ -105,6 +119,19 @@ The following are product guardrails for every milestone:
   system service installation and release changes receive the required review.
 - No changes belong in Fledge repositories. Needed Fledge-side capabilities
   remain owner dependencies, not issues agents create in those repositories.
+
+### Desktop networking is an explicit prerequisite
+
+The current [dependency policy](../crates/xtask/src/dependency_policy.rs) rejects
+network clients and unapproved Windows networking features. Its narrow
+`syrinx-update-net` exception is for application updates, not a general service
+transport. SVC-01 must name the proposed host-owned transport boundary,
+destinations, credential ownership and exact gate changes for review. Do not
+add a networking library to `syrinx-core`, a WASM guest or a plugin view, route
+service requests through page IPC, or quietly reuse the updater's exception.
+Keep matching, indexing and core models free of network dependencies; retain
+negative gate tests proving unapproved callers cannot reach the transport.
+The services backend may use its own reviewed server networking stack.
 
 ## 3. Product catalogue and commercial policy
 
@@ -148,10 +175,16 @@ It leaves a two-thirds spread before payment fees and all other expenses.
 | AI 100 | $100 | $33.333333 | $400 |
 | AI 200 | $200 | $66.666667 | $800 |
 
-Keep the ledger in fixed-point sub-cent units and round only for display.
-Do not grant $6.67 twelve times and claim an exact $80 annual cap. Admission
-control uses the exact budget and reserves the maximum approved request cost
-before dispatch. Reconcile the reservation against actual billed usage.
+Keep the retail allowance and provider costs in reviewed integer sub-cent units
+(or exact rational arithmetic for intermediate rates). Debit exactly three times
+the recorded provider cost; do not store a repeating decimal as an exact third.
+At a fixed unit scale, the provider admission ceiling is
+`floor(remaining_retail_units / 3)`, leaving any sub-unit remainder unused.
+For example, at one-millionth of a dollar, $20 permits 6,666,666 provider units
+and leaves two retail units; it never grants a rounded-up $6.67. Choose a scale
+that preserves the supplier's billing precision, document reconciliation and
+rounding, and reserve an upper bound before dispatch. The table's annual values
+are mathematical ceilings, not promises of exactly representable debits.
 
 Attributable cost includes provider-billed input, cached input, cache writes,
 output/reasoning and separately charged tools where applicable. Record a
@@ -168,6 +201,9 @@ requests; it does not disable local plugins. Additional usage requires an
 explicit purchase at the same 3-times rule, never an automatic overage.
 Top-up amounts, expiry and refund rules need a decision before top-ups launch.
 Upgrades, downgrades and proration must not mint a second full allowance.
+Define UTC period boundaries, month-end/leap-year anniversaries, delayed renewals
+and mid-period changes from authoritative billing records. An annual plan needs
+an idempotent server-side monthly allowance schedule without monthly invoices.
 Internal failed retries are a Syrinx expense unless a clearly disclosed,
 owner-approved policy says otherwise; bound them separately.
 
@@ -363,6 +399,13 @@ Use transactional reservations and unique idempotency keys for concurrent AI
 requests. Test table access, database functions, object storage and service APIs
 with two synthetic users, anonymous access, expired tokens and forged identifiers.
 
+JWT expiry alone does not implement immediate device revocation. Define the
+maximum revocation delay, check current session/device grants on protected
+operations, and account for already-issued object URLs and active downloads.
+Supabase documents that session termination and JWT validity are distinct;
+test the chosen enforcement rather than assuming sign-out invalidates every
+issued token instantly. [Source S16](#9-sources)
+
 Design desktop sign-in using a reviewed authorization-code/PKCE flow (Proof Key
 for Code Exchange), explicit redirect allowlists and per-attempt state. Keep
 the verifier bound to the initiating device/attempt; verify compatibility with
@@ -375,6 +418,15 @@ Require private buckets and ownership-checked, short-lived object access.
 Encrypted blobs still need authorization, quotas and deletion controls. RLS and
 TLS do not replace end-to-end encryption: Supabase authentication must never
 give the service plaintext access to a password vault.
+
+Bind each sync root, key envelope, pending upload and service job to an immutable
+account identity. On sign-out or switching accounts, stop and detach old jobs;
+never relabel A's queued data for B or upload existing local files to B without
+an explicit reviewed enrollment/import flow. Keep local files usable and state
+clearly which copies remain on disk. Service-account separation does not create
+browser profiles: the spec's single workspace and existing page cookies remain.
+Account linking, email changes and deletion/recreation must not inherit an old
+account's entitlements or decryptable data merely because the email matches.
 
 ### Recovery and production readiness
 
@@ -416,6 +468,8 @@ evaluate Supabase as the preferred option, define record categories
 and retention, prepare costs and account-recovery design, and decide refund,
 tax presentation, selling-region and cancellation policies. Recommend minimum
 service metadata rather than collecting browsing telemetry.
+Include the desktop network-gate design, service-account switching, revocation
+latency, server-owned monthly AI scheduling and recovery after uncertain charges.
 
 **Acceptance criteria:** an owner-reviewed decision confirms or rejects the
 Supabase recommendation above and names the hosting boundary,
@@ -439,7 +493,9 @@ recovery from decryption-key recovery and prevent cross-account access.
 
 **Acceptance criteria:** synthetic accounts cannot access one another's service
 records; expired/revoked sessions fail; local browsing works signed out and
-during an outage; secrets do not appear in logs or exports.
+during an outage; secrets do not appear in logs or exports; A-to-B account
+switches cancel stale jobs without uploading A's files to B or deleting local
+work; revoked-device tests cover tokens and short-lived object URLs.
 
 **Blocked by:** SVC-01 and SVC-06. **Parent:** Services. **Priority/size:** P1 / M.
 
@@ -453,11 +509,16 @@ events idempotently, reconcile out-of-order state and separate each service's
 entitlement. Support renewals, payment failure, scheduled cancellation,
 refunds/disputes and recovery after backend downtime. Never provision from
 the checkout thank-you page alone.
+Validate server-allowlisted service/price IDs, currency and live/test environment;
+enforce the approved duplicate-subscription policy. Verify the original webhook
+body, acknowledge after durable receipt and retry failed processing from a queue;
+run periodic Stripe reconciliation so a missed event cannot strand access.
 
 **Acceptance criteria:** duplicate, reordered and delayed synthetic events
 converge on Stripe's authoritative subscription state; each approved lifecycle
 policy has a regression case; annual AI payments do not issue a year's usage
-at once; no production charges are used for validation.
+at once; invalid prices, simultaneous checkout attempts and missed events are
+covered; no production charges are used for validation.
 
 **Blocked by:** SVC-01 and SVC-02. **Parent:** Services. **Priority/size:** P0 / M.
 
@@ -569,6 +630,27 @@ access and uses reviewed key rotation; it cannot erase copies a device already
 downloaded. Recovery uses a trusted device or recovery key, not an account
 password-reset backdoor.
 
+Notes are local Markdown files behind host-owned document capabilities; its
+catalogue is rebuilt in plugin memory. Define the sync adapter against those
+documents, not the plugin's private memory or a second notes table in SQLite.
+Review stable document identities, renames, bounded enumeration, attachments,
+path traversal/reparse-point defenses and change notifications with #36/#37.
+Incoming changes must preserve the host's atomic saves and D28 dirty-buffer
+rules. A revoked vault-folder grant or disabled/uninstalled plugin stops access.
+Host-held plugin search data must be purged on removal/revocation; rebuilding
+the note index uses its own source namespace and retention policy, never the
+seven-day page-text policy. Recheck current grants before using cached results.
+
+Quota enforcement belongs on the server even for encrypted bytes. Reserve
+space before accepting concurrent uploads, authenticate owner/object/version
+bindings, and verify transfer size/hash consistency. Only a client holding the
+key can verify the authenticated encrypted record before applying it. Define
+cleanup of abandoned uploads and unreferenced blobs. Cost estimates include
+temporary and backup copies even
+when they are excluded from the customer's visible quota. Define a deletion
+epoch/checkpoint or equivalent so a device offline beyond tombstone retention
+must reconcile safely instead of recreating deleted content after a restore.
+
 Proposed cancellation policy: stop sync at the end of paid access, retain local
 files, allow 30 days for cloud export, then delete cloud data under the published
 policy. Explicit deletion and backup expiry need separate documented bounds.
@@ -606,6 +688,10 @@ creates an unnoticed account-recovery backdoor.
 metadata, key hierarchy, trusted-device pairing, recovery, rotation, rollback
 detection and revocation. Select maintained, licence-compatible components;
 do not invent a cryptographic primitive.
+Specify the Notes document/attachment adapter, account/root binding, safe
+filenames, schema migration and old-client compatibility. Treat synced settings
+as untrusted input; permissions, executable paths and network destinations are
+not portable preferences. Review cross-version WIT changes before coding them.
 
 **Acceptance criteria:** the threat model distinguishes content from metadata;
 independent review covers lost keys, compromised devices and rollback; an owner
@@ -622,6 +708,8 @@ duplicates or overwrite newer work.
 **Work:** implement SYN-01's versioned records, authenticated transport,
 idempotent uploads, resumable attachment handling and offline queue. Sync only
 selected categories and keep the local durable store in local app data.
+Enforce server quota reservations and bounded decoding; clean up incomplete
+uploads without deleting committed objects. Stop old-account jobs on sign-out.
 
 **Acceptance criteria:** synthetic two-device retries converge; interrupted
 uploads resume without corruption; cross-account access fails; the server
@@ -642,6 +730,8 @@ contract and D28 checksum handshake, including dirty editor buffers.
 **Acceptance criteria:** concurrent edits retain recoverable versions; an
 offline device cannot silently restore deleted content; restore has explicit
 semantics; restart and CRLF/LF cases pass; no live SQLite files are copied.
+Tests also cover renames, traversal/reparse points, note/attachment relationships,
+schema upgrades, expired deletion markers and grant revocation during a write.
 
 **Blocked by:** SYN-02 and reviewed Notes host operations. **Parent:** Sync.
 **Priority/size:** P0 / M.
@@ -676,7 +766,8 @@ at the proposed quota. Resolve critical findings before a limited beta.
 replay, offline conflicts, deletion, quota and outages; restoration preserves
 deletion policy; costs meet the approved budget; public claims match evidence.
 
-**Blocked by:** SYN-04. **Parent:** Sync. **Priority/size:** P0 / M.
+**Blocked by:** SYN-04 and SVC-07 before paid production release.
+**Parent:** Sync. **Priority/size:** P0 / M.
 
 ## 7. Epic: AI — Plugin actions and metered usage
 
@@ -712,6 +803,23 @@ read/write effects. External sending, deletion, shell execution and account
 changes require explicit user authorization. Retrieved content is untrusted:
 instructions in notes or tool results cannot grant capabilities or approve an
 action. Password-vault content is excluded from AI tools, retrieval and context.
+
+An install-time plugin grant does not authorize hosted processing of all data
+that plugin can read. Apply both the underlying grant and the current AI task's
+selected scope. Revalidate plugin instance, grant, account and document version
+at execution, including after a model call returns. Purge unavailable sources
+from retrieval; a stale index hit never authorizes a read. Route model requests
+through the server-controlled gateway with allowlisted models, provider options
+and tools, so a modified desktop client cannot choose unbounded paid operations.
+
+Do not wait on a provider or a long-running command inside a synchronous WASM
+export or the UI thread. The host orchestrator queues bounded jobs outside the
+guest call, records operation IDs and returns through the reviewed event/result
+contract. A trap can poison the plugin store and leave a write's outcome unknown,
+as #158 documents. Reconcile uncertain operations before retrying; neither
+re-instantiating a plugin nor reconnecting the model permits repeating a send,
+write or charge. Cancellation stops future steps and prevents stale approvals
+from executing, but does not undo an external action already completed.
 
 Retrieval stays local; only selected, relevant context is sent for hosted
 processing. Encrypted Sync does not make hosted AI end-to-end encrypted: the
@@ -766,7 +874,8 @@ specify versioned WIT action descriptions and review boundaries; approve the
 
 **Acceptance criteria:** recorded decisions name the provider baseline,
 retention controls, model evaluation results and action permissions; the
-password vault is explicitly inaccessible; contract changes receive review.
+password vault is explicitly inaccessible; contract changes receive review,
+including old/new component compatibility and the host-owned job lifecycle.
 
 **Blocked by:** SVC-01 and approved plugin host/interface. **Parent:** AI.
 **Type:** decision/review. **Priority/size:** P0 / M.
@@ -780,11 +889,20 @@ spend beyond the allowance or bill a task twice.
 idempotency, monthly allowance boundaries and supplier-cost reconciliation.
 Bound tool steps, context, output and retry spending. Separate customer usage
 from internally absorbed failures and retain only minimal billing metadata.
+If a stream disconnects or a worker crashes after dispatch, retain an uncertain
+reservation until billing reconciliation or an explicitly funded loss policy
+resolves it; do not release it on timeout and allow the same money to be spent
+again. Pin the rate version and allowance period per request, including across
+a monthly reset. Enforce total service spend/concurrency limits as well as user
+limits so absorbed retries and abuse cannot exhaust the operator's budget.
 
 **Acceptance criteria:** all six subscription prices map to correct allowances;
-annual plans issue twelve monthly periods; exact thirds do not drift through
-cent rounding; concurrent reservations cannot overspend; retries and duplicate
-events do not double-charge; proration cannot create free extra allowances.
+annual plans issue twelve monthly periods without relying on monthly invoices;
+integer retail debits retain the 3-times rule without rounding up provider
+budgets; concurrent reservations cannot overspend; retries and duplicate events
+do not double-charge; proration cannot create free extra allowances. Test
+month-end/leap-year boundaries, missing usage receipts, process crashes,
+cancellation and account deletion while a reservation is unsettled.
 
 **Blocked by:** SVC-03 and AIP-01. **Parent:** AI. **Priority/size:** P0 / M.
 
@@ -796,6 +914,9 @@ filesystem access or a second permission system.
 **Work:** expose selected Notes search/read operations through approved host
 capabilities, validate model tool arguments and return bounded results with
 stable source references. Connect the provider adapter to the usage ledger.
+Authorize the gateway server-side; reject client-selected provider URLs, models,
+tool budgets and storage options outside AIP-01's policy. Recheck grants after
+each provider wait and use only bounded, currently authorized source content.
 
 **Acceptance criteria:** answers cite accessible source records; excluded
 notes are absent from context; forged tool calls and cross-scope references
@@ -837,16 +958,24 @@ approved patch application can be reviewed and reversed.
 
 #### AIP-06 — Execute explicitly approved Forge tests through host capabilities
 
-**Why this matters:** proposed code changes need verification, but model output
-must not become an unrestricted shell session.
+**Why this matters:** proposed code changes need verification, but running a
+project's tests executes code with the user's permissions. A working directory,
+timeout and output cap do not sandbox that code.
 
 **Work:** request approval for a concrete command and working directory; invoke
 the approved Forge process capability with cancellation, resource limits and
-bounded output. Treat command output as untrusted model context.
+bounded output. Present the established full-trust warning, "Can run programs
+on your computer with your permissions", including that test hooks/dependencies
+can access files and the network. Third-party plugins receive no full-trust
+grant in v1. Treat output as untrusted; review what may enter hosted context.
+An allowlist or secret-file filter is not a guarantee against arbitrary programs.
 
 **Acceptance criteria:** changed commands require new approval; cancellation
-stops owned child work; execution cannot silently widen scope; secrets in output
-are not logged or transmitted indiscriminately; model/tool loops remain bounded.
+stops owned child work where the approved process controller can enforce it,
+and reports any remaining activity; execution never silently gains full trust;
+secrets in output are not logged or transmitted indiscriminately; model/tool
+loops remain bounded. Tests cover stale approvals, plugin revocation and an
+uncertain result without automatically rerunning a side-effecting command.
 
 **Blocked by:** AIP-05 and reviewed Forge process capabilities. **Parent:** AI.
 **Priority/size:** P0 / M.
@@ -880,7 +1009,8 @@ every supported tier stays within its budget at full utilization; provider
 retention is accurately disclosed; model changes must rerun relevant evaluations.
 
 **Blocked by:** AIP-04 and AIP-07 for Notes beta; AIP-06 for advertised Forge
-execution. **Parent:** AI. **Priority/size:** P0 / M.
+execution; SVC-07 before paid production release.
+**Parent:** AI. **Priority/size:** P0 / M.
 
 #### AIP-09 — Add Fledge actions when the real client is ready
 
@@ -895,7 +1025,7 @@ Fledge draft. Develop tests against the stand-in before real-client acceptance.
 external sends and record changes require the appropriate user authorization;
 cross-plugin transfers disclose the destination; missing scopes fail clearly.
 
-**Blocked by:** AIP-01, the approved real Fledge client, Stage C (D24) and
+**Blocked by:** AIP-03, AIP-08, the approved real Fledge client, Stage C (D24) and
 the owner's explicit resumption of the Fledge plugin's hold.
 **Parent:** AI. **Priority/size:** P1 / M; split by action family before building.
 
@@ -967,6 +1097,11 @@ or permanently disconnected.
 **Work:** design optional privileged installation, signed component updates,
 credential storage, connect/disconnect, kill switch, network changes, sleep,
 browser closure, account expiry and uninstall. Audit dependency licensing.
+Specify the privileged service's authenticated local command channel and access
+controls; unprivileged callers must not submit arbitrary executables, config
+paths or routes. Keep supplier master credentials server-side; protect issued
+per-device credentials locally. Define authenticated updates, anti-downgrade
+rules, captive-portal/LAN behavior and recovery when billing cannot be reached.
 
 **Acceptance criteria:** reviewed state/failure diagram, exact protected scope,
 installation permissions and rollback procedure; approved behavior for explicit
@@ -1000,7 +1135,8 @@ connect/disconnect, location, status and approved startup/close controls. Explai
 device scope and surface failures with a recovery path.
 
 **Acceptance criteria:** lifecycle tests cover purchase, renewal, cancellation,
-payment failure and outage; expiry obeys VPN-02; no secret ships in the app;
+payment failure and outage; expiry obeys VPN-02; no shared supplier secret ships
+in the app, while issued per-device credentials use protected runtime storage;
 UI never reports protection merely because an entitlement is active.
 
 **Blocked by:** VPN-03, SVC-03 and SVC-04. **Parent:** VPN. **Priority/size:** P1 / M.
@@ -1019,7 +1155,8 @@ kill-switch behavior is verified during failures; removal restores expected
 networking; provider/owner responsibilities are documented. Google sign-in and
 protected playback acceptance remain owner-operated under repository rules.
 
-**Blocked by:** VPN-04. **Parent:** VPN. **Priority/size:** P0 / M.
+**Blocked by:** VPN-04 and SVC-07 before paid production release.
+**Parent:** VPN. **Priority/size:** P0 / M.
 
 ## 9. Sources
 
@@ -1043,6 +1180,7 @@ not permanent contracts. Recheck before procurement or publication.
 | S13 | [Supabase database backups](https://supabase.com/docs/guides/platform/backups) | Database backups exclude Storage object bytes. |
 | S14 | [Supabase PKCE](https://supabase.com/docs/guides/auth/sessions/pkce-flow) | Code-verifier binding; desktop callback implementation still needs review. |
 | S15 | [Supabase Vault](https://supabase.com/docs/guides/database/vault) | Server-side secrets can be decrypted through SQL; this is distinct from client-side password-vault encryption. |
+| S16 | [Supabase sessions](https://supabase.com/docs/guides/auth/sessions) | Session termination, JWT lifetime and revocation enforcement are distinct. |
 
 The owner messages in this session set AI prices, annual parity, plugin-aware
 AI, device-wide VPN and future password sync, and identify Supabase as the
