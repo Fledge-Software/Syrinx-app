@@ -17,6 +17,43 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-10-25
+
+- **Notes organises notes in folders; database-style views go to a separate,
+  later plugin (owner's own decision, 2026-10-25).** The owner's words:
+  "dont worry about databases for notes. We will put them in a different
+  plugin. Just have folders that allow the user to organize notes."
+  - **What changes.** Database-style views (typed properties, table views
+    and `.base` files) leave the Notes plugin for a separate plugin that
+    comes later and is not scheduled, tracked as #167, *Epic: Databases
+    plugin (typed properties and table views)*. Notes v1 organises notes in
+    folders instead: a folder tree in the Vault tab, creating, renaming and
+    deleting folders, moving a note between folders with its links kept,
+    and choosing the folder for a new note, built in #168 on the guarded
+    rename of #38.
+  - **What it supersedes.** The spec's "database-style views" for Notes
+    (`docs/spec.md`, § 4, which is kept verbatim; this entry overrides it)
+    and decision N3 of the Notes epic (#35), "Bases in v1 is one table".
+    #39 (the property-type metadata decision) and #40 (typed properties and
+    one table view, formerly Notes 4) stay open, unchanged, as sub-issues of
+    #167 instead of #35, and Notes' acceptance (#41) no longer includes a
+    table.
+  - **What stays.** D27's Obsidian compatibility, wikilinks, backlinks and
+    the outline panel. Properties stay in the files untouched, as plain
+    frontmatter: Notes indexes them for search, never retypes or rewrites
+    them, and reads and writes no `.base` file and no property-type
+    metadata, so a vault edited in Syrinx still opens in Obsidian with its
+    properties and bases as they were. D27's "Obsidian's property types"
+    and "a subset of `.base`" now describe what the Databases plugin must
+    keep compatible, not what Notes builds.
+  - **Why.** The table was the heaviest Notes slice and rested on an
+    Obsidian file whose format is unverified (#39); folders are what the
+    owner needs to organise notes every day, and moving the views out lets
+    Notes reach daily use, and so unblock Forge (#42), sooner. Rejected:
+    keeping the one-table view in Notes v1 (N3), which the owner chose
+    against; dropping database views altogether, which the owner did not
+    ask for.
+
 ## 2026-10-24
 
 - **Syrinx's full-text index uses Tantivy, not SQLite's FTS5 (#52).** The
