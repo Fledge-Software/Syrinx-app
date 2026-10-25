@@ -44,13 +44,14 @@ short script in `.github/scripts/` so it can be read and tested on its own.
    `SHA256SUMS.txt`. The setup program is the download the website offers:
    people run it to install Syrinx and run a newer one to update (owner,
    2026-10-14). The zip stays for P1-39's updates and the owner-run scripts.
-5. **Website.** If this repository is public, the workflow checks out
-   `Fledge-Software/syrinx-public-site`. It runs that repository's
+5. **Website.** Because this repository is public, the workflow then checks
+   out `Fledge-Software/syrinx-public-site`. It runs that repository's
    `scripts/publish-release.mjs` to write the version, download link,
    checksum, notes and screenshots, builds the site to prove it still builds,
    and pushes the site's `main`. Vercel deploys that push to syrinxapp.dev
-   and docs.syrinxapp.dev. While this repository is private, this step is
-   skipped with a warning, because visitors could not download the zip.
+   and docs.syrinxapp.dev. The workflow checks the visibility on every run:
+   on a private repository this step is skipped with a warning, because
+   visitors could not download the zip.
 
 To release outside the schedule, run the workflow from the Actions tab
 ("Run workflow"). Tick **force** to release even when `main` has not
@@ -83,7 +84,10 @@ debugger stack run only when a test process actually crashed (a Windows
 
 ## One-time setup by the owner
 
-These steps need the owner's GitHub account, so no agent does them.
+These steps need the owner's GitHub account, so no agent does them. All
+four are done: the repository is public, and the website step, which needs
+the `SITE_REPO_TOKEN` secret, has published releases since 2026-10-14. What
+remains is renewing that token before it expires (step 2).
 
 1. **Review the pre-publication checklist below**, then make this repository
    public: Settings → General → Danger zone → Change visibility.
@@ -103,24 +107,29 @@ These steps need the owner's GitHub account, so no agent does them.
 
 ## Pre-publication checklist
 
-Making the repository public publishes its whole history, not just the
+The repository is public, so its whole history is published, not just the
 current files. Rewriting history is the owner's decision (`AGENTS.md`), so
-these are listed rather than changed. Checked on 2026-10-13:
+these were listed rather than changed. Checked on 2026-10-13, before the
+repository was made public. Since then almost every commit carries a
+`noreply` author address (Plan 1's ledger at af3de53 records the owner's
+history rewrite of 2026-10-13), and `.idea/` and the logs under
+`.claude/worktrees/` are no longer tracked; the third-party skills under
+`.claude/skills/` still are.
 
-- **Commit author email.** About 230 commits carry the owner's personal
-  Gmail address as author. GitHub shows it on every commit once public. To
+- **Commit author email.** About 230 commits carried the owner's personal
+  Gmail address as author, which GitHub would show on every public commit. To
   hide it for future commits, turn on "Keep my email addresses private" in
   GitHub's email settings and use the `noreply` address in `git config`.
   Existing commits keep it unless history is rewritten.
 - **Windows user name in paths.** Some handoff notes, [`docs/next-session-prompt.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/next-session-prompt.md)
-  and two tracked gate logs under `.claude/worktrees/` contain
+  and two tracked gate logs under `.claude/worktrees/` contained
   `C:\Users\<name>\Documents\GitHub\…` paths that reveal the Windows account
-  name. The logs can simply be deleted from the tree; the history keeps them.
-- **Editor settings.** `.idea/` is tracked. It holds no secrets, but it is
+  name. The logs could simply be deleted from the tree; the history keeps them.
+- **Editor settings.** `.idea/` was tracked. It held no secrets, but it is
   usually left out of public repositories.
 - **Third-party agent skills.** `.claude/skills/` contains skills copied from
   elsewhere (for example `ui-ux-pro-max`). Check that each one's licence
   allows redistribution, or stop tracking them before going public.
 - **Secrets.** No keys, tokens, `.env` or certificate files are tracked, and
   the P1-38 production key does not exist yet (issue #55). GitHub's secret
-  scanning runs automatically once the repository is public.
+  scanning runs automatically on a public repository.
