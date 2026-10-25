@@ -11,6 +11,12 @@
 > have moved into the [paid-services plan](paid-services-plan.md) as later
 > milestones. This report retains the research rationale; the plans own their
 > issue drafts. Split view, translation and email aliases remain research only.
+>
+> **Commercial approval, 2026-10-25:** the owner subsequently approved Sync at
+> $4/month or $40/year with sharing included, Household at $10/month or $100/year
+> for six people, and repeatable 30 GB storage units at $2/month. Cloudflare R2
+> stores encrypted files; Supabase manages accounts/subscriptions. The paid plan
+> is authoritative for all approved limits and later billing/security details.
 
 ## Recommendation
 
@@ -126,7 +132,7 @@ Validate demand on the supported platform before building: a Windows-only
 household feature may be less useful than users expect if family members need
 phones. A mobile or web client is a separate scope decision. Cost drivers are
 member activity, storage, support and substantial key-management engineering;
-no household price or seat allowance is selected here.
+the later owner-approved price and seat allowance are recorded in the paid plan.
 
 ### 3. Supplier-backed email aliases
 

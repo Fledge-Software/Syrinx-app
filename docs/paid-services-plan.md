@@ -15,16 +15,20 @@
 > passwords once a password manager exists; VPN protection is device-wide,
 > with Guardian the preferred provider to evaluate.
 >
-> **Accounts follow-up, 2026-10-25:** Supabase is the owner's preferred database
-> candidate, using the existing Fledge Software account if suitable. This plan
+> **Accounts follow-up, 2026-10-25:** the owner selected Supabase Auth/PostgreSQL
+> for accounts, subscriptions and metadata, using the existing Fledge Software
+> administrative account if suitable, and Cloudflare R2 for encrypted files. This plan
 > adds the recommended private services repository, account/subscription schema
 > and password-manager security boundaries. No account was inspected and no
 > repository, Supabase project or paid resource was created by this work.
 >
 > **Later milestones selected by the owner, 2026-10-25:** encrypted attachment
-> sharing and household Sync are added after individual Sync. Their packaging,
-> prices, quotas and membership limits remain decisions, not changes to the
-> current subscription prices.
+> sharing and household Sync are added after individual Sync. The owner approved
+> Sync at $4/month or $40/year with sharing included, and Household at $10/month
+> or $100/year for six people. Section 3.1 records the approved launch limits.
+> This selects the commercial and provider baseline, not resource provisioning,
+> paid upgrades or deployment.
+> The owner also approved repeatable 30 GB storage add-ons at $2/month each.
 
 ## 1. How to use this document
 
@@ -149,19 +153,95 @@ promised before their actual costs are measured.
 | Product | Monthly | Annual | Status and inclusion |
 |---|---:|---:|---|
 | Support Syrinx | $5 | $50 | Separate voluntary support; no service entitlement. |
-| Syrinx Sync | $4 | $40 | Proposed price; encrypted notes, attachments, bookmarks and portable settings, with password sync added after its prerequisite. |
+| Syrinx Sync | $4 | $40 | Owner-approved price; 10 GB for one person, with attachment sharing included when released; password sync follows its prerequisite. |
 | Syrinx AI 20 | $20 | $240 | Owner-set price; $20 of retail-rated AI usage per monthly allowance period. |
 | Syrinx AI 100 | $100 | $1,200 | Owner-set price; $100 of retail-rated AI usage per monthly allowance period. |
 | Syrinx AI 200 | $200 | $2,400 | Owner-set price; $200 of retail-rated AI usage per monthly allowance period. |
 | Syrinx VPN | $7.99 | $79.99 | Proposed price, contingent on Guardian terms; device-wide Windows protection. |
-| Encrypted attachment sharing | Undecided | Undecided | Later paid Sync capability; recommend a bounded included allowance, subject to SHR-01 costs and owner approval. No new fee is selected. |
-| Household Sync | Undecided | Undecided | Later paid shared-collection offering; HHS-01 decides packaging, payer/member rules and limits. |
+| Encrypted attachment sharing | Included | Included | No additional subscription charge; uses the active Sync or Household allowance below when released. |
+| Syrinx Household | $10 | $100 | Owner-approved price; six people including the payer, 100 GB pooled storage and shared Notes collections; replaces members' individual Sync subscriptions. |
+| Extra storage | $2 per 30 GB | Monthly billing only | Owner-approved repeatable add-on to an active Sync or Household subscription; an annual base plan can also buy it monthly. |
 
 AI tier names are working identifiers. All three tiers have the same plugin
 capabilities and permission rules; the purchased amount of usage differs.
 Annual AI plans receive twelve monthly allowances, not one immediately
 spendable annual balance. The owner's annual choice is twelve months' price
 with the same monthly allowance, so there is no annual AI discount.
+
+#### Approved Sync and Household launch limits
+
+The owner accepted these limits on 2026-10-25. They apply when the corresponding
+milestones ship, not before their implementation and release gates pass.
+
+| Limit or feature | Syrinx Sync | Syrinx Household |
+|---|---|---|
+| Price | $4/month or $40/year. | $10/month or $100/year. |
+| People | One. | Six maximum, including the payer. |
+| Total encrypted storage | 10 GB. | 100 GB pooled across members' private and shared data; not per member or an extra 10 GB per member. |
+| Maximum shared file | 250 MB. | 500 MB. |
+| Active sharing links | 50. | 200 pooled across the household. |
+| Shared-link downloads | 50 GB per monthly allowance period. | 250 GB per monthly allowance period, pooled. |
+| Version history | Up to 30 days within the storage quota. | Same, within the pooled quota. |
+| Shared Notes collections | Not included. | Included. |
+| Default link expiry | Seven days. | Seven days. |
+| Maximum link expiry | 30 days. | 30 days. |
+| Link security | Expiry, revocation and optional link passwords included. | Same. |
+| Recipient subscription/account | Neither required to download through the reviewed recipient flow. | Same. |
+
+Notes, attachments, retained versions and stored sharing snapshots consume the
+same storage quota. Server backup/temporary copies still enter operating-cost
+estimates as section 6 describes; they are not additional customer allowances.
+Shared-file limits do not silently limit local Notes files or ordinary device
+sync, whose attachment-handling design remains separate.
+
+Warn at 80% and 95% of storage and shared-download budgets. Exhausted storage
+pauses new uploads that would increase usage; exhausted link count prevents new
+links; exhausted shared-download allowance pauses external link delivery until
+reset or resolution under the approved policy. Never silently delete current
+files or charge overages. Local use and authorized ordinary device downloads
+remain available. Define concurrent reservations, partial-transfer accounting
+and safe quota release before implementation.
+
+Shared-download allowances reset monthly, including on annual subscriptions,
+and are separate from ordinary device sync traffic. Use a server-owned schedule
+with documented anniversary/month-end behavior. Free R2 egress does not imply
+unlimited sharing: request, authorization and abuse costs remain. Only the
+30 GB add-on below is approved; other capacity products require a new decision.
+
+**Approved extra storage:** each purchased unit adds 30 GB for $2/month, and the
+customer may buy additional units repeatedly. For quantity `n`, individual Sync
+has `10 + 30 × n` GB and Household has `100 + 30 × n` GB, with a recurring add-on
+charge of `$2 × n` per month. For example, three units add 90 GB for $6/month.
+There is no fixed product cap on the number of purchased units; implementation
+must still handle quantity bounds, concurrent purchases and capacity failures
+safely rather than accepting a payment it cannot provision.
+
+The add-on increases storage only: people, maximum shared-file size, active-link
+count, shared-download allowance and history duration do not increase. Household
+extra storage joins its pool; it is not a separate allotment for each member.
+Every quantity increase requires an explicit purchase showing the new recurring
+total and any proration. Never buy capacity automatically on quota exhaustion.
+Annual base subscriptions can buy monthly add-ons; no annual add-on price or
+discount is selected. Show the separate renewal schedule and monthly charges
+clearly, without changing the annual base plan's billing interval.
+
+An add-on requires an active base Sync/Household entitlement and cannot survive
+as an orphan paid product. Define refunds/proration and base-plan transitions in
+SVC-03. Scheduled removal takes effect at the end of its paid period; preview
+the resulting quota. If usage then exceeds it, preserve current files and exports
+while blocking new storage growth until usage falls or capacity is bought.
+Do not silently delete files or reinstate a canceled add-on. Household joins,
+departures and ownership transfers require an explicit treatment of existing
+personal add-ons; do not double-bill or silently transfer private data.
+
+Household includes individual Sync functionality for its members; six separate
+individual subscriptions are not required. HHS-01 defines explicit upgrade,
+proration and individual-plan replacement so joining cannot double-bill a member
+or silently cancel an unrelated service. AI and VPN remain separate. Pooling
+storage and paying the bill grant no access to another member's private content.
+Only explicitly shared Notes collections are collaborative; password-vault
+sharing is excluded. Departure/cancellation needs a documented entitlement and
+export transition, never automatic new individual charges.
 
 ### 3.2 What 3 times AI cost means
 
@@ -303,7 +383,7 @@ that reasoning is preserved with the code.
 | Existing plugin repositories | Notes/Forge behavior and approved host-tool integration; no shared provider secrets. |
 | Proposed private `Syrinx-services` | API implementation, database migrations and access policies, Stripe processing, AI ledger/gateway, sync authorization, Guardian provisioning, synthetic tests and deployment/operations documentation. |
 | Hosted Supabase project | Private customer/service records and managed authentication. The repository holds schema definitions, never production database contents. |
-| Private object storage | Encrypted sync blobs; Supabase Storage and R2 remain alternatives to evaluate for this layer. |
+| Private Cloudflare R2 storage | Owner-selected storage for encrypted sync objects, versions and sharing snapshots; Supabase Storage is not the selected file backend. |
 | Hosting secret manager | Stripe/webhook, model-provider, Guardian, database and Supabase server credentials. No secrets in either public or private Git history. |
 
 Public source visibility is not the security boundary. A modified desktop app
@@ -319,13 +399,15 @@ sanitized architecture and synthetic evidence. No work is placed in a Fledge
 application repository. Backend API compatibility is versioned so public
 browser releases do not require users to read the private repository.
 
-### Supabase recommendation and project isolation
+### Selected providers and project isolation
 
-Recommend **Supabase Auth plus managed PostgreSQL** for the initial service.
+Use owner-selected **Supabase Auth plus managed PostgreSQL** for identity,
+accounts, subscriptions, entitlements and service metadata, and **Cloudflare R2**
+for encrypted files.
 The combined identity and relational database fit accounts with several
 subscriptions, billing-event reconciliation and transactional usage budgets.
-Keep the choice provisional until SVC-01 confirms deployment region, auth
-flows, costs, recovery and the service API runtime. The alternative is a
+SVC-01 defines deployment region, auth flows, costs, recovery and the service
+API runtime without reopening provider selection. The alternative was a
 managed PostgreSQL service with separate identity and API hosting; that offers
 more independent choices but adds integration and operations work. There is
 no identified requirement in this plan that justifies that extra work yet.
@@ -347,7 +429,8 @@ Supabase's published Free plan currently includes two active projects,
 500 MB database storage, 50,000 monthly active users, 1 GB file storage and
 5 GB egress plus 5 GB cached egress. Inactive free projects can pause after
 one week. These are platform quotas, not per-customer entitlements; Free's
-1 GB does not fund the proposed 10 GB per Sync subscriber. [Source S9](#9-sources)
+1 GB is not the Sync storage pool: encrypted files live in R2 under the approved
+10 GB/100 GB quotas. [Source S9](#9-sources)
 
 Use Free for development and validation. For paid production, recommend
 budgeting **Pro from $25/month**, with the first project included and additional
@@ -376,6 +459,7 @@ annual Sync, monthly AI and VPN with a different billing period.
 | Billing customer | Stable account-to-Stripe-customer mapping. | Backend only; never accept a client-chosen Stripe customer as proof of ownership. |
 | Subscription | Service, Stripe subscription/item and price IDs, currency, interval, status, period dates and cancellation. | Verified Stripe state reconciled by the backend. |
 | Entitlement | Service/tier access and effective expiry or grace policy. | Backend only; never user-editable profile metadata. |
+| Storage add-on grant | Base-plan linkage, 30 GB quantity, Stripe item/subscription, effective paid period and scheduled reduction. | Backend derives quota from verified paid quantities; no client-selected capacity or orphan add-ons. |
 | AI allowance period | Exact retail allowance, monthly boundary and plan version. | Backend; annual payment creates monthly periods, not an immediate annual balance. |
 | AI usage entry/reservation | Idempotent debit, reserved amount, settled provider cost and rate-card version. | Transactional backend ledger; no prompts or tool-result bodies. |
 | Device/session grant | Device authorization, public key where needed, revocation and expiry. | Backend plus approved device-pairing protocol; no raw bearer secrets in logs. |
@@ -431,6 +515,14 @@ Encrypted blobs still need authorization, quotas and deletion controls. RLS and
 TLS do not replace end-to-end encryption: Supabase authentication must never
 give the service plaintext access to a password vault.
 
+Supabase RLS does not protect R2 directly. A reviewed backend or Cloudflare
+authorization layer checks entitlement, account/collection/share access and
+quota before issuing bounded R2 access. Keep R2 credentials server-side; do not
+use public buckets or permanent object URLs as the sharing mechanism. Account-free
+recipients use the approved share capability/password flow, not a Supabase
+account or broad bucket access. Define revocation latency for issued URLs and
+active streams. Provider encryption at rest never replaces client encryption.
+
 Bind each sync root, key envelope, pending upload and service job to an immutable
 account identity. On sign-out or switching accounts, stop and detach old jobs;
 never relabel A's queued data for B or upload existing local files to B without
@@ -443,8 +535,9 @@ account's entitlements or decryptable data merely because the email matches.
 ### Recovery and production readiness
 
 Test database restoration and encrypted-object restoration as separate paths.
-Supabase database backups do not include the bytes stored through its Storage
-API, only their metadata. Recovery must reconcile metadata, blobs, deletion
+Supabase database backups do not contain file bytes held in R2; even Supabase
+Storage object bytes are outside its database backups. Recovery must reconcile
+metadata, R2 blobs, deletion
 markers and billing/provider state before reopening access. Publish recovery
 targets and backup-expiry limits; deleting a live record is not immediate
 erasure from every backup. [Source S13](#9-sources)
@@ -455,7 +548,7 @@ measured capacity. Database-at-rest encryption is not a substitute for the
 client-side encryption design in SYN-01 and PWS-01.
 
 The foundation's dependency order is SVC-01, SVC-05, SVC-06, SVC-02, SVC-03,
-SVC-04, then SVC-07. Identifiers remain stable for conversion; their numeric
+SVC-04, SVC-08, then SVC-07. Identifiers remain stable for conversion; their numeric
 order does not override these dependencies. Service adapters can be developed
 once their prerequisites pass, but paid production releases also require SVC-07.
 
@@ -473,18 +566,19 @@ does not prevent free local browsing. Published policies match behavior.
 retention that the current local-only analytics approval does not cover.
 
 **What exists today:** `docs/decisions.md`, D39 and the usage-report documents
-define local aggregate analytics. No hosted architecture is approved here.
+define local aggregate analytics. Supabase and R2 are selected; deployment,
+transport, account lifecycle and retention still need the detailed design.
 
 **Work:** write the accounts/subscriptions architecture report described above;
-evaluate Supabase as the preferred option, define record categories
+design the selected Supabase/R2 boundary, define record categories
 and retention, prepare costs and account-recovery design, and decide refund,
 tax presentation, selling-region and cancellation policies. Recommend minimum
 service metadata rather than collecting browsing telemetry.
 Include the desktop network-gate design, service-account switching, revocation
 latency, server-owned monthly AI scheduling and recovery after uncertain charges.
 
-**Acceptance criteria:** an owner-reviewed decision confirms or rejects the
-Supabase recommendation above and names the hosting boundary,
+**Acceptance criteria:** an owner-reviewed design uses the selected Supabase/R2
+responsibilities and names the hosting boundary,
 data flows, minimum records, deletion process and itemized budget. It explicitly
 excludes browsing content from operational logs and explains tradeoffs.
 
@@ -604,8 +698,33 @@ retention are documented; email/recovery and abuse-limit tests pass; Free-plan
 pausing and quotas are not relied on for the paid production service. Subsequent
 Sync, AI and VPN releases rerun the relevant checks with their own adapters.
 
-**Blocked by:** SVC-04, SVC-06 and owner-approved production configuration.
+**Blocked by:** SVC-04, SVC-06, SVC-08 and owner-approved production configuration.
 **Parent:** Services. **Priority/size:** P0 / M.
+
+#### SVC-08 — Sell repeatable storage units and reconcile effective quotas
+
+**Why this matters:** extra storage must increase only after verified payment,
+and cancellation or duplicate webhooks must not delete data or bill twice.
+
+**Work:** implement the approved 30 GB/$2 monthly add-on for both base plans,
+using an authoritative quantity and explicit base-plan linkage. Support repeated
+purchases, annual-base/monthly-add-on billing, price/quantity previews, approved
+proration, scheduled reductions and transitions between individual and Household.
+Derive storage quota transactionally from current base and add-on grants. Keep
+link, member, shared-file, history and transfer limits unchanged.
+
+**Acceptance criteria:** synthetic purchases of one, three and large quantities
+produce the exact `base GB + 30 × n` quota and `$2 × n` monthly charge; failed,
+duplicate or reordered payments cannot grant unpaid units or charge twice;
+concurrent purchases converge; annual bases retain their interval; add-ons cannot
+outlive their base without an explicit valid transition; over-quota reductions
+preserve current data and exports while stopping growth. Test invoice failure,
+renewal, scheduled cancellation, payer/member changes and restored billing state.
+No automatic capacity purchase or overage charge is possible.
+
+**Blocked by:** SVC-03, SVC-04 and SVC-06. **Parent:** Services.
+**Type:** billing/storage implementation. **Priority/size:** P0 / M;
+split billing, quota and UI work before implementation if necessary.
 
 ## 6. Epic: Sync — Encrypted personal data
 
@@ -631,10 +750,11 @@ not claim it learns nothing about service use.
 | Fledge records | Remain under Fledge's own authority and integration decisions. |
 | Cookies, OAuth tokens, history, machine paths and page-text cache | Excluded. Password inclusion does not include these other secrets. |
 
-Proposed package: $4/month or $40/year, 10 GB total encrypted storage including
-attachments and history, and up to 30 days of versions within that quota.
-Warn before quota exhaustion and never silently discard current files. Decide
-version eviction and maximum attachment size before launch.
+The approved package is $4/month or $40/year with 10 GB total encrypted storage
+and up to 30 days of versions within that quota. Section 3.1 defines sharing
+limits, 80%/95% warnings and Household's pooled 100 GB. Never silently discard
+current files. Decide history eviction and ordinary sync attachment handling
+before launch; shared-file limits are already 250 MB/500 MB by plan.
 
 Synchronization transfers records, never a live SQLite database. Protect
 conflicting edits and deletion propagation. Revoking a device prevents future
@@ -671,11 +791,14 @@ depends on its version history and separately tested disaster recovery.
 
 ### Cost and alternatives
 
-Cloudflare R2 is a candidate, not a selection. Its standard storage rate in the
+Cloudflare R2 is the selected encrypted-file backend. Its standard storage rate in the
 research snapshot is $0.015/GB-month, or $0.15 for 10 GB before operations and
 other services. Writes cost $4.50/million Class A operations; reads cost
 $0.36/million Class B operations; internet egress is free under the published
-pricing. Request patterns and retained versions still matter. [Source S2](#9-sources)
+pricing. Fully occupied 100 GB Household primary storage is approximately
+$1.50/month at that rate. These figures exclude backup/temporary copies,
+authorization compute, Supabase and support. Validate total costs in beta
+without silently changing approved prices or quotas. [Source S2](#9-sources)
 
 The initial variable-infrastructure target is at most $0.75 per active user per
 month, subject to load testing. Engineering, recovery and support are separate
@@ -754,8 +877,9 @@ schema upgrades, expired deletion markers and grant revocation during a write.
 mistakes without understanding the storage protocol.
 
 **Work:** add per-category switches, quota warnings, version restore,
-device/recovery controls and the approved cancellation/export policy. Confirm
-the 10 GB quota and history eviction rules with the owner.
+device/recovery controls and the approved cancellation/export policy. Implement
+the approved 10 GB quota and 80%/95% warnings; review history eviction and the
+remaining cancellation/retention rules with the owner.
 
 **Acceptance criteria:** disabling a category has documented local/cloud
 behavior; quota exhaustion preserves current work; export and recovery succeed;
@@ -1178,7 +1302,7 @@ not permanent contracts. Recheck before procurement or publication.
 | Key | Source | Supports |
 |---|---|---|
 | S1 | [Stripe Billing pricing](https://stripe.com/billing/pricing) | Pay-as-you-go Billing fee and standard US card-processing baseline. |
-| S2 | [Cloudflare R2 pricing](https://developers.cloudflare.com/r2/pricing/) | Candidate storage, operations and egress cost benchmark. |
+| S2 | [Cloudflare R2 pricing](https://developers.cloudflare.com/r2/pricing/) | Selected storage backend's storage, operations and egress cost benchmark. |
 | S3 | [OpenAI API pricing](https://developers.openai.com/api/docs/pricing) | Dated token-cost example; not a model selection. |
 | S4 | [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling) | Model proposals are executed through application-controlled tools. |
 | S5 | [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data) | Distinct training, application-state and abuse-retention policies. |
@@ -1195,9 +1319,9 @@ not permanent contracts. Recheck before procurement or publication.
 | S16 | [Supabase sessions](https://supabase.com/docs/guides/auth/sessions) | Session termination, JWT lifetime and revocation enforcement are distinct. |
 
 The owner messages in this session set AI prices, annual parity, plugin-aware
-AI, device-wide VPN and future password sync, and identify Supabase as the
-preferred candidate. Other limits, cancellation terms and final supplier
-configuration remain proposals until explicitly accepted.
+AI, device-wide VPN and future password sync, select Supabase and R2, and approve
+section 3.1's Sync/Household prices and limits. Remaining cancellation, recovery
+and deployment details require their own design decisions.
 
 ## 10. Epic: Sync — Password vault extension
 
@@ -1222,7 +1346,8 @@ AI retrieval, generic plugin search, logs or analytics. Do not sync cookies,
 OAuth tokens or the WebView2 user-data folder as a shortcut.
 
 Password sync is planned within the Sync subscription without a separate fee;
-final storage/device limits remain subject to the service policy decision.
+storage consumes the approved plan quota; device limits remain a service-policy
+decision. Household does not include password-vault sharing.
 Already downloaded vault data cannot be remotely erased merely by revoking a
 device. Explain that limit and rotate access for future data as designed.
 
@@ -1343,10 +1468,11 @@ no vault secrets; the owner approves release after reviewing evidence.
 
 Let a subscriber share an explicitly selected, immutable Notes attachment or
 export through encrypted delivery with expiry and revocation. Local export
-remains free. Recommend a bounded sharing allowance within paid Sync rather
-than another base subscription, but approve that packaging only after measuring
-costs. The existing $4/$40 Sync proposal does not silently promise unlimited
-public downloads or a particular sharing quota.
+remains free. The owner approved sharing within paid Sync and Household at no
+additional subscription charge. Apply section 3.1's file sizes, active-link
+counts, monthly transfer allowances and expiry limits; recipients need no
+Syrinx subscription or account. Validate costs before release without silently
+reducing approved quotas or adding a fee.
 
 ### Why it comes where it does
 
@@ -1364,8 +1490,8 @@ it must not silently change what a previously issued link delivers. Share
 creation requires an explicit file selection and confirmation. Neither an AI
 proposal nor a plugin's folder grant authorizes publication on its own.
 
-Decide recipient authentication versus bearer-link access, key delivery,
-optional passwords, expiry and download limits in SHR-01. Link possession can
+SHR-01 defines the account-free recipient/key protocol, including optional link
+passwords, within section 3.1's approved expiry and delivery limits. Link possession can
 confer access; revocation can prevent future retrieval but cannot erase a
 recipient's downloaded copy or guarantee stopping an in-progress transfer.
 Define and test that cutoff. Encryption does not remove metadata, abuse or
@@ -1394,19 +1520,21 @@ limits. Independent review, cost tests and a restore drill pass before sale.
 
 ### Proposed issues
 
-#### SHR-01 — Decide sharing protocol, recipient experience and commercial limits
+#### SHR-01 — Design sharing protocol and validate approved commercial limits
 
 **Why this matters:** adding a public link to private Sync can expose a whole
 vault or create an unbounded delivery bill if keys and limits are unspecified.
 
 **Work:** prepare the threat model and owner-reviewed design covering immutable
 selection, recipient access, separate keys, expiry, revocation, original-file
-deletion, web-client trust, abuse handling and cancellation. Recommend packaging
-and quotas from measured workload assumptions. Review any new API, network,
+deletion, web-client trust, abuse handling and cancellation. Use section 3.1's
+approved packaging and quotas, and measure their cost implications. Review any new API, network,
 frontend or deployment boundary before implementation.
 
-**Acceptance criteria:** the owner selects the recipient/access model and price
-or included allowance; limits and cost assumptions are explicit; no shared
+**Acceptance criteria:** the reviewed recipient/access design requires neither
+a paid plan nor an account to download; optional passwords and seven-day default/
+30-day maximum expiry are supported; approved allowances and cost assumptions
+are explicit; no shared
 object exposes other Notes or vault keys; malicious-host and downloaded-copy
 limits are disclosed; password records and automatic publishing are excluded;
 independent protocol review findings are resolved before coding the protocol.
@@ -1429,7 +1557,11 @@ time, ownership, entitlement or remaining transfer allowance.
 concurrent quota bypass fail in synthetic tests; revocation survives a database/
 blob restore; partial uploads do not publish incomplete shares; the service
 holds no usable plaintext decryption key under the approved threat model;
-original Notes remain unchanged and usable locally.
+original Notes remain unchanged and usable locally. Test 250/500 MB file bounds,
+50/200 active-link limits and 50/250 GB monthly delivery budgets as appropriate;
+annual billing still resets transfer monthly, and device sync is classified
+separately. Storage add-ons never increase these sharing limits. Warning and
+exhaustion behavior creates no automatic charges.
 
 **Blocked by:** SHR-01. **Parent:** Attachment sharing. **Type:** implementation.
 **Priority/size:** P0 / M; split schema, transport and cryptography if needed.
@@ -1476,10 +1608,13 @@ owner release approval and a passing service-readiness recheck.
 ### What it is
 
 Let separate service accounts share explicitly selected Notes collections such
-as shopping lists and itineraries. Household Sync is a later paid capability;
-its subscription price, included seats and storage/transfer limits are not set.
-An individual Sync subscription does not automatically grant administrative
-access to another account. Each person still has private, unshared Notes.
+as shopping lists and itineraries. Household costs $10/month or $100/year for
+up to six people including the payer, with 100 GB pooled storage, 500 MB shared
+files, 200 active links and 250 GB of shared-link downloads per monthly period.
+It includes members' individual Sync functionality rather than charging six
+individual plans too. It grants no access to another account's private content.
+Each person still has private, unshared Notes. Purchased storage units expand
+the household pool by 30 GB each for $2/month without increasing member limits.
 
 ### Why it comes where it does
 
@@ -1534,10 +1669,12 @@ the owner of every member's private data or its only recovery mechanism.
 
 **Work:** design household/collection identities, invitation/role transitions,
 key distribution, member removal, recovery, billing and ownership transfer.
-Recommend a price and member/storage limits using measured costs and Windows-only
-use cases. Define export/cancellation/deletion and shared-content AI exclusion.
+Apply section 3.1's approved price and limits, validate costs for Windows-only
+use cases, and define individual-to-household upgrades without duplicate base
+or add-on charges. Define export/cancellation/deletion and shared-content AI exclusion.
 
-**Acceptance criteria:** the owner approves product limits and the role matrix;
+**Acceptance criteria:** the design enforces the approved six-person ceiling,
+pooled quotas and monthly/annual prices; the owner approves the role matrix;
 independent review covers member/payer compromise, revoked offline devices and
 backup recovery; personal Notes and password vaults remain separate; account
 recovery cannot decrypt another member's private data; household entitlement
@@ -1551,7 +1688,8 @@ and membership are modeled separately with explicit state transitions.
 **Why this matters:** an invitation, stale token or billing flag must not give
 unapproved access to shared content or preserve access after removal.
 
-**Work:** implement household/membership records, expiring single-use invitations,
+**Work:** implement household/membership records, a transactionally enforced
+six-member ceiling including the payer, expiring single-use invitations,
 explicit acceptance, role checks and HHS-01's key epochs/envelopes. Enforce both
 RLS/privileges and privileged API authorization. Reconcile revocation across
 sessions, object access and offline uploads; do not send raw keys in invitation mail.
@@ -1560,7 +1698,8 @@ sessions, object access and offline uploads; do not send raw keys in invitation 
 content or write old-epoch updates; invites cannot be replayed or reassigned to
 another account; role downgrades take effect within the documented bounds;
 restored backups do not reinstate revoked access; billing changes alone never
-grant collection keys or access to personal Notes.
+grant collection keys or access to personal Notes; concurrent invitation
+acceptance cannot create a seventh member or duplicate individual Sync charges.
 
 **Blocked by:** HHS-01. **Parent:** Household Sync. **Type:** implementation.
 **Priority/size:** P0 / M; split membership and key lifecycle for review.
@@ -1609,19 +1748,21 @@ service-readiness recheck pass before the owner approves paid release.
 Before creating issues, reconcile these drafts with the live tracker and check
 that prerequisites have not already been implemented elsewhere. Use the source
 sections here for each issue's rationale and observable completion criteria.
-Proposed storage limits, cancellation terms and supplier choices go into
-decision issues rather than being silently accepted by implementation.
+Section 3.1's prices/limits and the Supabase/R2 selection are settled for this
+plan. Remaining cancellation, retention and protocol choices go into decision
+issues rather than being silently accepted by implementation.
 
 Creation order: Services, Sync, AI, VPN, Password sync, Attachment sharing,
 Household Sync. This is tracker creation order, not permission to bypass the
 implementation dependencies or phase order. Publish the seven epic
-bodies from their What/Why/Shape/Guardrails/Done sections, then the 37 work or
+bodies from their What/Why/Shape/Guardrails/Done sections, then the 38 work or
 decision drafts beneath their appropriate epic. Attach native sub-issues and
 translate draft dependency keys into issue links. One milestone assignment per
 issue; other prerequisites are blocking links. Do not create Fledge-side work.
 The new chains are SHR-01 → SHR-02 → SHR-03 → SHR-04 and HHS-01 → HHS-02 →
-HHS-03 → HHS-04, with HHS-01 waiting for SHR-04. Their pricing and policy
-decisions must be resolved before paid implementation/launch claims are made.
+HHS-03 → HHS-04, with HHS-01 waiting for SHR-04. SVC-08 adds storage billing
+after SVC-04 and before the SVC-07 production gate. Implement the approved
+commercial baseline; resolve remaining protocol/policy choices before launch.
 
 At implementation time, each slice needs relevant synthetic tests, independent
 review and the repository's required gate. For changes to Syrinx itself, run
