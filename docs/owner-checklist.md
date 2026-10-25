@@ -92,6 +92,11 @@ their items in Plan 1's old deferred-work register (`DW-n`, read at
   asks for in place of the five fixed palettes; also in the palette, peek
   and import windows; Ctrl or Shift alone does not bring the ring back.
 - **Check 13 (DW-61):** Shift Tab back into the sidebar tree, and the peek.
+- **#101 (decide):** read
+  `docs/dev/vendor-reviews/gpui-live-region-comparison.md` and choose how the
+  footer and restore status lines become live regions; its recommendation
+  needs no vendor patch. The NVDA check that they are announced comes with
+  that slice; record the choice in #101.
 
 ### 5. Window checks of the Settings sections
 
