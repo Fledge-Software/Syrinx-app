@@ -1,10 +1,10 @@
-//! Runs native find, download, print and zoom controls outside synchronous accelerator callbacks.
+//! Runs native find, download, print, zoom and mute controls outside synchronous accelerator callbacks.
 
 use std::{cell::Cell, rc::Rc};
 
 use webview2_com::{
     FindStartCompletedHandler, IsDefaultDownloadDialogOpenChangedEventHandler,
-    Microsoft::Web::WebView2::Win32::*, ZoomFactorChangedEventHandler,
+    IsMutedChangedEventHandler, Microsoft::Web::WebView2::Win32::*, ZoomFactorChangedEventHandler,
 };
 use windows::{
     Win32::Foundation::E_POINTER,
@@ -12,7 +12,10 @@ use windows::{
 };
 use wry::{WebView, WebViewExtWindows};
 
-use super::{BrowserError, BrowserEvent, EventSink};
+use super::{
+    BrowserError, BrowserEvent, EventSink,
+    lifecycle::{emit_audio_changed, playing_audio},
+};
 
 pub enum PageAction {
     Find {
@@ -51,6 +54,13 @@ impl Essentials {
         emit_zoom(&view.controller(), id, &events).map_err(|_| BrowserError::PageControl)?;
         register_downloads(view, id, events.clone())
             .map_err(|_| BrowserError::EventRegistration)?;
+        // A runtime without the mute event still opens the page; only mute changes are lost.
+        if register_mute(view, id, events.clone()).is_err() {
+            events.emit(BrowserEvent::Error {
+                tab: Some(id),
+                error: BrowserError::EventRegistration,
+            });
+        }
         Ok(Self {
             id,
             events,
@@ -100,6 +110,15 @@ impl Essentials {
                 }
             }
         }
+    }
+
+    /// Mutes through WebView2 itself; a runtime without `ICoreWebView2_8` reports a tab error.
+    pub(super) fn set_muted(&self, view: &WebView, muted: bool) -> Result<(), BrowserError> {
+        let core: ICoreWebView2_8 = view
+            .webview()
+            .cast()
+            .map_err(|_| BrowserError::PageControl)?;
+        unsafe { core.SetIsMuted(muted) }.map_err(|_| BrowserError::PageControl)
     }
 
     fn find(&self, core: &ICoreWebView2, request: u64, text: &str) -> windows::core::Result<()> {
@@ -183,6 +202,39 @@ fn emit_zoom(
     }
     events.emit(BrowserEvent::ZoomChanged { id, factor });
     Ok(())
+}
+
+/// Reports mute changes as `AudioChanged`, read back from the page each time. Audible changes
+/// reach the same event from the lifecycle's one `IsDocumentPlayingAudioChanged` handler.
+fn register_mute(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
+    let core: ICoreWebView2_8 = view.webview().cast()?;
+    let muted =
+        IsMutedChangedEventHandler::create(Box::new(move |core, _| report_mute(core, id, &events)));
+    // The handler lives as long as the controller, so its token is never removed.
+    let mut token = 0;
+    unsafe { core.add_IsMutedChanged(&muted, &mut token) }
+}
+
+/// Reports a mute change: an unreadable audible state is `Metadata`, as in the lifecycle's
+/// playback handler, and an unreadable mute state `PageControl`.
+fn report_mute(
+    core: Option<ICoreWebView2>,
+    id: u64,
+    events: &EventSink,
+) -> windows::core::Result<()> {
+    let report = |error| {
+        events.emit(BrowserEvent::Error {
+            tab: Some(id),
+            error,
+        })
+    };
+    let (core, playing) = core
+        .ok_or_else(|| windows::core::Error::from(E_POINTER))
+        .and_then(|core| core.cast::<ICoreWebView2_8>())
+        .and_then(|core| playing_audio(&core).map(|playing| (core, playing)))
+        .inspect_err(|_| report(BrowserError::Metadata))?;
+    emit_audio_changed(events, id, &core, playing)
+        .inspect_err(|_| report(BrowserError::PageControl))
 }
 
 fn register_downloads(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
