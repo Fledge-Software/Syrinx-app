@@ -596,6 +596,14 @@ fn shortcut_for_modifiers(
             _ => None,
         };
     }
+    // F3 and Shift F3 step Syrinx's find bar, so WebView2's own never opens (#82).
+    if key == 0x72 && !control && !alt {
+        return Some(if shift {
+            BrowserShortcut::FindPrevious
+        } else {
+            BrowserShortcut::FindNext
+        });
+    }
     if key == 0x7A && !control && !alt && !shift {
         return Some(BrowserShortcut::Fullscreen);
     }
@@ -637,13 +645,15 @@ fn shortcut_for_modifiers(
     }
 }
 
-/// Ctrl F, Ctrl H and the zoom keys. Plus and minus also count shifted and on the keypad,
-/// as Chrome's table does; `VK_OEM_PLUS` and `VK_OEM_MINUS` follow Chrome's key-code table, not the printed
-/// keys: Ctrl = zooms in on a US keyboard, and on layouts without - on that key (such as
-/// French AZERTY) Ctrl - falls back to WebView2's own zoom.
+/// Ctrl F, Ctrl G (find next, #82), Ctrl H and the zoom keys. Plus and minus also count
+/// shifted and on the keypad, as Chrome's table does; `VK_OEM_PLUS` and `VK_OEM_MINUS`
+/// follow Chrome's key-code table, not the printed keys: Ctrl = zooms in on a US keyboard,
+/// and on layouts without - on that key (such as French AZERTY) Ctrl - falls back to
+/// WebView2's own zoom.
 fn find_history_or_zoom(key: u32, shift: bool) -> Option<BrowserShortcut> {
     match (key, shift) {
         (0x46, false) => Some(BrowserShortcut::Find),
+        (0x47, false) => Some(BrowserShortcut::FindNext),
         (0x48, false) => Some(BrowserShortcut::History),
         (0xBB | 0x6B, _) => Some(BrowserShortcut::ZoomIn),
         (0xBD | 0x6D, _) => Some(BrowserShortcut::ZoomOut),
@@ -841,6 +851,40 @@ mod tests {
             assert_eq!(shortcut_for_modifiers(key, true, shift, true, false), None);
             assert_eq!(shortcut_for_modifiers(key, true, shift, true, true), None);
         }
+    }
+
+    #[test]
+    fn find_next_and_previous_keys_step_syrinx_find_not_webview2s_bar() {
+        // F3, Shift F3 and Ctrl G (#82); Syrinx takes them so WebView2's own bar never opens.
+        for (key, control, shift, expected) in [
+            (0x72, false, false, BrowserShortcut::FindNext),
+            (0x72, false, true, BrowserShortcut::FindPrevious),
+            (0x47, true, false, BrowserShortcut::FindNext),
+        ] {
+            assert_eq!(
+                shortcut_for_modifiers(key, control, shift, false, false),
+                Some(expected)
+            );
+            // With Alt, or AltGr, the key stays the page's.
+            assert_eq!(
+                shortcut_for_modifiers(key, control, shift, true, false),
+                None
+            );
+            assert_eq!(
+                shortcut_for_modifiers(key, control, shift, true, true),
+                None
+            );
+        }
+        // Ctrl F3 and a bare G are not find keys; Ctrl Shift G waits on the owner.
+        assert_eq!(
+            shortcut_for_modifiers(0x72, true, false, false, false),
+            None
+        );
+        assert_eq!(
+            shortcut_for_modifiers(0x47, false, false, false, false),
+            None
+        );
+        assert_eq!(shortcut_for_modifiers(0x47, true, true, false, false), None);
     }
 
     #[test]
