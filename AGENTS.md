@@ -148,6 +148,11 @@ Some work needs the owner, not an agent:
   never enters, stores or asks for the owner's credentials;
 - checking whether the owner's Google Workspace admin console turns on
   device checks (an open thread, tracked in GitHub issues);
+- creating a GitHub repository and choosing where it lives (D16). The owner
+  created `Fledge-Software/Syrinx-app` on 2026-10-13; each plugin
+  repository, the template's included, is still the owner's to create, and
+  agents prepare its contents (`docs/decisions.md`, 2026-10-15 and
+  2026-10-20);
 - anything on Fledge's side. The Fledge-side gaps are a list for the owner,
   not issues or pull requests in Fledge's repositories;
 - installing software system-wide on the owner's machine, and registering
@@ -156,9 +161,8 @@ Some work needs the owner, not an agent:
 If the next task needs one of these, point at it and ask; do not work
 around it.
 
-Two items once on this list are done: the owner created the repository at
-`Fledge-Software/Syrinx-app` (2026-10-13, D16) and made it public under
-MPL-2.0, the licence chosen on 2026-10-13.
+One item once on this list is done: the owner made `Fledge-Software/Syrinx-app`
+public under MPL-2.0, the licence chosen on 2026-10-13.
 
 ## Work order: follow the phases
 
@@ -487,8 +491,8 @@ Never do the following without explicit confirmation from the owner, even if
 the task description seems to imply it or a script or tool makes it easy:
 
 ### Version control
-- Committing when the owner has not asked (the v1 plan's own commits to its
-  branch are the exception, D1)
+- Committing when the owner has not asked (the v1 plans' own commits to
+  their branch were the exception, D1; the plans were removed on 2026-10-16)
 - Adding another remote, pushing `main` or a branch other than the one your
   session was assigned, or opening a pull request unasked
 - Force-pushing, or rewriting history (rebase, amend, filter-branch) that
