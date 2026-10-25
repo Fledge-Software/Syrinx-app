@@ -4,9 +4,13 @@
 # Syrinx
 
 Syrinx is a browser-first workspace app: a Windows desktop browser with a
-vertical-tab sidebar, where Forge (code), Notes and Fledge run as built-in
-plugins that open as tabs. It was called Atlas, a working name, until the
-owner named it Syrinx on 2026-10-12; the docs and wiki say Syrinx throughout. Pages render in WebView2 driven from
+vertical-tab sidebar, where Notes, Forge (code) and Fledge will run as
+built-in plugins that open as tabs. Plugins are sandboxed WebAssembly
+components, each in its own repository, with the built-in ones bundled in
+Syrinx's release (owner, 2026-10-15 and 2026-10-21); none is built yet,
+and the Fledge plugin is on hold until Fledge's API is ready (2026-10-20).
+It was called Atlas, a working name, until the owner named it Syrinx on
+2026-10-12; the docs and wiki say Syrinx throughout. Pages render in WebView2 driven from
 Rust through wry, and Syrinx's own interface is drawn in Rust with the
 conditionally approved GPUI base (D37's idle-patch gate still applies).
 
@@ -34,8 +38,7 @@ above, and `docs/spec.md` below. Before picking up work, also read:
 - `design/README.md`, before changing anything the owner sees.
 - The wiki's Background page behind the area you are working in, for the
   reasoning (notes 07 and 08 correct parts of the earlier ones).
-- `docs/dev/LOCAL-DEV.md`, once the scaffold has created it: how to run the app
-  and the gate on this machine.
+- `docs/dev/LOCAL-DEV.md`: how to run the app and the gate on this machine.
 
 # Writing readable code
 
@@ -53,7 +56,7 @@ above, and `docs/spec.md` below. Before picking up work, also read:
 - **The repository is on GitHub at `Fledge-Software/Syrinx-app` (owner,
   2026-10-13).** Push only the branch your session was assigned, never
   `main` unless the owner asks, and open a pull request only when the owner
-  asks. Syrinx is MPL-2.0; the owner makes the repository public. A weekly
+  asks. Syrinx is MPL-2.0, and the owner has made the repository public. A weekly
   preview release runs from `.github/workflows/weekly-release.yml`; see
   `docs/releasing.md` and `docs/decisions.md`.
 - **Local implementation is approved (D41; workflow updated 2026-10-12).**
@@ -62,12 +65,14 @@ above, and `docs/spec.md` below. Before picking up work, also read:
   `main` (see `docs/decisions.md`). GitHub is not a prerequisite. The owner-requested planning baseline is
   committed as `2c80273`; the scaffold records the exact development commands
   in `docs/dev/LOCAL-DEV.md`.
-- **Commit only when the owner asks.** (The v1 plan may be committed as it
-  is written, to its local branch.)
-- **Work the phases in order.** Phase 0, the feasibility spike, comes first;
-  stop after it and report what worked, what didn't and what you recommend.
-  After it, take the next piece of work from the earliest phase or plan with
-  open work, and if that is blocked, ask before skipping ahead. See "Work
+- **Commit only when the owner asks.** (The v1 plans were the one
+  exception, committed to their branch as they were written; they were
+  removed on 2026-10-16 and are read at `af3de53`.)
+- **Work the phases in order.** Phase 0, the feasibility spike, came first
+  and is done: its verdict, go with GPUI, is the wiki's Background 09
+  (2026-10-10), and the owner approved the four v1 plans the same day.
+  Take the next piece of work from the earliest phase or plan with open
+  work, and if that is blocked, ask before skipping ahead. See "Work
   order" in `AGENTS.md`.
 - **Syrinx is a separate project from Fledge-App.** Fledge reaches Syrinx only
   as a plugin talking to Fledge's API; don't put Syrinx code or docs in the

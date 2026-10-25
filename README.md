@@ -26,7 +26,7 @@ newer) and the Windows SDK. From a checkout:
 ```powershell
 cargo syrinx              # run Syrinx
 cargo xtask check         # the gate: dependencies, format, Clippy, tests, smoke run
-cargo xtask package       # the portable zip under target\package
+cargo xtask package       # the setup program and portable zip under target\package
 ```
 
 `docs/dev/LOCAL-DEV.md` has the details and the traps.
