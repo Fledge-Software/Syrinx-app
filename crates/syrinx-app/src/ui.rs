@@ -529,6 +529,7 @@ impl BrowserView {
                 view.parent_hwnd = handle;
                 show_app_icon(handle);
                 title_bar::correct_caption_hit_test(handle);
+                owned_popup::keep_frame_with_family(handle);
             }
             Err(error) => {
                 view.fail(error);

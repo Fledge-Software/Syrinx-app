@@ -1,7 +1,8 @@
 //! Confines Windows storage, page, single-instance, calendar, Edge, icon, disk, backdrop,
-//! caption and setup services to the platform boundary.
+//! active-frame, caption and setup services to the platform boundary.
 
 pub mod acceptance;
+pub mod active_frame;
 pub mod app_icon;
 pub mod backdrop;
 pub mod browser;
