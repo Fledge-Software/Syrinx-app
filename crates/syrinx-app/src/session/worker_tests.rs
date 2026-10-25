@@ -2061,3 +2061,6 @@ mod folder_tests;
 
 #[path = "permission_tests.rs"]
 mod permission_tests;
+
+#[path = "tab_action_tests.rs"]
+mod tab_action_tests;

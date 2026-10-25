@@ -17,7 +17,7 @@ use syrinx_store::{
     BackupArchive, BackupEntry, BackupMetadata, DirectoryLease, LocationError, LocationOperation,
     StoreError, StoredSnapshot,
     deletion::{DeletionError, DeletionLog},
-    replay_history_deletions, validate_backup, validate_database,
+    replay_deletions, validate_backup, validate_database,
 };
 
 use super::{
@@ -447,7 +447,7 @@ fn replay_stage(
         sqlite_path: sqlite_database_path(&path),
         identity,
     };
-    replay_history_deletions(&lease, deletions, recorded_generation)?;
+    replay_deletions(&lease, deletions, recorded_generation)?;
     let entry = GuardedEntry::regular_file(
         path.clone(),
         native::open_readonly(&path, LocationOperation::ReadBackup)?,

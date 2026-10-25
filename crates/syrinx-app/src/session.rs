@@ -105,8 +105,20 @@ pub enum SessionCommand {
         backwards: bool,
     },
     FocusTab(TabId),
+    // TODO(#95): send from the row menu, then drop cfg(test).
+    /// Opens a selected copy of a web tab right after it (#95).
+    #[cfg(test)]
+    Duplicate(TabId),
+    /// Closes every ordinary tab but this one, sparing open saved pages (#95).
+    #[cfg(test)]
+    CloseOthers(TabId),
+    /// Closes the ordinary tabs below this one, sparing open saved pages (#95).
+    #[cfg(test)]
+    CloseBelow(TabId),
     OpenSaved(SavedPageId),
     SaveActive,
+    /// Saves a tab that need not be active, as a row's menu does (#95).
+    SaveTab(TabId),
     Unsave(SavedPageId),
     /// Creates, renames, removes or moves saved folders and pages (P1-21).
     Folder(FolderCommand),
@@ -134,7 +146,8 @@ pub enum SessionCommand {
         factor: Option<f64>,
     },
     /// Forgets the zoom levels changed in `[start, end)` Unix seconds, with Clear browsing
-    /// data's cookies and site data (#90); answered with `SiteZoomsCleared`.
+    /// data's cookies and site data (#90), through D47's journal so a restored backup cannot
+    /// bring them back (#121); answered with `SiteZoomsCleared`.
     ClearSiteZooms {
         request_id: u64,
         start: i64,
@@ -262,6 +275,9 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<Vec<HistoryVisit>, SessionError>,
     },
+    /// The saved zoom levels after a clear the window did not ask for finished (#121): one a
+    /// busy database interrupted, completed while idle or ahead of a later history clear.
+    SiteZoomsReplaced(SiteZoomLevels),
     /// What a `ClearSiteZooms` request removed, or why it failed.
     SiteZoomsCleared {
         request_id: u64,
@@ -327,7 +343,7 @@ pub enum SessionError {
     Snapshot(SnapshotError),
     Search(SearchError),
     Destination(DestinationError),
-    /// The history-deletion journal refused or failed a record (D47).
+    /// The deletion journal refused or failed a record (D47).
     Deletion(JournalError),
     /// The usage file could not be read, written or deleted (AN-01); never fatal.
     Usage(UsageError),
@@ -741,9 +757,7 @@ fn open_journal(
     if !repair {
         return DeletionJournal::open(lease).map_err(SessionError::Deletion);
     }
-    let applied = store
-        .history_deletion_generation()
-        .map_err(SessionError::Store)?;
+    let applied = store.deletion_generation().map_err(SessionError::Store)?;
     DeletionJournal::rebuild(lease, applied).map_err(SessionError::Deletion)
 }
 
@@ -948,9 +962,9 @@ impl Worker {
         self.survival.operation = "saving the tabs";
         let retried = self.retry_unsaved(store);
         self.survival.result(retried, events)?;
-        // A clear that a busy database interrupted must not leave cleared history showing (D47).
-        self.survival.operation = "clearing history";
-        let cleared = self.finish_pending_clear(store);
+        // A clear that a busy database interrupted must not leave cleared data showing (D47).
+        self.survival.operation = "finishing an interrupted clear";
+        let cleared = self.finish_pending_clear(store, events);
         self.survival.result(cleared, events)?;
         let now = utc_seconds();
         // A clock failure is reported once, by the backup check below.
@@ -1042,6 +1056,11 @@ impl Worker {
                 start,
                 end,
             } => return self.clear_history(store, request_id, start, end, events),
+            SessionCommand::ClearSiteZooms {
+                request_id,
+                start,
+                end,
+            } => return self.clear_site_zooms(store, request_id, start, end, events),
             SessionCommand::OpenHistory(id) => match self.history_destination(id) {
                 Ok(command) => command,
                 Err(error) => return emit_recoverable(events, error),
@@ -1222,15 +1241,20 @@ impl Worker {
         self.save_model(store, &model)
     }
 
-    /// Finishes a history clear that a busy database interrupted, if one is pending.
-    fn finish_pending_clear(&mut self, store: &Store) -> Result<(), SessionError> {
-        deletions::finish_pending(
+    /// Finishes a clear of either category that a busy database interrupted, if one is pending,
+    /// and hands the window the zoom levels left when that clear removed any (#121).
+    fn finish_pending_clear(
+        &mut self,
+        store: &Store,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let finished = deletions::finish_pending(
             store,
             &mut self.deletions,
             &mut self.catalogue,
             &mut self.history,
-        )
-        .map(drop)
+        )?;
+        deletions::report_replaced_site_zooms(store, &finished, events)
     }
 
     /// Adds the whole import in memory, then commits it with a single save.
@@ -1323,6 +1347,7 @@ impl Worker {
         end: i64,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        // An interrupted zoom clear finished on the way leaves the window's levels stale (#121).
         let result = deletions::clear(
             store,
             &mut self.deletions,
@@ -1330,14 +1355,54 @@ impl Worker {
             &mut self.history,
             start,
             end,
+        )
+        .and_then(|finished| {
+            deletions::report_replaced_site_zooms(store, &finished, events)?;
+            Ok(finished.history)
+        });
+        self.report_cleared(result, events, |result| SessionEvent::HistoryCleared {
+            request_id,
+            result,
+        })
+    }
+
+    /// Clears saved zoom levels through the same journal as history (#121).
+    fn clear_site_zooms(
+        &mut self,
+        store: &Store,
+        request_id: u64,
+        start: i64,
+        end: i64,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let result = deletions::clear_site_zooms(
+            store,
+            &mut self.deletions,
+            &mut self.catalogue,
+            &mut self.history,
+            start,
+            end,
         );
+        self.report_cleared(result, events, |result| SessionEvent::SiteZoomsCleared {
+            request_id,
+            result,
+        })
+    }
+
+    /// Tells the dialog a clear's outcome, then lets a storage failure decide the session's fate.
+    fn report_cleared<T>(
+        &mut self,
+        result: Result<T, SessionError>,
+        events: &UnboundedSender<SessionEvent>,
+        event: impl FnOnce(Result<T, SessionError>) -> SessionEvent,
+    ) -> Result<(), SessionError> {
         // The dialog always hears the outcome. Lost storage still stops the session; a busy
         // one is logged, and the journal finishes the clear first next time (D47).
         let failure = match &result {
             Err(SessionError::Store(error)) => Some(SessionError::Store(error.clone())),
             _ => None,
         };
-        let delivered = emit(events, SessionEvent::HistoryCleared { request_id, result });
+        let delivered = emit(events, event(result));
         if let Some(failure) = failure {
             self.survival.survive_shown(failure)?;
         }
@@ -1494,6 +1559,12 @@ fn counted_feature(command: &SessionCommand) -> Counted {
         | SessionCommand::ObserveClosed(_) => Counted::IfChanged(Feature::TabClosed),
         SessionCommand::SaveActive => Counted::IfChanged(Feature::SavedSaved),
         SessionCommand::Unsave(_) => Counted::IfChanged(Feature::SavedRemoved),
+        SessionCommand::SaveTab(_) => Counted::IfChanged(Feature::SavedSaved),
+        // D39's schema has no counter for duplicating or bulk closes until the owner approves one.
+        #[cfg(test)]
+        SessionCommand::Duplicate(_)
+        | SessionCommand::CloseOthers(_)
+        | SessionCommand::CloseBelow(_) => Counted::Nothing,
         SessionCommand::Folder(FolderCommand::Create { .. }) => {
             Counted::IfChanged(Feature::FolderCreated)
         }
@@ -1575,19 +1646,39 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         }
         SessionCommand::CycleActive { backwards } => cycle_active(model, backwards)?,
         SessionCommand::FocusTab(id) => model.select(id).map_err(SessionError::Model)?,
+        #[cfg(test)]
+        SessionCommand::Duplicate(id) => {
+            model.duplicate(id).map_err(SessionError::Model)?;
+        }
+        #[cfg(test)]
+        SessionCommand::CloseOthers(id) => {
+            model.close_others(id).map_err(SessionError::Model)?;
+        }
+        #[cfg(test)]
+        SessionCommand::CloseBelow(id) => {
+            model.close_below(id).map_err(SessionError::Model)?;
+        }
+        SessionCommand::SaveTab(id) => {
+            // Home and Settings are Syrinx's own pages, not destinations, so Ctrl D and a row
+            // menu leave them unsaved (#91).
+            let syrinx_page = model
+                .tabs()
+                .iter()
+                .any(|tab| tab.id() == id && tab.metadata().is_syrinx_page(PageOrigin::Ordinary));
+            if syrinx_page {
+                return Ok(());
+            }
+            model.save_page(id).map_err(SessionError::Model)?;
+        }
         SessionCommand::OpenSaved(id) => {
             model
                 .open_saved(id, Activation::Foreground)
                 .map_err(SessionError::Model)?;
         }
         SessionCommand::SaveActive => {
+            // Save the worker's current selection.
             let id = model.active_id().ok_or(SessionError::NoActiveTab)?;
-            // Home and Settings are Syrinx's own pages, not destinations, so Ctrl D leaves them
-            // unsaved (#91).
-            if model.snapshot().active_is_syrinx_page() {
-                return Ok(());
-            }
-            model.save_page(id).map_err(SessionError::Model)?;
+            apply_model(model, SessionCommand::SaveTab(id))?;
         }
         SessionCommand::Unsave(id) => {
             model.remove_saved(id).map_err(SessionError::Model)?;
@@ -1726,10 +1817,7 @@ fn upsert_tab(
     tab: &TabSnapshot,
 ) -> Result<(), SessionError> {
     let origin = PageOrigin::from_adopted_popup(popups.contains(&tab.id));
-    let mut row = entry(Target::Tab(tab.id), &tab.metadata, true);
-    if let Some(name) = tab.metadata.syrinx_title(origin) {
-        row.title = name.to_owned();
-    }
+    let row = entry(Target::Tab(tab.id), &tab.metadata, origin, true);
     catalogue.upsert(row).map_err(SessionError::Search)
 }
 
@@ -1751,6 +1839,7 @@ fn upsert_saved<'a>(
             .upsert(entry(
                 Target::Saved(page.id),
                 &page.metadata,
+                PageOrigin::Ordinary,
                 open.contains(&page.id),
             ))
             .map_err(SessionError::Search)?;
@@ -1758,10 +1847,15 @@ fn upsert_saved<'a>(
     Ok(())
 }
 
-fn entry(target: Target, metadata: &TabMetadata, open: bool) -> Entry {
+/// A catalogue row; Home and Settings take the core's names (`syrinx_title`), as in the
+/// sidebar. Other titles stay as reported, since the palette falls back to the address itself.
+fn entry(target: Target, metadata: &TabMetadata, origin: PageOrigin, open: bool) -> Entry {
+    let title = metadata
+        .syrinx_title(origin)
+        .map_or_else(|| metadata.title.clone(), str::to_owned);
     Entry {
         target,
-        title: metadata.title.clone(),
+        title,
         address: metadata.address.clone(),
         usage: Usage {
             visits: 0,
@@ -1896,6 +1990,22 @@ mod tests {
     }
 
     #[test]
+    fn saving_a_home_tab_by_id_leaves_it_unsaved() -> Result<(), SessionError> {
+        // A row menu's SaveTab follows the same #91 rule as Ctrl D's SaveActive.
+        let mut model = TabModel::new();
+        apply_model(
+            &mut model,
+            SessionCommand::NewTab {
+                address: "about:blank".to_owned(),
+            },
+        )?;
+        let home = model.tabs()[0].id();
+        apply_model(&mut model, SessionCommand::SaveTab(home))?;
+        assert!(model.saved_pages().is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn catalogue_updates_remove_closed_instances_but_keep_unloaded_saved_rows()
     -> Result<(), SessionError> {
         let mut model = TabModel::new();
@@ -1955,6 +2065,45 @@ mod tests {
         )?;
         let row = catalogue.get(Target::Tab(tab)).expect("synthetic tab row");
         assert_eq!(row.title, "Home");
+        Ok(())
+    }
+
+    #[test]
+    fn a_saved_home_page_has_one_name_in_the_palette_and_the_sidebar() -> Result<(), SessionError> {
+        let mut model = TabModel::new();
+        let mut catalogue = Catalogue::new();
+        let popups = HashSet::new();
+        apply_model(
+            &mut model,
+            SessionCommand::NewTab {
+                address: "about:blank".to_owned(),
+            },
+        )?;
+        let tab = model.tabs()[0].id();
+        // Ctrl D refuses Home since #91, so save it through the model, as a page saved
+        // before then is stored.
+        model.save_page(tab).map_err(SessionError::Model)?;
+        let saved_open = model.snapshot();
+        sync_catalogue(
+            &mut catalogue,
+            &popups,
+            &TabModelSnapshot::default(),
+            &saved_open,
+        )?;
+        let page = &saved_open.saved_pages[0];
+        let saved_row = catalogue.get(Target::Saved(page.id)).expect("saved row");
+        assert_eq!(saved_row.title, "Home");
+        assert_eq!(page.display_title(), "Home");
+        // Home is only displayed; the stored title is left as the page reported it.
+        assert_ne!(page.metadata.title, "Home");
+
+        // Closing the tab leaves only the saved row, which keeps the same name.
+        apply_model(&mut model, SessionCommand::CloseTab(tab))?;
+        let closed = model.snapshot();
+        sync_catalogue(&mut catalogue, &popups, &saved_open, &closed)?;
+        let saved_row = catalogue.get(Target::Saved(page.id)).expect("saved row");
+        assert_eq!(saved_row.title, "Home");
+        assert_eq!(closed.saved_pages[0].display_title(), "Home");
         Ok(())
     }
 
@@ -2111,6 +2260,8 @@ mod tests {
             site_zooms: levels.clone(),
         };
         assert!(!format!("{preferences:?}").contains(host));
+        let replaced = SessionEvent::SiteZoomsReplaced(levels.clone());
+        assert!(!format!("{replaced:?}").contains(host));
         let cleared = SessionEvent::SiteZoomsCleared {
             request_id: 1,
             result: Ok(ClearedSiteZooms {

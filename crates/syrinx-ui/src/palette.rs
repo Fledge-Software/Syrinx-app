@@ -226,6 +226,14 @@ pub struct Palette {
     pub accent: AccentColors,
 }
 
+impl Palette {
+    /// Whether this palette is light: Paper, or a light theme, which starts from Paper. Windows
+    /// draws the material and widgets in their light form for it.
+    pub fn is_light(&self) -> bool {
+        self.id == PaletteId::Paper
+    }
+}
+
 /// Builds a palette for `id` with the owner's accent applied.
 pub fn palette(id: PaletteId, accent: Accent) -> Palette {
     match id {
@@ -307,6 +315,16 @@ pub(crate) const HAZE_WALLPAPER: [Color; 5] = [
     Color::hex(0x6B3F94),
     Color::hex(0x1D6F6A),
     Color::hex(0x9C5637),
+];
+
+/// Stand-in wallpaper for a light theme's material: Windows draws light Acrylic and Mica with
+/// a white luminosity layer, so what shows through is a pale version of the Haze stand-ins.
+pub(crate) const LIGHT_WALLPAPER: [Color; 5] = [
+    Color::hex(0xE4E7F0),
+    Color::hex(0xC9D1F0),
+    Color::hex(0xDCCDEA),
+    Color::hex(0xC6E3E0),
+    Color::hex(0xEED6CA),
 ];
 
 /// The canvas's Glass stand-in wallpaper: four solid discs and three gradient stops.

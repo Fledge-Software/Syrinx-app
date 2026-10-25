@@ -148,6 +148,61 @@ pub(super) fn row_close_target(model: &TabModelSnapshot, row: TreeId) -> Option<
     }
 }
 
+/// The close control a row offers, which the wide row's × and the compact row's corner badge
+/// (#128) both draw. It is built on `row_close_target`, so the control and Ctrl W never
+/// disagree about what a row closes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RowClose {
+    /// Close an open tab; its row goes with it.
+    Tab(TabId),
+    /// Unload a saved page's live tab; the saved row stays.
+    Unload(TabId),
+}
+
+impl RowClose {
+    /// The tab `SessionCommand::CloseTab` takes.
+    pub(super) fn tab(self) -> TabId {
+        match self {
+            RowClose::Tab(tab) | RowClose::Unload(tab) => tab,
+        }
+    }
+
+    /// The control's accessible name.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            RowClose::Tab(_) => "Close tab",
+            RowClose::Unload(_) => "Unload page",
+        }
+    }
+
+    /// The row keys that do the same, in `aria-keyshortcuts` form. Delete closes only an
+    /// ordinary tab's row: on a saved row it removes the saved page itself.
+    pub(super) fn keys(self) -> &'static str {
+        match self {
+            RowClose::Tab(_) => "Control+W Delete",
+            RowClose::Unload(_) => "Control+W",
+        }
+    }
+
+    /// Whether the row is still drawn after the close, so a click must let go of row focus
+    /// rather than leave the row's keys (Alt arrows, Delete) armed.
+    pub(super) fn row_stays(self) -> bool {
+        matches!(self, RowClose::Unload(_))
+    }
+}
+
+/// The close control for `row`: none for a folder, an unopened saved page or a tab that has
+/// already gone.
+pub(super) fn row_close(model: &TabModelSnapshot, row: TreeId) -> Option<RowClose> {
+    let tab = row_close_target(model, row)?;
+    match row {
+        TreeId::Tab(_) => Some(RowClose::Tab(tab)),
+        TreeId::Page(_) => Some(RowClose::Unload(tab)),
+        // A folder has no live page, so `row_close_target` has already said no.
+        TreeId::Folder(_) => None,
+    }
+}
+
 /// The tree key an unmodified key press stands for. Alt arrows move rows, so any modifier
 /// leaves the key to the row's other bindings.
 pub(super) fn tree_key_for(key: &str, modified: bool) -> Option<TreeKey> {
@@ -749,6 +804,54 @@ mod tests {
             row_close_target(&model, TreeId::Folder(folder_id(10))),
             None
         );
+    }
+
+    #[test]
+    fn the_close_control_closes_an_open_tab_row() {
+        let close = row_close(&model(), TreeId::Tab(tab_id(200)))
+            .expect("an open tab's row offers Close tab");
+        assert_eq!(close, RowClose::Tab(tab_id(200)));
+        assert_eq!(close.tab(), tab_id(200));
+        assert_eq!(close.name(), "Close tab");
+        assert_eq!(close.keys(), "Control+W Delete");
+        assert!(!close.row_stays());
+    }
+
+    #[test]
+    fn the_close_control_unloads_a_live_saved_row() {
+        let close = row_close(&model(), TreeId::Page(page_id(1)))
+            .expect("a live saved page's row offers Unload page");
+        assert_eq!(close, RowClose::Unload(tab_id(100)));
+        assert_eq!(close.tab(), tab_id(100));
+        assert_eq!(close.name(), "Unload page");
+        assert_eq!(close.keys(), "Control+W");
+        // The saved row stays after the unload, so a click must let go of row focus.
+        assert!(close.row_stays());
+    }
+
+    #[test]
+    fn an_unopened_saved_row_a_folder_and_a_closed_tab_offer_no_close_control() {
+        let model = model();
+        assert_eq!(row_close(&model, TreeId::Page(page_id(2))), None);
+        assert_eq!(row_close(&model, TreeId::Folder(folder_id(10))), None);
+        assert_eq!(row_close(&model, TreeId::Tab(tab_id(300))), None);
+    }
+
+    #[test]
+    fn the_close_control_and_ctrl_w_agree_on_every_row() {
+        let model = model();
+        // Every row the sidebar draws, and a tab that has already gone.
+        let rows = tree(&model, &HashSet::new())
+            .into_iter()
+            .map(|row| row.id)
+            .chain([TreeId::Tab(tab_id(300))]);
+        for row in rows {
+            assert_eq!(
+                row_close(&model, row).map(RowClose::tab),
+                row_close_target(&model, row),
+                "{row:?}"
+            );
+        }
     }
 
     #[test]

@@ -7,7 +7,7 @@ use syrinx_platform::browser::{OverlayMonitor, overlay_monitor, overlay_pointer}
 use syrinx_ui::sidebar::{PEEK_EDGE_ZONE, PEEK_WIDTH, in_peek_zone};
 
 use super::{
-    owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup},
+    owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup, round_popup_corners},
     peek_state::{HoverSample, PeekState, SAMPLE_INTERVAL},
     *,
 };
@@ -479,7 +479,8 @@ fn open_peek_window(
             ..Default::default()
         },
     };
-    let popup = open_owned_popup(spec, cx, move |_, popup, cx| {
+    let popup = open_owned_popup(spec, cx, move |hwnd, popup, cx| {
+        round_popup_corners(hwnd, "sidebar popup");
         let closing_browser = browser.downgrade();
         popup.on_window_should_close(cx, move |window, cx| {
             if closing_browser
