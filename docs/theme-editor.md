@@ -1,7 +1,12 @@
 # Theme editor
 
-Status: **built (pull request #5), owner check pending**, from the owner's
-decision of 2026-10-15 (`docs/decisions.md`).
+Status: **built** (pull request #5, merged 2026-10-16), from the owner's
+decision of 2026-10-15 (`docs/decisions.md`). Later slices added the Glass
+preset (#124, for #93) and real Acrylic with the Home choice (#145, for
+#151). The Glass look passed the owner's window check on 2026-10-24
+(`docs/decisions.md`); the see-through checks are
+`docs/owner-checklist.md`, item 7, and measuring Acrylic's drag and resize
+("Building it", step 4) is still open.
 
 ## Why
 
@@ -148,10 +153,12 @@ the same way.
 
 ## Customize
 
-The Theme section replaces the palette list:
+The Theme section replaces the palette list. It is drawn in Customize and
+in Settings' Appearance section (#91):
 
-- One row each for Graphite and Paper, then the saved themes, then
-  "New theme".
+- One row each for the presets, Graphite, Paper and Glass, then the saved
+  themes (a saved theme named like a preset reads, for example, "Glass
+  (saved)"), then "New theme".
 - Choosing a row applies it at once, as today.
 - A custom theme's row has Edit. Edit opens the controls above, applied
   live to the real window as they change, with Duplicate, Delete and Done.

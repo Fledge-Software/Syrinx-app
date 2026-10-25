@@ -10,6 +10,13 @@ Until the product was named Syrinx on 2026-10-12 it was called Atlas. On
 included; "Atlas" remains only in real identifiers such as the old install's
 folder names.
 
+A `DW-n` name in an older entry is an item of Plan 1's deferred-work
+register, read at
+[af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work).
+Since 2026-10-16 open deferred work is tracked by GitHub issue number
+instead (`docs/dev/deferred-work.md`); where an item became an issue, the
+entry names it.
+
 ## 2026-10-24
 
 - **Syrinx's full-text index uses Tantivy, not SQLite's FTS5 (#52).** The
@@ -51,8 +58,9 @@ folder names.
     4.5:1 above about 60 %, so under dark Acrylic they keep at least a
     0.343 tint under them (`DARK_ACRYLIC_SURFACE_FLOOR`), the least at
     which white text on the selected row still reaches 4.5:1. This
-    surface floor awaits the owner's look on Windows. Text is now readable at every step for every material,
-    in both modes, with Home Solid or See-through; Mica, Mica Alt and
+    surface floor awaits the owner's look on Windows. Text is now
+    readable at every step for every material, in both modes, with Home
+    Solid or See-through; Mica, Mica Alt and
     light themes keep no window floor, and the Glass preset (50 %) and
     the Haze preset are unchanged. This replaces the implementation note
     below that a saved dark Acrylic theme was readable only up to 55 %.
@@ -222,11 +230,11 @@ folder names.
   a 0.44 tint, close to the canvas's 0.46; its tint test
   `the_window_tint_thins_as_transparency_rises` is updated to the new
   mapping. This settles the three points the 2026-10-22 entry left for
-  #124's merge. Implementation note, not part of the owner's decision: #124 checks a
-  dark theme under Acrylic over Glass's bright wallpaper discs, where a
-  saved theme's text reached 4.5:1 only up to 55 % (the 10 % row floor
-  covers Mica, Mica Alt and light themes to 90 %); the dark-Acrylic floor
-  approved above has since made it readable to 90 %.
+  #124's merge. Implementation note, not part of the owner's decision:
+  #124 checks a dark theme under Acrylic over Glass's bright wallpaper
+  discs, where a saved theme's text reached 4.5:1 only up to 55 % (the
+  10 % row floor covers Mica, Mica Alt and light themes to 90 %); the
+  dark-Acrylic floor approved above has since made it readable to 90 %.
   Rejected: keeping #124's automatic thinning beside the Home choice, which
   would make one preset ignore the owner's per-theme setting.
 
@@ -814,7 +822,8 @@ folder names.
 ## 2026-10-14
 
 - **The weekly release workflow signs updates; the owner keeps no release
-  key on a device (P1-39d, DW-30; replaces the 2026-10-13 key arrangement).**
+  key on a device (P1-39d, DW-30, now #55; replaces the 2026-10-13 key
+  arrangement).**
   The 2026-10-13 approval had the owner create two offline keys, a primary on
   a hardware key and a backup stored separately. Walking through P1-39d, the
   owner declined to keep a key on any device, because a lost or destroyed
@@ -837,13 +846,13 @@ folder names.
   the secret's value. Building this is an agent slice that changes the
   release workflow; see DW-30 in the plan's ["Deferred work" register](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work).
 
-- **Sidebar rows get their own right-click menu (DW-63 follow-up).** When
-  choosing Ctrl W for DW-63 (recorded under 2026-10-15), the owner also
-  asked for a per-row right-click menu holding Unload page and the row's
-  other actions (Close tab, Remove saved page, Rename and Remove folder),
-  each showing its key, so every row action is reachable by mouse as well
-  as by keyboard. Today a right-click anywhere in the sidebar opens only
-  the general ⋯ menu. See DW-63 in the plan's ["Deferred work" register](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work).
+- **Sidebar rows get their own right-click menu (DW-63 follow-up, now
+  #58).** When choosing Ctrl W for DW-63 (recorded under 2026-10-15), the
+  owner also asked for a per-row right-click menu holding Unload page and
+  the row's other actions (Close tab, Remove saved page, Rename and Remove
+  folder), each showing its key, so every row action is reachable by mouse
+  as well as by keyboard. Today a right-click anywhere in the sidebar opens
+  only the general ⋯ menu. See DW-63 in the plan's ["Deferred work" register](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work).
 
 - **Syrinx ships as a setup program that installs and updates itself
   (P1-37).** Release 0.2.0 shipped a zip holding `syrinx.exe` and PowerShell
@@ -1006,16 +1015,17 @@ folder names.
   not start. After relaunching for an update, Syrinx does not force itself
   to the front. The owner creates two offline release keys, a primary on a
   hardware key and a backup stored separately, outside the repository and
-  outside every agent session; both public keys are pinned (DW-30), and a
-  separate statement-only key was deferred. `cargo xtask check-deps` changes
-  only as question 8 lists: `syrinx-app` and `syrinx-update-net` may depend
-  on the update verifier; `syrinx-update-net` may use the `windows` crate
-  with its own exact feature list; and that crate alone may use
+  outside every agent session; both public keys are pinned (DW-30, now #55),
+  and a separate statement-only key was deferred. `cargo xtask check-deps`
+  changes only as question 8 lists: `syrinx-app` and `syrinx-update-net` may
+  depend on the update verifier; `syrinx-update-net` may use the `windows`
+  crate with its own exact feature list; and that crate alone may use
   `Win32_Networking_WinHttp`, the only exception to D9's no-network rule.
   `reqwest` with `rustls` was rejected to keep a TLS stack and `tokio` out
   of Syrinx's own crates. P1-39 is split into P1-39a to P1-39d as the
   proposal's slice table defines, with no other renumbering. The release
-  keys remain the owner's to create, so production updates wait on DW-30.
+  keys remain the owner's to create, so production updates wait on DW-30
+  (now #55).
 
 - **Syrinx is on GitHub at `Fledge-Software/Syrinx-app`.** The owner created
   the repository under the Fledge Software organisation and added it as
@@ -1063,10 +1073,12 @@ folder names.
   is crowded across developer tools. The syrinx is a bird's vocal organ,
   which fits beside Fledge. The owner holds the domain `syrinxapp.dev`.
   Code, crates, the data folder and Windows registration names still say
-  Syrinx until a dedicated rename slice changes them together. That slice
+  Atlas until a dedicated rename slice changes them together. That slice
   must also handle the data folder (`%LOCALAPPDATA%\Atlas\data`) before the
   owner's first real install (P1-37). New work should not spread the old
-  name further than it must.
+  name further than it must. *(Done since: the crates are `syrinx-*`, and
+  the installed app's data folder is `%LOCALAPPDATA%\Syrinx\data`, as the
+  2026-10-14 setup-program entry names it.)*
 - **Finished work merges to main; slices are built in local worktrees.**
   This replaces D41's routing through the integration branch
   `codex/integrated-browser-preview`, which left main at P1-04 while
@@ -1183,6 +1195,8 @@ folder names.
   small. The owner rejected keeping history forever, a year and 30 days.
 
 - **The installed app keeps its data in `%LOCALAPPDATA%\Atlas\data` (P1-37).**
+  *(Since the rename slice the folder is `%LOCALAPPDATA%\Syrinx\data`; see
+  the naming entry above and the 2026-10-14 setup-program entry.)*
   Development and preview builds keep using `SyrinxProductPreview`, so test
   runs never mix with the owner's real browsing data. Nothing is moved or
   deleted between them; the installed app starts empty and bookmarks are

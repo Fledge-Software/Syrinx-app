@@ -36,7 +36,10 @@ the 2026-10-09 design pass. The owner-approved 2026-10-10 additions below
 them again requires the owner's approval.
 
 - **The browser is named Syrinx** in the chrome (the mockup said "Perch").
-- **No Extensions button.** Tauri's OS web views cannot run Chrome extensions.
+- **No Extensions button.** Syrinx v1 runs no Chrome extensions, a known
+  limit in the spec and `AGENTS.md`. (This first named Tauri's OS web
+  views; D3 and D4 replaced Tauri, and pages render in WebView2 driven
+  from Rust through wry.)
 - **New tab is a `+` on the Open tabs header (Ctrl T)**, not a row, so no two
   rows read "New tab".
 - **Saved pages and folders live inline with ordinary tabs (D43).** Pin
@@ -70,8 +73,9 @@ them again requires the owner's approval.
   in on top of whatever is showing, on every kind of tab, without resizing
   anything under it. A persistently visible sidebar, set by Ctrl Alt S or
   the D44 drag control, reserves its current width beside the page. Over a
-  web page the sidebar sits above a separate native web view, so
-  it needs the same layering fix as the command palette in Phase 0.
+  web page the sidebar sits above a separate native web view, so the peek,
+  like the command palette, is its own popup window owned by the main
+  window, the arrangement Phase 0 proved (`docs/dev/trapstoknow.md`).
 - **A plugin is a tab that never leaves the Plugins list.** It can be opened
   and closed like a tab. Open, its row shows what it has open after its name
   ("Forge · fledge-core"), and the active one is highlighted with a close
@@ -195,7 +199,8 @@ is copied.
 ## Base palettes
 
 **Replaced on 2026-10-15** (`docs/decisions.md`, `docs/theme-editor.md`).
-Graphite, the default, and Paper are the only presets. Haze, Glass and
+Graphite, the default, and Paper were the only presets; since 2026-10-21
+Glass is a preset again (#93, built in #124; `docs/decisions.md`). Haze and
 Tint are no longer fixed palettes: the owner builds looks like them in the
 theme editor (mode, background, gradient, Mica, Mica Alt or Acrylic,
 transparency, glass edges, grain) and saves them by name. The table and
@@ -239,9 +244,12 @@ Rules that hold for the see-through palettes:
   transparent page background breaks sites that assume white.
 - **The command palette stays near-opaque.** Over a web page it sits above a
   separate native web view, which CSS blur cannot see.
-- **Acrylic has to be measured.** Tauri's docs say it drags and resizes slowly
-  on Windows 10 1903+ and Windows 11 build 22000. The development machine runs
-  build 26300, so it may be fine there; the Phase 0 spike has to confirm it.
+- **Acrylic has to be measured.** Tauri's docs, read before D3 and D4
+  replaced Tauri, say it drags and resizes slowly on Windows 10
+  1903+ and Windows 11 build 22000. The development machine runs build
+  26300, so it may be fine there. Phase 0 did not measure it; the
+  measurement waits on the owner's own drag (`docs/theme-editor.md`,
+  "Building it", step 4).
 - **Text gets lighter on glass.** The muted grey is raised in Haze and Glass so
   it stays at 4.5:1 over a mid-tone wallpaper. A bright wallpaper can still
   fail, so Syrinx's "Reduce transparency" switch follows the OS setting and
