@@ -354,6 +354,14 @@ replay. Diagnostic output redacts the ranges. This module performs no file
 I/O or history collection. P1-27 persists it as `syrinx.deletions` beside the
 database, with schema 5's applied generation as the barrier, and connects the
 clearing and replay participants; see [`docs/p1-27-clear-data.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-27-clear-data.md).
+Since #121 the journal has a second category, `SiteZoom` (category byte 2),
+for the zoom levels that Clear browsing data's "Cookies and site data"
+removes: `Store::apply_deletions` applies every category of a request batch
+in one transaction and advances the one applied generation, and the staged
+replay covers the `site_zoom` table on copies of schema 7 or later. The
+record layout is unchanged. A build that does not know a category refuses
+the journal, as it always has; this build names such a record as written by
+a newer Syrinx.
 
 `Store::backup_if_due(utc_seconds, idle)` is a blocking host-worker call on
 the existing writer queue. It takes a daily `VACUUM INTO` snapshot only when
