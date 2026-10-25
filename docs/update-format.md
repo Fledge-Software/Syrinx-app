@@ -4,7 +4,12 @@ This is the reviewed format and key-handling design of Syrinx's update
 verifier (P1-38), and how the update slices built on it work: the
 latest-version statement (P1-39a), staging and rollback (P1-39b), "Check for
 updates" (P1-39c) and the update-record repairs (DW-66, DW-69). The approved
-delivery design they implement is `docs/update-delivery.md`.
+delivery design they implement is `docs/update-delivery.md`. A `DW-n` name
+is an item of Plan 1's old deferred-work register, read at `af3de53`; open
+deferred work now has a GitHub issue (`docs/dev/deferred-work.md`). The
+Updates section these slices describe was in Customize when they were
+built; since #91 (2026-10-23) it is in Settings (`ui/updates.rs`,
+`ui/settings_page.rs`), and the sections below say so.
 
 ## Why this exists
 
@@ -483,19 +488,20 @@ fail-closed behaviour until P1-39d.
 
 ### Where the code lives
 
-The staging, swap and recovery code sits in `crates/syrinx-update/src/install/`
-beside the verifier, and the helper is the crate's second executable,
-`src/bin/syrinx-apply.rs`. Keeping them in the verifier's crate means the
-helper needs no new crate and no dependency (a new crate depending on
-`syrinx-update` would also break `check-deps` change 1, which allows only
-`syrinx-app`), and the recovery tests can sign synthetic packages with the
-in-memory CNG keys that exist only in that crate's test build. The crate
-still requests only the `windows` features `Win32_Foundation` and
-`Win32_Security_Cryptography`; everything else is `std`. `syrinx-app` adds
-the Customize section, the palette command and the handover
-(`src/updates.rs`, `src/ui/updates.rs`), `syrinx-platform` adds a folder
-picker and a free-space query (`file_dialog::choose_folder`,
-`disk::free_bytes`), and `syrinx-store` adds the pre-update snapshot.
+The staging, swap and recovery code sits in
+`crates/syrinx-update/src/install/` beside the verifier, and the helper is
+the crate's second executable, `src/bin/syrinx-apply.rs`. Keeping them in
+the verifier's crate means the helper needs no new crate and no dependency
+(a new crate depending on `syrinx-update` would also break `check-deps`
+change 1, which allows only `syrinx-app`), and the recovery tests can sign
+synthetic packages with the in-memory CNG keys that exist only in that
+crate's test build. The crate still requests only the `windows` features
+`Win32_Foundation` and `Win32_Security_Cryptography`; everything else is
+`std`. `syrinx-app` adds the Updates section (in Customize then, in Settings
+since #91), the palette command and the handover (`src/updates.rs`,
+`src/ui/updates.rs`), `syrinx-platform` adds a folder picker and a
+free-space query (`file_dialog::choose_folder`, `disk::free_bytes`), and
+`syrinx-store` adds the pre-update snapshot.
 
 ### The folders
 
@@ -535,10 +541,11 @@ and is left alone.
 
 ### Staging: "Install update from file…"
 
-The command is in Customize's new Updates section ("Install from file…")
-and in the palette ("Install update from file…"). The owner picks the
-package folder that `cargo xtask package` and `cargo xtask sign-update`
-wrote. On its own thread, `stage_from_folder`:
+The command is in Settings' Updates section ("Install from file…"), which
+P1-39b added to Customize and #91 moved to Settings, and in the palette
+("Install update from file…"). The owner picks the package folder that
+`cargo xtask package` and `cargo xtask sign-update` wrote. On its own
+thread, `stage_from_folder`:
 
 1. takes the update lock, and reads `state`; an unreadable `state` refuses
    staging rather than forgetting the accepted serial;
@@ -577,8 +584,9 @@ diagnostic line names only the fixed category and the verifier's reason.
 
 ### Restart now, Later, and the pre-update snapshot
 
-Once staged, Customize shows "Syrinx 1.4.0 is ready" with **Restart now**
-and **Later**. Nothing is replaced until one of them leads to a clean exit:
+Once staged, Settings' Updates section shows "Syrinx 1.4.0 is ready" with
+**Restart now** and **Later**. Nothing is replaced until one of them leads
+to a clean exit:
 
 - **Restart now** asks the session worker for D13's extra snapshot
   (`SessionCommand::SnapshotBeforeUpdate`, `Store::backup_before_update`),
@@ -805,7 +813,7 @@ regenerated for the new file list. The only lockfile change is
 ## P1-39c: "Check for updates"
 
 P1-39c is the third slice of the approved delivery design. It gives the
-owner one button, in Customize's Updates section and as the palette command
+owner one button, in Settings' Updates section and as the palette command
 "Check for updates", that asks the approved host what the newest release is
 and, after the owner's yes, downloads it into P1-39b's staging. Without it
 every update would still mean copying a package folder by hand. It is the
@@ -828,22 +836,22 @@ keys to check them with" and contacts nobody (the same refusal now covers
 "Install update from file…"). A test proves no request is made.
 
 One press reads four small files and stops: `latest`, `latest.sig`, then the
-stated version's `manifest` and `manifest.sig`. The owner then sees
-"Syrinx 1.4.0 is available (38 MB). Download and verify it?" with
-**Download** and **Not now**. The size can only come from the signed
-manifest, which the statement binds by its SHA-256, so the manifest is read
-before asking; the proposal's "nothing larger than the statement" is read
-here as "nothing larger than these four signed files". The owner approved
-that reading on 2026-10-14, so the confirmation shows a verified size.
-Only Download fetches the payload files, one by one
-under `<version>/files/`, straight into `Updates\incoming\<version>\`, and
-then P1-39b's staging verifies and stages them exactly as it does a folder:
-the statement and manifest are checked again, the payload is verified and
-installed from its verified handles, and Customize offers Restart now and
-Later. Check and download each run on their own thread with a **Cancel**
-button. A statement naming the installed version says "Syrinx 1.3.0 is up to
-date." and stores its serial, as staging does; an offer stores only the
-`available` category, and the serial is stored once the download is staged.
+stated version's `manifest` and `manifest.sig`. The owner then sees "Syrinx
+1.4.0 is available (38 MB). Download and verify it?" with **Download** and
+**Not now**. The size can only come from the signed manifest, which the
+statement binds by its SHA-256, so the manifest is read before asking; the
+proposal's "nothing larger than the statement" is read here as "nothing
+larger than these four signed files". The owner approved that reading on
+2026-10-14, so the confirmation shows a verified size. Only Download fetches
+the payload files, one by one under `<version>/files/`, straight into
+`Updates\incoming\<version>\`, and then P1-39b's staging verifies and stages
+them exactly as it does a folder: the statement and manifest are checked
+again, the payload is verified and installed from its verified handles, and
+Settings' Updates section offers Restart now and Later. Check and download
+each run on their own thread with a **Cancel** button. A statement naming
+the installed version says "Syrinx 1.3.0 is up to date." and stores its
+serial, as staging does; an offer stores only the `available` category, and
+the serial is stored once the download is staged.
 
 ### The code
 
@@ -1010,7 +1018,7 @@ stops updates for good with no explanation of what to do.
 
 ### What the owner sees
 
-Customize's Updates section shows, only while the record is unreadable,
+Settings' Updates section shows, only while the record is unreadable,
 "Syrinx can't read its update records, so it won't check for or install
 updates." with a **Reset update records…** button. Pressing it replaces the
 line's button with an explanation and **Reset** and **Cancel**: resetting
@@ -1077,8 +1085,8 @@ There is no palette command. The update commands in the palette come from
 `syrinx-core`'s fixed command registry and are listed in every build, while
 this action must never appear for a readable record; a command that is
 usually refused would also put a destructive-sounding entry in front of the
-owner every day. The action lives in Customize, where its explanation and
-confirmation are shown.
+owner every day. The action lives in Settings' Updates section (in
+Customize until #91), where its explanation and confirmation are shown.
 
 ### Tests
 
@@ -1100,12 +1108,12 @@ The window was checked on 2026-10-14 with an `installed` build copied to a
 synthetic `Programs\Syrinx` folder in a scratch directory and fresh
 `--test-data-dir` profiles, the window confirmed in the foreground by
 process id before each click. With a deliberately damaged synthetic
-`Updates\state`, Customize's Updates section showed the line and **Reset
-update records…**; pressing it showed the explanation with **Reset** and
-**Cancel**; **Reset** renamed the record to `state.unreadable`, removed the
-line and reported "Update records reset…". With no `state`, and with a
-readable one, UI Automation found no reset control. This is an agent's
-observation, not the owner's visual acceptance.
+`Updates\state`, the Updates section (then in Customize, in Settings since
+#91) showed the line and **Reset update records…**; pressing it showed the
+explanation with **Reset** and **Cancel**; **Reset** renamed the record to
+`state.unreadable`, removed the line and reported "Update records reset…".
+With no `state`, and with a readable one, UI Automation found no reset
+control. This is an agent's observation, not the owner's visual acceptance.
 
 ### A staged update beside an unreadable record
 

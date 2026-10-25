@@ -69,7 +69,7 @@ fn version_5_upgrades_to_6_keeping_session_history_and_clear_generation() {
     assert_eq!(stored.revision, 1);
     assert_eq!(stored.snapshot, fixture());
     assert_eq!(store.history_entries().expect("history kept").len(), 1);
-    assert_eq!(store.history_deletion_generation(), Ok(3));
+    assert_eq!(store.deletion_generation(), Ok(3));
     assert_eq!(
         store.permission("https://upgrade.example.test", PermissionKind::Camera),
         Ok(None),

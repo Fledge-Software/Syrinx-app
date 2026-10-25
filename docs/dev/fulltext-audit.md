@@ -1,6 +1,6 @@
 # P1-23 full-text candidate audit
 
-Page recall needs measured costs for deletion and seven-day expiry before Syrinx chooses a store. This audit was prepared on 2026-10-11 and continued on 2026-10-12 under the owner's explicit Tantivy approval. It covers benchmark-only use. P1-24 still waits for review of the measured engine choice and satisfaction of the production preconditions below.
+Page recall needs measured costs for deletion and seven-day expiry before Syrinx chooses a store. This audit was prepared on 2026-10-11 and continued on 2026-10-12 under the owner's explicit Tantivy approval. It covers benchmark-only use. The owner chose Tantivy on 2026-10-24 (`docs/decisions.md`); P1-24's production adapter (#53) still has to satisfy the production preconditions below.
 
 ## SQLite FTS5: existing dependency, no patch change
 
@@ -10,13 +10,17 @@ Use a separate disposable cache database, never Syrinx's durable store or snapsh
 
 ## Tantivy: exact candidate and approval boundary
 
-Approved benchmark pin: `tantivy = { version = "=0.26.2", default-features = false, features = ["mmap", "lz4-compression"] }`. MIT is declared in its packaged manifest and licence. Memory-mapped directories permit a disk/recovery comparison; LZ4 supplies document compression. Stemming, stopwords and Zstandard are omitted to avoid changing query semantics or adding unnecessary native compression dependencies. The main alternative is Tantivy's broader default feature set; it should not silently replace this audited configuration.
+Current pin, since 2026-10-24: `tantivy = { version = "=0.27.0", default-features = false, features = ["mmap", "lz4-compression"] }`. The move from 0.26.2 and its audit are in "Tantivy 0.27.0 move, 2026-10-24" below; the rest of this section and the inventory after it record the original 0.26.2 audit.
+
+Originally approved benchmark pin: `tantivy = { version = "=0.26.2", default-features = false, features = ["mmap", "lz4-compression"] }`. MIT is declared in its packaged manifest and licence. Memory-mapped directories permit a disk/recovery comparison; LZ4 supplies document compression. Stemming, stopwords and Zstandard are omitted to avoid changing query semantics or adding unnecessary native compression dependencies. The main alternative is Tantivy's broader default feature set; it should not silently replace this audited configuration.
 
 The [packaged changelog](https://docs.rs/crate/tantivy/0.26.2/source/CHANGELOG.md) records recent scorer and aggregation fixes, while [upstream releases](https://github.com/quickwit-oss/tantivy/releases) show ongoing maintenance. Its manifest requires Rust 1.86; the installed 1.97.1 meets this. Release activity is evidence of maintenance, not proof of correctness or security.
 
 **Approved for the benchmark, with the advisory retained.** On 2026-10-12 the owner explicitly instructed this session to measure the audited candidate despite its `lru 0.16.4` advisory if no compatible fixed version was cached. The local crates.io sparse-index cache ends at non-yanked Tantivy 0.26.2; its `lru ^0.16.3` requirement excludes the fixed `>=0.18.2` range. No network refresh, ineffective `cargo update`, patch or vendoring of lru was performed.
 
 [RUSTSEC-2026-0253](https://rustsec.org/advisories/RUSTSEC-2026-0253.html) describes use-after-free/double-free when a key destructor panics during `pop` and execution continues after catching the panic. Reinspection of cached `tantivy-0.26.2/src/store/reader.rs` found `LruCache<usize, Block>` at line 74 and get/put operations at lines 84/95. Integer keys have no panicking destructor, so the advisory's stated trigger is not reachable through this inspected store-reader path, including Syrinx's intended stored-document retrieval. This does not establish that every future use of Tantivy/lru is safe or replace a package-level advisory review. The benchmark exercises only synthetic data and is not a product dependency.
+
+**Resolved by Tantivy 0.27.0 (2026-10-24).** Tantivy 0.27.0 requires `lru ^0.18.2`, and the lockfile resolves `lru 0.18.5`, inside the advisory's patched range `>= 0.18.2`. The owner approved the move on 2026-10-24 (`docs/decisions.md`); the details are in "Tantivy 0.27.0 move, 2026-10-24" below. The paragraph that follows is kept as the original precondition.
 
 **P1-24 precondition if Tantivy is selected:** resolve the advisory with an audited upstream candidate or compatible fixed dependency before production integration. This session does not authorize a lru patch, suppress the finding, or approve shipping the affected version. The owner's benchmark exception supersedes the previous recommendation to withhold measurement.
 
@@ -233,3 +237,69 @@ The workspace-copy closure has 140 all-target packages and 119 Windows packages,
 `cargo tree -p tantivy --locked --offline --target all --edges normal,build --prefix none --format '{p} | {l}'` reproduces all 140 entries in the inventory above (Cargo's proc-macro annotation is omitted from the table). A parsed comparison against the committed baseline lockfile shows exactly 36 added registry name/version pairs and zero removed or upgraded versions. The existing SQLite source and build flags, all workspace pins and all vendor files remain unchanged. The two existing exact-package licence exceptions remain sufficient; no new licence exception is needed.
 
 The raw tree is `target/p1-23-approved-tree.txt`. Maintenance/security conclusions remain those of the retained 2026-10-11 source/advisory snapshot; no fresh advisory-database download or automated cargo-audit pass is claimed on 2026-10-12. The latest-version statement is deliberately limited to the local registry cache, as requested by the owner.
+
+## Tantivy 0.27.0 move, 2026-10-24
+
+**Why.** The bake-off chose Tantivy (#52, `docs/decisions.md`, 2026-10-24), and the tested 0.26.2 requires `lru ^0.16.3`, which RUSTSEC-2026-0253 covers. Tantivy 0.27.0 requires `lru ^0.18.2`, the advisory's first fixed version. The owner approved moving the exact pin and the lockfile growth it brings on 2026-10-24. The benchmark crate is still the only Tantivy user; `crates/xtask/src/dependency_policy.rs` (`check_fulltext_quarantine`) keeps it that way until #53 brings Tantivy into Syrinx.
+
+**What changed.** `crates/fulltext-bench/Cargo.toml` pins `=0.27.0` with the same `default-features = false` and the same `mmap` and `lz4-compression` features, both of which still exist in 0.27.0's manifest. `Cargo.lock` was changed only with `cargo update -p tantivy --precise 0.27.0`; no blanket update was run. The benchmark source needed no change: it touches none of the breaking changes in 0.27.0's CHANGELOG, such as `set_fast` taking a string, the new `FieldType::TieBreaker` variant and the removed `BooleanWeight::new` and `RamDirectory::deep_clone`, and it compiled and passed its tests in `cargo xtask check` unchanged; its capture-time field uses the `FAST` flag, not `set_fast`. 0.27.0 requires Rust 1.88; the installed 1.97.1 meets this. Tantivy 0.27.0 was published on 2026-10-17 and is the latest stable release; it is young, so the comparison was rerun on it (below).
+
+**RUSTSEC-2026-0253 resolved.** The lockfile resolves `lru 0.18.5` (published 2026-09-23, MIT), inside the patched range `>= 0.18.2`; 0.18.5 is also patched for RUSTSEC-2021-0130 and RUSTSEC-2026-0002. Tantivy 0.27.0 still uses `lru` only for the doc-store block cache (`src/store/reader.rs`, `LruCache<usize, Block>`).
+
+**Lockfile changes.** Two packages are new to `Cargo.lock` and eleven change version; nothing is removed. All are MIT or Apache-2.0, so no licence exception is needed.
+
+| Package | Before | After | Declared licence | Published (crates.io) |
+| --- | --- | --- | --- | --- |
+| tantivy | 0.26.2 | 0.27.0 | MIT | 2026-10-17 |
+| tantivy-bitpacker | 0.10.0 | 0.27.0 | MIT | 2026-10-16 |
+| tantivy-columnar | 0.7.0 | 0.27.0 | MIT | 2026-10-17 |
+| tantivy-common | 0.11.0 | 0.27.0 | MIT | 2026-10-16 |
+| tantivy-query-grammar | 0.26.0 | 0.27.0 | MIT | 2026-10-16 |
+| tantivy-sstable | 0.7.0 | 0.27.0 | MIT | 2026-10-16 |
+| tantivy-stacker | 0.7.0 | 0.27.0 | MIT | 2026-10-17 |
+| lru | 0.16.4 | 0.18.5 | MIT | 2026-09-23 |
+| lz4_flex | 0.13.1 | 0.14.0 | MIT | 2026-07-14 |
+| murmurhash32 | 0.3.1 | 0.4.0 | MIT | 2026-04-09 |
+| datasketches | 0.2.0 | 0.5.0 | Apache-2.0 | 2026-09-04 |
+| serde-tuple-vec-map | new | 1.0.1 | MIT | 2022-04-04 |
+| unwrap-infallible | new | 1.0.0 | MIT OR Apache-2.0 | 2025-12-06 |
+
+Maintenance: the seven Tantivy crates, lz4_flex and murmurhash32 come from the Tantivy/Quickwit maintainers; datasketches is the Apache DataSketches project's Rust port; lru 0.19.0 exists upstream (2026-10-18), so the crate is maintained, and Tantivy's `^0.18.2` requirement keeps it on 0.18. serde-tuple-vec-map is a small, finished serde helper with no release since 2022, and unwrap-infallible is a one-function helper; neither has a RustSec entry. None of these versions is yanked.
+
+**Packages that join Tantivy's closure without changing the lockfile.** These were already in `Cargo.lock` for other crates and keep their earlier audits; they now also sit under Tantivy: base64 0.23.1, rand 0.9.5, rand_chacha 0.9.0, rand_core 0.9.5, ppv-lite86 0.2.21, getrandom 0.3.4, r-efi 5.3.0, wasip2 1.0.4, wit-bindgen 0.57.1, zerocopy 0.8.62, zerocopy-derive 0.8.62 and syn 2.0.119. All offer MIT or Apache-2.0 (zerocopy also BSD-2-Clause; r-efi's LGPL alternative is not selected, as before). allocator-api2 0.2.21, base64 0.22.1 and hashbrown 0.16.1 leave Tantivy's closure but stay in the lockfile for other crates. The closure is now 151 all-target packages and 127 Windows packages, from `cargo tree -p tantivy --locked --offline --target all --edges normal,build --prefix none --format '{p} | {l}'` (and `--target x86_64-pc-windows-msvc`).
+
+**Advisories.** `cargo audit` is still not installed. Each new or changed package, and each package newly in the closure, was matched against the RustSec advisory database's `crates/` directories at commit `21d909e4c8bd4e14c7aea58bf980c881a0053ab1` (2026-10-24), read through the GitHub API. Matches and their patched ranges, all of which contain the resolved versions:
+
+- id = "RUSTSEC-2021-0130"; package = "lru"; patched = [">= 0.7.1"]
+- id = "RUSTSEC-2026-0002"; package = "lru"; informational = "unsound"; patched = [">= 0.16.3"]
+- id = "RUSTSEC-2026-0253"; package = "lru"; informational = "unsound"; patched = [">= 0.18.2"]
+- id = "RUSTSEC-2026-0041"; package = "lz4_flex"; patched = [">= 0.11.6, < 0.12.0", ">= 0.12.1"]
+- id = "RUSTSEC-2017-0004"; package = "base64"; patched = [">= 0.5.2"]
+- id = "RUSTSEC-2026-0097"; package = "rand"; informational = "unsound"; patched = [">= 0.10.1", "< 0.10.0, >= 0.9.3", "< 0.9.0, >= 0.8.6"]
+- id = "RUSTSEC-2019-0035"; package = "rand_core"; informational = "unsound"; patched = ["^ 0.3.1", ">= 0.4.2"]
+- id = "RUSTSEC-2021-0023"; package = "rand_core"; patched = [">= 0.6.2"]
+- id = "RUSTSEC-2023-0074"; package = "zerocopy"; patched = [..., ">= 0.7.31"]
+
+No other package listed above has a RustSec entry. As before, this is a manual scoped review, not a cargo-audit pass or a claim that no undisclosed flaw exists.
+
+**The prefix-snippet trap still holds.** `src/query/phrase_prefix_query/phrase_prefix_query.rs` and `SnippetGenerator::create` are byte-for-byte the same in 0.26.2 and 0.27.0: `query_terms` still visits only the phrase terms, never the prefix, so a one-word prefix query still gives `SnippetGenerator::create` no terms. The benchmark keeps its own prefix expansion and its empty-snippet rejection (`docs/dev/trapstoknow.md`, "Local search"). This is a source comparison, not a new measurement.
+
+**Confirming rerun on 0.27.0, 2026-10-24.** An agent ran `run-comparison.ps1 -Label p1-23-quiet-0270-2026-10-24 -QuietWaitMinutes 20` with the same twelve runs as #52's 0.26.2 comparison: three per engine on each synthetic corpus. The runner saw no Cargo or rustc process on any check. All twelve exited 0 with empty error logs, passed the crash-recovery and stale-replay checks, and both engines matched the same number of pages for every query. The middle of three runs on the broad corpus:
+
+| What was measured | FTS5 | Tantivy 0.27.0 | Tantivy 0.26.2 (#52) |
+| --- | ---: | ---: | ---: |
+| Slowest query, 95th percentile (`lexeme000*`) | 26.8 ms | 2.7 ms | 2.3 ms |
+| Expiring 40,000 pages | 317 s | 2.4 s | 2.2 s |
+| Reopening after the crash | 30 ms | 11 ms | 11 ms |
+| Disk after expiry | 408 MB | 55 MB | 55 MB |
+| Peak working set | 383 MB | 562 MB | 562 MB |
+
+Tantivy 0.27.0 performs as 0.26.2 did, within run-to-run noise, so #52's choice stands on the version Syrinx will ship. The raw files are `target/p1-23-quiet-0270-2026-10-24-*` on the owner's machine, outside the repository.
+
+## Production use in `syrinx-search`, 2026-10-24 (#53)
+
+**Why.** P1-24 builds Syrinx's full-text index on the engine #52 chose. Until then `crates/xtask/src/dependency_policy.rs` let only the bake-off harness depend on Tantivy; the issue lifts that for `syrinx-search` only, now that the advisory above is resolved by 0.27.0 and the new graph is audited in "Tantivy 0.27.0 move".
+
+**What changed.** The pin moved into the workspace's `[workspace.dependencies]` with the same exact version and the same features (`default-features = false`, `mmap`, `lz4-compression`); `crates/fulltext-bench` and `crates/syrinx-search` both inherit it, so the two cannot drift apart. `Cargo.lock` gains one line, `"tantivy"` in `syrinx-search`'s dependency list: no package is added, removed or moved to another version, so the licence and advisory review of the 0.27.0 graph above covers it unchanged.
+
+**The boundary that remains.** The dependency check now allows Tantivy in exactly two crates, `syrinx-search` and `fulltext-bench`; every other crate reaches the index through `syrinx_search::fulltext`, and nothing may depend on the bake-off. `syrinx-search` stays in the set of headless crates whose resolved graph may not reach a network client, which `cargo xtask check-deps` checks on every gate.

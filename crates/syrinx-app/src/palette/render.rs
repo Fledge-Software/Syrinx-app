@@ -11,7 +11,7 @@ use syrinx_ui::metrics::{radius, text};
 use super::{
     PaletteView,
     choices::PaletteChoices,
-    display::{Highlighted, Preview, ROW_TEXT_LIMIT, Section, highlight, row_title},
+    display::{Highlighted, Preview, ROW_TEXT_LIMIT, Section, highlight, row_title, search_label},
     query::{Chip, View},
 };
 use crate::controls::control;
@@ -24,14 +24,14 @@ const TRAILING_WIDTH: f32 = 180.;
 
 /// The position of `row` among the list's children, which also include section headers.
 pub(super) fn child_index(choices: &PaletteChoices, row: usize) -> usize {
-    let address_rows = choices.address_rows();
-    let Some(hit_index) = row.checked_sub(address_rows) else {
+    let lead_rows = choices.lead_rows();
+    let Some(hit_index) = row.checked_sub(lead_rows) else {
         return row;
     };
     let headers = (0..=hit_index.min(choices.results.len().saturating_sub(1)))
         .filter(|&index| starts_section(&choices.results, index))
         .count();
-    address_rows + hit_index + headers
+    lead_rows + hit_index + headers
 }
 
 fn starts_section(hits: &[SearchHit], index: usize) -> bool {
@@ -106,6 +106,8 @@ pub(super) fn list(view: &PaletteView, wide: bool, cx: &mut Context<PaletteView>
         .track_scroll(&view.scroll);
     if let Some(address) = &view.choices.address {
         rows = rows.child(address_row(view, address, cx));
+    } else if view.choices.web_search {
+        rows = rows.child(search_row(view, cx));
     }
     for (index, hit) in view.choices.results.iter().enumerate() {
         if starts_section(&view.choices.results, index) {
@@ -113,7 +115,7 @@ pub(super) fn list(view: &PaletteView, wide: bool, cx: &mut Context<PaletteView>
         }
         rows = rows.child(result_row(view, index, hit, cx));
     }
-    if view.choices.results.is_empty() && view.choices.address.is_none() {
+    if view.choices.results.is_empty() && view.choices.lead_rows() == 0 {
         rows = rows.children(empty_state(view.view));
     }
     let column = div()
@@ -153,6 +155,27 @@ fn address_row(view: &PaletteView, address: &str, cx: &mut Context<PaletteView>)
     .into_any_element()
 }
 
+/// The lead row for plain text: Enter searches Google unless a confident match is chosen.
+fn search_row(view: &PaletteView, cx: &mut Context<PaletteView>) -> AnyElement {
+    let request_id = view.choices.request_id;
+    let title = highlight(&search_label(&view.choices.entry), &[], ROW_TEXT_LIMIT);
+    row_frame(
+        "search-google".into(),
+        title.text.clone(),
+        RowState::of(&view.choices, 0),
+    )
+    .on_click(cx.listener(move |this, _, window, cx| {
+        if this.choices.request_id != request_id {
+            return;
+        }
+        this.choices.select(0);
+        this.submit(false, window, cx);
+    }))
+    .child(glyph("⌕"))
+    .child(row_text(title))
+    .into_any_element()
+}
+
 fn result_row(
     view: &PaletteView,
     index: usize,
@@ -161,7 +184,7 @@ fn result_row(
 ) -> AnyElement {
     let target = hit.target;
     let request_id = view.choices.request_id;
-    let row = RowState::of(&view.choices, index + view.choices.address_rows());
+    let row = RowState::of(&view.choices, index + view.choices.lead_rows());
     let trailing = match view.commands.command(target) {
         Some(command) => command
             .shortcut
@@ -508,7 +531,8 @@ mod tests {
         let second = Target::Tab(TabId::new(2).expect("tab"));
         let saved = Target::Saved(SavedPageId::new(1).expect("saved"));
         let mut choices = PaletteChoices::default();
-        let request = choices.query_scoped("synthetic", true);
+        // A scoped view has no lead row, so the first row is the first result.
+        let request = choices.query_scoped("synthetic", false);
         assert!(choices.receive(
             request,
             Ok(SearchResults {

@@ -265,7 +265,9 @@ fn wait_fullscreen(
     Ok(())
 }
 
-fn key(child: HWND, key: usize) -> Result<(), String> {
+/// Posts one key press to the focused page child, as a user would type it; the audio suite
+/// shares it.
+pub(super) fn key(child: HWND, key: usize) -> Result<(), String> {
     let thread = unsafe { GetWindowThreadProcessId(child, None) };
     let mut info = GUITHREADINFO {
         cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,

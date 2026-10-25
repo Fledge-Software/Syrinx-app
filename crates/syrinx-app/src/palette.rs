@@ -18,13 +18,13 @@ use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
 use syrinx_core::usage::{Feature, Timing, UsageRecorder};
 use syrinx_core::{CommandAction, CommandContext, CommandRegistry};
 use syrinx_platform::browser::BrowserShortcut;
-use syrinx_search::{Scope, SearchResults, Target};
+use syrinx_search::{Scope, Target};
 
 pub use display::arrange;
 
 use choices::PaletteChoices;
 use commands::{CommandMatcher, CommandMatches};
-use display::Preview;
+use display::{Arranged, Preview};
 use query::{Chip, ParsedQuery, View};
 
 use crate::{acceptance::PresentProbe, session::SessionError, text_field, theme, ui};
@@ -288,11 +288,11 @@ impl PaletteView {
     pub fn receive(
         &mut self,
         request_id: u64,
-        result: Result<SearchResults, SessionError>,
+        result: Result<Arranged, SessionError>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.is_open() || !self.choices.receive(request_id, result) {
+        if !self.is_open() || !self.choices.receive_arranged(request_id, result) {
             return false;
         }
         if let Some(probe) = &self.probe {
@@ -414,6 +414,9 @@ impl PaletteView {
             && let Some(address) = &self.choices.address
         {
             return Some(Preview::address(address));
+        }
+        if selected == 0 && self.choices.web_search {
+            return Some(Preview::search(&self.choices.entry));
         }
         let hit = self.choices.selected_hit()?;
         let Some(command) = self.commands.command(hit.target) else {

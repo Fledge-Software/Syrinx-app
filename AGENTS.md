@@ -45,22 +45,35 @@ and `xtask`; P1-02 adds the window-independent `syrinx-core` model. Later
 crates are added in their approved slice.
 The layout proposed in research note 03 (wiki: `Background-03-core-architecture`,
 "Crate layout") is the starting point, adjusted for the engine and interface
-decisions made since (D3 and D4 in `docs/architecture-decisions.md`), and the
+decisions made since (D3 and D4 in `docs/architecture-decisions.md`) and for
+WASM plugins (owner, 2026-10-15 and 2026-10-21; research note 10), and the
 scaffold settles it:
 
-- `crates/syrinx-plugin-api` holds the `Plugin` trait and the data types that
-  cross it. It depends on no other Syrinx crate.
+- Plugins are WebAssembly (WASM) components: Rust compiled to a sandboxed
+  module that Syrinx loads at run time. Their contract is one versioned WIT
+  package, `syrinx:plugin`, whose world is `plugin`, kept in this
+  repository at `wit/v0_1/` (owner, 2026-10-24).
+- `crates/syrinx-plugin-host` (owner, 2026-10-24) is the only crate that
+  links wasmtime; it loads, links and runs plugins, enforces the owner's
+  grants, and publishes the test host that plugin repositories run their
+  contract tests against.
 - `crates/syrinx-core` holds the tab model, session, palette and command
-  registry and the plugin host; `crates/syrinx-store` holds rusqlite and its
-  migrations; `crates/syrinx-search` holds the in-memory catalogue (frizbee)
-  and the full-text index (chosen by plan 1's FTS5/Tantivy comparison).
-- `crates/plugin-notes`, `crates/plugin-forge` and `crates/plugin-fledge`
-  are the built-in plugins, and `crates/fledge-client` holds the Fledge API
-  trait and its stand-in client.
+  registry, and stays free of wasmtime; `crates/syrinx-store` holds rusqlite
+  and its migrations; `crates/syrinx-search` holds the in-memory catalogue
+  (frizbee) and the full-text index (chosen by plan 1's FTS5/Tantivy
+  comparison).
+- The built-in plugins, Notes and later Forge, are not workspace crates.
+  Each lives in its own repository made from the plugin template (#30) and
+  ships as a signed package bundled in Syrinx's release. The Fledge plugin
+  and its client are on hold (2026-10-20).
 - `syrinx-app` and `syrinx-ui` draw the interface with the approved GPUI base;
-  `syrinx-platform` owns WebView2 and Win32. Other product crates remain free
-  of toolkit/web-view dependencies so the core stays testable without a window.
-- Notes and Forge edit in CodeMirror 6 inside a small local web view (D28).
+  `syrinx-platform` owns WebView2 and Win32, with plugin views a separate
+  type from page web views. Other product crates remain free of
+  toolkit/web-view dependencies so the core stays testable without a window.
+- Plugin tabs draw in HTML inside Syrinx's own plugin views; palette forms
+  and Home widgets are declarative and drawn by GPUI (2026-10-21). Notes and
+  Forge edit in one host-provided CodeMirror 6 component, which Syrinx ships
+  in such a view (D28).
 - `docs/` holds the spec, the owner's decisions, the v1 architecture
   decisions and the documents for the app and its operations. `docs/dev/`
   holds contributor material agents and tooling read: `LOCAL-DEV.md` (how to
@@ -101,7 +114,7 @@ tracked in GitHub issues. Read these in this order of authority:
    was rejected and why, and they are settled. Where it disagrees with the
    three above, they win and the disagreement goes to a GitHub issue. Plans
    2–4 are also approved, with implementation queued in order through their
-   epics (#25 plugin runtime, #32 Fledge, #35 Notes, #42 Forge).
+   epics (#25 plugin runtime, #35 Notes, #42 Forge; #32 Fledge is on hold).
 
 - **Settled decisions stay settled.** If code or a task seems to need a
   different decision, stop and ask; do not quietly build around one.
@@ -135,10 +148,11 @@ Some work needs the owner, not an agent:
   never enters, stores or asks for the owner's credentials;
 - checking whether the owner's Google Workspace admin console turns on
   device checks (an open thread, tracked in GitHub issues);
-- creating the GitHub repository and choosing the account or organisation it
-  lives under (D16);
-- making the repository public (the licence, MPL-2.0, was chosen on
-  2026-10-13);
+- creating a GitHub repository and choosing where it lives (D16). The owner
+  created `Fledge-Software/Syrinx-app` on 2026-10-13; each plugin
+  repository, the template's included, is still the owner's to create, and
+  agents prepare its contents (`docs/decisions.md`, 2026-10-15 and
+  2026-10-20);
 - anything on Fledge's side. The Fledge-side gaps are a list for the owner,
   not issues or pull requests in Fledge's repositories;
 - installing software system-wide on the owner's machine, and registering
@@ -147,24 +161,32 @@ Some work needs the owner, not an agent:
 If the next task needs one of these, point at it and ask; do not work
 around it.
 
+One item once on this list is done: the owner made `Fledge-Software/Syrinx-app`
+public under MPL-2.0, the licence chosen on 2026-10-13.
+
 ## Work order: follow the phases
 
 **The owner wants development to follow the phases in order**, one at a
 time:
 
-- **Phase 0, the feasibility spike, comes first.** It runs locally on Windows
-  11 and must prove what D6 lists: Google sign-in, YouTube, Disney+ and Hulu,
-  the daily sites, live overlays with correct focus (D7), shortcuts while a
-  page has focus, memory and start-up against Edge, and the GPUI against
-  Tauri + Svelte comparison with the rule written in D4. A measurement
-  protocol is written before the spike. **When it is done, stop and report**
-  what worked, what didn't and what you recommend. Nothing after it starts
-  without the owner's go-ahead.
+- **Phase 0, the feasibility spike, came first and is done.** It ran
+  locally on Windows 11 to prove what D6 lists: Google sign-in, YouTube,
+  Disney+ and Hulu, the daily sites, live overlays with correct focus (D7),
+  shortcuts while a page has focus, memory and start-up against Edge, and
+  the GPUI against Tauri + Svelte comparison with the rule written in D4.
+  Its verdict, go with GPUI on two conditions, is the wiki's Background 09
+  (2026-10-10), and the owner gave the go-ahead by approving the four v1
+  plans the same day.
 - **Then the four v1 plans (D5)**, which follow the spec's phases 1 to 5:
   plan 1, the engine, browser core and command palette (spec phases 1 and 2);
-  plan 2, the plugin runtime and the Fledge plugin on its stand-in client
-  (spec phase 3, kept thin by D34); plan 3, Notes (spec phase 4); plan 4,
-  Forge (spec phase 5).
+  plan 2, the plugin runtime (spec phase 3, kept thin by D34); plan 3, Notes
+  (spec phase 4); plan 4, Forge (spec phase 5).
+- **Plugins go runtime, template, Notes, Forge (2026-10-20).** The runtime
+  (#25) comes first, then the template (#30), then Notes (#35); Forge (#42)
+  starts only once Notes is live as the owner's daily notes tool. The Fledge
+  plugin waits for Fledge's API and the owner. The research note (#26) and
+  the template may run alongside Plan 1; the plugin host (#28, #29) waits
+  for Plan 1's exit. The owner accepts Plan 2 at #25's exit.
 - **The local workflow is approved (D41).** GitHub is not required before
   implementation. Each approved slice is built on one branch in a local
   worktree and reviewed independently. Since 2026-10-12, a slice merges to
@@ -213,8 +235,15 @@ style problem.
   if Phase 0 shows the default fails, and then only with the owner (D22).
 - **Never attach an IPC handler to a page web view.** It adds `window.ipc`,
   which was reported to break Google Docs and Sheets, and it hands untrusted
-  pages a channel into Syrinx. Only Syrinx's own local web views (the editors)
-  talk to Rust.
+  pages a channel into Syrinx. Only Syrinx's own local web views (the editor
+  and plugin views) talk to Rust.
+- **The message handler and custom-protocol filter belong to the plugin-view
+  type only.** They are never attached to a page web view, and no view of
+  either kind gets an initialization script; the plugin-view slice under
+  #25 adds a gate test that refuses all three in `browser/page.rs`. Plugin
+  views use the same environment as pages but a separate InPrivate profile,
+  a per-plugin `.invalid` origin served by Rust, a Content Security Policy
+  the host sets, and no network of their own.
 - **Never inject scripts, add request filters, rewrite headers or open a
   remote debugging port on Google's sites.** Google blocks sign-in for exactly
   that kind of middleman.
@@ -230,14 +259,24 @@ style problem.
 
 **Plugins:**
 
-- **A plugin crate depends only on `syrinx-plugin-api`.** Built-in plugins use
-  the same API a third party will, so only owned, serialisable values cross
-  the trait and a plugin reaches Syrinx only through its `Host`
-  (note 03, wiki: `Background-03-core-architecture`, "The plugin trait").
-- **Fledge sits behind a trait.** The Fledge plugin calls Fledge only through
-  the `fledge-client` trait, on the stand-in client until the real client is
-  built after Fledge's Stage C (D24). Syrinx authenticates as an ordinary OAuth
-  client with only the permissions the owner grants (D23).
+- **A plugin depends only on the `syrinx:plugin` WIT world.** Built-in plugins
+  use the same world, manifest, review and grants a third party will, so only
+  owned, typed values cross it, identity is a plain id, and a plugin reaches
+  Syrinx only through the world's imports (research note 10, section 2).
+- **A plugin gets no capability by default.** Its manifest asks for each one
+  with a reason; the owner grants it at install or first use and can revoke
+  it. The host owns every risky service, such as files, terminals and git.
+- **Running a program is full trust, and is called that.** The owner sees
+  "Can run programs on your computer with your permissions". Third-party
+  plugins get no full-trust capability in v1.
+- **Syrinx fetches no plugin over the network in v1.** Built-ins are bundled
+  in its signed release; any other plugin is installed from a folder the
+  owner picks, and updates are owner-initiated.
+- **Fledge sits behind a trait.** The Fledge plugin, on hold since 2026-10-20,
+  calls Fledge only through the `fledge-client` trait, on the stand-in client
+  until the real client is built after Fledge's Stage C (D24). Syrinx
+  authenticates as an ordinary OAuth client with only the permissions the
+  owner grants (D23).
 - **Syrinx is a separate project from Fledge-App.** Never put Syrinx code or
   docs in a Fledge repository, and never open issues or pull requests there.
 
@@ -364,10 +403,26 @@ style problem.
   approval accepts the lockfile growth Tantivy brings. It does not accept any
   transitive package outside the permissive licences listed above; stop and
   ask if one appears.
-- **Pin GPUI exactly with `=`.** Snapshot releases change its API weekly, and
-  a caret requirement has already broken builds (note 08, 1.2). A patched
+- **Approved narrow licence exception, 2026-10-21:** the wasmtime and
+  Cranelift family (about 31 crates, listed in research note 10, section 1)
+  may carry `Apache-2.0 WITH LLVM-exception` at the pinned `=48.0.x` versions
+  and the Cranelift 0.135.x versions they require. The exception only adds
+  permissions to Apache-2.0. This approves neither
+  other packages under it nor a general licence-policy expansion; record the
+  audit of every transitive crate before adding wasmtime.
+- **Pin GPUI and wasmtime exactly with `=`.** GPUI's snapshot releases change
+  its API weekly, and a caret requirement has already broken builds (note 08,
+  1.2). wasmtime stays on its 48.x long-term-support line; a security patch
+  within it is a routine pin bump that must pass the gate. A patched
   fork of wry or tao is allowed only if small, pinned and offered upstream
   (D12).
+- **JavaScript packages follow the same audit (owner, 2026-10-24).**
+  CodeMirror and every npm package it brings are audited for licence,
+  maintenance and security in `docs/dev/codemirror-audit.md`, pinned exactly
+  in a lockfile with integrity hashes, and shipped as a committed, built
+  bundle. An `xtask` check refuses any lockfile package missing from the
+  audit and compares the bundle's hash, so the gate needs no network. Syrinx
+  never fetches script at run time or from a CDN.
 - **Keys and tokens never go into the repository.** Fledge OAuth tokens and
   any other secret are read at run time from outside the repository.
 
@@ -395,10 +450,11 @@ a page card resized, a popup stacked correctly or focus came back to the page.
 
 **In GitHub issues on `Fledge-Software/Syrinx-app`, and nowhere else.**
 Open questions, deferred work and new slices each get an issue, written in
-the Fledge format (an epic per plan or phase, its slices as issues under a
-milestone). Labels follow the wiki's How-we-track-work page; they are kept
-simple on purpose. The plans that held this work before 2026-10-16 are read
-at af3de53, linked from the wiki's History page.
+the Fledge format (an epic per plan or phase, its slices as sub-issues of
+the epic; Syrinx uses no milestones, 2026-10-16). Labels follow the wiki's
+How-we-track-work page; they are kept simple on purpose. The plans that
+held this work before 2026-10-16 are read at af3de53, linked from the
+wiki's History page.
 
 A deferred-work marker (`TODO`, `FIXME`, `HACK`) in Syrinx-authored code is
 allowed only when it names its GitHub issue, as in
@@ -435,8 +491,8 @@ Never do the following without explicit confirmation from the owner, even if
 the task description seems to imply it or a script or tool makes it easy:
 
 ### Version control
-- Committing when the owner has not asked (the v1 plan's own commits to its
-  branch are the exception, D1)
+- Committing when the owner has not asked (the v1 plans' own commits to
+  their branch were the exception, D1; the plans were removed on 2026-10-16)
 - Adding another remote, pushing `main` or a branch other than the one your
   session was assigned, or opening a pull request unasked
 - Force-pushing, or rewriting history (rebase, amend, filter-branch) that
@@ -469,8 +525,8 @@ the task description seems to imply it or a script or tool makes it easy:
 - Installing software system-wide, or changing Windows settings or the
   registry (including registering Syrinx as a browser or the default browser)
 - Changing CI or release scripts, once they exist
-- Upgrading a major version of a core dependency, or moving the GPUI, wry or
-  `webview2-com` pins
+- Upgrading a major version of a core dependency, moving the GPUI, wry or
+  `webview2-com` pins, or moving wasmtime off its 48.x line
 - Changing `Cargo.lock` in ways that shift many transitive dependencies
 
 ### Product-specific
@@ -496,8 +552,8 @@ the task description seems to imply it or a script or tool makes it easy:
 
 ### Scope
 - Refactors that touch more than a handful of unrelated files
-- Changing public APIs other code depends on, above all the `Plugin` trait
-  in `syrinx-plugin-api`
+- Changing public APIs other code depends on, above all the `syrinx:plugin`
+  WIT world
 - Renaming or moving files or directories that other tooling or docs may
   reference
 

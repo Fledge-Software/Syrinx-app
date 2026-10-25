@@ -8,7 +8,9 @@ These traps come from research, the Phase 0 spikes and local implementation.
 Each names its source and how sure it is. Update a trap when new evidence
 confirms or disproves it. When a new trap costs you real time, add it in the same shape: one
 bullet, symptom first, then the fix, then the source. Put the story of how
-you found it in the commit message, not here.
+you found it in the commit message, not here. A `DW-n` name below is an
+item of Plan 1's old deferred-work register, read at `af3de53`; open
+deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Page tabs: WebView2 through wry
 
@@ -276,6 +278,21 @@ you found it in the commit message, not here.
   canvas's paint, as `controls::watch_pointer` does. Source:
   `gpui-pre-0.3.8/src/window.rs`, `HitboxId::is_hovered` (line 782), and
   DW-62's visual probe (observed).
+- **A control revealed by GPUI's hover listener vanishes between press and
+  release.** `on_hover` reports "not hovered" while the element has a pending
+  mouse-down, so a press followed by a one-pixel move hides a control drawn
+  only while the listener says hovered, and the mouse-up then clicks whatever
+  is under it (a sidebar row, which selects instead of closing). Keep such a
+  control in the tree and toggle its `visibility` from a `group_hover` style
+  instead: `Visibility::Hidden` makes `Interactivity::paint` return before it
+  paints the element, its mouse listeners and its accessibility node, so a
+  hidden control can never take a click, while the group-hover wake registered
+  just before that return still redraws it on the next hover. The compact
+  sidebar's close badge (#128) is built this way. Source:
+  `gpui-pre-0.3.8/src/elements/div.rs`, lines 3154–3172 (the hover listener
+  requires no pending mouse-down) and 2533–2537 (the hidden return follows
+  `paint_hover_group_handler`), read for PR #153 (code-confirmed; the owner's
+  window check is pending).
 - **A bounds observer fires on every activation change, not only on a move.**
   GPUI's activation callback calls `bounds_changed`, which runs every
   `observe_window_bounds` observer. The peek's watch closed the peek when it was
@@ -544,19 +561,32 @@ you found it in the commit message, not here.
 
 ## Local search
 
-- **Tantivy prefix matches can produce empty native snippets.** In 0.26.2,
-  `PhrasePrefixQuery::query_terms` omits the suffix term used for prefix
-  matching. `SnippetGenerator::create` therefore cannot highlight that
+- **Tantivy prefix matches can produce empty native snippets.** In 0.26.2 and
+  0.27.0 (whose `phrase_prefix_query.rs` and `SnippetGenerator::create` are
+  identical), `PhrasePrefixQuery::query_terms` omits the suffix term used
+  for prefix matching. `SnippetGenerator::create` therefore cannot highlight that
   expansion by itself. P1-23 expands the body terms inside the query timer
   and rejects empty snippets for its matching body queries; otherwise the
   timing would compare different amounts of work. Source:
-  [`docs/p1-23-fulltext-bakeoff.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-23-fulltext-bakeoff.md), continuation method and focused tests.
+  [`docs/p1-23-fulltext-bakeoff.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-23-fulltext-bakeoff.md),
+  continuation method and focused tests; the 0.27.0 recheck is a source
+  comparison, recorded in `docs/dev/fulltext-audit.md`.
 - **Tantivy deletion alone retains stored bodies in active segments.** D40
   needs segment merging and successful garbage collection after releasing
   old readers, including when only one segment has deletions. P1-23 scans
   stored rows and checks physical/live document counts after maintenance;
   hiding expired matches alone would not pass. Source:
   [`docs/p1-23-fulltext-bakeoff.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-23-fulltext-bakeoff.md), continuation retention checks.
+
+- **A Tantivy `SegmentMeta` still in scope keeps its segment's files through
+  garbage collection.** `searchable_segment_metas()` hands out tracked metas,
+  and `garbage_collect_files` treats every tracked meta's files as living, so
+  holding the list across a merge and its collection left the merged-away
+  segment, with its deleted text, on disk; GC reported success and the
+  searcher's live-segment counts looked clean. Drop the metas before
+  collecting, and audit the folder for files of segments the searcher no
+  longer has. Source: #53's blocked-cleanup test and the folder audit in
+  `crates/syrinx-search/src/fulltext/tests/fixture.rs` (observed; high).
 
 - **A NUL query can match padding beyond a field's text.** In the pinned
   frizbee 0.13.0 matcher, synthetic `\0` queries returned highlight indices
@@ -593,6 +623,24 @@ you found it in the commit message, not here.
 
 ## Storage
 
+- **A new deletion-journal category makes a build that predates it refuse
+  the journal and offer the clear-all-history repair.** D47's codec fails
+  closed on a category byte it does not know, by design. A build between
+  #90 (schema 7) and #121 opens the database normally, then meets a
+  `SiteZoom` record in `syrinx.deletions`, reports the record as damaged and
+  offers the repair; confirming it rewrites the journal as all-time history
+  clears, so the zoom clears lose their replay protection. Builds before
+  schema 7 never get that far: `FutureSchema` refuses the database first.
+  When adding a category, expect a downgrade to the previous preview to meet
+  that prompt, and warn of it in the merge commit's subject ("going back to
+  an older preview shows the clear-data repair prompt"): the weekly release
+  notes are `main`'s first-parent commit subjects and nothing else
+  (`.github/scripts/release-notes.sh`), so no other text reaches them. This
+  build names an unknown category as written by a newer Syrinx, in the
+  journal message and the repair prompt alike. Source:
+  `crates/syrinx-store/src/deletion.rs`, `decode_record`, and
+  `crates/syrinx-app/src/session/history_repair.rs`, `repairable`
+  (code-confirmed, #121).
 - **A retained directory or database can still be renamed despite excluding
   delete sharing.** Windows metadata-only opens do not enforce this sharing
   restriction. Retained directories need `FILE_LIST_DIRECTORY`, and retained

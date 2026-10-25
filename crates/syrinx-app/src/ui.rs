@@ -3,6 +3,7 @@
 mod chrome_focus;
 mod clear_data;
 mod customize;
+mod downloads;
 mod essentials;
 mod favorites;
 mod find;
@@ -273,11 +274,14 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
 }
 
 /// Whether a palette command hands the keys back to the page once it has run; the others
-/// (edit address, find, history) place focus themselves and must not be overridden.
+/// (edit address, find, history, downloads) place focus themselves and must not be overridden.
 fn command_returns_focus_to_page(action: BrowserAction) -> bool {
     !matches!(
         action,
-        BrowserAction::EditAddress | BrowserAction::FindInPage | BrowserAction::ShowHistory
+        BrowserAction::EditAddress
+            | BrowserAction::FindInPage
+            | BrowserAction::ShowHistory
+            | BrowserAction::ShowDownloads
     )
 }
 
@@ -318,6 +322,8 @@ pub struct BrowserView {
     find: Option<find::FindBar>,
     find_sequence: u64,
     site_zoom: site_zoom::SiteZoom,
+    /// This session's downloads, in memory only (#143).
+    downloads: syrinx_core::DownloadList,
     permissions: Vec<permissions::Prompt>,
     model: TabModelSnapshot,
     session_revision: Option<u64>,
@@ -429,6 +435,7 @@ impl BrowserView {
             find: None,
             find_sequence: 0,
             site_zoom: site_zoom::SiteZoom::default(),
+            downloads: syrinx_core::DownloadList::default(),
             permissions: Vec::new(),
             model: TabModelSnapshot::default(),
             session_revision: None,
@@ -795,6 +802,7 @@ impl BrowserView {
             SessionEvent::SiteZoomsCleared { request_id, result } => {
                 self.site_zooms_cleared(request_id, result);
             }
+            SessionEvent::SiteZoomsReplaced(levels) => self.replace_site_zooms(levels),
             SessionEvent::RememberedPermissions { request_id, result } => {
                 self.site_permissions_listed(request_id, result, window, cx);
             }
@@ -916,6 +924,19 @@ impl BrowserView {
                 active,
             } => self.find_completed(id, request, count, active),
             BrowserEvent::DownloadDialog { .. } => {}
+            BrowserEvent::DownloadStarted {
+                download,
+                tab,
+                file_name,
+                total,
+            } => self.download_started(download, tab, &file_name, total, window, cx),
+            BrowserEvent::DownloadChanged {
+                download,
+                state,
+                received,
+                total,
+                can_resume,
+            } => self.download_changed(download, state, received, (total, can_resume), window, cx),
             BrowserEvent::PermissionRequested {
                 id,
                 request,
@@ -935,11 +956,7 @@ impl BrowserView {
                 self.acceptance_title(id, &title);
                 self.metadata(id, Some(title), None);
             }
-            BrowserEvent::CloseRequested { id } => {
-                if let Some(command) = page_lifecycle::observed_close(id, self.closing) {
-                    self.command(command);
-                }
-            }
+            BrowserEvent::CloseRequested { id } => self.page_requested_close(id),
             BrowserEvent::Created { id } => {
                 // A new controller starts at 100%; its first address applies the site's level.
                 self.site_zoom.forget_page(id);
@@ -975,12 +992,19 @@ impl BrowserView {
                 success,
                 cancelled,
             } => {
+                // A navigation that became a download ends with success false and no new
+                // document (#143): neither a failure to count nor a visit to retract. The
+                // mark was read by `navigation_status.observe` above and is spent here.
+                let became_download =
+                    self.navigation_status.finish_download_navigation(id) && !success;
                 // A stopped or replaced navigation is not a failure to count.
-                if !success && !cancelled {
+                if !success && !cancelled && !became_download {
                     self.usage.recorder.error(ErrorCategory::NavigationFailed);
                 }
                 // History retracts a visit whose navigation failed.
-                if let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id) {
+                if !became_download
+                    && let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id)
+                {
                     self.command(SessionCommand::ObserveNavigation {
                         id: tab.id,
                         success,
@@ -1191,6 +1215,7 @@ impl BrowserView {
         for id in removed {
             self.connections.remove(&id.get());
             self.forget_find(id.get(), false);
+            downloads::forget_removed_page(&mut self.downloads, id);
             if self.page_command(BrowserCommand::Close { id: id.get() }) {
                 self.loaded.remove(&id);
                 self.pending_pages.remove(&id);
@@ -1319,8 +1344,8 @@ impl BrowserView {
             BrowserShortcut::History => {
                 self.toggle_history(history_list::ReturnFocus::Page, window, cx);
             }
-            BrowserShortcut::Downloads
-            | BrowserShortcut::Print
+            BrowserShortcut::Downloads => self.toggle_downloads(window, cx),
+            BrowserShortcut::Print
             | BrowserShortcut::ZoomIn
             | BrowserShortcut::ZoomOut
             | BrowserShortcut::ZoomReset => self.essential_shortcut(shortcut),
@@ -2384,6 +2409,10 @@ mod palette_shortcut_tests {
         assert!(!command_returns_focus_to_page(BrowserAction::ShowHistory));
         assert!(!command_returns_focus_to_page(BrowserAction::FindInPage));
         assert!(!command_returns_focus_to_page(BrowserAction::EditAddress));
+        assert!(
+            !command_returns_focus_to_page(BrowserAction::ShowDownloads),
+            "the downloads flyout takes the keys"
+        );
         assert!(command_returns_focus_to_page(BrowserAction::ZoomIn));
     }
 

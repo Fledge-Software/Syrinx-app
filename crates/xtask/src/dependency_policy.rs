@@ -284,8 +284,9 @@ fn check_direct_dependencies(
 /// The P1-23 bake-off harness, which no product crate may use.
 const FULLTEXT_BENCH: &str = "fulltext-bench";
 
-/// Approved only for the bake-off until P1-24 chooses an engine and RUSTSEC-2026-0253 is resolved.
+/// The full-text engine chosen in #52; only the bake-off and its production adapter use it.
 const TANTIVY: &str = "tantivy";
+const TANTIVY_USERS: [&str; 2] = [FULLTEXT_BENCH, "syrinx-search"];
 
 fn check_fulltext_quarantine(name: &str, dependency: &str, violations: &mut BTreeSet<String>) {
     // Keep the benchmark and its Tantivy graph out of everything Syrinx ships.
@@ -294,9 +295,10 @@ fn check_fulltext_quarantine(name: &str, dependency: &str, violations: &mut BTre
             "{name} -> {dependency}: nothing may depend on the P1-23 full-text bake-off harness"
         ));
     }
-    if dependency == TANTIVY && name != FULLTEXT_BENCH {
+    // Other crates reach the index only through syrinx-search's adapter (#53).
+    if dependency == TANTIVY && !TANTIVY_USERS.contains(&name) {
         violations.insert(format!(
-            "{name} -> {dependency}: only fulltext-bench may depend on Tantivy before P1-24 chooses it"
+            "{name} -> {dependency}: only syrinx-search and fulltext-bench may depend on Tantivy"
         ));
     }
 }
@@ -1617,17 +1619,20 @@ mod tests {
 
     #[test]
     fn quarantines_the_fulltext_bench_and_tantivy() -> Result<(), String> {
-        // The bake-off may use Tantivy; nothing else may use either, in any dependency kind.
-        let permitted = metadata(vec![package(
-            "fulltext-bench",
-            json!([{"name": "tantivy"}, {"name": "rusqlite"}]),
-        )]);
+        // The bake-off and the production adapter may use Tantivy; nothing may use the bake-off.
+        let permitted = metadata(vec![
+            package(
+                "fulltext-bench",
+                json!([{"name": "tantivy"}, {"name": "rusqlite"}]),
+            ),
+            package("syrinx-search", json!([{"name": "tantivy"}])),
+        ]);
         assert!(check_metadata(&permitted)?.is_empty());
 
         let input = metadata(vec![
             package("fulltext-bench", json!([{"name": "tantivy"}])),
             package(
-                "syrinx-search",
+                "syrinx-store",
                 json!([{"name": "tantivy", "rename": "fulltext", "optional": true}]),
             ),
             package(
@@ -1644,7 +1649,7 @@ mod tests {
         assert!(
             violations
                 .iter()
-                .any(|message| message.contains("syrinx-search -> tantivy"))
+                .any(|message| message.contains("syrinx-store -> tantivy"))
         );
         assert!(
             violations
