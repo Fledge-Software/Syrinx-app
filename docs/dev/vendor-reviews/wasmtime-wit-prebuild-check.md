@@ -264,9 +264,10 @@ The rule this gives, worded as the review proposed: **within a minor track
 imported interfaces, may be added, each `@since`. No export, no exported
 function and no existing item changes. Anything else opens a new minor track
 with its own `bindgen!` module** (note 10's scheme, item 4), or goes in a
-separate world. Home widgets are such a case: the template's wording that they
-can "return later as an `@since` addition" holds only if that addition is an
-import, so #31 should plan for a track, not a gate. Notes' five capabilities
+separate world. Home widgets are such a case: the template's wording, that
+widgets "should arrive as an `@since` addition on a later minor"
+(`syrinx-plugin-template/docs/wit-changes.md`), holds only if that addition is
+an import, so #31 should plan for a track, not a gate. Notes' five capabilities
 are all imports, so decision 6 is unaffected.
 
 ## The end-to-end run
@@ -279,7 +280,7 @@ are all imports, so decision 6 is unaffected.
   than prints. **A trap poisons the whole store, not just the instance that
   trapped.** Any trap sets one `trapped` flag per store
   (`wasmtime-48.0.7/src/runtime/func.rs`, line 1480; `component/store.rs`,
-  line 43, "Whether an instance belonging to this store has trapped"), nothing
+  line 42, "Whether an instance belonging to this store has trapped"), nothing
   resets it, and with the component model's concurrency off `may_enter`
   returns its negation (`concurrent_disabled.rs`, line 178). So every
   component instance in that store is refused, a store must hold one plugin
@@ -460,8 +461,9 @@ Built and run in the throwaway as the shim host.
   Apache-2.0, BSD) or as whole MPL-2.0 files", and it lists "code under a
   licence not listed above" among the things to ask first. Decision 2's
   exception names `Apache-2.0 WITH LLVM-exception` for the wasmtime family's
-  crates as dependencies at their pinned versions. It approves "neither other
-  packages under it nor a general licence-policy expansion", and it says
+  crates as dependencies at their pinned versions. In `docs/decisions.md`'s
+  words, "This does not approve another crate under that licence, a wasmtime
+  line other than 48.0.x, or a general licence-policy expansion", and it says
   nothing of files copied into Syrinx's own tree. **So (b) needs a second
   ruling:** that these four files may be committed under
   `Apache-2.0 WITH LLVM-exception`, the licence both the crate and WASI's
@@ -661,8 +663,8 @@ the owner amending that sentence, which this report does not do itself.
    is a routine bump under decision 1 of 2026-10-21.
 3. **Only under (c): approve moving `tokio` from 1.53.2 to 1.53.3** with
    #28's lockfile change, as item 2 above argues.
-4. **Where the audit file is committed.** #27's text says "draft it as
-   `docs/dev/wasmtime-audit.md`; #28 commits it". The review recommends
+4. **Where the audit file is committed.** #27's checklist comment says "Draft
+   it as `docs/dev/wasmtime-audit.md`; #28 commits it". The review recommends
    keeping it committed here, as a dated pre-pin baseline that #28 updates
    against the real lockfile, because that puts the D9 and licence-check
    questions in front of the owner before #28 starts. This pull request does
