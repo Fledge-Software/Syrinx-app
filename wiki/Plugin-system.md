@@ -71,10 +71,10 @@ fill in the 2026-10-15 outline:
   48.x line; one versioned WIT package, `syrinx:plugin`; plugin tabs drawn
   in HTML in a plugin view, a web view type separate from page web views,
   while palette forms and Home widgets are declarative and drawn by GPUI;
-  nothing granted by default; and signed folder packages, with the
-  built-in plugins bundled in Syrinx's release, an "Install plugin from
-  folder…" command and no plugin fetched over the network in v1. The owner now accepts Plan 2 at the runtime epic's exit
-  rather than in the Fledge epic.
+  nothing granted by default; and signed folder packages, with the built-in
+  plugins bundled in Syrinx's release, an "Install plugin from folder…"
+  command and no plugin fetched over the network in v1. The owner now
+  accepts Plan 2 at the runtime epic's exit rather than in the Fledge epic.
 - **2026-10-24.** Phase 2 is approved and re-cut for WASM plugins: the host
   crate is `crates/syrinx-plugin-host`, the only crate that links wasmtime,
   and the WIT package lives at `wit/v0_1/` in the Syrinx repository.

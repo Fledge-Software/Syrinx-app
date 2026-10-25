@@ -780,12 +780,11 @@ entry names it.
 
 - **Sidebar rows get their own right-click menu (DW-63 follow-up, now
   #58).** When choosing Ctrl W for DW-63 (recorded under 2026-10-15), the
-  owner also
-  asked for a per-row right-click menu holding Unload page and the row's
-  other actions (Close tab, Remove saved page, Rename and Remove folder),
-  each showing its key, so every row action is reachable by mouse as well
-  as by keyboard. Today a right-click anywhere in the sidebar opens only
-  the general ⋯ menu. See DW-63 in the plan's ["Deferred work" register](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work).
+  owner also asked for a per-row right-click menu holding Unload page and
+  the row's other actions (Close tab, Remove saved page, Rename and Remove
+  folder), each showing its key, so every row action is reachable by mouse
+  as well as by keyboard. Today a right-click anywhere in the sidebar opens
+  only the general ⋯ menu. See DW-63 in the plan's ["Deferred work" register](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/plans/Syrinx%20v1%20%E2%80%94%20Plan.md#deferred-work).
 
 - **Syrinx ships as a setup program that installs and updates itself
   (P1-37).** Release 0.2.0 shipped a zip holding `syrinx.exe` and PowerShell
@@ -948,12 +947,11 @@ entry names it.
   not start. After relaunching for an update, Syrinx does not force itself
   to the front. The owner creates two offline release keys, a primary on a
   hardware key and a backup stored separately, outside the repository and
-  outside every agent session; both public keys are pinned (DW-30, now
-  #55), and a
-  separate statement-only key was deferred. `cargo xtask check-deps` changes
-  only as question 8 lists: `syrinx-app` and `syrinx-update-net` may depend
-  on the update verifier; `syrinx-update-net` may use the `windows` crate
-  with its own exact feature list; and that crate alone may use
+  outside every agent session; both public keys are pinned (DW-30, now #55),
+  and a separate statement-only key was deferred. `cargo xtask check-deps`
+  changes only as question 8 lists: `syrinx-app` and `syrinx-update-net` may
+  depend on the update verifier; `syrinx-update-net` may use the `windows`
+  crate with its own exact feature list; and that crate alone may use
   `Win32_Networking_WinHttp`, the only exception to D9's no-network rule.
   `reqwest` with `rustls` was rejected to keep a TLS stack and `tokio` out
   of Syrinx's own crates. P1-39 is split into P1-39a to P1-39d as the
