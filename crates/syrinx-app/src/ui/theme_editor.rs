@@ -10,7 +10,7 @@ use syrinx_ui::metrics::text;
 use syrinx_ui::theme::{
     self, ANGLE, EDGES, Fill, GRAIN, Material, Mode, Range, TRANSPARENCY, ThemeSpec,
 };
-use syrinx_ui::{Color, Palette};
+use syrinx_ui::{Accent, Color, Palette};
 
 use super::BrowserView;
 use super::customize::{ThemeRow, group_heading, theme_row, toggled};
@@ -396,7 +396,13 @@ impl BrowserView {
                 self.material_choice(slot, theme, panel, cx),
             ));
         if material_on {
-            view = view.child(self.stepper(slot, TRANSPARENCY_STEPS, theme, panel, cx));
+            view = view
+                .child(self.stepper(slot, TRANSPARENCY_STEPS, theme, panel, cx))
+                .child(labelled(
+                    panel,
+                    "Home",
+                    self.home_choice(slot, theme, panel, cx),
+                ));
         } else {
             view = view.child(labelled(
                 panel,
@@ -422,13 +428,8 @@ impl BrowserView {
         if let Some(error) = editor.error {
             view = view.child(note(panel, error));
         }
-        let problems = theme.contrast_problems(self.home.appearance.accent);
-        if !problems.is_empty() {
-            view = view.child(note(
-                panel,
-                "Some marks or tile letters fall below the contrast minimum on this background. \
-                 Text has been lightened or darkened to stay readable.",
-            ));
+        if let Some(warning) = contrast_note(theme, self.home.appearance.accent) {
+            view = view.child(note(panel, warning));
         }
         if material_on {
             view = view.child(note(
@@ -479,6 +480,34 @@ impl BrowserView {
                 segment(id, material.name(), theme.material == material, panel).on_click(
                     cx.listener(move |this, _, window, cx| {
                         this.change_theme(slot, |theme| theme.material = material, window, cx);
+                    }),
+                ),
+            );
+        }
+        group
+    }
+
+    /// Whether Home's card stays solid or follows Transparency like the rest of the chrome.
+    fn home_choice(
+        &self,
+        slot: usize,
+        theme: &ThemeSpec,
+        panel: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let options = [(false, "Solid"), (true, "See-through")];
+        let mut group = segmented_group();
+        for (see_through, label) in options {
+            let id = ("theme-home", slot * 10 + usize::from(see_through));
+            group = group.child(
+                segment(id, label, theme.see_through_home == see_through, panel).on_click(
+                    cx.listener(move |this, _, window, cx| {
+                        this.change_theme(
+                            slot,
+                            |theme| theme.see_through_home = see_through,
+                            window,
+                            cx,
+                        );
                     }),
                 ),
             );
@@ -663,6 +692,28 @@ fn turn_listener(
     })
 }
 
+/// What the editor says about a theme's contrast: whether text itself still fails, or only
+/// marks and tile letters do while text was adjusted to pass.
+fn contrast_note(theme: &ThemeSpec, accent: Accent) -> Option<&'static str> {
+    let problems = theme.contrast_problems(accent);
+    if problems
+        .iter()
+        .any(|check| theme::is_readable_role(check.foreground))
+    {
+        return Some(
+            "Some text falls below the contrast minimum on this background, even after it was \
+             lightened or darkened. Lower Transparency or choose another background colour.",
+        );
+    }
+    if problems.is_empty() {
+        return None;
+    }
+    Some(
+        "Some marks or tile letters fall below the contrast minimum on this background. Text \
+         has been lightened or darkened to stay readable.",
+    )
+}
+
 /// A short line about a saved theme for its row.
 fn describe(theme: &ThemeSpec) -> String {
     let mode = match theme.mode {
@@ -674,7 +725,12 @@ fn describe(theme: &ThemeSpec) -> String {
         (Material::None, Fill::Gradient { .. }) => "gradient".to_owned(),
         (material, _) => format!("{}, {} % see-through", material.name(), theme.transparency),
     };
-    format!("{mode}, {look}.")
+    let home = if theme.see_through_home && theme.material != Material::None {
+        ", Home too"
+    } else {
+        ""
+    };
+    format!("{mode}, {look}{home}.")
 }
 
 fn labelled(panel: &Palette, label: &'static str, control: impl gpui::IntoElement) -> Div {

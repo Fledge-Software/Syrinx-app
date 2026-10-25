@@ -4,8 +4,10 @@ Until 2026-10-16 Syrinx's outstanding work lived in Markdown: plan files with
 slice tables, "Open threads" and a "Deferred work" register, plus hand-off
 notes between sessions. Keeping the same task in several files meant they
 drifted apart, and a new contributor had to read thousands of lines to learn
-what was next. On 2026-10-16 the owner moved all of it to GitHub issues.
-This page says how that works.
+what was next. On 2026-10-16 the owner moved all of it to GitHub issues and
+removed the plans from the repository; they are still read at commit
+`af3de53`, linked from the [History](History) page. This page says how the
+issues work.
 
 ## Issues are the only place for planned work
 
@@ -25,7 +27,8 @@ shape it and what "done" looks like. Each piece of the epic is a
 **sub-issue** attached to it with GitHub's sub-issue feature, so the epic
 shows its progress. For example,
 [#25 Epic: Plugin runtime — WASM host and plugin template](https://github.com/Fledge-Software/Syrinx-app/issues/25)
-has #26 to #31 as sub-issues.
+has #26 to #31 as sub-issues, joined by #134 to #142 when the owner approved
+the re-cut of its slices on 2026-10-24, and by #92.
 
 Syrinx uses **no milestones**. The order of work is stated in each epic's
 body and in "Blocked by #n" lines, which is enough for one owner and avoids

@@ -95,6 +95,7 @@ impl Fixture {
             state: Some(BrowserState {
                 pages: HashMap::new(),
                 popups: popups::PopupRequests::default(),
+                downloads: super::downloads::DownloadOperations::default(),
                 environment: Some(environment),
                 engine: None,
                 profile,

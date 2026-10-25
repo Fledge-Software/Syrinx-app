@@ -3,9 +3,11 @@
 mod activation;
 mod address_display;
 mod address_entry;
+mod address_prefix;
 mod bookmark_import;
 mod commands;
 mod destinations;
+mod downloads;
 mod page_text;
 mod tabs;
 pub mod usage;
@@ -13,6 +15,7 @@ mod web_address;
 
 pub use address_display::readable_address;
 pub use address_entry::{EntryError, entry_destination, google_search, recognized_address};
+pub use address_prefix::{AddressPrefix, address_prefix, is_bare_host};
 pub use web_address::{WebAddressError, web_address};
 
 pub use page_text::{
@@ -36,6 +39,10 @@ pub use commands::{
 pub use destinations::{
     BuiltInPlugin, Destination, DestinationEdit, DestinationError, DestinationSurface,
     DestinationTarget, MAX_DESTINATIONS, MAX_LABEL_CHARS, QuickDestinations,
+};
+pub use downloads::{
+    BlockReason, Download, DownloadControl, DownloadInterruption, DownloadList, DownloadState,
+    MAX_DOWNLOADS, format_size,
 };
 
 pub use tabs::{

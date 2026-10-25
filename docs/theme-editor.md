@@ -1,7 +1,12 @@
 # Theme editor
 
-Status: **built (pull request #5), owner check pending**, from the owner's
-decision of 2026-10-15 (`docs/decisions.md`).
+Status: **built** (pull request #5, merged 2026-10-16), from the owner's
+decision of 2026-10-15 (`docs/decisions.md`). Later slices added the Glass
+preset (#124, for #93) and real Acrylic with the Home choice (#145, for
+#151). The Glass look passed the owner's window check on 2026-10-24
+(`docs/decisions.md`); the see-through checks are
+`docs/owner-checklist.md`, item 7, and measuring Acrylic's drag and resize
+("Building it", step 4) is still open.
 
 ## Why
 
@@ -17,7 +22,8 @@ editor:
   Graphite, Paper and Glass are the presets. Glass came back as a preset
   on 2026-10-21, when the owner asked for "the glass look" in the theme
   selection (#93): the canvas's Glass under Acrylic, with Transparency
-  55 % (the canvas's `rgba(16,17,24,0.46)` tint, to the nearest step) and
+  50 % (a 1 − 50/90 = 0.44 tint, the nearest step to the canvas's
+  `rgba(16,17,24,0.46)` under the 2026-10-22 mapping) and
   Glass edges 24 % (the canvas's edge). Choosing it draws the canvas look
   with nothing to edit; Reduce transparency turns it into Graphite with its
   edges.
@@ -38,8 +44,9 @@ accent colours.
 | Background style | Solid, Gradient | Solid |
 | Second colour | Any `#RRGGBB`, used by Gradient | `#2A1838` |
 | Angle | 0–355°, turned 15° per press, used by Gradient | 155° |
-| Material | None, Mica, Mica Alt, Acrylic | None |
+| Material | Off, Mica, Mica Alt, Acrylic | Off |
 | Transparency | 0–90 % in 5 % steps, used with a material | 50 % |
+| Home | Solid, See-through, used with a material | Solid |
 | Glass edges | 0–40 % in 4 % steps | 0 % |
 | Grain | 0–15 % in 1 % steps | 0 % |
 | Accent | As before: a preset or any `#RRGGBB`, shared by every theme | The orange `#FF612E` |
@@ -50,13 +57,35 @@ How the choices combine:
   background colour is painted over it at the chosen transparency, so
   Fill and Grain are hidden. Grain is drawn into an opaque image, which
   would cover the material.
+- Transparency sets the tint's opacity to 1 − Transparency/90 (owner
+  decision 2026-10-22): 0 % is the background colour alone, 90 % is
+  Windows' material alone, so Acrylic shows the windows behind Syrinx
+  frosted. The title bar and sidebar take the window tint. Windows draws
+  the material light for a light theme and dark for a dark one, and a
+  light theme's text is checked over pale stand-in wallpapers. A selected
+  row keeps at least a 10 % tint under it, so over Mica and Mica Alt, and
+  in a light theme, its text stays at 4.5:1 at 90 %. A dark theme under
+  Acrylic is checked over Glass's bright wallpaper discs instead (#124),
+  so its tint never drops below 32/255, about 12.5 % (owner decision
+  2026-10-24): the least at which white text reaches 4.5:1 over the teal
+  disc. Its white-film surfaces (selected row, fields, pill, surfaces, and
+  Home's card while Home is Solid) keep at least a 0.343 tint under them.
+  Text then stays at 4.5:1 at every step for every material. If a theme's
+  own colours still fail, the editor says so instead of claiming it was
+  made readable.
+- Home: See-through thins Home's card by the slider's own factor,
+  1 − Transparency/90, so it is clear at 90 %. Solid keeps the starting preset's card. The command
+  palette, menus and the Customize panel stay opaque either way.
+- Home: See-through is the only thing that thins Home's card; the
+  automatic thinning of Haze's dark card that #124 added was dropped for
+  it (owner decision 2026-10-24). A saved Haze keeps Home Solid, so its
+  card stays the canvas's `rgba(10,11,14,0.5)` until the owner turns
+  See-through on.
 - Glass edges draw the canvas's glass edge (#93): an inset top highlight
   at the edge strength and a faint inner ring at 7/24 of it, on fields,
   selected rows, the Home card, plugin cards, the search pill and the
   Customize panel. At 24 % it is the canvas's Glass exactly. On a light
   theme the ring is dark ink.
-- Under a material, Transparency thins the window's tint; a dark tint on
-  Home's card (Haze's) thins with it, so the material shows through Home.
 - Colours are worked out from a starting preset:
   - a light theme starts from Paper;
   - a dark opaque theme starts from Graphite;
@@ -76,7 +105,7 @@ canvas exactly. A saved theme that starts from Glass (a dark theme under
 Acrylic, including a saved "Glass") keeps none of them, so all its text
 is lifted to 4.5:1 (#93 review). It does not take Haze's two either,
 because one of those excuses muted text on the selected row. Where even
-white cannot reach 4.5:1, as at 70 % Transparency over a bright wallpaper,
+white cannot reach 4.5:1, as from 60 % Transparency over a bright wallpaper,
 the editor reports it.
 
 Rules that every theme keeps:
@@ -105,7 +134,9 @@ bytes, so no schema change is needed:
 - `appearance.theme`: `graphite`, `paper`, `glass` or `custom:<slot>`.
 - `appearance.custom.<slot>` for slots 1 to 12: one line such as
   `v1;name=…;mode=dark;bg=#141519;…`. An empty value marks a free slot,
-  because the table has no delete.
+  because the table has no delete. A theme with Home See-through ends in
+  `;home=see-through`; the field is written only when on, so themes saved
+  before 2026-10-22 read and write unchanged.
 - `appearance.accent` and `appearance.reduce_transparency` are unchanged.
 
 Migration: the old `appearance.palette` key is still read when
@@ -122,10 +153,12 @@ the same way.
 
 ## Customize
 
-The Theme section replaces the palette list:
+The Theme section replaces the palette list. It is drawn in Customize and
+in Settings' Appearance section (#91):
 
-- One row each for Graphite and Paper, then the saved themes, then
-  "New theme".
+- One row each for the presets, Graphite, Paper and Glass, then the saved
+  themes (a saved theme named like a preset reads, for example, "Glass
+  (saved)"), then "New theme".
 - Choosing a row applies it at once, as today.
 - A custom theme's row has Edit. Edit opens the controls above, applied
   live to the real window as they change, with Duplicate, Delete and Done.
