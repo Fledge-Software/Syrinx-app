@@ -8,6 +8,7 @@ pub use folders::{
     FolderContents, FolderRemoval, RemovedSavedEntries, SavedEntryId, SavedFolder, SavedFolderId,
     SavedPlacement, saved_folder_contents,
 };
+pub(crate) use folders::{UNTITLED_FOLDER, is_blank_folder_title};
 pub use import::{AppendedSavedTree, NewSavedItem};
 pub use snapshot::{
     SavedFolderSnapshot, SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot,
@@ -97,6 +98,11 @@ impl PageOrigin {
 /// What every view calls a blank tab; spelled here and nowhere else.
 const HOME_TITLE: &str = "Home";
 
+/// The address of Syrinx's own Settings page (#91). No web view ever loads it, and the
+/// address bar refuses the scheme, so only Syrinx itself opens a tab here.
+pub const SETTINGS_ADDRESS: &str = "syrinx://settings";
+const SETTINGS_TITLE: &str = "Settings";
+
 impl TabMetadata {
     /// Whether this is a blank tab shown as Home; an adopted popup still awaiting its first
     /// address is not, so its row keeps the address.
@@ -110,11 +116,28 @@ impl TabMetadata {
         self.is_home(origin).then_some(HOME_TITLE)
     }
 
-    /// The one name the sidebar shows for an open tab: Home for a blank tab, otherwise the
-    /// title, or the address when the page has no title.
+    /// Whether this tab shows Syrinx's Settings page rather than a web page.
+    pub fn is_settings(&self) -> bool {
+        self.address == SETTINGS_ADDRESS
+    }
+
+    /// The name Syrinx gives its own pages, Home and Settings, in place of a stored title.
+    pub fn syrinx_title(&self, origin: PageOrigin) -> Option<&'static str> {
+        self.home_title(origin)
+            .or_else(|| self.is_settings().then_some(SETTINGS_TITLE))
+    }
+
+    /// Whether this tab shows one of Syrinx's own pages: exactly those `syrinx_title` names, so
+    /// a page added there is covered here too.
+    pub fn is_syrinx_page(&self, origin: PageOrigin) -> bool {
+        self.syrinx_title(origin).is_some()
+    }
+
+    /// The one name the sidebar shows for an open tab or saved page: Syrinx's name for its own
+    /// pages, otherwise the title, or the address when the page has no title.
     pub fn display_title(&self, origin: PageOrigin) -> String {
-        if let Some(home) = self.home_title(origin) {
-            return home.to_owned();
+        if let Some(name) = self.syrinx_title(origin) {
+            return name.to_owned();
         }
         if self.title.is_empty() {
             return self.address.clone();
@@ -536,6 +559,68 @@ impl TabModel {
         Ok(tab)
     }
 
+    /// Opens a selected copy of a web tab right after it; a saved page's copy is unsaved and
+    /// starts the ordinary tabs.
+    pub fn duplicate(&mut self, id: TabId) -> Result<TabId, TabError> {
+        // Validate the source before opening anything, so a refusal changes nothing.
+        let index = self.index_of(id)?;
+        let source = &self.tabs[index];
+        if source.kind != TabKind::Web {
+            return Err(TabError::NotWebTab(id));
+        }
+        let position = match source.saved_page_id {
+            Some(_) => 0,
+            None => index - self.saved_tab_count() + 1,
+        };
+        let metadata = source.metadata.clone();
+
+        // The copy is appended, so its final position always lies inside the ordinary group.
+        let copy = self.open(TabKind::Web, metadata, Activation::Foreground)?;
+        self.move_ordinary(copy, position)?;
+        Ok(copy)
+    }
+
+    /// Closes every ordinary tab except `keep`, sparing open saved pages. `keep` is selected
+    /// only when something closed; a no-op leaves the selection alone.
+    pub fn close_others(&mut self, keep: TabId) -> Result<Vec<Tab>, TabError> {
+        self.index_of(keep)?;
+        let targets = self.ordinary_ids_from(0, keep);
+        self.close_many(keep, &targets)
+    }
+
+    /// Closes the ordinary tabs after `id`, sparing open saved pages. `id` is selected only
+    /// when something closed; a no-op leaves the selection alone.
+    pub fn close_below(&mut self, id: TabId) -> Result<Vec<Tab>, TabError> {
+        let index = self.index_of(id)?;
+        let targets = self.ordinary_ids_from(index + 1, id);
+        self.close_many(id, &targets)
+    }
+
+    /// The ordinary tabs from position `start` on, other than `keep`, in display order.
+    fn ordinary_ids_from(&self, start: usize, keep: TabId) -> Vec<TabId> {
+        let start = start.max(self.saved_tab_count());
+        self.tabs[start..]
+            .iter()
+            .map(Tab::id)
+            .filter(|id| *id != keep)
+            .collect()
+    }
+
+    /// Closes `targets` bottom-up, so reopening restores them top-down in their old positions.
+    /// Returns the closed tabs in display order and selects `keep` if any closed. The callers
+    /// have validated `keep` and read `targets` from the model, so every close succeeds.
+    fn close_many(&mut self, keep: TabId, targets: &[TabId]) -> Result<Vec<Tab>, TabError> {
+        let mut closed = Vec::with_capacity(targets.len());
+        for id in targets.iter().rev() {
+            closed.push(self.close(*id)?);
+        }
+        closed.reverse();
+        if !closed.is_empty() {
+            self.active = Some(keep);
+        }
+        Ok(closed)
+    }
+
     /// Selects a saved instance or restores the newest closed ordinary web snapshot.
     pub fn reopen_closed(&mut self) -> Result<Option<TabId>, TabError> {
         // A saved row still owns its destination, even after its previous tab navigated.
@@ -667,7 +752,10 @@ impl fmt::Debug for TabModel {
 
 #[cfg(test)]
 mod tests {
-    use super::{Activation, BLANK_ADDRESS, PageOrigin, TabError, TabKind, TabMetadata, TabModel};
+    use super::{
+        Activation, BLANK_ADDRESS, PageOrigin, SETTINGS_ADDRESS, TabError, TabKind, TabMetadata,
+        TabModel,
+    };
 
     #[test]
     fn a_blank_tab_is_called_home_and_other_tabs_use_title_then_address() {
@@ -692,6 +780,41 @@ mod tests {
             metadata("", "https://example.test/").display_title(PageOrigin::Ordinary),
             "https://example.test/"
         );
+    }
+
+    #[test]
+    fn the_settings_address_is_called_settings_whatever_its_stored_title() {
+        let settings = TabMetadata {
+            title: SETTINGS_ADDRESS.to_owned(),
+            address: SETTINGS_ADDRESS.to_owned(),
+            ..TabMetadata::default()
+        };
+        assert!(settings.is_settings());
+        assert!(!settings.is_home(PageOrigin::Ordinary));
+        assert_eq!(settings.display_title(PageOrigin::Ordinary), "Settings");
+        assert_eq!(
+            settings.syrinx_title(PageOrigin::Ordinary),
+            Some("Settings")
+        );
+        let home = TabMetadata {
+            address: BLANK_ADDRESS.to_owned(),
+            ..TabMetadata::default()
+        };
+        assert!(!home.is_settings());
+        assert_eq!(home.syrinx_title(PageOrigin::Ordinary), Some("Home"));
+        // A web page that merely mentions the address is still a web page.
+        let page = TabMetadata {
+            title: "Settings".to_owned(),
+            address: "https://example.test/syrinx://settings".to_owned(),
+            ..TabMetadata::default()
+        };
+        assert!(!page.is_settings());
+        assert_eq!(page.syrinx_title(PageOrigin::Ordinary), None);
+        // Syrinx's own pages are exactly the ones it names.
+        assert!(settings.is_syrinx_page(PageOrigin::Ordinary));
+        assert!(home.is_syrinx_page(PageOrigin::Ordinary));
+        assert!(!home.is_syrinx_page(PageOrigin::AdoptedPopup));
+        assert!(!page.is_syrinx_page(PageOrigin::Ordinary));
     }
 
     #[test]

@@ -1,7 +1,9 @@
 //! Connects the shared session to browser chrome without running storage or search on the UI thread.
 
+mod chrome_focus;
 mod clear_data;
 mod customize;
+mod downloads;
 mod essentials;
 mod favorites;
 mod find;
@@ -34,10 +36,12 @@ mod recovery;
 mod runtime_notice;
 mod saved_moves;
 mod security;
+mod settings_page;
 mod sidebar_rows;
 mod sidebar_tree;
 mod sidebar_view;
 mod site_permissions;
+mod site_zoom;
 mod suspended_fixture;
 mod theme_editor;
 mod tile_editor;
@@ -60,7 +64,7 @@ use std::{
         Arc,
         atomic::{AtomicU8, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use futures::{StreamExt, channel::mpsc::unbounded};
@@ -160,9 +164,14 @@ fn window_bindings() -> Vec<KeyBinding> {
         .collect();
     // The palette is where commands run, so it is not itself a command.
     bindings.push(KeyBinding::new("ctrl-k", Palette, None));
-    // The sidebar toggle and peek dismissal are window keys, not palette commands.
+    // The sidebar toggle, Settings and peek dismissal are window keys, not palette commands.
     bindings.extend([
         KeyBinding::new("ctrl-alt-s", ToggleSidebar, None),
+        KeyBinding::new(
+            settings_page::SETTINGS_KEY,
+            settings_page::OpenSettings,
+            None,
+        ),
         KeyBinding::new("escape", DismissPeek, Some("Syrinx")),
         KeyBinding::new("escape", crate::palette::Dismiss, Some("SyrinxPeek")),
     ]);
@@ -265,17 +274,23 @@ fn browser_shortcut(action: BrowserAction) -> Option<BrowserShortcut> {
 }
 
 /// Whether a palette command hands the keys back to the page once it has run; the others
-/// (edit address, find, history) place focus themselves and must not be overridden.
+/// (edit address, find, history, downloads) place focus themselves and must not be overridden.
 fn command_returns_focus_to_page(action: BrowserAction) -> bool {
     !matches!(
         action,
-        BrowserAction::EditAddress | BrowserAction::FindInPage | BrowserAction::ShowHistory
+        BrowserAction::EditAddress
+            | BrowserAction::FindInPage
+            | BrowserAction::ShowHistory
+            | BrowserAction::ShowDownloads
     )
 }
 
 /// Whether a shortcut opens something in Syrinx's chrome, which page fullscreen hides.
 fn needs_chrome(shortcut: BrowserShortcut) -> bool {
-    matches!(shortcut, BrowserShortcut::Find | BrowserShortcut::History)
+    matches!(
+        shortcut,
+        BrowserShortcut::Find | BrowserShortcut::History | BrowserShortcut::Settings
+    )
 }
 
 /// How this launch runs: normally, or as one of the unattended synthetic checks.
@@ -302,7 +317,9 @@ pub struct BrowserView {
     connections: std::collections::HashMap<u64, syrinx_platform::browser::ConnectionState>,
     find: Option<find::FindBar>,
     find_sequence: u64,
-    zoom_levels: std::collections::HashMap<u64, f64>,
+    site_zoom: site_zoom::SiteZoom,
+    /// This session's downloads, in memory only (#143).
+    downloads: syrinx_core::DownloadList,
     permissions: Vec<permissions::Prompt>,
     model: TabModelSnapshot,
     session_revision: Option<u64>,
@@ -321,6 +338,7 @@ pub struct BrowserView {
     navigation_status: NavigationStatus,
     history: history_list::HistoryList,
     clear_data: clear_data::ClearDataDialog,
+    settings: settings_page::SettingsPage,
     shown: Option<TabId>,
     bounds: Option<PageBounds>,
     sidebar_sizing: SidebarSizing,
@@ -363,7 +381,7 @@ pub struct BrowserView {
     home_palette: HomePaletteIntent,
     importer: import::BookmarkImporter,
     home: home::HomeState,
-    /// Keeps keyboard focus as Customize's permission list opens, closes and rereads (DW-7).
+    /// Keeps keyboard focus as Settings' permission list opens, closes and rereads (DW-7).
     site_permission_focus: site_permissions::PermissionFocus,
     incoming: incoming_links::IncomingLinks,
     runtime: runtime_notice::RuntimeNotice,
@@ -377,12 +395,16 @@ pub struct BrowserView {
     smoke_waiting: bool,
     /// P1-33's scripted palette acceptance run; `None` in every other launch.
     acceptance: Option<palette_acceptance::Acceptance>,
-    /// Customize's Updates section and the staged update's handover (P1-39b).
+    /// Settings' Updates section and the staged update's handover (P1-39b).
     updates: updates::UpdatePanel,
-    /// Customize's Usage report section and the window's own measurements (AN-01).
+    /// Settings' Usage report section and the window's own measurements (AN-01).
     usage: usage_report::UsageState,
     outcome: Arc<AtomicU8>,
 }
+
+/// One budget for a quit without a close request to stop both workers. Windows allows about
+/// 5 s after it ends the session; the engine's own save wait (3 s) fits inside (#96).
+const QUIT_BOUND: Duration = Duration::from_millis(4_500);
 
 impl BrowserView {
     pub fn new(
@@ -408,7 +430,8 @@ impl BrowserView {
             connections: std::collections::HashMap::new(),
             find: None,
             find_sequence: 0,
-            zoom_levels: std::collections::HashMap::new(),
+            site_zoom: site_zoom::SiteZoom::default(),
+            downloads: syrinx_core::DownloadList::default(),
             permissions: Vec::new(),
             model: TabModelSnapshot::default(),
             session_revision: None,
@@ -427,6 +450,7 @@ impl BrowserView {
             navigation_status: NavigationStatus::default(),
             history: history_list::HistoryList::default(),
             clear_data: clear_data::ClearDataDialog::default(),
+            settings: settings_page::SettingsPage::new(cx),
             shown: None,
             bounds: None,
             sidebar_sizing: SidebarSizing::default(),
@@ -447,6 +471,7 @@ impl BrowserView {
                     }
                     this.watch_peek(window, cx);
                     this.focus_page_after_activation(window, cx);
+                    this.reassert_palette_after_activation(cx);
                 }
             }),
             message: "Opening your workspace…".to_owned(),
@@ -490,6 +515,12 @@ impl BrowserView {
             usage: usage_report::UsageState::new(usage, launched),
             outcome,
         };
+        // A Windows session end quits GPUI without a close request; stop the workers then (#96).
+        cx.on_app_quit(|view, _cx| {
+            view.stop_workers_on_quit();
+            async {}
+        })
+        .detach();
         window.focus(&view.focus, cx);
         match native_handle(window) {
             Ok(handle) => {
@@ -532,7 +563,7 @@ impl BrowserView {
                 if let Err(error) = update_in_main(&view, cx, |view, window, cx| {
                     view.session_event(event, window, cx)
                 }) {
-                    // Ending here drops the stream, so its sender fails next; say why (#9).
+                    // Ending drops the stream; the worker keeps saving, unheard by this window (#9).
                     eprintln!("Session events stopped reaching the browser window: {error:#}");
                     return;
                 }
@@ -607,7 +638,9 @@ impl BrowserView {
             SessionEvent::Preferences {
                 settings,
                 destinations,
+                site_zooms,
             } => {
+                self.site_zoom.restore(site_zooms.0);
                 self.runtime_settings_loaded(&settings);
                 self.restore_folder_expansion(&settings);
                 self.restore_preferences(&settings, destinations, window, cx);
@@ -641,6 +674,9 @@ impl BrowserView {
                     self.history.close();
                     self.clear_data.close();
                 }
+                if settings_page::settings_tab_closed(&self.model, &snapshot.model) {
+                    self.close_settings_subviews();
+                }
                 self.model = snapshot.model;
                 if initial {
                     self.usage.session_restored();
@@ -650,8 +686,9 @@ impl BrowserView {
                 self.usage.state_arrived(self.model.active_id, home);
                 self.save_folder_expansion();
                 self.crashes.retain(&self.model);
-                self.zoom_levels
-                    .retain(|id, _| self.model.tabs.iter().any(|tab| tab.id.get() == *id));
+                let tabs = &self.model.tabs;
+                self.site_zoom
+                    .retain_pages(|id| tabs.iter().any(|tab| tab.id.get() == id));
                 self.navigation_status.retain(&self.model);
                 if !self.closing {
                     if let Some(id) = snapshot.navigate {
@@ -675,6 +712,11 @@ impl BrowserView {
                 }
                 if let Some((request, target)) = snapshot.popup {
                     self.commit_popup(request, target);
+                }
+                let unattended =
+                    self.smoke || self.suspended_fixture.enabled() || self.acceptance.is_some();
+                if new_home && !self.closing && !unattended {
+                    self.take_keys_for_new_home();
                 }
                 self.sync_pages();
                 // Work that waited for the session to accept commands.
@@ -708,8 +750,6 @@ impl BrowserView {
                         address: "about:blank".to_owned(),
                     });
                 }
-                let unattended =
-                    self.smoke || self.suspended_fixture.enabled() || self.acceptance.is_some();
                 if new_home && !self.closing && !unattended {
                     self.open_palette(false, window, cx);
                 }
@@ -755,6 +795,10 @@ impl BrowserView {
             SessionEvent::HistoryCleared { request_id, result } => {
                 self.history_cleared(request_id, result);
             }
+            SessionEvent::SiteZoomsCleared { request_id, result } => {
+                self.site_zooms_cleared(request_id, result);
+            }
+            SessionEvent::SiteZoomsReplaced(levels) => self.replace_site_zooms(levels),
             SessionEvent::RememberedPermissions { request_id, result } => {
                 self.site_permissions_listed(request_id, result, window, cx);
             }
@@ -868,13 +912,24 @@ impl BrowserView {
                 self.suspended_fixture.observe(id, suspended)
             }
             BrowserEvent::Connection { id, state } => self.observe_connection(id, state),
-            BrowserEvent::ZoomChanged { id, factor } => {
-                self.zoom_levels.insert(id, factor);
-            }
+            BrowserEvent::ZoomChanged { id, factor } => self.page_zoom_reported(id, factor, cx),
             BrowserEvent::FindCompleted { id, request, count } => {
                 self.find_completed(id, request, count)
             }
             BrowserEvent::DownloadDialog { .. } => {}
+            BrowserEvent::DownloadStarted {
+                download,
+                tab,
+                file_name,
+                total,
+            } => self.download_started(download, tab, &file_name, total, window, cx),
+            BrowserEvent::DownloadChanged {
+                download,
+                state,
+                received,
+                total,
+                can_resume,
+            } => self.download_changed(download, state, received, (total, can_resume), window, cx),
             BrowserEvent::PermissionRequested {
                 id,
                 request,
@@ -894,12 +949,10 @@ impl BrowserView {
                 self.acceptance_title(id, &title);
                 self.metadata(id, Some(title), None);
             }
-            BrowserEvent::CloseRequested { id } => {
-                if let Some(command) = page_lifecycle::observed_close(id, self.closing) {
-                    self.command(command);
-                }
-            }
+            BrowserEvent::CloseRequested { id } => self.page_requested_close(id),
             BrowserEvent::Created { id } => {
+                // A new controller starts at 100%; its first address applies the site's level.
+                self.site_zoom.forget_page(id);
                 if let Ok(id) = TabId::new(id)
                     && page_lifecycle::created(id, &mut self.pending_pages, &mut self.loaded)
                 {
@@ -932,12 +985,19 @@ impl BrowserView {
                 success,
                 cancelled,
             } => {
+                // A navigation that became a download ends with success false and no new
+                // document (#143): neither a failure to count nor a visit to retract. The
+                // mark was read by `navigation_status.observe` above and is spent here.
+                let became_download =
+                    self.navigation_status.finish_download_navigation(id) && !success;
                 // A stopped or replaced navigation is not a failure to count.
-                if !success && !cancelled {
+                if !success && !cancelled && !became_download {
                     self.usage.recorder.error(ErrorCategory::NavigationFailed);
                 }
                 // History retracts a visit whose navigation failed.
-                if let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id) {
+                if !became_download
+                    && let Some(tab) = self.model.tabs.iter().find(|tab| tab.id.get() == id)
+                {
                     self.command(SessionCommand::ObserveNavigation {
                         id: tab.id,
                         success,
@@ -970,6 +1030,7 @@ impl BrowserView {
             }
             BrowserEvent::Url { id, url } => {
                 self.acceptance_observed(&url);
+                self.page_site_changed(id, &url);
                 self.forget_find(id, true);
                 self.metadata(id, None, Some(url));
             }
@@ -994,6 +1055,12 @@ impl BrowserView {
                 }
             }
             BrowserEvent::Error { tab, error } => {
+                // A failed page control may be a zoom Syrinx asked for; stop waiting for it.
+                if let (Some(id), syrinx_platform::browser::BrowserError::PageControl) =
+                    (tab, &error)
+                {
+                    self.site_zoom.abandon_apply(id);
+                }
                 if tab.is_none() {
                     self.fail(error.to_string());
                 } else if tab.is_some_and(|id| self.active_page_feedback(id)) {
@@ -1141,6 +1208,7 @@ impl BrowserView {
         for id in removed {
             self.connections.remove(&id.get());
             self.forget_find(id.get(), false);
+            downloads::forget_removed_page(&mut self.downloads, id);
             if self.page_command(BrowserCommand::Close { id: id.get() }) {
                 self.loaded.remove(&id);
                 self.pending_pages.remove(&id);
@@ -1254,6 +1322,7 @@ impl BrowserView {
                 self.dismiss_peek(generation, window, cx);
             }
             BrowserShortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
+            BrowserShortcut::Settings => self.open_settings_from_page(window, cx),
             // Only a focused page sends these; GPUI's own F6 binding covers the chrome.
             BrowserShortcut::FocusNextPane => self.cycle_pane(Direction::Forward, true, window, cx),
             BrowserShortcut::FocusPreviousPane => {
@@ -1266,8 +1335,8 @@ impl BrowserView {
             BrowserShortcut::History => {
                 self.toggle_history(history_list::ReturnFocus::Page, window, cx);
             }
-            BrowserShortcut::Downloads
-            | BrowserShortcut::Print
+            BrowserShortcut::Downloads => self.toggle_downloads(window, cx),
+            BrowserShortcut::Print
             | BrowserShortcut::ZoomIn
             | BrowserShortcut::ZoomOut
             | BrowserShortcut::ZoomReset => self.essential_shortcut(shortcut),
@@ -1541,9 +1610,7 @@ impl BrowserView {
     fn focus_shown_page(&mut self) {
         // A page the card does not show (Home, History, clear data, a crash card) gets no keys.
         if !self.page_card_shows_web_page() {
-            if let Err(error) = syrinx_platform::browser::focus_chrome(self.parent_hwnd) {
-                self.message = error.to_string();
-            }
+            self.move_keys_to_chrome();
             return;
         }
         if let Some(id) = self.shown {
@@ -1571,6 +1638,35 @@ impl BrowserView {
         let adopted = self.popup_pages.contains(&tab.id);
         tab.metadata
             .is_home(PageOrigin::from_adopted_popup(adopted))
+    }
+
+    /// Runs the orderly shutdown synchronously when GPUI quits with workers still running, as
+    /// when Windows ends the session: GPUI exits the process as soon as quit handlers return.
+    /// After a normal close both workers are already gone and this does nothing.
+    fn stop_workers_on_quit(&mut self) {
+        if self.browser.is_none() && self.session.is_none() {
+            return;
+        }
+        self.closing = true;
+        let deadline = Instant::now() + QUIT_BOUND;
+        // Both workers stop together: no page event can reach storage while this thread waits.
+        if let Some(session) = &self.session {
+            session.request_shutdown();
+        }
+        if let Some(browser) = self.browser.take() {
+            self.browser_stopped = true;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if let Err(error) = browser.shutdown_within(remaining) {
+                eprintln!("The page host did not stop cleanly as Syrinx quit: {error}");
+            }
+        }
+        if let Some(session) = self.session.take() {
+            self.session_stopped = true;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if let Err(error) = session.shutdown_within(remaining) {
+                eprintln!("Local storage did not stop cleanly as Syrinx quit: {error}");
+            }
+        }
     }
 
     pub fn request_close(&mut self, cx: &mut Context<Self>) {
@@ -1805,6 +1901,7 @@ impl BrowserView {
             .gap(px(10.))
             .rounded(px(corner))
             .bg(theme::rgba(palette.field))
+            .shadow(theme::shadow(syrinx_ui::ShadowRole::Field))
             .flex()
             .items_center()
             .overflow_hidden()
@@ -1818,9 +1915,9 @@ impl BrowserView {
             field.flex_1()
         };
         if track {
-            field = field
-                .track_focus(self.address_field_focus())
-                .focus(crate::controls::focus_ring);
+            field = field.track_focus(self.address_field_focus()).focus(
+                crate::controls::focus_ring_keeping(syrinx_ui::ShadowRole::Field),
+            );
         }
         if !readable.is_empty() {
             return field
@@ -1905,6 +2002,8 @@ impl Render for BrowserView {
                 .child(history_list::render(&self.history, cx))
         } else if let Some(card) = self.crashed_page(cx) {
             card
+        } else if self.shown.is_none() && self.settings_showing() {
+            self.settings_page(window, cx)
         } else if self.shown.is_none() {
             self.home_page(window, cx)
         } else {
@@ -1914,7 +2013,7 @@ impl Render for BrowserView {
         let page_drawn = self.browser_ready && !self.closing && self.page_card_shows_web_page();
         let card = page_drawn.then(|| page_card::card_edges(self.card_frame(window)));
         let sidebar = self.sidebar(window, cx);
-        let chrome = crate::controls::watch_pointer(div())
+        let chrome = crate::controls::watch_pointer_and(div(), self.chrome_press_noter(cx))
             .size_full()
             .relative()
             .key_context("Syrinx")
@@ -1946,6 +2045,10 @@ impl Render for BrowserView {
             )
             .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
                 this.toggle_sidebar(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &settings_page::OpenSettings, _, cx| {
+                this.open_settings(None);
+                cx.notify();
             }))
             .on_action(cx.listener(|this, _: &DismissPeek, window, cx| {
                 // Escape closes the topmost of an open menu, the peek and the history list. A menu
@@ -2277,15 +2380,16 @@ mod palette_shortcut_tests {
             );
             shortcuts.push(shortcut);
         }
-        // Every native shortcut except the palette, fullscreen and the window's sidebar and
-        // peek keys is reachable as a command: ten navigation actions, history and six page
-        // essentials.
+        // Every native shortcut except the palette, fullscreen, Settings and the window's
+        // sidebar and peek keys is reachable as a command: ten navigation actions, history and
+        // six page essentials.
         assert_eq!(shortcuts.len(), 17);
         assert!(shortcuts.contains(&BrowserShortcut::History));
         for window_key in [
             BrowserShortcut::Palette,
             BrowserShortcut::Fullscreen,
             BrowserShortcut::ToggleSidebar,
+            BrowserShortcut::Settings,
         ] {
             assert!(!shortcuts.contains(&window_key));
         }
@@ -2296,13 +2400,18 @@ mod palette_shortcut_tests {
         assert!(!command_returns_focus_to_page(BrowserAction::ShowHistory));
         assert!(!command_returns_focus_to_page(BrowserAction::FindInPage));
         assert!(!command_returns_focus_to_page(BrowserAction::EditAddress));
+        assert!(
+            !command_returns_focus_to_page(BrowserAction::ShowDownloads),
+            "the downloads flyout takes the keys"
+        );
         assert!(command_returns_focus_to_page(BrowserAction::ZoomIn));
     }
 
     #[test]
-    fn only_find_and_history_leave_page_fullscreen_first() {
+    fn only_find_history_and_settings_leave_page_fullscreen_first() {
         assert!(needs_chrome(BrowserShortcut::Find));
         assert!(needs_chrome(BrowserShortcut::History));
+        assert!(needs_chrome(BrowserShortcut::Settings));
         for shortcut in [
             BrowserShortcut::ZoomIn,
             BrowserShortcut::ZoomOut,

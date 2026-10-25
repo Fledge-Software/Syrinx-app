@@ -17,12 +17,90 @@ fn append(log: &mut DeletionLog, bytes: &mut Vec<u8>, record: DeletionRecord) {
 }
 
 fn clear(log: &mut DeletionLog, bytes: &mut Vec<u8>, interval: DeletionRange) {
+    clear_with(log, bytes, DeletionCategory::History, interval);
+}
+
+fn clear_with(
+    log: &mut DeletionLog,
+    bytes: &mut Vec<u8>,
+    category: DeletionCategory,
+    interval: DeletionRange,
+) {
     let requested = log
-        .request(DeletionCategory::History, interval)
+        .request(category, interval)
         .expect("prepare synthetic clear");
     append(log, bytes, requested);
     let completed = log.completion().expect("prepare completed synthetic clear");
     append(log, bytes, completed);
+}
+
+/// Recomputes a hand-edited record's checksum, so only the edited field can fail decoding.
+fn resealed(mut record: [u8; RECORD_SIZE]) -> [u8; RECORD_SIZE] {
+    let checksum = checksum(&record[..RECORD_SIZE - 4]);
+    record[RECORD_SIZE - 4..].copy_from_slice(&checksum.to_be_bytes());
+    record
+}
+
+#[test]
+fn a_zoom_clear_record_differs_from_a_history_one_only_by_its_category_byte_and_checksum() {
+    // The record carries no host: a zoom clear is the same 48 bytes as a history clear
+    // except for the category byte, so nothing about the cleared sites can be in it.
+    let history = DeletionLog::default()
+        .request(DeletionCategory::History, range(10, 20))
+        .expect("prepare synthetic history clear")
+        .encode();
+    let zoom = DeletionLog::default()
+        .request(DeletionCategory::SiteZoom, range(10, 20))
+        .expect("prepare synthetic zoom clear")
+        .encode();
+    assert_eq!(history[9], 1);
+    assert_eq!(zoom[9], 2);
+    assert_eq!(history[..9], zoom[..9]);
+    assert_eq!(history[10..RECORD_SIZE - 4], zoom[10..RECORD_SIZE - 4]);
+    assert_ne!(history[RECORD_SIZE - 4..], zoom[RECORD_SIZE - 4..]);
+}
+
+#[test]
+fn zoom_clears_round_trip_and_an_unknown_category_still_fails_closed() {
+    let mut log = DeletionLog::default();
+    let mut bytes = EMPTY_DELETION_LOG.to_vec();
+    clear(&mut log, &mut bytes, range(10, 20));
+    clear_with(
+        &mut log,
+        &mut bytes,
+        DeletionCategory::SiteZoom,
+        range(30, 40),
+    );
+
+    let recovered = DeletionLog::decode(&bytes, 2).expect("mixed log reloads");
+    assert_eq!(recovered, log);
+    let categories: Vec<_> = recovered
+        .unapplied(0)
+        .expect("every clear")
+        .iter()
+        .map(|request| request.category())
+        .collect();
+    assert_eq!(
+        categories,
+        [DeletionCategory::History, DeletionCategory::SiteZoom]
+    );
+    assert_eq!(
+        recovered.unapplied(1).expect("zoom clear")[0].range(),
+        range(30, 40)
+    );
+
+    // A category this build does not know is refused even with a valid checksum (D47).
+    let zoom_request = EMPTY_DELETION_LOG.len() + 2 * RECORD_SIZE;
+    let mut future: [u8; RECORD_SIZE] = bytes[zoom_request..zoom_request + RECORD_SIZE]
+        .try_into()
+        .expect("one whole record");
+    future[9] = 3;
+    let mut unknown = bytes[..zoom_request].to_vec();
+    unknown.extend_from_slice(&resealed(future));
+    assert_eq!(
+        DeletionLog::decode(&unknown, 1),
+        Err(DeletionError::UnsupportedCategory)
+    );
 }
 
 #[test]

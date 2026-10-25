@@ -46,6 +46,7 @@ impl HomePaletteIntent {
                 | SessionCommand::RememberPermission { .. }
                 | SessionCommand::ObserveMetadata { .. }
                 | SessionCommand::SaveActive
+                | SessionCommand::SaveTab(_)
                 | SessionCommand::Unsave(_)
                 | SessionCommand::Folder(_)
         );
@@ -57,8 +58,8 @@ impl HomePaletteIntent {
         Ok(())
     }
 
-    /// Queues a command whose Home tab is not a palette entry: the settings gear's Home opens
-    /// the Customize panel, so its acknowledgement must not open the palette over it (#14).
+    /// Queues a command whose new tab is not a palette entry: nobody asked to type when the
+    /// settings gear opens a tab, so its acknowledgement must not open the palette (#14, #91).
     pub(super) fn send_without_entry(
         &mut self,
         sender: &Sender<SessionCommand>,

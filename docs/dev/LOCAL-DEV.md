@@ -1,22 +1,26 @@
 # Local development on Windows 11
 
-Syrinx's first scaffold supplies the build and architecture checks (P1-01);
-P1-02 adds the tab and saved-page model without a window. Work on this machine,
-in the local repository, one approved slice at a time. The planning baseline
-is `2c80273`; P1-01 was merged into `claude/plan-atlas-v1` as `c30e4e7`, and
-P1-02 as `0641826` from `codex/p1-02-tab-model`. D41 permits local branches and
-independent review, with the owner's approval before each merge. Product
-commits still require the owner's request. There is no remote or push.
+This is how to build, run and check Syrinx on this machine. Work one
+approved slice at a time, each on its own branch, usually in its own git
+worktree (D41). Since 2026-10-13 the repository is on GitHub at
+`Fledge-Software/Syrinx-app`: a branch reaches `main` through a reviewed
+pull request, and the Gate workflow runs the same gate on GitHub (see
+"Run and check"). Product commits still require the owner's request. The
+planning baseline is `2c80273`. The sections after "What the architecture
+check protects" also keep each early slice's dated gate record; those
+records describe the code as it was on their date. A `DW-n` name is an
+item of Plan 1's old deferred-work register, read at `af3de53`; open
+deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## What exists
 
 - `Cargo.toml` defines the virtual workspace, resolver 3, shared package
   settings/lints and the `local` executable profile.
-- `crates/syrinx-app` now contains D49's integrated preview window, session
-  worker and Ctrl K palette. The owner approved bringing this integration
-  forward; it does not mark the remaining slices complete. Its native page
-  host lives in `syrinx-platform`. See [`docs/integrated-browser-preview.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/integrated-browser-preview.md)
-  for the implementation and validation status.
+- `crates/syrinx-app` is the browser: its window, sidebar, page card, Home,
+  palette and Settings, and the session worker that saves them. Its native
+  page host lives in `syrinx-platform`. It began as D49's integrated preview
+  ([`docs/integrated-browser-preview.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/integrated-browser-preview.md), at af3de53).
+  The wiki's Architecture page maps every crate in the workspace.
 - `crates/xtask` runs the gate and dependency-boundary check. Add product
   crates when their approved slices begin; there are no placeholder Plugin
   APIs or copied spike implementations.
@@ -24,13 +28,12 @@ commits still require the owner's request. There is no remote or push.
   20-entry closed-web-tab history, and saved-page identities that survive
   closing their live page. Its one third-party dependency is `url` (owner
   approval 2026-10-12, DW-1), for the shared web-address rule. The sidebar and
-  palette will consume its shared row projection; this slice adds no UI,
-  database, folder manager or importer.
+  palette read its shared row projection.
 
 Use the installed Windows MSVC Rust toolchain. This scaffold was developed
 with Rust/Cargo 1.97.1 and the `x86_64-pc-windows-msvc` target. Node 24.15.0
-and pnpm 10.34.4 are available, but this slice does not use them. It adds no
-toolchain downloader, system installation, registry setting or CI service.
+and pnpm 10.34.4 are available, but the build does not use them. The build
+adds no toolchain downloader, system installation or registry setting.
 The product is licensed under MPL-2.0 (`LICENSE`); Cargo publishing stays disabled.
 
 ### The Windows SDK resource compiler
@@ -86,8 +89,9 @@ cargo test --package syrinx-update --features release-tool --profile local --off
 cargo run --package syrinx-app --profile local --offline --locked -- --smoke
 ```
 
-The first line shows the standalone equivalent of the check that `xtask`
-runs internally. The test command retains Cargo's default target selection,
+The first three lines show the standalone equivalents of the checks that
+`xtask` runs internally (`crates/xtask/src/main.rs`, `check_workspace`).
+The test command retains Cargo's default target selection,
 including documentation tests when library crates arrive; `--all-targets`
 would omit those tests. The final application launch verifies that the executable
 actually runs: `--smoke` opens a GPUI window and a WebView2 `about:blank`
@@ -120,6 +124,15 @@ does not establish D38. Fix formatting with
 `cargo fmt --all`. A passing gate is required before review and merge, and
 it does not replace inspecting a window once a slice introduces UI.
 
+On GitHub, `.github/workflows/gate.yml` runs the same `cargo xtask check` on
+every pull request and every push to `main`, on a `windows-latest` runner
+with the pinned toolchain (Rust 1.97.1) and the locked dependencies fetched
+first, through `.github/scripts/run-gate.sh`, which keeps the log and, when
+the gate fails, puts its end in the run summary. A separate Linux job checks
+only formatting, so a formatting slip is reported within a minute or two.
+The weekly release runs the gate the same way before it builds anything
+(`docs/releasing.md`).
+
 ## Why the profile is explicit
 
 Smart App Control blocked unsigned debug builds during Phase 0. D38 keeps
@@ -144,8 +157,9 @@ development tool that runs the quality checks listed above; "optimized" means
 compiled with the release-style `local` profile. It is not the browser.
 On 2026-10-10, signature inspection reported `NotSigned` for
 `target/local/syrinx-app.exe`, and launching that exact file printed
-`Atlas 0.1.0` (its name then) and exited successfully. This proves the current console
-scaffold starts unsigned, not that the later browser window is implemented.
+`Atlas 0.1.0` (its name then) and exited successfully. This proved that the
+console scaffold of that date started unsigned, not that the later browser
+window was implemented.
 
 During P1-05, Windows blocked `target/local/xtask.exe` and the store unit-test
 executable even on unchanged retries. Syrinx-specific Code Integrity event
@@ -270,10 +284,11 @@ or persistence is claimed by this result.
 
 ## Durable saved pages and session records
 
-P1-03 adds `syrinx-store` and the filesystem part of `syrinx-platform`. The
-console application still does not open a production database. The later
-application composition will obtain a `WindowsDirectoryLease` from the
-platform and pass it to `Store::open`; the store never imports Windows APIs.
+P1-03 added `syrinx-store` and the filesystem part of `syrinx-platform`,
+while the application was still a console scaffold. The session worker now
+obtains a `WindowsDirectoryLease` from the platform at start-up and passes
+it to `Store::open` (`crates/syrinx-app/src/session.rs`); the store never
+imports Windows APIs.
 [`docs/storage-path-preflight.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/storage-path-preflight.md) explains the location checks and their limits.
 
 `Store` is a blocking interface for host worker threads, not the future UI
@@ -354,6 +369,14 @@ replay. Diagnostic output redacts the ranges. This module performs no file
 I/O or history collection. P1-27 persists it as `syrinx.deletions` beside the
 database, with schema 5's applied generation as the barrier, and connects the
 clearing and replay participants; see [`docs/p1-27-clear-data.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-27-clear-data.md).
+Since #121 the journal has a second category, `SiteZoom` (category byte 2),
+for the zoom levels that Clear browsing data's "Cookies and site data"
+removes: `Store::apply_deletions` applies every category of a request batch
+in one transaction and advances the one applied generation, and the staged
+replay covers the `site_zoom` table on copies of schema 7 or later. The
+record layout is unchanged. A build that does not know a category refuses
+the journal, as it always has; this build names such a record as written by
+a newer Syrinx.
 
 `Store::backup_if_due(utc_seconds, idle)` is a blocking host-worker call on
 the existing writer queue. It takes a daily `VACUUM INTO` snapshot only when
@@ -382,8 +405,8 @@ engine identity test, plus seven architecture tests. No tests were ignored
 or filtered. Independent source reviews passed for the SQLite patch, store
 ordering, native backup/recovery and deletion contract. Final documentation
 review also passed, including agreement between both 40-row issue maps. The application
-remains the console scaffold until its approved UI slices; no production
-database or profile was opened. The owner explicitly approved P1-04's commit
+was then still the console scaffold; no production database or profile was
+opened. The owner explicitly approved P1-04's commit
 and local merge on 2026-10-10; Plan 1's ledger records their completion.
 
 ## P1-05 local catalogue search
@@ -411,14 +434,18 @@ path. Do not run it alongside a build. Keep the audited `frizbee =0.13.0`
 pin and `safe_read` feature; [`docs/p1-05-search.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-05-search.md) records the protocol and
 verification status. The full local gate remains required separately.
 
-Current P1-05 validation is partial: formatting and the full workspace Clippy
+P1-05's first validation was partial: formatting and the full workspace Clippy
 command passed. Across the workspace attempt and focused xtask run, 132 tests
 passed: 30 core, 40 native unit, 4 backup integration, 18 storage integration,
 26 search and 14 xtask. Windows blocked the store unit-test executable before
 its 38 tests ran; the subsequent engine-identity test and workspace
 documentation-test stage were not reached. The console launch passed unsigned.
-The complete quality gate and D48 performance gate remain unresolved;
 [`docs/p1-05-search.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-05-search.md) records both failures and the separate CPU diagnostic.
+The complete gate has since passed: on 2026-10-13, after P1-05's D48 work
+merged to `main`, `cargo xtask check` passed 1,050 tests and the smoke run
+(Plan 1's ledger, [at af3de53](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/implementation-status.md)).
+D48's performance gate is still unverified: it waits on the owner's three
+quiet-machine `cargo xtask bench` runs (`docs/owner-checklist.md`, item 2).
 
 ## Palette acceptance (P1-33)
 
@@ -446,7 +473,9 @@ builds `syrinx-app` with the `local` profile and its `installed` feature
 `target\package-build` directory, so `target\local\syrinx.exe` stays the
 development build using `SyrinxProductPreview`. It writes a versioned folder
 and zip under `target\package`, with a manifest and the owner-run scripts
-from `packaging/`. It installs and registers nothing. The gate's
+from `packaging/`, and packs that folder into the setup program,
+`<package>-setup.exe`, beside the zip (the download since 2026-10-14). It
+installs and registers nothing. The gate's
 `cargo xtask check-packaging` step refuses a `packaging/syrinx-registration.ps1`
 that differs from the Rust registry table (regenerate it with
 `cargo xtask write-registration`) and parses every script without running
@@ -470,7 +499,7 @@ dependency that enables that feature.
 
 Since P1-39b the package also holds `syrinx-apply.exe`, the update helper,
 built from `syrinx-update` without the release tool. "Install update from
-file…" (Customize and the palette) works only in an `installed` build
+file…" (Settings' Updates section and the palette) works only in an `installed` build
 running from a folder named `Syrinx`; a development build says so and
 touches nothing. With `PRODUCTION_KEYS` still empty (issue #55), an installed
 build refuses every package as signed by an unknown key. The staging and
@@ -527,13 +556,16 @@ its own run created. See the trap in `docs/dev/trapstoknow.md`.
 
 ## Data and artifacts
 
-The scaffold opens no database, browser profile, account, note vault or
-project folder. It collects no analytics and makes no application network
-calls. Tests use synthetic dependency metadata and disposable tab/store data.
-Cargo output stays under the ignored `target/` directory; `Cargo.lock` is
-intentionally versioned.
+A development run opens only `%LOCALAPPDATA%\SyrinxProductPreview` or a
+`--test-data-dir` folder, never the installed `%LOCALAPPDATA%\Syrinx\data`.
+Syrinx makes no network call of its own: the one call is "Check for
+updates", which only the owner starts, and a development build refuses it
+before any request. The usage report (D39) counts locally, and only while
+the owner has switched it on; never collect or export real usage while
+developing. Tests use synthetic dependency metadata and disposable tab/store
+data. Cargo output stays under the ignored `target/` directory; `Cargo.lock`
+is intentionally versioned.
 
-Later product data belongs in local app data, outside synced folders (D13).
+Product data belongs in local app data, outside synced folders (D13).
 Page text and its index expire after seven days and stay outside daily
-durable-state backups (D40). The local analytics proposal is a separate
-later slice; it does not authorize collection while building the scaffold.
+durable-state backups (D40).

@@ -1,6 +1,8 @@
-//! Proves that appearance settings and tile edits survive a real worker restart.
+//! Proves that appearance settings, tile edits and site zoom levels survive a real worker
+//! restart, and that a zoom clear goes through D47's journal (#121).
 
 use syrinx_core::{BuiltInPlugin, Destination, DestinationTarget};
+use syrinx_store::deletion::{DeletionCategory, DeletionRange};
 
 use super::*;
 
@@ -13,6 +15,7 @@ fn preferences(
             SessionEvent::Preferences {
                 settings,
                 destinations,
+                ..
             } => return (settings, destinations),
             SessionEvent::Usage { .. } => continue,
             event => panic!("expected synthetic preferences, got {event:?}"),
@@ -204,5 +207,257 @@ fn a_double_clicked_remove_queued_twice_removes_one_tile() {
         .collect();
     assert_eq!(labels, ["Synthetic two"]);
     stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+/// The site zoom levels the worker hands the window at start-up (#90).
+fn site_zooms(events: &mut UnboundedReceiver<SessionEvent>) -> BTreeMap<String, f64> {
+    loop {
+        match next_any_event(events) {
+            SessionEvent::Preferences { site_zooms, .. } => return site_zooms.0,
+            SessionEvent::Usage { .. } => continue,
+            event => panic!("expected synthetic preferences, got {event:?}"),
+        }
+    }
+}
+
+fn zoom(host: &str, factor: Option<f64>) -> SessionCommand {
+    SessionCommand::SiteZoom {
+        host: host.to_owned(),
+        factor,
+    }
+}
+
+#[test]
+fn site_zoom_levels_survive_restart_and_a_reset_forgets_one() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    assert!(site_zooms(&mut events).is_empty());
+    state(&mut events);
+    send(&handle, zoom("kept.example.test", Some(1.25)));
+    send(&handle, zoom("reset.example.test", Some(0.75)));
+    send(&handle, zoom("reset.example.test", None));
+    stop(handle, &mut events);
+
+    let (handle, mut events) = fixture.start();
+    let restored = site_zooms(&mut events);
+    assert_eq!(
+        restored.into_iter().collect::<Vec<_>>(),
+        [("kept.example.test".to_owned(), 1.25)]
+    );
+    state(&mut events);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_refused_site_zoom_reports_without_stopping_the_worker() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    site_zooms(&mut events);
+    state(&mut events);
+    send(&handle, zoom("https://address.example.test/", Some(1.25)));
+    assert!(matches!(
+        next_any_event(&mut events),
+        SessionEvent::Failure {
+            error: SessionError::Store(syrinx_store::StoreError::InvalidEncoding(
+                syrinx_store::EncodingField::SiteZoom
+            )),
+            fatal: false,
+        }
+    ));
+    let opened = change(
+        &handle,
+        &mut events,
+        SessionCommand::NewTab {
+            address: "about:blank".to_owned(),
+        },
+    );
+    assert_eq!(opened.model.tabs.len(), 1);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+#[test]
+fn clearing_every_site_zoom_reports_the_count_and_what_remains() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    site_zooms(&mut events);
+    state(&mut events);
+    send(&handle, zoom("one.example.test", Some(1.25)));
+    send(&handle, zoom("two.example.test", Some(0.9)));
+    send(
+        &handle,
+        SessionCommand::ClearSiteZooms {
+            request_id: 7,
+            start: 0,
+            end: i64::MAX,
+        },
+    );
+    match next_any_event(&mut events) {
+        SessionEvent::SiteZoomsCleared {
+            request_id: 7,
+            result: Ok(cleared),
+        } => {
+            assert_eq!(cleared.sites, 2);
+            assert!(cleared.remaining.0.is_empty());
+        }
+        event => panic!("expected the synthetic zoom clear, got {event:?}"),
+    }
+    stop(handle, &mut events);
+    // The clear is journaled, so a restored backup replays it (D47, #121).
+    assert_eq!(
+        completed_clears(&fixture),
+        (1, vec![DeletionCategory::SiteZoom])
+    );
+
+    let (handle, mut events) = fixture.start();
+    assert!(site_zooms(&mut events).is_empty(), "the clear is durable");
+    state(&mut events);
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+/// The journal after the worker stopped: its completed generation and every clear's category.
+/// Panics on a pending clear, since a stopped worker leaves none.
+fn completed_clears(fixture: &Fixture) -> (u64, Vec<DeletionCategory>) {
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let journal = DeletionJournal::open(&lease).expect("reopen synthetic journal");
+    assert_eq!(journal.log().pending(), None);
+    let categories = journal
+        .log()
+        .unapplied(0)
+        .expect("every synthetic clear")
+        .iter()
+        .map(|request| request.category())
+        .collect();
+    (journal.log().completed_generation(), categories)
+}
+
+#[test]
+fn a_zoom_clear_requested_before_a_crash_finishes_at_the_next_start() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    site_zooms(&mut events);
+    state(&mut events);
+    send(&handle, zoom("crashed.example.test", Some(1.25)));
+    stop(handle, &mut events);
+
+    // Step 1 alone is durable: the request is journaled, nothing is applied or completed.
+    let now = utc_seconds().expect("synthetic clock");
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let mut journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let range = DeletionRange::new(now - 3_600, now + 1).expect("valid synthetic range");
+    let request = journal
+        .log()
+        .request(DeletionCategory::SiteZoom, range)
+        .expect("prepare synthetic request");
+    journal.append(request).expect("journal synthetic request");
+    drop(journal);
+    drop(lease);
+
+    // The start-up finishes the clear before the window hears any level.
+    let (handle, mut events) = fixture.start();
+    assert!(site_zooms(&mut events).is_empty());
+    state(&mut events);
+    stop(handle, &mut events);
+    assert_eq!(
+        completed_clears(&fixture),
+        (1, vec![DeletionCategory::SiteZoom])
+    );
+    fixture.cleanup();
+}
+
+/// A worker whose journal holds a zoom clear that stopped after its request, as a busy
+/// database leaves one: `kept` changed long before the clear's range, `cleared` inside it.
+fn worker_with_pending_zoom_clear(
+    fixture: &Fixture,
+) -> (
+    Worker,
+    Store,
+    UnboundedSender<SessionEvent>,
+    UnboundedReceiver<SessionEvent>,
+) {
+    let lease =
+        Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let store = Store::open(lease).expect("open synthetic store");
+    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let now = utc_seconds().expect("synthetic clock");
+    store
+        .save_site_zoom("kept.example.test".to_owned(), Some(1.25), 100)
+        .expect("save synthetic kept level");
+    store
+        .save_site_zoom("cleared.example.test".to_owned(), Some(0.9), now)
+        .expect("save synthetic cleared level");
+    let range = DeletionRange::new(now - 3_600, now + 1).expect("valid synthetic range");
+    let request = worker
+        .deletions
+        .log()
+        .request(DeletionCategory::SiteZoom, range)
+        .expect("prepare synthetic request");
+    worker
+        .deletions
+        .append(request)
+        .expect("journal synthetic request");
+    let (sender, events) = unbounded();
+    (worker, store, sender, events)
+}
+
+/// The levels the window was handed, among the events already sent.
+fn replaced_levels(events: &mut UnboundedReceiver<SessionEvent>) -> Option<BTreeMap<String, f64>> {
+    while let Ok(event) = events.try_recv() {
+        if let SessionEvent::SiteZoomsReplaced(levels) = event {
+            return Some(levels.0);
+        }
+    }
+    None
+}
+
+fn kept_level() -> Option<BTreeMap<String, f64>> {
+    Some(BTreeMap::from([("kept.example.test".to_owned(), 1.25)]))
+}
+
+#[test]
+fn a_pending_zoom_clear_finished_while_idle_replaces_the_windows_levels() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    // The same branch the idle timer runs, without waiting for it.
+    worker
+        .idle(&store, &sender)
+        .expect("finish the synthetic clear while idle");
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    assert_eq!(worker.deletions.log().pending(), None);
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}
+
+#[test]
+fn a_history_clear_that_finishes_a_pending_zoom_clear_replaces_the_windows_levels() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    worker
+        .handle(
+            &store,
+            SessionCommand::ClearHistory {
+                request_id: 9,
+                start: 0,
+                end: i64::MAX,
+            },
+            &sender,
+        )
+        .expect("clear synthetic history");
+    // The window hears its levels before the dialog hears the history count.
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    assert!(matches!(
+        next_any_event(&mut events),
+        SessionEvent::HistoryCleared {
+            request_id: 9,
+            result: Ok(_),
+        }
+    ));
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
     fixture.cleanup();
 }

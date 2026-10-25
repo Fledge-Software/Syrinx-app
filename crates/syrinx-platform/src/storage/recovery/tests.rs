@@ -1,7 +1,7 @@
 //! Exercises confirmed recovery and each interrupted move with disposable synthetic stores.
 
 use syrinx_core::{Activation, TabKind, TabMetadata, TabModel};
-use syrinx_store::{BackupOutcome, Store};
+use syrinx_store::{BackupOutcome, Store, deletion::DeletionCategory};
 
 use super::*;
 use crate::storage::{WindowsDirectoryLease, tests::Fixture};
@@ -138,10 +138,10 @@ fn corrupt_newest_candidate_falls_back_but_foreign_primary_never_does() {
     );
 }
 
-/// Marks a synthetic backup as written by a newer Syrinx (schema version 7, one past current).
+/// Marks a synthetic backup as written by a newer Syrinx (schema version 8, one past current).
 fn mark_newer_schema(path: &Path) {
     let mut bytes = fs::read(path).expect("read synthetic backup");
-    bytes[60..64].copy_from_slice(&7u32.to_be_bytes());
+    bytes[60..64].copy_from_slice(&8u32.to_be_bytes());
     fs::write(path, &bytes).expect("mark synthetic backup as newer");
 }
 
@@ -150,7 +150,7 @@ fn downgrade_to_flat_schema(path: &Path) {
     let connection = rusqlite::Connection::open(path).expect("open synthetic backup");
     connection
         .execute_batch(
-            "DROP TABLE site_permissions; DROP TABLE history_deletion_state; DROP TABLE history_visits; DROP TABLE history_urls; DROP TABLE settings; DROP TABLE quick_destinations; DROP TABLE saved_layout; DROP TABLE saved_folder_state; DROP TABLE saved_folders; PRAGMA user_version = 1;",
+            "DROP TABLE site_zoom; DROP TABLE site_permissions; DROP TABLE history_deletion_state; DROP TABLE history_visits; DROP TABLE history_urls; DROP TABLE settings; DROP TABLE quick_destinations; DROP TABLE saved_layout; DROP TABLE saved_folder_state; DROP TABLE saved_folders; PRAGMA user_version = 1;",
         )
         .expect("downgrade synthetic backup");
     assert!(connection.close().is_ok(), "close synthetic backup");
@@ -200,7 +200,7 @@ fn flat_schema_backup_restores_and_the_next_open_migrates_it() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read restored schema version");
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
     assert!(
         connection.close().is_ok(),
         "close restored synthetic database"
@@ -429,22 +429,24 @@ fn recovery_bundle(fixture: &Fixture) -> PathBuf {
         .expect("synthetic recovery bundle exists")
 }
 
-/// Clears `[start, end)` in journal order: durable request, store, durable completion.
+/// Clears `[start, end)` of one category in journal order: durable request, store, durable
+/// completion.
 fn journaled_clear(
     journal: &mut crate::storage::DeletionJournal,
     store: &Store,
+    category: DeletionCategory,
     start: i64,
     end: i64,
 ) {
     let range = syrinx_store::deletion::DeletionRange::new(start, end).expect("synthetic range");
     let request = journal
         .log()
-        .request(syrinx_store::deletion::DeletionCategory::History, range)
+        .request(category, range)
         .expect("prepare synthetic request");
     journal.append(request).expect("request is durable");
     let pending = journal.log().pending().expect("clear is pending");
     store
-        .apply_history_deletions(&[pending])
+        .apply_deletions(&[pending])
         .expect("live clear applies");
     let completion = journal.log().completion().expect("prepare completion");
     journal.append(completion).expect("completion is durable");
@@ -470,7 +472,7 @@ fn recovery_replays_every_later_clear_onto_the_restored_copy() {
     }
 
     // The newest backup holds the first clear; the second clear happens after it.
-    journaled_clear(&mut journal, &store, 100, 200);
+    journaled_clear(&mut journal, &store, DeletionCategory::History, 100, 200);
     let BackupOutcome::Created(backup) = store
         .backup_if_due(86_400, true)
         .expect("create synthetic backup")
@@ -478,7 +480,7 @@ fn recovery_replays_every_later_clear_onto_the_restored_copy() {
         panic!("synthetic backup must be due");
     };
     assert_eq!(backup.deletion_generation, 1);
-    journaled_clear(&mut journal, &store, 200, 300);
+    journaled_clear(&mut journal, &store, DeletionCategory::History, 200, 300);
     let expected = store.history_entries().expect("live history");
     assert_eq!(expected.len(), 1);
     store.shutdown().expect("close synthetic store");
@@ -505,7 +507,55 @@ fn recovery_replays_every_later_clear_onto_the_restored_copy() {
     let lease =
         WindowsDirectoryLease::prepare(&fixture.root).expect("recovered location opens normally");
     let store = Store::open(Arc::new(lease)).expect("recovered SQLite opens");
-    assert_eq!(store.history_deletion_generation(), Ok(2));
+    assert_eq!(store.deletion_generation(), Ok(2));
     assert_eq!(store.history_entries(), Ok(expected));
+    store.shutdown().expect("close recovered store");
+}
+
+#[test]
+fn recovery_replays_a_later_zoom_clear_onto_the_restored_copy() {
+    let fixture = Fixture::new();
+    let lease = Arc::new(
+        WindowsDirectoryLease::prepare(&fixture.root).expect("prepare synthetic location"),
+    );
+    let store = Store::open(lease.clone()).expect("open synthetic store");
+    let mut journal =
+        crate::storage::DeletionJournal::open(&lease).expect("open synthetic journal");
+    for (host, modified_at) in [("kept.example.test", 50), ("cleared.example.test", 150)] {
+        store
+            .save_site_zoom(host.to_owned(), Some(1.25), modified_at)
+            .expect("save synthetic zoom");
+    }
+
+    // The backup holds both levels; the zoom clear happens after it (#121).
+    let BackupOutcome::Created(backup) = store
+        .backup_if_due(86_400, true)
+        .expect("create synthetic backup")
+    else {
+        panic!("synthetic backup must be due");
+    };
+    assert_eq!(backup.deletion_generation, 0);
+    journaled_clear(&mut journal, &store, DeletionCategory::SiteZoom, 100, 200);
+    let expected = store.site_zooms().expect("live levels");
+    assert_eq!(expected.len(), 1);
+    store.shutdown().expect("close synthetic store");
+    drop(journal);
+    drop(lease);
+    damage(&fixture, false);
+
+    let log = crate::storage::read_deletion_log(&fixture.root).expect("read synthetic journal");
+    assert_eq!(log.completed_generation(), 1);
+    let offer = offer_recovery(&fixture.root, &log).expect("journal covers the backup");
+    assert_eq!(offer.metadata(), backup);
+    offer
+        .confirm()
+        .expect("confirmed recovery replays and installs");
+
+    // The restored copy lacks the cleared level and records the journal's generation.
+    let lease =
+        WindowsDirectoryLease::prepare(&fixture.root).expect("recovered location opens normally");
+    let store = Store::open(Arc::new(lease)).expect("recovered SQLite opens");
+    assert_eq!(store.deletion_generation(), Ok(1));
+    assert_eq!(store.site_zooms(), Ok(expected));
     store.shutdown().expect("close recovered store");
 }

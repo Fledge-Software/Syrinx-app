@@ -12,10 +12,14 @@ use std::{
 
 use futures::Stream;
 use syrinx_search::{BlankQuery, BoostWeights};
-use syrinx_store::{BackupOutcome, DirectoryLease, StoredSnapshot, validate_backup};
+use syrinx_store::{
+    BackupOutcome, DirectoryLease, EncodingField, HistoryEntry, RecordedVisit, StoredSnapshot,
+    validate_backup,
+};
 
 use super::*;
 
+mod survival_tests;
 mod usage_tests;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -85,6 +89,8 @@ impl Fixture {
             "usage.json.damaged",
             stop::LOG_NAME,
             stop::OLD_LOG_NAME,
+            stop::SURVIVED_LOG_NAME,
+            stop::OLD_SURVIVED_LOG_NAME,
         ] {
             remove_if_present(&self.0.join(name), false);
         }
@@ -943,6 +949,74 @@ fn a_command_that_stops_the_worker_loop_names_its_reason_and_operation() {
 }
 
 #[test]
+fn a_failure_saving_settled_titles_names_that_operation_not_the_running_command() {
+    let fixture = Fixture::new();
+    let lease =
+        Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic title store"));
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let store = Store::open(lease).expect("open synthetic title store");
+    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let (sender, mut events) = unbounded();
+    worker
+        .handle(
+            &store,
+            SessionCommand::NewTab {
+                address: SAVED_ADDRESS.into(),
+            },
+            &sender,
+        )
+        .expect("commit synthetic page");
+    let tab = state(&mut events)
+        .model
+        .active_id
+        .expect("synthetic tab is active");
+
+    // Inject the failure: a settled title names an entry the store refuses to address.
+    let refused = NonZeroU64::new(u64::MAX).expect("synthetic identity is nonzero");
+    let recorded = RecordedVisit {
+        visit: refused,
+        entry: HistoryEntry {
+            id: refused,
+            address: SAVED_ADDRESS.into(),
+            title: String::new(),
+            visit_count: 1,
+            last_visited: 0,
+        },
+    };
+    let settled = Instant::now()
+        .checked_sub(history::TITLE_SETTLE)
+        .expect("synthetic title predates the settle delay");
+    worker
+        .history
+        .hold_settled_title(tab, &recorded, "Synthetic title".into(), settled);
+    let expected = SessionError::During {
+        operation: "saving settled page titles",
+        error: Box::new(SessionError::Store(StoreError::InvalidEncoding(
+            EncodingField::History,
+        ))),
+    };
+    let (commands, receiver) = mpsc::channel();
+    commands
+        .send(SessionCommand::CloseActive)
+        .expect("queue the command that finds the settled title");
+    let (mut usage, _) =
+        UsageCollector::load(Arc::default(), &fixture.0, local_today(), Instant::now());
+
+    // The title is written before the command runs, and its failure is named as such.
+    let result = worker.serve(&store, receiver, &sender, &mut usage);
+    assert_eq!(result, Err(expected.clone()));
+    let shown = expected.to_string();
+    assert!(
+        shown.ends_with("(while saving settled page titles)"),
+        "{shown}"
+    );
+    assert!(!shown.contains("closing the active tab"), "{shown}");
+    drop(worker);
+    store.shutdown().expect("close synthetic title store");
+    fixture.cleanup();
+}
+
+#[test]
 fn a_stop_is_appended_to_the_log_beside_the_database_without_an_address() {
     let fixture = Fixture::new();
     checked_io(fs::create_dir(&fixture.0));
@@ -1015,34 +1089,6 @@ fn read_stop_log(fixture: &Fixture) -> Vec<String> {
 }
 
 #[test]
-fn run_keeps_the_stop_of_a_command_that_ends_the_loop_in_the_log() {
-    let fixture = Fixture::new();
-    let (commands, receiver) = mpsc::channel();
-    let (sender, mut events) = unbounded();
-    let worker = run_in_thread(&fixture, receiver, sender);
-    // Once the restored tabs arrive the loop is serving; the window then goes away.
-    while !matches!(next_any_event(&mut events), SessionEvent::State(_)) {}
-    drop(events);
-    commands
-        .send(SessionCommand::NewTab {
-            address: LIVE_ADDRESS.into(),
-        })
-        .expect("queue the command whose answer cannot be delivered");
-
-    let error = worker
-        .join()
-        .expect("join the run thread")
-        .expect_err("a lost window stops the loop");
-
-    // The log holds exactly the returned error's line, naming the operation, with no address.
-    let lines = read_stop_log(&fixture);
-    assert_eq!(lines, [stop::stop_line(&error)]);
-    assert!(lines[0].contains("(while "), "{lines:?}");
-    assert!(!lines[0].contains("example.test"), "{lines:?}");
-    fixture.cleanup();
-}
-
-#[test]
 fn run_keeps_a_stop_that_happens_while_usage_counting_loads() {
     let fixture = Fixture::new();
     let (_commands, receiver) = mpsc::channel();
@@ -1097,6 +1143,16 @@ fn home_entry_acknowledgments_follow_their_command_and_do_not_survive_restart() 
     assert_eq!(reopened.home_entry, Some(2));
     assert_eq!(reopened.created, [replacement]);
     assert_eq!(reopened.model.tabs[0].metadata.address, "about:blank");
+    // Home itself is never saved (#91), so the reopened tab navigates before Ctrl D.
+    change(
+        &handle,
+        &mut events,
+        SessionCommand::ObserveMetadata {
+            id: replacement,
+            title: None,
+            address: Some("https://home-entry.example.test/".into()),
+        },
+    );
     let saved = change(&handle, &mut events, SessionCommand::SaveActive);
     let saved_id = saved.model.saved_pages[0].id;
     assert_eq!(saved.home_entry, None);
@@ -2005,3 +2061,6 @@ mod folder_tests;
 
 #[path = "permission_tests.rs"]
 mod permission_tests;
+
+#[path = "tab_action_tests.rs"]
+mod tab_action_tests;

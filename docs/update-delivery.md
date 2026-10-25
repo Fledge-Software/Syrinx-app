@@ -104,14 +104,20 @@ trusted for integrity: the signature decides, so a compromised host can
 withhold updates but cannot install code.
 
 **GitHub Releases of `Fledge-Software/Syrinx-app`.** Releases are free and
-already where the code lives. But the repository is private (owner,
-2026-10-13), so downloading a release asset needs an authenticated request.
+already where the code lives. But the repository was private when this was
+written (2026-10-13), so downloading a release asset needed an authenticated request.
 Syrinx would have to carry a GitHub token, and any token that can read
 release assets of a private repository can also read its source. That
 breaks "keys never go into the repository" in spirit, because the token
 would ship inside every copy. Public releases would need a public
 repository, which waits on the licence. GitHub also answers a download with
 a redirect to a second host, which Syrinx would have to follow.
+*(Since then the licence was chosen, MPL-2.0 on 2026-10-13, and the
+repository is public, so a release asset no longer needs a token. The
+owner's choice of `syrinxapp.dev` (question 2) is unchanged, and the other
+reason above still applies: GitHub answers a download with a redirect to a
+second host, while Syrinx fetches fixed paths from one host and follows no
+redirects.)*
 
 **Static files on `syrinxapp.dev`, which the owner holds** (decision
 2026-10-12). Syrinx would fetch fixed paths from one host, follow no
@@ -579,7 +585,9 @@ them in chat, and `docs/update-format.md` ("P1-39b") records them:
 - A Later install is not watched for a failed start in v1; the manual
   rename is documented.
 - An unreadable `Updates\state` keeps refusing staging; a "Reset update
-  records" action is deferred as DW-66.
+  records" action is deferred as DW-66 (an item of Plan 1's old
+  deferred-work register, read at `af3de53`). *(Built since: see "DW-66"
+  in `docs/update-format.md`.)*
 - The pre-update snapshot counts within D13's seven copies and is skipped
   when a valid copy is under an hour old.
 - Later is armed only for the current session; after a crash Syrinx asks

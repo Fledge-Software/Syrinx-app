@@ -1,5 +1,6 @@
 //! Serializes durable writes and keeps two read connections behind independent locks.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::num::NonZeroU64;
 use std::sync::{
@@ -17,10 +18,10 @@ use crate::error::{
     EncodingField, StoreError, StoreOperation, combine_results, database_error, with_cleanup,
 };
 use crate::history::{
-    self, HistoryDeletion, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit,
-    HistoryWrite, RecordedVisit,
+    self, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit, HistoryWrite, RecordedVisit,
 };
 use crate::preferences::{self, PreferenceWrite, StoredPreferences};
+use crate::replay::{self, AppliedDeletions};
 use crate::{BackupOutcome, DirectoryLease, ShutdownState};
 use crate::{backup, records, schema};
 
@@ -234,6 +235,34 @@ impl Store {
         self.read(|connection| crate::permissions::list(connection))
     }
 
+    /// Every saved per-site zoom level by host (#90), read once at start-up.
+    pub fn site_zooms(&self) -> Result<BTreeMap<String, f64>, StoreError> {
+        self.read(|connection| crate::site_zoom::load(connection))
+    }
+
+    /// Saves `host`'s zoom level as changed at `modified_at` Unix seconds, or forgets it with
+    /// `None` so the site opens at 100%. A default (100%) factor is refused: pass `None`.
+    pub fn save_site_zoom(
+        &self,
+        host: String,
+        factor: Option<f64>,
+        modified_at: i64,
+    ) -> Result<(), StoreError> {
+        crate::site_zoom::validate_host(&host)?;
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::SiteZoom {
+                host,
+                factor,
+                modified_at,
+                reply,
+            })
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
+    }
+
     /// Creates a daily validated backup only while idle. This blocks on the existing writer queue.
     pub fn backup_if_due(
         &self,
@@ -300,20 +329,27 @@ impl Store {
         self.write_entry(HistoryWrite::RemoveVisit(visit))
     }
 
-    /// Applies D47 history clears and records the newest generation applied, in one
-    /// transaction. Reports what changed so a running catalogue can follow.
-    pub fn apply_history_deletions(
+    /// Applies D47 clears of history and site zoom levels and records the newest generation
+    /// applied, in one transaction. Reports what changed so a running catalogue can follow.
+    pub fn apply_deletions(
         &self,
         requests: &[DeletionRequest],
-    ) -> Result<HistoryDeletion, StoreError> {
-        match self.write_history(HistoryWrite::Delete(requests.to_vec()))? {
-            HistoryOutcome::Deleted(deletion) => Ok(deletion),
-            _ => Err(StoreError::InvalidEncoding(EncodingField::History)),
-        }
+    ) -> Result<AppliedDeletions, StoreError> {
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::Deletions {
+                requests: requests.to_vec(),
+                reply,
+            })
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
     }
 
-    /// The newest D47 clear this database has applied; the journal must reach at least it.
-    pub fn history_deletion_generation(&self) -> Result<u64, StoreError> {
+    /// The newest D47 clear this database has applied, of any category; the journal must
+    /// reach at least it.
+    pub fn deletion_generation(&self) -> Result<u64, StoreError> {
         self.read(|connection| history::applied_generation(connection))
     }
 
@@ -424,6 +460,17 @@ enum WriterRequest {
         /// Removes the choice only while it is still saved as this value.
         expected: Option<bool>,
         reply: mpsc::SyncSender<Result<bool, StoreError>>,
+    },
+    SiteZoom {
+        host: String,
+        factor: Option<f64>,
+        modified_at: i64,
+        reply: mpsc::SyncSender<Result<(), StoreError>>,
+    },
+    /// D47 journal requests to apply in one transaction, whatever their categories.
+    Deletions {
+        requests: Vec<DeletionRequest>,
+        reply: mpsc::SyncSender<Result<AppliedDeletions, StoreError>>,
     },
     Save(SaveRequest),
     /// A committed revision a reader loaded; no reply.
@@ -540,6 +587,20 @@ fn serve_writes(
             } => {
                 let result =
                     crate::permissions::forget(&writer.connection, &origin, kind, expected);
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::SiteZoom {
+                host,
+                factor,
+                modified_at,
+                reply,
+            } => {
+                let result =
+                    crate::site_zoom::write(&writer.connection, &host, factor, modified_at);
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::Deletions { requests, reply } => {
+                let result = replay::apply_live(&mut writer.connection, &requests);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
             WriterRequest::Save(request) => {

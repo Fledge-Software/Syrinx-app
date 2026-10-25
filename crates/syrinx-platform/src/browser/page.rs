@@ -51,6 +51,7 @@ pub(super) struct PageContext {
     pub(super) events: EventSink,
     pub(super) shortcuts: NativeSink,
     pub(super) popups: super::popups::PopupRequests,
+    pub(super) downloads: super::downloads::DownloadOperations,
     pub(super) text: super::page_text::TextContext,
     /// An adopted popup whose opener showed an excluded or tainted document.
     pub(super) starts_tainted: bool,
@@ -78,6 +79,7 @@ impl Page {
             events,
             shortcuts,
             popups,
+            downloads,
             text: text_context,
             starts_tainted,
         } = context;
@@ -129,9 +131,11 @@ impl Page {
         register_source(&view, id, events.clone(), destination.clone())?;
         register_navigation(&view, id, events.clone())?;
         lifecycle.register_navigation(&view)?;
+        lifecycle.register_audio(&view)?;
         register_process_failure(&view, id, events.clone(), shortcuts.clone())?;
         let permissions = super::permissions::Permissions::register(&view, id, events.clone())?;
         let essentials = super::essentials::Essentials::register(&view, id, events.clone())?;
+        super::downloads::register(&view, id, events.detached(), downloads)?;
         register_focus_arrival(&view, id, events.clone())?;
         register_focus_departure(&view, shortcuts.clone(), id, events.clone())?;
         // Observes headers and navigations only while capture is on; never a request filter.
@@ -624,6 +628,9 @@ fn shortcut_for_modifiers(
         (0x52, false) => Some(BrowserShortcut::Reload),
         (0x09, false) => Some(BrowserShortcut::NextTab),
         (0x09, true) => Some(BrowserShortcut::PreviousTab),
+        // VK_OEM_COMMA opens Settings, following Chrome and Edge (#91). The owner decided the
+        // gear; taking Ctrl , from a focused page awaits the owner's confirmation.
+        (0xBC, false) => Some(BrowserShortcut::Settings),
         _ => None,
     }
 }
@@ -712,6 +719,26 @@ mod tests {
             departure_shortcut(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC),
             None
         );
+    }
+
+    #[test]
+    fn control_comma_opens_settings_over_a_focused_page() {
+        assert_eq!(
+            shortcut_for_modifiers(0xBC, true, false, false, false),
+            Some(BrowserShortcut::Settings)
+        );
+        // Shifted, with Alt or AltGr, or alone, the comma stays the page's.
+        for (control, shift, alt, right_alt) in [
+            (true, true, false, false),
+            (true, false, true, false),
+            (true, false, true, true),
+            (false, false, false, false),
+        ] {
+            assert_eq!(
+                shortcut_for_modifiers(0xBC, control, shift, alt, right_alt),
+                None
+            );
+        }
     }
 
     #[test]

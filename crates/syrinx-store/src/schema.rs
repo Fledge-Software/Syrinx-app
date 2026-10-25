@@ -9,7 +9,7 @@ use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x5359_5258;
-pub(crate) const SCHEMA_VERSION: i64 = 6;
+pub(crate) const SCHEMA_VERSION: i64 = 7;
 
 /// The record layout of a recognized Syrinx database, by `user_version`.
 /// Declared in version order, so later generations compare greater.
@@ -23,13 +23,15 @@ pub(crate) enum SchemaGeneration {
     Preferences,
     /// Version 4 (P1-20): adds browsing history beside the version 3 session and preferences.
     History,
-    /// Version 5 (P1-27): records which D47 history clears this database has applied.
+    /// Version 5 (P1-27): records which D47 clears this database has applied.
     Deletions,
     /// Version 6 (P1-12): adds the owner's remembered site permission choices.
     Permissions,
+    /// Version 7 (#90): adds the owner's per-site zoom levels.
+    SiteZoom,
 }
 
-pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Permissions;
+pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::SiteZoom;
 
 impl SchemaGeneration {
     /// Whether this generation (version 2 or later) stores saved pages as a folder tree.
@@ -55,6 +57,11 @@ impl SchemaGeneration {
     /// Whether this generation (version 6 or later) stores remembered site permissions.
     fn has_permissions(self) -> bool {
         self >= Self::Permissions
+    }
+
+    /// Whether this generation (version 7 or later) stores per-site zoom levels.
+    pub(crate) fn has_site_zoom(self) -> bool {
+        self >= Self::SiteZoom
     }
 }
 
@@ -122,7 +129,8 @@ const HISTORY_VISITS_TABLE: &str = "CREATE TABLE history_visits (
     visited_at INTEGER NOT NULL CHECK(visited_at >= 0)
 ) STRICT";
 
-// The newest D47 clear applied here; a restored copy replays the external journal past it.
+// The newest D47 clear applied here, of any category; a restored copy replays the external
+// journal past it. The name predates the zoom category (#121) and stays: version 5 is frozen.
 const DELETION_STATE_TABLE: &str = "CREATE TABLE history_deletion_state (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     applied_generation INTEGER NOT NULL CHECK(applied_generation >= 0)
@@ -327,6 +335,7 @@ fn inspect_identity(connection: &Connection) -> Result<Identity, StoreError> {
         4 => Ok(Identity::Syrinx(SchemaGeneration::History)),
         5 => Ok(Identity::Syrinx(SchemaGeneration::Deletions)),
         6 => Ok(Identity::Syrinx(SchemaGeneration::Permissions)),
+        7 => Ok(Identity::Syrinx(SchemaGeneration::SiteZoom)),
         version if version > SCHEMA_VERSION => Err(StoreError::FutureSchema { version }),
         _ => Err(StoreError::SchemaMismatch),
     }
@@ -376,6 +385,11 @@ pub(crate) fn permissions_migration() -> String {
     format!("{};", crate::permissions::TABLE)
 }
 
+/// Version 7: adds the empty per-site zoom table. Absent rows mean 100%.
+pub(crate) fn site_zoom_migration() -> String {
+    format!("{};", crate::site_zoom::TABLE)
+}
+
 /// Owns the migration SQL that `rusqlite_migration` borrows, numbered by position.
 pub(crate) struct MigrationScripts {
     initial: String,
@@ -384,6 +398,7 @@ pub(crate) struct MigrationScripts {
     history: String,
     deletions: String,
     permissions: String,
+    site_zoom: String,
 }
 
 impl MigrationScripts {
@@ -395,6 +410,7 @@ impl MigrationScripts {
             history: history_migration(),
             deletions: deletions_migration(),
             permissions: permissions_migration(),
+            site_zoom: site_zoom_migration(),
         }
     }
 
@@ -406,6 +422,7 @@ impl MigrationScripts {
             M::up_with_hook(&self.history, check_migrated_records).foreign_key_check(),
             M::up_with_hook(&self.deletions, check_migrated_deletions),
             M::up_with_hook(&self.permissions, check_migrated_permissions),
+            M::up_with_hook(&self.site_zoom, check_migrated_site_zoom),
         ])
     }
 }
@@ -440,6 +457,15 @@ pub(crate) fn check_migrated_permissions(transaction: &Transaction<'_>) -> HookR
         Ok(_) => Err(HookError::Hook(
             "unexpected site permission rows".to_owned(),
         )),
+        Err(error) => Err(HookError::Hook(error.to_string())),
+    }
+}
+
+pub(crate) fn check_migrated_site_zoom(transaction: &Transaction<'_>) -> HookResult {
+    // The new table must start empty, so every site still opens at 100% before the commit.
+    match crate::site_zoom::count(transaction) {
+        Ok(0) => Ok(()),
+        Ok(_) => Err(HookError::Hook("unexpected site zoom rows".to_owned())),
         Err(error) => Err(HookError::Hook(error.to_string())),
     }
 }
@@ -544,20 +570,25 @@ const DELETION_ADDED_OBJECTS: &[SchemaObject] = &[
 const PERMISSION_ADDED_OBJECTS: &[SchemaObject] =
     &[table("site_permissions", crate::permissions::TABLE)];
 
+/// Version 7 adds the per-site zoom table to version 6.
+const SITE_ZOOM_ADDED_OBJECTS: &[SchemaObject] = &[table("site_zoom", crate::site_zoom::TABLE)];
+
 /// Objects of each generation, sorted by name as `sqlite_schema` lists them.
-/// Versions 5 and 6 each add their objects on top of every earlier version's.
+/// Versions 5, 6 and 7 each add their objects on top of every earlier version's.
 fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> {
     let base = match generation {
         SchemaGeneration::FlatSaved => FLAT_OBJECTS,
         SchemaGeneration::Folders => FOLDER_OBJECTS,
         SchemaGeneration::Preferences => PREFERENCE_OBJECTS,
-        SchemaGeneration::History | SchemaGeneration::Deletions | SchemaGeneration::Permissions => {
-            HISTORY_OBJECTS
-        }
+        SchemaGeneration::History
+        | SchemaGeneration::Deletions
+        | SchemaGeneration::Permissions
+        | SchemaGeneration::SiteZoom => HISTORY_OBJECTS,
     };
     let additions = [
         (generation.has_deletion_state(), DELETION_ADDED_OBJECTS),
         (generation.has_permissions(), PERMISSION_ADDED_OBJECTS),
+        (generation.has_site_zoom(), SITE_ZOOM_ADDED_OBJECTS),
     ];
     let added = additions
         .into_iter()
