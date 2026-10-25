@@ -339,10 +339,13 @@ app against synthetic local pages).
 None of the plugin system is built in this workspace yet. What is decided:
 
 - **Plugins live outside this workspace.** Each is its own repository made
-  from the template, `Fledge-Software/syrinx-plugin-template` (#30), and
-  built-in plugins ship as signed packages bundled in Syrinx's release. The
-  Notes plugin (#35) will have its own repository; Forge (#42) follows once
-  Notes is in daily use. The Fledge plugin (#32) is on hold.
+  from the template,
+  [`Fledge-Software/syrinx-plugin-template`](https://github.com/Fledge-Software/syrinx-plugin-template)
+  (#30), and built-in plugins ship as signed packages bundled in Syrinx's
+  release. The Notes plugin (#35) lives in
+  [`Fledge-Software/Syrinx-Notes-Plugin`](https://github.com/Fledge-Software/Syrinx-Notes-Plugin),
+  made from that template; Forge (#42) follows once Notes is in daily use.
+  The Fledge plugin (#32) is on hold.
 - **The host is planned as `crates/syrinx-plugin-host`** (#28): the only
   crate that will link wasmtime. It will load and run plugins, enforce the
   capabilities the owner grants, and publish a test host library that
