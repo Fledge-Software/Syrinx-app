@@ -19,6 +19,7 @@ mod import;
 mod incoming_links;
 mod main_window;
 mod menus;
+mod mute;
 mod navigation_intents;
 mod navigation_status;
 mod owned_popup;
@@ -289,7 +290,11 @@ fn command_returns_focus_to_page(action: BrowserAction) -> bool {
 fn needs_chrome(shortcut: BrowserShortcut) -> bool {
     matches!(
         shortcut,
-        BrowserShortcut::Find | BrowserShortcut::History | BrowserShortcut::Settings
+        BrowserShortcut::Find
+            | BrowserShortcut::FindNext
+            | BrowserShortcut::FindPrevious
+            | BrowserShortcut::History
+            | BrowserShortcut::Settings
     )
 }
 
@@ -318,6 +323,8 @@ pub struct BrowserView {
     find: Option<find::FindBar>,
     find_sequence: u64,
     site_zoom: site_zoom::SiteZoom,
+    /// Tabs the owner muted in this run; never saved (#95).
+    muted: HashSet<TabId>,
     /// This session's downloads, in memory only (#143).
     downloads: syrinx_core::DownloadList,
     permissions: Vec<permissions::Prompt>,
@@ -431,6 +438,7 @@ impl BrowserView {
             find: None,
             find_sequence: 0,
             site_zoom: site_zoom::SiteZoom::default(),
+            muted: HashSet::new(),
             downloads: syrinx_core::DownloadList::default(),
             permissions: Vec::new(),
             model: TabModelSnapshot::default(),
@@ -689,6 +697,7 @@ impl BrowserView {
                 let tabs = &self.model.tabs;
                 self.site_zoom
                     .retain_pages(|id| tabs.iter().any(|tab| tab.id.get() == id));
+                self.muted.retain(|id| tabs.iter().any(|tab| tab.id == *id));
                 self.navigation_status.retain(&self.model);
                 if !self.closing {
                     if let Some(id) = snapshot.navigate {
@@ -883,6 +892,7 @@ impl BrowserView {
             }
             BrowserEvent::PageRestored { id } => {
                 self.crashes.restored(id);
+                self.reapply_mute(id);
                 self.recovery_focus(window, cx);
             }
             BrowserEvent::RecoveryStarted { sequence, tabs } => {
@@ -913,9 +923,14 @@ impl BrowserView {
             }
             BrowserEvent::Connection { id, state } => self.observe_connection(id, state),
             BrowserEvent::ZoomChanged { id, factor } => self.page_zoom_reported(id, factor, cx),
-            BrowserEvent::FindCompleted { id, request, count } => {
-                self.find_completed(id, request, count)
-            }
+            // Shown by the row's audio badge once slice 4 of #95 draws it.
+            BrowserEvent::AudioChanged { .. } => {}
+            BrowserEvent::FindResult {
+                id,
+                request,
+                count,
+                active,
+            } => self.find_completed(id, request, count, active),
             BrowserEvent::DownloadDialog { .. } => {}
             BrowserEvent::DownloadStarted {
                 download,
@@ -951,6 +966,7 @@ impl BrowserView {
             }
             BrowserEvent::CloseRequested { id } => self.page_requested_close(id),
             BrowserEvent::Created { id } => {
+                self.reapply_mute(id);
                 // A new controller starts at 100%; its first address applies the site's level.
                 self.site_zoom.forget_page(id);
                 if let Ok(id) = TabId::new(id)
@@ -1331,6 +1347,8 @@ impl BrowserView {
             BrowserShortcut::LeavePageBackward => self.leave_page_backward(window, cx),
             BrowserShortcut::Fullscreen => self.fullscreen_shortcut(window),
             BrowserShortcut::Find => self.open_find(window, cx),
+            BrowserShortcut::FindNext => self.find_next_key(false, window, cx),
+            BrowserShortcut::FindPrevious => self.find_next_key(true, window, cx),
             // From a page key, the palette or a menu, the keys were the page's to return.
             BrowserShortcut::History => {
                 self.toggle_history(history_list::ReturnFocus::Page, window, cx);
@@ -2410,6 +2428,8 @@ mod palette_shortcut_tests {
     #[test]
     fn only_find_history_and_settings_leave_page_fullscreen_first() {
         assert!(needs_chrome(BrowserShortcut::Find));
+        assert!(needs_chrome(BrowserShortcut::FindNext));
+        assert!(needs_chrome(BrowserShortcut::FindPrevious));
         assert!(needs_chrome(BrowserShortcut::History));
         assert!(needs_chrome(BrowserShortcut::Settings));
         for shortcut in [

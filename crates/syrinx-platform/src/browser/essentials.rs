@@ -1,23 +1,30 @@
-//! Runs native find, download, print and zoom controls outside synchronous accelerator callbacks.
+//! Runs native find, download, print, zoom and mute controls outside synchronous accelerator callbacks.
 
 use std::{cell::Cell, rc::Rc};
 
 use webview2_com::{
+    FindActiveMatchIndexChangedEventHandler, FindMatchCountChangedEventHandler,
     FindStartCompletedHandler, IsDefaultDownloadDialogOpenChangedEventHandler,
-    Microsoft::Web::WebView2::Win32::*, ZoomFactorChangedEventHandler,
+    IsMutedChangedEventHandler, Microsoft::Web::WebView2::Win32::*, ZoomFactorChangedEventHandler,
 };
 use windows::{
     Win32::Foundation::E_POINTER,
-    core::{BOOL, HSTRING, Interface},
+    core::{BOOL, HSTRING, IUnknown, Interface},
 };
 use wry::{WebView, WebViewExtWindows};
 
-use super::{BrowserError, BrowserEvent, EventSink};
+use super::{
+    BrowserError, BrowserEvent, EventSink,
+    lifecycle::{emit_audio_changed, playing_audio},
+};
 
 pub enum PageAction {
+    /// Searches the page for `text`, matching case only when `case_sensitive`; an empty
+    /// `text` stops the search instead.
     Find {
         request: u64,
         text: String,
+        case_sensitive: bool,
     },
     FindNext,
     FindPrevious,
@@ -38,7 +45,19 @@ pub enum PageAction {
 pub(super) struct Essentials {
     id: u64,
     events: EventSink,
-    search: Rc<Cell<Option<u64>>>,
+    search: Rc<FindState>,
+}
+
+/// Which find request is current and which has finished starting, so a late result from an
+/// older search is dropped; and whether the match-change events are registered yet.
+#[derive(Default)]
+struct FindState {
+    /// The newest request; `None` once find stops.
+    current: Cell<Option<u64>>,
+    /// The newest request whose `Start` completed.
+    settled: Cell<Option<u64>>,
+    /// Whether registering the match-change events has been tried.
+    watching: Cell<bool>,
 }
 
 impl Essentials {
@@ -51,10 +70,17 @@ impl Essentials {
         emit_zoom(&view.controller(), id, &events).map_err(|_| BrowserError::PageControl)?;
         register_downloads(view, id, events.clone())
             .map_err(|_| BrowserError::EventRegistration)?;
+        // A runtime without the mute event still opens the page; only mute changes are lost.
+        if register_mute(view, id, events.clone()).is_err() {
+            events.emit(BrowserEvent::Error {
+                tab: Some(id),
+                error: BrowserError::EventRegistration,
+            });
+        }
         Ok(Self {
             id,
             events,
-            search: Rc::new(Cell::new(None)),
+            search: Rc::default(),
         })
     }
 
@@ -67,11 +93,15 @@ impl Essentials {
         let core = view.webview();
         unsafe {
             match action {
-                PageAction::Find { request, text } => self.find(&core, request, &text),
+                PageAction::Find {
+                    request,
+                    text,
+                    case_sensitive,
+                } => self.find(&core, request, &text, case_sensitive),
                 PageAction::FindNext => core.cast::<ICoreWebView2_28>()?.Find()?.FindNext(),
                 PageAction::FindPrevious => core.cast::<ICoreWebView2_28>()?.Find()?.FindPrevious(),
                 PageAction::StopFind => {
-                    self.search.set(None);
+                    self.search.current.set(None);
                     core.cast::<ICoreWebView2_28>()?.Find()?.Stop()
                 }
                 PageAction::Downloads => {
@@ -102,26 +132,50 @@ impl Essentials {
         }
     }
 
-    fn find(&self, core: &ICoreWebView2, request: u64, text: &str) -> windows::core::Result<()> {
-        self.search.set(Some(request));
+    /// Mutes through WebView2 itself; a runtime without `ICoreWebView2_8` reports a tab error.
+    pub(super) fn set_muted(&self, view: &WebView, muted: bool) -> Result<(), BrowserError> {
+        let core: ICoreWebView2_8 = view
+            .webview()
+            .cast()
+            .map_err(|_| BrowserError::PageControl)?;
+        unsafe { core.SetIsMuted(muted) }.map_err(|_| BrowserError::PageControl)
+    }
+
+    fn find(
+        &self,
+        core: &ICoreWebView2,
+        request: u64,
+        text: &str,
+        case_sensitive: bool,
+    ) -> windows::core::Result<()> {
+        self.search.current.set(Some(request));
         let find = unsafe { core.cast::<ICoreWebView2_28>()?.Find()? };
         // Empty Start never completes on the tested runtime. Clearing explicitly stops the search.
         if text.is_empty() {
             unsafe {
                 find.Stop()?;
             }
-            self.events.emit(BrowserEvent::FindCompleted {
+            self.events.emit(BrowserEvent::FindResult {
                 id: self.id,
                 request,
                 count: 0,
+                active: -1,
             });
             return Ok(());
+        }
+        // Without change events the bar still gets Start's result, so search regardless.
+        if self.watch_matches(&find).is_err() {
+            self.events.emit(BrowserEvent::Error {
+                tab: Some(self.id),
+                error: BrowserError::EventRegistration,
+            });
         }
         let environment: ICoreWebView2Environment15 =
             unsafe { core.cast::<ICoreWebView2_2>()?.Environment()? }.cast()?;
         let options = unsafe { environment.CreateFindOptions()? };
         unsafe {
             options.SetFindTerm(&HSTRING::from(text))?;
+            options.SetIsCaseSensitive(case_sensitive)?;
             options.SetSuppressDefaultFindDialog(true)?;
             options.SetShouldHighlightAllMatches(true)?;
         }
@@ -130,27 +184,98 @@ impl Essentials {
         let id = self.id;
         let search = self.search.clone();
         let handler = FindStartCompletedHandler::create(Box::new(move |result| {
-            if search.get() != Some(request) {
+            if search.current.get() != Some(request) {
                 return Ok(());
             }
-            let result = result.and_then(|()| {
-                let mut count = 0;
-                unsafe {
-                    completed_find.MatchCount(&mut count)?;
-                }
-                events.emit(BrowserEvent::FindCompleted { id, request, count });
-                Ok(())
-            });
-            if result.is_err() {
-                events.emit(BrowserEvent::Error {
-                    tab: Some(id),
-                    error: BrowserError::PageControl,
-                });
-            }
-            result
+            search.settled.set(Some(request));
+            report_on_error(
+                result.and_then(|()| emit_matches(&completed_find, id, request, &events)),
+                id,
+                &events,
+            )
         }));
         unsafe { find.Start(&options, &handler) }
     }
+
+    /// Registers the active-match and count change events on the first search rather than at
+    /// page creation, so a runtime without `ICoreWebView2_28` still opens pages. Tried once
+    /// only, so a partial failure can never add a second handler for the same event.
+    fn watch_matches(&self, find: &ICoreWebView2Find) -> windows::core::Result<()> {
+        if self.search.watching.replace(true) {
+            return Ok(());
+        }
+        // The handlers stay for the page's life, so their tokens are never used to remove them.
+        let (mut index_token, mut count_token) = (0, 0);
+        unsafe {
+            find.add_ActiveMatchIndexChanged(
+                &FindActiveMatchIndexChangedEventHandler::create(self.match_change_handler()),
+                &mut index_token,
+            )?;
+            find.add_MatchCountChanged(
+                &FindMatchCountChangedEventHandler::create(self.match_change_handler()),
+                &mut count_token,
+            )
+        }
+    }
+
+    /// Reports the current match position and count, for the settled search only.
+    fn match_change_handler(&self) -> MatchChangeClosure {
+        let events = self.events.clone();
+        let id = self.id;
+        let search = self.search.clone();
+        Box::new(move |find, _| {
+            let Some(request) = settled_request(search.current.get(), search.settled.get()) else {
+                return Ok(());
+            };
+            let find = find.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+            report_on_error(emit_matches(&find, id, request, &events), id, &events)
+        })
+    }
+}
+
+type MatchChangeClosure =
+    Box<dyn FnMut(Option<ICoreWebView2Find>, Option<IUnknown>) -> windows::core::Result<()>>;
+
+/// The request a match change belongs to: the current one, once its `Start` has completed.
+fn settled_request(current: Option<u64>, settled: Option<u64>) -> Option<u64> {
+    current.filter(|request| settled == Some(*request))
+}
+
+/// Sends the search's match count and the 1-based position of the active match.
+fn emit_matches(
+    find: &ICoreWebView2Find,
+    id: u64,
+    request: u64,
+    events: &EventSink,
+) -> windows::core::Result<()> {
+    let mut count = 0;
+    let mut active = -1;
+    unsafe {
+        find.MatchCount(&mut count)?;
+        find.ActiveMatchIndex(&mut active)?;
+    }
+    events.emit(BrowserEvent::FindResult {
+        id,
+        request,
+        count,
+        active,
+    });
+    Ok(())
+}
+
+/// Shows a failed find read as a page-control error, and passes the result on.
+fn report_on_error(
+    result: windows::core::Result<()>,
+    id: u64,
+    events: &EventSink,
+) -> windows::core::Result<()> {
+    if result.is_err() {
+        events.emit(BrowserEvent::Error {
+            tab: Some(id),
+            error: BrowserError::PageControl,
+        });
+    }
+    result
 }
 
 fn register_zoom(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
@@ -183,6 +308,39 @@ fn emit_zoom(
     }
     events.emit(BrowserEvent::ZoomChanged { id, factor });
     Ok(())
+}
+
+/// Reports mute changes as `AudioChanged`, read back from the page each time. Audible changes
+/// reach the same event from the lifecycle's one `IsDocumentPlayingAudioChanged` handler.
+fn register_mute(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
+    let core: ICoreWebView2_8 = view.webview().cast()?;
+    let muted =
+        IsMutedChangedEventHandler::create(Box::new(move |core, _| report_mute(core, id, &events)));
+    // The handler lives as long as the controller, so its token is never removed.
+    let mut token = 0;
+    unsafe { core.add_IsMutedChanged(&muted, &mut token) }
+}
+
+/// Reports a mute change: an unreadable audible state is `Metadata`, as in the lifecycle's
+/// playback handler, and an unreadable mute state `PageControl`.
+fn report_mute(
+    core: Option<ICoreWebView2>,
+    id: u64,
+    events: &EventSink,
+) -> windows::core::Result<()> {
+    let report = |error| {
+        events.emit(BrowserEvent::Error {
+            tab: Some(id),
+            error,
+        })
+    };
+    let (core, playing) = core
+        .ok_or_else(|| windows::core::Error::from(E_POINTER))
+        .and_then(|core| core.cast::<ICoreWebView2_8>())
+        .and_then(|core| playing_audio(&core).map(|playing| (core, playing)))
+        .inspect_err(|_| report(BrowserError::Metadata))?;
+    emit_audio_changed(events, id, &core, playing)
+        .inspect_err(|_| report(BrowserError::PageControl))
 }
 
 fn register_downloads(view: &WebView, id: u64, events: EventSink) -> windows::core::Result<()> {
@@ -231,6 +389,17 @@ fn next_zoom(factor: f64, action: &PageAction) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn match_changes_report_only_for_the_current_settled_search() {
+        // Before the current search's Start completes, a change belongs to an older one.
+        assert_eq!(settled_request(Some(4), Some(3)), None);
+        assert_eq!(settled_request(Some(4), None), None);
+        assert_eq!(settled_request(Some(4), Some(4)), Some(4));
+        // A stopped search reports nothing.
+        assert_eq!(settled_request(None, Some(4)), None);
+        assert_eq!(settled_request(None, None), None);
+    }
 
     #[test]
     fn zoom_steps_boundaries_and_reset_are_predictable() {

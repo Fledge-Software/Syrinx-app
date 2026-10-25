@@ -3,7 +3,7 @@
 use super::*;
 use syrinx_platform::browser::PageAction;
 
-const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Essentials fixture</title><link rel=icon href=data:,><p>syntheticneedle syntheticneedle</p><input autofocus aria-label='Synthetic input'>";
+const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Essentials fixture</title><link rel=icon href=data:,><p>syntheticneedle syntheticneedle SYNTHETICNEEDLE</p><input autofocus aria-label='Synthetic input'>";
 
 pub(super) fn response(request: &[u8]) -> Option<&'static str> {
     request.starts_with(b"GET /essentials ").then_some(PAGE)
@@ -70,33 +70,36 @@ pub(super) fn exercise(
     }
     find_while_typing_in_chrome(host, events, parent, deadline)?;
     send(host, BrowserCommand::Focus { id: 3000 })?;
-    for (request, text, expected) in [(1, "syntheticneedle", 2), (2, "", 0)] {
+    for (request, text, case_sensitive, expected) in [
+        (1, "syntheticneedle", false, 3),
+        (2, "syntheticneedle", true, 2),
+        (3, "", false, 0),
+    ] {
         action(
             host,
             PageAction::Find {
                 request,
                 text: text.into(),
+                case_sensitive,
             },
         )?;
-        loop {
-            if let BrowserEvent::FindCompleted {
-                id: 3000,
-                request: completed,
-                count,
-            } = checked_event(events, deadline)?
-            {
-                if completed != request {
-                    continue;
-                }
-                if count != expected {
-                    return Err(format!(
-                        "Synthetic find count {count} differs from {expected}."
-                    ));
-                }
-                break;
-            }
+        let (count, active) = find_result(events, request, deadline)?;
+        if count != expected {
+            return Err(format!(
+                "Synthetic find count {count} differs from {expected}."
+            ));
         }
-        println!("Synthetic find completed with {expected} matches.");
+        // ActiveMatchIndex counts from 1, which the bar's "N of M" label relies on.
+        let first = if expected > 0 { 1 } else { -1 };
+        if active != first {
+            return Err(format!(
+                "Synthetic find's active match {active} differs from {first}."
+            ));
+        }
+        println!("Synthetic find completed with {expected} matches, active match {active}.");
+        if expected > 1 {
+            step_to_second_match(host, events, request, active, deadline)?;
+        }
         action(host, PageAction::StopFind)?;
     }
     for (command, expected) in [
@@ -126,11 +129,118 @@ pub(super) fn exercise(
         }
     }
     println!("Synthetic download-dialog and zoom phases passed.");
+    exercise_mute(host, events, deadline)?;
     // ShowPrintUI opens preview only. No physical print or output file is requested.
     action(host, PageAction::Print)?;
     lifecycle::barrier(host, events, deadline)?;
     send(host, BrowserCommand::Close { id: 3000 })?;
     Ok(())
+}
+
+/// Mutes the shown page and a suspended hidden one, reading each back from `IsMuted` (#95).
+fn exercise_mute(
+    host: &BrowserHost,
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    deadline: Instant,
+) -> Result<(), String> {
+    for muted in [true, false] {
+        send(host, BrowserCommand::SetMuted { id: 3000, muted })?;
+        wait_muted(events, 3000, muted, deadline)?;
+    }
+    println!("Synthetic mute and unmute read back on the shown page.");
+    // A never-shown page is suspended once its load completes and the grace passes.
+    send(
+        host,
+        BrowserCommand::Create {
+            id: 3001,
+            url: "about:blank".into(),
+        },
+    )?;
+    while !matches!(
+        checked_event(events, deadline)?,
+        BrowserEvent::Suspended {
+            id: 3001,
+            suspended: true
+        }
+    ) {}
+    // Muting must not wake the page; WebView2 may defer the read-back until it resumes.
+    send(
+        host,
+        BrowserCommand::SetMuted {
+            id: 3001,
+            muted: true,
+        },
+    )?;
+    let while_suspended = wait_muted_while_suspended(events, deadline)?;
+    send(host, BrowserCommand::ShowActive(Some(3001)))?;
+    if !while_suspended {
+        wait_muted(events, 3001, true, deadline)?;
+    }
+    println!(
+        "Synthetic mute of a suspended page read back {}.",
+        if while_suspended {
+            "while it stayed suspended"
+        } else {
+            "only after it was shown"
+        }
+    );
+    for muted in [false, true] {
+        send(host, BrowserCommand::SetMuted { id: 3001, muted })?;
+        wait_muted(events, 3001, muted, deadline)?;
+    }
+    println!("Synthetic unmute and mute read back on the resumed page.");
+    send(host, BrowserCommand::Close { id: 3001 })?;
+    // Print, next, needs the essentials page shown and focused again.
+    send(host, BrowserCommand::ShowActive(Some(3000)))?;
+    send(host, BrowserCommand::Focus { id: 3000 })?;
+    lifecycle::barrier(host, events, deadline)
+}
+
+/// Waits up to three seconds for the suspended page's mute read-back; `false` when none
+/// came, meaning WebView2 deferred it. Fails if muting resumed the page.
+fn wait_muted_while_suspended(
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    deadline: Instant,
+) -> Result<bool, String> {
+    let window = (Instant::now() + Duration::from_secs(3)).min(deadline);
+    loop {
+        let event = match checked_event(events, window) {
+            Ok(event) => event,
+            Err(_) if Instant::now() >= window && window < deadline => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        match event {
+            BrowserEvent::Suspended {
+                id: 3001,
+                suspended: false,
+            } => return Err("Muting a suspended synthetic page resumed it.".into()),
+            BrowserEvent::AudioChanged {
+                id: 3001,
+                muted: true,
+                ..
+            } => return Ok(true),
+            _ => {}
+        }
+    }
+}
+
+/// Waits for the page's own `IsMuted` to report the requested state.
+fn wait_muted(
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    id: u64,
+    expected: bool,
+    deadline: Instant,
+) -> Result<(), String> {
+    loop {
+        if let BrowserEvent::AudioChanged {
+            id: changed, muted, ..
+        } = checked_event(events, deadline)?
+            && changed == id
+            && muted == expected
+        {
+            return Ok(());
+        }
+    }
 }
 
 fn action(host: &BrowserHost, action: PageAction) -> Result<(), String> {
@@ -152,6 +262,7 @@ fn find_while_typing_in_chrome(
             PageAction::Find {
                 request,
                 text: text.into(),
+                case_sensitive: false,
             },
         )?;
         loop {
@@ -160,7 +271,7 @@ fn find_while_typing_in_chrome(
                     focus_events += 1;
                     require_chrome_focus(parent, "a page focus event during find")?;
                 }
-                BrowserEvent::FindCompleted {
+                BrowserEvent::FindResult {
                     id: 3000,
                     request: completed,
                     ..
@@ -177,6 +288,50 @@ fn find_while_typing_in_chrome(
         "Synthetic find kept focus on the chrome over five queries ({focus_events} page focus events)."
     );
     Ok(())
+}
+
+/// Waits for the named request's result and returns its count and active match.
+fn find_result(
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    request: u64,
+    deadline: Instant,
+) -> Result<(i32, i32), String> {
+    loop {
+        if let BrowserEvent::FindResult {
+            id: 3000,
+            request: completed,
+            count,
+            active,
+        } = checked_event(events, deadline)?
+            && completed == request
+        {
+            return Ok((count, active));
+        }
+    }
+}
+
+/// Find next moves the active match one place on, which shows where WebView2 counts from.
+fn step_to_second_match(
+    host: &BrowserHost,
+    events: &mut UnboundedReceiver<BrowserEvent>,
+    request: u64,
+    first: i32,
+    deadline: Instant,
+) -> Result<(), String> {
+    action(host, PageAction::FindNext)?;
+    loop {
+        let (_, active) = find_result(events, request, deadline)?;
+        if active == first {
+            continue;
+        }
+        if active != first + 1 {
+            return Err(format!(
+                "Find next moved the active match from {first} to {active}."
+            ));
+        }
+        println!("Synthetic find next moved the active match from {first} to {active}.");
+        return Ok(());
+    }
 }
 
 /// Fails the suite when Windows keyboard focus is no longer on the chrome window.
