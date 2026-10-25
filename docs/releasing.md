@@ -116,16 +116,16 @@ history rewrite of 2026-10-13), and `.idea/` and the logs under
 `.claude/worktrees/` are no longer tracked; the third-party skills under
 `.claude/skills/` still are.
 
-- **Commit author email.** About 230 commits carry the owner's personal
-  Gmail address as author. GitHub shows it on every public commit. To
+- **Commit author email.** About 230 commits carried the owner's personal
+  Gmail address as author, which GitHub would show on every public commit. To
   hide it for future commits, turn on "Keep my email addresses private" in
   GitHub's email settings and use the `noreply` address in `git config`.
   Existing commits keep it unless history is rewritten.
 - **Windows user name in paths.** Some handoff notes, [`docs/next-session-prompt.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/next-session-prompt.md)
-  and two tracked gate logs under `.claude/worktrees/` contain
+  and two tracked gate logs under `.claude/worktrees/` contained
   `C:\Users\<name>\Documents\GitHub\…` paths that reveal the Windows account
-  name. The logs can simply be deleted from the tree; the history keeps them.
-- **Editor settings.** `.idea/` is tracked. It holds no secrets, but it is
+  name. The logs could simply be deleted from the tree; the history keeps them.
+- **Editor settings.** `.idea/` was tracked. It held no secrets, but it is
   usually left out of public repositories.
 - **Third-party agent skills.** `.claude/skills/` contains skills copied from
   elsewhere (for example `ui-ux-pro-max`). Check that each one's licence
