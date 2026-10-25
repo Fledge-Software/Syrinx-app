@@ -17,9 +17,9 @@ const QUIET_REPORT_SLACK: Duration = Duration::from_secs(2);
 const TONE_ID: u64 = 1600;
 
 /// A faint 30 Hz tone at about -29 dBFS: loud enough for WebView2's audibility detection, below
-/// what most speakers reproduce. It stands in for muting the web view, which needs a mute
-/// command Syrinx does not have yet (#95). Enter starts it, so the posted key press gives
-/// Chromium's autoplay rule its user gesture; S stops it.
+/// what most speakers reproduce. It stands in for muting the web view; proving that a page
+/// muted with `SetMuted` (#95) stays awake while it plays is #157. Enter starts it, so the
+/// posted key press gives Chromium's autoplay rule its user gesture; S stops it.
 const TONE: &str = r#"<!doctype html><meta charset=utf-8><title>tone-ready</title>
 <link rel=icon href=data:,><p>Enter: start a faint synthetic tone. S: stop it.</p><script>
 let context,tone;

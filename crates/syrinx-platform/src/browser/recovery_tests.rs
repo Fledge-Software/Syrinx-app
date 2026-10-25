@@ -522,3 +522,48 @@ fn closing_a_crashed_tab_leaves_a_running_budget_untouched() {
         "only a stopped engine forgets its attempts"
     );
 }
+
+#[test]
+fn set_muted_reaches_only_its_live_page_and_a_crashed_page_ignores_it() {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8;
+    let mut fixture = Fixture::new();
+    fixture.create(61);
+    fixture.create(62);
+    let is_muted = |fixture: &mut Fixture, id: u64| {
+        let core: ICoreWebView2_8 = fixture.state().pages[&id]
+            .webview()
+            .cast()
+            .expect("synthetic runtime has ICoreWebView2_8");
+        let mut muted = windows::core::BOOL::default();
+        unsafe { core.IsMuted(&mut muted) }.expect("read back IsMuted");
+        muted.as_bool()
+    };
+    fixture
+        .state()
+        .apply(BrowserCommand::SetMuted {
+            id: 61,
+            muted: true,
+        })
+        .expect("mute a live synthetic page");
+    assert!(is_muted(&mut fixture, 61));
+    assert!(!is_muted(&mut fixture, 62), "the other page stays audible");
+    assert_eq!(
+        fixture.state().apply(BrowserCommand::SetMuted {
+            id: 99,
+            muted: true
+        }),
+        Err(BrowserError::UnknownTab)
+    );
+
+    let renderer = fixture.state().pages[&62].synthetic_failure(62, 1);
+    fixture.state().native_event(renderer);
+    assert!(fixture.state().unavailable.contains_key(&62));
+    fixture
+        .state()
+        .apply(BrowserCommand::SetMuted {
+            id: 62,
+            muted: true,
+        })
+        .expect("a crashed page ignores mute until it is restored");
+    assert!(fixture.state().unavailable.contains_key(&62));
+}

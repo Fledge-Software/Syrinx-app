@@ -149,6 +149,12 @@ pub enum BrowserCommand {
     Focus {
         id: u64,
     },
+    /// Mutes or unmutes one page through WebView2's own `SetIsMuted` (#95); no script runs.
+    /// A page waiting for engine recovery ignores it; the app sends it again once restored.
+    SetMuted {
+        id: u64,
+        muted: bool,
+    },
     /// Clears WebView2's own data for the shared profile (P1-27); `span: None` is all time.
     ClearData {
         request: u64,
@@ -292,6 +298,12 @@ pub enum BrowserEvent {
     ZoomChanged {
         id: u64,
         factor: f64,
+    },
+    /// A page's mute or audible state changed (WebView2's `IsMuted`, `IsDocumentPlayingAudio`).
+    AudioChanged {
+        id: u64,
+        muted: bool,
+        playing: bool,
     },
     PermissionRequested {
         id: u64,
@@ -606,6 +618,7 @@ impl EventSink {
                     | BrowserEvent::NavigationCompleted { .. }
                     | BrowserEvent::Fullscreen { .. }
                     | BrowserEvent::Suspended { .. }
+                    | BrowserEvent::AudioChanged { .. }
                     | BrowserEvent::PermissionFinished { .. }
                     | BrowserEvent::PageText { .. }
                     | BrowserEvent::Error { .. }
@@ -946,6 +959,7 @@ impl BrowserState {
                 self.retry_unavailable(id)?;
             }
             BrowserCommand::Focus { id } if self.unavailable.contains_key(&id) => {}
+            BrowserCommand::SetMuted { id, .. } if self.unavailable.contains_key(&id) => {}
             command => {
                 let id = command.tab_id().ok_or(BrowserError::InvalidTab)?;
                 let page = self.pages.get(&id).ok_or(BrowserError::UnknownTab)?;
@@ -1083,7 +1097,8 @@ impl BrowserCommand {
             | Self::Back { id }
             | Self::Forward { id }
             | Self::Reload { id }
-            | Self::Focus { id } => Some(*id),
+            | Self::Focus { id }
+            | Self::SetMuted { id, .. } => Some(*id),
             Self::ShowActive(id) => *id,
             Self::CancelPopup { .. }
             | Self::Resize(_)
@@ -1320,6 +1335,13 @@ mod tests {
         ));
         assert!(closed);
         assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn set_muted_routes_to_its_own_tab() {
+        for (id, muted) in [(7, true), (8, false)] {
+            assert_eq!(BrowserCommand::SetMuted { id, muted }.tab_id(), Some(id));
+        }
     }
 
     #[test]

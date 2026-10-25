@@ -453,6 +453,9 @@ fn describe_event(event: &BrowserEvent) -> String {
             format!("NavigationCompleted {id} {success}")
         }
         BrowserEvent::Suspended { id, suspended } => format!("Suspended {id} {suspended}"),
+        BrowserEvent::AudioChanged { id, muted, playing } => {
+            format!("AudioChanged {id} muted {muted} playing {playing}")
+        }
         other => format!("{other:?}"),
     }
 }
