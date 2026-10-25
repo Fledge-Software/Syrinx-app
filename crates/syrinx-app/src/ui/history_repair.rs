@@ -1,4 +1,4 @@
-//! Asks the owner to clear all history when Syrinx's record of cleared history is unusable.
+//! Asks the owner to clear all history when Syrinx's record of cleared data is unusable.
 
 use crate::session::{HistoryRepairPrompt, HistoryRepairReason};
 
@@ -27,11 +27,13 @@ impl HistoryRepairCard {
 
     fn explanation(&self) -> &'static str {
         match self.prompt.reason {
-            HistoryRepairReason::Damaged => {
-                "Syrinx's record of the history you cleared is damaged."
-            }
+            HistoryRepairReason::Damaged => "Syrinx's record of cleared data is damaged.",
             HistoryRepairReason::Incomplete => {
-                "Syrinx's record of the history you cleared is missing or older than your data."
+                "Syrinx's record of cleared data is missing or older than your data."
+            }
+            // Says what the journal message says (`JournalError`, #121); the two must agree.
+            HistoryRepairReason::Newer => {
+                "Syrinx's record of cleared data was written by a newer Syrinx."
             }
         }
     }
@@ -44,9 +46,9 @@ impl BrowserView {
             return card;
         };
         card = card.child(repair.explanation()).child(
-            "Without it, history you cleared could come back from a backup. To continue, Syrinx \
+            "Without it, data you cleared could come back from a backup. To continue, Syrinx \
              must clear all browsing history. Saved pages, open tabs and settings are kept. A copy \
-             of the damaged record stays in Syrinx's data folder.",
+             of that record stays in Syrinx's data folder.",
         );
         if repair.confirming && self.failure.is_none() && !self.session_stopped {
             return card.child("Clearing all browsing history…");
@@ -89,5 +91,15 @@ mod tests {
         assert!(!card.confirm(2));
         assert!(card.confirm(3));
         assert!(!card.confirm(3));
+    }
+
+    #[test]
+    fn a_newer_journal_is_explained_as_newer_not_damaged() {
+        let card = HistoryRepairCard::new(HistoryRepairPrompt {
+            offer_id: 1,
+            reason: HistoryRepairReason::Newer,
+        });
+        assert!(card.explanation().contains("newer Syrinx"));
+        assert!(!card.explanation().contains("damaged"));
     }
 }

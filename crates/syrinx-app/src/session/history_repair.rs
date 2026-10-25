@@ -12,6 +12,8 @@ pub enum HistoryRepairReason {
     Damaged,
     /// The database has applied clears the journal no longer records (it was lost or replaced).
     Incomplete,
+    /// A record names a category only a newer Syrinx writes, which this build cannot honour (#121).
+    Newer,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -29,9 +31,11 @@ pub(super) fn repairable(error: &SessionError) -> Option<HistoryRepairReason> {
         SessionError::Deletion(JournalError::Deletion(
             DeletionError::DamagedRecord
             | DeletionError::UnsupportedFormat
-            | DeletionError::UnsupportedCategory
             | DeletionError::TooLarge,
         )) => Some(HistoryRepairReason::Damaged),
+        SessionError::Deletion(JournalError::Deletion(DeletionError::UnsupportedCategory)) => {
+            Some(HistoryRepairReason::Newer)
+        }
         _ => None,
     }
 }
@@ -52,4 +56,31 @@ pub(super) fn confirm(
         events,
         |command| matches!(command, SessionCommand::ConfirmHistoryRepair { offer_id } if *offer_id == prompt.offer_id),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn journal(error: DeletionError) -> SessionError {
+        SessionError::Deletion(JournalError::Deletion(error))
+    }
+
+    #[test]
+    fn each_journal_refusal_names_the_reason_the_prompt_explains() {
+        assert_eq!(
+            repairable(&journal(DeletionError::DamagedRecord)),
+            Some(HistoryRepairReason::Damaged)
+        );
+        assert_eq!(
+            repairable(&journal(DeletionError::MissingGeneration)),
+            Some(HistoryRepairReason::Incomplete)
+        );
+        // Only a newer Syrinx writes a category this build does not know (#121).
+        assert_eq!(
+            repairable(&journal(DeletionError::UnsupportedCategory)),
+            Some(HistoryRepairReason::Newer)
+        );
+        assert_eq!(repairable(&journal(DeletionError::PendingClear)), None);
+    }
 }
