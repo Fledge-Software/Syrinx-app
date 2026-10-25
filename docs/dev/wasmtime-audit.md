@@ -320,6 +320,22 @@ LLVM-exception family (`wasmtime-wasi`, `wasmtime-wasi-io`, `winx` and
 Several of those crates stay in Syrinx's build through other crates; the point
 is that the plugin host no longer needs them.
 
+**What option (b) copies into Syrinx's tree.** `bindgen!` needs the WASI
+interfaces as WIT text, so (b) commits 692 lines copied from
+`wasmtime-wasi 48.0.7`'s `src/p2/wit/deps/`: `io.wit`, `clocks.wit` and
+`random.wit` whole, and lines 1 to 139 of `cli.wit` (its two worlds cut). In
+the crate they fall under its `Apache-2.0 WITH LLVM-exception` and `LICENSE`,
+and the files carry no header of their own. WASI publishes the same packages,
+which wasmtime's `ci/vendor-wit.sh` fetched with `wkg get`, under the OCI
+licence annotation `Apache-2.0 WITH LLVM-exception`. The source repository's
+`LICENSE.md` names only the W3C Community Contributor License Agreement, a
+contributor agreement with no SPDX identifier. Decision 2's exception covers
+the family's crates as dependencies, not files copied into the tree, so
+AGENTS.md's licence rule makes this a second owner ruling. The report's "(b)"
+gives the evidence, the ruling and the alternatives; one of them, taking the
+files from `wasmtime-wasi` as a build dependency only, fails this gate the
+same way.
+
 The owner's options, with the evidence for each and a recommendation, are in
 the report's "Owner decides: WASI and the network gate".
 

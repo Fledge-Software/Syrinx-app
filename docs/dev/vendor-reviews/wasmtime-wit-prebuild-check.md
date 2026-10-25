@@ -144,7 +144,7 @@ names, as note 10's scheme assumed (⚠️ now resolved).
 
 **Which WASI 0.2 imports Rust's standard library brings**, for
 `wasm32-wasip2` on `rustc 1.97.0`, read from each component's
-`component_type().imports()`. Every guest imports the same fourteen
+`component_type().imports()`. Every guest imports at least these fourteen
 interfaces, all at `0.2.9`, the fourteen the template found on Linux:
 `wasi:io/poll`, `wasi:io/error`, `wasi:io/streams`,
 `wasi:clocks/monotonic-clock`, and `wasi:cli/stdout`, `stderr`, `stdin`,
@@ -373,7 +373,9 @@ Built and run in the throwaway as the shim host.
   lines: the four output writes, `ready`, `block`, `poll` and dropping a timer,
   the two `subscribe` functions of the monotonic clock, the two `now`s, the
   seed, and the two forms of `exit`. The whole throwaway library is 510 lines
-  including the plugin world's own host functions.
+  including the plugin world's own host functions. Beside that code it
+  commits 692 lines of WASI WIT copied from the crate, which need their own
+  ruling (below).
 - **How it behaves**, each observed in a test:
   - Standard output and standard error go to two buffers in the store,
     capped at 64 KiB each; the rest is dropped and counted. After 4,001
@@ -406,7 +408,10 @@ Built and run in the throwaway as the shim host.
   `wasi:filesystem/types@0.2.9`, but a matching implementation was not found
   in the linker: instance export `descriptor` has the wrong type: resource
   implementation is missing". That is the refusal the review's S5 asks for,
-  by construction rather than by care.
+  by construction rather than by care. The verification of #158 also built a
+  sockets guest (`std::net::TcpStream::connect` to a documentation address).
+  It imports seven `wasi:sockets` interfaces besides the filesystem ones,
+  and the shim refused it before it ran.
 - **The real plugin:** the Notes 1 component instantiates and activates on
   the shim host unchanged. It imports the fourteen, `insecure-seed`, and six
   of Syrinx's host functions.
@@ -421,6 +426,72 @@ Built and run in the throwaway as the shim host.
   exactly a shim's situation: its output buffers are capped and
   `write-zeroes` is bounded, and #28's tests should keep any guest from making
   the host allocate on its say-so.
+- **A second ruling: the WIT files it copies.** `bindgen!` needs the
+  interface definitions as WIT text, so (b) commits four files copied from
+  `wasmtime-wasi 48.0.7`'s `src/p2/wit/deps/`: `io.wit` (299 lines),
+  `clocks.wit` (162) and `random.wit` (92) whole, and lines 1 to 139 of
+  `cli.wit`'s 233, cutting the two worlds after them; 692 lines in all. Their
+  SHA-256s are `96e206d0…f433`, `6ed8aa65…47cc` and `48578c40…e08f`, and
+  `b3434fc7…9ca3` for the cut `cli.wit` (the original is `fb6ac5d2…3873`).
+  Their licence, from three places:
+  - **In the crate**, they fall under its `license = "Apache-2.0 WITH
+    LLVM-exception"` and its `LICENSE`, the Apache License 2.0 with the "LLVM
+    Exceptions" appended at line 205. The files carry no header or SPDX line
+    of their own.
+  - **As published by WASI.** wasmtime's `ci/vendor-wit.sh` at `v48.0.7`
+    fetched them with `wkg get --format wit "wasi:cli@0.2.12"` and its three
+    siblings, from the packages WASI publishes. WASI's own publishing workflow
+    (`.github/workflows/publish-proposal.yml` at tag `v0.2.12`) labels every
+    package `Apache-2.0 WITH LLVM-exception`. The
+    `org.opencontainers.image.licenses` annotation on
+    `ghcr.io/webassembly/wasi/cli`, `io`, `clocks` and `random` at `0.2.12`
+    reads exactly that, which is the one SPDX expression that covers them.
+  - **In the source repository**, `WebAssembly/WASI` at `v0.2.12` (commit
+    `281ba75f`), `LICENSE.md` and each proposal's own `LICENSE.md` say the
+    specification is published "under the W3C Community Contributor License
+    Agreement", and GitHub reports the licence as `NOASSERTION`. That
+    agreement is one contributors sign, not a licence for distributing the
+    files. Its section 2.1 grants everyone a copyright licence to reproduce,
+    adapt, distribute and sublicense the contributions, and section 2.2 asks
+    that derivative works name the specification and its version. It has no
+    SPDX identifier.
+
+  AGENTS.md admits outside code "only under permissive licences (MIT,
+  Apache-2.0, BSD) or as whole MPL-2.0 files", and it lists "code under a
+  licence not listed above" among the things to ask first. Decision 2's
+  exception names `Apache-2.0 WITH LLVM-exception` for the wasmtime family's
+  crates as dependencies at their pinned versions. It approves "neither other
+  packages under it nor a general licence-policy expansion", and it says
+  nothing of files copied into Syrinx's own tree. **So (b) needs a second
+  ruling:** that these four files may be committed under
+  `Apache-2.0 WITH LLVM-exception`, the licence both the crate and WASI's
+  packages declare. They would sit in one folder with the crate's `LICENSE`,
+  a change notice on `cli.wit` (Apache-2.0, section 4(b)), and a provenance
+  note giving the source crate and version, the path, each file's SHA-256,
+  the cut worlds and the WASI version; that note also meets the agreement's
+  attribution. The files are not code to maintain, but Syrinx owns them and
+  copies them again when it moves to a newer WASI 0.2 patch release.
+
+  Three ways to avoid copying, with their cost:
+  - **Register the sixteen interfaces by hand** with
+    `Linker::instance("wasi:cli/stdout@0.2.9")`, `func_wrap` and `resource`,
+    declaring the records and variants through wasmtime's `ComponentType`
+    derives. No WIT text is copied. But the host types are written by hand,
+    and a signature that drifts from the real one shows up only when a guest
+    fails to instantiate, not when Syrinx compiles.
+  - **Read the WIT from `wasmtime-wasi` at build time only**, as a
+    `[build-dependencies]` entry. **The gate refuses it.** Main's
+    `check-deps`, run on a scratch copy of `aa355b9` with exactly that
+    declaration and `wasmtime` as the only run-time dependency, prints the
+    same `windows-sys 0.60.2 … requested by io-extras 0.19.0` line. The gate
+    reads every resolved package and its unified features, whatever the
+    dependency kind.
+  - **Copy them at build time from Cargo's registry cache.** This is
+    fragile: the cache holds `wasmtime-wasi` only while something depends on
+    it, and that dependency is what (b) removes.
+
+  The recommendation is to ask for the ruling, and to fall back on
+  registering by hand if the owner declines.
 
 ### (c) Keep `wasmtime-wasi` and grant exceptions to the network check
 
@@ -472,9 +543,12 @@ is compiled into `syrinx.exe`, so `wasmtime-wasi`'s filesystem advisories and
 RUSTSEC-2026-0386 stop applying to Syrinx's build, and the host compiles 67
 fewer crates. Filesystem and socket imports are refused at instantiation by
 construction. The price is about 300 lines of mostly constant host code that
-#28's contract tests exercise anyway, and the real Notes 1 component already
-runs on it. It changes #27's list in one place: the pin becomes
-`wasmtime =48.0.7` alone. It also touches the wording of decision 1 of
+#28's contract tests exercise anyway, plus 692 lines of copied WIT, and the
+real Notes 1 component already runs on it. It changes #27's list in one
+place: the pin becomes `wasmtime =48.0.7` alone. Beyond choosing (b), it
+needs two owner rulings. The first is the licence of the four copied WIT
+files (above); asking for it is better than registering the interfaces by
+hand. The second touches the wording of decision 1 of
 2026-10-21, which keeps "the component model and WASI 0.2" (unchanged under
 (b): the shim implements WASI 0.2, and plugins still target `wasm32-wasip2`)
 but explains `async` as "compiled in because `wasmtime-wasi` requires it".
@@ -484,9 +558,14 @@ the owner amending that sentence, which this report does not do itself.
 ## What #28 must do differently, or write down
 
 1. **Settle the WASI question first** ("Owner decides"). Under (b), the pin
-   is `wasmtime =48.0.7` alone; port the shim into `syrinx-plugin-host` with
+   is `wasmtime =48.0.7` alone. Port the shim into `syrinx-plugin-host` with
    its tests, link exactly the sixteen interfaces, and list a guest's imports
-   again whenever the template's toolchain moves. Under (c), make the gate
+   again whenever the template's toolchain moves. Once the owner has ruled on
+   the copied WIT, keep the four files in one folder with the crate's
+   `LICENSE`, a change notice on `cli.wit`, and a provenance note in the shape
+   of the `vendor/*.provenance.md` files: the source crate and version, the
+   path, each file's SHA-256 and the cut worlds. If the owner declines,
+   register the interfaces by hand instead. Under (c), make the gate
    changes the owner approves, link io, clocks, cli and random one by one
    instead of calling `add_to_linker_sync`, and check
    `component_type().imports()` before instantiating so a refusal names the
@@ -551,15 +630,30 @@ the owner amending that sentence, which this report does not do itself.
 10. **Carry the stub defaults to #30:** the template ships per-interface
     defaults as code, a macro for example, because wit-bindgen's generated
     stubs trap instead of answering `not-found`.
+11. **Harden the shim when porting it** (the verification of #158 found
+    these in the throwaway):
+    - Make `write` refuse contents longer than the last `check-write` permit,
+      as WASI 0.2 requires and `wasmtime-wasi` enforces.
+    - Compare `component_type().imports()` with the sixteen interfaces before
+      instantiating, so a refusal lists every unsupported interface. A
+      sockets guest was refused only for `wasi:filesystem/types`, its first
+      missing import.
+    - Cap the live timers in a store, beside the output buffers: each
+      `subscribe-*` call adds an entry that stays until the guest drops it.
+    - Count the bytes `write-zeroes` cuts off past the permit in
+      `dropped_output_bytes`, without the throwaway's catch-all
+      `unwrap_or(0)`.
 
 ## Open questions for the owner
 
 1. **How the host provides WASI** ("Owner decides"): (b), drop
    `wasmtime-wasi` and let Syrinx's host provide the sixteen interfaces, is
    recommended over (c), approving a ninth network entry and a change to the
-   headless network rule. This comes first, because it decides the pin;
-   (b) also means amending decision 1's sentence on why `async` is compiled
-   in.
+   headless network rule. This comes first, because it decides the pin.
+   (b) also needs two further rulings: that the four WASI WIT files it
+   copies may be committed under `Apache-2.0 WITH LLVM-exception` ("(b)",
+   "A second ruling"), and an amendment to decision 1's sentence on why
+   `async` is compiled in.
 2. **Confirm the pin** (#27's last box): `wasmtime =48.0.7` alone under (b),
    or with `wasmtime-wasi =48.0.7` under (c). 48.0.7 is the newest 48.x on
    the live index and the first 48.x patched against RUSTSEC-2026-0378 and
