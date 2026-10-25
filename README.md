@@ -34,6 +34,7 @@ cargo xtask package       # the setup program and portable zip under target\pack
 ## Where things are
 
 - `crates/`: the Rust workspace (app, core model, storage, search, UI, platform).
+- `docs/architecture.md`: a newcomer's map of the Cargo workspace, its crates and the gate.
 - `docs/spec.md`, `docs/decisions.md` and `docs/architecture-decisions.md`:
   what Syrinx is, the phased plan and the decisions made. Work is tracked in
   GitHub issues.
