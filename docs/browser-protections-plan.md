@@ -2,7 +2,7 @@
 
 > **Status:** Planning draft, 2026-10-25. The owner requested a separate plan
 > in the paid-services planning PR, using Brave as the product comparison.
-> This document prepares future milestones, epics and issues; it implements
+> This document prepares future epics and native sub-issues; it implements
 > no feature and changes no standing product or security decision.
 > The owner also selected quick capture, saved-tab reopening and accessible
 > reading for this included-features plan. All three remain free and local;
@@ -25,9 +25,9 @@ The owner-selected conveniences from the
 [everyday-feature research](everyday-features-research.md) are now planned in
 sections 5–7. They require no account, Sync or hosted AI subscription. Cross-device
 availability remains an optional Sync service. The existing filename is retained
-so earlier links continue to work; this document now covers six milestones.
+so earlier links continue to work; this document now covers six epics.
 
-| Milestones | Included feature | Prerequisites |
+| Epics | Included feature | Prerequisites |
 |---|---|---|
 | BP1–BP3 | Ad/tracker protection, controls and safe rule updates. | The existing scope, page-security, licensing and feasibility decisions below. |
 | QC | Quick capture into Notes. | Stable Notes documents, reviewed host capabilities and owner-approved UI. |
@@ -35,7 +35,7 @@ so earlier links continue to work; this document now covers six milestones.
 | AR | Accessible reading and verified local read-aloud. | Approved content acquisition, isolated rendering and voice feasibility. |
 
 These are separate dependency paths, not permission to skip the existing phase
-order. The three convenience milestones do not depend on the blocker shipping.
+order. The three convenience epics do not depend on the blocker shipping.
 
 Blocking in this plan applies to Syrinx's browsing traffic. It does not provide
 device-wide filtering, hide an IP address, replace the VPN, or guarantee that
@@ -46,10 +46,12 @@ way to fix a broken site.
 
 Use the [Fledge issue format](../.claude/skills/planissues/issue-format.md) and
 the conversion rules in [the services plan](paid-services-plan.md). Create an
-epic and native sub-issues for each approved milestone later; check existing
+epic issue and its native sub-issues for each approved delivery phase later; check existing
 issues and labels, replace dependency keys with real links, and avoid duplicate
 work. The owner's preparatory-document request is not a change to the present
-issues-only tracking policy. Priorities and sizes here are planning metadata.
+issues-only tracking policy. Syrinx uses no milestones, and the reference
+format's milestone/label conventions do not override AGENTS.md. Priorities and
+sizes here are planning metadata, not labels to create.
 
 ## 2. Authority, scope and feasibility
 
@@ -61,7 +63,7 @@ owner's explicit approval. It does not jump the existing browser/plugin/Notes/
 Forge work order. Research and issue preparation do not authorize a prototype
 that intercepts real browsing.
 
-Review baseline: `origin/main` at `b2825da` on 2026-10-25. The existing
+Review baseline: `origin/main` at `a89c9c8` on 2026-10-25. The existing
 [dependency policy](../crates/xtask/src/dependency_policy.rs) still restricts
 desktop networking; `syrinx-update-net` is a narrow application-update
 exception. BPR-07 must propose and obtain approval for the rule-feed transport
@@ -69,6 +71,54 @@ and its exact gate changes, not treat the updater as general network access.
 Keep the matcher and core model free of networking. A future page-filter gate
 change must remain narrow enough to keep remote-page IPC, initialization
 scripts and plugin custom protocols forbidden on ordinary page views.
+
+### Current WASM plugin boundary
+
+[AGENTS.md](../AGENTS.md) and the 2026-10-21/24 owner decisions define sandboxed
+WebAssembly (WASM) components with the `syrinx:plugin` WebAssembly Interface
+Types (WIT) package, world `plugin`, planned at `wit/v0_1/`. Only
+`crates/syrinx-plugin-host` links wasmtime on the approved exactly pinned 48.x
+line; `syrinx-core` stays free of it. These are approved implementation
+locations, not a claim that the host or every required capability has shipped.
+The [pre-build findings](https://github.com/Fledge-Software/Syrinx-app/blob/a89c9c8/docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md)
+still require the owner to settle WASI/network-gate choices. Added guest exports
+can break older components despite `@since`; test supported old/new pairs before
+any WIT change, rather than assuming version annotations ensure compatibility.
+
+The protections matcher and saved-tab lifecycle belong to the native browser,
+not a privileged plugin. Quick capture extends Notes in its separate template-
+based repository and uses host-owned document, attachment, draft and editor
+capabilities through WIT. Neither a native `plugin-notes` workspace crate nor
+direct access to another plugin's storage is part of this design. Notes now
+organizes files in folders; the [2026-10-25 decision](https://github.com/Fledge-Software/Syrinx-app/blob/a89c9c8/docs/decisions.md#2026-10-25) moves database-style views
+to the later #167 epic, which is not a prerequisite for capture.
+
+Plugins have no default capabilities. Their manifests declare static commands,
+view kinds, feeds, widgets and capability requests with reasons; the host enforces scoped,
+revocable grants. Cross-boundary values are typed and owned, persistent identity
+uses plain IDs, and live host handles use resources. The approved view-message
+and plugin-settings channels are the only general JSON exceptions. The host
+pulls search feeds and owns cursors; a palette keystroke never invokes a plugin.
+
+Palette forms and Home widgets are declarative GPUI surfaces. Plugin tabs use
+the separate plugin-view type in the shared WebView2 environment, a separate
+InPrivate profile, per-plugin `.invalid` origins, host-set Content Security
+Policy and a validated bridge only to their own WASM component. No plugin view
+gets network access or an initialization script. Page views never receive that
+bridge or custom protocol. Notes uses the single host-provided CodeMirror
+component, with no plugin JavaScript inside it in v1, and D28 still governs saves.
+RDR-01 must review the reader's own rendering boundary; this plan does not turn
+untrusted page content into a trusted plugin view.
+
+Keep calls synchronous and bounded; host jobs handle slow work and return via
+the reviewed event/result contract, rechecking grants before committing changes.
+Plugin changes need contract tests against `syrinx-plugin-host`'s published test
+host as well as host integration tests. Signed built-ins ship bundled with
+Syrinx; other plugins are installed from an owner-selected folder, updates are
+owner-initiated, and v1 fetches no plugin over the network. Rule-list updates are
+data updates, never a route to install executable plugins or scripts.
+
+### Protection feasibility
 
 Brave's Shields combines ad/tracker blocking with other protections. Its filter
 lists and browser integration are a useful reference, not proof that WebView2
@@ -164,18 +214,18 @@ obligations before bundling any such list. Do not copy Brave's complete list
 catalogue, scriptlet resources or uBlock code without individual review.
 [EasyList licence terms](https://easylist.to/pages/licence.html)
 
-## 3. Delivery milestones and issue drafts
+## 3. Delivery epics and issue drafts
 
 Each issue below has the shared current baseline: no blocker implementation
 is authorized by this document, and feasibility on Syrinx's pinned stack has
 not been demonstrated. Split a task further if it exceeds one reviewable PR.
 
-### Milestone BP1 — Decide scope and prove the engine boundary
+### Epic BP1 — Decide scope and prove the engine boundary
 
 **Epic: Built-in protections — scope, licensing and feasibility.**
 
 **What it is:** establish a credible, lawful and compatible route before adding
-protection claims or changing the page lifecycle. Skipping this milestone risks
+protection claims or changing the page lifecycle. Skipping this epic risks
 breaking sign-in or distributing lists the project cannot ship.
 
 **Why it comes where it does:** product scope and licence decisions precede
@@ -259,7 +309,7 @@ go/no-go recommendation are reviewed before production work.
 **Blocked by:** BPR-01 and BPR-02, including explicit prototype approval.
 **Parent:** BP1. **Type:** feasibility. **Priority/size:** P1 / M.
 
-### Milestone BP2 — Implement local ad and tracker protections
+### Epic BP2 — Implement local ad and tracker protections
 
 **Epic: Built-in protections — local matching and understandable controls.**
 
@@ -352,7 +402,7 @@ outage, unsupported and stale-list states are understandable.
 **Blocked by:** BPR-05 and owner design approval. **Parent:** BP2.
 **Type:** implementation/UI. **Priority/size:** P1 / M.
 
-### Milestone BP3 — Maintain rules and verify release behavior
+### Epic BP3 — Maintain rules and verify release behavior
 
 **Epic: Built-in protections — safe updates, compatibility and release.**
 
@@ -480,7 +530,7 @@ hosting. Before release, resolve measured performance budgets, compatibility
 results and support ownership. No commercial relationship with Brave, list
 maintainers or a hosting provider is implied.
 
-## 5. Milestone QC — Quick capture into Notes
+## 5. Epic QC — Quick capture into Notes
 
 **Epic: Included features — quick capture into Notes.**
 
@@ -514,7 +564,9 @@ destination and must not acquire broader access than normal Notes editing.
 **Work:** prepare the capture UI and command design; define title/body/source,
 inbox selection, attachment limits, cancellation and recovery of an unfinished
 form. Map every operation to the current Notes/host capabilities and name any
-required compatible interface change. Preserve the existing app shortcuts.
+required compatible interface change. Keep the form declarative and rendered
+by GPUI; define the Notes manifest command and typed WIT data flow without
+running a guest to discover commands. Preserve the existing app shortcuts.
 
 **Acceptance criteria:** the owner reviews the flow; there is an explicit save
 action and destination; missing Notes or a revoked folder grant fails clearly;
@@ -532,13 +584,17 @@ lose attachments or create a duplicate note when the user retries.
 **Work:** implement the approved form and host-mediated save. Preserve source
 links without executing them, validate size/type/path limits, and identify
 in-flight saves so uncertain results are reconciled before retry. Publish the
-saved document through Notes' normal catalogue/search-feed path.
+saved document through Notes' normal catalogue/search-feed path. Keep plugin
+behavior in Notes' separate WASM repository and safe file operations in host
+capabilities; use plain document IDs rather than native pointers or raw paths.
 
 **Acceptance criteria:** synthetic captures reopen with text, link and attachment
 intact; duplicate submission cannot create duplicate records silently; disk-full,
 restart, cancellation and revoked-grant cases preserve recoverable input;
 sign-out or unavailable Sync does not prevent local saving; private data stays
-out of logs and unrelated plugin contexts.
+out of logs and unrelated plugin contexts. Contract tests use the published
+test host and cover missing/revoked capabilities, supported version pairs and
+traps with uncertain save outcomes before a retry.
 
 **Blocked by:** QCP-01 and implemented Notes save/search capabilities.
 **Parent:** QC. **Type:** implementation. **Priority/size:** P1 / M.
@@ -560,7 +616,7 @@ the owner accepts the visible flow and the required gate passes.
 
 **Blocked by:** QCP-02. **Parent:** QC. **Type:** validation. **Priority/size:** P1 / S.
 
-## 6. Milestone ST — Save and reopen tab groups
+## 6. Epic ST — Save and reopen tab groups
 
 **Epic: Included features — resume saved tab groups.**
 
@@ -640,7 +696,7 @@ the required gate passes. Do not claim saving a URL preserves unsent form data.
 
 **Blocked by:** STB-02. **Parent:** ST. **Type:** validation. **Priority/size:** P1 / S.
 
-## 7. Milestone AR — Accessible reading
+## 7. Epic AR — Accessible reading
 
 **Epic: Included features — accessible reading and local read-aloud.**
 
@@ -729,5 +785,7 @@ Publish six epics and 19 work/decision drafts if the owner requests tracker
 conversion: BP1–BP3 keep BPR-01 through BPR-10; QC owns QCP-01 through QCP-03;
 ST owns STB-01 through STB-03; AR owns RDR-01 through RDR-03. Preserve the
 existing BPR keys and convert each new chain in numeric order after its stated
-prerequisites. Reconcile existing saved-folder and Notes work before publishing
+prerequisites. Each draft's **Parent** key maps to exactly one native parent
+epic; cross-epic prerequisites are blocking links. Create no milestones.
+Reconcile existing saved-folder and Notes work before publishing
 duplicates. Research-only split view and translation are outside this plan.

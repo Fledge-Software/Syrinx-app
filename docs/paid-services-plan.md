@@ -1,11 +1,11 @@
 # Syrinx paid services — Sync, AI, VPN and later sharing
 
 > **Status:** Planning draft, 2026-10-25. The owner requested this local
-> document for later conversion into GitHub milestones, epics and issues.
+> document for later conversion into GitHub epics and native sub-issues.
 > No implementation, provider agreement, deployment or GitHub publication is
 > recorded by this document.
 >
-> **Target tracker:** `Fledge-Software/Syrinx-app`. Milestone and issue IDs are
+> **Target tracker:** `Fledge-Software/Syrinx-app`. Epic and issue IDs are
 > unassigned. The draft identifiers below are conversion keys, not issue numbers.
 >
 > **Owner decisions in this conversation:** the browser remains free; AI must
@@ -22,7 +22,7 @@
 > and password-manager security boundaries. No account was inspected and no
 > repository, Supabase project or paid resource was created by this work.
 >
-> **Later milestones selected by the owner, 2026-10-25:** encrypted attachment
+> **Later epics selected by the owner, 2026-10-25:** encrypted attachment
 > sharing and household Sync are added after individual Sync. The owner approved
 > Sync at $4/month or $40/year with sharing included, and Household at $10/month
 > or $100/year for six people. Section 3.1 records the approved launch limits.
@@ -44,24 +44,25 @@ below. Optional cloud delivery and shared collections belong to this plan.
 
 The [everyday-feature research](everyday-features-research.md) preserves the
 rationale and other unselected opportunities. Attachment sharing and household
-Sync have now been selected for the later milestones in sections 11 and 12.
+Sync have now been selected for the later epics in sections 11 and 12.
 
 This is the owner-requested preparation document, rather than a second live
 backlog. Its format follows the repository's
 [Fledge issue format](../.claude/skills/planissues/issue-format.md) and the local
 Fledge-App epic/task templates. It keeps the reasoning beside proposed
-milestones and issue bodies so a future session can publish them without
+epics and issue bodies so a future session can publish them without
 reconstructing this conversation.
 
-[The 2026-10-16 tracking decision](decisions.md) ordinarily keeps work in issues
-and uses no milestones. The owner's request authorizes this preparatory
-document in milestone form; it does not silently change the standing tracker,
-create labels or publish issues. Confirm the tracker migration when publishing.
+[The 2026-10-16 tracking decision](decisions.md) and [AGENTS.md](../AGENTS.md)
+use an epic per plan or phase, with its slices attached as native sub-issues.
+Syrinx uses no milestones. The Fledge reference supplies the writing format;
+its milestone and label conventions do not override Syrinx's rules. This
+document prepares issue bodies; it does not publish issues or create labels.
 Once published, issues become the source of work status, and this document
 becomes the rationale and source map. Do not maintain two completion lists.
 
-Use native GitHub sub-issues for parent/child relationships. Create milestones
-and epics first, replace draft dependency keys with real issue links, and add
+Use native GitHub sub-issues for parent/child relationships. Create the epic
+issues first, replace draft dependency keys with real issue links, and add
 native blocking relationships where supported. Never fabricate issue numbers.
 Inspect existing issues and labels before creating anything. Use Syrinx's
 existing labels unless the owner approves additions; decision issues use
@@ -79,21 +80,24 @@ Read [owner decisions](decisions.md), [the spec](spec.md),
 [the design](../design/README.md), [architecture decisions](architecture-decisions.md),
 and [development traps](dev/trapstoknow.md) before implementation.
 
-The 2026-10-15 decision and its 2026-10-24 refinement supersede the earlier in-process plugin layout:
+The 2026-10-15 decision and its 2026-10-24 refinement supersede the earlier
+in-process plugin layout:
 plugins are Rust compiled to sandboxed WebAssembly (WASM), built in separate
 repositories from a template. A WebAssembly Interface Types (WIT) contract
-and Rust host mediate capabilities. The approved package is `syrinx:plugin`
-at `wit/v0_1/`, and the host crate is `crates/syrinx-plugin-host`; these are
+and Rust host mediate capabilities. The approved package is `syrinx:plugin`,
+with world `plugin` at `wit/v0_1/`, and the host crate is
+`crates/syrinx-plugin-host`; these are
 approved implementation locations, not a claim that every capability exists.
 AI must use those same capabilities;
 this document does not revive native built-in plugin crates or unrestricted
 direct calls into plugin storage. Existing tracking references are #25 for the
-plugin runtime, #32 for Fledge (on hold), #35 for Notes and #42 for Forge;
+plugin runtime, #30 for the template, #32 for Fledge (on hold), #35 for Notes
+and #42 for Forge;
 recheck their current status before scheduling.
 
-The architecture review for this plan checked `origin/main` at `b2825da`
+The architecture review for this plan checked `origin/main` at `a89c9c8`
 (2026-10-25), including #158's
-[WIT pre-build findings](https://github.com/Fledge-Software/Syrinx-app/blob/b2825da/docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md).
+[WIT pre-build findings](https://github.com/Fledge-Software/Syrinx-app/blob/a89c9c8/docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md).
 The host is still prerequisite work: that report leaves a WASI/network-gate
 choice for the owner. It also demonstrates that new exports, or functions in
 existing exports, break older components even with `@since` annotations. Any
@@ -101,14 +105,49 @@ AI or Sync interface addition must distinguish host imports from guest exports,
 use the approved compatibility track and test old/new host-plugin pairs. This
 plan neither settles those open choices nor treats the WIT as already shipped.
 
+### WASM ownership and delivery contract
+
+Only `syrinx-plugin-host` links wasmtime and loads components; `syrinx-core`
+remains free of the runtime. The host follows the approved exactly pinned 48.x
+line and enforces resource budgets, grants and typed calls. Built-ins receive
+the same manifest review and revocable capabilities as third-party plugins,
+with no default grants. A paid entitlement never grants a local capability.
+
+| Responsibility | Implementation boundary |
+|---|---|
+| Notes/Forge behavior and plugin state | Separate plugin repositories made from #30's template; Rust WASM components, not workspace crates or native DLLs. |
+| Local files, safe saves and later processes/git | Host-owned services reached only through reviewed WIT imports; no raw WASI filesystem, socket or process access and no cross-plugin private-storage calls. |
+| Accounts, Sync transport, AI orchestration and VPN control | Reviewed native host/service boundaries, not privileged WASM plugins. The private backend owns payment/provider authority; no guest or plugin view receives provider credentials. |
+| Plugin tabs | HTML in the separate plugin-view type; same WebView2 environment as pages, separate InPrivate profile, per-plugin `.invalid` origin, host-set Content Security Policy and a validated bridge to that plugin only. No view networking or initialization scripts. |
+| Palette forms and Home widgets | Declarative values rendered by GPUI; no plugin web view embedded in the palette. |
+| Notes/Forge editor | One host-provided CodeMirror component, with no plugin JavaScript inside it in v1; D28 controls saves. |
+
+Use owned, typed WIT values, plain persistent IDs and resources only for live
+host capabilities. The only general JSON channels are the approved view-message
+and plugin-settings channels; AI actions must not become an arbitrary JSON
+RPC escape hatch. Static commands, feeds, view kinds and capability requests
+belong in the manifest and are read without executing a plugin. The host pulls
+search feeds through guest exports and owns their cursors; no plugin runs on
+palette keystrokes.
+
+Plugin repositories run contract tests against the library test host published
+by `syrinx-plugin-host`. Test grant refusal/revocation, compatibility with the
+current and previous supported contract tracks, cancellation and traps. Built-in
+packages are signed and bundled with Syrinx; other plugins are installed from
+an owner-selected folder, and updates are owner-initiated. No service purchase
+downloads or activates a plugin automatically, and v1 fetches no plugin over
+the network. These boundaries apply to every sub-issue below.
+
+### Work order and product guardrails
+
 The existing work order remains binding: finish the earlier approved browser
 work, then the plugin host and template, then Notes; Forge waits until Notes
 is live as the owner's daily notes tool, as decided on 2026-10-20.
-These service milestones do not authorize skipping that order. Fledge's real
+These service epics do not authorize skipping that order. Fledge's real
 client still waits for Stage C (D24), Fledge's API and the owner's explicit
 resumption of its hold; AI does not bypass those dependencies.
 
-The following are product guardrails for every milestone:
+The following are product guardrails for every epic:
 
 - The free browser works without a service account, subscription or connection
   to the service backend. Supporter payments remain separate from services.
@@ -172,7 +211,7 @@ with the same monthly allowance, so there is no annual AI discount.
 #### Approved Sync and Household launch limits
 
 The owner accepted these limits on 2026-10-25. They apply when the corresponding
-milestones ship, not before their implementation and release gates pass.
+epics ship, not before their implementation and release gates pass.
 
 | Limit or feature | Syrinx Sync | Syrinx Household |
 |---|---|---|
@@ -336,28 +375,35 @@ initial planning budget, excluding storage, AI calls and VPN charges. Replace
 it with an architecture-based estimate before contracting or launch. No
 credible one-time development or security-review quote has been obtained.
 
-## 4. Milestone map
+## 4. Epic map
 
-These are proposed feature milestones, not replacements for the current v1
-phase numbers. Every milestone gets one epic and its native sub-issues.
+These are proposed feature epics, not replacements for the current v1
+phase numbers. Each row becomes one epic issue with the listed native sub-issues;
+dependencies connect issues rather than milestone assignments.
 
-| Draft milestone | Epic title | Prerequisite | Exit |
+| Draft epic key | Epic title | Prerequisite | Exit |
 |---|---|---|---|
-| Services — Accounts and billing | Epic: Services — Accounts and billing | Owner approval of scope, hosting and data boundaries; existing work-order clearance. | Optional accounts, verified entitlements, cancellation and cost accounting work without affecting free browsing. |
-| Sync — Encrypted personal data | Epic: Sync — Encrypted personal data | Services foundation and stable Notes persistence. | Two Windows devices safely sync selected encrypted records and recover conflicts/deletions. |
-| AI — Plugin actions and metered usage | Epic: AI — Plugin actions and metered usage | Services foundation, reviewed WASM host contract and relevant plugins. | All three tiers enforce 3-times pricing and AI performs permitted plugin workflows with reviewable changes. |
-| VPN — Device-wide protection | Epic: VPN — Device-wide protection | Services foundation, Guardian agreement and approved Windows integration. | Paid users receive verified device-wide protection with safe failure and removal behavior. |
-| Sync — Password vault extension | Epic: Sync — Password vault extension | Encrypted Sync and a separately approved, implemented password manager. | Password records sync securely without exposing secrets to AI or the cloud service. |
-| Sync — Encrypted attachment sharing | Epic: Sync — Encrypted attachment sharing | Released individual Sync, service readiness and an approved recipient/key protocol. | Explicitly selected immutable files have tested encrypted delivery, expiry, revocation and bounded costs. |
-| Sync — Household collections | Epic: Sync — Household collections | Individual Sync and validated attachment-sharing foundations; approved membership/key design. | Separate accounts can share selected Notes collections with enforceable roles, safe removal and clear billing ownership. |
+| Services | Epic: Services — Accounts and billing | Owner approval of scope, hosting and data boundaries; existing work-order clearance. | Optional accounts, verified entitlements, cancellation and cost accounting work without affecting free browsing. |
+| Sync | Epic: Sync — Encrypted personal data | Services foundation and stable Notes persistence. | Two Windows devices safely sync selected encrypted records and recover conflicts/deletions. |
+| AI | Epic: AI — Plugin actions and metered usage | Services foundation, reviewed WASM host contract and relevant plugins. | All three tiers enforce 3-times pricing and AI performs permitted plugin workflows with reviewable changes. |
+| VPN | Epic: VPN — Device-wide protection | Services foundation, Guardian agreement and approved Windows integration. | Paid users receive verified device-wide protection with safe failure and removal behavior. |
+| Password sync | Epic: Sync — Password vault extension | Encrypted Sync and a separately approved, implemented password manager. | Password records sync securely without exposing secrets to AI or the cloud service. |
+| Attachment sharing | Epic: Sync — Encrypted attachment sharing | Released individual Sync, service readiness and an approved recipient/key protocol. | Explicitly selected immutable files have tested encrypted delivery, expiry, revocation and bounded costs. |
+| Household Sync | Epic: Sync — Household collections | Individual Sync and validated attachment-sharing foundations; approved membership/key design. | Separate accounts can share selected Notes collections with enforceable roles, safe removal and clear billing ownership. |
+
+The keys match each draft's **Parent** field: Services owns SVC-01–SVC-08;
+Sync owns SYN-01–SYN-05; AI owns AIP-01–AIP-09; VPN owns VPN-01–VPN-05;
+Password sync owns PWS-01–PWS-03; Attachment sharing owns SHR-01–SHR-04;
+Household Sync owns HHS-01–HHS-04. These are 38 native sub-issue drafts under
+seven epics, not seven milestones or a new label hierarchy.
 
 Researching Guardian's terms does not authorize implementation ahead of earlier
 work. The real Fledge AI adapter is explicitly held until Stage C and the
-approved real-client work. Password sync is a follow-on milestone rather than
+approved real-client work. Password sync is a follow-on epic rather than
 a reason to hold the initial Notes sync release.
 Sharing and household collections are later expansions, not prerequisites for
 the initial individual services. Neither depends on password sync: password
-vaults and their keys remain outside both sharing milestones.
+vaults and their keys remain outside both sharing epics.
 
 ## 5. Epic: Services — Accounts and billing
 
@@ -770,7 +816,7 @@ not claim it learns nothing about service use.
 | Notes, attachments, folders, tags and links | Initial release after Notes persistence is stable. |
 | Bookmarks and Favorites | Initial release, individually enabled. |
 | Appearance and keyboard preferences | Initial release through an explicit portable-settings allowlist. |
-| Password vault records | Included later, after the password-manager prerequisite and separate security milestone. |
+| Password vault records | Included later, after the password-manager prerequisite and separate security epic. |
 | Open tabs and saved sessions | Later candidate requiring explicit opt-in because URLs can be sensitive. |
 | Other plugin preferences | Later candidate after each plugin declares a safe portable schema. |
 | Forge projects | Outside initial sync; retain existing version-control workflows. |
@@ -974,8 +1020,10 @@ adapter remains blocked by Stage C and the real client.
 ### Shape and guardrails
 
 The model proposes a structured action. Rust checks its schema, permissions,
-resource scope and current record version, then invokes the plugin through
-approved host capabilities. Tool calling lets the application remain the
+resource scope and current record version, then calls the plugin's reviewed
+WIT export through `syrinx-plugin-host`. The guest requests risky operations
+only through granted WIT imports; there are no direct calls between plugins.
+Tool calling lets the application remain the
 executor rather than giving a model raw access. [Source S4](#9-sources)
 
 | Plugin | First useful capability | Extension |
@@ -984,8 +1032,11 @@ executor rather than giving a model raw access. [Source S4](#9-sources)
 | Forge | Explain selected code, search approved projects and propose patches. | Apply approved patches and run explicitly approved tests. |
 | Fledge | Synthetic workflows on the stand-in client. | Approved real-client record search and actions after Stage C. |
 
-The WIT/host action contract records inputs, outputs, resource permissions and
-read/write effects. External sending, deletion, shell execution and account
+The WIT/host action contract records typed inputs, outputs, resource permissions
+and read/write effects. Static action/command declarations belong in the
+manifest; the model cannot create new capabilities or a generic JSON execution
+channel. Any extension to that manifest/contract needs the compatibility review
+in section 2. External sending, deletion, shell execution and account
 changes require explicit user authorization. Retrieved content is untrusted:
 instructions in notes or tool results cannot grant capabilities or approve an
 action. Password-vault content is excluded from AI tools, retrieval and context.
@@ -1062,6 +1113,9 @@ specify versioned WIT action descriptions and review boundaries; approve the
 retention controls, model evaluation results and action permissions; the
 password vault is explicitly inaccessible; contract changes receive review,
 including old/new component compatibility and the host-owned job lifecycle.
+Separate host imports from guest exports, assign plugin changes to their own
+repositories, and test against the published library test host. No interface
+change may move wasmtime into core or add raw guest filesystem/network access.
 
 **Blocked by:** SVC-01 and approved plugin host/interface. **Parent:** AI.
 **Type:** decision/review. **Priority/size:** P0 / M.
@@ -1530,7 +1584,7 @@ reducing approved quotas or adding a fee.
 Individual encrypted Sync must pass SYN-05 and service production readiness
 first. Private device sync does not establish a safe recipient-sharing protocol.
 Review the additional threat model before reusing any encryption or account
-machinery. This milestone does not include live editing, whole-vault sharing,
+machinery. This epic does not include live editing, whole-vault sharing,
 password records or recipients writing back into the sender's Notes.
 
 ### Shape and guardrails
@@ -1812,8 +1866,9 @@ Household Sync. This is tracker creation order, not permission to bypass the
 implementation dependencies or phase order. Publish the seven epic
 bodies from their What/Why/Shape/Guardrails/Done sections, then the 38 work or
 decision drafts beneath their appropriate epic. Attach native sub-issues and
-translate draft dependency keys into issue links. One milestone assignment per
-issue; other prerequisites are blocking links. Do not create Fledge-side work.
+translate draft dependency keys into issue links. Each slice has one native
+parent epic; other prerequisites are blocking links. Create no milestones and
+do not create Fledge-side work.
 The new chains are SHR-01 → SHR-02 → SHR-03 → SHR-04 and HHS-01 → HHS-02 →
 HHS-03 → HHS-04, with HHS-01 waiting for SHR-04. SVC-08 adds storage billing
 after SVC-04 and before the SVC-07 production gate. Implement the approved

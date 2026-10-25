@@ -7,9 +7,9 @@
 >
 > **Owner selection, 2026-10-25:** quick capture, saved-tab reopening and
 > accessible reading have moved into the [included-features plan](browser-protections-plan.md)
-> as milestones QC, ST and AR. Encrypted attachment sharing and household Sync
+> as epics QC, ST and AR. Encrypted attachment sharing and household Sync
 > have moved into the [paid-services plan](paid-services-plan.md) as later
-> milestones. This report retains the research rationale; the plans own their
+> epics. This report retains the research rationale; the plans own their
 > issue drafts. Split view, translation and email aliases remain research only.
 >
 > **Commercial approval, 2026-10-25:** the owner subsequently approved Sync at
@@ -29,7 +29,7 @@ Sync before a separate product; household sharing follows only after individual
 Sync is reliable. Email aliases are a lower-priority supplier investigation.
 
 The [paid-services plan](paid-services-plan.md) covers Sync, hosted AI, VPN,
-later password sync and the selected sharing milestones. The
+later password sync and the selected sharing epics. The
 [included-features plan](browser-protections-plan.md) covers free ad/tracker
 blocking and the three selected conveniences. This report supplements them;
 it is not another implementation backlog. Convert the plans' drafts only when
