@@ -87,10 +87,10 @@ their items in Plan 1's old deferred-work register (`DW-n`, read at
   each row once, as "n of m". Also try Shift Tab and decide owner question
   3 (announce rows only after arrows, as built, or after every keystroke).
 - **Check 12 (DW-62):** click a toolbar button, no ring; press Tab or F6
-  from a page, ring appears; in Graphite, Paper and Glass and in one
-  custom theme (the five fixed palettes were replaced on 2026-10-15); also in the
-  palette, peek and import windows; Ctrl or Shift alone does not bring the
-  ring back.
+  from a page, ring appears; in every preset (Graphite, Paper and, since
+  2026-10-21, Glass) and in one custom theme, which the 2026-10-16 decision
+  asks for in place of the five fixed palettes; also in the palette, peek
+  and import windows; Ctrl or Shift alone does not bring the ring back.
 - **Check 13 (DW-61):** Shift Tab back into the sidebar tree, and the peek.
 
 ### 5. Window checks of the Settings sections
@@ -157,10 +157,13 @@ in #143 (downloads) or #151 (themes); record the two verdicts in
      what SmartScreen does while the dialog is hidden.
 
    Then run the whole fixture once, the same command without
-   `--downloads-only`, and record how long the run took from start to
-   finish beside its result (for example `$start = Get-Date`, then the
+   `--downloads-only`, and record in #143 how long the run took from start
+   to finish beside its result (for example `$start = Get-Date`, then the
    command, then `(Get-Date) - $start`, which keeps the fixture's output
-   on screen). The whole run includes #130's audio suite and the
+   on screen). Run it on a quiet machine, as section 2 describes, and
+   straight after the `--downloads-only` run, so `cargo run` rebuilds
+   nothing and the time measures the fixture, not the compiler. The whole
+   run includes #130's audio suite, which needs that quiet machine, and the
    certificate suite, which starts `python.exe` from the path. The
    fixture ends itself after 600 s in case its message pump is stuck. Its
    suites and shutdowns may use up to 545 s (seven 45 s suites,
@@ -206,7 +209,36 @@ in #143 (downloads) or #151 (themes); record the two verdicts in
    corner is computed from the title bar's layout rather than read from the
    button.
 
-### 8. Housekeeping when convenient
+### 8. Window checks of the 2026-10-24 merges (#76, #85, #51)
+
+On 2026-10-24 you told the coordinating agent to merge the open pull
+requests. Three of them took their issue's recommended answer before
+anyone had looked at the result in a window. The `docs/decisions.md`
+entries that record those answers wait for your confirmation in PR #162.
+Record pass or fail, or what to change, in the issue named (a comment on
+a closed issue is enough).
+
+1. **A saved Home tab is called "Home" (#76, PR #100).** Since #91,
+   Ctrl D refuses Home, so only a Home page saved before 2026-10-23 has
+   such a row; if your profile has none, ask an agent for a synthetic
+   profile that does. The saved row reads "Home" in the sidebar, in the
+   peek and in the palette, both while its tab is open and after you
+   close it, and typing "about:blank" in the palette still finds it.
+2. **The palette and the peek have rounded corners (#85, PR #103).** In
+   Graphite and in Paper, open Ctrl K over a Home tab, then collapse the
+   sidebar and open the peek. Look for clean corners and a soft shadow,
+   with no black corners and no double shadow. `design/README.md` records
+   the look once you say yes.
+3. **The restore-backup screen (#51, PR #102).** An agent prepares a
+   synthetic profile with a verified backup and a deliberately damaged
+   database, never your own; start Syrinx on it with the window visible.
+   The screen is drawn in Graphite whatever theme is chosen, shows the
+   backup's date in your local time followed by UTC, and offers
+   **Restore this backup** and **Cancel and exit**. Say whether its
+   wording (listed in PR #102) and its two choices are what you want;
+   #51 stays open until you do.
+
+### 9. Housekeeping when convenient
 
 - The repository is public now. The pre-publication checklist in
   `docs/releasing.md` records what was checked on 2026-10-13 and what has
