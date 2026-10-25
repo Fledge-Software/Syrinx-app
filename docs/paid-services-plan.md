@@ -28,6 +28,11 @@ on a subscription. These services charge for optional hosting, model usage and
 VPN access. They leave local browsing and local plugin functionality usable
 without a paid account.
 
+The separate [built-in browser protections plan](browser-protections-plan.md)
+proposes free ad and tracker blocking, with its own feasibility, licensing and
+compatibility milestones. Those browser features require no paid entitlement
+and do not change the prices or service scope below.
+
 This is the owner-requested preparation document, rather than a second live
 backlog. Its format follows the repository's
 [Fledge issue format](../.claude/skills/planissues/issue-format.md) and the local
