@@ -47,7 +47,8 @@ session and the command table, with no window or browser engine in sight.
 `syrinx-store` persists it to one local **SQLite** database through
 rusqlite. `syrinx-search` ranks open tabs, saved pages, history and commands
 in memory with the frizbee fuzzy matcher on every keystroke, and holds the
-Tantivy full-text index for page text. `syrinx-platform` is the only crate
+Tantivy full-text index, which is not yet fed page text (#53, planned).
+`syrinx-platform` is the only crate
 that touches WebView2 and Win32. Plugins (Notes first, then Forge) will be
 **WebAssembly components** in their own repositories, loaded and sandboxed
 by a host crate built on wasmtime; that part is **planned** (section 6).
@@ -59,7 +60,9 @@ The root `Cargo.toml` makes every folder under `crates/` a member
 `default-members = ["crates/syrinx-app"]`, so a bare `cargo build` builds
 the browser. Every crate inherits version `0.1.0`, Rust edition 2024, a
 minimum Rust of 1.97, `publish = false` and the MPL-2.0 licence from
-`[workspace.package]`, and the shared lints from `[workspace.lints]`.
+`[workspace.package]` (except `fulltext-bench`, which sets the same
+`publish` and licence values itself), and the shared lints from
+`[workspace.lints]`.
 Outside versions are declared once, in `[workspace.dependencies]`, and each
 crate opts in with `name.workspace = true`, so two crates can never ask for
 different versions of the same library.
@@ -231,7 +234,7 @@ crate reaches past its layer. The main rules, from
 | Only `syrinx-platform` may depend on `wry`, `webview2-com` or raw Win32; `syrinx-update` and `syrinx-update-net` may use `windows` with their exact feature lists. | Windows code stays in one place. |
 | `syrinx-core`, `syrinx-store`, `syrinx-search`, `syrinx-update` and `syrinx-update-net` must not reach shell crates even indirectly. | Same reason, through the whole graph. |
 | Only `syrinx-search` and `fulltext-bench` may use Tantivy; nothing may use `fulltext-bench`. | Keeps the bake-off out of what ships. |
-| No crate may declare a network client or a Windows networking feature, except WinHTTP in `syrinx-update-net`, which only `syrinx-app` may use. | D9: keystrokes and browsing stay on the machine. |
+| No crate may declare a network client or a Windows networking feature, except WinHTTP in `syrinx-update-net`, which only `syrinx-app` may use. The resolved graph is checked too, against an exact list of Windows networking features third-party crates request, such as GPUI's `Win32_Networking_WinSock` (`THIRD_PARTY_NETWORK_FEATURES` in `dependency_policy/resolved_windows.rs`). | D9: keystrokes and browsing stay on the machine. |
 
 `docs/dev/LOCAL-DEV.md`, "What the architecture check protects", lists the
 rules in full.
@@ -295,8 +298,11 @@ tests and runs with its own `local` profile, defined in the root
 `Cargo.toml`. It inherits `release` (optimized), but keeps debug assertions
 and overflow checks on and line-number debug information, so tests still
 catch mistakes. It exists because Windows' Smart App Control blocked
-unoptimized debug builds during Phase 0, and the owner keeps Windows'
-security settings unchanged. `[profile.local.build-override]` also
+unoptimized debug builds during Phase 0, and agents never change Windows'
+security settings to get past such a block. The owner has since turned
+Smart App Control off on this machine for development (2026-10-12), but the
+profile stays, because a clean or another machine may still block unsigned
+builds. `[profile.local.build-override]` also
 optimizes build scripts, which Cargo would otherwise leave unoptimized.
 
 `.cargo/config.toml` gives two aliases, both `--offline --locked --profile
