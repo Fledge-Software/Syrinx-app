@@ -1,6 +1,6 @@
 [package]
 name = "syrinx-search"
-description = "Syrinx's local in-memory search catalogue"
+description = "Syrinx's local search catalogue and full-text index"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,7 @@ license.workspace = true
 [dependencies]
 syrinx-core = { path = "../syrinx-core" }
 frizbee.workspace = true
+tantivy.workspace = true
 
 [features]
 # Opt-in timing diagnostics over the 100,000-row acceptance workload; see https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-05-search.md.

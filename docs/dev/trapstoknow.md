@@ -578,6 +578,16 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   hiding expired matches alone would not pass. Source:
   [`docs/p1-23-fulltext-bakeoff.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-23-fulltext-bakeoff.md), continuation retention checks.
 
+- **A Tantivy `SegmentMeta` still in scope keeps its segment's files through
+  garbage collection.** `searchable_segment_metas()` hands out tracked metas,
+  and `garbage_collect_files` treats every tracked meta's files as living, so
+  holding the list across a merge and its collection left the merged-away
+  segment, with its deleted text, on disk; GC reported success and the
+  searcher's live-segment counts looked clean. Drop the metas before
+  collecting, and audit the folder for files of segments the searcher no
+  longer has. Source: #53's blocked-cleanup test and the folder audit in
+  `crates/syrinx-search/src/fulltext/tests/fixture.rs` (observed; high).
+
 - **A NUL query can match padding beyond a field's text.** In the pinned
   frizbee 0.13.0 matcher, synthetic `\0` queries returned highlight indices
   equal to the field's byte length. Both the exhaustive and ASCII-filtered

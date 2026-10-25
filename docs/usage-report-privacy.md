@@ -104,7 +104,7 @@ justified was left out (see "Rejected fields").
 | `palette.chose_page_text` | Chose a tier 2 full-text result | Is D18's recall used enough to justify its cost? |
 | `palette.chose_command` | Ran a command | |
 | `palette.chose_address` | Navigated to a typed address | |
-| `palette.chose_web_search` | Used Search the web (Alt Enter) | |
+| `palette.chose_web_search` | Searched Google: Enter on the search row, or Alt Enter | |
 | `palette.scope_changed` | Scope-chip changes | Are the chips useful? |
 | `nav.back` | Back | Toolbar and shortcut use. |
 | `nav.forward` | Forward | |
