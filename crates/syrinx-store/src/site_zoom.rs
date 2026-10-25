@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use rusqlite::{Connection, params};
 
+use crate::deletion::{DeletionCategory, DeletionRequest};
 use crate::{EncodingField, StoreError, StoreOperation, error::database_error};
 
 /// Only levels away from 100% are kept; an absent host means 100%. `last_modified` is in
@@ -110,9 +111,26 @@ pub(crate) fn write(
     Ok(())
 }
 
-/// Removes the levels changed in `[start, end)` Unix seconds, as Clear browsing data's
-/// "Cookies and site data" does; returns how many sites were cleared.
-pub(crate) fn clear(connection: &Connection, start: i64, end: i64) -> Result<usize, StoreError> {
+/// Removes the levels changed in each `SiteZoom` request's half-open range, as Clear browsing
+/// data's "Cookies and site data" asks through D47's journal (#121); requests of other
+/// categories are skipped. Returns how many sites were cleared.
+pub(crate) fn delete_ranges(
+    connection: &Connection,
+    requests: &[DeletionRequest],
+) -> Result<usize, StoreError> {
+    let mut sites = 0;
+    for request in requests {
+        if request.category() != DeletionCategory::SiteZoom {
+            continue;
+        }
+        let range = request.range();
+        sites += clear(connection, range.start(), range.end())?;
+    }
+    Ok(sites)
+}
+
+/// Removes the levels changed in `[start, end)` Unix seconds; returns how many sites were cleared.
+fn clear(connection: &Connection, start: i64, end: i64) -> Result<usize, StoreError> {
     connection
         .execute(
             "DELETE FROM site_zoom WHERE last_modified >= ?1 AND last_modified < ?2",

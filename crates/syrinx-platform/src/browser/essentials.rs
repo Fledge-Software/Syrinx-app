@@ -30,6 +30,9 @@ pub enum PageAction {
     ZoomReset,
     /// Restores a site's remembered level (#90); clamped to WebView2's 25% to 500%.
     SetZoom(f64),
+    /// Points the profile's downloads at a synthetic folder. Only the native fixture sends
+    /// this; Syrinx itself never changes where WebView2 saves files.
+    SetDownloadFolder(std::path::PathBuf),
 }
 
 pub(super) struct Essentials {
@@ -77,6 +80,10 @@ impl Essentials {
                 PageAction::CloseDownloads => {
                     core.cast::<ICoreWebView2_9>()?.CloseDefaultDownloadDialog()
                 }
+                PageAction::SetDownloadFolder(folder) => core
+                    .cast::<ICoreWebView2_13>()?
+                    .Profile()?
+                    .SetDefaultDownloadFolderPath(&HSTRING::from(folder.as_os_str())),
                 PageAction::Print => core
                     .cast::<ICoreWebView2_16>()?
                     .ShowPrintUI(COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER),

@@ -146,7 +146,8 @@ pub enum SessionCommand {
         factor: Option<f64>,
     },
     /// Forgets the zoom levels changed in `[start, end)` Unix seconds, with Clear browsing
-    /// data's cookies and site data (#90); answered with `SiteZoomsCleared`.
+    /// data's cookies and site data (#90), through D47's journal so a restored backup cannot
+    /// bring them back (#121); answered with `SiteZoomsCleared`.
     ClearSiteZooms {
         request_id: u64,
         start: i64,
@@ -274,6 +275,9 @@ pub enum SessionEvent {
         request_id: u64,
         result: Result<Vec<HistoryVisit>, SessionError>,
     },
+    /// The saved zoom levels after a clear the window did not ask for finished (#121): one a
+    /// busy database interrupted, completed while idle or ahead of a later history clear.
+    SiteZoomsReplaced(SiteZoomLevels),
     /// What a `ClearSiteZooms` request removed, or why it failed.
     SiteZoomsCleared {
         request_id: u64,
@@ -339,7 +343,7 @@ pub enum SessionError {
     Snapshot(SnapshotError),
     Search(SearchError),
     Destination(DestinationError),
-    /// The history-deletion journal refused or failed a record (D47).
+    /// The deletion journal refused or failed a record (D47).
     Deletion(JournalError),
     /// The usage file could not be read, written or deleted (AN-01); never fatal.
     Usage(UsageError),
@@ -753,9 +757,7 @@ fn open_journal(
     if !repair {
         return DeletionJournal::open(lease).map_err(SessionError::Deletion);
     }
-    let applied = store
-        .history_deletion_generation()
-        .map_err(SessionError::Store)?;
+    let applied = store.deletion_generation().map_err(SessionError::Store)?;
     DeletionJournal::rebuild(lease, applied).map_err(SessionError::Deletion)
 }
 
@@ -960,9 +962,9 @@ impl Worker {
         self.survival.operation = "saving the tabs";
         let retried = self.retry_unsaved(store);
         self.survival.result(retried, events)?;
-        // A clear that a busy database interrupted must not leave cleared history showing (D47).
-        self.survival.operation = "clearing history";
-        let cleared = self.finish_pending_clear(store);
+        // A clear that a busy database interrupted must not leave cleared data showing (D47).
+        self.survival.operation = "finishing an interrupted clear";
+        let cleared = self.finish_pending_clear(store, events);
         self.survival.result(cleared, events)?;
         let now = utc_seconds();
         // A clock failure is reported once, by the backup check below.
@@ -1054,6 +1056,11 @@ impl Worker {
                 start,
                 end,
             } => return self.clear_history(store, request_id, start, end, events),
+            SessionCommand::ClearSiteZooms {
+                request_id,
+                start,
+                end,
+            } => return self.clear_site_zooms(store, request_id, start, end, events),
             SessionCommand::OpenHistory(id) => match self.history_destination(id) {
                 Ok(command) => command,
                 Err(error) => return emit_recoverable(events, error),
@@ -1234,15 +1241,20 @@ impl Worker {
         self.save_model(store, &model)
     }
 
-    /// Finishes a history clear that a busy database interrupted, if one is pending.
-    fn finish_pending_clear(&mut self, store: &Store) -> Result<(), SessionError> {
-        deletions::finish_pending(
+    /// Finishes a clear of either category that a busy database interrupted, if one is pending,
+    /// and hands the window the zoom levels left when that clear removed any (#121).
+    fn finish_pending_clear(
+        &mut self,
+        store: &Store,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let finished = deletions::finish_pending(
             store,
             &mut self.deletions,
             &mut self.catalogue,
             &mut self.history,
-        )
-        .map(drop)
+        )?;
+        deletions::report_replaced_site_zooms(store, &finished, events)
     }
 
     /// Adds the whole import in memory, then commits it with a single save.
@@ -1335,6 +1347,7 @@ impl Worker {
         end: i64,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        // An interrupted zoom clear finished on the way leaves the window's levels stale (#121).
         let result = deletions::clear(
             store,
             &mut self.deletions,
@@ -1342,14 +1355,54 @@ impl Worker {
             &mut self.history,
             start,
             end,
+        )
+        .and_then(|finished| {
+            deletions::report_replaced_site_zooms(store, &finished, events)?;
+            Ok(finished.history)
+        });
+        self.report_cleared(result, events, |result| SessionEvent::HistoryCleared {
+            request_id,
+            result,
+        })
+    }
+
+    /// Clears saved zoom levels through the same journal as history (#121).
+    fn clear_site_zooms(
+        &mut self,
+        store: &Store,
+        request_id: u64,
+        start: i64,
+        end: i64,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let result = deletions::clear_site_zooms(
+            store,
+            &mut self.deletions,
+            &mut self.catalogue,
+            &mut self.history,
+            start,
+            end,
         );
+        self.report_cleared(result, events, |result| SessionEvent::SiteZoomsCleared {
+            request_id,
+            result,
+        })
+    }
+
+    /// Tells the dialog a clear's outcome, then lets a storage failure decide the session's fate.
+    fn report_cleared<T>(
+        &mut self,
+        result: Result<T, SessionError>,
+        events: &UnboundedSender<SessionEvent>,
+        event: impl FnOnce(Result<T, SessionError>) -> SessionEvent,
+    ) -> Result<(), SessionError> {
         // The dialog always hears the outcome. Lost storage still stops the session; a busy
         // one is logged, and the journal finishes the clear first next time (D47).
         let failure = match &result {
             Err(SessionError::Store(error)) => Some(SessionError::Store(error.clone())),
             _ => None,
         };
-        let delivered = emit(events, SessionEvent::HistoryCleared { request_id, result });
+        let delivered = emit(events, event(result));
         if let Some(failure) = failure {
             self.survival.survive_shown(failure)?;
         }
@@ -2207,6 +2260,8 @@ mod tests {
             site_zooms: levels.clone(),
         };
         assert!(!format!("{preferences:?}").contains(host));
+        let replaced = SessionEvent::SiteZoomsReplaced(levels.clone());
+        assert!(!format!("{replaced:?}").contains(host));
         let cleared = SessionEvent::SiteZoomsCleared {
             request_id: 1,
             result: Ok(ClearedSiteZooms {
