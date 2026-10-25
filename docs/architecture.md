@@ -241,18 +241,22 @@ rules in full.
 Four outside crates are copied into `vendor/` and patched, each with the
 owner's narrow approval recorded in `AGENTS.md` ("Dependencies and
 licence"). Each has a provenance file beside it recording the published
-archive's checksum, the exact files changed and their hashes, and a review
-in `docs/dev/vendor-reviews/` explaining the change.
+archive's checksum, the exact files changed and their hashes. Most changes
+also have a review in `docs/dev/vendor-reviews/`; the table says where each
+one's explanation is.
 
 | Crate | Why it is patched | Where the record is |
 |---|---|---|
 | `wry` 0.57.0 | Two patches. Published wry destroys a page's native window as soon as the page asks to close, before Syrinx can save that the tab closed; the first patch hands the request to Syrinx's session worker instead. The second keeps temporary owners alive while a web view is being built, so a failed construction cleans up properly. | `vendor/wry-0.57.0.provenance.md`; `page-close-event-review.md` and `wry-failed-construction-patch-review.md` |
-| `gpui-pre-windows` 0.3.8 (GPUI's Windows backend, pulled in by `gpui-pre-platform`) | Two patches. Unpatched, GPUI repaints every window on every display refresh, about 3.75% of a core while idle; the idle patch repaints only when something changed (D37). The 2026-10-14 patch embeds precompiled shaders in every profile, because with debug assertions on GPUI compiled them at run time from the build machine's source folder, so preview v0.1.0 started nowhere else. | `vendor/gpui-pre-windows-0.3.8.provenance.md`; `gpui-idle-patch-review.md` and `p1-06-gpui-idle-results.md` |
+| `gpui-pre-windows` 0.3.8 (GPUI's Windows backend, pulled in by `gpui-pre-platform`) | Two patches. Unpatched, GPUI repaints every window on every display refresh, about 3.75% of a core while idle; the idle patch repaints only when something changed (D37). The 2026-10-14 patch embeds precompiled shaders in every profile, because with debug assertions on GPUI compiled them at run time from the build machine's source folder, so preview v0.1.0 started nowhere else. | Idle patch: `gpui-idle-patch-review.md` and `p1-06-gpui-idle-results.md`. Shaders patch: no review file; it is explained in `vendor/gpui-pre-windows-0.3.8.provenance.md`, "Embedded shaders patch (2026-10-14)". |
 | `frizbee` 0.13.0 | A three-file fix so the fast ASCII scoring path never scores the padding past a field's real text, which returned highlight positions beyond the string for some queries. | `vendor/frizbee-0.13.0.provenance.md`; `p1-05-frizbee-maintenance-review.md` |
 | `libsqlite3-sys` 0.38.2 | The Rust wrapper is unchanged; its bundled SQLite is replaced with 3.53.4 for journal, write-ahead-log and corruption-check fixes that crash recovery relies on when it inspects a possibly damaged database. | `vendor/libsqlite3-sys-0.38.2.provenance.md`; `p1-04-sqlite-maintenance-review.md` |
 
-Each patch also has a ready upstream diff next to it (the `*.patch` files),
-so it can be offered back to the project; sending one needs the owner.
+Each Syrinx-authored patch (two for wry, two for GPUI, one for frizbee) has
+an upstream-ready `*.patch` file beside it, so it can be offered back to the
+project; sending one needs the owner. The SQLite update has none, because it
+is not Syrinx's diff: its four files are copied from rusqlite's own upstream
+SQLite 3.53.4 import, as its provenance file records.
 Unchanged upstream `TODO` comments and lint annotations are allowed only
 inside these vendored folders.
 
@@ -342,8 +346,8 @@ None of the plugin system is built in this workspace yet. What is decided:
   from the template,
   [`Fledge-Software/syrinx-plugin-template`](https://github.com/Fledge-Software/syrinx-plugin-template)
   (#30), and built-in plugins ship as signed packages bundled in Syrinx's
-  release. The Notes plugin (#35) lives in
-  [`Fledge-Software/Syrinx-Notes-Plugin`](https://github.com/Fledge-Software/Syrinx-Notes-Plugin),
+  release. The Notes plugin (#35) lives in `Fledge-Software/Syrinx-Notes-Plugin`,
+  a repository that is private for now,
   made from that template; Forge (#42) follows once Notes is in daily use.
   The Fledge plugin (#32) is on hold.
 - **The host is planned as `crates/syrinx-plugin-host`** (#28): the only
