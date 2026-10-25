@@ -1,11 +1,14 @@
-# Syrinx built-in browser protections — ad and tracker blocking
+# Syrinx included features — protections, capture, saved tabs and reading
 
 > **Status:** Planning draft, 2026-10-25. The owner requested a separate plan
 > in the paid-services planning PR, using Brave as the product comparison.
 > This document prepares future milestones, epics and issues; it implements
-> no protection and changes no standing product or security decision.
+> no feature and changes no standing product or security decision.
+> The owner also selected quick capture, saved-tab reopening and accessible
+> reading for this included-features plan. All three remain free and local;
+> their implementation designs and scheduling still follow the existing gates.
 >
-> **Target tracker:** `Fledge-Software/Syrinx-app`. The BPR identifiers below
+> **Target tracker:** `Fledge-Software/Syrinx-app`. The draft identifiers below
 > are draft conversion keys, not GitHub issue numbers. Prepared by Codex.
 
 ## 1. Purpose and relationship to paid services
@@ -18,9 +21,21 @@ covers optional cloud Sync, hosted AI and a device-wide VPN separately.
 The owner has requested this plan; the defaults and delivery date below remain
 proposals for review.
 
-Other candidate conveniences are recorded separately in the
-[everyday-feature research](everyday-features-research.md); they do not expand
-this blocking milestone's scope.
+The owner-selected conveniences from the
+[everyday-feature research](everyday-features-research.md) are now planned in
+sections 5–7. They require no account, Sync or hosted AI subscription. Cross-device
+availability remains an optional Sync service. The existing filename is retained
+so earlier links continue to work; this document now covers six milestones.
+
+| Milestones | Included feature | Prerequisites |
+|---|---|---|
+| BP1–BP3 | Ad/tracker protection, controls and safe rule updates. | The existing scope, page-security, licensing and feasibility decisions below. |
+| QC | Quick capture into Notes. | Stable Notes documents, reviewed host capabilities and owner-approved UI. |
+| ST | Save and reopen selected tab groups. | Existing saved pages/folders, generic tab model and safe lifecycle handling. |
+| AR | Accessible reading and verified local read-aloud. | Approved content acquisition, isolated rendering and voice feasibility. |
+
+These are separate dependency paths, not permission to skip the existing phase
+order. The three convenience milestones do not depend on the blocker shipping.
 
 Blocking in this plan applies to Syrinx's browsing traffic. It does not provide
 device-wide filtering, hide an IP address, replace the VPN, or guarantee that
@@ -464,3 +479,255 @@ origin strategy, list licences, matcher choice, runtime API coverage and update
 hosting. Before release, resolve measured performance budgets, compatibility
 results and support ownership. No commercial relationship with Brave, list
 maintainers or a hosting provider is implied.
+
+## 5. Milestone QC — Quick capture into Notes
+
+**Epic: Included features — quick capture into Notes.**
+
+**What it is:** preserve why a link or snippet matters by creating an inbox
+note from text the user supplies, an explicit source link and an optional
+chosen attachment. Reuse Notes' existing task affordances rather than build
+a second task system. Ordinary capture, search and local export are free.
+
+**Why it comes where it does:** Notes' document, attachment and safe-save
+capabilities must be usable first. Capture writes through the same host and
+plugin contract as normal editing; it does not invent a second notes store.
+
+**Shape:** start with a small capture form reached through the existing command
+system. Explicit paste and file selection are the initial input routes. Review
+any later current-page selection or URL shortcut separately; no automatic
+clipboard watching, screenshots, page extraction or background capture.
+
+**Guardrails:** honor folder grants, containment, D28 saves and WIT compatibility.
+No upload occurs unless the destination is already selected for Sync under its
+own controls. Attachments are copied/imported only by the reviewed Notes path;
+never delete or move the user's original file as part of capture.
+
+**Done when:** a user can save a snippet with its source, find the resulting
+note through the palette, and continue editing without duplicate or lost content.
+
+#### QCP-01 — Define the capture flow and document contract
+
+**Why this matters:** a fast capture command must still have an unambiguous
+destination and must not acquire broader access than normal Notes editing.
+
+**Work:** prepare the capture UI and command design; define title/body/source,
+inbox selection, attachment limits, cancellation and recovery of an unfinished
+form. Map every operation to the current Notes/host capabilities and name any
+required compatible interface change. Preserve the existing app shortcuts.
+
+**Acceptance criteria:** the owner reviews the flow; there is an explicit save
+action and destination; missing Notes or a revoked folder grant fails clearly;
+source links are stored as data and never fetched to create a preview; drafts
+have a stated local retention policy; no new background capture is implied.
+
+**Blocked by:** stable Notes document/attachment design, WIT review and existing
+work-order clearance. **Parent:** QC. **Type:** design. **Priority/size:** P1 / S.
+
+#### QCP-02 — Save captures through Notes' existing host operations
+
+**Why this matters:** a separate capture writer could bypass safe-save rules,
+lose attachments or create a duplicate note when the user retries.
+
+**Work:** implement the approved form and host-mediated save. Preserve source
+links without executing them, validate size/type/path limits, and identify
+in-flight saves so uncertain results are reconciled before retry. Publish the
+saved document through Notes' normal catalogue/search-feed path.
+
+**Acceptance criteria:** synthetic captures reopen with text, link and attachment
+intact; duplicate submission cannot create duplicate records silently; disk-full,
+restart, cancellation and revoked-grant cases preserve recoverable input;
+sign-out or unavailable Sync does not prevent local saving; private data stays
+out of logs and unrelated plugin contexts.
+
+**Blocked by:** QCP-01 and implemented Notes save/search capabilities.
+**Parent:** QC. **Type:** implementation. **Priority/size:** P1 / M.
+
+#### QCP-03 — Validate capture usability and release behavior
+
+**Why this matters:** capture is useful only if people can save quickly and
+find the result again without learning a second organizational system.
+
+**Work:** exercise paste, source-link entry, attachment selection, keyboard-only
+use, cancellation and reopening. Verify focus return from the form and access
+through existing Notes tasks and search. Run the implementation gate and inspect
+Graphite, Paper and one custom theme on Windows.
+
+**Acceptance criteria:** a synthetic capture can be found, opened and edited;
+screen-reader labels and save/error states are usable; no account or paid
+entitlement is required; documented limits match the implemented input routes;
+the owner accepts the visible flow and the required gate passes.
+
+**Blocked by:** QCP-02. **Parent:** QC. **Type:** validation. **Priority/size:** P1 / S.
+
+## 6. Milestone ST — Save and reopen tab groups
+
+**Epic: Included features — resume saved tab groups.**
+
+**What it is:** save selected browsing tabs into an existing saved-page folder,
+then reopen the folder through the palette or Home. This is an extension of
+saved pages and session handling within the one workspace, not new profiles.
+
+**Why it comes where it does:** inspect existing folder actions and reuse or
+extend them before creating an issue for behavior already implemented. The
+generic tab model, saved-page persistence and close/navigation rules remain
+authoritative.
+
+**Shape:** recommend separate "save selected tabs" and "open saved folder"
+actions, with any close-after-save choice explicit. Define ordering, duplicate
+handling and lazy/bounded opening before implementation. Do not archive form
+contents, cookies or live plugin state. Unsupported tab types are explained.
+
+**Guardrails:** saving URLs is local persistence, never automatic Sync enrollment.
+Do not close tabs merely because saving their URLs succeeded: forms, downloads
+and dirty editors still require their existing lifecycle handling. Block unsafe
+stored URL schemes at open time and preserve the browser's normal security checks.
+
+**Done when:** a saved selection reopens predictably after restart without
+duplicating storage or discarding work in existing tabs.
+
+#### STB-01 — Reconcile existing folder actions and approve reopening behavior
+
+**Why this matters:** adding another session mechanism would create conflicting
+ownership and make the same folder behave differently across entry points.
+
+**Work:** map current saved-folder, bookmark and restore commands; identify only
+the missing convenience actions. Define eligible tab types, nested-folder
+behavior, order, duplicate/reuse policy, existing-tab interaction and opening
+limits. Review UI and explicit close-after-save semantics with the owner.
+
+**Acceptance criteria:** the design references the existing generic tab and
+saved-page model; implemented behavior is reused; no profiles or second session
+database are introduced; partial save/open failures and unsaved-content handling
+have explicit outcomes; allowed URLs are validated when reopened.
+
+**Blocked by:** current saved-folder/lifecycle review and existing work-order
+clearance. **Parent:** ST. **Type:** design. **Priority/size:** P1 / S.
+
+#### STB-02 — Add selected-tab saving and bounded folder reopening
+
+**Why this matters:** reopening a large group must not freeze the browser,
+overwrite existing tabs or navigate to unsafe stored commands.
+
+**Work:** implement only STB-01's missing actions through current commands,
+persistence and tab lifecycle. Keep folder order deterministic; make partial
+failure recoverable and bound simultaneous page creation. Preserve the original
+selection if saving fails. Route all close requests through existing guards.
+
+**Acceptance criteria:** synthetic sets survive restart and reopen in the
+approved order; repeated activation follows the duplicate policy; malformed URLs,
+unsupported tab types and nested folders follow the design; no saved item can
+bypass navigation security; canceling an open operation leaves existing work
+intact and reports which items opened.
+
+**Blocked by:** STB-01. **Parent:** ST. **Type:** implementation.
+**Priority/size:** P1 / M.
+
+#### STB-03 — Verify tab recovery, accessibility and resource limits
+
+**Why this matters:** a convenience feature should reduce tab clutter without
+turning reopening or closing into a data-loss or memory problem.
+
+**Work:** test large synthetic folders, duplicate URLs, restart and partial
+failures; verify form/download/editor close guards with appropriate fixtures.
+Measure reopening responsiveness and memory against budgets set in STB-01.
+Inspect keyboard/focus behavior and the required themes; run the implementation gate.
+
+**Acceptance criteria:** opening is bounded and cancelable; close-after-save never
+silently bypasses a guard; the saved folder stays usable after failure; the
+feature works signed out without a subscription; the owner reviews its UI and
+the required gate passes. Do not claim saving a URL preserves unsent form data.
+
+**Blocked by:** STB-02. **Parent:** ST. **Type:** validation. **Priority/size:** P1 / S.
+
+## 7. Milestone AR — Accessible reading
+
+**Epic: Included features — accessible reading and local read-aloud.**
+
+**What it is:** make text easier to read with adjustable typography, spacing,
+contrast and, where verified, local read-aloud. This accessibility feature is
+free and does not consume AI allowance or require Sync.
+
+**Why it comes where it does:** page content acquisition and the reading surface
+need their own security/architecture review. D35 indexing approval does not
+authorize a reader extractor, and its seven-day cache is not a reading archive.
+
+**Shape:** first prove a permitted user-invoked page-to-reader route, and support
+explicitly pasted text as a narrower input. Sanitize to an inert local document
+with no remote scripts, styles, frames or automatic image/font requests. Select
+the rendering location through design review; do not repurpose a plugin profile
+or add page IPC. Read-aloud uses only verified installed local voices initially.
+
+**Guardrails:** preserve Google/extraction exclusions and page-security rules;
+unsupported pages receive an honest unavailable state. Manual-text reading can
+ship as such, but must not be described as completed webpage reader support.
+No automatic reading history, content snapshots, voice downloads or cloud speech.
+
+**Done when:** approved inputs can be read comfortably with keyboard and assistive
+technology, and optional speech has a verified local/offline path or a clear
+unavailable state. Unsupported acquisition methods remain explicitly blocked.
+
+#### RDR-01 — Prove content acquisition, rendering and voice boundaries
+
+**Why this matters:** a reader can accidentally weaken page isolation, retain
+sensitive content or send text to a speech provider without the user expecting it.
+
+**Work:** prepare synthetic feasibility evidence for a permitted user-invoked
+extraction route, sanitization and isolated rendering. Specify source attribution,
+supported pages, content lifetime, local preference persistence and navigation.
+Verify voice APIs, installed-language support and offline/network behavior.
+Obtain approval for any needed page-content, interface or dependency change.
+
+**Acceptance criteria:** a capability matrix separates webpage reading, pasted
+text and speech; protected pages are not extracted; remote-resource execution
+and fetching are absent; the owner reviews typography and controls; unproven
+voice/extraction paths remain unavailable rather than falling back to cloud or
+script injection; no implementation proceeds through an unresolved boundary.
+
+**Blocked by:** owner design/security approval and existing work-order clearance.
+**Parent:** AR. **Type:** feasibility/design. **Priority/size:** P1 / M.
+
+#### RDR-02 — Implement the approved reading surface and local speech controls
+
+**Why this matters:** accessible typography and speech must remain usable without
+creating a second browser surface that silently loads untrusted content.
+
+**Work:** render sanitized supported inputs with text size, spacing and contrast
+controls, semantic structure and keyboard navigation. Add start/pause/stop and
+voice/rate selection only for verified local voices. Stop speech and clear the
+transient document at the defined close/replace boundary. Links open only through
+the normal reviewed host navigation route on a user gesture.
+
+**Acceptance criteria:** hostile synthetic markup cannot execute or load remote
+resources; input size and processing are bounded; reading preferences persist
+without persisting content; unavailable voices fail clearly; text and speech
+work offline for supported inputs; no paid service or new browser profile is used.
+
+**Blocked by:** RDR-01. **Parent:** AR. **Type:** implementation.
+**Priority/size:** P1 / M; split renderer and speech if needed.
+
+#### RDR-03 — Validate accessibility, privacy and supported-page claims
+
+**Why this matters:** a visually simplified page is not necessarily accessible
+or faithful to its source, and speech cancellation must actually stop output.
+
+**Work:** test headings, lists, links, long text, unsupported languages, malformed
+markup, screen readers, zoom and keyboard focus. Measure speech stop/replace,
+content cleanup, offline operation and absence of unexpected network requests.
+Inspect Graphite, Paper and one custom theme and run the implementation gate.
+
+**Acceptance criteria:** controls and reading order are usable with assistive
+technology; source text is not rewritten by an AI model; unsupported pages and
+missing voices are accurately explained; no content enters history, diagnostics
+or Sync automatically; the owner accepts the UI and the required gate passes.
+
+**Blocked by:** RDR-02. **Parent:** AR. **Type:** validation. **Priority/size:** P1 / M.
+
+## 8. Included-feature conversion map
+
+Publish six epics and 19 work/decision drafts if the owner requests tracker
+conversion: BP1–BP3 keep BPR-01 through BPR-10; QC owns QCP-01 through QCP-03;
+ST owns STB-01 through STB-03; AR owns RDR-01 through RDR-03. Preserve the
+existing BPR keys and convert each new chain in numeric order after its stated
+prerequisites. Reconcile existing saved-folder and Notes work before publishing
+duplicates. Research-only split view and translation are outside this plan.

@@ -1,4 +1,4 @@
-# Syrinx paid services — Sync, AI and VPN
+# Syrinx paid services — Sync, AI, VPN and later sharing
 
 > **Status:** Planning draft, 2026-10-25. The owner requested this local
 > document for later conversion into GitHub milestones, epics and issues.
@@ -20,6 +20,11 @@
 > adds the recommended private services repository, account/subscription schema
 > and password-manager security boundaries. No account was inspected and no
 > repository, Supabase project or paid resource was created by this work.
+>
+> **Later milestones selected by the owner, 2026-10-25:** encrypted attachment
+> sharing and household Sync are added after individual Sync. Their packaging,
+> prices, quotas and membership limits remain decisions, not changes to the
+> current subscription prices.
 
 ## 1. How to use this document
 
@@ -28,14 +33,14 @@ on a subscription. These services charge for optional hosting, model usage and
 VPN access. They leave local browsing and local plugin functionality usable
 without a paid account.
 
-The separate [built-in browser protections plan](browser-protections-plan.md)
-proposes free ad and tracker blocking, with its own feasibility, licensing and
-compatibility milestones. Those browser features require no paid entitlement
-and do not change the prices or service scope below.
+The separate [included-features plan](browser-protections-plan.md) covers free
+ad/tracker blocking, quick capture, saved-tab reopening and accessible reading.
+Those local features require no paid entitlement and do not change the prices
+below. Optional cloud delivery and shared collections belong to this plan.
 
-The [everyday-feature research](everyday-features-research.md) records additional
-included and paid opportunities. Those recommendations are not added scope for
-these milestones until the owner selects them.
+The [everyday-feature research](everyday-features-research.md) preserves the
+rationale and other unselected opportunities. Attachment sharing and household
+Sync have now been selected for the later milestones in sections 11 and 12.
 
 This is the owner-requested preparation document, rather than a second live
 backlog. Its format follows the repository's
@@ -149,6 +154,8 @@ promised before their actual costs are measured.
 | Syrinx AI 100 | $100 | $1,200 | Owner-set price; $100 of retail-rated AI usage per monthly allowance period. |
 | Syrinx AI 200 | $200 | $2,400 | Owner-set price; $200 of retail-rated AI usage per monthly allowance period. |
 | Syrinx VPN | $7.99 | $79.99 | Proposed price, contingent on Guardian terms; device-wide Windows protection. |
+| Encrypted attachment sharing | Undecided | Undecided | Later paid Sync capability; recommend a bounded included allowance, subject to SHR-01 costs and owner approval. No new fee is selected. |
+| Household Sync | Undecided | Undecided | Later paid shared-collection offering; HHS-01 decides packaging, payer/member rules and limits. |
 
 AI tier names are working identifiers. All three tiers have the same plugin
 capabilities and permission rules; the purchased amount of usage differs.
@@ -248,11 +255,16 @@ phase numbers. Every milestone gets one epic and its native sub-issues.
 | AI — Plugin actions and metered usage | Epic: AI — Plugin actions and metered usage | Services foundation, reviewed WASM host contract and relevant plugins. | All three tiers enforce 3-times pricing and AI performs permitted plugin workflows with reviewable changes. |
 | VPN — Device-wide protection | Epic: VPN — Device-wide protection | Services foundation, Guardian agreement and approved Windows integration. | Paid users receive verified device-wide protection with safe failure and removal behavior. |
 | Sync — Password vault extension | Epic: Sync — Password vault extension | Encrypted Sync and a separately approved, implemented password manager. | Password records sync securely without exposing secrets to AI or the cloud service. |
+| Sync — Encrypted attachment sharing | Epic: Sync — Encrypted attachment sharing | Released individual Sync, service readiness and an approved recipient/key protocol. | Explicitly selected immutable files have tested encrypted delivery, expiry, revocation and bounded costs. |
+| Sync — Household collections | Epic: Sync — Household collections | Individual Sync and validated attachment-sharing foundations; approved membership/key design. | Separate accounts can share selected Notes collections with enforceable roles, safe removal and clear billing ownership. |
 
 Researching Guardian's terms does not authorize implementation ahead of earlier
 work. The real Fledge AI adapter is explicitly held until Stage C and the
 approved real-client work. Password sync is a follow-on milestone rather than
 a reason to hold the initial Notes sync release.
+Sharing and household collections are later expansions, not prerequisites for
+the initial individual services. Neither depends on password sync: password
+vaults and their keys remain outside both sharing milestones.
 
 ## 5. Epic: Services — Accounts and billing
 
@@ -1325,7 +1337,274 @@ no vault secrets; the owner approves release after reviewing evidence.
 
 **Blocked by:** PWS-02. **Parent:** Password sync. **Priority/size:** P0 / M.
 
-## 11. Conversion and validation checklist
+## 11. Epic: Sync — Encrypted attachment sharing
+
+### What it is
+
+Let a subscriber share an explicitly selected, immutable Notes attachment or
+export through encrypted delivery with expiry and revocation. Local export
+remains free. Recommend a bounded sharing allowance within paid Sync rather
+than another base subscription, but approve that packaging only after measuring
+costs. The existing $4/$40 Sync proposal does not silently promise unlimited
+public downloads or a particular sharing quota.
+
+### Why it comes where it does
+
+Individual encrypted Sync must pass SYN-05 and service production readiness
+first. Private device sync does not establish a safe recipient-sharing protocol.
+Review the additional threat model before reusing any encryption or account
+machinery. This milestone does not include live editing, whole-vault sharing,
+password records or recipients writing back into the sender's Notes.
+
+### Shape and guardrails
+
+Use a new share identity and per-share access/key boundary for each immutable
+snapshot. Changing or deleting the original must have documented behavior;
+it must not silently change what a previously issued link delivers. Share
+creation requires an explicit file selection and confirmation. Neither an AI
+proposal nor a plugin's folder grant authorizes publication on its own.
+
+Decide recipient authentication versus bearer-link access, key delivery,
+optional passwords, expiry and download limits in SHR-01. Link possession can
+confer access; revocation can prevent future retrieval but cannot erase a
+recipient's downloaded copy or guarantee stopping an in-progress transfer.
+Define and test that cutoff. Encryption does not remove metadata, abuse or
+authorization risks. Recipients verify authenticated content before opening it.
+
+A browser-based recipient surface, if selected, is a separately reviewed hosted
+surface with its own deployment and frontend security obligations; it is not
+permission to add mobile Syrinx support. A fragment-carried key is not enough
+to protect against compromised recipient-page scripts. Minimize executable
+dependencies, exclude analytics/third-party scripts, and state honestly what
+the design protects against, including a malicious hosting operator. Never put
+plaintext, link secrets or decryption keys in backend logs or URL query strings.
+
+Measure encrypted storage, temporary copies, requests, delivery bandwidth and
+abuse/support costs. Enforce server-side storage and transfer budgets. Define
+how expired shares are removed, how backups respect revocation, and what
+happens to active shares on cancellation, deletion or provider outage. Prefer
+safe downloads over inline active-document previews in the first release;
+never execute a shared HTML file in the trusted recipient application's origin.
+
+### Done when
+
+Synthetic selected files can be retrieved only under the approved share policy,
+decrypted by authorized recipients, and expired/revoked with the documented
+limits. Independent review, cost tests and a restore drill pass before sale.
+
+### Proposed issues
+
+#### SHR-01 — Decide sharing protocol, recipient experience and commercial limits
+
+**Why this matters:** adding a public link to private Sync can expose a whole
+vault or create an unbounded delivery bill if keys and limits are unspecified.
+
+**Work:** prepare the threat model and owner-reviewed design covering immutable
+selection, recipient access, separate keys, expiry, revocation, original-file
+deletion, web-client trust, abuse handling and cancellation. Recommend packaging
+and quotas from measured workload assumptions. Review any new API, network,
+frontend or deployment boundary before implementation.
+
+**Acceptance criteria:** the owner selects the recipient/access model and price
+or included allowance; limits and cost assumptions are explicit; no shared
+object exposes other Notes or vault keys; malicious-host and downloaded-copy
+limits are disclosed; password records and automatic publishing are excluded;
+independent protocol review findings are resolved before coding the protocol.
+
+**Blocked by:** SYN-05, SVC-07 and work-order clearance. **Parent:** Attachment sharing.
+**Type:** decision/security review. **Priority/size:** P0 / M.
+
+#### SHR-02 — Implement encrypted share records and enforce delivery limits
+
+**Why this matters:** guessing an object ID, replaying a revoked link or racing
+downloads must not bypass ownership, expiry or the service budget.
+
+**Work:** add owner-bound share/version records, key envelopes under SHR-01's
+protocol, revocation state and quota reservations in the private service.
+Implement bounded uploads/download authorization, authenticated ciphertext,
+orphan cleanup and recovery-safe deletion. Avoid accepting client claims about
+time, ownership, entitlement or remaining transfer allowance.
+
+**Acceptance criteria:** cross-account access, guessed links, expired access and
+concurrent quota bypass fail in synthetic tests; revocation survives a database/
+blob restore; partial uploads do not publish incomplete shares; the service
+holds no usable plaintext decryption key under the approved threat model;
+original Notes remain unchanged and usable locally.
+
+**Blocked by:** SHR-01. **Parent:** Attachment sharing. **Type:** implementation.
+**Priority/size:** P0 / M; split schema, transport and cryptography if needed.
+
+#### SHR-03 — Add explicit share controls and the approved recipient surface
+
+**Why this matters:** users need to know exactly what they are sharing, who can
+retrieve it and how to stop access without deleting their own file.
+
+**Work:** implement file/expiry review, share creation, safe link copying,
+active-share management and revocation through the approved host operations.
+Implement the selected recipient verification/download route; review any web
+surface independently. Keep secrets out of referrers, diagnostics and analytics.
+
+**Acceptance criteria:** creation requires explicit authorization for the exact
+snapshot; stale or revoked folder permissions prevent creation; recipients see
+clear expired/revoked/invalid states; unsafe content is never rendered with the
+recipient app's privileges; cancellation preserves free local export; UI is
+keyboard-accessible and reviewed in the required themes.
+
+**Blocked by:** SHR-02 and owner design approval. **Parent:** Attachment sharing.
+**Type:** implementation/UI. **Priority/size:** P1 / M; split desktop and recipient work.
+
+#### SHR-04 — Validate sharing security, recovery and cost before release
+
+**Why this matters:** public delivery has attack and cost patterns that ordinary
+two-device Sync tests do not cover.
+
+**Work:** independently review protocol/client boundaries; test leaked links,
+brute-force attempts, malformed files, in-progress revocation, restore, account
+deletion, cancellation and traffic spikes. Measure the approved quotas and
+support procedures. Run the desktop and any backend/recipient-surface gates.
+
+**Acceptance criteria:** critical findings are resolved; revocation/expiry claims
+match measured behavior; delivery is bounded without silent surprise billing;
+downloaded-copy limits and data retention are published; paid production requires
+owner release approval and a passing service-readiness recheck.
+
+**Blocked by:** SHR-03 and SVC-07 revalidation. **Parent:** Attachment sharing.
+**Type:** validation/release. **Priority/size:** P0 / M.
+
+## 12. Epic: Sync — Household collections
+
+### What it is
+
+Let separate service accounts share explicitly selected Notes collections such
+as shopping lists and itineraries. Household Sync is a later paid capability;
+its subscription price, included seats and storage/transfer limits are not set.
+An individual Sync subscription does not automatically grant administrative
+access to another account. Each person still has private, unshared Notes.
+
+### Why it comes where it does
+
+Build after individual Sync and the validated sharing foundation. Household
+collaboration adds invitations, roles and multi-user key management, not just
+another device on the same login. Sharing a household login is rejected because
+it loses attribution, independent recovery and enforceable removal. This remains
+a Windows client feature; phone/web editing needs a separate scope decision.
+
+### Shape and guardrails
+
+Define a household and shared-collection identity separately from the payer's
+account. The payer manages billing but receives no implicit decryption authority
+over personal Notes. Approve invitation expiry, explicit recipient acceptance,
+owner/admin/editor/reader roles and any ownership-transfer process in HHS-01.
+Do not automatically enroll contacts or transfer personal folders into a group.
+
+Use per-collection key epochs and reviewed member-specific key delivery. Member
+removal stops future service access and rotates access for future data as the
+protocol requires; it cannot erase earlier plaintext or keys already held.
+Do not accept a removed member's old-epoch offline writes as current edits.
+Preserve conflicts and deleted-record semantics without discarding another
+member's valid work. Recovery must not let an account password reset bypass
+encryption or resurrect a removed membership.
+
+Use shared-collection roles and current grants for every read, write, search
+result and attachment operation. Purge revoked shared search/cache material
+under the approved local retention policy. Membership alone never grants AI
+permission to send other people's content to a provider; exclude shared
+collections from hosted AI initially until a distinct consent policy is approved.
+Keep password vaults and private service credentials outside household sharing.
+
+Decide payer loss, cancellation, ownership transfer, household dissolution and
+member export before launch. Do not cascade deletion of the payer's account
+into everyone else's only copy without the approved notice/export lifecycle.
+Explain the difference between removing a local copy, leaving a collection and
+deleting shared content. No new browser profiles or workspaces are introduced.
+
+### Done when
+
+Synthetic members can join, use permitted collections, resolve offline edits
+and leave safely. Removed members cannot obtain new data or upload stale edits;
+private collections remain isolated; recovery and billing transitions preserve
+the approved access and export policy. Costs and support limits are viable.
+
+### Proposed issues
+
+#### HHS-01 — Approve household membership, encryption and billing policies
+
+**Why this matters:** the person paying for a group must not silently become
+the owner of every member's private data or its only recovery mechanism.
+
+**Work:** design household/collection identities, invitation/role transitions,
+key distribution, member removal, recovery, billing and ownership transfer.
+Recommend a price and member/storage limits using measured costs and Windows-only
+use cases. Define export/cancellation/deletion and shared-content AI exclusion.
+
+**Acceptance criteria:** the owner approves product limits and the role matrix;
+independent review covers member/payer compromise, revoked offline devices and
+backup recovery; personal Notes and password vaults remain separate; account
+recovery cannot decrypt another member's private data; household entitlement
+and membership are modeled separately with explicit state transitions.
+
+**Blocked by:** SHR-04, SYN-05 and work-order clearance. **Parent:** Household Sync.
+**Type:** decision/security review. **Priority/size:** P0 / M.
+
+#### HHS-02 — Implement membership authorization and collection key lifecycle
+
+**Why this matters:** an invitation, stale token or billing flag must not give
+unapproved access to shared content or preserve access after removal.
+
+**Work:** implement household/membership records, expiring single-use invitations,
+explicit acceptance, role checks and HHS-01's key epochs/envelopes. Enforce both
+RLS/privileges and privileged API authorization. Reconcile revocation across
+sessions, object access and offline uploads; do not send raw keys in invitation mail.
+
+**Acceptance criteria:** synthetic nonmembers and removed members cannot read new
+content or write old-epoch updates; invites cannot be replayed or reassigned to
+another account; role downgrades take effect within the documented bounds;
+restored backups do not reinstate revoked access; billing changes alone never
+grant collection keys or access to personal Notes.
+
+**Blocked by:** HHS-01. **Parent:** Household Sync. **Type:** implementation.
+**Priority/size:** P0 / M; split membership and key lifecycle for review.
+
+#### HHS-03 — Add shared collections, conflict handling and household management
+
+**Why this matters:** shared editing and deletion need understandable ownership
+so one member does not accidentally erase everyone else's work.
+
+**Work:** extend the reviewed Notes/host contract for collection scope, member
+roles and shared change notifications. Preserve D28 saves, offline conflicts,
+attachment integrity and deletion checkpoints. Add clear private/shared labels,
+invitations, leave/remove, billing-owner and export controls. Apply the approved
+AI exclusion and avoid automatic publication through attachment-share links.
+
+**Acceptance criteria:** authorized synthetic members converge without silent
+overwrite; read-only members cannot edit; private content never enters the
+shared queue/search namespace; stale approvals fail after role changes; leaving
+and deleting shared content are distinct actions; local export and payer-loss
+recovery follow HHS-01. UI is accessible and reviewed in required themes.
+
+**Blocked by:** HHS-02 and reviewed Notes/WIT changes. **Parent:** Household Sync.
+**Type:** implementation/UI. **Priority/size:** P1 / M; split by host and plugin ownership.
+
+#### HHS-04 — Validate multi-member recovery, cancellation and release economics
+
+**Why this matters:** a successful two-person demo does not prove safety when a
+member is offline, the payer leaves or backups are restored.
+
+**Work:** test three or more synthetic accounts with overlapping roles, offline
+devices, removal during editing, owner transfer, deletion, cancellation and
+recovery. Revalidate cryptography, access policies, UI and costs at the proposed
+limits. Document operator support that never requires plaintext collection keys.
+
+**Acceptance criteria:** all role and lifecycle cases satisfy the approved
+policy; no critical findings remain; removed members cannot regain future
+access through replay/restore; payer deletion does not silently erase others'
+data; costs fit the approved pricing; desktop/plugin/service gates and the
+service-readiness recheck pass before the owner approves paid release.
+
+**Blocked by:** HHS-03 and SVC-07 revalidation. **Parent:** Household Sync.
+**Type:** validation/release. **Priority/size:** P0 / M.
+
+## 13. Conversion and validation checklist
 
 Before creating issues, reconcile these drafts with the live tracker and check
 that prerequisites have not already been implemented elsewhere. Use the source
@@ -1333,11 +1612,16 @@ sections here for each issue's rationale and observable completion criteria.
 Proposed storage limits, cancellation terms and supplier choices go into
 decision issues rather than being silently accepted by implementation.
 
-Creation order: Services, Sync, AI, VPN, Password sync. Publish the five epic
-bodies from their What/Why/Shape/Guardrails/Done sections, then the 29 work or
+Creation order: Services, Sync, AI, VPN, Password sync, Attachment sharing,
+Household Sync. This is tracker creation order, not permission to bypass the
+implementation dependencies or phase order. Publish the seven epic
+bodies from their What/Why/Shape/Guardrails/Done sections, then the 37 work or
 decision drafts beneath their appropriate epic. Attach native sub-issues and
 translate draft dependency keys into issue links. One milestone assignment per
 issue; other prerequisites are blocking links. Do not create Fledge-side work.
+The new chains are SHR-01 → SHR-02 → SHR-03 → SHR-04 and HHS-01 → HHS-02 →
+HHS-03 → HHS-04, with HHS-01 waiting for SHR-04. Their pricing and policy
+decisions must be resolved before paid implementation/launch claims are made.
 
 At implementation time, each slice needs relevant synthetic tests, independent
 review and the repository's required gate. For changes to Syrinx itself, run

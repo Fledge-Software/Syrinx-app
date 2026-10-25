@@ -4,6 +4,13 @@
 > during review of PR #163. Researched by a Codex subagent and reviewed by
 > Codex against the current architecture. No feature, price, provider contact,
 > implementation order or new data collection is approved by this report.
+>
+> **Owner selection, 2026-10-25:** quick capture, saved-tab reopening and
+> accessible reading have moved into the [included-features plan](browser-protections-plan.md)
+> as milestones QC, ST and AR. Encrypted attachment sharing and household Sync
+> have moved into the [paid-services plan](paid-services-plan.md) as later
+> milestones. This report retains the research rationale; the plans own their
+> issue drafts. Split view, translation and email aliases remain research only.
 
 ## Recommendation
 
@@ -15,11 +22,12 @@ For a later paid expansion, investigate encrypted attachment sharing within
 Sync before a separate product; household sharing follows only after individual
 Sync is reliable. Email aliases are a lower-priority supplier investigation.
 
-The [paid-services plan](paid-services-plan.md) already covers Sync, hosted AI,
-VPN and later password sync. The [browser-protections plan](browser-protections-plan.md)
-covers free ad/tracker blocking. This report supplements them; it is not another
-implementation backlog. Convert only owner-selected recommendations into the
-existing issue structure after checking for duplicates and phase dependencies.
+The [paid-services plan](paid-services-plan.md) covers Sync, hosted AI, VPN,
+later password sync and the selected sharing milestones. The
+[included-features plan](browser-protections-plan.md) covers free ad/tracker
+blocking and the three selected conveniences. This report supplements them;
+it is not another implementation backlog. Convert the plans' drafts only when
+the owner requests issue publication, checking duplicates and phase dependencies.
 
 These priorities are product judgments based on concrete use cases and existing
 products, not evidence of demand, willingness to pay or completed WebView2
