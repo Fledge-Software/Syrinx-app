@@ -475,7 +475,9 @@ them in chat, and `docs/update-format.md` ("P1-39b") records them:
 - A Later install is not watched for a failed start in v1; the manual
   rename is documented.
 - An unreadable `Updates\state` keeps refusing staging; a "Reset update
-  records" action is deferred as DW-66.
+  records" action is deferred as DW-66 (an item of Plan 1's old
+  deferred-work register, read at `af3de53`). *(Built since: see "DW-66"
+  in `docs/update-format.md`.)*
 - The pre-update snapshot counts within D13's seven copies and is skipped
   when a valid copy is under an hour old.
 - Later is armed only for the current session; after a crash Syrinx asks
