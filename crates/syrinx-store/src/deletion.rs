@@ -13,10 +13,14 @@ pub const EMPTY_DELETION_LOG: &[u8] = b"SYRINX-DELETE-01";
 /// The length of one encoded record, so a writer can recognise a torn final append.
 pub const DELETION_RECORD_BYTES: usize = RECORD_SIZE;
 
-/// The only durable browsing category introduced by this contract; unknown kinds fail closed.
+/// The durable browsing categories a clear can name; unknown kinds fail closed, so a build
+/// that does not know a category refuses the journal rather than skip a clear (D47).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeletionCategory {
+    /// Visits in the range (P1-27), encoded as category byte 1.
     History,
+    /// Per-site zoom levels changed in the range (#121), encoded as category byte 2.
+    SiteZoom,
 }
 
 /// A half-open interval of Unix seconds. Values contain no URLs or page contents.
@@ -100,6 +104,7 @@ impl DeletionRecord {
         bytes[8] = kind;
         bytes[9] = match request.category {
             DeletionCategory::History => 1,
+            DeletionCategory::SiteZoom => 2,
         };
         bytes[16..24].copy_from_slice(&request.generation.to_be_bytes());
         bytes[24..32].copy_from_slice(&request.range.start.to_be_bytes());
@@ -291,15 +296,17 @@ fn decode_record(bytes: &[u8]) -> Result<DeletionRecord, DeletionError> {
     if bytes[10..16] != [0; 6] || bytes[40..44] != [0; 4] {
         return Err(DeletionError::UnsupportedFormat);
     }
-    if bytes[9] != 1 {
-        return Err(DeletionError::UnsupportedCategory);
-    }
+    let category = match bytes[9] {
+        1 => DeletionCategory::History,
+        2 => DeletionCategory::SiteZoom,
+        _ => return Err(DeletionError::UnsupportedCategory),
+    };
     let generation = u64::from_be_bytes(read_number(bytes, 16)?);
     let start = i64::from_be_bytes(read_number(bytes, 24)?);
     let end = i64::from_be_bytes(read_number(bytes, 32)?);
     let request = DeletionRequest {
         generation,
-        category: DeletionCategory::History,
+        category,
         range: DeletionRange::new(start, end)?,
     };
     match bytes[8] {

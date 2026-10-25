@@ -8,7 +8,9 @@ These traps come from research, the Phase 0 spikes and local implementation.
 Each names its source and how sure it is. Update a trap when new evidence
 confirms or disproves it. When a new trap costs you real time, add it in the same shape: one
 bullet, symptom first, then the fix, then the source. Put the story of how
-you found it in the commit message, not here.
+you found it in the commit message, not here. A `DW-n` name below is an
+item of Plan 1's old deferred-work register, read at `af3de53`; open
+deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Page tabs: WebView2 through wry
 
@@ -576,6 +578,16 @@ you found it in the commit message, not here.
   hiding expired matches alone would not pass. Source:
   [`docs/p1-23-fulltext-bakeoff.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-23-fulltext-bakeoff.md), continuation retention checks.
 
+- **A Tantivy `SegmentMeta` still in scope keeps its segment's files through
+  garbage collection.** `searchable_segment_metas()` hands out tracked metas,
+  and `garbage_collect_files` treats every tracked meta's files as living, so
+  holding the list across a merge and its collection left the merged-away
+  segment, with its deleted text, on disk; GC reported success and the
+  searcher's live-segment counts looked clean. Drop the metas before
+  collecting, and audit the folder for files of segments the searcher no
+  longer has. Source: #53's blocked-cleanup test and the folder audit in
+  `crates/syrinx-search/src/fulltext/tests/fixture.rs` (observed; high).
+
 - **A NUL query can match padding beyond a field's text.** In the pinned
   frizbee 0.13.0 matcher, synthetic `\0` queries returned highlight indices
   equal to the field's byte length. Both the exhaustive and ASCII-filtered
@@ -611,6 +623,24 @@ you found it in the commit message, not here.
 
 ## Storage
 
+- **A new deletion-journal category makes a build that predates it refuse
+  the journal and offer the clear-all-history repair.** D47's codec fails
+  closed on a category byte it does not know, by design. A build between
+  #90 (schema 7) and #121 opens the database normally, then meets a
+  `SiteZoom` record in `syrinx.deletions`, reports the record as damaged and
+  offers the repair; confirming it rewrites the journal as all-time history
+  clears, so the zoom clears lose their replay protection. Builds before
+  schema 7 never get that far: `FutureSchema` refuses the database first.
+  When adding a category, expect a downgrade to the previous preview to meet
+  that prompt, and warn of it in the merge commit's subject ("going back to
+  an older preview shows the clear-data repair prompt"): the weekly release
+  notes are `main`'s first-parent commit subjects and nothing else
+  (`.github/scripts/release-notes.sh`), so no other text reaches them. This
+  build names an unknown category as written by a newer Syrinx, in the
+  journal message and the repair prompt alike. Source:
+  `crates/syrinx-store/src/deletion.rs`, `decode_record`, and
+  `crates/syrinx-app/src/session/history_repair.rs`, `repairable`
+  (code-confirmed, #121).
 - **A retained directory or database can still be renamed despite excluding
   delete sharing.** Windows metadata-only opens do not enforce this sharing
   restriction. Retained directories need `FILE_LIST_DIRECTORY`, and retained

@@ -803,6 +803,7 @@ impl BrowserView {
             SessionEvent::SiteZoomsCleared { request_id, result } => {
                 self.site_zooms_cleared(request_id, result);
             }
+            SessionEvent::SiteZoomsReplaced(levels) => self.replace_site_zooms(levels),
             SessionEvent::RememberedPermissions { request_id, result } => {
                 self.site_permissions_listed(request_id, result, window, cx);
             }

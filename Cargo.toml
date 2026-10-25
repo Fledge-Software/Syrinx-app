@@ -31,6 +31,8 @@ webview2-com = "=0.39.1"
 raw-window-handle = "=0.6.2"
 futures = "=0.3.34"
 url = "=2.5.8"
+# The full-text engine (#52); only syrinx-search and the bake-off may use it (xtask check-deps).
+tantivy = { version = "=0.27.0", default-features = false, features = ["mmap", "lz4-compression"] }
 
 # P1-04 needs SQLite's damaged-input fixes before validating recovery candidates.
 [patch.crates-io]
