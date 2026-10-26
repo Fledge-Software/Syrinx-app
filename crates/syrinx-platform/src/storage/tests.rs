@@ -468,7 +468,12 @@ fn a_cache_folder_is_created_beside_the_database_and_held_in_place() {
     let folder = lease
         .cache_folder("synthetic-cache")
         .expect("create a synthetic cache folder");
-    assert_eq!(folder.path(), destination.join("synthetic-cache"));
+    // Compare resolved paths: the CI runner's temp folder is spelled as an 8.3 short name.
+    let resolve = |path: &Path| fs::canonicalize(path).expect("resolve the synthetic path");
+    assert_eq!(
+        resolve(folder.path()),
+        resolve(&destination.join("synthetic-cache"))
+    );
     assert!(folder.path().is_dir());
 
     // Files inside stay the cache's own to create and delete; the folder itself cannot move.
