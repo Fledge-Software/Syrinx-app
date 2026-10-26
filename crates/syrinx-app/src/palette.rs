@@ -18,13 +18,13 @@ use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
 use syrinx_core::usage::{Feature, Timing, UsageRecorder};
 use syrinx_core::{CommandAction, CommandContext, CommandRegistry};
 use syrinx_platform::browser::BrowserShortcut;
-use syrinx_search::{Scope, Target};
+use syrinx_search::{Scope, SearchResults, Target};
 
 pub use display::arrange;
 
 use choices::PaletteChoices;
 use commands::{CommandMatcher, CommandMatches};
-use display::{Arranged, Preview};
+use display::Preview;
 use query::{Chip, ParsedQuery, View};
 
 use crate::{acceptance::PresentProbe, session::SessionError, text_field, theme, ui};
@@ -288,11 +288,11 @@ impl PaletteView {
     pub fn receive(
         &mut self,
         request_id: u64,
-        result: Result<Arranged, SessionError>,
+        result: Result<SearchResults, SessionError>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.is_open() || !self.choices.receive_arranged(request_id, result) {
+        if !self.is_open() || !self.choices.receive_ordered(request_id, result) {
             return false;
         }
         if let Some(probe) = &self.probe {
@@ -316,6 +316,16 @@ impl PaletteView {
     /// The row Enter would open or run, for P1-33's acceptance run.
     pub fn selected_target(&self) -> Option<Target> {
         self.choices.selected_hit().map(|hit| hit.target)
+    }
+
+    /// Whether the typed row leads and is Enter's choice, for P1-33's acceptance run.
+    pub fn typed_row_selected(&self) -> bool {
+        self.choices.lead_rows() > 0 && self.choices.selected == Some(0)
+    }
+
+    /// Moves the selection down as the Down key does, for P1-33's acceptance run.
+    pub fn press_down(&mut self, cx: &mut Context<Self>) {
+        self.move_selection(true, cx);
     }
 
     /// The typed text, for P1-33's acceptance run.
@@ -413,7 +423,7 @@ impl PaletteView {
         if selected == 0
             && let Some(address) = &self.choices.address
         {
-            return Some(Preview::address(address));
+            return Some(Preview::address(&self.choices.entry, address));
         }
         if selected == 0 && self.choices.web_search {
             return Some(Preview::search(&self.choices.entry));
@@ -552,7 +562,7 @@ impl Render for PaletteView {
             .on_action(cx.listener(|this, _: &ui::Reload, _, _| {
                 this.emit(PaletteEvent::Shortcut(BrowserShortcut::Reload));
             }))
-            // Tab leaves the query for the scope chips and the web search button.
+            // Tab leaves the query for the scope chips.
             .on_action(|_: &ui::FocusNextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &ui::FocusPreviousControl, window, cx| window.focus_prev(cx))
             .child(

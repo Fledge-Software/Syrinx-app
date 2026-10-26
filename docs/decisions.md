@@ -19,6 +19,47 @@ entry names it.
 
 ## 2026-10-25
 
+- **The palette's first row is always what the owner typed (owner's own
+  decision, 2026-10-25).** The owner typed `youtube` in the palette and
+  found an unrelated open tab first and preselected, with the YouTube
+  history below it and the web search in a footer. The owner's words: "why
+  would anyone want to search youtube and get the recent. The thing the
+  user is searching should obviously be the first option. Then you have
+  other options underneath." Only the quoted words are the owner's; the
+  rest is recorded by the coordinator and the owner may correct it.
+  - **What changes, as recorded.** In the Everything view the first row is
+    the typed text, and it is preselected, so plain Enter runs it: a search
+    of the web for the text ("youtube — Search the web"), or, for a
+    complete address, a visit to that address. The row is built locally
+    and nothing is fetched while typing (D9). Open tabs, bookmarks and
+    history follow in their sections, reached with Down. A row that holds
+    the typed text only as letters scattered through it now ranks below
+    every row holding it as a word or an address prefix; it stays listed.
+    Where one section has both kinds, its scattered rows follow every word
+    match under a second header of the same name (for example Open tabs,
+    History, then Open tabs again). The `>`, `@` and `/` prefixes and the
+    scope chips have no typed row and are unchanged.
+  - **What it supersedes, as recorded.**
+    - The choices of 2026-10-24 made in #127 and recorded in commit
+      `305af76` rather than here: preselecting a confident local match
+      below the search row instead of completing it inline. That match was
+      a page whose address starts with the typed text, an open page's
+      exact title, or a command's exact name. It also covered a typed bare
+      host that only starts a known host: `cloud.exam` used to open a
+      known `cloud.example.test`, and Enter now goes to
+      `https://cloud.exam/`, which may not exist; the known page is one
+      Down away. With the typed row always chosen, Enter in Everything no
+      longer waits for the local results (#127 kept that wait, from P1-33,
+      only because a confident match could still arrive). Without a typed
+      row, in the chips, it still waits.
+    - The pinned "Search the web" footer row under the results, which came
+      from the design canvas (P1-30/31; `design/canvas/project/Palette.dc.html`)
+      and which #127 kept. The footer row is gone, so in the chips and
+      after a prefix the web search is no longer a click or a Tab stop.
+      `design/README.md`'s "always offers Search the web (Alt Enter)" still
+      holds: Alt Enter always searches the web, and the footer's hint line
+      still names it.
+
 - **Notes organises notes in folders; database-style views go to a separate,
   later plugin (owner's own decision, 2026-10-25).** The owner's words:
   "dont worry about databases for notes. We will put them in a different

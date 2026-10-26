@@ -1,5 +1,5 @@
-//! Decides whether typed text is the exact start of a known page's address, so Enter opens that
-//! page only on a letter-for-letter match and searches the web otherwise (#127).
+//! Decides whether typed text is the exact start of a known page's address, so the palette ranks
+//! that page with the word matches above scattered-letter ones (#127, 2026-10-25).
 
 use std::net::IpAddr;
 

@@ -1,9 +1,9 @@
-//! Turns search hits into bounded, safely highlighted palette rows, sections and previews.
+//! Turns search hits into bounded, safely highlighted palette rows, in order and in sections, and previews.
 
 use std::collections::HashSet;
 use std::ops::Range;
 
-use syrinx_core::{SavedPageId, TabModelSnapshot, live_instance};
+use syrinx_core::{AddressPrefix, TabModelSnapshot, address_prefix, live_instance};
 use syrinx_search::{SearchHit, SearchResults, Target};
 
 /// Row text is cut here so one long title cannot stall layout.
@@ -104,39 +104,72 @@ impl Section {
     }
 }
 
-/// Worker results prepared for display, with the saved pages among them that are open.
-pub struct Arranged {
-    pub results: SearchResults,
-    /// Saved rows that stand for a live tab; their exact title switches like a tab's (#127).
-    pub open_saved: HashSet<SavedPageId>,
+/// How closely a row matches the typed text. A row that only holds the typed letters scattered
+/// through it ranks below every row holding the text as a word or an address prefix (2026-10-25).
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Strength {
+    /// Each typed word starts a word of the title or address, or the text starts the address.
+    Word,
+    /// Only a fuzzy match: letters in order with gaps, or with a typo.
+    Scattered,
 }
 
-/// Prepares worker results for display: one row per destination, grouped by section.
+impl Strength {
+    pub fn of(hit: &SearchHit, text: &str) -> Self {
+        let text = text.trim();
+        if text.is_empty() || address_prefix(text, &hit.address) != AddressPrefix::No {
+            return Self::Word;
+        }
+        let title = hit.title.to_lowercase();
+        let address = hit.address.to_lowercase();
+        let every_word_found = text
+            .to_lowercase()
+            .split_whitespace()
+            .all(|word| starts_a_word(&title, word) || starts_a_word(&address, word));
+        if every_word_found {
+            Self::Word
+        } else {
+            Self::Scattered
+        }
+    }
+}
+
+/// Whether `word` occurs in `text` where a word begins: at the start, or after a character that
+/// is not a letter or digit (a space, `.`, `/`, `-` and so on).
+fn starts_a_word(text: &str, word: &str) -> bool {
+    text.match_indices(word).any(|(start, _)| {
+        text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|previous| !previous.is_alphanumeric())
+    })
+}
+
+/// Prepares worker results for display: one row per destination, in the worker's ranking.
 ///
 /// A saved page's live instance appears as its saved row, since activating that row focuses
 /// the same live page (D43); listing both would offer two rows for one destination.
-pub fn arrange(mut results: SearchResults, model: &TabModelSnapshot) -> Arranged {
+pub fn arrange(mut results: SearchResults, model: &TabModelSnapshot) -> SearchResults {
     let mut seen = HashSet::new();
-    let mut open_saved = HashSet::new();
     let mut hits = Vec::with_capacity(results.hits.len());
     for mut hit in results.hits {
         if let Target::Tab(id) = hit.target
             && let Some(saved) = saved_page_of(model, id)
         {
             hit.target = Target::Saved(saved);
-            open_saved.insert(saved);
         }
         if seen.insert(hit.target) {
             hits.push(hit);
         }
     }
-    // A stable sort keeps the ranking inside each section.
-    hits.sort_by_key(|hit| Section::of(hit.target));
     results.hits = hits;
-    Arranged {
-        results,
-        open_saved,
-    }
+    results
+}
+
+/// Orders rows for the list, the one place that does so: word matches first, then scattered
+/// ones, each grouped by section. A stable sort keeps the worker's ranking inside each group.
+pub fn order(hits: &mut [SearchHit], text: &str) {
+    hits.sort_by_cached_key(|hit| (Strength::of(hit, text), Section::of(hit.target)));
 }
 
 fn saved_page_of(
@@ -148,9 +181,14 @@ fn saved_page_of(
     (live_instance(model, saved) == Some(id)).then_some(saved)
 }
 
-/// The search row's name, shared by the row and its preview.
+/// The typed row's name when the text is a search, shared by the row and its preview.
 pub fn search_label(entry: &str) -> String {
-    format!("Search Google for “{entry}”")
+    format!("{entry} — Search the web")
+}
+
+/// The typed row's name when the text is an address, shared by the row and its preview.
+pub fn address_label(entry: &str, address: &str) -> String {
+    format!("{entry} — Go to {address}")
 }
 
 /// What the preview pane says about the selected row.
@@ -163,12 +201,13 @@ pub struct Preview {
 }
 
 impl Preview {
-    pub fn address(address: &str) -> Self {
+    pub fn address(entry: &str, address: &str) -> Self {
         Self {
             kind: "Address",
-            title: highlight(&format!("Go to {address}"), &[], PREVIEW_TEXT_LIMIT),
+            title: highlight(&address_label(entry, address), &[], PREVIEW_TEXT_LIMIT),
             detail: None,
-            hint: "Enter opens this address in the current tab.".to_owned(),
+            hint: "Enter opens this address in the current tab. Matches, if any, are below it."
+                .to_owned(),
         }
     }
 
@@ -177,7 +216,7 @@ impl Preview {
             kind: "Web search",
             title: highlight(&search_label(entry), &[], PREVIEW_TEXT_LIMIT),
             detail: None,
-            hint: "Enter searches Google in the current tab. Down chooses a page instead."
+            hint: "Enter searches the web, with Google, in the current tab. Matches, if any, are below it."
                 .to_owned(),
         }
     }
@@ -316,12 +355,19 @@ mod tests {
                 hit(Target::Tab(unknown), "Unknown"),
             ],
         };
-        let Arranged {
-            results: arranged,
-            open_saved,
-        } = arrange(results, &model.snapshot());
-        // Only the saved page with a live tab counts as open; the other is a closed bookmark.
-        assert_eq!(open_saved, HashSet::from([saved]));
+        let mut arranged = arrange(results, &model.snapshot());
+        // Collapsing keeps the worker's ranking; only the saved page with a live tab moves.
+        let ranked: Vec<_> = arranged.hits.iter().map(|hit| hit.target).collect();
+        assert_eq!(
+            ranked,
+            [
+                Target::Saved(other_saved),
+                Target::Saved(saved),
+                Target::Tab(ordinary),
+                Target::Tab(unknown),
+            ]
+        );
+        order(&mut arranged.hits, "");
         let targets: Vec<_> = arranged.hits.iter().map(|hit| hit.target).collect();
         assert_eq!(
             targets,
@@ -334,5 +380,129 @@ mod tests {
         );
         // The better-ranked duplicate wins, so the live instance's metadata is shown.
         assert_eq!(arranged.hits[3].title, "Live instance");
+    }
+
+    fn page(target: Target, title: &str, address: &str) -> SearchHit {
+        SearchHit {
+            title: title.to_owned(),
+            address: address.to_owned(),
+            ..hit(target, title)
+        }
+    }
+
+    fn history(key: u64) -> Target {
+        Target::History(std::num::NonZeroU64::new(key).expect("synthetic history key"))
+    }
+
+    #[test]
+    fn a_word_or_address_prefix_is_strong_and_scattered_letters_are_weak() {
+        let tab = Target::Tab(TabId::new(1).expect("tab"));
+        let strong = [
+            ("youtube", "YouTube", "https://youtube.example/"),
+            ("youtube", "Synthetic home", "https://www.youtube.example/"),
+            (
+                "youtube",
+                "youtube - Synthetic search",
+                "https://search.example.test/",
+            ),
+            (
+                "YOUTUBE",
+                "Watch on YouTube",
+                "https://videos.example.test/",
+            ),
+            (
+                "road",
+                "Studios/Terra roadmap",
+                "https://example.test/terra",
+            ),
+            (
+                "terra road",
+                "Studios/Terra roadmap",
+                "https://example.test/x",
+            ),
+            ("example.test/te", "Synthetic", "https://example.test/terra"),
+            ("", "Anything", "https://example.test/"),
+        ];
+        for (text, title, address) in strong {
+            let row = page(tab, title, address);
+            assert_eq!(
+                Strength::of(&row, text),
+                Strength::Word,
+                "{text} in {title}"
+            );
+        }
+        let weak = [
+            // Letters in order with gaps, or mid-word, are only a fuzzy match.
+            (
+                "youtube",
+                "Studios/Terra roadmap",
+                "https://example.test/terra",
+            ),
+            ("tube", "YouTube", "https://youtube.example/"),
+            ("ample", "Synthetic", "https://example.test/"),
+            (
+                "terra zzz",
+                "Studios/Terra roadmap",
+                "https://example.test/x",
+            ),
+        ];
+        for (text, title, address) in weak {
+            let row = page(tab, title, address);
+            assert_eq!(
+                Strength::of(&row, text),
+                Strength::Scattered,
+                "{text} in {title}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scattered_tab_ranks_below_a_word_match_in_history() {
+        let tab = Target::Tab(TabId::new(1).expect("tab"));
+        let saved = Target::Saved(SavedPageId::new(1).expect("saved"));
+        // The worker ranked the open tab first: its open-tab boost outweighs the history row.
+        let mut hits = vec![
+            page(tab, "Studios/Terra roadmap", "https://example.test/terra"),
+            page(
+                saved,
+                "Synthetic video notes",
+                "https://notes.example.test/",
+            ),
+            page(history(1), "YouTube", "https://youtube.example/"),
+            page(
+                history(2),
+                "youtube - Synthetic search",
+                "https://search.example.test/",
+            ),
+        ];
+        order(&mut hits, "youtube");
+        let targets: Vec<_> = hits.iter().map(|hit| hit.target).collect();
+        // Word matches lead in their section; every scattered row follows, still listed.
+        assert_eq!(targets, [history(1), history(2), tab, saved]);
+    }
+
+    #[test]
+    fn single_letters_keep_every_match_and_rank_word_starts_first() {
+        let tab = Target::Tab(TabId::new(1).expect("tab"));
+        let mut hits = vec![
+            page(tab, "Synthetic toy", "https://example.test/"),
+            page(history(1), "Yarn", "https://yarn.example.test/"),
+        ];
+        order(&mut hits, "y");
+        let targets: Vec<_> = hits.iter().map(|hit| hit.target).collect();
+        assert_eq!(targets, [history(1), tab], "both stay listed");
+    }
+
+    #[test]
+    fn the_typed_row_names_the_text_before_what_enter_does() {
+        assert_eq!(search_label("youtube"), "youtube — Search the web");
+        assert_eq!(
+            address_label("example.com", "https://example.com/"),
+            "example.com — Go to https://example.com/"
+        );
+        assert_eq!(
+            Preview::search("youtube").title.text,
+            "youtube — Search the web"
+        );
     }
 }
