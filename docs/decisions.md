@@ -22,9 +22,10 @@ entry names it.
 - **The plugin runtime starts now, before Plan 1's exit, with wasmtime
   pinned at exactly 48.0.7 (owner, 2026-10-26).** The owner's words: "Yes.
   Start the plugin runtime now, before Plan 1's exit (P1-40), with wasmtime
-  pinned at exactly 48.0.7. Record this as my decision in docs/decisions.md
-  and run #28 with the usual plan, review and build loop." The rest of this entry is the coordinator's
-  record, and the owner may correct it.
+  pinned at exactly 48.0.7. Record this as my decision in
+  docs/decisions.md and run #28 with the usual plan, review and build
+  loop." The rest of this entry is the coordinator's record, and the owner
+  may correct it.
   - **Why.** Notes PR #14 (Fledge-Software/Syrinx-Notes-Plugin) added a
     folder tree whose Owner check asked for a look in the real window, and
     nobody could do it: Syrinx has no plugin host, so it cannot load Notes.
@@ -35,28 +36,33 @@ entry names it.
   - **What changes.** The plugin host (#28 first, then #134 to #137 and
     Plan 2's Phase 2 slices) no longer waits for Plan 1's exit. The
     coordinator reads "the plugin runtime" as all of #25, Phase 2's window
-    slices included; the owner may narrow this to Phase 1. This
-    narrows the 2026-10-15 rule that no plugin work starts until Plan 1
-    closes, as 2026-10-20 already did for #26 and #30. Plan 1's open work,
-    P1-40 included, stays open and keeps its own order. The plugin host
-    still follows its own order inside #25, and the owner still accepts
-    Plan 2 at #25's exit. `AGENTS.md`'s work order is updated to match,
-    and so are the bodies of #25, #27 and #28.
+    slices included; the owner may narrow this to Phase 1. This narrows
+    the 2026-10-15 rule that no plugin work starts until Plan 1 closes, as
+    2026-10-20 already did for #26 and #30. Plan 1's open work, P1-40
+    included, stays open and keeps its own order. The plugin host still
+    follows its own order inside #25, and the owner still accepts Plan 2
+    at #25's exit. `AGENTS.md`'s work order, the in-repo wiki page
+    `wiki/Plugin-system.md` and the bodies of #25, #27 and #28 are updated
+    to match.
   - **The pin.** 2026-10-21's decision 1 pinned wasmtime to `=48.0.x`.
     The exact version is now `=48.0.7`, the version the template's WIT
-    build ran. Coordinator's reading: `wasmtime-wasi` and the rest of the
-    wasmtime family are pinned at the matching 48.0.7 release, with the
-    Cranelift versions it requires. #27's audit of every transitive crate, under the 2026-10-21
-    licence exception, is still done before wasmtime enters `Cargo.lock`.
-    Moving to a later 48.0 security patch remains a routine pin bump that
-    must pass the gate.
+    build ran. The owner's words fix wasmtime itself; the rest of the
+    wasmtime family follows at the versions 48.0.7 requires. Whether
+    `wasmtime-wasi` is a dependency at all is still open: it is the first
+    open question in `docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md`,
+    where option (b) drops it and Syrinx's host provides the WASI
+    interfaces, and option (c) pins it at `=48.0.7`. The owner decides it
+    before #28 adds the dependency. #27's audit of every transitive crate,
+    under the 2026-10-21 licence exception, is still done before wasmtime
+    enters `Cargo.lock`. Moving to a later 48.0 security patch remains a
+    routine pin bump that must pass the gate.
   - **What it costs.** Plugin-host code lands in Syrinx's own crates while
     Plan 1 is still being accepted, so the gate and the release carry
-    wasmtime (research note 10, the WASM runtime note at
+    wasmtime before the browser core is signed off. Research note 10, the
+    WASM runtime note at
     `docs/dev/background-10-wasm-plugin-runtime-draft.md`, measured about
-    17 MiB added on Linux) before the
-    browser core is signed off. #28 records the build-time and size cost.
-    Rejected: waiting for P1-40, which leaves every plugin slice
+    17 MiB added on Linux; #28 records the build-time and size cost on
+    Windows. Rejected: waiting for P1-40, which leaves every plugin slice
     unverifiable in the window until then.
 
 ## 2026-10-25
@@ -535,8 +541,8 @@ entry names it.
   the host start before Plan 1 closes; see that date's entry.)*
 
 - **Runtime and pin (decision 1): wasmtime with the component model,
-  pinned exactly `=48.0.x`.** *(On 2026-10-26 the owner fixed the exact
-  version at `=48.0.7`; see that date's entry.)* Syrinx embeds wasmtime with the component
+  pinned exactly `=48.0.x`.** *(On 2026-10-26 the owner fixed the
+  exact version at `=48.0.7`; see that date's entry.)* Syrinx embeds wasmtime with the component
   model and WIT (WebAssembly Interface Types, the typed interface
   language the owner chose on 2026-10-15), host bindings generated with
   `wasmtime::component::bindgen!`, pinned with `=` on the 48.x
@@ -772,8 +778,8 @@ entry names it.
   to Syrinx's own crates, so it still waits for Plan 1 to close and, in
   addition, for the owner to approve the research note *(approved on
   2026-10-21; see that date's entries)*. *(Superseded on 2026-10-26: the
-  plugin host no longer waits for Plan 1 to close. See that date's entry.)*
-  Rejected: holding
+  plugin host no longer waits for Plan 1 to close. See that date's
+  entry.)* Rejected: holding
   all plugin work until Plan 1 closes, which would leave the research and
   template idle although they cannot affect Plan 1; and starting the host
   now too, which would change product crates while Plan 1 is still being
