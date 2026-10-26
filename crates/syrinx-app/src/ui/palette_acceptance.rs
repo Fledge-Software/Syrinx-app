@@ -829,8 +829,10 @@ impl Run {
         self.check_click_inside().await?;
         let (main, outside) = self.with(|view, window, _| {
             let viewport = window.viewport_size();
-            // Inside the page card, where GPUI draws no control.
-            let outside = point(viewport.width * 0.75, viewport.height * 0.5);
+            // The sidebar's empty area below its rows: chrome GPUI receives, unlike the page
+            // card, where a real click goes to WebView2 and ends the entry through `PageFocused`.
+            let sidebar = px(view.sidebar_sizing.width());
+            let outside = point(sidebar * 0.5, viewport.height * 0.75);
             (view.main_window, outside)
         })?;
         self.click(main, outside)?;
@@ -887,7 +889,7 @@ impl Run {
             "click_outside_leaves_focus_alone",
             passed,
             format!(
-                "after {STALE_WINDOW:?}: palette open {palette_open}; popup visible                  {popup_visible}; windows {windows}; page focused {page_focused}; page focus                  deferred {deferred}; expected tab active {}",
+                "after {STALE_WINDOW:?}: palette open {palette_open}; popup visible \n                 {popup_visible}; windows {windows}; page focused {page_focused}; page focus \n                 deferred {deferred}; expected tab active {}",
                 active == Some(page)
             ),
         );

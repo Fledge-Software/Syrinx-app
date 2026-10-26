@@ -203,17 +203,19 @@ impl PaletteView {
     /// Ends the entry as if Esc were pressed; the browser then returns focus to the page.
     /// The popup is hidden even without an entry, so a stray visible popup can always close.
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_open() {
-            self.emit(PaletteEvent::Closed);
-        }
-        self.close(window, cx);
+        self.end_entry(PaletteEvent::Closed, window, cx);
     }
 
     /// Ends the entry for a press in the main window, without sending the keys to the page:
     /// the press chooses where focus goes, as it does for the menus (#172).
     pub fn dismiss_for_chrome_press(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_entry(PaletteEvent::ClickedAway, window, cx);
+    }
+
+    /// Reports how an open entry ended, then hides the popup.
+    fn end_entry(&mut self, event: PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_open() {
-            self.emit(PaletteEvent::ClickedAway);
+            self.emit(event);
         }
         self.close(window, cx);
     }
