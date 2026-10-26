@@ -17,6 +17,39 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-10-26
+
+- **The plugin runtime starts now, before Plan 1's exit, with wasmtime
+  pinned at exactly 48.0.7 (owner, 2026-10-26).** The owner's words: "Yes.
+  Start the plugin runtime now, before Plan 1's exit (P1-40), with wasmtime
+  pinned at exactly 48.0.7." The rest of this entry is the coordinator's
+  record, and the owner may correct it.
+  - **Why.** Notes PR #14 (Fledge-Software/Syrinx-Notes-Plugin) added a
+    folder tree whose Owner check asked for a look in the real window, and
+    nobody could do it: Syrinx has no plugin host, so it cannot load Notes.
+    Every Notes and Forge slice is in the same position. The runtime is
+    what makes plugin work visible, so the owner chose not to let it wait
+    for P1-40, the owner's one-week daily-driver acceptance.
+  - **What changes.** The plugin host (#28 first, then #134 to #137 and
+    Plan 2's Phase 2 slices) no longer waits for Plan 1's exit. This
+    narrows the 2026-10-15 rule that no plugin work starts until Plan 1
+    closes, as 2026-10-20 already did for #26 and #30. Plan 1's open work,
+    P1-40 included, stays open and keeps its own order. The plugin host
+    still follows its own order inside #25, and the owner still accepts
+    Plan 2 at #25's exit.
+  - **The pin.** 2026-10-21's decision 1 pinned wasmtime to `=48.0.x`.
+    The exact version is now `=48.0.7`, the version the template's WIT
+    build ran. #27's audit of every transitive crate, under the 2026-10-21
+    licence exception, is still done before wasmtime enters `Cargo.lock`.
+    Moving to a later 48.0 security patch remains a routine pin bump that
+    must pass the gate.
+  - **What it costs.** Plugin-host code lands in Syrinx's own crates while
+    Plan 1 is still being accepted, so the gate and the release carry
+    wasmtime (note 10 measured about 17 MiB added on Linux) before the
+    browser core is signed off. #28 records the build-time and size cost.
+    Rejected: waiting for P1-40, which leaves every plugin slice
+    unverifiable in the window until then.
+
 ## 2026-10-25
 
 - **The palette's first row is always what the owner typed (owner's own
