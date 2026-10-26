@@ -72,8 +72,8 @@ cargo xtask palette-acceptance
 
 Reports go to `target\p1-33\`. Check that the opening p95 is under one
 refresh interval, `escape_returns_page_focus` passes 20 of 20 and
-`enter_activates_selected_tab` and `enter_activates_exact_title` pass every
-time. Then the hand checks in
+`enter_activates_selected_tab` and `enter_activates_title_row_after_down` pass
+every time. Then the hand checks in
 [`docs/p1-33-palette-acceptance.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-33-palette-acceptance.md), "Owner checks" 3 and 4 (a playing
 video under the palette, Alt Tab, a second monitor).
 

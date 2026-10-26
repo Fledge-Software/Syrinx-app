@@ -11,7 +11,10 @@ use syrinx_ui::metrics::{radius, text};
 use super::{
     PaletteView,
     choices::PaletteChoices,
-    display::{Highlighted, Preview, ROW_TEXT_LIMIT, Section, highlight, row_title, search_label},
+    display::{
+        Highlighted, Preview, ROW_TEXT_LIMIT, Section, address_label, highlight, row_title,
+        search_label,
+    },
     query::{Chip, View},
 };
 use crate::controls::control;
@@ -118,12 +121,7 @@ pub(super) fn list(view: &PaletteView, wide: bool, cx: &mut Context<PaletteView>
     if view.choices.results.is_empty() && view.choices.lead_rows() == 0 {
         rows = rows.children(empty_state(view.view));
     }
-    let column = div()
-        .flex()
-        .flex_col()
-        .min_h_0()
-        .child(rows)
-        .child(web_search_row(cx));
+    let column = div().flex().flex_col().min_h_0().child(rows);
     if wide {
         column
             .w(px(LIST_WIDTH))
@@ -135,9 +133,11 @@ pub(super) fn list(view: &PaletteView, wide: bool, cx: &mut Context<PaletteView>
     }
 }
 
+/// The typed row for a complete address: Enter goes there (2026-10-25).
 fn address_row(view: &PaletteView, address: &str, cx: &mut Context<PaletteView>) -> AnyElement {
     let request_id = view.choices.request_id;
-    let title = highlight(&format!("Go to {address}"), &[], ROW_TEXT_LIMIT);
+    let label = address_label(&view.choices.entry, address);
+    let title = highlight(&label, &[], ROW_TEXT_LIMIT);
     row_frame(
         "go-to-address".into(),
         title.text.clone(),
@@ -155,12 +155,12 @@ fn address_row(view: &PaletteView, address: &str, cx: &mut Context<PaletteView>)
     .into_any_element()
 }
 
-/// The lead row for plain text: Enter searches Google unless a confident match is chosen.
+/// The typed row for plain text: Enter searches the web for it unless the owner moves down.
 fn search_row(view: &PaletteView, cx: &mut Context<PaletteView>) -> AnyElement {
     let request_id = view.choices.request_id;
     let title = highlight(&search_label(&view.choices.entry), &[], ROW_TEXT_LIMIT);
     row_frame(
-        "search-google".into(),
+        "search-web".into(),
         title.text.clone(),
         RowState::of(&view.choices, 0),
     )
@@ -378,33 +378,6 @@ fn empty_state(view: View) -> Option<Div> {
     )
 }
 
-fn web_search_row(cx: &mut Context<PaletteView>) -> Div {
-    let tokens = theme::current();
-    div()
-        .flex_shrink_0()
-        .px(px(10.))
-        .py(px(6.))
-        .border_t_1()
-        .border_color(rgba(tokens.panel_divider))
-        .child(
-            control(div().id("web-search"), Role::Button, "Search the web")
-                .aria_keyshortcuts("Alt+Enter")
-                .h(px(40.))
-                .px(px(10.))
-                .rounded(px(radius::TILE))
-                .flex()
-                .items_center()
-                .gap_3()
-                .text_size(px(text::PALETTE_ROW))
-                .text_color(rgba(tokens.text_secondary_bright))
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, window, cx| this.submit(true, window, cx)))
-                .child(glyph("⌕"))
-                .child(div().flex_1().child("Search the web"))
-                .child(key_hint("Alt Enter")),
-        )
-}
-
 pub(super) fn preview(preview: Option<Preview>) -> Div {
     let tokens = theme::current();
     let pane = div()
@@ -559,5 +532,38 @@ mod tests {
         ));
         assert_eq!(child_index(&choices, 0), 0);
         assert_eq!(child_index(&choices, 1), 2);
+    }
+
+    #[test]
+    fn a_section_with_scattered_rows_repeats_its_header_after_the_word_matches() {
+        let word_tab = Target::Tab(TabId::new(1).expect("tab"));
+        let scattered_tab = Target::Tab(TabId::new(2).expect("tab"));
+        let history = Target::History(NonZeroU64::MIN);
+        let page = |target, title: &str, address: &str| SearchHit {
+            title: title.to_owned(),
+            address: address.to_owned(),
+            ..hit(target)
+        };
+        let mut choices = PaletteChoices::default();
+        let request = choices.query_scoped("youtube", true);
+        assert!(choices.receive_ordered(
+            request,
+            Ok(SearchResults {
+                generation: 1,
+                counts: ScopeCounts::default(),
+                hits: vec![
+                    page(word_tab, "YouTube Music", "https://music.example.test/"),
+                    page(scattered_tab, "Studios/Terra", "https://example.test/terra"),
+                    page(history, "YouTube", "https://youtube.example/"),
+                ],
+            })
+        ));
+        let order: Vec<_> = choices.results.iter().map(|hit| hit.target).collect();
+        assert_eq!(order, [word_tab, history, scattered_tab]);
+        // Children: typed row, [Open tabs] tab, [History] history, [Open tabs] tab
+        assert_eq!(child_index(&choices, 0), 0);
+        assert_eq!(child_index(&choices, 1), 2);
+        assert_eq!(child_index(&choices, 2), 4);
+        assert_eq!(child_index(&choices, 3), 6);
     }
 }

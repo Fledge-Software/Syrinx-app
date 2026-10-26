@@ -52,8 +52,8 @@ const WORDS: [&str; 6] = [
 ];
 const FOCUS_PAGE: &str = "focus-page";
 const ENTER_PAGE: &str = "enter-target";
-/// Plain text searches the web unless it matches exactly (#127). `/` lists open tabs and Enter
-/// opens its top row, so this is how the owner switches to a tab by part of its title.
+/// Plain text leads with a row that searches the web for it (2026-10-25). `/` lists open tabs
+/// and Enter opens its top row, so this is how the owner switches to a tab by part of its title.
 const ENTER_QUERY: &str = "/enter-target";
 
 /// What the Enter check types to reach the background page.
@@ -61,8 +61,9 @@ const ENTER_QUERY: &str = "/enter-target";
 enum EnterQuery {
     /// `/` and part of the title: the open-tabs view opens its top row.
     TabScope,
-    /// The page's whole current title: plain text that switches to an open tab (#127).
-    ExactTitle,
+    /// The page's whole current title: plain text leads with the typed row, and Down reaches
+    /// the open tab (2026-10-25).
+    TypedTitle,
 }
 
 impl EnterQuery {
@@ -73,9 +74,9 @@ impl EnterQuery {
                 "enter_activates_selected_tab",
                 "no_stale_refocus_after_enter",
             ),
-            Self::ExactTitle => (
-                "enter_activates_exact_title",
-                "no_stale_refocus_after_exact_title",
+            Self::TypedTitle => (
+                "enter_activates_title_row_after_down",
+                "no_stale_refocus_after_title_row",
             ),
         }
     }
@@ -375,7 +376,7 @@ impl Run {
         self.check_rapid_dismissal().await?;
         self.check_second_open().await?;
         self.check_enter_activation(EnterQuery::TabScope).await?;
-        self.check_enter_activation(EnterQuery::ExactTitle).await?;
+        self.check_enter_activation(EnterQuery::TypedTitle).await?;
         for size in SIZES {
             self.measure_ranking(size).await?;
         }
@@ -835,14 +836,7 @@ impl Run {
         })??;
         // Enter only once the full text's own reply selects the target, as the bursts do.
         let target = Target::Tab(enter);
-        let selected = self
-            .try_wait(Duration::from_secs(3), |view, _, cx| {
-                let palette = view.palette.as_ref()?.view.read(cx);
-                let settled = palette.input_text(cx) == query && palette.answered();
-                (settled && palette.selected_target() == Some(target)).then_some(())
-            })
-            .await?
-            .is_some();
+        let selected = self.select_enter_target(how, &query, target).await?;
         // Enter on anything else could search Google, which an automated run must never do.
         if !selected {
             let _closed = self.escape_to_page(focus).await?;
@@ -892,6 +886,42 @@ impl Run {
         );
         self.check_no_stale_refocus(stale_check, enter).await?;
         self.return_to(focus).await
+    }
+
+    /// Waits until the target row is selected for `query`. Plain text leads with the typed row
+    /// (2026-10-25), so for the title the run checks that row is first, then moves Down to the
+    /// tab as the owner would.
+    async fn select_enter_target(
+        &mut self,
+        how: EnterQuery,
+        query: &str,
+        target: Target,
+    ) -> Result<bool, String> {
+        if matches!(how, EnterQuery::TypedTitle) {
+            let typed_row_first = self
+                .try_wait(Duration::from_secs(3), |view, _, cx| {
+                    let palette = view.palette.as_ref()?.view.read(cx);
+                    let settled = palette.input_text(cx) == query && palette.answered();
+                    (settled && palette.typed_row_selected()).then_some(())
+                })
+                .await?
+                .is_some();
+            if !typed_row_first {
+                return Ok(false);
+            }
+            self.with(|view, _, cx| {
+                let palette = view.palette.as_ref().map(|palette| palette.view.clone());
+                palette.map(|palette| palette.update(cx, |palette, cx| palette.press_down(cx)))
+            })?;
+        }
+        let selected = self
+            .try_wait(Duration::from_secs(3), |view, _, cx| {
+                let palette = view.palette.as_ref()?.view.read(cx);
+                let settled = palette.input_text(cx) == query && palette.answered();
+                (settled && palette.selected_target() == Some(target)).then_some(())
+            })
+            .await?;
+        Ok(selected.is_some())
     }
 
     /// Records both of an Enter check's rows as failed when Enter was never pressed, so the
