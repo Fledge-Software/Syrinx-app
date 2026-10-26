@@ -29,6 +29,18 @@
 > This selects the commercial and provider baseline, not resource provisioning,
 > paid upgrades or deployment.
 > The owner also approved repeatable 30 GB storage add-ons at $2/month each.
+>
+> **Version A2 update, 2026-10-26:** the owner's product map
+> ([`product-map.md`](product-map.md), decision of 2026-10-26 in
+> [`decisions.md`](decisions.md)) changes this plan in five places, which the
+> sections below now reflect. AI is one $20 subscription plus one-off credit
+> packs, replacing the $100 and $200 tiers; a person's own API key is free and
+> needs no subscription; hosted models are OpenAI and Anthropic first, with
+> OpenRouter later. Household costs $20/month or $200/year. VPN costs $8/month.
+> One Syrinx account signs in to both the website and the app (SVC-09). The
+> $30/$246 Browser Package is an idea the owner has not decided, so no bundle
+> is promised yet. Where this banner and the older paragraphs above disagree,
+> the banner wins.
 
 ## 1. How to use this document
 
@@ -188,34 +200,37 @@ The services backend may use its own reviewed server networking stack.
 All amounts are USD. Tax presentation, refunds and selling regions need an
 owner-approved launch policy. Sync includes the sharing allowance below, and
 Household includes Sync for its members. AI, VPN and voluntary support remain
-separate; no additional cross-service bundle is promised.
+separate; no additional cross-service bundle is promised. The owner's
+"Browser Package" ($30/month or $246/year with VPN, 50 GB of Sync and $20 of
+AI usage) is recorded as an undecided idea in [`product-map.md`](product-map.md).
 
 | Product | Monthly | Annual | Status and inclusion |
 |---|---:|---:|---|
 | Support Syrinx | $5 | $50 | Separate voluntary support; no service entitlement. |
 | Syrinx Sync | $4 | $40 | Owner-approved price; 10 GB for one person, with attachment sharing included when released; password sync follows its prerequisite. |
-| Syrinx AI 20 | $20 | $240 | Owner-set price; $20 of retail-rated AI usage per monthly allowance period. |
-| Syrinx AI 100 | $100 | $1,200 | Owner-set price; $100 of retail-rated AI usage per monthly allowance period. |
-| Syrinx AI 200 | $200 | $2,400 | Owner-set price; $200 of retail-rated AI usage per monthly allowance period. |
-| Syrinx VPN | $7.99 | $79.99 | Proposed price, contingent on Guardian terms; device-wide Windows protection. |
+| Syrinx AI | $20 | $240 | Owner-set price; $20 of retail-rated AI usage per monthly allowance period. The only AI subscription since 2026-10-26. |
+| AI credit pack | One-off | — | Owner-approved shape (2026-10-26): extra retail-rated usage at the same 3-times rule, bought explicitly, never automatically. Sizes, expiry and refunds are open (AIP-01). |
+| Own API key | Free | Free | Owner decision (2026-10-26): a person can use their own OpenAI or Anthropic key (OpenRouter later) with no subscription; they pay the provider directly (AIP-10). |
+| Syrinx VPN | $8 | Open ($80 proposed) | Owner-set monthly price (2026-10-26), contingent on Guardian terms; device-wide Windows protection. |
 | Encrypted attachment sharing | Included | Included | No additional subscription charge; uses the active Sync or Household allowance below when released. |
-| Syrinx Household | $10 | $100 | Owner-approved price; six people including the payer, 100 GB pooled storage and shared Notes collections; replaces members' individual Sync subscriptions. |
+| Syrinx Household | $20 | $200 | Owner-set price (2026-10-26, replacing $10/$100); six people including the payer, 100 GB pooled storage and shared Notes collections; replaces members' individual Sync subscriptions. |
 | Extra storage | $2 per 30 GB | Monthly billing only | Owner-approved repeatable add-on to an active Sync or Household subscription; an annual base plan can also buy it monthly. |
 
-AI tier names are working identifiers. All three tiers have the same plugin
-capabilities and permission rules; the purchased amount of usage differs.
-Annual AI plans receive twelve monthly allowances, not one immediately
-spendable annual balance. The owner's annual choice is twelve months' price
-with the same monthly allowance, so there is no annual AI discount.
+There is one AI subscription. Credit packs add usage, not capabilities, and
+a person using their own key gets the same plugin capabilities and permission
+rules as a subscriber. Annual AI plans receive twelve monthly allowances, not
+one immediately spendable annual balance. The owner's annual choice is twelve
+months' price with the same monthly allowance, so there is no annual AI discount.
 
 #### Approved Sync and Household launch limits
 
-The owner accepted these limits on 2026-10-25. They apply when the corresponding
+The owner accepted these limits on 2026-10-25; Household's price changed on
+2026-10-26. They apply when the corresponding
 epics ship, not before their implementation and release gates pass.
 
 | Limit or feature | Syrinx Sync | Syrinx Household |
 |---|---|---|
-| Price | $4/month or $40/year. | $10/month or $100/year. |
+| Price | $4/month or $40/year. | $20/month or $200/year. |
 | People | One. | Six maximum, including the payer. |
 | Base encrypted storage, expandable with add-ons | 10 GB. | 100 GB pooled across members' private and shared data; not per member or an extra 10 GB per member. |
 | Maximum shared file | 250 MB. | 500 MB. |
@@ -258,12 +273,12 @@ it never adds another 30 GB without a quantity increase.
 
 | Active units | Sync storage / total monthly price | Household storage / total monthly price |
 |---|---|---|
-| 0 | 10 GB / $4. | 100 GB / $10. |
-| 1 | 40 GB / $6. | 130 GB / $12. |
-| 3 | 100 GB / $10. | 190 GB / $16. |
+| 0 | 10 GB / $4. | 100 GB / $20. |
+| 1 | 40 GB / $6. | 130 GB / $22. |
+| 3 | 100 GB / $10. | 190 GB / $26. |
 
 These totals use monthly base plans, before tax or proration. With an annual
-base, the charge remains $40/year or $100/year plus `$2 × n` each month.
+base, the charge remains $40/year or $200/year plus `$2 × n` each month.
 There is no fixed product cap on the number of purchased units; implementation
 must still handle quantity bounds, concurrent purchases and capacity failures
 safely rather than accepting a payment it cannot provision.
@@ -310,9 +325,7 @@ It leaves a two-thirds spread before payment fees and all other expenses.
 
 | AI tier | Monthly retail allowance | Maximum provider spend, approximately | Annual provider spend at full usage |
 |---|---:|---:|---:|
-| AI 20 | $20 | $6.666667 | $80 |
-| AI 100 | $100 | $33.333333 | $400 |
-| AI 200 | $200 | $66.666667 | $800 |
+| AI | $20 | $6.666667 | $80 |
 
 Keep the retail allowance and provider costs in reviewed integer sub-cent units
 (or exact rational arithmetic for intermediate rates). Debit exactly three times
@@ -355,9 +368,7 @@ international card, currency, refunds and optional services. [Source S1](#9-sour
 
 | AI tier | Monthly receipt after estimated Stripe fees | Provider cost at full allowance | Monthly contribution before other costs | Annual contribution after fees and full provider allowance |
 |---|---:|---:|---:|---:|
-| AI 20 | $18.98 | $6.666667 | $12.31 | $151.06 |
-| AI 100 | $96.10 | $33.333333 | $62.77 | $756.50 |
-| AI 200 | $192.50 | $66.666667 | $125.83 | $1,513.30 |
+| AI | $18.98 | $6.666667 | $12.31 | $151.06 |
 
 Annual contribution assumes one annual payment, twelve fully used monthly
 allowances and no refunds. These amounts are not profit or demand forecasts.
@@ -366,10 +377,10 @@ They exclude hosting, engineering, security review, support, tax and losses.
 | Other service | Monthly price | After estimated Stripe fees | Assumed variable service cost | Contribution before other costs |
 |---|---:|---:|---:|---:|
 | Sync, base individual plan | $4 | $3.56 | $0.75 target ceiling, excluding add-ons | $2.81 |
-| VPN | $7.99 | $7.40 | $3 hypothetical provider quote | $4.40 |
+| VPN | $8 | $7.41 | $3 hypothetical provider quote | $4.41 |
 
-The VPN annual price leaves about $3.40 per month after those same fees and
-a hypothetical $3 monthly supplier cost. Minimum commitments could change
+At the proposed $80 annual price, VPN leaves about $3.41 per month after those
+same fees and a hypothetical $3 monthly supplier cost. Minimum commitments could change
 this entirely. The shared backend's $25–$100 monthly allowance is only an
 initial planning budget, excluding storage, AI calls and VPN charges. Replace
 it with an architecture-based estimate before contracting or launch. No
@@ -385,16 +396,16 @@ dependencies connect issues rather than milestone assignments.
 |---|---|---|---|
 | Services | Epic: Services — Accounts and billing | Owner approval of scope, hosting and data boundaries; existing work-order clearance. | Optional accounts, verified entitlements, cancellation and cost accounting work without affecting free browsing. |
 | Sync | Epic: Sync — Encrypted personal data | Services foundation and stable Notes persistence. | Two Windows devices safely sync selected encrypted records and recover conflicts/deletions. |
-| AI | Epic: AI — Plugin actions and metered usage | Services foundation, reviewed WASM host contract and relevant plugins. | All three tiers enforce 3-times pricing and AI performs permitted plugin workflows with reviewable changes. |
+| AI | Epic: AI — Plugin actions and metered usage | Services foundation, reviewed WASM host contract and relevant plugins. | The subscription and credit packs enforce 3-times pricing, own-key use works without a subscription, and AI performs permitted plugin workflows with reviewable changes. |
 | VPN | Epic: VPN — Device-wide protection | Services foundation, Guardian agreement and approved Windows integration. | Paid users receive verified device-wide protection with safe failure and removal behavior. |
 | Password sync | Epic: Sync — Password vault extension | Encrypted Sync and a separately approved, implemented password manager. | Password records sync securely without exposing secrets to AI or the cloud service. |
 | Attachment sharing | Epic: Sync — Encrypted attachment sharing | Released individual Sync, service readiness and an approved recipient/key protocol. | Explicitly selected immutable files have tested encrypted delivery, expiry, revocation and bounded costs. |
 | Household Sync | Epic: Sync — Household collections | Individual Sync and validated attachment-sharing foundations; approved membership/key design. | Separate accounts can share selected Notes collections with enforceable roles, safe removal and clear billing ownership. |
 
-The keys match each draft's **Parent** field: Services owns SVC-01–SVC-08;
-Sync owns SYN-01–SYN-05; AI owns AIP-01–AIP-09; VPN owns VPN-01–VPN-05;
+The keys match each draft's **Parent** field: Services owns SVC-01–SVC-09;
+Sync owns SYN-01–SYN-05; AI owns AIP-01–AIP-10; VPN owns VPN-01–VPN-05;
 Password sync owns PWS-01–PWS-03; Attachment sharing owns SHR-01–SHR-04;
-Household Sync owns HHS-01–HHS-04. These are 38 native sub-issue drafts under
+Household Sync owns HHS-01–HHS-04. These are 40 native sub-issue drafts under
 seven epics, not seven milestones or a new label hierarchy.
 
 Researching Guardian's terms does not authorize implementation ahead of earlier
@@ -617,7 +628,7 @@ measured capacity. Database-at-rest encryption is not a substitute for the
 client-side encryption design in SYN-01 and PWS-01.
 
 The foundation's dependency order is SVC-01, SVC-05, SVC-06, SVC-02, SVC-03,
-SVC-04, SVC-08, then SVC-07. Identifiers remain stable for conversion; their numeric
+SVC-04, SVC-08, then SVC-07; SVC-09 follows SVC-05 and the owner's Supabase project. Identifiers remain stable for conversion; their numeric
 order does not override these dependencies. Service adapters can be developed
 once their prerequisites pass, but paid production releases also require SVC-07.
 
@@ -798,6 +809,40 @@ No automatic capacity purchase or overage charge is possible.
 **Blocked by:** SVC-03, SVC-04 and SVC-06. **Parent:** Services.
 **Type:** billing/storage implementation. **Priority/size:** P0 / M;
 split billing, quota and UI work before implementation if necessary.
+
+#### SVC-09 — One Syrinx account on the website and in the app
+
+**Why this matters:** the owner wants one sign-in for both places (2026-10-26):
+people edit their account on syrinxapp.dev, and the same account unlocks the
+paid features in the app. Two separate logins would mean two password resets,
+two places to cancel and two sets of security bugs.
+
+**What exists today:** the website (`Fledge-Software/syrinx-public-site`) is a
+static Astro site with no backend. Since 2026-10-26 it carries `/account/`
+pages scaffolded for Supabase Auth in the browser, switched off until the
+build has the project's URL and publishable key. No Supabase project exists yet.
+
+**Work:** (a) on the website, sign-up, sign-in, email confirmation, password
+reset and an account page showing the email, the active services and links to
+the hosted billing portal and account deletion, using Supabase Auth's
+browser PKCE flow and only the publishable key; (b) in the app, "Sign in"
+opens the website in the person's browser, the website hands the app a
+one-time authorization code through a registered `syrinx://` or loopback
+redirect, and the app finishes PKCE itself and keeps the refresh token in
+Windows' credential store (the device grant in SVC-02). Account data shown on
+the website comes only from tables the signed-in user may read under RLS.
+
+**Acceptance criteria:** a synthetic account signs up on the website and signs
+in to the app without typing its password into the app; signing out on one
+device or revoking it on the account page stops that device within the stated
+delay; the website loads no Supabase script on any page outside `/account/`
+and sets no tracking; with no project configured, `/account/` explains that
+accounts are not open yet; redirect URLs are allowlisted; tests use reserved
+`example.com` addresses only.
+
+**Blocked by:** SVC-01, SVC-05 and the owner's Supabase project.
+**Parent:** Services. **Priority/size:** P1 / M; split the website and app
+halves into separate pull requests.
 
 ## 6. Epic: Sync — Encrypted personal data
 
@@ -1005,8 +1050,11 @@ deletion policy; costs meet the approved budget; public claims match evidence.
 
 ### What it is
 
-Syrinx AI searches selected plugin content and carries out permitted work. The
-three tiers purchase different usage allowances, not different access rights.
+Syrinx AI is a built-in AI area: a chat and harness that searches selected
+plugin content and carries out permitted work in Notes, Forge and later
+plugins. It runs in one of two modes with the same tools and permissions:
+hosted, through Syrinx's gateway on the $20 subscription and any credit packs,
+or with the person's own API key, free of charge (owner, 2026-10-26).
 Examples are drafting a note from selected sources, explaining a project file,
 proposing a patch, and eventually drafting a Fledge follow-up.
 
@@ -1074,7 +1122,9 @@ a guarantee of zero retention. [Source S5](#9-sources)
 ### Cost and alternatives
 
 Section 3's 3-times ledger replaces the earlier $15 plan and arbitrary $5 spend
-cap. Provider selection remains open. Evaluate models using synthetic Syrinx
+cap. The hosted baseline is OpenAI and Anthropic, with OpenRouter later for a
+wider model choice (owner, 2026-10-26); AIP-01 still checks their retention,
+prices and task quality before contracting. Evaluate models using synthetic Syrinx
 tasks and use an adapter so the product is not tied to one vendor's API.
 
 As a dated benchmark, standard short-context GPT-6.1 Sol was listed at $2 per
@@ -1095,8 +1145,8 @@ provider costs. No tier grants unattended privileged actions.
 Each monthly and annual tier enforces section 3's allowance and 3-times rate.
 Selected plugin workflows produce cited answers and reviewable edits. Concurrent
 requests, retries, forged calls and instructions hidden in documents cannot
-escape permission or cost limits. Higher tiers receive useful additional usage,
-not merely a higher bill for identical practical limits.
+escape permission or cost limits. Credit packs add usage only when bought, and
+own-key mode reaches the same tools without touching Syrinx's ledger.
 
 ### Proposed issues
 
@@ -1225,9 +1275,9 @@ uncertain result without automatically rerunning a side-effecting command.
 **Why this matters:** users need to understand how much work a subscription buys
 and why a long task may require more allowance.
 
-**Work:** show the three tiers, annual totals, monthly reset date, remaining
+**Work:** show the subscription, credit packs, annual totals, monthly reset date, remaining
 retail-rated usage and substantial-task estimates. Implement approved plan-change
-rules and exhaustion behavior. Leave top-ups unavailable until their terms land.
+rules and exhaustion behavior. Leave credit packs unavailable until their terms land.
 
 **Acceptance criteria:** no annual allowance is shown as immediately available;
 no automatic overage occurs; exhausted accounts retain local plugin use; both
@@ -1297,7 +1347,7 @@ Do not write a VPN protocol or operate exit servers. Browser-only proxying was
 the alternative and does not meet the owner's device-wide selection. No
 filtering/ad-blocking feature is implied by a provider's broader product name.
 
-The target price is $7.99/month or $79.99/year. Target supplier cost is at most
+The owner's price is $8/month (2026-10-26); $80/year is proposed. Target supplier cost is at most
 approximately $3 per subscriber/month with no substantial minimum commitment;
 this is a commercial target, not a quote. Device allowance remains undecided.
 Brave's researched comparison was $9.99/month or $99.99/year, with broader
@@ -1713,7 +1763,7 @@ owner release approval and a passing service-readiness recheck.
 ### What it is
 
 Let separate service accounts share explicitly selected Notes collections such
-as shopping lists and itineraries. Household costs $10/month or $100/year for
+as shopping lists and itineraries. Household costs $20/month or $200/year for
 up to six people including the payer, with 100 GB pooled storage, 500 MB shared
 files, 200 active links and 250 GB of shared-link downloads per monthly period.
 It includes members' individual Sync functionality rather than charging six
@@ -1852,6 +1902,32 @@ service-readiness recheck pass before the owner approves paid release.
 **Blocked by:** HHS-03 and SVC-07 revalidation. **Parent:** Household Sync.
 **Type:** validation/release. **Priority/size:** P0 / M.
 
+#### AIP-10 — Use a person's own API key without a subscription
+
+**Why this matters:** the owner decided on 2026-10-26 that anyone can use
+Syrinx's AI area with their own OpenAI or Anthropic key (OpenRouter later),
+free, because they pay the provider directly. Without it, people who already
+pay a provider would pay twice.
+
+**Work:** a settings page to add, test and remove a key per provider; store it
+only in Windows' credential store, never in the database, logs, Sync or the
+service backend; send model requests from the native host straight to the
+chosen provider through the transport reviewed in "Desktop networking";
+reuse the same tool, permission and approval path as hosted mode, with no
+Syrinx ledger debit; show which mode a conversation uses and that the
+provider sees the selected context.
+
+**Acceptance criteria:** with a synthetic key against a local stub provider,
+own-key mode reaches the same plugin tools as hosted mode and nothing is sent
+to Syrinx's backend; a wrong or revoked key fails clearly; removing the key
+deletes it from the credential store; the key never appears in logs, crash
+dumps, exports or the usage report; no plugin, WASM guest or plugin view can
+read it.
+
+**Blocked by:** AIP-01, AIP-03 and the reviewed desktop transport. Not blocked
+by SVC-03, because it needs no entitlement. **Parent:** AI.
+**Priority/size:** P1 / M.
+
 ## 13. Conversion and validation checklist
 
 Before creating issues, reconcile these drafts with the live tracker and check
@@ -1864,7 +1940,7 @@ issues rather than being silently accepted by implementation.
 Creation order: Services, Sync, AI, VPN, Password sync, Attachment sharing,
 Household Sync. This is tracker creation order, not permission to bypass the
 implementation dependencies or phase order. Publish the seven epic
-bodies from their What/Why/Shape/Guardrails/Done sections, then the 38 work or
+bodies from their What/Why/Shape/Guardrails/Done sections, then the 40 work or
 decision drafts beneath their appropriate epic. Attach native sub-issues and
 translate draft dependency keys into issue links. Each slice has one native
 parent epic; other prerequisites are blocking links. Create no milestones and

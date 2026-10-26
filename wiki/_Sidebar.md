@@ -5,6 +5,7 @@
 - [Architecture](Architecture)
 - [How we track work](How-we-track-work)
 - [Plugin system](Plugin-system)
+- [Product and services](Product-and-services)
 
 **Background research**
 - [01 Shell and engine](Background-01-shell-and-engine)

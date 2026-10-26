@@ -153,6 +153,12 @@ the same way.
 
 ## Customize
 
+Customize is free. The owner's product map of 2026-10-26
+([`product-map.md`](product-map.md), C9) sets its direction: from an editor
+for how Syrinx looks to one for how it looks and works, where the owner can
+also build workflows. Only the looks part below is built; functions and
+workflows need their own plan first.
+
 The Theme section replaces the palette list. It is drawn in Customize and
 in Settings' Appearance section (#91):
 

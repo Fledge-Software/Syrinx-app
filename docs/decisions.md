@@ -17,6 +17,79 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-10-26
+
+- **The product map "Version A2" sets the free features, the paid services
+  and their prices (owner's own decision, 2026-10-26).** The owner drew
+  Syrinx's features and paid products on a Miro board titled "Version A2"
+  and asked that the plans, issues, wiki and website be brought into line
+  with it. The board is transcribed, with every conflict against earlier
+  records and how each was settled, in
+  [`docs/product-map.md`](product-map.md). The quoted phrases below are the
+  owner's words, from the board or from answers given in chat; the rest is
+  recorded by the coordinator, and the owner may correct it.
+  - **Free features, as recorded.** Plugins ("allows users to create
+    personal or publishable add-ons to the source"), Customize ("currently a
+    small visual editor for how Syrinx looks. I want to grow it to be an
+    editor for how Syrinx looks, functions, and allows the user to create
+    workflows and such") and the ad and tracker blocker are free. The
+    browser itself stays free, as on 2026-10-25.
+  - **Household Sync costs $20 a month or $200 a year.** The owner chose
+    this in chat over the $10/$100 approved on 2026-10-25; six people and
+    100 GB pooled storage stay as they were. The annual price follows Sync's
+    rule of ten months' price.
+  - **AI is one $20 subscription plus credit packs, and a person's own API
+    key is free.** The owner chose in chat: "One $20 tier + credit packs".
+    The $100 and $200 tiers of 2026-10-25 are withdrawn. Extra usage is a
+    one-off credit pack priced by the same three-times-provider-cost rule,
+    never charged automatically; pack sizes, expiry and refunds are still
+    open (AIP-01). The board's "User can also hook in their personal API
+    key for one of the many providers" is free and needs no subscription,
+    because that person pays the provider directly. The hosted models are
+    "for now OpenAI, claude", with OpenRouter later ("We can later offer
+    all kinds of models through openrouter"). The AI area is a "built in AI
+    harness/chat area" that "integrates with Notes, Forge, and more plugins
+    coming soon".
+  - **VPN is $8 a month.** The board's $8 replaces the proposed $7.99; the
+    annual price is still open (the plan proposes $80). Guardian remains
+    the provider to evaluate, and nothing is sold before its terms are known.
+  - **The Browser Package is an idea, not a decision.** The board shows
+    "Browser Package $30mo / $246yr Includes VPN, 50gb of Sync, and $20 of AI
+    usage". Asked whether to record it as decided, the owner chose "Idea
+    only, not decided", so the 2026-10-25 rule that no cross-service bundle
+    is promised stands until the owner decides it; it is tracked as a
+    question.
+  - **One Syrinx account signs in to both the website and the app.** The
+    owner's words: "The Syrinx site will also need to be able to be logged
+    into to edit account info, that same log in will need to be used to log
+    into Syrinx App to use any of the features paid for". Accounts use the
+    Supabase Auth selected on 2026-10-25, in a dedicated Syrinx project the
+    owner will create ("We'll make a supabase project soon"). The owner
+    chose in chat to scaffold the website's account pages now, switched off
+    until that project exists. An account is still optional: free browsing
+    never needs one.
+  - **Recorded as direction, each needing its own plan before work starts:**
+    Customize growing into an editor for functions and workflows; publishing
+    plugins (a directory, after v1, since v1 installs plugins only from a
+    folder); "Syrinx Distros", forks of Syrinx that the project supports and
+    promotes, including "a preconfigured 'plugin-pack'", while still being
+    able to add plugins and the subscriptions; and a desktop or phone app
+    "that would directly integrate with Fledge App". None of these changes a
+    standing decision: Windows 11 only in v1 (D2), no network plugin fetch
+    in v1, and the Fledge plugin's hold of 2026-10-20 all stand.
+  - **What it supersedes, as recorded.** From the 2026-10-25 records in
+    [`docs/paid-services-plan.md`](paid-services-plan.md): the AI 100 and AI
+    200 tiers, Household's $10/$100, VPN's $7.99, and "provider selection
+    remains open" for hosted AI (now OpenAI and Anthropic first).
+  - **What stays, as the coordinator reads it.** Sync at $4/$40 with 10 GB,
+    the $2-per-30 GB storage add-on, the $5/$50 voluntary support, the
+    three-times AI cost rule, end-to-end encrypted Sync, Supabase plus
+    Cloudflare R2, Guardian as the VPN to evaluate, and every privacy and
+    page-web-view guardrail in `AGENTS.md`. The board's "Syrinx does not
+    collect user information" is read with the 2026-10-25 account design:
+    Syrinx collects no browsing data or content, and an account holds only
+    what sign-in and billing need.
+
 ## 2026-10-25
 
 - **The palette's first row is always what the owner typed (owner's own
