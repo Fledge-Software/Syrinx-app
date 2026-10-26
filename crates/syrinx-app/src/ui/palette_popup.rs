@@ -5,7 +5,8 @@ use std::time::Instant;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::Pixels;
 use syrinx_platform::browser::{
-    BrowserError, OverlayRect, activate_if_foreground, show_overlay, syrinx_in_foreground,
+    BrowserError, OverlayRect, activate_if_foreground, holds_keyboard_focus, show_overlay,
+    syrinx_in_foreground,
 };
 
 use super::{
@@ -42,8 +43,9 @@ pub(super) struct PalettePopup {
     entry: u64,
     /// The status line this entry replaced, shown again when the entry ends (#14).
     resting_status: String,
-    /// Whether the owner pressed a mouse button in the main window during this entry.
-    chrome_pressed: bool,
+    /// Whether this entry's popup has been shown; a page focus event from before then is the
+    /// previous entry's Esc returning the keys to the page, not a click (#172).
+    shown: bool,
 }
 
 /// What ending an entry reads from the open popup; a trait so a test can stand in for it.
@@ -156,7 +158,7 @@ impl BrowserView {
             hwnd: kept.hwnd,
             entry,
             resting_status,
-            chrome_pressed: false,
+            shown: false,
         });
         self.listen_to_palette(entry, receiver, window, cx);
         Some(entry)
@@ -332,7 +334,11 @@ impl BrowserView {
             return;
         }
         match shown {
-            Ok(true) => {}
+            Ok(true) => {
+                if let Some(palette) = &mut self.palette {
+                    palette.shown = true;
+                }
+            }
             // Another application is in front: the entry ends rather than float above it.
             Ok(false) => {
                 self.message = "Syrinx was not in front, so the palette stayed closed.".to_owned();
@@ -370,12 +376,21 @@ impl BrowserView {
 
     /// Ends the open entry as Esc does, so the receiver returns focus to the page.
     fn dismiss_palette(&mut self, cx: &mut Context<Self>) {
+        self.end_in_popup(cx, PaletteView::dismiss);
+    }
+
+    /// Ends the open entry in its popup with `end`; a popup that is gone ends it here.
+    fn end_in_popup(
+        &mut self,
+        cx: &mut Context<Self>,
+        end: impl FnOnce(&mut PaletteView, &mut Window, &mut Context<PaletteView>),
+    ) {
         let Some(palette) = &self.palette else {
             return;
         };
         let view = palette.view.clone();
         let dismissed = palette.window.update(cx, |_, popup, cx| {
-            view.update(cx, |palette, cx| palette.dismiss(popup, cx));
+            view.update(cx, |palette, cx| end(palette, popup, cx));
         });
         if dismissed.is_err() {
             self.end_palette_entry();
@@ -451,7 +466,7 @@ impl BrowserView {
     }
 
     /// The main window became active while the palette shows its caret but never had the
-    /// keys: give them back to the palette, unless the owner clicked the chrome (#14).
+    /// keys: give them back to the palette (#14). A chrome click has already ended the entry.
     pub(super) fn reassert_palette_after_activation(&mut self, cx: &mut Context<Self>) {
         let Some(palette) = &self.palette else {
             return;
@@ -461,40 +476,90 @@ impl BrowserView {
             view.is_open(),
             view.was_active_this_entry(),
             syrinx_in_foreground(),
-            palette.chrome_pressed,
         );
         if reassert {
             self.refocus_palette(cx);
         }
     }
 
-    /// Notes a mouse press in the main window, toolbar included, for the open entry; called
-    /// from `controls::watch_pointer_and` on the chrome root.
-    pub(super) fn chrome_press_noter(&self, cx: &mut Context<Self>) -> impl Fn(&mut App) + 'static {
+    /// Ends the open entry on a mouse press anywhere in the main window, toolbar included
+    /// (#172); called from `controls::watch_pointer_and` on the chrome root. The press is a
+    /// click outside the palette whether or not its popup ever had the keys, and it keeps
+    /// the focus it gives the control pressed rather than sending the keys to the page.
+    pub(super) fn end_palette_on_chrome_press(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&mut App) + 'static {
         let browser = cx.weak_entity();
         move |cx| {
-            let noted = browser.update(cx, |browser, _| {
-                if let Some(palette) = &mut browser.palette {
-                    palette.chrome_pressed = true;
-                }
-            });
-            if noted.is_err() {
+            let ended = browser.update(cx, |browser, cx| browser.dismiss_palette_for_press(cx));
+            if ended.is_err() {
                 eprintln!("A chrome press arrived after its browser was removed.");
             }
+        }
+    }
+
+    /// Ends a live entry for a chrome press, leaving focus to the press.
+    fn dismiss_palette_for_press(&mut self, cx: &mut Context<Self>) {
+        if self.palette_entry_live(cx) {
+            self.end_in_popup(cx, PaletteView::dismiss_for_chrome_press);
+        }
+    }
+
+    /// A click into the page in view ends the open entry as Esc does (#172).
+    pub(super) fn end_palette_on_page_focus(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(palette) = &self.palette else {
+            return;
+        };
+        let focus = PageFocus {
+            entry_shown: palette.shown,
+            page_in_view: self.shown.map(TabId::get) == Some(id),
+            keys_in_syrinx: holds_keyboard_focus(self.parent_hwnd)
+                || holds_keyboard_focus(palette.hwnd),
+        };
+        if page_focus_ends_palette(self.palette_entry_live(cx), focus) {
+            self.dismiss_palette(cx);
+        }
+    }
+
+    /// Switching to another application ends the open entry, even one whose popup never
+    /// had the keys and so never lost activation itself (#172).
+    pub(super) fn end_palette_when_syrinx_left(&mut self, cx: &mut Context<Self>) {
+        if leaving_syrinx_ends_palette(self.palette_entry_live(cx), syrinx_in_foreground()) {
+            self.dismiss_palette(cx);
         }
     }
 }
 
 /// Whether the main window's activation should hand the keys back to the palette: the
-/// entry is live, its popup never had them, Syrinx is in front (it never takes the
-/// foreground from another application) and no chrome click chose the main window.
-fn should_reassert_palette(
-    live: bool,
-    was_active: bool,
-    in_front: bool,
-    chrome_click: bool,
-) -> bool {
-    live && !was_active && in_front && !chrome_click
+/// entry is live, its popup never had them, and Syrinx is in front (it never takes the
+/// foreground from another application).
+fn should_reassert_palette(live: bool, was_active: bool, in_front: bool) -> bool {
+    live && !was_active && in_front
+}
+
+/// What a page's `GotFocus` arrived into.
+#[derive(Clone, Copy)]
+struct PageFocus {
+    /// The open entry's popup has been shown.
+    entry_shown: bool,
+    /// The focused page is the one in the page card.
+    page_in_view: bool,
+    /// Windows keyboard focus is still on the main window or the palette's popup.
+    keys_in_syrinx: bool,
+}
+
+/// Whether a page's `GotFocus` is the owner clicking it: the page in view took the keys from
+/// both the chrome and the palette after the entry was shown. A stray `GotFocus` leaves them
+/// in Syrinx (#57); one before the show is the previous entry's Esc arriving late.
+fn page_focus_ends_palette(live: bool, focus: PageFocus) -> bool {
+    live && focus.entry_shown && focus.page_in_view && !focus.keys_in_syrinx
+}
+
+/// Whether the main window's deactivation ends the palette: another application is now in
+/// front. Activating the palette's own popup also deactivates the main window, and keeps it.
+fn leaving_syrinx_ends_palette(live: bool, in_front: bool) -> bool {
+    live && !in_front
 }
 
 /// Whether an event or show task for `entry` still belongs to the open entry.
@@ -569,22 +634,75 @@ mod tests {
 
     #[test]
     fn only_a_live_never_active_entry_takes_the_keys_back_while_syrinx_is_in_front() {
-        assert!(should_reassert_palette(true, false, true, false));
+        assert!(should_reassert_palette(true, false, true));
         assert!(
-            !should_reassert_palette(false, false, true, false),
-            "the entry has ended"
+            !should_reassert_palette(false, false, true),
+            "the entry has ended, as a chrome click ends it"
         );
         assert!(
-            !should_reassert_palette(true, true, true, false),
+            !should_reassert_palette(true, true, true),
             "the popup had the keys, so losing them ends the entry instead"
         );
         assert!(
-            !should_reassert_palette(true, false, false, false),
+            !should_reassert_palette(true, false, false),
             "another application is in front"
         );
+    }
+
+    #[test]
+    fn a_click_into_the_page_in_view_closes_the_palette_but_a_stray_focus_event_does_not() {
+        let click = PageFocus {
+            entry_shown: true,
+            page_in_view: true,
+            keys_in_syrinx: false,
+        };
         assert!(
-            !should_reassert_palette(true, false, true, true),
-            "the owner clicked the chrome"
+            page_focus_ends_palette(true, click),
+            "the page took the keys from the palette, or from the chrome when it never had them"
+        );
+        let stray = PageFocus {
+            keys_in_syrinx: true,
+            ..click
+        };
+        assert!(
+            !page_focus_ends_palette(true, stray),
+            "a stray GotFocus while the palette or chrome kept the keys (#57)"
+        );
+        let hidden = PageFocus {
+            page_in_view: false,
+            ..click
+        };
+        assert!(
+            !page_focus_ends_palette(true, hidden),
+            "a hidden page handing its focus back after New tab (#14)"
+        );
+        let before_show = PageFocus {
+            entry_shown: false,
+            ..click
+        };
+        assert!(
+            !page_focus_ends_palette(true, before_show),
+            "the previous entry's Esc returned the keys to the page just before this opening"
+        );
+        assert!(
+            !page_focus_ends_palette(false, click),
+            "the entry already ended"
+        );
+    }
+
+    #[test]
+    fn switching_to_another_application_closes_the_palette_but_activating_it_does_not() {
+        assert!(
+            leaving_syrinx_ends_palette(true, false),
+            "another application is in front, even if the popup never had the keys"
+        );
+        assert!(
+            !leaving_syrinx_ends_palette(true, true),
+            "the palette's own popup took activation from the main window"
+        );
+        assert!(
+            !leaving_syrinx_ends_palette(false, false),
+            "the entry already ended"
         );
     }
 

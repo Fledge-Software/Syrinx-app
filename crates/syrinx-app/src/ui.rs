@@ -359,8 +359,9 @@ pub struct BrowserView {
     /// Each window's sidebar row focus handles and drawn rows (DW-61).
     sidebar_trees: sidebar_tree::SidebarTrees,
     panes: panes::PaneFocus,
-    /// Ends a sidebar drag when the window deactivates; dropping it unsubscribes.
-    _drag_activation_watch: Subscription,
+    /// Follows the main window's activation: ends a sidebar drag or an open palette when it is
+    /// lost, and returns focus when it comes back; dropping it unsubscribes.
+    _main_activation_watch: Subscription,
     message: String,
     failure: Option<String>,
     focus: FocusHandle,
@@ -471,9 +472,10 @@ impl BrowserView {
             sidebar_edge_focus: cx.focus_handle().tab_stop(true),
             sidebar_trees: sidebar_tree::SidebarTrees::default(),
             panes: panes::PaneFocus::new(cx),
-            _drag_activation_watch: cx.observe_window_activation(window, |this, window, cx| {
+            _main_activation_watch: cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
                     this.sidebar_drag_abandoned(window, cx);
+                    this.end_palette_when_syrinx_left(cx);
                 } else {
                     // Returning from our own popup must preserve Escape's edge dismissal.
                     if !this.peek_monitoring {
@@ -1064,7 +1066,10 @@ impl BrowserView {
                 crate::controls::note_input(ModalityInput::PageKey, window, cx);
                 self.shortcut(shortcut, window, cx);
             }
-            BrowserEvent::PageFocused { id } => self.page_took_focus(id, window, cx),
+            BrowserEvent::PageFocused { id } => {
+                self.end_palette_on_page_focus(id, cx);
+                self.page_took_focus(id, window, cx);
+            }
             BrowserEvent::PopupRequested { id, request, url } => {
                 self.request_popup(id, request, url);
             }
@@ -1445,7 +1450,9 @@ impl BrowserView {
                     CommandAction::Plugin { .. } => usage.other_command(),
                 }
             }
-            PaletteEvent::Closed => usage.count(Feature::PaletteDismissed),
+            PaletteEvent::Closed | PaletteEvent::ClickedAway => {
+                usage.count(Feature::PaletteDismissed);
+            }
             PaletteEvent::Activate(Target::Command(_))
             | PaletteEvent::Query { .. }
             | PaletteEvent::Shortcut(_) => {}
@@ -1516,6 +1523,8 @@ impl BrowserView {
             PaletteEvent::Closed => {
                 self.focus_page(window, cx);
             }
+            // The chrome press that ended the entry has already chosen where focus goes.
+            PaletteEvent::ClickedAway => {}
         }
         if finishes_entry {
             self.peek_state.rearm();
@@ -2034,7 +2043,8 @@ impl Render for BrowserView {
         let page_drawn = self.browser_ready && !self.closing && self.page_card_shows_web_page();
         let card = page_drawn.then(|| page_card::card_edges(self.card_frame(window)));
         let sidebar = self.sidebar(window, cx);
-        let chrome = crate::controls::watch_pointer_and(div(), self.chrome_press_noter(cx))
+        let end_palette_on_press = self.end_palette_on_chrome_press(cx);
+        let chrome = crate::controls::watch_pointer_and(div(), end_palette_on_press)
             .size_full()
             .relative()
             .key_context("Syrinx")
@@ -2468,6 +2478,7 @@ mod palette_shortcut_tests {
                 PaletteEvent::Activate(Target::Tab(TabId::new(1).expect("synthetic tab"))),
                 PaletteEvent::Run(CommandAction::Browser(BrowserAction::NewTab)),
                 PaletteEvent::Closed,
+                PaletteEvent::ClickedAway,
             ] {
                 let (sender, mut receiver) = unbounded();
                 sender
@@ -2493,7 +2504,8 @@ mod palette_shortcut_tests {
                         PaletteEvent::Submit { .. }
                         | PaletteEvent::Activate(_)
                         | PaletteEvent::Run(_)
-                        | PaletteEvent::Closed => {
+                        | PaletteEvent::Closed
+                        | PaletteEvent::ClickedAway => {
                             completed = true;
                             retained_popup = None;
                         }

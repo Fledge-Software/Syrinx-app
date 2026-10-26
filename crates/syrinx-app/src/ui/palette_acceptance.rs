@@ -375,6 +375,7 @@ impl Run {
         self.measure_openings().await?;
         self.check_rapid_dismissal().await?;
         self.check_second_open().await?;
+        self.check_click_outside().await?;
         self.check_enter_activation(EnterQuery::TabScope).await?;
         self.check_enter_activation(EnterQuery::TypedTitle).await?;
         for size in SIZES {
@@ -817,6 +818,110 @@ impl Run {
         Ok(())
     }
 
+    /// A click inside the open palette must keep it open, and a press in the main window
+    /// outside it must close it (#172). Both clicks are dispatched in-process, so Windows
+    /// activation never moves: this proves the press alone ends the entry, without the
+    /// popup's deactivation. The popup here did have the keys; #14's never-active entry is
+    /// left to the owner's window check.
+    async fn check_click_outside(&mut self) -> Result<(), String> {
+        let focus = self.focus_tab()?;
+        self.open_timed().await?;
+        self.check_click_inside().await?;
+        let (main, outside) = self.with(|view, window, _| {
+            let viewport = window.viewport_size();
+            // Inside the page card, where GPUI draws no control.
+            let outside = point(viewport.width * 0.75, viewport.height * 0.5);
+            (view.main_window, outside)
+        })?;
+        self.click(main, outside)?;
+        let closed = self
+            .try_wait(Duration::from_secs(3), |view, _, _| {
+                view.palette.is_none().then_some(())
+            })
+            .await?
+            .is_some();
+        let message = self.with(|view, _, _| view.message.clone())?;
+        self.report.check(
+            "click_outside_closes_palette",
+            closed,
+            format!("palette closed: {closed}; status: {message}"),
+        );
+        if !closed {
+            // Leave the rest of the run a closed palette to open.
+            self.with(|view, _, cx| view.retire_palette(cx))?;
+            return Ok(());
+        }
+        self.check_click_left_focus_alone(focus).await?;
+        self.sleep(SETTLE).await;
+        Ok(())
+    }
+
+    /// After a click outside, nothing may reopen the palette or send the keys to the page:
+    /// the press chose where focus goes (`PaletteEvent::ClickedAway`, #172).
+    async fn check_click_left_focus_alone(&mut self, page: TabId) -> Result<(), String> {
+        self.sleep(STALE_WINDOW).await;
+        let main = self.main;
+        let (palette_open, popup_visible, windows, page_focused, deferred, active) =
+            self.with(|view, _, cx| {
+                let popup_visible = view.kept_palette_hwnd().is_some_and(|popup| {
+                    probe_win32::overlay_stacking(popup, main)
+                        .is_ok_and(|stacking| stacking.visible)
+                });
+                (
+                    view.palette.is_some(),
+                    popup_visible,
+                    cx.windows().len(),
+                    view.page_focus(page) == Some(true),
+                    focus_deferred(view),
+                    view.model.active_id,
+                )
+            })?;
+        // The main window and the kept, hidden palette popup (DW-90).
+        let passed = !palette_open
+            && !popup_visible
+            && windows == 2
+            && !page_focused
+            && !deferred
+            && active == Some(page);
+        self.report.check(
+            "click_outside_leaves_focus_alone",
+            passed,
+            format!(
+                "after {STALE_WINDOW:?}: palette open {palette_open}; popup visible                  {popup_visible}; windows {windows}; page focused {page_focused}; page focus                  deferred {deferred}; expected tab active {}",
+                active == Some(page)
+            ),
+        );
+        Ok(())
+    }
+
+    /// Clicks the open palette's status footer, which has no control, and checks it stays open.
+    async fn check_click_inside(&mut self) -> Result<(), String> {
+        let (popup, inside) = self.with(|view, _, cx| {
+            let palette = view
+                .palette
+                .as_ref()
+                .ok_or_else(|| "The palette closed before its inside click.".to_owned())?;
+            let popup: AnyWindowHandle = palette.window.into();
+            let viewport = popup
+                .update(cx, |_, window, _| window.viewport_size())
+                .map_err(|error| format!("The palette window is gone: {error:#}"))?;
+            // The middle of the 32-pixel status footer.
+            Ok::<_, String>((
+                popup,
+                point(viewport.width * 0.5, viewport.height - px(16.)),
+            ))
+        })??;
+        self.click(popup, inside)?;
+        self.sleep(SETTLE).await;
+        let kept = self.with(|view, _, cx| view.palette_entry_live(cx))?;
+        self.report.check(
+            "click_inside_keeps_palette",
+            kept,
+            format!("palette still open after a click on its footer: {kept}"),
+        );
+        Ok(())
+    }
+
     /// Typing `how` to reach the background page and pressing Enter must switch to that tab.
     async fn check_enter_activation(&mut self, how: EnterQuery) -> Result<(), String> {
         let focus = self.focus_tab()?;
@@ -1107,16 +1212,14 @@ impl Run {
         self.with(|view, window, cx| view.toggle_sidebar(window, cx))
     }
 
-    /// Moves to `at` in `popup`, then presses and releases the left button there.
-    fn click(&mut self, popup: AnyWindowHandle, at: Point<Pixels>) -> Result<(), String> {
+    /// Moves to `at` in `target`, then presses and releases the left button there.
+    fn click(&mut self, target: AnyWindowHandle, at: Point<Pixels>) -> Result<(), String> {
         for event in left_click(at) {
             self.cx
-                .update_window(popup, |_, window, cx| {
+                .update_window(target, |_, window, cx| {
                     window.dispatch_event(event, cx);
                 })
-                .map_err(|error| {
-                    format!("The peek closed before its row was clicked: {error:#}")
-                })?;
+                .map_err(|error| format!("The window closed before it was clicked: {error:#}"))?;
         }
         Ok(())
     }

@@ -457,6 +457,7 @@ synthetic profile. Syrinx then times palette opening and per-keystroke ranking
 at 1,000, 10,000 and 100,000 in-memory synthetic rows, checks overlay focus and
 stacking, clicks a sidebar peek row in-process (#10), checks that a page focus
 event leaves the find field focused only while the chrome holds the keys (#57),
+checks that a click in the main window closes an open palette (#172),
 and closes itself. Reports go to `target\p1-33\` as JSON and a
 Markdown summary. Run it in the foreground on a quiet machine and leave the
 keyboard and mouse alone: focus checks need Syrinx to be the active app. Method
