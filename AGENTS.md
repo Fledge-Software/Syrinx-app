@@ -185,8 +185,9 @@ time:
   (#25) comes first, then the template (#30), then Notes (#35); Forge (#42)
   starts only once Notes is live as the owner's daily notes tool. The Fledge
   plugin waits for Fledge's API and the owner. The research note (#26) and
-  the template may run alongside Plan 1; the plugin host (#28, #29) waits
-  for Plan 1's exit. The owner accepts Plan 2 at #25's exit.
+  the template may run alongside Plan 1, and since 2026-10-26 so may the
+  plugin host (#28 first), with wasmtime pinned at `=48.0.7`. The owner
+  accepts Plan 2 at #25's exit.
 - **The local workflow is approved (D41).** GitHub is not required before
   implementation. Each approved slice is built on one branch in a local
   worktree and reviewed independently. Since 2026-10-12, a slice merges to
