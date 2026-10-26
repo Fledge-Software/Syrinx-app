@@ -75,12 +75,22 @@ pub(super) fn open_owned_popup(
     }
 }
 
-/// Makes the popup an owned, non-topmost window with Syrinx's icon; its handle on success.
+/// Makes the popup an owned, non-topmost window with Syrinx's icon, whose frame is drawn
+/// active with the main window's; its handle on success.
 fn own_popup(popup: &Window, owner: isize) -> Result<isize, String> {
     let hwnd = native_handle(popup).map_err(str::to_owned)?;
     set_overlay_owner(hwnd, owner).map_err(|error| error.to_string())?;
     show_app_icon(hwnd);
+    keep_frame_with_family(hwnd);
     Ok(hwnd)
+}
+
+/// Keep a Syrinx window's frame, and so its Mica or Acrylic, drawn active while the main
+/// window or one of these popups has activation. A failure only loses that, so it is reported.
+pub(super) fn keep_frame_with_family(hwnd: isize) {
+    if let Err(error) = syrinx_platform::active_frame::install(hwnd) {
+        eprintln!("{error}");
+    }
 }
 
 /// Gives an owned popup Windows 11's rounded corners and system shadow (#72, #85).

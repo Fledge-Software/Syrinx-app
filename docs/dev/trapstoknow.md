@@ -514,6 +514,21 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   Acrylic backdrop, create the popup `Transparent` and call
   `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE, 3)` on its window
   yourself. Blur is optional under D7. Source: note 08, section 3.2 (high).
+- **A system backdrop goes flat whenever its window's frame is drawn
+  inactive, including while Syrinx's own palette is open.** DWM draws Mica's
+  and Acrylic's solid fallback on a window whose frame is inactive, and an
+  owned popup taking activation sends its owner `WM_NCACTIVATE(FALSE)`; a
+  non-activating popup (the peek) is never drawn active at all.
+  `syrinx_platform::active_frame` rewrites only that message's `wParam`, so
+  every installed window of the family is drawn active while any of them is
+  active, and leaves `WM_ACTIVATE`, focus and the foreground alone. It relies
+  on `WM_NCACTIVATE`'s `lParam` naming the other window, as Microsoft's page
+  for the message documents (NULL when that window belongs to another
+  application); its `SetActiveWindow` test checks that on each run. Call
+  `install` on any new owned popup, or it counts as outside Syrinx. While
+  another application is active the fallback stays: no documented DWM route
+  keeps the material lit there. Source: `active_frame.rs` and its tests
+  (2026-10-25); the owner's visual check is pending.
 - **Keys go to the page while GPUI still shows a caret.** Nothing in GPUI
   hands focus back to WebView2. After the palette closes, activate the main
   window, then call wry's `WebView::focus()`. The activation must have
