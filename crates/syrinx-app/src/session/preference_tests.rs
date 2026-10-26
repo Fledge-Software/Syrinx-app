@@ -381,8 +381,9 @@ fn worker_with_pending_zoom_clear(
     let lease =
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let page_text = page_text::PageText::open(&lease);
     let store = Store::open(lease).expect("open synthetic store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
     let now = utc_seconds().expect("synthetic clock");
     store
         .save_site_zoom("kept.example.test".to_owned(), Some(1.25), 100)

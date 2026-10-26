@@ -175,12 +175,31 @@ pub enum Outcome {
     Expired,
 }
 
-/// One cleared history range from D47's journal, `[start, end)` in Unix seconds.
+/// One record of D47's journal, which numbers every clear whatever it removed.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct ClearRequest {
     pub generation: u64,
-    pub start: i64,
-    pub end: i64,
+    pub scope: ClearScope,
+}
+
+/// What one journal clear means for this index.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum ClearScope {
+    /// A history clear: page text and tombstones dated in `[start, end)` Unix seconds go.
+    Pages { start: i64, end: i64 },
+    /// A clear of data the index does not hold, such as site zoom levels (#121). It only
+    /// advances the generation, so the journal's numbering stays without gaps.
+    Elsewhere,
+}
+
+impl fmt::Debug for ClearScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Matches the journal: a cleared range is never printed.
+        formatter.write_str(match self {
+            Self::Pages { .. } => "Pages([redacted])",
+            Self::Elsewhere => "Elsewhere",
+        })
+    }
 }
 
 impl fmt::Debug for ClearRequest {

@@ -534,7 +534,8 @@ fn direct_worker(fixture: &Fixture) -> (Arc<WindowsDirectoryLease>, Store, Worke
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let store = Store::open(lease.clone()).expect("open guarded synthetic store");
-    let worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let worker = Worker::restore(&store, journal, page_text::PageText::open(&lease))
+        .expect("restore synthetic worker");
     (lease, store, worker)
 }
 
@@ -625,7 +626,8 @@ fn idle_expiry_runs_in_bounded_batches_then_waits_a_day() {
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let store = Store::open(lease.clone()).expect("open guarded synthetic store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, page_text::PageText::open(&lease))
+        .expect("restore synthetic worker");
     let (sender, _events) = unbounded();
     assert_eq!(worker.catalogue.len(), 2);
 

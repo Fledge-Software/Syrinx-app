@@ -75,7 +75,9 @@ the measured result belongs in the benchmark report, not a library claim.
 which the owner chose over SQLite's FTS5 on 2026-10-24 (#52). It lives in a
 folder the caller opens and owns exclusively. That folder is a cache: it must be
 local, outside D13's backups and outside any synced folder, and it can always
-be rebuilt from its sources.
+be rebuilt from its sources. Syrinx's session worker opens it as `fulltext`
+beside `syrinx.db`, through the storage guard's `cache_folder`
+(`crates/syrinx-app/src/session/page_text.rs`).
 
 Every document belongs to one namespace. `Namespace::page()` holds captured page
 text, which expires seven days after capture (D40) and follows D47's history
@@ -102,7 +104,12 @@ commit or `retry_cleanup` tries again. Opening the index finishes a cleanup a
 crash interrupted. A failed `discard` leaves the handle refusing all work
 (`NeedsReopen`), because Tantivy has already released the folder's lock. `apply_clears` stores the last applied journal
 generation in the same commit as its deletions, so replaying the journal after
-a crash or a backup restore applies each clear exactly once.
+a crash or a backup restore applies each clear exactly once. The journal numbers
+every clear, so a clear of something the index does not hold, such as site zoom
+levels, arrives as `ClearScope::Elsewhere` and only advances the generation. An
+index ahead of its journal (the journal was lost and recreated) cannot know
+what the new journal cleared: its owner calls `restart_clears`, which removes
+all page text and counts from generation 0 again, and then applies the journal.
 
 Search does not filter by age, so whoever owns the index calls `expire` at
 start-up and at least daily. A feed's tombstones never expire; `reset` is how
