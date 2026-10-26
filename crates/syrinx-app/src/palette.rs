@@ -48,12 +48,18 @@ pub enum PaletteEvent {
     Run(CommandAction),
     Shortcut(BrowserShortcut),
     Closed,
+    /// A press in Syrinx's chrome ended the entry; focus stays where that press put it (#172).
+    ClickedAway,
 }
 
 impl PaletteEvent {
     pub fn finishes_entry(&self) -> bool {
         match self {
-            Self::Submit { .. } | Self::Activate(_) | Self::Run(_) | Self::Closed => true,
+            Self::Submit { .. }
+            | Self::Activate(_)
+            | Self::Run(_)
+            | Self::Closed
+            | Self::ClickedAway => true,
             Self::Query { .. } | Self::Shortcut(_) => false,
         }
     }
@@ -197,8 +203,19 @@ impl PaletteView {
     /// Ends the entry as if Esc were pressed; the browser then returns focus to the page.
     /// The popup is hidden even without an entry, so a stray visible popup can always close.
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_entry(PaletteEvent::Closed, window, cx);
+    }
+
+    /// Ends the entry for a press in the main window, without sending the keys to the page:
+    /// the press chooses where focus goes, as it does for the menus (#172).
+    pub fn dismiss_for_chrome_press(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_entry(PaletteEvent::ClickedAway, window, cx);
+    }
+
+    /// Reports how an open entry ended, then hides the popup.
+    fn end_entry(&mut self, event: PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_open() {
-            self.emit(PaletteEvent::Closed);
+            self.emit(event);
         }
         self.close(window, cx);
     }
@@ -645,6 +662,7 @@ mod tests {
             PaletteEvent::Activate(Target::Tab(TabId::new(1).expect("synthetic tab"))),
             PaletteEvent::Run(CommandAction::Browser(BrowserAction::Reload)),
             PaletteEvent::Closed,
+            PaletteEvent::ClickedAway,
         ] {
             let (sender, mut receiver) = unbounded();
             // Typing and further shortcuts must reach the same receiver before entry finishes.

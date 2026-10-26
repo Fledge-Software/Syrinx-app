@@ -1145,11 +1145,17 @@ pub fn focus_chrome(parent: isize) -> Result<(), BrowserError> {
 /// WebView2 can raise `GotFocus` while the keys never leave the chrome (#57).
 /// `GetFocus` reads the calling thread's input state: call this on the chrome's own thread.
 pub fn chrome_has_keyboard_focus(parent: isize) -> bool {
-    if parent == 0 {
+    holds_keyboard_focus(parent)
+}
+
+/// Whether Windows keyboard focus is on `window` itself, such as the palette's popup.
+/// `GetFocus` reads the calling thread's input state: call this on the window's own thread.
+pub fn holds_keyboard_focus(window: isize) -> bool {
+    if window == 0 {
         return false;
     }
     let focused = unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() };
-    focused == HWND(parent as *mut _)
+    focused == HWND(window as *mut _)
 }
 
 /// Keep GPUI's separate overlay above Syrinx, without making it topmost over other apps.
