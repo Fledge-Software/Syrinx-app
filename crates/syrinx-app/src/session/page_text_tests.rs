@@ -319,12 +319,15 @@ fn an_index_that_cannot_open_is_reported_and_the_session_goes_on() {
     state(&mut events);
     match next_event(&mut events) {
         SessionEvent::Failure {
-            error: SessionError::During { error, .. },
+            error: SessionError::During { operation, error },
             fatal: false,
-        } => assert_eq!(
-            *error,
-            SessionError::IndexFolder(LocationError::UnexpectedEntryKind)
-        ),
+        } => {
+            assert_eq!(operation, "opening the search index");
+            assert_eq!(
+                *error,
+                SessionError::IndexFolder(LocationError::UnexpectedEntryKind)
+            );
+        }
         event => panic!("expected the index failure to be reported, got {event:?}"),
     }
     // Clearing still works and completes: the journal brings the index level later.
@@ -332,5 +335,95 @@ fn an_index_that_cannot_open_is_reported_and_the_session_goes_on() {
     stop(handle, &mut events);
     assert_eq!(completed_clears(&fixture), 1);
     checked_io(fs::remove_file(index_folder(&fixture)));
+    fixture.cleanup();
+}
+
+#[test]
+fn a_confirmed_history_repair_clears_page_text_even_when_the_index_matches_the_new_journal() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    seed_index(&fixture, &[page("cleared", now - 600), note("kept")]);
+    // The rebuilt journal of a database at generation 0 ends with a pending all-time clear at
+    // generation 1; an index that already counted to 1 would otherwise skip that clear.
+    advance_index(&fixture, 1);
+
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let (store, worker) = open_session(lease, true).expect("open with a confirmed repair");
+    let index = worker.page_text.index().expect("the index is open");
+    assert!(ids_in(index, Namespace::page()).is_empty());
+    assert_eq!(ids_in(index, notes()), ["kept"]);
+    assert_eq!(index.cleared_generation(), 1);
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    assert_eq!(completed_clears(&fixture), 1);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_clear_the_index_applied_before_a_crash_is_completed_but_not_applied_again() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    journal_unapplied_clear(&fixture, now - 3_600, now + 1);
+    // The index applied generation 1, then a page dated inside its range was captured again;
+    // Syrinx stopped before the database or the journal's completion caught up.
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    drop(
+        lease
+            .cache_folder(page_text::INDEX_FOLDER)
+            .expect("guard synthetic index folder"),
+    );
+    drop(lease);
+    let mut index = FullText::open(&index_folder(&fixture)).expect("open synthetic index");
+    let clear = ClearRequest {
+        generation: 1,
+        scope: ClearScope::Pages {
+            start: now - 3_600,
+            end: now + 1,
+        },
+    };
+    index
+        .apply_clears(&[clear])
+        .expect("apply the synthetic clear");
+    drop(index);
+    seed_index(&fixture, &[page("recaptured", now - 600)]);
+
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    stop(handle, &mut events);
+
+    let (pages, generation) = stored_ids(&fixture, Namespace::page());
+    assert_eq!(pages, ["recaptured"], "the clear was applied twice");
+    assert_eq!(generation, 1);
+    assert_eq!(completed_clears(&fixture), 1);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_damaged_index_is_emptied_and_started_afresh() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    drop(
+        lease
+            .cache_folder(page_text::INDEX_FOLDER)
+            .expect("guard synthetic index folder"),
+    );
+    drop(lease);
+    // Unreadable metadata beside a stray file that stands in for an old segment's text.
+    checked_io(fs::write(
+        index_folder(&fixture).join("meta.json"),
+        b"synthetic damaged metadata",
+    ));
+    let stray = index_folder(&fixture).join("synthetic-segment.store");
+    checked_io(fs::write(&stray, b"synthetic stale page text"));
+
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    clear_history(&handle, &mut events, now - 3_600, now + 1);
+    stop(handle, &mut events);
+
+    // The cache was rebuilt: nothing old is left, and it follows the journal from there.
+    assert!(!stray.exists());
+    assert_eq!(stored_ids(&fixture, Namespace::page()).1, 1);
     fixture.cleanup();
 }

@@ -538,3 +538,31 @@ fn cache_folder_diagnostics_redact_the_location() {
         "CacheFolder { location: [redacted] }"
     );
 }
+
+#[test]
+fn emptying_a_cache_folder_removes_its_files_and_refuses_anything_else() {
+    let fixture = Fixture::new();
+    let lease = prepare(&fixture.root.join("data"));
+    let folder = lease
+        .cache_folder("synthetic-cache")
+        .expect("create a synthetic cache folder");
+    fs::write(folder.path().join("segment.bin"), b"synthetic").expect("write synthetic file");
+    fs::write(folder.path().join(".synthetic-lock"), b"synthetic").expect("write synthetic file");
+    folder.empty().expect("empty the synthetic cache folder");
+    assert!(
+        fs::read_dir(folder.path())
+            .expect("list the synthetic cache folder")
+            .next()
+            .is_none()
+    );
+
+    // A subfolder is refused before anything is deleted, so a link inside cannot be followed.
+    fs::create_dir(folder.path().join("nested")).expect("create synthetic subfolder");
+    fs::write(folder.path().join("kept.bin"), b"kept").expect("write synthetic file");
+    assert_eq!(
+        folder.empty().err(),
+        Some(LocationError::UnexpectedEntryKind)
+    );
+    assert!(folder.path().join("nested").is_dir());
+    assert!(folder.path().join("kept.bin").is_file());
+}

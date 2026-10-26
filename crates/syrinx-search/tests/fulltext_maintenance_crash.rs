@@ -6,12 +6,13 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::mpsc,
+    thread::JoinHandle,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use syrinx_search::fulltext::{
-    Change, ClearRequest, ClearScope, FullText, FullTextDocument, Namespace, NamespaceFilter,
-    PAGE_RETENTION_SECONDS, SearchRequest,
+    Change, ClearRequest, ClearScope, FullText, FullTextDocument, FullTextError, Namespace,
+    NamespaceFilter, PAGE_RETENTION_SECONDS, SearchRequest,
 };
 
 /// Set only in a child this file starts, naming the index folder it works on.
@@ -73,7 +74,7 @@ fn a_killed_expiry_is_all_or_nothing() {
         assert!(!finished || old == 0, "a finished expiry was lost");
         assert_eq!(hits(&index, "recentsigil"), PAGES);
         assert_eq!(hits(&index, "notesigil"), NOTES);
-        assert!(!index.cleanup_pending());
+        assert_cleaned(&mut index);
 
         // Running it again finishes the job and changes nothing else.
         index.expire(NOW).expect("expire after the kill");
@@ -104,7 +105,7 @@ fn a_killed_journal_clear_is_all_or_nothing() {
         }
         assert!(!finished || generation == 1, "a finished clear was lost");
         assert_eq!(hits(&index, "notesigil"), NOTES);
-        assert!(!index.cleanup_pending());
+        assert_cleaned(&mut index);
 
         // Replaying the journal applies the clear exactly once.
         let replayed = index
@@ -117,6 +118,20 @@ fn a_killed_journal_clear_is_all_or_nothing() {
         drop(index);
         fs::remove_dir_all(&folder).expect("remove the synthetic index folder");
     }
+}
+
+/// Opening finished any cleanup the kill interrupted. A scanner briefly holding a deleted
+/// segment can delay that on Windows, so one retry is allowed before it counts as a failure.
+fn assert_cleaned(index: &mut FullText) {
+    if index.cleanup_pending() {
+        std::thread::sleep(Duration::from_millis(500));
+        // A refused retry leaves `cleanup_pending` set, which the assertion below reports.
+        match index.retry_cleanup() {
+            Ok(()) | Err(FullTextError::CleanupPending) => {}
+            Err(error) => panic!("the cleanup retry failed: {error:?}"),
+        }
+    }
+    assert!(!index.cleanup_pending(), "deleted text stayed on disk");
 }
 
 fn all_time_clear() -> ClearRequest {
@@ -209,20 +224,22 @@ fn kill_during(operation: Operation, folder: &Path, delay: u64) -> bool {
         .stderr(Stdio::null())
         .spawn()
         .expect("start the synthetic child");
-    let reports = read_reports(&mut child);
+    let (reports, reader) = read_reports(&mut child);
     await_report(&mut child, &reports, "BEGIN");
     std::thread::sleep(Duration::from_millis(delay));
     // TerminateProcess stops the child wherever it is, as a crash or power cut would.
     child.kill().expect("kill the synthetic child");
     let status = child.wait().expect("reap the synthetic child");
     assert!(!status.success(), "the child exited on its own");
+    // The reader ends at the closed pipe, so every report the child wrote is queued after this.
+    reader.join().expect("join the report reader");
     reports.try_iter().any(|line| line.ends_with("DONE"))
 }
 
-fn read_reports(child: &mut Child) -> mpsc::Receiver<String> {
+fn read_reports(child: &mut Child) -> (mpsc::Receiver<String>, JoinHandle<()>) {
     let output = child.stdout.take().expect("child output");
     let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
+    let reader = std::thread::spawn(move || {
         for line in BufReader::new(output).lines() {
             let Ok(line) = line else { break };
             if sender.send(line).is_err() {
@@ -230,7 +247,7 @@ fn read_reports(child: &mut Child) -> mpsc::Receiver<String> {
             }
         }
     });
-    receiver
+    (receiver, reader)
 }
 
 /// Waits up to two minutes for `expected`; kills the child before failing.

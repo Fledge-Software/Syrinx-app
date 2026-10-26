@@ -748,7 +748,10 @@ fn open_session(
 ) -> Result<(Store, Worker), SessionError> {
     let lease = Arc::new(lease);
     let store = Store::open(lease.clone()).map_err(SessionError::Store)?;
-    let page_text = page_text::PageText::open(&lease);
+    let mut page_text = page_text::PageText::open(&lease);
+    if repair {
+        page_text.after_journal_repair();
+    }
     let opened = open_journal(&store, &lease, repair)
         .and_then(|journal| Worker::restore(&store, journal, page_text));
     match opened {
@@ -1438,11 +1441,11 @@ impl Worker {
     }
 
     /// Shows the owner, once, a failure that closed the full-text index; the session goes on.
+    /// The failure already names what the index was doing.
     fn report_page_text(
         &mut self,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        self.survival.operation = "keeping the search index";
         let problem = self.page_text.take_problem();
         self.survival.result(problem, events)
     }

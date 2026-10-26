@@ -1,6 +1,10 @@
 //! Holds a cache folder beside the database under the database's own location checks (D13, D40).
 
-use std::{ffi::OsStr, fmt, path::Path};
+use std::{
+    ffi::OsStr,
+    fmt, fs,
+    path::{Path, PathBuf},
+};
 
 use syrinx_store::{DirectoryLease, LocationError, LocationOperation};
 
@@ -20,6 +24,35 @@ pub struct CacheFolder {
 impl CacheFolder {
     pub fn path(&self) -> &Path {
         &self.directory.path
+    }
+
+    /// Deletes every file inside, so a damaged cache can start afresh.
+    ///
+    /// Every entry is checked first: a subfolder or a link is refused before anything is
+    /// deleted, so nothing outside this folder can be reached through one.
+    pub fn empty(&self) -> Result<(), LocationError> {
+        self.directory
+            .revalidate(true, LocationOperation::OpenDirectory)?;
+        for file in self.plain_files()? {
+            fs::remove_file(&file)
+                .map_err(|error| native::io_error(LocationOperation::EmptyCacheFolder, error))?;
+        }
+        Ok(())
+    }
+
+    /// Every entry inside, refusing anything but a plain file.
+    fn plain_files(&self) -> Result<Vec<PathBuf>, LocationError> {
+        let failed = |error| native::io_error(LocationOperation::EmptyCacheFolder, error);
+        let mut files = Vec::new();
+        for entry in fs::read_dir(self.path()).map_err(failed)? {
+            let entry = entry.map_err(failed)?;
+            // The entry's own type, never a link's target.
+            if !entry.file_type().map_err(failed)?.is_file() {
+                return Err(LocationError::UnexpectedEntryKind);
+            }
+            files.push(entry.path());
+        }
+        Ok(files)
     }
 }
 
