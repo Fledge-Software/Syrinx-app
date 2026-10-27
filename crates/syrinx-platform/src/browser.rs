@@ -34,7 +34,7 @@ use std::{
         mpsc::{self, Receiver, Sender, TryRecvError},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -230,6 +230,9 @@ pub struct CapturedText {
     pub response_bytes: usize,
     pub call_time: Duration,
     pub parse_time: Duration,
+    /// When the page finished loading, or its address last changed through the History
+    /// API: the visit this text belongs to. `None` when the clock could not say.
+    pub visited_at: Option<SystemTime>,
 }
 
 impl fmt::Debug for BrowserCommand {

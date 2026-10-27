@@ -1,15 +1,16 @@
 //! The window's side of page-text capture (#54): the owner's setting and excluded sites, the
 //! policy the page host reads by, and which captured text the session worker keeps (D35, D40).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use syrinx_core::{PageTextPolicy, PolicyError, TabId, TabModelSnapshot, excluded_site};
 use syrinx_platform::browser::{BrowserCommand, CapturedText, PageTextOutcome};
 
 use super::BrowserView;
-use crate::session::{self, CapturedPage, PageTextSetting, SessionCommand};
+use crate::session::{CapturedPage, PageTextSetting, SessionCommand};
 
-/// The capture setting as the window holds it, and what it knows about each tab's page.
+/// The capture setting as the window holds it, and the tabs whose next page must not be read.
 #[derive(Default)]
 pub(super) struct PageTextCapture {
     setting: PageTextSetting,
@@ -21,9 +22,6 @@ pub(super) struct PageTextCapture {
     /// duplicated. Taint is not saved, so such a page is never read until the owner
     /// navigates the tab (P1-25's production recommendation).
     reopened: HashSet<TabId>,
-    /// Unix seconds when each tab's page last finished loading. A capture is dated by this
-    /// visit, so a clear of that time removes it even when the capture arrives later.
-    loaded: HashMap<u64, i64>,
 }
 
 impl PageTextCapture {
@@ -94,8 +92,6 @@ impl PageTextCapture {
         self.reopened.extend(reopened.iter().copied());
         self.reopened
             .retain(|id| model.tabs.iter().any(|tab| tab.id == *id));
-        self.loaded
-            .retain(|id, _| model.tabs.iter().any(|tab| tab.id.get() == *id));
     }
 
     /// The owner chose an address for the tab, so its next page is Syrinx's own navigation.
@@ -117,18 +113,12 @@ impl PageTextCapture {
         self.reopened.remove(&id);
     }
 
-    /// The tab's page finished loading at `at`, which dates any capture of it.
-    pub(super) fn page_loaded(&mut self, id: u64, at: i64) {
-        self.loaded.insert(id, at);
-    }
-
-    /// The text to keep from tab `id`'s capture, judged by the setting now rather than when
-    /// the snapshot was taken: one already parsing when capture was switched off, or when the
+    /// The text to keep from a capture, judged by the setting now rather than when the
+    /// snapshot was taken: one already parsing when capture was switched off, or when the
     /// owner excluded its site, still arrives and is dropped here. A capture whose visit time
     /// is unknown is dropped too, since no clear could be matched against it.
     pub(super) fn keepable(
         &self,
-        id: u64,
         captured: CapturedText,
         title: Option<&str>,
     ) -> Option<CapturedPage> {
@@ -139,7 +129,7 @@ impl PageTextCapture {
         if captured.text.trim().is_empty() {
             return None;
         }
-        let visited_at = *self.loaded.get(&id)?;
+        let visited_at = unix_seconds(captured.visited_at?)?;
         let address = without_fragment(&captured.address).to_owned();
         let title = title.unwrap_or(&address).to_owned();
         Some(CapturedPage {
@@ -166,6 +156,12 @@ impl PageTextCapture {
             }
         }
     }
+}
+
+/// Whole seconds since the Unix epoch, as the index dates documents.
+fn unix_seconds(time: SystemTime) -> Option<i64> {
+    let seconds = time.duration_since(UNIX_EPOCH).ok()?.as_secs();
+    i64::try_from(seconds).ok()
 }
 
 /// The address the index keys a page by: a fragment names a place in the same page.
@@ -195,14 +191,6 @@ impl BrowserView {
         self.command(SessionCommand::SavePageTextSetting(setting));
     }
 
-    /// Notes when a tab's page finished loading. Without a clock no visit is recorded, so a
-    /// capture of that page is not kept.
-    pub(super) fn page_text_page_loaded(&mut self, id: u64) {
-        if let Ok(now) = session::utc_seconds() {
-            self.page_text.page_loaded(id, now);
-        }
-    }
-
     /// Hands a capture the setting still allows to the worker; every other outcome is only
     /// P1-25's evidence and is dropped.
     pub(super) fn page_text_arrived(&mut self, id: u64, outcome: PageTextOutcome) {
@@ -210,7 +198,7 @@ impl BrowserView {
             return;
         };
         let title = self.captured_page_title(id, &captured.address);
-        if let Some(page) = self.page_text.keepable(id, captured, title.as_deref()) {
+        if let Some(page) = self.page_text.keepable(captured, title.as_deref()) {
             self.command(SessionCommand::StorePageText(page));
         }
     }
@@ -231,9 +219,8 @@ mod tests {
 
     use super::*;
 
-    /// The synthetic tab every capture below comes from, and when its page loaded.
-    const TAB: u64 = 7;
-    const LOADED_AT: i64 = 1_700_000_000;
+    /// When every synthetic page below was visited.
+    const VISITED_AT: i64 = 1_700_000_000;
 
     fn captured(address: &str, text: &str) -> CapturedText {
         CapturedText {
@@ -244,13 +231,13 @@ mod tests {
             response_bytes: text.len(),
             call_time: Duration::ZERO,
             parse_time: Duration::ZERO,
+            visited_at: Some(UNIX_EPOCH + Duration::from_secs(VISITED_AT as u64)),
         }
     }
 
     fn switched_on() -> PageTextCapture {
         let mut capture = PageTextCapture::default();
         capture.switch(true);
-        capture.page_loaded(TAB, LOADED_AT);
         capture
     }
 
@@ -300,12 +287,12 @@ mod tests {
     }
 
     #[test]
-    fn restoring_the_setting_keeps_what_is_known_about_the_tabs() {
+    fn restoring_the_setting_keeps_the_reopened_tabs() {
+        let (model, ids) = model_with(&["https://a.example.test/"]);
         let mut capture = switched_on();
+        capture.tabs_changed(&model.snapshot(), true, &[]);
         capture.restore(&BTreeMap::new());
-        capture.switch(true);
-        let page = capture.keepable(TAB, captured("https://page.example.test/", "words"), None);
-        assert!(page.is_some(), "the tab's load time survives a restore");
+        assert!(reopens(&capture, ids[0]));
     }
 
     #[test]
@@ -313,7 +300,6 @@ mod tests {
         let mut capture = switched_on();
         capture.switch(false);
         let page = capture.keepable(
-            TAB,
             captured("https://page.example.test/", "synthetic words"),
             None,
         );
@@ -332,7 +318,7 @@ mod tests {
         ] {
             assert!(
                 capture
-                    .keepable(TAB, captured(address, "synthetic words"), None)
+                    .keepable(captured(address, "synthetic words"), None)
                     .is_none(),
                 "{address}"
             );
@@ -340,11 +326,10 @@ mod tests {
     }
 
     #[test]
-    fn an_allowed_page_is_kept_by_its_address_without_a_fragment_and_dated_by_its_load() {
+    fn an_allowed_page_is_kept_by_its_address_without_a_fragment_and_dated_by_its_visit() {
         let capture = switched_on();
         let page = capture
             .keepable(
-                TAB,
                 captured("https://page.example.test/a?b=1#section", "synthetic words"),
                 Some("Synthetic title"),
             )
@@ -352,26 +337,24 @@ mod tests {
         assert_eq!(page.address, "https://page.example.test/a?b=1");
         assert_eq!(page.title, "Synthetic title");
         assert_eq!(page.text, "synthetic words");
-        assert_eq!(page.visited_at, LOADED_AT);
+        assert_eq!(page.visited_at, VISITED_AT);
         let untitled = capture
-            .keepable(TAB, captured("https://page.example.test/", "words"), None)
+            .keepable(captured("https://page.example.test/", "words"), None)
             .expect("an untitled synthetic page");
         assert_eq!(untitled.title, "https://page.example.test/");
         assert!(
             capture
-                .keepable(TAB, captured("https://page.example.test/", " \n "), None)
+                .keepable(captured("https://page.example.test/", " \n "), None)
                 .is_none()
         );
     }
 
     #[test]
-    fn a_capture_from_a_tab_with_no_finished_load_is_not_kept() {
+    fn a_capture_with_no_visit_time_is_not_kept() {
         let capture = switched_on();
-        let page = capture.keepable(
-            TAB + 1,
-            captured("https://page.example.test/", "synthetic words"),
-            None,
-        );
+        let mut undated = captured("https://page.example.test/", "synthetic words");
+        undated.visited_at = None;
+        let page = capture.keepable(undated, None);
         assert!(page.is_none(), "no visit time to match a clear against");
     }
 
@@ -425,11 +408,9 @@ mod tests {
         capture.tabs_changed(&model.snapshot(), false, &[reopened]);
         assert!(!reopens(&capture, fresh));
         assert!(reopens(&capture, reopened));
-        // A closed tab's marks go with it.
-        capture.page_loaded(reopened.get(), LOADED_AT);
+        // A closed tab's mark goes with it.
         model.close(reopened).expect("close synthetic tab");
         capture.tabs_changed(&model.snapshot(), false, &[]);
         assert!(capture.reopened.is_empty());
-        assert!(!capture.loaded.contains_key(&reopened.get()));
     }
 }

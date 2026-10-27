@@ -33,7 +33,8 @@ pub(super) struct PageText {
     /// doing; a later one is kept after an earlier one, never in its place.
     problem: Option<SessionError>,
     /// The clears and erases made this session, which a capture still in flight must not
-    /// outlive (#54).
+    /// outlive (#54). One is added per clear, erase or excluded site, so it stays short; a
+    /// capture can arrive long after its visit (a suspended page waits to be shown).
     fences: Vec<Fence>,
     /// The revision the last stored capture took, so a later one always replaces it.
     last_revision: u64,

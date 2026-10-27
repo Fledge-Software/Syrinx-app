@@ -1035,10 +1035,6 @@ impl BrowserView {
                 // mark was read by `navigation_status.observe` above and is spent here.
                 let became_download =
                     self.navigation_status.finish_download_navigation(id) && !success;
-                // A capture of this page is dated by when it finished loading (#54).
-                if success {
-                    self.page_text_page_loaded(id);
-                }
                 // A stopped or replaced navigation is not a failure to count.
                 if !success && !cancelled && !became_download {
                     self.usage.recorder.error(ErrorCategory::NavigationFailed);
