@@ -162,7 +162,8 @@ fn wait_muted_and_playing(
         }
     }
     Err(format!(
-        "WebView2 did not report the muted tone page as playing audio within {:.1} s of its          tone starting (check the machine has an audio output device).",
+        "WebView2 did not report the muted tone page as playing audio within {:.1} s of its \
+         tone starting (check the machine has an audio output device).",
         started.elapsed().as_secs_f64()
     ))
 }
@@ -179,7 +180,7 @@ fn is_muted_and_playing(event: &BrowserEvent) -> bool {
     )
 }
 
-/// Hides the playing page and fails on any suspension within `PLAYING_HOLD`.
+/// Hides the playing page and fails on a quiet report or any suspension within `PLAYING_HOLD`.
 fn hold_hidden_while_playing(
     host: &BrowserHost,
     events: &mut UnboundedReceiver<BrowserEvent>,
@@ -219,7 +220,9 @@ fn went_quiet(event: &BrowserEvent) -> bool {
 /// after `AUDIO_GRACE` of quiet, so a suspension inside the hold would follow this report.
 fn reported_quiet_while_hidden(after: Duration) -> String {
     format!(
-        "WebView2 reported the muted tone page quiet {:.1} s after hiding while its tone still          played: the runtime stops reporting audio for a muted page once it is hidden, so Syrinx          would let it sleep.",
+        "WebView2 reported the muted tone page quiet {:.1} s after hiding while its tone still \
+         played: the runtime stops reporting audio for a muted page once it is hidden, so Syrinx \
+         would let it sleep.",
         after.as_secs_f64()
     )
 }
@@ -227,7 +230,8 @@ fn reported_quiet_while_hidden(after: Duration) -> String {
 /// Names a suspension inside the hold, which the audio grace should make impossible.
 fn suspended_while_playing(after: Duration) -> String {
     format!(
-        "Synthetic muted tone page was suspended {:.1} s after hiding, inside the {} s hold          while its tone played and without a quiet report: Syrinx's playback rule failed.",
+        "Synthetic muted tone page was suspended {:.1} s after hiding, inside the {} s hold \
+         while its tone played and without a quiet report: Syrinx's playback rule failed.",
         after.as_secs_f64(),
         PLAYING_HOLD.as_secs()
     )
