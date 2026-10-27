@@ -18,7 +18,7 @@ const QUIET_REPORT_SLACK: Duration = Duration::from_secs(2);
 const PLAYING_REPORT_WAIT: Duration = Duration::from_secs(10);
 const TONE_ID: u64 = 1600;
 
-/// A faint 30 Hz tone at about -29 dBFS: loud enough for WebView2's audibility detection. The
+/// A 30 Hz tone at about -29 dBFS: loud enough for WebView2's audibility detection. The
 /// suite mutes the page with `SetMuted` (#95) before it starts, so the run makes no sound.
 /// Enter starts it, so the posted key press gives Chromium's autoplay rule its user gesture;
 /// S stops it.
@@ -161,11 +161,13 @@ fn wait_muted_and_playing(
         }
     }
     Err(format!(
-        "WebView2 did not report the muted tone page as playing audio within {} s of its tone          starting (check the machine has an audio output device).",
+        "WebView2 did not report the muted tone page as playing audio within {} s of its tone \
+         starting (check the machine has an audio output device).",
         PLAYING_REPORT_WAIT.as_secs()
     ))
 }
 
+/// Whether `event` is WebView2 reporting the muted tone page as playing audio.
 fn is_muted_and_playing(event: &BrowserEvent) -> bool {
     matches!(
         event,
@@ -198,13 +200,11 @@ fn hold_hidden_while_playing(
     Ok(())
 }
 
-/// Names an early suspension: the runtime stops reporting audio while muted. At about five
-/// seconds it never reported the tone at all; later, Syrinx's playback rule failed.
+/// Names an early suspension of the muted, playing page. The playing report was already seen
+/// before hiding, so the runtime stopped reporting audio while muted, or Syrinx's rule failed.
 fn suspended_while_playing(after: Duration) -> String {
     format!(
-        "Synthetic tone page was suspended {:.1} s after hiding while its tone played; about \
-         5 s means WebView2 never reported the tone as playing audio (check the machine has an \
-         audio output device), later means the playback rule failed.",
+        "Synthetic muted tone page was suspended {:.1} s after hiding while its tone played:          the runtime stops reporting audio while muted (if about 5 s), or Syrinx's playback          rule failed (if later).",
         after.as_secs_f64()
     )
 }
