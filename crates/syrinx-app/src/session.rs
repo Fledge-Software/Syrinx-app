@@ -5,6 +5,7 @@ mod folders;
 mod history;
 mod history_repair;
 mod page_text;
+mod page_text_setting;
 mod preferences;
 mod recovery;
 mod retention;
@@ -15,6 +16,8 @@ mod usage;
 
 pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
+pub use page_text::CapturedPage;
+pub use page_text_setting::PageTextSetting;
 pub use recovery::RecoveryPrompt;
 pub use synthetic::SyntheticCatalogue;
 pub use usage::{STATE_FOLDER, UsageControl, UsageError, UsageStatus, usage_file};
@@ -195,6 +198,14 @@ pub enum SessionCommand {
         request_id: u64,
         period: ReportPeriod,
     },
+    /// Keeps one page's captured text in the full-text index for seven days (#54). The window
+    /// sends it only while capture is on and the page is still allowed, so nothing else is
+    /// checked here.
+    StorePageText(CapturedPage),
+    /// Saves the owner's page-text setting (#54). Switching capture off erases all page text,
+    /// and excluding a site erases that site's, before the save and whatever it returns; a
+    /// refused save is retried until it is kept.
+    SavePageTextSetting(PageTextSetting),
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -217,6 +228,9 @@ pub struct SessionSnapshot {
     pub home_entry: Option<u64>,
     /// Native popup request correlated only after durable tab allocation.
     pub popup: Option<(u64, Option<TabId>)>,
+    /// The created tabs that put back a page an earlier tab showed (reopened or duplicated),
+    /// whose first page page text must not read (#54).
+    pub reopened: Vec<TabId>,
     pub previous_shutdown: ShutdownState,
 }
 
@@ -835,6 +849,8 @@ struct Worker {
     retention: retention::Schedule,
     /// The full-text index's page text, kept level with the journal and D40 (#53).
     page_text: page_text::PageText,
+    /// The owner's page-text setting, held until the database has taken it (#54).
+    page_text_setting: page_text_setting::AppliedSetting,
     revision: u64,
     previous_shutdown: ShutdownState,
     destinations: QuickDestinations,
@@ -852,6 +868,13 @@ struct Worker {
     survival: stop::Survival,
     /// A tab model a busy database refused, and when to try it again (#9).
     unsaved: unsaved::Unsaved,
+}
+
+/// The tabs a command created, and those of them that put back an earlier tab's page.
+#[derive(Default)]
+struct Opened {
+    created: Vec<TabId>,
+    reopened: Vec<TabId>,
 }
 
 /// The model after a command, and the failures it survived, reported once it is published.
@@ -882,6 +905,8 @@ impl Worker {
             retention::EXPIRY_BATCH,
         )?;
         page_text.expire_if_due(now);
+        let restored = PageTextSetting::restored(&stored_preferences.settings);
+        erase_what_the_setting_forbids(&mut page_text, &restored, now);
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
         let snapshot = model.snapshot();
@@ -907,6 +932,7 @@ impl Worker {
             deletions,
             retention: schedule,
             page_text,
+            page_text_setting: page_text_setting::AppliedSetting::restored(restored.setting),
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
@@ -936,8 +962,15 @@ impl Worker {
             },
         )
         .map_err(stop::during("sending the saved settings"))?;
-        self.publish(events, self.model.snapshot(), Vec::new(), None, None, None)
-            .map_err(stop::during("sending the restored tabs"))?;
+        self.publish(
+            events,
+            self.model.snapshot(),
+            Opened::default(),
+            None,
+            None,
+            None,
+        )
+        .map_err(stop::during("sending the restored tabs"))?;
         self.report_page_text(events)?;
         let mut delay = IDLE_DELAY;
         loop {
@@ -1036,6 +1069,9 @@ impl Worker {
         }
         self.page_text.retry_cleanup();
         self.report_page_text(events)?;
+        self.survival.operation = SAVING_PAGE_TEXT_SETTING_AGAIN;
+        let resaved = self.page_text_setting.retry(store);
+        self.survival.result(resaved, events)?;
         // The store retains its daily due state; retries remain idle and bounded.
         self.survival.operation = "taking the daily backup";
         let backed_up = backup_while_idle(store, now, &self.usage, events);
@@ -1054,6 +1090,10 @@ impl Worker {
             self.save_model(store, &model)
                 .map_err(stop::during("saving the tabs at shutdown"))?;
         }
+        // The last chance to keep a page-text switch-off the database refused.
+        self.survival.operation = SAVING_PAGE_TEXT_SETTING_AGAIN;
+        let resaved = self.page_text_setting.retry(store);
+        self.survival.result(resaved, events)?;
         // A title still held at exit most likely names the tab's current page.
         self.survival.operation = "saving page titles at shutdown";
         let settled = self.settle_titles(store, true);
@@ -1100,6 +1140,16 @@ impl Worker {
             } => return self.answer_query(request_id, &text, scope, policy, events),
             SessionCommand::GrowSyntheticCatalogue { total } => {
                 return self.grow_synthetic(total, events);
+            }
+            SessionCommand::StorePageText(page) => {
+                self.page_text.store(page, utc_seconds()?);
+                return Ok(());
+            }
+            SessionCommand::SavePageTextSetting(setting) => {
+                let now = utc_seconds()?;
+                return self
+                    .page_text_setting
+                    .apply(setting, &mut self.page_text, store, now);
             }
             SessionCommand::RecentHistory { request_id, limit } => {
                 let result = store.recent_visits(limit).map_err(SessionError::Store);
@@ -1196,6 +1246,7 @@ impl Worker {
             _ => None,
         };
         let counted = counted_feature(&command);
+        let reopening = reopens_a_page(&command);
         let before = self.model.snapshot();
         if let Err(error) = apply_model(&mut self.model, command) {
             // A refused popup must not leave its native request waiting for a tab.
@@ -1224,7 +1275,13 @@ impl Worker {
             stop::keep_refused(&mut refused, registered)?;
         }
         // Survived failures follow the state, so its "Saved locally" cannot hide them.
-        let published = self.publish(events, after, created, navigate, home_entry, popup);
+        let reopened = if reopening {
+            created.clone()
+        } else {
+            Vec::new()
+        };
+        let opened = Opened { created, reopened };
+        let published = self.publish(events, after, opened, navigate, home_entry, popup);
         self.survival.report_refused(refused, events)?;
         published
     }
@@ -1346,7 +1403,7 @@ impl Worker {
         self.usage.count(Feature::ImportCompleted);
         let result = Ok(commit);
         let published = emit(events, SessionEvent::Imported { request_id, result })
-            .and_then(|()| self.publish(events, after, Vec::new(), None, None, None));
+            .and_then(|()| self.publish(events, after, Opened::default(), None, None, None));
         self.survival.report_refused(refused, events)?;
         published
     }
@@ -1414,6 +1471,9 @@ impl Worker {
         end: i64,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        // A capture of a page visited in this range may still be in flight; it must not land
+        // after the clear (D47).
+        self.page_text.fence_clear(start, end, utc_seconds()?);
         let result = deletions::clear(
             store,
             &mut self.deletions,
@@ -1558,7 +1618,7 @@ impl Worker {
         &self,
         events: &UnboundedSender<SessionEvent>,
         model: TabModelSnapshot,
-        created: Vec<TabId>,
+        opened: Opened,
         navigate: Option<TabId>,
         home_entry: Option<u64>,
         popup: Option<(u64, Option<TabId>)>,
@@ -1568,10 +1628,11 @@ impl Worker {
             SessionEvent::State(SessionSnapshot {
                 revision: self.revision,
                 model,
-                created,
+                created: opened.created,
                 navigate,
                 home_entry,
                 popup,
+                reopened: opened.reopened,
                 previous_shutdown: self.previous_shutdown,
             }),
         )
@@ -1658,6 +1719,83 @@ fn counted_feature(command: &SessionCommand) -> Counted {
         _ => Counted::Nothing,
     }
 }
+
+/// Whether a command puts back a page an earlier tab showed, which may have been reached from
+/// an excluded site, so page text must not read it from the start (#54, D35).
+/// Every command is listed, so a new one that puts back a page cannot be read by default.
+fn reopens_a_page(command: &SessionCommand) -> bool {
+    match command {
+        SessionCommand::ReopenClosed
+        | SessionCommand::Duplicate(_)
+        | SessionCommand::HomeEntry {
+            action: HomeEntryAction::ReopenClosed,
+            ..
+        } => true,
+        SessionCommand::HomeEntry {
+            action: HomeEntryAction::NewTab | HomeEntryAction::OpenSaved(_),
+            ..
+        }
+        | SessionCommand::CheckPermission { .. }
+        | SessionCommand::RememberPermission { .. }
+        | SessionCommand::RememberedPermissions { .. }
+        | SessionCommand::ForgetPermission { .. }
+        | SessionCommand::ConfirmRecovery { .. }
+        | SessionCommand::ConfirmHistoryRepair { .. }
+        | SessionCommand::NewTab { .. }
+        | SessionCommand::AdoptPopup { .. }
+        | SessionCommand::NavigateActive { .. }
+        | SessionCommand::CloseTab(_)
+        | SessionCommand::ObserveClosed(_)
+        | SessionCommand::CloseActive
+        | SessionCommand::CycleActive { .. }
+        | SessionCommand::FocusTab(_)
+        | SessionCommand::CloseOthers(_)
+        | SessionCommand::CloseBelow(_)
+        | SessionCommand::OpenSaved(_)
+        | SessionCommand::SaveActive
+        | SessionCommand::SaveTab(_)
+        | SessionCommand::Unsave(_)
+        | SessionCommand::Folder(_)
+        | SessionCommand::UpdateMetadata { .. }
+        | SessionCommand::ObserveMetadata { .. }
+        | SessionCommand::ImportBookmarks { .. }
+        | SessionCommand::SaveSettings(_)
+        | SessionCommand::SiteZoom { .. }
+        | SessionCommand::ClearSiteZooms { .. }
+        | SessionCommand::EditDestinations { .. }
+        | SessionCommand::Query { .. }
+        | SessionCommand::ObserveNavigation { .. }
+        | SessionCommand::OpenHistory(_)
+        | SessionCommand::RecentHistory { .. }
+        | SessionCommand::ClearHistory { .. }
+        | SessionCommand::GrowSyntheticCatalogue { .. }
+        | SessionCommand::SnapshotBeforeUpdate
+        | SessionCommand::Usage(_)
+        | SessionCommand::UsageReport { .. }
+        | SessionCommand::StorePageText(_)
+        | SessionCommand::SavePageTextSetting(_)
+        | SessionCommand::Shutdown => false,
+    }
+}
+
+/// What the stored page-text setting no longer allows, erased at start-up: everything when
+/// capture is off, or text of an excluded site an earlier erase left behind (#54).
+fn erase_what_the_setting_forbids(
+    page_text: &mut page_text::PageText,
+    restored: &page_text_setting::RestoredSetting,
+    now: i64,
+) {
+    if restored.leaves_text_to_erase() {
+        page_text.erase(now);
+        return;
+    }
+    if restored.setting.on {
+        page_text.erase_sites(&restored.setting.excluded, now);
+    }
+}
+
+/// What a refused page-text setting is retried as, while idle and at shutdown.
+const SAVING_PAGE_TEXT_SETTING_AGAIN: &str = "saving the page text setting again";
 
 fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), SessionError> {
     match command {
@@ -1809,6 +1947,8 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::SnapshotBeforeUpdate
         | SessionCommand::Usage(_)
         | SessionCommand::UsageReport { .. }
+        | SessionCommand::StorePageText(_)
+        | SessionCommand::SavePageTextSetting(_)
         | SessionCommand::Shutdown => {}
     }
     Ok(())
@@ -2360,6 +2500,7 @@ mod tests {
             navigate: None,
             home_entry: None,
             popup: None,
+            reopened: Vec::new(),
             previous_shutdown: ShutdownState::Clean,
         });
         assert!(!format!("{event:?}").contains(address));

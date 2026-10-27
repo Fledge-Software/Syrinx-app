@@ -353,6 +353,22 @@ fn web_host(address: &str) -> Result<String, Ineligible> {
     Ok(host.to_owned())
 }
 
+/// The site an owner's exclusion entry names: a bare host name, or the host of a web address
+/// the owner pasted, normalized as the lists are (#54).
+pub fn excluded_site(entry: &str) -> Result<String, PolicyError> {
+    let entry = entry.trim();
+    if let Ok(host) = web_host(entry) {
+        return Ok(host);
+    }
+    normalized_host(entry)
+}
+
+/// Whether `address` is on `site` or one of its subdomains, by the same label-boundary rule
+/// the exclusion lists use, so erasing an excluded site removes exactly what it excludes (#54).
+pub fn address_within_site(address: &str, site: &str) -> bool {
+    web_host(address).is_ok_and(|host| sites::within_domain(&host, site))
+}
+
 fn listed(domains: &[String], host: &str) -> bool {
     domains
         .iter()
@@ -401,6 +417,38 @@ mod tests {
         );
         assert!(PageTextPolicy::new(&["has space.test"]).is_err());
         assert!(PageTextPolicy::new(&["a/b"]).is_err());
+    }
+
+    #[test]
+    fn an_owner_entry_may_be_a_host_or_a_pasted_address() {
+        assert_eq!(excluded_site(" Owner.TEST. "), Ok("owner.test".to_owned()));
+        assert_eq!(
+            excluded_site("https://Owner.test/account?id=1#top"),
+            Ok("owner.test".to_owned())
+        );
+        for refused in ["", "has space.test", "owner.test/path", "ftp://owner.test/"] {
+            assert_eq!(excluded_site(refused), Err(PolicyError), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn an_address_is_within_a_site_only_across_a_label_boundary() {
+        for inside in [
+            "https://owner.test/account",
+            "http://www.owner.test/",
+            "https://Deep.Sub.OWNER.test./page",
+        ] {
+            assert!(address_within_site(inside, "owner.test"), "{inside}");
+        }
+        for outside in [
+            "https://notowner.test/",
+            "https://owner.test.example/",
+            "https://example.test/owner.test",
+            "about:blank",
+            "not an address",
+        ] {
+            assert!(!address_within_site(outside, "owner.test"), "{outside}");
+        }
     }
 
     #[test]

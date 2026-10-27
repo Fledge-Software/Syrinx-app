@@ -493,3 +493,66 @@ fn a_fatal_stop_is_still_kept_in_the_log_beside_the_database() {
     assert_eq!(read_stop_log(&fixture), [stop::stop_line(&error)]);
     fixture.cleanup();
 }
+
+/// Whether the database holds page-text capture as on.
+fn stored_capture_on(store: &Store) -> bool {
+    let stored = preferences::restore(store).expect("read synthetic settings");
+    PageTextSetting::restored(&stored.settings).setting.on
+}
+
+#[test]
+fn a_page_text_switch_off_a_busy_database_refused_is_saved_later_and_stays_off() {
+    let fixture = Fixture::new();
+    let (store, mut worker) = direct_worker(&fixture);
+    let (sender, _events) = unbounded();
+    let on = PageTextSetting {
+        on: true,
+        excluded: Vec::new(),
+    };
+    worker
+        .handle(&store, SessionCommand::SavePageTextSetting(on), &sender)
+        .expect("switching capture on is saved");
+    assert!(stored_capture_on(&store));
+
+    // The switch-off is refused, and reported rather than swallowed.
+    let lock = hold_write_lock(&fixture);
+    let off = PageTextSetting::default();
+    let refused = worker
+        .handle(&store, SessionCommand::SavePageTextSetting(off), &sender)
+        .expect_err("a busy database refuses the switch-off");
+    assert!(is_busy(&refused), "{refused:?}");
+    assert!(worker.page_text_setting.unsaved());
+    release_write_lock(lock);
+
+    // The idle step saves it, so a restart reads capture as off.
+    worker.idle(&store, &sender).expect("idle retry succeeds");
+    assert!(!worker.page_text_setting.unsaved());
+    assert!(!stored_capture_on(&store));
+    close_direct(fixture, store, worker);
+}
+
+#[test]
+fn a_page_text_switch_off_still_refused_at_shutdown_is_tried_once_more() {
+    let fixture = Fixture::new();
+    let (store, mut worker) = direct_worker(&fixture);
+    let (sender, _events) = unbounded();
+    let on = PageTextSetting {
+        on: true,
+        excluded: Vec::new(),
+    };
+    worker
+        .handle(&store, SessionCommand::SavePageTextSetting(on), &sender)
+        .expect("switching capture on is saved");
+    let lock = hold_write_lock(&fixture);
+    let off = PageTextSetting::default();
+    worker
+        .handle(&store, SessionCommand::SavePageTextSetting(off), &sender)
+        .expect_err("a busy database refuses the switch-off");
+    release_write_lock(lock);
+
+    worker
+        .finish_serving(&store, &sender)
+        .expect("shutdown saves the held switch-off");
+    assert!(!stored_capture_on(&store));
+    close_direct(fixture, store, worker);
+}

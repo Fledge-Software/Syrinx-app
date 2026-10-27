@@ -19,6 +19,44 @@ entry names it.
 
 ## 2026-10-27
 
+- **Switching page text off erases it at once (#54, owner, 2026-10-27).**
+  The owner's words: "Erase them right away". The rest of this entry is the
+  coordinator's record, and the owner may correct it. Turning "Remember page
+  text" off in Settings > Privacy removes every stored page from the
+  full-text index in one reset of its page namespace, run by the session
+  worker with the switch-off (even if saving it fails, since erasing is the
+  safe direction), as switching usage counting off
+  deletes the counts (AN-01). Notes and other feeds in the index are kept.
+  A failed erase is reported, never swallowed, and tried again the next
+  time the setting is saved or Syrinx starts while capture is off. Letting
+  the text expire within seven days was rejected: an owner switching off a
+  privacy feature expects its data to go with it.
+- **Restored, reopened and duplicated tabs are not read until the owner
+  navigates them (#54, owner, 2026-10-27).** The owner's words: "Keep it".
+  The rest of this entry is the coordinator's record, and the owner may
+  correct it. Page-text taint (P1-25's "skip all exits") is not saved, so
+  a restored tab cannot tell whether its page was reached from a bank's or
+  Google's sign-in. Such tabs, and tabs reopened with Ctrl Shift T or
+  duplicated, therefore open tainted, as crash recovery already does, and
+  are read again once the owner navigates them from the address bar, the
+  palette, a bookmark, a tile or Home. Saving taint with each tab was
+  rejected: it needs a schema change for the small gain of reading a
+  restored ordinary page before the owner next navigates it.
+- **Excluding a site erases its stored page text at once; the switch stays
+  in Settings > Privacy (#54, owner, 2026-10-27).** Recorded on #54 after
+  the independent review of #198; the owner may correct this record.
+  Excluding a site removes every stored page on that site or its
+  subdomains, matched by the same label-boundary rule (`within_domain`) the
+  exclusion itself uses, so `owner.test` takes `www.owner.test` but not
+  `notowner.test` or `owner.test.example`. The rows are deleted outright,
+  with no tombstones, because a tombstone's id is the page's address and
+  would keep the very addresses the owner excluded. This matches switching
+  capture off, which already erases everything. The review that raised the
+  question recommended this because, once the palette searches page text,
+  the owner would otherwise find a site they had just excluded. The capture
+  switch and the excluded sites stay in Settings > Privacy with the other
+  privacy controls, not in Customize as #54 first said. Restoring a backup
+  can bring back an older exclusion list, a D35 risk tracked in #199.
 - **The sidebar row's menu lists its tab actions in Firefox's order; a muted
   tab shows only a mute icon; bulk closes always ask (owner, 2026-10-27).**
   #95 slice 4 needed the owner's choice of how a sidebar row offers the tab

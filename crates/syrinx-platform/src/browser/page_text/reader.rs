@@ -4,7 +4,7 @@ use std::{
     cell::RefCell,
     rc::Rc,
     sync::mpsc::{self, SyncSender, TrySendError},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use syrinx_core::EligibleDocument;
@@ -53,6 +53,8 @@ pub(super) struct Job {
     pub(super) json: String,
     pub(super) document: EligibleDocument,
     pub(super) call_time: Duration,
+    /// When the visit behind this capture happened, which dates its text.
+    pub(super) visited_at: Option<SystemTime>,
     pub(super) events: EventSink,
     pub(super) native: NativeSink,
 }
@@ -117,6 +119,7 @@ fn parse(job: Job) {
             response_bytes,
             call_time: job.call_time,
             parse_time: started.elapsed(),
+            visited_at: job.visited_at,
         }),
         Err(reason) => PageTextOutcome::Discarded(reason),
     };

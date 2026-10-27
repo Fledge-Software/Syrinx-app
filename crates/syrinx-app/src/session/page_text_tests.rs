@@ -662,3 +662,375 @@ fn a_damaged_index_is_emptied_and_started_afresh() {
     assert_eq!(stored_ids(&fixture, Namespace::page()).1, 1);
     fixture.cleanup();
 }
+
+/// A synthetic capture as the window hands it over, of a page that loaded a minute ago.
+fn captured(address: &str, body: &str) -> CapturedPage {
+    let now = utc_seconds().expect("synthetic clock");
+    visited(address, body, now - 60)
+}
+
+/// A synthetic capture of a page visited (loaded, or moved to by the History API) at `visited_at`.
+fn visited(address: &str, body: &str, visited_at: i64) -> CapturedPage {
+    CapturedPage {
+        address: address.to_owned(),
+        title: "Synthetic captured page".to_owned(),
+        text: body.to_owned(),
+        visited_at,
+    }
+}
+
+/// The page ids whose title or body holds `word`.
+fn pages_with(index: &FullText, word: &str) -> Vec<String> {
+    let request = SearchRequest {
+        text: word.to_owned(),
+        prefix_last: false,
+        namespaces: NamespaceFilter::Only(vec![Namespace::page()]),
+        limit: 100,
+    };
+    let hits = index.search(&request).expect("search synthetic index");
+    hits.into_iter().map(|hit| hit.id).collect()
+}
+
+/// Every file's bytes under `folder`, however deep.
+fn files_under(folder: &Path) -> Vec<Vec<u8>> {
+    let mut files = Vec::new();
+    for entry in checked_io(fs::read_dir(folder)) {
+        let path = checked_io(entry).path();
+        if path.is_dir() {
+            files.extend(files_under(&path));
+        } else {
+            files.push(checked_io(fs::read(&path)));
+        }
+    }
+    files
+}
+
+/// A worker's page text opened on the fixture's guarded folder, without a session.
+fn open_page_text(fixture: &Fixture) -> (Arc<WindowsDirectoryLease>, page_text::PageText) {
+    let lease = Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data"));
+    let page_text = page_text::PageText::open(&lease);
+    (lease, page_text)
+}
+
+#[test]
+fn a_captured_page_is_kept_found_by_a_body_word_and_never_backed_up() {
+    let fixture = Fixture::new();
+    let address = "https://kept.example.test/article";
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    let body = format!("{WORD} synthetic captured words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(captured(address, &body)),
+    );
+    // A snapshot taken after the capture holds the database only (D40).
+    send(&handle, SessionCommand::SnapshotBeforeUpdate);
+    match next_event(&mut events) {
+        SessionEvent::UpdateSnapshot(Ok(())) => {}
+        event => panic!("expected a synthetic snapshot, got {event:?}"),
+    }
+    stop(handle, &mut events);
+
+    let index = FullText::open(&index_folder(&fixture)).expect("reopen synthetic index");
+    assert_eq!(pages_with(&index, "captured"), [address]);
+    drop(index);
+    let files = files_under(&fixture.0.join("backups"));
+    assert!(!files.is_empty(), "the snapshot was taken");
+    for bytes in files {
+        let found = bytes
+            .windows(WORD.len())
+            .any(|window| window == WORD.as_bytes());
+        assert!(!found, "page text reached a backup");
+    }
+    fixture.cleanup();
+}
+
+#[test]
+fn a_later_capture_replaces_the_text_and_seven_days_remove_it() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let address = "https://replaced.example.test/";
+    let (lease, mut page_text) = open_page_text(&fixture);
+    page_text.store(visited(address, "firstcapture words", now), now);
+    // Within the same second, the later capture still replaces the earlier one.
+    page_text.store(visited(address, "secondcapture words", now), now);
+    let index = page_text.index().expect("the index is open");
+    assert!(pages_with(index, "firstcapture").is_empty());
+    assert_eq!(pages_with(index, "secondcapture"), [address]);
+
+    page_text.expire_if_due(now + PAGE_RETENTION_SECONDS + 1);
+    let index = page_text.index().expect("the index is open");
+    assert!(pages_with(index, "secondcapture").is_empty());
+    assert_eq!(page_text.take_problem(), Ok(()));
+    drop(page_text);
+    drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn an_address_too_long_to_key_is_left_unread_reported_and_the_index_stays_open() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let long = format!("https://long.example.test/{}", "a".repeat(4_096));
+    let (lease, mut page_text) = open_page_text(&fixture);
+    page_text.store(captured(&long, "longaddress words"), now);
+    page_text.store(
+        captured("https://short.example.test/", "shortaddress words"),
+        now,
+    );
+    let index = page_text.index().expect("the index is still open");
+    assert!(pages_with(index, "longaddress").is_empty());
+    assert_eq!(
+        pages_with(index, "shortaddress"),
+        ["https://short.example.test/"]
+    );
+    // The skipped page is reported, without its address.
+    let problem = page_text.take_problem().expect_err("the skip is reported");
+    assert!(
+        !problem.to_string().contains("long.example.test"),
+        "{problem}"
+    );
+    drop(page_text);
+    drop(lease);
+    fixture.cleanup();
+}
+
+/// The setting as the window sends it, with no excluded sites.
+fn capture(on: bool) -> SessionCommand {
+    excluding(on, &[])
+}
+
+fn excluding(on: bool, sites: &[&str]) -> SessionCommand {
+    SessionCommand::SavePageTextSetting(PageTextSetting {
+        on,
+        excluded: sites.iter().map(|site| (*site).to_owned()).collect(),
+    })
+}
+
+#[test]
+fn switching_capture_off_erases_page_text_at_once_and_keeps_notes() {
+    let fixture = Fixture::new();
+    seed_index(&fixture, &[note("kept")]);
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(true));
+    let body = format!("{WORD} erasedcapture words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(captured("https://erased.example.test/", &body)),
+    );
+    send(&handle, capture(false));
+    stop(handle, &mut events);
+
+    let index = FullText::open(&index_folder(&fixture)).expect("reopen synthetic index");
+    assert!(pages_with(&index, "erasedcapture").is_empty());
+    assert_eq!(ids_in(&index, notes()), ["kept"]);
+    drop(index);
+
+    // A restart neither brings the text back nor erases notes.
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    assert_eq!(stored_ids(&fixture, notes()).0, ["kept"]);
+    fixture.cleanup();
+}
+
+#[test]
+fn page_text_left_behind_while_capture_is_off_is_erased_at_start_up() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    // An erase cut short: the setting is saved off, the text is still there.
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(false));
+    stop(handle, &mut events);
+    seed_index(&fixture, &[page("left", now - 60), note("kept")]);
+
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    assert_eq!(stored_ids(&fixture, notes()).0, ["kept"]);
+    fixture.cleanup();
+}
+
+#[test]
+fn erased_page_text_does_not_return_with_a_restored_backup() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    seed_recovery(&fixture);
+    seed_index(&fixture, &[page("before", now - 600)]);
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(false));
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+
+    // The database is damaged and the owner restores a backup taken before the switch-off.
+    damage_recovery_primary(&fixture);
+    let (handle, mut events) = fixture.start();
+    let offer_id = recovery_offer(&mut events);
+    send(&handle, SessionCommand::ConfirmRecovery { offer_id });
+    state(&mut events);
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    remove_preserved_recovery_bundle(&fixture, Some(DAMAGED_RECOVERY_PRIMARY));
+    fixture.cleanup();
+}
+
+#[test]
+fn an_erase_the_index_cannot_make_is_reported_not_swallowed() {
+    let fixture = Fixture::new();
+    let (lease, mut page_text) = open_page_text(&fixture);
+    let now = utc_seconds().expect("synthetic clock");
+    // Close the index the way a failed operation does, then switch capture off.
+    page_text.store(captured("https://kept.example.test/", "words"), now);
+    page_text.close_for_test();
+    page_text.erase(now);
+    assert!(page_text.take_problem().is_err());
+    drop(page_text);
+    drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn excluding_a_site_erases_its_text_and_its_subdomains_and_spares_lookalikes() {
+    let fixture = Fixture::new();
+    seed_index(&fixture, &[note("kept")]);
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(true));
+    for address in [
+        "https://owner.test/account",
+        "https://www.owner.test/",
+        "https://notowner.test/",
+        "https://owner.test.example/",
+    ] {
+        let body = format!("{WORD} exclusioncapture words");
+        send(
+            &handle,
+            SessionCommand::StorePageText(captured(address, &body)),
+        );
+    }
+    send(&handle, excluding(true, &["owner.test"]));
+    stop(handle, &mut events);
+
+    let mut kept = stored_ids(&fixture, Namespace::page()).0;
+    kept.sort();
+    assert_eq!(
+        kept,
+        ["https://notowner.test/", "https://owner.test.example/"]
+    );
+    assert_eq!(stored_ids(&fixture, notes()).0, ["kept"]);
+    fixture.cleanup();
+}
+
+#[test]
+fn text_of_an_excluded_site_left_behind_is_erased_at_start_up() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, excluding(true, &["owner.test"]));
+    stop(handle, &mut events);
+    // An erase cut short: the site is excluded, its text is still there.
+    seed_index(
+        &fixture,
+        &[
+            page("https://www.owner.test/", now - 60),
+            page("https://other.test/", now - 60),
+        ],
+    );
+
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    stop(handle, &mut events);
+    assert_eq!(
+        stored_ids(&fixture, Namespace::page()).0,
+        ["https://other.test/"]
+    );
+    fixture.cleanup();
+}
+
+#[test]
+fn a_capture_of_a_page_visited_before_a_history_clear_never_lands_after_it() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(true));
+    // Clear browsing data's last hour, as the window computes it.
+    clear_history(&handle, &mut events, now - 3_600, now + 1);
+    // A capture that was still in flight arrives after the clear; one of a page visited
+    // after the clear is kept.
+    let before = format!("{WORD} inflightcapture words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(visited("https://flight.example.test/", &before, now - 2)),
+    );
+    let after = format!("{WORD} aftercapture words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(visited("https://after.example.test/", &after, now + 5)),
+    );
+    stop(handle, &mut events);
+
+    let index = FullText::open(&index_folder(&fixture)).expect("reopen synthetic index");
+    assert!(pages_with(&index, "inflightcapture").is_empty());
+    assert_eq!(
+        pages_with(&index, "aftercapture"),
+        ["https://after.example.test/"]
+    );
+    fixture.cleanup();
+}
+
+#[test]
+fn a_capture_stored_just_before_a_clear_is_dated_by_its_visit_and_cleared() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(true));
+    let body = format!("{WORD} visitdatedcapture words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(visited("https://dated.example.test/", &body, now - 30)),
+    );
+    // A range that holds the visit but ends before the store: only the visit's date matches.
+    clear_history(&handle, &mut events, now - 60, now - 10);
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    fixture.cleanup();
+}
+
+#[test]
+fn a_capture_from_before_a_switch_off_is_not_kept_after_capture_comes_back_on() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(true));
+    send(&handle, capture(false));
+    send(&handle, capture(true));
+    let body = format!("{WORD} togglecapture words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(visited("https://toggle.example.test/", &body, now - 2)),
+    );
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    fixture.cleanup();
+}
+
+#[test]
+fn a_captured_page_never_shows_its_address_title_or_text_in_debug_output() {
+    let page = visited(
+        "https://debug-sentinel.example.test/",
+        "debug-sentinel words",
+        0,
+    );
+    assert!(!format!("{page:?}").contains("sentinel"));
+    let command = SessionCommand::StorePageText(page);
+    assert!(!format!("{command:?}").contains("sentinel"));
+}

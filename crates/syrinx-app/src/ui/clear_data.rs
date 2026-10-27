@@ -466,7 +466,8 @@ pub(super) fn render(dialog: &ClearDataDialog, cx: &mut Context<BrowserView>) ->
         (
             Kind::History,
             "Browsing history",
-            "Syrinx's history and search results, and the page engine's record of visits",
+            "Syrinx's history, remembered page text and search results, and the page \
+             engine's record of visits",
         ),
         (
             Kind::Cookies,

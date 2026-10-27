@@ -319,3 +319,42 @@ fn restarting_clears_removes_page_text_only_and_counts_from_zero() {
     assert_eq!(reopened.cleared_generation(), 0);
     assert_eq!(fixture.ids(&reopened, "restartsigil"), ["note"]);
 }
+
+#[test]
+fn removing_pages_by_id_leaves_no_row_or_tombstone_for_them_and_keeps_the_rest() {
+    let fixture = Fixture::new();
+    let mut index = fixture.open();
+    index
+        .stage(
+            &[
+                upsert(page_document("site-a", 1, NOW - 100, "removalsigil")),
+                upsert(page_document("site-b", 1, NOW - 100, "removalsigil")),
+                upsert(page_document("other", 1, NOW - 100, "removalsigil")),
+                delete(Namespace::page(), "site-gone", 1),
+                upsert(document(notes(), "site-note", 1, NOW - 100, "removalsigil")),
+            ],
+            NOW,
+        )
+        .expect("stage pages, a tombstone and a note");
+    index.commit().expect("commit them");
+
+    // Every page row the test accepts goes, the tombstone too, and none is left in its place.
+    let removed = index.remove_pages(|id| id.starts_with("site-"));
+    assert_eq!(removed, Ok(3));
+    let keys: Vec<_> = fixture
+        .audit(&index)
+        .into_iter()
+        .map(|row| (row.key, row.tombstone))
+        .collect();
+    assert!(
+        keys.iter()
+            .all(|(key, _)| !key.starts_with("page") || key.ends_with("other")),
+        "{keys:?}"
+    );
+    assert!(keys.iter().all(|(_, tombstone)| !tombstone), "{keys:?}");
+    let mut found = fixture.ids_in(&index, "removalsigil", NamespaceFilter::All);
+    found.sort();
+    assert_eq!(found, ["other", "site-note"]);
+    // Nothing to remove changes nothing.
+    assert_eq!(index.remove_pages(|id| id.starts_with("site-")), Ok(0));
+}

@@ -66,7 +66,7 @@ fn main_run(
         browser.wait_finals(quiet, 1, OUTCOME_TIMEOUT)?;
         let listening_before = listening_ports(browser)?;
         type Case = fn(&mut Browser, &Server) -> Result<CaseResult, String>;
-        let cases: [(&str, Case); 23] = [
+        let cases: [(&str, Case); 24] = [
             ("F1", f1),
             ("F2", f2),
             ("F3", f3),
@@ -89,6 +89,7 @@ fn main_run(
             ("F26", f26),
             ("F27", f27),
             ("F28", f28),
+            ("F29", f29),
             ("F13", f13),
         ];
         for (name, case) in cases {
@@ -593,6 +594,35 @@ fn f28(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
             describe(&all[..known]),
             describe(&back),
             path_of(&shown)
+        ),
+    ))
+}
+
+/// F29 (#54): a reopened tab of an otherwise readable page is not read, its reload is not
+/// either, and a Syrinx navigation afterwards is read.
+fn f29(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
+    let id = browser.reopen(&server.sites.url(Role::Plain, "/landing?via=reopen"))?;
+    let first = browser.wait_finals(id, 1, OUTCOME_TIMEOUT);
+    browser.send(BrowserCommand::Reload { id })?;
+    let reloaded = browser.wait_finals(id, 2, OUTCOME_TIMEOUT);
+    let known = browser.log.outcomes(id).len();
+    browser.navigate(id, &server.sites.url(Role::Plain, "/landing?via=syrinx"))?;
+    let cleared = browser.wait_finals(id, 3, OUTCOME_TIMEOUT);
+    let all = browser.log.outcomes(id);
+    browser.close(id)?;
+    let passed = first.is_ok()
+        && reloaded.is_ok()
+        && cleared.is_ok()
+        && !requested(&all[..known])
+        && has_ineligible(&all[..known], &[Ineligible::LeftExcluded])
+        && captured(&all[known..]).is_some();
+    Ok(CaseResult::new(
+        "F29",
+        passed,
+        format!(
+            "reopened and reloaded: {}; after a Syrinx navigation: {}",
+            describe(&all[..known]),
+            describe(&all[known..])
         ),
     ))
 }

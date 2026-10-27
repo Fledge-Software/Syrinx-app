@@ -34,7 +34,7 @@ use std::{
         mpsc::{self, Receiver, Sender, TryRecvError},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -118,6 +118,13 @@ pub enum BrowserCommand {
         allowed: bool,
     },
     Create {
+        id: u64,
+        url: String,
+    },
+    /// Opens a tab Syrinx puts back rather than one the owner just chose: a restored, reopened
+    /// or duplicated tab (#54). Its page starts tainted and loading it is not Syrinx's own
+    /// navigation, so page text never reads it until the owner navigates the tab (D35).
+    Reopen {
         id: u64,
         url: String,
     },
@@ -223,6 +230,9 @@ pub struct CapturedText {
     pub response_bytes: usize,
     pub call_time: Duration,
     pub parse_time: Duration,
+    /// When the page finished loading, or its address last changed through the History
+    /// API: the visit this text belongs to. `None` when the clock could not say.
+    pub visited_at: Option<SystemTime>,
 }
 
 impl fmt::Debug for BrowserCommand {
@@ -805,7 +815,9 @@ fn drain_commands(
         };
         let tab = command.tab_id();
         let creating = match &command {
-            BrowserCommand::Create { id, .. } | BrowserCommand::AdoptPopup { id, .. } => Some(*id),
+            BrowserCommand::Create { id, .. }
+            | BrowserCommand::Reopen { id, .. }
+            | BrowserCommand::AdoptPopup { id, .. } => Some(*id),
             _ => None,
         };
         let event = match (creating, apply(command)) {
@@ -844,7 +856,8 @@ impl BrowserState {
         self.new_page_with_taint(id, false)
     }
 
-    /// A new page; an adopted popup inherits its opener's page-text taint.
+    /// A new page; an adopted popup inherits its opener's page-text taint, and a reopened tab
+    /// starts tainted.
     fn new_page_with_taint(&self, id: u64, starts_tainted: bool) -> Result<Page, BrowserError> {
         if id == 0 {
             return Err(BrowserError::InvalidTab);
@@ -882,6 +895,13 @@ impl BrowserState {
                 self.ensure_environment()?;
                 let page = self.new_page(id)?;
                 page.navigate(&url)?;
+                self.pages.insert(id, page);
+            }
+            BrowserCommand::Reopen { id, url } => {
+                self.ensure_environment()?;
+                // As crash recovery does: tainted from the start, loaded without clearing it.
+                let page = self.new_page_with_taint(id, true)?;
+                page.restore(&url)?;
                 self.pages.insert(id, page);
             }
             BrowserCommand::AdoptPopup { request, id } => {
@@ -1094,6 +1114,7 @@ impl BrowserCommand {
             | Self::ResolvePermission { id, .. }
             | Self::AdoptPopup { id, .. }
             | Self::Create { id, .. }
+            | Self::Reopen { id, .. }
             | Self::Navigate { id, .. }
             | Self::Close { id }
             | Self::Back { id }
@@ -1237,6 +1258,30 @@ mod tests {
             Ok(BrowserCommand::Reload { id: 7 })
         ));
         assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_reopened_tab_is_acknowledged_as_created_like_any_other() {
+        let (commands, incoming) = mpsc::channel();
+        let (events, mut received) = unbounded();
+        commands
+            .send(BrowserCommand::Reopen {
+                id: 9,
+                url: "https://reopened.example.test/".into(),
+            })
+            .expect("queue synthetic reopening");
+        assert!(drain_commands(
+            &incoming,
+            &EventSink(events, None),
+            |command| match command {
+                BrowserCommand::Reopen { id: 9, .. } => Ok(()),
+                _ => panic!("unexpected synthetic command"),
+            }
+        ));
+        assert!(matches!(
+            received.try_recv(),
+            Ok(BrowserEvent::Created { id: 9 })
+        ));
     }
 
     #[test]

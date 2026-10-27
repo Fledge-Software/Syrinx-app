@@ -25,6 +25,8 @@ mod navigation_status;
 mod owned_popup;
 mod page_card;
 mod page_lifecycle;
+mod page_text_capture;
+mod page_text_settings;
 mod palette_acceptance;
 mod palette_popup;
 mod panes;
@@ -414,6 +416,10 @@ pub struct BrowserView {
     updates: updates::UpdatePanel,
     /// Settings' Usage report section and the window's own measurements (AN-01).
     usage: usage_report::UsageState,
+    /// The page-text setting and which tabs' next page must not be read (#54).
+    page_text: page_text_capture::PageTextCapture,
+    /// Settings' open "exclude a site" field, if any.
+    page_text_site: Option<page_text_settings::SiteField>,
     outcome: Arc<AtomicU8>,
 }
 
@@ -532,6 +538,8 @@ impl BrowserView {
             acceptance: acceptance.map(palette_acceptance::Acceptance::new),
             updates: updates::UpdatePanel::new(update_context, startup_updates),
             usage: usage_report::UsageState::new(usage, launched),
+            page_text: page_text_capture::PageTextCapture::default(),
+            page_text_site: None,
             outcome,
         };
         // A Windows session end quits GPUI without a close request; stop the workers then (#96).
@@ -663,6 +671,7 @@ impl BrowserView {
                 self.site_zoom.restore(site_zooms.0);
                 self.runtime_settings_loaded(&settings);
                 self.restore_folder_expansion(&settings);
+                self.restore_page_text(&settings);
                 self.restore_preferences(&settings, destinations, window, cx);
             }
             SessionEvent::Destinations(destinations) => self.destinations_changed(destinations),
@@ -710,6 +719,8 @@ impl BrowserView {
                 let tabs = &self.model.tabs;
                 self.site_zoom
                     .retain_pages(|id| tabs.iter().any(|tab| tab.id.get() == id));
+                self.page_text
+                    .tabs_changed(&self.model, initial, &snapshot.reopened);
                 self.navigation_status.retain(&self.model);
                 if !self.closing {
                     if let Some(id) = snapshot.navigate {
@@ -968,6 +979,8 @@ impl BrowserView {
             }
             BrowserEvent::Ready => {
                 self.browser_ready = true;
+                // Before any page exists, so every page is observed by the owner's setting.
+                self.send_page_text_policy();
                 self.resize_pages(window);
                 self.sync_pages();
             }
@@ -1070,8 +1083,7 @@ impl BrowserView {
             BrowserEvent::DataCleared { request, outcome } => {
                 self.browser_data_cleared(request, outcome);
             }
-            // The app never switches capture on before P1-26, so no capture reaches here.
-            BrowserEvent::PageText { .. } => {}
+            BrowserEvent::PageText { id, outcome } => self.page_text_arrived(id, outcome),
             // Every page shortcut is a key the page handed over, so the ring may show (DW-62).
             BrowserEvent::Shortcut(shortcut) => {
                 crate::controls::note_input(ModalityInput::PageKey, window, cx);
@@ -1203,7 +1215,7 @@ impl BrowserView {
         if !page_command_allowed(self.closing, &command) {
             return false;
         }
-        if let BrowserCommand::Create { url, .. } | BrowserCommand::Navigate { url, .. } = &command
+        if let Some(url) = loaded_address(&command)
             && !self.acceptance_permits(url)
         {
             return false;
@@ -1257,12 +1269,11 @@ impl BrowserView {
             && !self.loaded.contains(id)
             && !self.pending_pages.contains(id)
         {
-            let queued = self.page_command(BrowserCommand::Create {
-                id: id.get(),
-                url: url.clone(),
-            });
+            let create = self.page_text.create_command(*id, url.clone());
+            let queued = self.page_command(create);
             if queued {
                 self.pending_pages.insert(*id);
+                self.page_text.page_created(*id);
             }
             self.navigation_intents.creation_queued(*id, queued);
         }
@@ -1306,6 +1317,7 @@ impl BrowserView {
     }
 
     fn navigate_committed(&mut self, id: TabId) {
+        self.page_text.owner_navigated(id);
         let Some(tab) = self.model.tabs.iter().find(|tab| tab.id == id) else {
             self.fail("The acknowledged navigation has no live tab.");
             return;
@@ -2308,6 +2320,16 @@ fn queue_session_command(
     }
     send(home, sender, command)?;
     Ok(true)
+}
+
+/// The address a command loads into a page, which an acceptance run must check first.
+fn loaded_address(command: &BrowserCommand) -> Option<&str> {
+    match command {
+        BrowserCommand::Create { url, .. }
+        | BrowserCommand::Reopen { url, .. }
+        | BrowserCommand::Navigate { url, .. } => Some(url),
+        _ => None,
+    }
 }
 
 fn page_command_allowed(closing: bool, command: &BrowserCommand) -> bool {

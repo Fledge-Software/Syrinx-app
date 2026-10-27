@@ -203,6 +203,7 @@ impl BrowserView {
     pub(super) fn close_settings_subviews(&mut self) {
         self.home.site_permissions.close();
         self.usage.report.close();
+        self.page_text_site = None;
     }
 
     /// Whether the active tab is the Settings page.
@@ -373,7 +374,8 @@ impl BrowserView {
             }
             SettingsSection::Privacy => column
                 .child(self.site_permissions_entry(palette, cx))
-                .child(self.clear_data_entry(palette, cx)),
+                .child(self.clear_data_entry(palette, cx))
+                .child(self.page_text_section(palette, window, cx)),
             SettingsSection::UsageReport if self.usage.report.is_open() => {
                 self.usage_report_view(palette, cx)
             }
@@ -442,7 +444,7 @@ fn heading(id: &'static str, level: usize, title: &'static str, size: f32) -> St
 }
 
 /// A divided row: a title and a line of explanation, with its one action on the right.
-fn entry_row(
+pub(super) fn entry_row(
     palette: &Palette,
     title: &'static str,
     description: &'static str,
