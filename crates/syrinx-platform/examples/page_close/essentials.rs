@@ -225,7 +225,7 @@ fn wait_muted_while_suspended(
 }
 
 /// Waits for the page's own `IsMuted` to report the requested state.
-fn wait_muted(
+pub(super) fn wait_muted(
     events: &mut UnboundedReceiver<BrowserEvent>,
     id: u64,
     expected: bool,

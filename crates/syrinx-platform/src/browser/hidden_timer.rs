@@ -513,18 +513,6 @@ mod tests {
         assert_eq!(timer.due(), Some(stopped + AUDIO_GRACE));
     }
 
-    /// The timer has no mute input, so this only restates that the one playback flag decides:
-    /// WebView2 documents `IsDocumentPlayingAudio` as true while `IsMuted` is true. The real
-    /// proof, a muted tone page staying awake on this runtime, waits for #157, which needs
-    /// #117's `SetMuted`.
-    #[test]
-    fn a_muted_page_that_plays_counts_as_playing() {
-        let start = Instant::now();
-        let timer = hidden_playing(start);
-        assert_eq!(timer.due(), None);
-        assert!(!timer.suspension_due(start + LOADING_LIMIT * 2));
-    }
-
     #[test]
     fn a_pause_while_shown_still_delays_sleep_after_hiding() {
         let start = Instant::now();

@@ -136,9 +136,10 @@ home and settings, history, clear data, restore after restart).
   sleep itself). The native audio suite proves the timing; run it on a
   quiet machine:
   `cargo run --offline --locked --profile local --package syrinx-platform --example page_close -- --audio-only`.
-  It plays a faint 30 Hz tone for about 20 seconds (most speakers cannot
-  reproduce it) and must print that the tone page stayed awake while hidden
-  and then slept about a minute after the tone stopped. Record pass or fail
+  It mutes its page first, so it makes no sound, then plays a synthetic tone
+  for about 20 seconds. It must print that WebView2 reports the muted page as
+  playing audio, that the tone page stayed awake while hidden, and that it
+  then slept about a minute after the tone stopped. Record pass or fail
   and the printed seconds in #130.
 
 ### 7. Downloads and see-through themes (PR #145: #143, #151)
