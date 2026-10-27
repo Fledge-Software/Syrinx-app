@@ -42,6 +42,21 @@ entry names it.
   palette, a bookmark, a tile or Home. Saving taint with each tab was
   rejected: it needs a schema change for the small gain of reading a
   restored ordinary page before the owner next navigates it.
+- **Excluding a site erases its stored page text at once; the switch stays
+  in Settings > Privacy (#54, owner, 2026-10-27).** Recorded on #54 after
+  the independent review of #198; the owner may correct this record.
+  Excluding a site removes every stored page on that site or its
+  subdomains, matched by the same label-boundary rule (`within_domain`) the
+  exclusion itself uses, so `owner.test` takes `www.owner.test` but not
+  `notowner.test` or `owner.test.example`. The rows are deleted outright,
+  with no tombstones, because a tombstone's id is the page's address and
+  would keep the very addresses the owner excluded. This matches switching
+  capture off, which already erases everything. Letting the site's text
+  expire within seven days was rejected: once the palette searches page
+  text, the owner would find a site they had just excluded. The capture
+  switch and the excluded sites stay in Settings > Privacy with the other
+  privacy controls, not in Customize as #54 first said. Restoring a backup
+  can bring back an older exclusion list, a D35 risk tracked in #199.
 - **The sidebar row's menu lists its tab actions in Firefox's order; a muted
   tab shows only a mute icon; bulk closes always ask (owner, 2026-10-27).**
   #95 slice 4 needed the owner's choice of how a sidebar row offers the tab
