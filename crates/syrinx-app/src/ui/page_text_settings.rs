@@ -21,7 +21,8 @@ use crate::text_field;
 use crate::theme::rgba;
 
 const CAPTURE_DESCRIPTION: &str = "Keeps the words on pages you open after switching this on, \
-    on this computer only, and deletes them after seven days. Never reads Google's sites, \
+    on this computer only, and deletes them after seven days, or at once when you switch \
+    this off. Never reads Google's sites, \
     banks and payment sites, pages with a password or card field, or the sites you exclude. \
     Pages that ask not to be stored are skipped whenever Syrinx can see that request.";
 

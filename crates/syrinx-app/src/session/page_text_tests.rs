@@ -781,3 +781,108 @@ fn an_address_too_long_to_key_is_left_unread_and_the_index_stays_open() {
     drop(lease);
     fixture.cleanup();
 }
+
+/// The settings a switch-off saves, as the window sends them.
+fn capture(value: &str) -> SessionCommand {
+    SessionCommand::SaveSettings(vec![
+        (CAPTURE_KEY.to_owned(), value.to_owned()),
+        ("page_text.excluded_sites".to_owned(), String::new()),
+    ])
+}
+
+#[test]
+fn switching_capture_off_erases_page_text_at_once_and_keeps_notes() {
+    let fixture = Fixture::new();
+    seed_index(&fixture, &[note("kept")]);
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(CAPTURE_ON));
+    let body = format!("{WORD} erasedcapture words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(captured("https://erased.example.test/", &body)),
+    );
+    send(&handle, capture("off"));
+    stop(handle, &mut events);
+
+    let index = FullText::open(&index_folder(&fixture)).expect("reopen synthetic index");
+    assert!(pages_with(&index, "erasedcapture").is_empty());
+    assert_eq!(ids_in(&index, notes()), ["kept"]);
+    drop(index);
+
+    // A restart neither brings the text back nor erases notes.
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    assert_eq!(stored_ids(&fixture, notes()).0, ["kept"]);
+    fixture.cleanup();
+}
+
+#[test]
+fn page_text_left_behind_while_capture_is_off_is_erased_at_start_up() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    // An erase cut short: the setting is saved off, the text is still there.
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture("off"));
+    stop(handle, &mut events);
+    seed_index(&fixture, &[page("left", now - 60), note("kept")]);
+
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    assert_eq!(stored_ids(&fixture, notes()).0, ["kept"]);
+    fixture.cleanup();
+}
+
+#[test]
+fn erased_page_text_does_not_return_with_a_restored_backup() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    seed_recovery(&fixture);
+    seed_index(&fixture, &[page("before", now - 600)]);
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture("off"));
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+
+    // The database is damaged and the owner restores a backup taken before the switch-off.
+    damage_recovery_primary(&fixture);
+    let (handle, mut events) = fixture.start();
+    let offer_id = recovery_offer(&mut events);
+    send(&handle, SessionCommand::ConfirmRecovery { offer_id });
+    state(&mut events);
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    remove_preserved_recovery_bundle(&fixture, Some(DAMAGED_RECOVERY_PRIMARY));
+    fixture.cleanup();
+}
+
+#[test]
+fn an_erase_the_index_cannot_make_is_reported_not_swallowed() {
+    let fixture = Fixture::new();
+    let (lease, mut page_text) = open_page_text(&fixture);
+    let now = utc_seconds().expect("synthetic clock");
+    // Close the index the way a failed operation does, then switch capture off.
+    page_text.store(captured("https://kept.example.test/", "words"), now);
+    page_text.close_for_test();
+    page_text.erase();
+    assert!(page_text.take_problem().is_err());
+    drop(page_text);
+    drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn only_a_saved_value_other_than_on_counts_as_switched_off() {
+    use page_text::capture_switched_off as off;
+    assert!(off([(CAPTURE_KEY, "off")].into_iter()));
+    assert!(off([(CAPTURE_KEY, "garbled")].into_iter()));
+    assert!(!off([(CAPTURE_KEY, CAPTURE_ON)].into_iter()));
+    assert!(!off([("appearance.theme", "off")].into_iter()));
+    assert!(!off(std::iter::empty()));
+}

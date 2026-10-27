@@ -11,6 +11,11 @@ use syrinx_store::{DirectoryLease, LocationError};
 
 use super::{SessionError, deletions, retention, stop};
 
+/// Whether page text is captured: `on`, or anything else for off (#54).
+pub const CAPTURE_KEY: &str = "page_text.capture";
+/// The one stored value that switches capture on.
+pub const CAPTURE_ON: &str = "on";
+
 /// The index's folder beside the database. Backups copy only the database, so the index stays
 /// outside D13's snapshots as D40 requires.
 pub(super) const INDEX_FOLDER: &str = "fulltext";
@@ -89,6 +94,19 @@ impl PageText {
         self.settle(stored, "keeping a page's text");
     }
 
+    /// Erases all page text at once, as switching capture off does (owner, 2026-10-27).
+    /// An index closed by an earlier failure cannot be erased now, so that is reported too;
+    /// the next start, or the next save of the setting, tries again.
+    pub(super) fn erase(&mut self) {
+        let Some(index) = self.index.as_mut() else {
+            let closed = SessionError::FullText(FullTextError::NeedsReopen);
+            self.report(stop::during(ERASING)(closed));
+            return;
+        };
+        let erased = index.reset(&Namespace::page()).or_else(cleanup_later);
+        self.settle(erased, ERASING);
+    }
+
     /// Removes page text past D40's seven days at start-up and then once a day.
     pub(super) fn expire_if_due(&mut self, now: i64) {
         if retention::waiting(self.expiry_due, now) {
@@ -123,6 +141,13 @@ impl PageText {
     #[cfg(test)]
     pub(super) fn index(&self) -> Option<&FullText> {
         self.index.as_ref()
+    }
+
+    /// Closes the index as a failed operation would, for tests of what follows.
+    #[cfg(test)]
+    pub(super) fn close_for_test(&mut self) {
+        self.index = None;
+        self.folder = None;
     }
 
     /// The open index, for tests that stage work in it.
@@ -243,6 +268,17 @@ fn store_page(index: &mut FullText, page: CapturedPage, now: i64) -> Result<(), 
     }
     index.commit().or_else(cleanup_later)
 }
+
+/// Whether saved settings say capture is off after having been set: then any page text
+/// left by an erase that failed or was interrupted goes at start-up or with the save.
+pub(super) fn capture_switched_off<'a>(
+    mut entries: impl Iterator<Item = (&'a str, &'a str)>,
+) -> bool {
+    entries.any(|(key, value)| key == CAPTURE_KEY && value != CAPTURE_ON)
+}
+
+/// What a failed erase is reported as.
+const ERASING: &str = "erasing page text after capture was switched off";
 
 /// What a failure to open the index is reported as.
 const OPENING: &str = "opening the search index";

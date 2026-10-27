@@ -15,7 +15,7 @@ mod usage;
 
 pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
-pub use page_text::CapturedPage;
+pub use page_text::{CAPTURE_KEY, CAPTURE_ON, CapturedPage};
 pub use recovery::RecoveryPrompt;
 pub use synthetic::SyntheticCatalogue;
 pub use usage::{STATE_FOLDER, UsageControl, UsageError, UsageStatus, usage_file};
@@ -901,6 +901,15 @@ impl Worker {
             retention::EXPIRY_BATCH,
         )?;
         page_text.expire_if_due(now);
+        // Capture is off: finish an erase that failed or was cut short (owner, 2026-10-27).
+        let settings = &stored_preferences.settings;
+        if page_text::capture_switched_off(
+            settings
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        ) {
+            page_text.erase();
+        }
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
         let snapshot = model.snapshot();
@@ -1202,8 +1211,20 @@ impl Worker {
             }
             command => command,
         };
+        let erases = match &command {
+            SessionCommand::SaveSettings(entries) => page_text::capture_switched_off(
+                entries
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str())),
+            ),
+            _ => false,
+        };
         let Some(command) = preferences::intercept(store, &mut self.destinations, command, events)?
         else {
+            // Only once the switch-off is saved, so a refused save erases nothing yet.
+            if erases {
+                self.page_text.erase();
+            }
             return Ok(());
         };
 

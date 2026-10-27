@@ -7,14 +7,11 @@ use syrinx_core::{PageTextPolicy, PolicyError, TabId, TabModelSnapshot, excluded
 use syrinx_platform::browser::{BrowserCommand, CapturedText, PageTextOutcome};
 
 use super::BrowserView;
-use crate::session::{CapturedPage, SessionCommand};
+use crate::session::{CAPTURE_KEY, CAPTURE_ON as ON, CapturedPage, SessionCommand};
 
-/// Whether capture is on: `on`, or anything else for off, so an unreadable value reads nothing.
-pub(super) const CAPTURE_KEY: &str = "page_text.capture";
 /// The owner's excluded sites: normalized host names, separated by spaces, in the order added.
 pub(super) const EXCLUDED_SITES_KEY: &str = "page_text.excluded_sites";
 
-const ON: &str = "on";
 const OFF: &str = "off";
 
 /// The capture setting as the window holds it, and the tabs whose next page must not be read.

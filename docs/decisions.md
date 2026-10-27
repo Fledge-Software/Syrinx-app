@@ -17,6 +17,31 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-10-27
+
+- **Switching page text off erases it at once (#54, owner, 2026-10-27).**
+  The owner's words: "Erase them right away". The rest of this entry is the
+  coordinator's record, and the owner may correct it. Turning "Remember page
+  text" off in Settings > Privacy removes every stored page from the
+  full-text index in one reset of its page namespace, run by the session
+  worker once the switch-off is saved, as switching usage counting off
+  deletes the counts (AN-01). Notes and other feeds in the index are kept.
+  A failed erase is reported, never swallowed, and tried again the next
+  time the setting is saved or Syrinx starts while capture is off. Letting
+  the text expire within seven days was rejected: an owner switching off a
+  privacy feature expects its data to go with it.
+- **Restored, reopened and duplicated tabs are not read until the owner
+  navigates them (#54, owner, 2026-10-27).** The owner's words: "Keep it".
+  The rest of this entry is the coordinator's record, and the owner may
+  correct it. Page-text taint (P1-25's "skip all exits") is not saved, so
+  a restored tab cannot tell whether its page was reached from a bank's or
+  Google's sign-in. Such tabs, and tabs reopened with Ctrl Shift T or
+  duplicated, therefore open tainted, as crash recovery already does, and
+  are read again once the owner navigates them from the address bar, the
+  palette, a bookmark, a tile or Home. Saving taint with each tab was
+  rejected: it needs a schema change for the small gain of reading a
+  restored ordinary page before the owner next navigates it.
+
 ## 2026-10-26
 
 - **The plugin runtime starts now, before Plan 1's exit, with wasmtime
