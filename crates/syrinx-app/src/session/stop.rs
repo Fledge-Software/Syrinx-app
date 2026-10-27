@@ -75,6 +75,7 @@ impl SessionCommand {
             Self::SnapshotBeforeUpdate => "taking the pre-update snapshot",
             Self::Usage(_) => CHANGING_USAGE,
             Self::UsageReport { .. } => BUILDING_USAGE_REPORT,
+            Self::StorePageText(_) => "keeping a page's text",
             Self::Shutdown => "shutting down",
         }
     }

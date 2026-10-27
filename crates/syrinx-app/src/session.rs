@@ -15,6 +15,7 @@ mod usage;
 
 pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
+pub use page_text::CapturedPage;
 pub use recovery::RecoveryPrompt;
 pub use synthetic::SyntheticCatalogue;
 pub use usage::{STATE_FOLDER, UsageControl, UsageError, UsageStatus, usage_file};
@@ -199,6 +200,10 @@ pub enum SessionCommand {
         request_id: u64,
         period: ReportPeriod,
     },
+    /// Keeps one page's captured text in the full-text index for seven days (#54). The window
+    /// sends it only while capture is on and the page is still allowed, so nothing else is
+    /// checked here.
+    StorePageText(CapturedPage),
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -221,6 +226,9 @@ pub struct SessionSnapshot {
     pub home_entry: Option<u64>,
     /// Native popup request correlated only after durable tab allocation.
     pub popup: Option<(u64, Option<TabId>)>,
+    /// The created tabs that put back a page an earlier tab showed (reopened or duplicated),
+    /// whose first page page text must not read (#54).
+    pub reopened: Vec<TabId>,
     pub previous_shutdown: ShutdownState,
 }
 
@@ -858,6 +866,13 @@ struct Worker {
     unsaved: unsaved::Unsaved,
 }
 
+/// The tabs a command created, and those of them that put back an earlier tab's page.
+#[derive(Default)]
+struct Opened {
+    created: Vec<TabId>,
+    reopened: Vec<TabId>,
+}
+
 /// The model after a command, and the failures it survived, reported once it is published.
 struct Persisted {
     after: TabModelSnapshot,
@@ -940,8 +955,15 @@ impl Worker {
             },
         )
         .map_err(stop::during("sending the saved settings"))?;
-        self.publish(events, self.model.snapshot(), Vec::new(), None, None, None)
-            .map_err(stop::during("sending the restored tabs"))?;
+        self.publish(
+            events,
+            self.model.snapshot(),
+            Opened::default(),
+            None,
+            None,
+            None,
+        )
+        .map_err(stop::during("sending the restored tabs"))?;
         self.report_page_text(events)?;
         let mut delay = IDLE_DELAY;
         loop {
@@ -1105,6 +1127,10 @@ impl Worker {
             SessionCommand::GrowSyntheticCatalogue { total } => {
                 return self.grow_synthetic(total, events);
             }
+            SessionCommand::StorePageText(page) => {
+                self.page_text.store(page, utc_seconds()?);
+                return Ok(());
+            }
             SessionCommand::RecentHistory { request_id, limit } => {
                 let result = store.recent_visits(limit).map_err(SessionError::Store);
                 return emit(events, SessionEvent::History { request_id, result });
@@ -1200,6 +1226,7 @@ impl Worker {
             _ => None,
         };
         let counted = counted_feature(&command);
+        let reopening = reopens_a_page(&command);
         let before = self.model.snapshot();
         if let Err(error) = apply_model(&mut self.model, command) {
             // A refused popup must not leave its native request waiting for a tab.
@@ -1228,7 +1255,13 @@ impl Worker {
             stop::keep_refused(&mut refused, registered)?;
         }
         // Survived failures follow the state, so its "Saved locally" cannot hide them.
-        let published = self.publish(events, after, created, navigate, home_entry, popup);
+        let reopened = if reopening {
+            created.clone()
+        } else {
+            Vec::new()
+        };
+        let opened = Opened { created, reopened };
+        let published = self.publish(events, after, opened, navigate, home_entry, popup);
         self.survival.report_refused(refused, events)?;
         published
     }
@@ -1350,7 +1383,7 @@ impl Worker {
         self.usage.count(Feature::ImportCompleted);
         let result = Ok(commit);
         let published = emit(events, SessionEvent::Imported { request_id, result })
-            .and_then(|()| self.publish(events, after, Vec::new(), None, None, None));
+            .and_then(|()| self.publish(events, after, Opened::default(), None, None, None));
         self.survival.report_refused(refused, events)?;
         published
     }
@@ -1562,7 +1595,7 @@ impl Worker {
         &self,
         events: &UnboundedSender<SessionEvent>,
         model: TabModelSnapshot,
-        created: Vec<TabId>,
+        opened: Opened,
         navigate: Option<TabId>,
         home_entry: Option<u64>,
         popup: Option<(u64, Option<TabId>)>,
@@ -1572,10 +1605,11 @@ impl Worker {
             SessionEvent::State(SessionSnapshot {
                 revision: self.revision,
                 model,
-                created,
+                created: opened.created,
                 navigate,
                 home_entry,
                 popup,
+                reopened: opened.reopened,
                 previous_shutdown: self.previous_shutdown,
             }),
         )
@@ -1661,6 +1695,21 @@ fn counted_feature(command: &SessionCommand) -> Counted {
             FolderCommand::Remove { .. } | FolderCommand::DeleteWithContents { .. },
         ) => Counted::IfChanged(Feature::FolderRemoved),
         _ => Counted::Nothing,
+    }
+}
+
+/// Whether a command puts back a page an earlier tab showed, which may have been reached from
+/// an excluded site, so page text must not read it from the start (#54, D35).
+fn reopens_a_page(command: &SessionCommand) -> bool {
+    match command {
+        SessionCommand::ReopenClosed
+        | SessionCommand::HomeEntry {
+            action: HomeEntryAction::ReopenClosed,
+            ..
+        } => true,
+        #[cfg(test)]
+        SessionCommand::Duplicate(_) => true,
+        _ => false,
     }
 }
 
@@ -1817,6 +1866,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::SnapshotBeforeUpdate
         | SessionCommand::Usage(_)
         | SessionCommand::UsageReport { .. }
+        | SessionCommand::StorePageText(_)
         | SessionCommand::Shutdown => {}
     }
     Ok(())
@@ -2368,6 +2418,7 @@ mod tests {
             navigate: None,
             home_entry: None,
             popup: None,
+            reopened: Vec::new(),
             previous_shutdown: ShutdownState::Clean,
         });
         assert!(!format!("{event:?}").contains(address));

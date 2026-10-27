@@ -29,6 +29,8 @@ pub(crate) const CUSTOM_ACCENT: FieldName = plain("custom-accent-field", "Custom
 pub(crate) const THEME_NAME: FieldName = plain("theme-name-field", "Theme name");
 pub(crate) const THEME_BACKGROUND: FieldName = plain("theme-background-field", "Background colour");
 pub(crate) const THEME_SECOND: FieldName = plain("theme-second-field", "Second gradient colour");
+pub(crate) const EXCLUDED_SITE: FieldName =
+    plain("excluded-site-field", "Site to exclude from page text");
 
 const fn plain(id: &'static str, label: &'static str) -> FieldName {
     FieldName {
@@ -89,13 +91,14 @@ mod tests {
 
     use super::*;
 
-    const ALL: [FieldName; 6] = [
+    const ALL: [FieldName; 7] = [
         PALETTE_QUERY,
         FIND_IN_PAGE,
         FOLDER_NAME,
         TILE_NAME,
         TILE_ADDRESS,
         CUSTOM_ACCENT,
+        EXCLUDED_SITE,
     ];
 
     #[test]

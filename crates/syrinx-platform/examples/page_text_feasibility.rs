@@ -221,6 +221,18 @@ impl Browser {
         Ok(id)
     }
 
+    /// Opens `url` in a new shown tab as Syrinx reopens a restored, closed or duplicated one.
+    pub fn reopen(&mut self, url: &str) -> Result<u64, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.send(BrowserCommand::Reopen {
+            id,
+            url: url.to_owned(),
+        })?;
+        self.send(BrowserCommand::ShowActive(Some(id)))?;
+        Ok(id)
+    }
+
     pub fn navigate(&self, id: u64, url: &str) -> Result<(), String> {
         self.send(BrowserCommand::Navigate {
             id,

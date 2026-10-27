@@ -1,9 +1,11 @@
 //! Keeps page text in the full-text index level with D47's clears and D40's seven days (#53).
 
-use std::fs;
+use std::{fmt, fs};
 
 use syrinx_platform::{CacheFolder, WindowsDirectoryLease};
-use syrinx_search::fulltext::{ClearRequest, ClearScope, FullText, FullTextError};
+use syrinx_search::fulltext::{
+    Change, ClearRequest, ClearScope, FullText, FullTextDocument, FullTextError, Namespace,
+};
 use syrinx_store::deletion::{DeletionCategory, DeletionLog, DeletionRequest};
 use syrinx_store::{DirectoryLease, LocationError};
 
@@ -76,6 +78,15 @@ impl PageText {
         };
         let followed = follow_journal(index, log);
         self.settle(followed, "applying a clear to the search index");
+    }
+
+    /// Keeps one page's text for D40's seven days, replacing an earlier capture of its address.
+    pub(super) fn store(&mut self, page: CapturedPage, now: i64) {
+        let Some(index) = self.index.as_mut() else {
+            return;
+        };
+        let stored = store_page(index, page, now);
+        self.settle(stored, "keeping a page's text");
     }
 
     /// Removes page text past D40's seven days at start-up and then once a day.
@@ -195,6 +206,42 @@ impl PageText {
             },
         }
     }
+}
+
+/// One page's captured text, as the window hands it over (#54). Its address, without a
+/// fragment, keys the document, so a later capture of the same page replaces it.
+pub struct CapturedPage {
+    pub address: String,
+    pub title: String,
+    pub text: String,
+}
+
+impl fmt::Debug for CapturedPage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Addresses, titles and page text are the owner's browsing; they never reach a log.
+        formatter.write_str("CapturedPage { contents: [redacted] }")
+    }
+}
+
+/// Stages and commits one page. Captures are seconds apart, so `now` orders them as
+/// revisions; a second capture within the same second is the same page and changes nothing.
+fn store_page(index: &mut FullText, page: CapturedPage, now: i64) -> Result<(), SessionError> {
+    let revision = u64::try_from(now).map_err(|_| SessionError::ClockUnavailable)?;
+    let document = FullTextDocument {
+        namespace: Namespace::page(),
+        id: page.address,
+        revision,
+        captured_at: now,
+        title: page.title,
+        body: page.text,
+    };
+    match index.stage(&[Change::Upsert(document)], now) {
+        Ok(_) => {}
+        // An address too long to key the index is left unread; the index itself is sound.
+        Err(FullTextError::InvalidDocument) => return Ok(()),
+        Err(error) => return Err(SessionError::FullText(error)),
+    }
+    index.commit().or_else(cleanup_later)
 }
 
 /// What a failure to open the index is reported as.

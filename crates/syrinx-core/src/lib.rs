@@ -20,7 +20,7 @@ pub use web_address::{WebAddressError, web_address};
 
 pub use page_text::{
     DocumentFacts, EligibleDocument, Ineligible, LeftDocument, ObservedResponse, PageTextPolicy,
-    PolicyError, SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, TEXT_LIMIT_BYTES, judge,
+    PolicyError, SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, TEXT_LIMIT_BYTES, excluded_site, judge,
     same_document_address, same_document_due,
 };
 

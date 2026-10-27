@@ -662,3 +662,122 @@ fn a_damaged_index_is_emptied_and_started_afresh() {
     assert_eq!(stored_ids(&fixture, Namespace::page()).1, 1);
     fixture.cleanup();
 }
+
+/// A synthetic capture as the window hands it over.
+fn captured(address: &str, body: &str) -> CapturedPage {
+    CapturedPage {
+        address: address.to_owned(),
+        title: "Synthetic captured page".to_owned(),
+        text: body.to_owned(),
+    }
+}
+
+/// The page ids whose title or body holds `word`.
+fn pages_with(index: &FullText, word: &str) -> Vec<String> {
+    let request = SearchRequest {
+        text: word.to_owned(),
+        prefix_last: false,
+        namespaces: NamespaceFilter::Only(vec![Namespace::page()]),
+        limit: 100,
+    };
+    let hits = index.search(&request).expect("search synthetic index");
+    hits.into_iter().map(|hit| hit.id).collect()
+}
+
+/// Every file's bytes under `folder`, however deep.
+fn files_under(folder: &Path) -> Vec<Vec<u8>> {
+    let mut files = Vec::new();
+    for entry in checked_io(fs::read_dir(folder)) {
+        let path = checked_io(entry).path();
+        if path.is_dir() {
+            files.extend(files_under(&path));
+        } else {
+            files.push(checked_io(fs::read(&path)));
+        }
+    }
+    files
+}
+
+/// A worker's page text opened on the fixture's guarded folder, without a session.
+fn open_page_text(fixture: &Fixture) -> (Arc<WindowsDirectoryLease>, page_text::PageText) {
+    let lease = Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data"));
+    let page_text = page_text::PageText::open(&lease);
+    (lease, page_text)
+}
+
+#[test]
+fn a_captured_page_is_kept_found_by_a_body_word_and_never_backed_up() {
+    let fixture = Fixture::new();
+    let address = "https://kept.example.test/article";
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    let body = format!("{WORD} synthetic captured words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(captured(address, &body)),
+    );
+    // A snapshot taken after the capture holds the database only (D40).
+    send(&handle, SessionCommand::SnapshotBeforeUpdate);
+    match next_event(&mut events) {
+        SessionEvent::UpdateSnapshot(Ok(())) => {}
+        event => panic!("expected a synthetic snapshot, got {event:?}"),
+    }
+    stop(handle, &mut events);
+
+    let index = FullText::open(&index_folder(&fixture)).expect("reopen synthetic index");
+    assert_eq!(pages_with(&index, "captured"), [address]);
+    drop(index);
+    let files = files_under(&fixture.0.join("backups"));
+    assert!(!files.is_empty(), "the snapshot was taken");
+    for bytes in files {
+        let found = bytes
+            .windows(WORD.len())
+            .any(|window| window == WORD.as_bytes());
+        assert!(!found, "page text reached a backup");
+    }
+    fixture.cleanup();
+}
+
+#[test]
+fn a_later_capture_replaces_the_text_and_seven_days_remove_it() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let address = "https://replaced.example.test/";
+    let (lease, mut page_text) = open_page_text(&fixture);
+    page_text.store(captured(address, "firstcapture words"), now);
+    page_text.store(captured(address, "secondcapture words"), now + 60);
+    let index = page_text.index().expect("the index is open");
+    assert!(pages_with(index, "firstcapture").is_empty());
+    assert_eq!(pages_with(index, "secondcapture"), [address]);
+
+    page_text.expire_if_due(now + 60 + PAGE_RETENTION_SECONDS + 1);
+    let index = page_text.index().expect("the index is open");
+    assert!(pages_with(index, "secondcapture").is_empty());
+    assert_eq!(page_text.take_problem(), Ok(()));
+    drop(page_text);
+    drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn an_address_too_long_to_key_is_left_unread_and_the_index_stays_open() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let long = format!("https://long.example.test/{}", "a".repeat(4_096));
+    let (lease, mut page_text) = open_page_text(&fixture);
+    page_text.store(captured(&long, "longaddress words"), now);
+    page_text.store(
+        captured("https://short.example.test/", "shortaddress words"),
+        now,
+    );
+    let index = page_text.index().expect("the index is still open");
+    assert!(pages_with(index, "longaddress").is_empty());
+    assert_eq!(
+        pages_with(index, "shortaddress"),
+        ["https://short.example.test/"]
+    );
+    assert_eq!(page_text.take_problem(), Ok(()));
+    drop(page_text);
+    drop(lease);
+    fixture.cleanup();
+}
