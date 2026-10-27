@@ -941,6 +941,18 @@ mod tests {
             .collect()
     }
 
+    /// The `fn name(` of the product function in `file` that holds `needle`'s one occurrence.
+    fn enclosing_fn(file: &str, needle: &str) -> String {
+        let (_, text) = product_sources()
+            .into_iter()
+            .find(|(name, _)| name == file)
+            .expect("the file is a product source");
+        let at = text.find(needle).expect("the needle occurs");
+        let start = text[..at].rfind("fn ").expect("inside a function");
+        let end = start + text[start..].find('(').expect("a parameter list") + 1;
+        text[start..end].to_owned()
+    }
+
     #[test]
     fn only_the_export_buttons_reach_the_clipboard_or_a_chosen_file() {
         // Needles are split so this test's own text never matches them.
@@ -956,6 +968,14 @@ mod tests {
                 ("usage_preview.rs".to_owned(), 1)
             ]
         );
+        // Copy link's write sits in its one named function, which writes only `row_link`'s
+        // address (tested in `row_menu`), and that function has one caller.
+        let link_writer = concat!("fn copy_row_", "link(");
+        assert_eq!(enclosing_fn("row_menu.rs", clipboard), link_writer);
+        let link_writes = concat!("cx.write_to_", "clipboard(link);");
+        assert_eq!(occurrences(link_writes), [("row_menu.rs".to_owned(), 1)]);
+        let link_calls = concat!("copy_row_", "link(");
+        assert_eq!(occurrences(link_calls), [("row_menu.rs".to_owned(), 2)]);
         // Defined once, called by Copy report and Copy prompt only.
         let helper = concat!("put_on_", "clipboard(");
         assert_eq!(occurrences(helper), [("usage_preview.rs".to_owned(), 3)]);

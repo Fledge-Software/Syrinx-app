@@ -5,13 +5,16 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::{KeyDownEvent, MouseDownEvent, Pixels, Point, WeakEntity, prelude::FluentBuilder as _};
+use gpui::{
+    KeyDownEvent, MouseDownEvent, MouseMoveEvent, Pixels, Point, WeakEntity,
+    prelude::FluentBuilder as _,
+};
 use syrinx_core::{BrowserAction, DestinationSurface, DownloadControl, Shortcut};
 use syrinx_platform::browser::{BrowserError, OverlayRect, hide_overlay, syrinx_in_foreground};
 
 use super::row_menu::{
-    ActionFocus, BulkClose, MenuOrigin, RowEntry, TabAction, browser_key_label, bulk_confirm_label,
-    bulk_question,
+    ActionFocus, BulkClose, MenuOrigin, RowEntry, RowPlace, TabAction, browser_key_label,
+    bulk_confirm_label, bulk_question,
 };
 use super::sidebar_tree::TreeId;
 use super::title_bar::{CAPTION_GAP, caption_buttons_width};
@@ -31,6 +34,12 @@ const DOWNLOADS_WIDTH: f32 = 380.;
 /// The flyout lists this many downloads, newest first; the session's list keeps more.
 const MAX_DOWNLOAD_ROWS: usize = 8;
 const ITEM_HEIGHT: f32 = 30.;
+/// An item's padding either side of its label and shortcut.
+const ITEM_PAD_X: f32 = 10.;
+/// An item's corner radius, inside the card's padding.
+const ITEM_RADIUS: f32 = 6.;
+/// How far a separator's line stops short of the card's sides.
+const SEPARATOR_INSET: f32 = 6.;
 /// A separator between a menu's groups: a 1 px line centred in this height.
 const SEPARATOR_HEIGHT: f32 = 9.;
 /// The card's padding around its rows and its border, in logical pixels.
@@ -82,10 +91,11 @@ enum MenuItem {
     Tab(TabAction),
     /// The confirmation's question; shown, never chosen.
     ConfirmPrompt,
-    /// Closes the tabs the confirmation named; `remember` stops it asking again.
+    /// Closes the `asked` tabs the confirmation named; `remember` stops it asking again.
     ConfirmBulk {
         bulk: BulkClose,
         remember: bool,
+        asked: usize,
     },
     Cancel,
 }
@@ -407,8 +417,11 @@ impl BrowserView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let wide = self.sidebar_sizing.labels_visible();
-        let rows = row_menu_rows(self.row_entries(row, wide));
+        let place = RowPlace {
+            wide: self.sidebar_sizing.labels_visible(),
+            keyed: matches!(opening.returns, MenuReturn::Row(_)),
+        };
+        let rows = row_menu_rows(self.row_entries(row, place));
         if rows.is_empty() {
             let rows = self.menu_rows(MenuKind::Sidebar);
             self.show_menu_rows(MenuKind::Sidebar, rows, opening, window, cx);
@@ -753,16 +766,16 @@ impl BrowserView {
         let returns = origin.returns.clone();
         let focus = match item {
             MenuItem::Tab(action) => self.run_tab_action(action, Some(origin), window, cx),
-            MenuItem::ConfirmBulk { bulk, remember } => {
-                self.confirm_bulk_close(bulk, remember);
-                ActionFocus::Unplaced
-            }
+            MenuItem::ConfirmBulk {
+                bulk,
+                remember,
+                asked,
+            } => self.confirm_bulk_close(bulk, remember, asked, origin, window, cx),
             _ => ActionFocus::Unplaced,
         };
         if focus == ActionFocus::Unplaced {
             self.return_menu_focus(returns, window, cx);
         }
-        cx.notify();
     }
 
     /// Does what the chosen item names; the keys go back to the page unless it places them.
@@ -773,13 +786,6 @@ impl BrowserView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(
-            item,
-            MenuItem::Tab(_) | MenuItem::ConfirmBulk { .. } | MenuItem::Cancel
-        ) {
-            self.run_row_item(item, origin, window, cx);
-            return;
-        }
         if item.takes_keys() {
             self.move_keys_to_chrome();
         }
@@ -808,15 +814,16 @@ impl BrowserView {
             }
             MenuItem::ClearDownloads => self.downloads.clear_finished(),
             MenuItem::CloseActiveTab => self.close_tab(),
-            // Shown for their state only, which `is_choosable` keeps from being chosen; row
-            // items ran above.
+            // A row menu's or confirmation's item puts the keys back itself.
+            MenuItem::Tab(_) | MenuItem::ConfirmBulk { .. } | MenuItem::Cancel => {
+                self.run_row_item(item, origin, window, cx);
+                return;
+            }
+            // Shown for their state only, which `is_choosable` keeps from being chosen.
             MenuItem::Download(_)
             | MenuItem::NoDownloads
             | MenuItem::Separator
-            | MenuItem::ConfirmPrompt
-            | MenuItem::Tab(_)
-            | MenuItem::ConfirmBulk { .. }
-            | MenuItem::Cancel => {}
+            | MenuItem::ConfirmPrompt => {}
         }
         if item.returns_keys_to_page() {
             self.focus_page(window, cx);
@@ -928,6 +935,7 @@ struct MenuView {
     zoom: f64,
     /// The row arrows have moved to; none until the owner presses one or hovers a row.
     selected: Option<usize>,
+    hover: HoverGuard,
     focus: FocusHandle,
     /// Deactivation before the popup was ever active is its hidden creation, not a click away.
     was_active: bool,
@@ -963,6 +971,7 @@ impl MenuView {
             rows,
             zoom,
             selected,
+            hover: HoverGuard::default(),
             focus: cx.focus_handle(),
             was_active: false,
             _activation: activation,
@@ -1083,7 +1092,7 @@ impl Render for MenuView {
         let mut card = div()
             .id("chrome-menu")
             .role(gpui::Role::Menu)
-            .aria_label(self.kind.name())
+            .aria_label(menu_name(self.kind, &self.rows))
             .track_focus(&self.focus)
             .size_full()
             .p(px(MENU_PADDING))
@@ -1105,9 +1114,9 @@ impl Render for MenuView {
                 continue;
             }
             let selected = self.selected == Some(index);
-            let drawn = menu_row(index, row, selected, &palette).on_hover(cx.listener(
-                move |this, hovered: &bool, _, cx| {
-                    if *hovered && this.selected != Some(index) {
+            let drawn = menu_row(index, row, selected, &palette).on_mouse_move(cx.listener(
+                move |this, event: &MouseMoveEvent, _, cx| {
+                    if this.hover.may_select(event.position) && this.selected != Some(index) {
                         this.selected = Some(index);
                         cx.notify();
                     }
@@ -1140,6 +1149,16 @@ impl Render for MenuView {
     }
 }
 
+/// The popup's accessible name: the confirmation is named by its question, such as "Close 3
+/// other tabs?", so a screen reader announces what it asks.
+fn menu_name(kind: MenuKind, rows: &[MenuRow]) -> String {
+    let question = rows.iter().find(|row| row.item == MenuItem::ConfirmPrompt);
+    match (kind, question) {
+        (MenuKind::Confirm, Some(row)) => row.label.clone(),
+        _ => kind.name().to_owned(),
+    }
+}
+
 /// A separator, or the confirmation's question in the menu's own type.
 fn drawn_only_row(index: usize, row: &MenuRow, palette: &syrinx_ui::Palette) -> Stateful<Div> {
     if row.item == MenuItem::Separator {
@@ -1147,7 +1166,7 @@ fn drawn_only_row(index: usize, row: &MenuRow, palette: &syrinx_ui::Palette) -> 
             .id(("menu-separator", index))
             .h(px(SEPARATOR_HEIGHT))
             .flex_shrink_0()
-            .px(px(6.))
+            .px(px(SEPARATOR_INSET))
             .flex()
             .items_center()
             .child(
@@ -1164,7 +1183,7 @@ fn drawn_only_row(index: usize, row: &MenuRow, palette: &syrinx_ui::Palette) -> 
         .aria_label(row.label.clone())
         .h(px(ITEM_HEIGHT))
         .flex_shrink_0()
-        .px(px(10.))
+        .px(px(ITEM_PAD_X))
         .flex()
         .items_center()
         .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -1192,11 +1211,11 @@ fn menu_row(
         })
         .h(px(ITEM_HEIGHT))
         .flex_shrink_0()
-        .px(px(10.))
+        .px(px(ITEM_PAD_X))
         .flex()
         .items_center()
         .gap_3()
-        .rounded(px(6.))
+        .rounded(px(ITEM_RADIUS))
         .cursor_pointer()
         .child(div().flex_1().min_w_0().truncate().child(row.label.clone()))
         .children(row.shortcut.clone().map(|keys| {
@@ -1206,6 +1225,28 @@ fn menu_row(
                 .text_color(theme::rgba(palette.text_muted))
                 .child(keys)
         }))
+}
+
+/// Lets the pointer select a row only once it has really moved. Windows sends a mouse move
+/// when a popup appears under a still pointer; that must not replace a keyboard selection.
+#[derive(Clone, Copy, Debug, Default)]
+struct HoverGuard {
+    first: Option<Point<Pixels>>,
+    moved: bool,
+}
+
+impl HoverGuard {
+    /// Whether a pointer move to `position` may change the selection.
+    fn may_select(&mut self, position: Point<Pixels>) -> bool {
+        if self.moved {
+            return true;
+        }
+        match self.first {
+            None => self.first = Some(position),
+            Some(first) => self.moved = first != position,
+        }
+        self.moved
+    }
 }
 
 /// Which corner of the menu sits at its anchor point.
@@ -1286,12 +1327,14 @@ fn confirm_rows(bulk: BulkClose, count: usize) -> Vec<MenuRow> {
             MenuItem::ConfirmBulk {
                 bulk,
                 remember: false,
+                asked: count,
             },
             bulk_confirm_label(count),
         ),
         fixed_row(MenuItem::ConfirmBulk {
             bulk,
             remember: true,
+            asked: count,
         }),
         fixed_row(MenuItem::Cancel),
     ]
@@ -1468,6 +1511,18 @@ mod tests {
             position: point(px(x), px(y)),
             corner,
         }
+    }
+
+    #[test]
+    fn hover_selects_only_after_the_pointer_has_moved() {
+        let still = point(px(40.), px(20.));
+        let mut guard = HoverGuard::default();
+        // The move Windows sends when the popup appears under a still pointer.
+        assert!(!guard.may_select(still));
+        assert!(!guard.may_select(still), "the same place again is no move");
+        assert!(guard.may_select(point(px(41.), px(20.))));
+        // Once moved, every later move selects, back at the first place too.
+        assert!(guard.may_select(still));
     }
 
     #[test]
@@ -1685,6 +1740,8 @@ mod tests {
             }))
         ));
         assert!(key_action("enter", Some(rows[0].item)).is_none());
+        assert_eq!(menu_name(MenuKind::Confirm, &rows), "Close 3 other tabs?");
+        assert_eq!(menu_name(MenuKind::Row, &[]), "Tab menu");
     }
 
     #[test]

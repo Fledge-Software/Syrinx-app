@@ -39,16 +39,20 @@ entry names it.
   - **What each row offers, as built.** Groups are split by a separator, and
     a key is named only where pressing it acts on that row: Ctrl R and
     Ctrl D act on the active tab, so they label only the active row's
-    items. Every key label is read from the binding that runs it, so the
-    menu and the keys cannot drift apart.
-    - An open tab: Reload tab, Duplicate tab, Mute tab (Unmute tab once
-      muted), Copy link | Save page | Close tab (Ctrl W, Delete), Close
+    items; Ctrl W acts on the active tab, or on the focused row when Shift
+    F10 or the Menu key opened the menu there; Delete and F2 act only on
+    the focused row, so a right-click menu does not name them. The keys
+    below are those of a menu opened from the keyboard. Every key label is
+    read from the binding that runs it, so the menu and the keys cannot
+    drift apart.
+    - An open tab: Reload tab, Mute tab (Unmute tab once muted), Duplicate
+      tab, Copy link | Save page | Close tab (Ctrl W, Delete), Close
       other tabs, Close tabs below | Reopen closed tab (Ctrl Shift T). Home
       and Settings rows have only the closing and reopening groups. A bulk
       close that would close nothing is left out of the menu, as Firefox
       greys it out.
     - A saved page whose page is open: Unload page (Ctrl W), Remove saved
-      page (Delete) | Reload tab, Duplicate tab, Mute tab, Copy link |
+      page (Delete) | Reload tab, Mute tab, Duplicate tab, Copy link |
       Reopen closed tab.
     - A saved page that is not open: Copy link | Remove saved page (Delete),
       the second only in the wide sidebar.
@@ -79,8 +83,10 @@ entry names it.
     offering Close 3 tabs, Close and don't ask again, and Cancel. "Don't ask
     again" is stored as Syrinx's own setting `tabs.ask_before_bulk_close`
     and is turned back on under Settings, Tabs, "Ask before closing several
-    tabs". Rejected: asking only above 20 tabs, which #95's plan had
-    recommended, because the owner chose to be asked every time.
+    tabs". If tabs open or close while it asks, choosing Close asks again
+    with the new count rather than close tabs the question never named.
+    Rejected: asking only above 20 tabs, which #95's plan had recommended,
+    because the owner chose to be asked every time.
   - **What it does not change.** No palette command was added, so D39's
     usage schema is unchanged; that choice stays open on #95. #58's item
     list named Shift Delete for removing a saved page or folder; the binding

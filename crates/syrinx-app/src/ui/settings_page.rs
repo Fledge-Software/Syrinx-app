@@ -393,13 +393,14 @@ impl BrowserView {
             palette,
         )
         .on_click(cx.listener(move |this, _, _, cx| {
-            this.set_ask_before_bulk_close(!on);
+            // From the current state, not the one this frame drew.
+            this.set_ask_before_bulk_close(!this.ask_before_bulk_close);
             cx.notify();
         }));
         entry_row(
             palette,
             "Ask before closing several tabs",
-            "Close other tabs and Close tabs below say how many tabs will close first.",
+            "Before Close other tabs or Close tabs below, Syrinx says how many tabs will close and asks first.",
             switch,
         )
     }

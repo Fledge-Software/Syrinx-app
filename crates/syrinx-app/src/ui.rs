@@ -330,8 +330,6 @@ pub struct BrowserView {
     muted: HashSet<TabId>,
     /// Tabs whose page last reported itself muted, which the sidebar's badge shows (#95).
     shown_muted: HashSet<TabId>,
-    /// Tabs whose mute was sent and not yet reported, so a refusal can be named.
-    mute_requests: HashSet<TabId>,
     /// Whether Close other tabs and Close tabs below ask first (owner, 2026-10-27).
     ask_before_bulk_close: bool,
     /// This session's downloads, in memory only (#143).
@@ -450,7 +448,6 @@ impl BrowserView {
             site_zoom: site_zoom::SiteZoom::default(),
             muted: HashSet::new(),
             shown_muted: HashSet::new(),
-            mute_requests: HashSet::new(),
             ask_before_bulk_close: true,
             downloads: syrinx_core::DownloadList::default(),
             permissions: Vec::new(),
@@ -981,6 +978,10 @@ impl BrowserView {
             }
             BrowserEvent::CloseRequested { id } => self.page_requested_close(id),
             BrowserEvent::Created { id } => {
+                // A new page starts audible whatever its tab's last page reported.
+                if let Ok(tab) = TabId::new(id) {
+                    self.page_gone(tab);
+                }
                 self.reapply_mute(id);
                 // A new controller starts at 100%; its first address applies the site's level.
                 self.site_zoom.forget_page(id);
@@ -1095,13 +1096,9 @@ impl BrowserView {
                 {
                     self.site_zoom.abandon_apply(id);
                 }
-                let refused_mute = matches!(
-                    (tab, &error),
-                    (Some(id), syrinx_platform::browser::BrowserError::PageControl)
-                        if self.mute_refused(id)
-                );
-                if refused_mute {
-                    // `mute_refused` has said why in the status line.
+                if let Some(id) = mute::refused_mute(tab, &error) {
+                    // Its own status line, not the generic error; the smoke check below still runs.
+                    self.mute_refused(id);
                 } else if tab.is_none() {
                     self.fail(error.to_string());
                 } else if tab.is_some_and(|id| self.active_page_feedback(id)) {
@@ -1252,6 +1249,7 @@ impl BrowserView {
             downloads::forget_removed_page(&mut self.downloads, id);
             if self.page_command(BrowserCommand::Close { id: id.get() }) {
                 self.loaded.remove(&id);
+                self.page_gone(id);
                 self.pending_pages.remove(&id);
             }
         }

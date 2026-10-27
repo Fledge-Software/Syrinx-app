@@ -54,8 +54,10 @@ const BADGE_GLYPH_SIZE: f32 = 11.;
 /// above it (#95), and the wide row's mute glyph.
 const MUTED_BADGE_SIZE: f32 = 12.;
 const MUTED_BADGE_INSET: f32 = 4.;
-const MUTED_BADGE_GLYPH_SIZE: f32 = 7.;
+const MUTED_BADGE_GLYPH_SIZE: f32 = 8.;
 const MUTE_GLYPH_SIZE: f32 = 12.;
+/// The wide row's × and mute buttons share this square, so they line up and are as easy to hit.
+const ROW_ACTION_SIZE: f32 = 20.;
 const LAST_VISIBLE_KEY: &str = "sidebar.last_visible_state";
 
 /// What a row shows: its icon letter, title and selection, and how deep it is nested.
@@ -508,9 +510,7 @@ impl BrowserView {
             return row.child(muted_badge(tab));
         }
         row.child(
-            row_button(("unmute", tab.get()), "Unmute tab")
-                .px_1()
-                .rounded_md()
+            row_action_box(row_button(("unmute", tab.get()), "Unmute tab"))
                 .font_family(glyph::FONT)
                 .text_size(px(MUTE_GLYPH_SIZE))
                 .text_color(theme::icon())
@@ -655,6 +655,8 @@ fn tree_item(
     cx: &mut Context<BrowserView>,
 ) -> Stateful<Div> {
     row.track_focus(focus)
+        // Announced like the close control's keys: Shift F10 or the Menu key opens the row menu.
+        .aria_keyshortcuts("Shift+F10 ContextMenu")
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             this.tree_key_down(id, event, window, cx);
         }))
@@ -788,7 +790,18 @@ fn row_button(id: impl Into<ElementId>, name: &'static str) -> Stateful<Div> {
 /// what the buttons do: Delete and F2 close, remove and rename, and Ctrl W unloads a saved
 /// page or closes a tab (DW-63).
 fn row_action(id: impl Into<ElementId>, glyph: &'static str, name: &'static str) -> Stateful<Div> {
-    row_button(id, name).px_1().rounded_md().child(glyph)
+    row_action_box(row_button(id, name)).child(glyph)
+}
+
+/// The square every wide row button sits in, its glyph centred.
+fn row_action_box(button: Stateful<Div>) -> Stateful<Div> {
+    button
+        .size(px(ROW_ACTION_SIZE))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
 }
 
 /// The compact row's close badge (#128): a round × on the icon's top-right corner, kept inside

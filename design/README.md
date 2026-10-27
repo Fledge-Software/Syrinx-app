@@ -175,15 +175,21 @@ design.
   Close tab (Ctrl W). Close other tabs and Close tabs below first ask in
   the same card at the same place: the question in semibold ("Close 3
   other tabs?"), a separator, then Close 3 tabs, Close and don't ask again,
-  and Cancel. Settings gains a Tabs section whose one switch, "Ask before
-  closing several tabs", turns the question back on.
+  and Cancel. Opened from the keyboard, the question starts on Close 3 tabs,
+  as Firefox's does: a mistaken Enter is undone by Reopen closed tab, while
+  starting on Cancel would make the common answer cost an extra key. The
+  pointer selects a row only after it has moved, as in native Windows menus,
+  so a card that opens under a still pointer keeps that keyboard choice. The
+  wide row's mute button and × share one 20 px square. Settings gains a Tabs
+  section whose one switch, "Ask before closing several tabs", turns the
+  question back on.
 - **The muted marker (#95; "Mute icon only", 2026-10-27).** A muted tab's
   wide row shows the Segoe MDL2 mute glyph (E74F) in the icon colour before
   its ×, which unmutes on a click. In the favicon-only sidebar it is a
-  12 px round badge with the same glyph on the icon's bottom-right corner,
-  clear of the close badge above it, in the close badge's colours, and shown
-  only. No speaker icon appears while a page plays sound. The canvas has no
-  board for any of these; adding one is the owner's.
+  12 px round badge with the same glyph, at 8 px, on the icon's bottom-right
+  corner, clear of the close badge above it, in the close badge's colours,
+  and shown only. No speaker icon appears while a page plays sound. The
+  canvas has no board for any of these; adding one is the owner's.
 
 ## Forge
 

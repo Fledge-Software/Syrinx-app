@@ -14,7 +14,6 @@ use super::{
     BrowserView,
     folder_editor::{FolderEditor, REMOVE_ROW_KEY, RENAME_ROW_KEY},
     menus::{Corner, MenuAnchor, MenuOpening, MenuReturn},
-    mute::change_mute,
     sidebar_tree::{TreeId, live_tab},
 };
 use crate::session::SessionCommand;
@@ -167,6 +166,15 @@ fn key_label(keystroke: &str) -> Option<String> {
         .map(|shortcut| shortcut.label())
 }
 
+/// Where a row's menu is shown: `wide` is false in the favicon-only sidebar, and `keyed` is
+/// true when Shift F10 or the Menu key opened it on the focused row, so the row's own keys
+/// (Ctrl W, Delete, F2) act on it once the menu closes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RowPlace {
+    pub(super) wide: bool,
+    pub(super) keyed: bool,
+}
+
 /// One menu line: an action with its key labels, or a separator between groups.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum RowEntry {
@@ -182,20 +190,22 @@ type Item = (TabAction, Option<String>);
 
 /// The row's menu in Firefox's order (owner, 2026-10-27), groups split by separators. A key
 /// is shown only where pressing it would act on this row: Ctrl R and Ctrl D act on the active
-/// tab, so they label only the active row. `wide` is false in the favicon-only sidebar, where
-/// renaming and removals that need the wide sidebar's card are left out.
-pub(super) fn row_actions(subject: RowSubject, wide: bool, keys: &RowKeys) -> Vec<RowEntry> {
+/// tab, Ctrl W on the active tab or the focused row, and Delete and F2 on the focused row
+/// only. In the favicon-only sidebar, renaming and removals that need the wide sidebar's
+/// card are left out.
+pub(super) fn row_actions(subject: RowSubject, place: RowPlace, keys: &RowKeys) -> Vec<RowEntry> {
+    let row_key = |label: &Option<String>| label.clone().filter(|_| place.keyed);
     let groups = match subject {
         RowSubject::OpenTab {
             tab,
             page,
             others,
             below,
-        } => open_tab_groups(tab, page, (others, below), keys),
+        } => open_tab_groups(tab, page, (others, below), place, keys),
         RowSubject::LiveSaved { saved, tab, page } => vec![
             vec![
-                (TabAction::Unload(tab), keys.close.clone()),
-                (TabAction::RemoveSaved(saved), keys.remove.clone()),
+                (TabAction::Unload(tab), close_key(page, place, keys)),
+                (TabAction::RemoveSaved(saved), row_key(&keys.remove)),
             ],
             page_items(tab, page, keys),
             vec![(TabAction::ReopenClosed, keys.reopen.clone())],
@@ -203,15 +213,23 @@ pub(super) fn row_actions(subject: RowSubject, wide: bool, keys: &RowKeys) -> Ve
         RowSubject::UnopenedSaved(saved) => vec![
             vec![(TabAction::CopyLink(LinkSource::Saved(saved)), None)],
             // Removing an unopened page asks first, on the wide sidebar's card.
-            when(wide, (TabAction::RemoveSaved(saved), keys.remove.clone())),
+            when(
+                place.wide,
+                (TabAction::RemoveSaved(saved), row_key(&keys.remove)),
+            ),
         ],
-        RowSubject::Folder(folder) if wide => vec![vec![
-            (TabAction::RenameFolder(folder), keys.rename.clone()),
-            (TabAction::RemoveFolder(folder), keys.remove.clone()),
+        RowSubject::Folder(folder) if place.wide => vec![vec![
+            (TabAction::RenameFolder(folder), row_key(&keys.rename)),
+            (TabAction::RemoveFolder(folder), row_key(&keys.remove)),
         ]],
         RowSubject::Folder(_) => Vec::new(),
     };
     join_groups(groups)
+}
+
+/// Ctrl W closes the active tab, or the focused row when a key opened the menu on it.
+fn close_key(page: PageFacts, place: RowPlace, keys: &RowKeys) -> Option<String> {
+    keys.close.clone().filter(|_| place.keyed || page.active)
 }
 
 /// An open tab's groups: its page, saving, closing, and reopening.
@@ -219,9 +237,12 @@ fn open_tab_groups(
     tab: TabId,
     page: PageFacts,
     (others, below): (usize, usize),
+    place: RowPlace,
     keys: &RowKeys,
 ) -> Vec<Vec<Item>> {
-    let close_keys = joined(&[keys.close.as_deref(), keys.remove.as_deref()]);
+    // Delete removes the focused row only, so it joins Ctrl W only on a keyed menu.
+    let delete = keys.remove.as_deref().filter(|_| place.keyed);
+    let close_keys = joined(&[close_key(page, place, keys).as_deref(), delete]);
     let save_keys = keys.save.clone().filter(|_| page.active);
     let mut closing = vec![(TabAction::Close(tab), close_keys)];
     // A bulk close that would close nothing is left out, as Firefox greys it out.
@@ -235,7 +256,7 @@ fn open_tab_groups(
     ]
 }
 
-/// Reload, Duplicate, Mute and Copy link, for a web page only.
+/// Reload, Mute, Duplicate and Copy link, in Firefox's order, for a web page only.
 fn page_items(tab: TabId, page: PageFacts, keys: &RowKeys) -> Vec<Item> {
     if !page.web {
         return Vec::new();
@@ -243,8 +264,8 @@ fn page_items(tab: TabId, page: PageFacts, keys: &RowKeys) -> Vec<Item> {
     let reload_keys = keys.reload.clone().filter(|_| page.active);
     vec![
         (TabAction::Reload(tab), reload_keys),
-        (TabAction::Duplicate(tab), None),
         (TabAction::SetMuted(tab, !page.muted), None),
+        (TabAction::Duplicate(tab), None),
         (TabAction::CopyLink(LinkSource::Tab(tab)), None),
     ]
 }
@@ -368,6 +389,25 @@ pub(super) fn bulk_close_setting(ask: bool) -> (String, String) {
     (ASK_BULK_CLOSE_KEY.to_owned(), ask.to_string())
 }
 
+/// What a confirmed bulk close does once the tabs are counted again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Recount {
+    /// The count the question named still holds.
+    Close,
+    /// Tabs opened or closed meanwhile; ask again with the new count.
+    AskAgain(usize),
+    Nothing,
+}
+
+/// Closes only what the question counted: a changed count asks again.
+pub(super) fn recount(asked: usize, now: usize) -> Recount {
+    match now {
+        0 => Recount::Nothing,
+        now if now == asked => Recount::Close,
+        now => Recount::AskAgain(now),
+    }
+}
+
 /// The confirmation's question, such as "Close 3 other tabs?".
 pub(super) fn bulk_question(kind: BulkKind, count: usize) -> String {
     let tabs = tabs_phrase(count);
@@ -404,11 +444,11 @@ pub(super) struct MenuOrigin {
 
 impl BrowserView {
     /// The row's menu entries now, or none when the row is gone.
-    pub(super) fn row_entries(&self, row: TreeId, wide: bool) -> Vec<RowEntry> {
+    pub(super) fn row_entries(&self, row: TreeId, place: RowPlace) -> Vec<RowEntry> {
         let Some(subject) = row_subject(&self.model, row, &self.muted, &self.popup_pages) else {
             return Vec::new();
         };
-        row_actions(subject, wide, &RowKeys::from_bindings(&self.commands))
+        row_actions(subject, place, &RowKeys::from_bindings(&self.commands))
     }
 
     /// Runs one row action for the menu, the row's keys or its buttons. `menu` is the menu it
@@ -476,39 +516,13 @@ impl BrowserView {
         }
     }
 
-    /// Records the owner's mute choice and asks the tab's live page to follow it. The badge
-    /// waits for the page's own report (`audio_reported`).
-    pub(super) fn set_tab_muted(&mut self, tab: TabId, mute: bool) {
-        let Some(command) = change_mute(&mut self.muted, &self.loaded, tab, mute) else {
-            return;
-        };
-        if self.page_command(command) {
-            self.mute_requests.insert(tab);
-        }
-    }
-
     /// Copies the row's address. Home and Settings rows never offer it.
     fn copy_link(&mut self, source: LinkSource, cx: &mut Context<Self>) {
-        let address = match source {
-            LinkSource::Tab(tab) => self
-                .model
-                .tabs
-                .iter()
-                .find(|candidate| candidate.id == tab)
-                .map(|candidate| candidate.metadata.address.clone()),
-            LinkSource::Saved(saved) => self
-                .model
-                .saved_pages
-                .iter()
-                .find(|page| page.id == saved)
-                .map(|page| page.metadata.address.clone()),
+        self.message = if copy_row_link(&self.model, source, cx) {
+            "Link copied.".to_owned()
+        } else {
+            "That row has no link to copy.".to_owned()
         };
-        let Some(address) = address.filter(|address| !address.is_empty()) else {
-            self.message = "That row has no link to copy.".to_owned();
-            return;
-        };
-        cx.write_to_clipboard(ClipboardItem::new_string(address));
-        self.message = "Link copied.".to_owned();
     }
 
     /// Asks before a bulk close, in the menu's place, unless the owner said not to ask;
@@ -532,6 +546,8 @@ impl BrowserView {
             }
             BulkPlan::Ask => {
                 let Some(menu) = menu else {
+                    // Only a menu offers a bulk close; say so rather than do nothing.
+                    self.message = "Close several tabs from a tab's menu.".to_owned();
                     return false;
                 };
                 self.show_bulk_confirmation(bulk, count, menu, window, cx);
@@ -540,12 +556,35 @@ impl BrowserView {
         }
     }
 
-    /// Closes the tabs the confirmation named; with `remember`, it never asks again.
-    pub(super) fn confirm_bulk_close(&mut self, bulk: BulkClose, remember: bool) {
-        if remember {
-            self.set_ask_before_bulk_close(false);
+    /// Closes the tabs the confirmation named; with `remember`, it never asks again. Tabs
+    /// opened or closed while it was asking make it ask again with the new count.
+    pub(super) fn confirm_bulk_close(
+        &mut self,
+        bulk: BulkClose,
+        remember: bool,
+        asked: usize,
+        origin: MenuOrigin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> ActionFocus {
+        let now = bulk_close_count(&self.model, bulk.kind, bulk.tab);
+        match recount(asked, now) {
+            Recount::Nothing => {
+                self.message = "No other tabs would close.".to_owned();
+                ActionFocus::Unplaced
+            }
+            Recount::AskAgain(count) => {
+                self.show_bulk_confirmation(bulk, count, origin, window, cx);
+                ActionFocus::Placed
+            }
+            Recount::Close => {
+                if remember {
+                    self.set_ask_before_bulk_close(false);
+                }
+                self.close_in_bulk(bulk);
+                ActionFocus::Unplaced
+            }
         }
-        self.close_in_bulk(bulk);
     }
 
     fn close_in_bulk(&mut self, bulk: BulkClose) {
@@ -602,6 +641,36 @@ impl BrowserView {
         };
         self.show_row_menu(row, opening, window, cx);
     }
+}
+
+/// The row's own address as Copy link writes it, or `None` for a row without one.
+fn row_link(model: &TabModelSnapshot, source: LinkSource) -> Option<ClipboardItem> {
+    let address = match source {
+        LinkSource::Tab(tab) => model
+            .tabs
+            .iter()
+            .find(|candidate| candidate.id == tab)
+            .map(|candidate| &candidate.metadata.address),
+        LinkSource::Saved(saved) => model
+            .saved_pages
+            .iter()
+            .find(|page| page.id == saved)
+            .map(|page| &page.metadata.address),
+    }?;
+    (!address.is_empty()).then(|| ClipboardItem::new_string(address.clone()))
+}
+
+/// Copy link's one clipboard write, of `row_link` only; returns whether there was one.
+fn copy_row_link(
+    model: &TabModelSnapshot,
+    source: LinkSource,
+    cx: &mut Context<BrowserView>,
+) -> bool {
+    let Some(link) = row_link(model, source) else {
+        return false;
+    };
+    cx.write_to_clipboard(link);
+    true
 }
 
 #[cfg(test)]
@@ -690,6 +759,19 @@ mod tests {
         RowKeys::from_bindings(&CommandRegistry::browser())
     }
 
+    const WIDE: RowPlace = RowPlace {
+        wide: true,
+        keyed: false,
+    };
+    const WIDE_KEYED: RowPlace = RowPlace {
+        wide: true,
+        keyed: true,
+    };
+    const COMPACT: RowPlace = RowPlace {
+        wide: false,
+        keyed: false,
+    };
+
     fn subject(row: TreeId, muted: &[u64]) -> RowSubject {
         let muted = muted.iter().map(|id| tab_id(*id)).collect();
         row_subject(&model(), row, &muted, &HashSet::new()).expect("the row is in the model")
@@ -720,13 +802,13 @@ mod tests {
 
     #[test]
     fn the_active_open_tab_lists_every_group_with_its_keys() {
-        let entries = row_actions(subject(TreeId::Tab(tab_id(200)), &[]), true, &keys());
+        let entries = row_actions(subject(TreeId::Tab(tab_id(200)), &[]), WIDE_KEYED, &keys());
         assert_eq!(
             shown(&entries),
             [
                 ("Reload tab", Some("Ctrl R")),
-                ("Duplicate tab", None),
                 ("Mute tab", None),
+                ("Duplicate tab", None),
                 ("Copy link", None),
                 ("—", None),
                 ("Save page", Some("Ctrl D")),
@@ -742,7 +824,7 @@ mod tests {
 
     #[test]
     fn an_inactive_tab_shows_no_ctrl_r_or_ctrl_d_and_the_last_has_no_close_below() {
-        let entries = row_actions(subject(TreeId::Tab(tab_id(400)), &[]), true, &keys());
+        let entries = row_actions(subject(TreeId::Tab(tab_id(400)), &[]), WIDE_KEYED, &keys());
         let shown = shown(&entries);
         assert!(shown.contains(&("Reload tab", None)), "{shown:?}");
         assert!(shown.contains(&("Save page", None)), "{shown:?}");
@@ -752,8 +834,36 @@ mod tests {
     }
 
     #[test]
+    fn close_keys_show_only_where_they_would_close_this_row() {
+        let close = |row: u64, place| {
+            let entries = row_actions(subject(TreeId::Tab(tab_id(row)), &[]), place, &keys());
+            shown(&entries)
+                .into_iter()
+                .find(|(label, _)| *label == "Close tab")
+                .and_then(|(_, keys)| keys.map(str::to_owned))
+        };
+        // A click on an inactive row leaves the keys elsewhere, so Ctrl W would close the
+        // active tab and Delete would reach the page.
+        assert_eq!(close(400, WIDE), None);
+        assert_eq!(
+            close(200, WIDE).as_deref(),
+            Some("Ctrl W"),
+            "the active tab"
+        );
+        assert_eq!(close(400, WIDE_KEYED).as_deref(), Some("Ctrl W, Delete"));
+        let saved = row_actions(subject(TreeId::Page(page_id(1)), &[]), WIDE, &keys());
+        assert!(shown(&saved).contains(&("Unload page", None)));
+        assert!(shown(&saved).contains(&("Remove saved page", None)));
+        let folder = row_actions(subject(TreeId::Folder(folder_id(10)), &[]), WIDE, &keys());
+        assert_eq!(
+            shown(&folder),
+            [("Rename folder", None), ("Remove folder", None)]
+        );
+    }
+
+    #[test]
     fn a_muted_tab_offers_unmute() {
-        let entries = row_actions(subject(TreeId::Tab(tab_id(400)), &[400]), true, &keys());
+        let entries = row_actions(subject(TreeId::Tab(tab_id(400)), &[400]), WIDE, &keys());
         assert!(entries.contains(&RowEntry::Action {
             action: TabAction::SetMuted(tab_id(400), false),
             keys: None,
@@ -763,7 +873,7 @@ mod tests {
 
     #[test]
     fn home_offers_only_closing_and_reopening() {
-        let entries = row_actions(subject(TreeId::Tab(tab_id(300)), &[]), true, &keys());
+        let entries = row_actions(subject(TreeId::Tab(tab_id(300)), &[]), WIDE_KEYED, &keys());
         assert_eq!(
             shown(&entries),
             [
@@ -779,7 +889,8 @@ mod tests {
     #[test]
     fn a_live_saved_page_unloads_and_removes_but_never_closes_others() {
         for wide in [true, false] {
-            let entries = row_actions(subject(TreeId::Page(page_id(1)), &[]), wide, &keys());
+            let place = RowPlace { wide, keyed: true };
+            let entries = row_actions(subject(TreeId::Page(page_id(1)), &[]), place, &keys());
             assert_eq!(
                 shown(&entries),
                 [
@@ -787,8 +898,8 @@ mod tests {
                     ("Remove saved page", Some("Delete")),
                     ("—", None),
                     ("Reload tab", None),
-                    ("Duplicate tab", None),
                     ("Mute tab", None),
+                    ("Duplicate tab", None),
                     ("Copy link", None),
                     ("—", None),
                     ("Reopen closed tab", Some("Ctrl Shift T")),
@@ -801,7 +912,7 @@ mod tests {
     #[test]
     fn an_unopened_saved_page_is_removed_only_from_the_wide_sidebar() {
         let row = TreeId::Page(page_id(2));
-        let wide = row_actions(subject(row, &[]), true, &keys());
+        let wide = row_actions(subject(row, &[]), WIDE_KEYED, &keys());
         assert_eq!(
             shown(&wide),
             [
@@ -810,14 +921,14 @@ mod tests {
                 ("Remove saved page", Some("Delete")),
             ]
         );
-        let compact = row_actions(subject(row, &[]), false, &keys());
+        let compact = row_actions(subject(row, &[]), COMPACT, &keys());
         assert_eq!(shown(&compact), [("Copy link", None)]);
     }
 
     #[test]
     fn a_folder_is_renamed_and_removed_only_from_the_wide_sidebar() {
         let row = TreeId::Folder(folder_id(10));
-        let wide = row_actions(subject(row, &[]), true, &keys());
+        let wide = row_actions(subject(row, &[]), WIDE_KEYED, &keys());
         assert_eq!(
             shown(&wide),
             [
@@ -825,15 +936,15 @@ mod tests {
                 ("Remove folder", Some("Delete"))
             ]
         );
-        assert!(row_actions(subject(row, &[]), false, &keys()).is_empty());
+        assert!(row_actions(subject(row, &[]), COMPACT, &keys()).is_empty());
     }
 
     #[test]
     fn compact_open_tabs_keep_every_item() {
         let row = TreeId::Tab(tab_id(200));
         assert_eq!(
-            row_actions(subject(row, &[]), false, &keys()),
-            row_actions(subject(row, &[]), true, &keys())
+            row_actions(subject(row, &[]), COMPACT, &keys()),
+            row_actions(subject(row, &[]), WIDE, &keys())
         );
     }
 
@@ -911,6 +1022,31 @@ mod tests {
         assert!(asks_before_bulk_close(&BTreeMap::new()), "asks by default");
         let unreadable = BTreeMap::from([(ASK_BULK_CLOSE_KEY.to_owned(), "maybe".to_owned())]);
         assert!(asks_before_bulk_close(&unreadable));
+    }
+
+    #[test]
+    fn a_confirmation_closes_only_the_tabs_it_counted() {
+        assert_eq!(recount(3, 3), Recount::Close);
+        assert_eq!(recount(3, 4), Recount::AskAgain(4));
+        assert_eq!(recount(3, 1), Recount::AskAgain(1));
+        assert_eq!(recount(3, 0), Recount::Nothing);
+    }
+
+    #[test]
+    fn copy_link_writes_exactly_the_rows_own_address() {
+        let text = |source| row_link(&model(), source).and_then(|item| item.text());
+        assert_eq!(
+            text(LinkSource::Tab(tab_id(200))).as_deref(),
+            Some("https://two.example.test/")
+        );
+        assert_eq!(
+            text(LinkSource::Saved(page_id(2))).as_deref(),
+            Some("https://saved.example.test/")
+        );
+        assert_eq!(text(LinkSource::Tab(tab_id(999))), None, "a row gone");
+        let mut blank = model();
+        blank.tabs[1].metadata.address.clear();
+        assert!(row_link(&blank, LinkSource::Tab(tab_id(200))).is_none());
     }
 
     #[test]

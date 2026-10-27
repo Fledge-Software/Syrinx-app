@@ -12,11 +12,25 @@ impl BrowserView {
         let Some(command) = reapplied_mute(&self.muted, id) else {
             return;
         };
-        if self.page_command(command)
-            && let Ok(tab) = TabId::new(id)
-        {
-            self.mute_requests.insert(tab);
+        self.page_command(command);
+    }
+
+    /// Records the owner's mute choice and asks the tab's live page to follow it. The badge
+    /// waits for the page's own report (`audio_reported`); a tab with no page shows none.
+    pub(super) fn set_tab_muted(&mut self, tab: TabId, mute: bool) {
+        let reported = self.shown_muted.contains(&tab);
+        let live = self.loaded.contains(&tab);
+        if !live {
+            self.shown_muted.remove(&tab);
         }
+        if let Some(command) = change_mute(&mut self.muted, live, reported, tab, mute) {
+            self.page_command(command);
+        }
+    }
+
+    /// The tab's page is gone or new, so nothing reports it muted any more.
+    pub(super) fn page_gone(&mut self, tab: TabId) {
+        self.shown_muted.remove(&tab);
     }
 
     /// The page reported its mute state. It is stored as reported, never flipped, so a
@@ -25,25 +39,19 @@ impl BrowserView {
         let Ok(tab) = TabId::new(id) else {
             return;
         };
-        self.mute_requests.remove(&tab);
         if record_reported_mute(&mut self.shown_muted, tab, muted) {
             cx.notify();
         }
     }
 
-    /// A page control failed. When it was a mute this run asked for, the runtime cannot mute:
-    /// the choice is dropped, so no badge or Unmute item claims otherwise, and the status line
-    /// says why. Returns whether the failure was a mute.
-    pub(super) fn mute_refused(&mut self, id: u64) -> bool {
-        let Ok(tab) = TabId::new(id) else {
-            return false;
-        };
-        if !self.mute_requests.remove(&tab) {
-            return false;
+    /// The runtime refused a mute (`BrowserError::Mute`, which no other control reports): the
+    /// choice is dropped, so no badge or Unmute item claims otherwise, and the status line
+    /// says why.
+    pub(super) fn mute_refused(&mut self, id: u64) {
+        if let Ok(tab) = TabId::new(id) {
+            self.muted.remove(&tab);
         }
-        self.muted.remove(&tab);
         self.message = CANNOT_MUTE.to_owned();
-        true
     }
 
     /// Forgets mute state for tabs that have closed.
@@ -51,14 +59,15 @@ impl BrowserView {
         let open: HashSet<TabId> = self.model.tabs.iter().map(|tab| tab.id).collect();
         self.muted.retain(|id| open.contains(id));
         self.shown_muted.retain(|id| open.contains(id));
-        self.mute_requests.retain(|id| open.contains(id));
     }
 }
 
-/// Records the owner's mute choice; returns the command for the tab's live page, if any.
-pub(super) fn change_mute(
+/// Records the owner's mute choice; returns the command for the tab's live page, sent only
+/// when the page `reported` the other state (WebView2 raises no event for an unchanged one).
+fn change_mute(
     muted: &mut HashSet<TabId>,
-    loaded: &HashSet<TabId>,
+    live: bool,
+    reported: bool,
     id: TabId,
     mute: bool,
 ) -> Option<BrowserCommand> {
@@ -67,10 +76,22 @@ pub(super) fn change_mute(
     } else {
         muted.remove(&id);
     }
-    loaded.contains(&id).then_some(BrowserCommand::SetMuted {
+    (live && reported != mute).then_some(BrowserCommand::SetMuted {
         id: id.get(),
         muted: mute,
     })
+}
+
+/// The tab whose mute the runtime refused, if `error` is that refusal. Only `Mute` counts: a
+/// failed zoom or find on the same tab is `PageControl` and never drops a mute choice.
+pub(super) fn refused_mute(
+    tab: Option<u64>,
+    error: &syrinx_platform::browser::BrowserError,
+) -> Option<u64> {
+    match (tab, error) {
+        (Some(id), syrinx_platform::browser::BrowserError::Mute) => Some(id),
+        _ => None,
+    }
 }
 
 /// Sets the tab's reported state; returns whether it changed.
@@ -109,22 +130,41 @@ mod tests {
     fn a_mute_choice_is_kept_and_reaches_only_a_live_page() {
         let live = TabId::new(7).unwrap();
         let unloaded = TabId::new(8).unwrap();
-        let loaded = HashSet::from([live]);
         let mut muted = HashSet::new();
         assert!(matches!(
-            change_mute(&mut muted, &loaded, live, true),
+            change_mute(&mut muted, true, false, live, true),
             Some(BrowserCommand::SetMuted { id: 7, muted: true })
         ));
-        assert!(change_mute(&mut muted, &loaded, unloaded, true).is_none());
+        assert!(change_mute(&mut muted, false, false, unloaded, true).is_none());
         assert_eq!(muted, HashSet::from([live, unloaded]));
         assert!(matches!(
-            change_mute(&mut muted, &loaded, live, false),
+            change_mute(&mut muted, true, true, live, false),
             Some(BrowserCommand::SetMuted {
                 id: 7,
                 muted: false
             })
         ));
         assert_eq!(muted, HashSet::from([unloaded]));
+    }
+
+    #[test]
+    fn only_a_mute_failure_is_read_as_a_refused_mute() {
+        use syrinx_platform::browser::BrowserError;
+        assert_eq!(refused_mute(Some(7), &BrowserError::Mute), Some(7));
+        // A zoom or find failure on a tab with a mute in flight is not a mute refusal.
+        assert_eq!(refused_mute(Some(7), &BrowserError::PageControl), None);
+        assert_eq!(refused_mute(None, &BrowserError::Mute), None);
+    }
+
+    #[test]
+    fn a_page_already_in_the_chosen_state_is_sent_nothing() {
+        let tab = TabId::new(7).unwrap();
+        let mut muted = HashSet::new();
+        // WebView2 raises no event for an unchanged state, so nothing would answer.
+        assert!(change_mute(&mut muted, true, true, tab, true).is_none());
+        assert!(muted.contains(&tab), "the choice is still kept");
+        assert!(change_mute(&mut muted, true, false, tab, false).is_none());
+        assert!(muted.is_empty());
     }
 
     #[test]

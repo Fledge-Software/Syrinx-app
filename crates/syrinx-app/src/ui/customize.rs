@@ -34,8 +34,7 @@ pub(super) struct CustomAccent {
 
 impl BrowserView {
     /// Shows the stored appearance, saved themes, sidebar width state, bulk-close choice and
-    /// tiles. Only an old
-    /// palette choice carried over into a saved theme is written back, once.
+    /// tiles. Only an old palette choice carried over into a saved theme is written back, once.
     pub(super) fn restore_preferences(
         &mut self,
         settings: &BTreeMap<String, String>,
