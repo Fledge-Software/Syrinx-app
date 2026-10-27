@@ -393,7 +393,13 @@ fn a_repair_whose_index_cannot_open_empties_its_folder_and_starts_afresh() {
     let index = worker.page_text.index().expect("a fresh index is open");
     assert!(ids_in(index, Namespace::page()).is_empty());
     assert_eq!(index.cleared_generation(), 1);
-    assert_eq!(worker.page_text.take_problem(), Ok(()));
+    // The owner still hears that the old index could not open.
+    match worker.page_text.take_problem() {
+        Err(SessionError::During { operation, .. }) => {
+            assert_eq!(operation, "opening the search index");
+        }
+        problem => panic!("expected the open failure to be reported, got {problem:?}"),
+    }
     drop(worker);
     store.shutdown().expect("close synthetic store");
     assert_eq!(completed_clears(&fixture), 1);
@@ -410,12 +416,15 @@ fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can(
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
     match open_session(lease, true) {
         Err(SessionError::During { operation, .. }) => {
-            assert_eq!(operation, "emptying the search index before a history repair");
+            assert_eq!(
+                operation,
+                "emptying the search index before a history repair"
+            );
         }
         Err(error) => panic!("expected the repair to be refused, got {error:?}"),
         Ok(_) => panic!("a repair went ahead while the old page text could not be removed"),
     }
-    // The journal was never rebuilt, so the next start offers the repair again.
+    // Nothing was rebuilt, so a damaged journal would still offer the repair at the next start.
     assert!(!fixture.0.join("syrinx.deletions").exists());
     drop(held);
 
@@ -427,6 +436,33 @@ fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can(
     drop(worker);
     store.shutdown().expect("close synthetic store");
     assert_eq!(completed_clears(&fixture), 1);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_repair_goes_ahead_when_a_file_stands_where_the_index_folder_belongs() {
+    let fixture = Fixture::new();
+    // Syrinx never opens an index through a file, so refusing the repair would protect nothing.
+    drop(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data"));
+    checked_io(fs::write(index_folder(&fixture), b"synthetic blocker"));
+
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
+    assert!(worker.page_text.index().is_none());
+    match worker.page_text.take_problem() {
+        Err(SessionError::During { operation, error }) => {
+            assert_eq!(operation, "opening the search index");
+            assert_eq!(
+                *error,
+                SessionError::IndexFolder(LocationError::UnexpectedEntryKind)
+            );
+        }
+        problem => panic!("expected the blocked folder to be reported, got {problem:?}"),
+    }
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    assert_eq!(completed_clears(&fixture), 1);
+    checked_io(fs::remove_file(index_folder(&fixture)));
     fixture.cleanup();
 }
 

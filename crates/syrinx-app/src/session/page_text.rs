@@ -2,6 +2,7 @@
 
 use syrinx_platform::{CacheFolder, WindowsDirectoryLease};
 use syrinx_search::fulltext::{ClearRequest, ClearScope, FullText, FullTextError};
+use syrinx_store::LocationError;
 use syrinx_store::deletion::{DeletionCategory, DeletionLog, DeletionRequest};
 
 use super::{SessionError, deletions, retention, stop};
@@ -42,14 +43,9 @@ impl PageText {
         }
     }
 
-    /// Removes all page text and restarts the index's count before an owner-confirmed repair
-    /// rebuilds the journal.
-    ///
-    /// The rebuilt journal's generations restart at the database's, which the index may have
-    /// counted past, so they cannot say what it has cleared. Doing this before the rebuild
-    /// keeps it durable: no later start needs to know a repair happened. An index that is
-    /// closed or cannot restart has its folder emptied instead. Only when that fails too is
-    /// the repair refused, which leaves the journal unrebuilt so the next start offers it again.
+    /// Removes all page text and restarts the index's count before a confirmed repair rebuilds
+    /// the journal, whose new generations cannot say what the index cleared. Failing to empty
+    /// the folder refuses the repair, so the next start offers it again.
     pub(super) fn restart_before_repair(
         &mut self,
         lease: &WindowsDirectoryLease,
@@ -57,8 +53,9 @@ impl PageText {
         if self.restart_open_index() {
             return Ok(());
         }
-        self.start_afresh(lease)
-            .map_err(stop::during("emptying the search index before a history repair"))
+        self.start_afresh(lease).map_err(stop::during(
+            "emptying the search index before a history repair",
+        ))
     }
 
     /// Applies every journal clear the index has not, before the journal marks one complete.
@@ -116,7 +113,10 @@ impl PageText {
         };
         let restarted = index.restart_clears().or_else(cleanup_later);
         let succeeded = restarted.is_ok();
-        self.settle(restarted, "restarting the search index for a history repair");
+        self.settle(
+            restarted,
+            "restarting the search index for a history repair",
+        );
         succeeded
     }
 
@@ -126,15 +126,20 @@ impl PageText {
         // Release the old index's files and folder before deleting them.
         self.index = None;
         self.folder = None;
-        let folder = lease
-            .cache_folder(INDEX_FOLDER)
-            .map_err(SessionError::IndexFolder)?;
+        let folder = match lease.cache_folder(INDEX_FOLDER) {
+            Ok(folder) => folder,
+            // Syrinx never opens an index through a file or link, so none can strand page text.
+            Err(error) if never_an_index(&error) => {
+                self.problem = Some(stop::during(OPENING)(SessionError::IndexFolder(error)));
+                return Ok(());
+            }
+            Err(error) => return Err(SessionError::IndexFolder(error)),
+        };
         folder.empty().map_err(SessionError::IndexFolder)?;
         match FullText::open(folder.path()) {
             Ok(index) => {
                 self.index = Some(index);
                 self.folder = Some(folder);
-                self.problem = None;
             }
             Err(error) => self.problem = Some(stop::during(OPENING)(SessionError::FullText(error))),
         }
@@ -172,6 +177,15 @@ fn open_index(lease: &WindowsDirectoryLease) -> Result<(CacheFolder, FullText), 
     };
     let index = opened.map_err(SessionError::FullText)?;
     Ok((folder, index))
+}
+
+/// Whether the guard refused the index folder's entry itself: a file or a link stands where
+/// the folder belongs, which every start refuses in the same way.
+fn never_an_index(error: &LocationError) -> bool {
+    matches!(
+        error,
+        LocationError::UnexpectedEntryKind | LocationError::ReparsePoint
+    )
 }
 
 /// Brings the index level with the journal, first restarting its count when the journal is
