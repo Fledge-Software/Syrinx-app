@@ -132,13 +132,11 @@ impl Essentials {
         }
     }
 
-    /// Mutes through WebView2 itself; a runtime without `ICoreWebView2_8` reports a tab error.
+    /// Mutes through WebView2 itself; a runtime without `ICoreWebView2_8` reports `Mute`, so
+    /// Syrinx never mistakes another page control's failure for a refused mute.
     pub(super) fn set_muted(&self, view: &WebView, muted: bool) -> Result<(), BrowserError> {
-        let core: ICoreWebView2_8 = view
-            .webview()
-            .cast()
-            .map_err(|_| BrowserError::PageControl)?;
-        unsafe { core.SetIsMuted(muted) }.map_err(|_| BrowserError::PageControl)
+        let core: ICoreWebView2_8 = view.webview().cast().map_err(|_| BrowserError::Mute)?;
+        unsafe { core.SetIsMuted(muted) }.map_err(|_| BrowserError::Mute)
     }
 
     fn find(

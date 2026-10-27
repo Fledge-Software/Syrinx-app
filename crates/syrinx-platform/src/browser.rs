@@ -432,6 +432,8 @@ pub enum BrowserError {
     Popup,
     Permission,
     PageControl,
+    /// WebView2 refused to mute or unmute a page, as a runtime without `ICoreWebView2_8` does.
+    Mute,
     Security,
     Settings,
     EventRegistration,

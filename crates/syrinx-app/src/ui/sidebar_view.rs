@@ -29,10 +29,11 @@ use super::{
     favorites::{DraggedFavorite, FavoriteSource},
     folder_editor::{
         CloseRowPage, DeleteFolderContents, DraggedRow, MoveRowDown, MoveRowIn, MoveRowOut,
-        MoveRowUp, ROW_CONTEXT, RemoveRow, RenameRow,
+        MoveRowUp, OpenRowMenu, ROW_CONTEXT, RemoveRow, RenameRow,
     },
     menus::MenuKind,
     page_card::edge_strip,
+    row_menu::TabAction,
     saved_moves::{DropTarget, Step},
     sidebar_tree::{RowClose, SidebarEntry, TreeId, active_tree_id, row_close, sidebar_entries},
     tiles::{self, monogram},
@@ -49,6 +50,14 @@ const COMPACT_ROW_GROUP: &str = "compact-row";
 const BADGE_SIZE: f32 = 16.;
 const BADGE_INSET: f32 = 2.;
 const BADGE_GLYPH_SIZE: f32 = 11.;
+/// The compact row's muted badge on the icon's bottom-right corner, clear of the close badge
+/// above it (#95), and the wide row's mute glyph.
+const MUTED_BADGE_SIZE: f32 = 12.;
+const MUTED_BADGE_INSET: f32 = 4.;
+const MUTED_BADGE_GLYPH_SIZE: f32 = 8.;
+const MUTE_GLYPH_SIZE: f32 = 12.;
+/// The wide row's × and mute buttons share this square, so they line up and are as easy to hit.
+const ROW_ACTION_SIZE: f32 = 20.;
 const LAST_VISIBLE_KEY: &str = "sidebar.last_visible_state";
 
 /// What a row shows: its icon letter, title and selection, and how deep it is nested.
@@ -411,6 +420,7 @@ impl BrowserView {
             saved: true,
         };
         let target = ActivationTarget::Saved(saved_id);
+        let remove = TabAction::RemoveSaved(saved_id);
         let row = row_frame(("saved", saved_id.get()), look, labels).on_click(cx.listener(
             move |this, _, window, cx| {
                 this.activate_row(target, window, cx);
@@ -419,12 +429,15 @@ impl BrowserView {
         // The confirmation for an unopened page needs the wide sidebar's card.
         let row = if labels || live.is_some() {
             row.on_action(cx.listener(move |this, _: &RemoveRow, window, cx| {
-                this.request_page_removal(saved_id, window, cx);
+                this.run_tab_action(remove, None, window, cx);
             }))
         } else {
             row
         };
         let mut row = movable_row(row, SavedEntryId::Page(saved_id), title, cx);
+        if let Some(tab) = live {
+            row = self.with_mute_marker(row, tab, labels, cx);
+        }
         if let Some(close) = close {
             row = row.child(close_control(close, labels, shows_ring, cx));
         }
@@ -436,7 +449,7 @@ impl BrowserView {
                 .text_color(theme::icon_dim())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
-                    this.request_page_removal(saved_id, window, cx);
+                    this.run_tab_action(remove, None, window, cx);
                 })),
         )
     }
@@ -472,11 +485,44 @@ impl BrowserView {
                 this.activate_row(target, window, cx);
             }))
             // Delete closes the tab, as its button does: the button is not a Tab stop (DW-61).
-            .on_action(cx.listener(move |this, _: &RemoveRow, _, cx| {
-                this.command(SessionCommand::CloseTab(id));
-                cx.notify();
+            .on_action(cx.listener(move |this, _: &RemoveRow, window, cx| {
+                this.run_tab_action(TabAction::Close(id), None, window, cx);
             }));
-        row.children(close.map(|close| close_control(close, labels, shows_ring, cx)))
+        self.with_mute_marker(row, id, labels, cx)
+            .children(close.map(|close| close_control(close, labels, shows_ring, cx)))
+    }
+
+    /// A muted tab's marker (#95): a clickable mute glyph before the wide row's ×, which
+    /// unmutes, or a small badge on the compact icon's bottom-right corner, shown only. It
+    /// follows what the page reports, so a mute the runtime refused never shows.
+    fn with_mute_marker(
+        &self,
+        row: Stateful<Div>,
+        tab: TabId,
+        labels: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        if !self.shown_muted.contains(&tab) {
+            return row;
+        }
+        let row = row.aria_description("Muted");
+        if !labels {
+            return row.child(muted_badge(tab));
+        }
+        row.child(
+            row_action_box(row_button(("unmute", tab.get()), "Unmute tab"))
+                .font_family(glyph::FONT)
+                .text_size(px(MUTE_GLYPH_SIZE))
+                .text_color(theme::icon())
+                .hover(|style| style.text_color(theme::text()))
+                .child(glyph::MUTE)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.run_tab_action(TabAction::SetMuted(tab, false), None, window, cx);
+                    // The row stays, so its keys must not stay armed after the click.
+                    this.release_row_focus(window, cx);
+                })),
+        )
     }
 
     /// A folder row: its arrow toggles the contents. Renaming and removal need the wide
@@ -513,10 +559,10 @@ impl BrowserView {
             return row;
         }
         row.on_action(cx.listener(move |this, _: &RenameRow, window, cx| {
-            this.start_rename_folder(id, window, cx);
+            this.run_tab_action(TabAction::RenameFolder(id), None, window, cx);
         }))
         .on_action(cx.listener(move |this, _: &RemoveRow, window, cx| {
-            this.request_folder_removal(id, false, window, cx);
+            this.run_tab_action(TabAction::RemoveFolder(id), None, window, cx);
         }))
         .on_action(
             cx.listener(move |this, _: &DeleteFolderContents, window, cx| {
@@ -528,7 +574,7 @@ impl BrowserView {
                 .text_color(theme::icon_dim())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
-                    this.start_rename_folder(id, window, cx);
+                    this.run_tab_action(TabAction::RenameFolder(id), None, window, cx);
                 })),
         )
         .child(
@@ -536,7 +582,7 @@ impl BrowserView {
                 .text_color(theme::icon_dim())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
-                    this.request_folder_removal(id, false, window, cx);
+                    this.run_tab_action(TabAction::RemoveFolder(id), None, window, cx);
                 })),
         )
     }
@@ -600,7 +646,8 @@ fn release_on_drag(view: &WeakEntity<BrowserView>, window: &mut Window, cx: &mut
 /// Makes a drawn row a member of the tree's roving focus (DW-61): it tracks its own focus
 /// handle, which is a Tab stop only for the one row `syrinx_ui::tree_focus` picks, and its
 /// arrow keys move focus between rows. Ctrl W closes its live page (DW-63); every row kind
-/// handles it, so a row with nothing to close never passes it on to the window's Ctrl W.
+/// handles it, so a row with nothing to close never passes it on to the window's Ctrl W. A
+/// right-click, Shift F10 or the Menu key opens the row's own menu (#95).
 fn tree_item(
     row: Stateful<Div>,
     id: TreeId,
@@ -608,13 +655,27 @@ fn tree_item(
     cx: &mut Context<BrowserView>,
 ) -> Stateful<Div> {
     row.track_focus(focus)
+        // Announced like the close control's keys: Shift F10 or the Menu key opens the row menu.
+        .aria_keyshortcuts("Shift+F10 ContextMenu")
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             this.tree_key_down(id, event, window, cx);
         }))
         // A handled action stops here: GPUI tries the window's binding only if it propagates.
-        .on_action(cx.listener(move |this, _: &CloseRowPage, _, cx| {
-            this.close_row_page(id, cx);
+        .on_action(cx.listener(move |this, _: &CloseRowPage, window, cx| {
+            this.close_row_page(id, window, cx);
         }))
+        .on_action(cx.listener(move |this, _: &OpenRowMenu, window, cx| {
+            this.open_row_menu_by_key(id, window, cx);
+        }))
+        // On the row itself, so a press on its own buttons opens it too; the sidebar's ⋯
+        // menu keeps the empty space around the rows.
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_row_menu_at(id, event.position, window, cx);
+            }),
+        )
 }
 
 /// The shared row shape: a titled row when labels show, a centred icon button otherwise.
@@ -698,11 +759,10 @@ fn close_control(
         .aria_keyshortcuts(close.keys())
         .on_click(cx.listener(move |this, _, window, cx| {
             cx.stop_propagation();
-            this.command(SessionCommand::CloseTab(close.tab()));
+            this.run_tab_action(close.action(), None, window, cx);
             if close.row_stays() {
                 this.release_row_focus(window, cx);
             }
-            cx.notify();
         }))
 }
 
@@ -730,7 +790,18 @@ fn row_button(id: impl Into<ElementId>, name: &'static str) -> Stateful<Div> {
 /// what the buttons do: Delete and F2 close, remove and rename, and Ctrl W unloads a saved
 /// page or closes a tab (DW-63).
 fn row_action(id: impl Into<ElementId>, glyph: &'static str, name: &'static str) -> Stateful<Div> {
-    row_button(id, name).px_1().rounded_md().child(glyph)
+    row_action_box(row_button(id, name)).child(glyph)
+}
+
+/// The square every wide row button sits in, its glyph centred.
+fn row_action_box(button: Stateful<Div>) -> Stateful<Div> {
+    button
+        .size(px(ROW_ACTION_SIZE))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
 }
 
 /// The compact row's close badge (#128): a round × on the icon's top-right corner, kept inside
@@ -757,6 +828,29 @@ fn close_badge(id: impl Into<ElementId>, name: &'static str, shown: bool) -> Sta
         .when(!shown, |badge| badge.invisible())
         .group_hover(COMPACT_ROW_GROUP, |style| style.visible())
         .child("×")
+}
+
+/// The compact row's muted badge: the mute glyph in a small circle on the icon's bottom-right
+/// corner. It is drawn only, with no role, focus or click of its own; the row's own
+/// description says "Muted" to screen readers.
+fn muted_badge(tab: TabId) -> Stateful<Div> {
+    div()
+        .id(("muted-badge", tab.get()))
+        .absolute()
+        .bottom(px(MUTED_BADGE_INSET))
+        .right(px(0.))
+        .size(px(MUTED_BADGE_SIZE))
+        .rounded_full()
+        .bg(theme::ground())
+        .border_1()
+        .border_color(theme::line())
+        .flex()
+        .items_center()
+        .justify_center()
+        .font_family(glyph::FONT)
+        .text_size(px(MUTED_BADGE_GLYPH_SIZE))
+        .text_color(theme::icon())
+        .child(glyph::MUTE)
 }
 
 /// Keeps a mouse press from focusing a row or its buttons, so a right-click, a middle-click

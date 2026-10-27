@@ -42,6 +42,79 @@ entry names it.
   palette, a bookmark, a tile or Home. Saving taint with each tab was
   rejected: it needs a schema change for the small gain of reading a
   restored ordinary page before the owner next navigates it.
+- **The sidebar row's menu lists its tab actions in Firefox's order; a muted
+  tab shows only a mute icon; bulk closes always ask (owner, 2026-10-27).**
+  #95 slice 4 needed the owner's choice of how a sidebar row offers the tab
+  actions slices 1 to 3 built (Duplicate, Close other tabs, Close tabs
+  below, Mute), and #58 asked for a right-click menu on every row. The
+  coordinator showed the owner design directions, and the owner chose
+  Direction 1 with "1: Firefox order", the playing indicator with "Mute
+  icon only", and bulk-close confirmation with "Always ask but give an
+  option to not ask again". The owner also accepted the coordinator's other
+  recommendations, listed below. Only the quoted words are the owner's; the
+  rest is recorded by the coordinator and the owner may correct it.
+  - **Why.** Every row action was reachable only through small buttons that
+    DW-61 took out of the Tab order, or through keys nothing on screen named.
+    A menu that lists each row's actions with the key that does the same
+    teaches the keys, gives the favicon-only sidebar a way to reach actions
+    it has no room to draw, and is where Firefox, Chrome and Edge put these
+    actions, so the owner's hands already know it.
+  - **What each row offers, as built.** Groups are split by a separator, and
+    a key is named only where pressing it acts on that row: Ctrl R and
+    Ctrl D act on the active tab, so they label only the active row's
+    items; Ctrl W acts on the active tab, or on the focused row when Shift
+    F10 or the Menu key opened the menu there; Delete and F2 act only on
+    the focused row, so a right-click menu does not name them. The keys
+    below are those of a menu opened from the keyboard. Every key label is
+    read from the binding that runs it, so the menu and the keys cannot
+    drift apart.
+    - An open tab: Reload tab, Mute tab (Unmute tab once muted), Duplicate
+      tab, Copy link | Save page | Close tab (Ctrl W, Delete), Close
+      other tabs, Close tabs below | Reopen closed tab (Ctrl Shift T). Home
+      and Settings rows have only the closing and reopening groups. A bulk
+      close that would close nothing is left out of the menu, as Firefox
+      greys it out.
+    - A saved page whose page is open: Unload page (Ctrl W), Remove saved
+      page (Delete) | Reload tab, Mute tab, Duplicate tab, Copy link |
+      Reopen closed tab.
+    - A saved page that is not open: Copy link | Remove saved page (Delete),
+      the second only in the wide sidebar.
+    - A folder: Rename folder (F2), Remove folder (Delete), in the wide
+      sidebar only. A folder in the favicon-only sidebar opens the ⋯ menu
+      instead.
+    - The ⋯ menu gains a separator and Close tab (Ctrl W), acting on the
+      active tab.
+  - **What the owner accepted with it.**
+    - The favicon-only sidebar offers no rename and no removal that needs
+      the wide sidebar's confirmation card (an unopened saved page, a
+      folder), because the card has no room there.
+    - Saved-page rows offer no Close other tabs or Close tabs below; both
+      already spare open saved pages, as Firefox spares pinned tabs.
+    - The peek, the sidebar's popup copy, gets no menu yet.
+    - Shift F10 and the Menu key open a focused row's menu, as in Windows'
+      own lists; Escape gives the keys back to the row.
+  - **Mute icon only.** No speaker icon appears while a page plays sound. A
+    muted tab shows a clickable mute glyph before its × in the wide sidebar,
+    which unmutes it, and a small badge on its icon's bottom-right corner in
+    the favicon-only sidebar. The badge follows only what the page reports
+    through WebView2, so a page that plays sound while muted keeps it, and a
+    runtime that cannot mute shows none: the status line says so instead.
+    Mute is still not saved across a restart (#117) and is never counted in
+    the usage report (D39).
+  - **Bulk closes always ask.** Close other tabs and Close tabs below first
+    ask "Close 3 other tabs?" (with the real count) in the menu's place,
+    offering Close 3 tabs, Close and don't ask again, and Cancel. "Don't ask
+    again" is stored as Syrinx's own setting `tabs.ask_before_bulk_close`
+    and is turned back on under Settings, Tabs, "Ask before closing several
+    tabs". If tabs open or close while it asks, choosing Close asks again
+    with the new count rather than close tabs the question never named.
+    Rejected: asking only above 20 tabs, which #95's plan had recommended,
+    because the owner chose to be asked every time.
+  - **What it does not change.** No palette command was added, so D39's
+    usage schema is unchanged; that choice stays open on #95. #58's item
+    list named Shift Delete for removing a saved page or folder; the binding
+    has always been Delete (Shift Delete deletes a folder with its
+    contents), and the menu shows Delete.
 
 ## 2026-10-26
 
