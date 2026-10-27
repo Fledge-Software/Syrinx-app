@@ -52,7 +52,8 @@ entry names it.
     open question in `docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md`,
     where option (b) drops it and Syrinx's host provides the WASI
     interfaces, and option (c) pins it at `=48.0.7`. The owner decides it
-    before #28 adds the dependency. #27's audit of every transitive crate,
+    before #28 adds the dependency. *(Answered later on 2026-10-26:
+    option (b), so `wasmtime-wasi` is not added; see the next entry.)* #27's audit of every transitive crate,
     under the 2026-10-21 licence exception, is still done before wasmtime
     enters `Cargo.lock`. Moving to a later 48.0 security patch remains a
     routine pin bump that must pass the gate.
@@ -93,17 +94,20 @@ entry names it.
     `wasmtime-wasi` requires it" no longer applies. Syrinx calls plugins
     synchronously and builds wasmtime without `async`.
   - **G10: three compiler crates fall under the licence exception.**
-    `regalloc2`, `target-lexicon` and `winx`, which wasmtime and Cranelift
-    require, are covered by the 2026-10-21 exception, as
-    `docs/dev/wasmtime-audit.md` reads it.
+    `regalloc2` and `target-lexicon` (and `winx`, which option (b) no
+    longer compiles) are covered by the 2026-10-21 exception at the
+    versions wasmtime 48.0.7 requires, as `docs/dev/wasmtime-audit.md`
+    reads it.
   - **G4: the gate checks licences.** #28 adds to `cargo xtask check` the
     plugin template's licence check: every package in `Cargo.lock` must
-    carry a licence the policy allows, with the two narrow exceptions of
-    2026-10-10 and the wasmtime family's of 2026-10-21. Until now only a
-    manual audit protected them.
+    carry an allowed licence or its exact approval: `unicode-ident
+    1.0.26`, `foldhash 0.2.0`, the 18 ICU crates, `encoding_rs 0.8.42`,
+    and the wasmtime family by exact name and version (29 lockfile entries
+    under G1's option (b)). Until now only a manual audit protected them.
   - **G9: the shape of plugin interface 0.1.0 is approved.** It counts as
-    frozen once #28's contract tests pass, and nothing copies it before
-    then:
+    frozen once #28's contract tests pass, and the template (#30) and
+    Notes keep their own draft copies until #28's closing comment names
+    the commit to copy:
     1. Within 0.1.x, only imports marked `@since` may be added; any other
        change starts a new version.
     2. There is no cancel export into a plugin's view code; Syrinx drops
@@ -120,8 +124,20 @@ entry names it.
     7. A search entry may carry up to 16 keywords of up to 120 characters;
        an over-limit keyword is dropped and logged, not used to refuse the
        batch.
-    8. The other types stay as they are, and a per-call time budget comes
-       later as a new service.
+    8. The search-change kinds, the log levels and what a plugin is told
+       when it starts stay as they are; anything new at start, such as a
+       per-call time budget, comes later as a new `@since` service
+       (planned for #135).
+
+    The same approval writes two rules into the contract. The form rule:
+    the host calls `forms.form-for` on preview, `forms.validate` as fields
+    change and `forms.submit` on Enter, never `commands.run` for a command
+    declared with a form, and `form-for` and `validate` have no side
+    effects. The delivery order: the host never calls an export from
+    inside an import; deferred calls run first in, first out, after the
+    current export returns; for each view, `opened` comes before any
+    `message` and `closed` comes last; and `events.deliver(r, ...)` follows
+    the export that returned `pending(r)` or armed `r`.
 
     The new date fields and icons have no design art yet; they are drawn
     under `design/README.md` in #29 and #141.
@@ -129,10 +145,15 @@ entry names it.
     it in #28's measurements, but no plugin view exists until #138, so
     #138 measures it.
   - **G7: the toolchain is pinned.** A `rust-toolchain.toml` pins Rust
-    1.97.1 with the `wasm32-wasip2` target, and the CI setup step
-    installs both. It also governs the weekly release build and this
-    machine's default toolchain.
-  - **A correction to 2026-10-24's decision 5.** The default stubs are
+    1.97.1 (CI's existing pin) with `wasm32-wasip2`, `rustfmt` and
+    `clippy`. The CI `setup-rust` step installs the target, fetches the
+    fixture lockfile and adds it to the cache key, and `LOCAL-DEV.md`
+    records how rustup's auto-install behaves. Because the weekly release
+    uses the same step, it builds on this toolchain too, with unchanged
+    output; inside this repository the file overrides the machine's
+    `stable` default.
+  - **A correction to 2026-10-24's decision 5 (a note, not an owner
+    decision).** The default stubs are
     written by hand in the guest, because the ones `wit-bindgen` generates
     trap (#27's pre-build check). The decision itself stands.
   - **Still the owner's to do.** O1: install `wasm32-wasip2` for 1.97.1
@@ -356,8 +377,9 @@ entry names it.
   `plugin` world; the guest crate generated by `wit-bindgen` supplies
   default stubs (for example `not-found` or empty results) so a plugin
   implements only what its manifest declares. #27's pre-build check
-  confirms this works. *(Corrected on 2026-10-26: the stubs are written by
-  hand, because the generated ones trap; see that date's entries.)* Rejected: one world per plugin role, which would
+  confirms this works. *(Corrected on 2026-10-26: the stubs are
+  written by hand, because the generated ones trap; see that date's
+  entries.)* Rejected: one world per plugin role, which would
   multiply the version tracks to keep compatible.
 
 - **(6) Notes' capability interfaces arrive with `@since(0.1.x)` in the
@@ -626,8 +648,9 @@ entry names it.
   `component-model-async`, WASI 0.3 and `wasi-http` off. Syrinx calls
   plugins synchronously; wasmtime's plain `async` Cargo feature is still
   compiled in because `wasmtime-wasi` requires it, so the dependency audit
-  covers the graph with it. *(Amended on 2026-10-26: `wasmtime-wasi` is
-  not used and `async` is not compiled in; see that date's entries.)* Security patch releases within 48.0.x are
+  covers the graph with it. *(Amended on 2026-10-26: `wasmtime-wasi`
+  is not used and `async` is not compiled in; see that date's
+  entries.)* Security patch releases within 48.0.x are
   routine pin bumps that pass the gate; a move to another major line still
   needs the owner. Why: it is the only runtime that meets the WIT decision
   with a support policy Syrinx can pin to; following wasmtime's monthly
