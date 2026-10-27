@@ -278,7 +278,7 @@ pub enum SessionEvent {
         result: Result<Vec<HistoryVisit>, SessionError>,
     },
     /// The saved zoom levels after a clear the window did not ask for finished (#121): one a
-    /// busy database interrupted, completed while idle or ahead of a later history clear.
+    /// busy database interrupted, completed while idle or ahead of any later journaled clear.
     SiteZoomsReplaced(SiteZoomLevels),
     /// What a `ClearSiteZooms` request removed, or why it failed.
     SiteZoomsCleared {
@@ -1278,16 +1278,17 @@ impl Worker {
         store: &Store,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        let finished = deletions::finish_pending(
+        deletions::finish_interrupted(
             store,
             &mut self.deletions,
             &mut deletions::Followers::new(
                 &mut self.catalogue,
                 &mut self.history,
                 &mut self.page_text,
+                events,
             ),
-        )?;
-        deletions::report_replaced_site_zooms(store, &finished, events)
+        )
+        .map(drop)
     }
 
     /// Adds the whole import in memory, then commits it with a single save.
@@ -1380,18 +1381,19 @@ impl Worker {
         end: i64,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        // An interrupted zoom clear finished on the way leaves the window's levels stale (#121).
         let result = deletions::clear(
             store,
             &mut self.deletions,
-            deletions::Followers::new(&mut self.catalogue, &mut self.history, &mut self.page_text),
+            deletions::Followers::new(
+                &mut self.catalogue,
+                &mut self.history,
+                &mut self.page_text,
+                events,
+            ),
             start,
             end,
         )
-        .and_then(|finished| {
-            deletions::report_replaced_site_zooms(store, &finished, events)?;
-            Ok(finished.history)
-        });
+        .map(|finished| finished.history);
         self.report_cleared(result, events, |result| SessionEvent::HistoryCleared {
             request_id,
             result,
@@ -1410,7 +1412,12 @@ impl Worker {
         let result = deletions::clear_site_zooms(
             store,
             &mut self.deletions,
-            deletions::Followers::new(&mut self.catalogue, &mut self.history, &mut self.page_text),
+            deletions::Followers::new(
+                &mut self.catalogue,
+                &mut self.history,
+                &mut self.page_text,
+                events,
+            ),
             start,
             end,
         );
@@ -1464,7 +1471,12 @@ impl Worker {
         let expired = retention::expire_live(
             store,
             &mut self.deletions,
-            deletions::Followers::new(&mut self.catalogue, &mut self.history, &mut self.page_text),
+            deletions::Followers::new(
+                &mut self.catalogue,
+                &mut self.history,
+                &mut self.page_text,
+                events,
+            ),
             now,
             &mut self.retention,
             limit,

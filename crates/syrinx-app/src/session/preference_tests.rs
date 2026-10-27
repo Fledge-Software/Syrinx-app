@@ -462,3 +462,43 @@ fn a_history_clear_that_finishes_a_pending_zoom_clear_replaces_the_windows_level
     store.shutdown().expect("close synthetic store");
     fixture.cleanup();
 }
+
+#[test]
+fn a_zoom_clear_finished_before_a_failing_history_clear_still_replaces_the_windows_levels() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    // A second link to the journal makes every later append refuse it (hard-linked file), so
+    // the pending zoom clear is applied but its completion, and the history clear, fail.
+    fs::hard_link(
+        fixture.0.join("syrinx.deletions"),
+        fixture.1.join("journal-alias"),
+    )
+    .expect("link the synthetic journal");
+    worker
+        .handle(
+            &store,
+            SessionCommand::ClearHistory {
+                request_id: 11,
+                start: 0,
+                end: i64::MAX,
+            },
+            &sender,
+        )
+        .expect("the worker reports a failed clear instead of stopping");
+    // The window hears its levels, and the dialog hears the failure.
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    assert!(matches!(
+        next_any_event(&mut events),
+        SessionEvent::HistoryCleared {
+            request_id: 11,
+            result: Err(_),
+        }
+    ));
+    // The levels were sent once, and the refused completion left the request pending.
+    assert_eq!(replaced_levels(&mut events), None);
+    assert!(worker.deletions.log().pending().is_some());
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fs::remove_file(fixture.1.join("journal-alias")).expect("remove the synthetic link");
+    fixture.cleanup();
+}

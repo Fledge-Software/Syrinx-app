@@ -15,11 +15,12 @@ use super::{
 };
 
 /// Everything besides the database that a clear must reach before the journal completes it:
-/// the running catalogue, the history recorder's cursors and the index's page text.
+/// the running catalogue, the history recorder's cursors, the index's page text and the window.
 pub(super) struct Followers<'a> {
     catalogue: &'a mut Catalogue,
     recorder: &'a mut history::HistoryRecorder,
     page_text: &'a mut PageText,
+    events: &'a UnboundedSender<SessionEvent>,
 }
 
 impl<'a> Followers<'a> {
@@ -27,11 +28,13 @@ impl<'a> Followers<'a> {
         catalogue: &'a mut Catalogue,
         recorder: &'a mut history::HistoryRecorder,
         page_text: &'a mut PageText,
+        events: &'a UnboundedSender<SessionEvent>,
     ) -> Self {
         Self {
             catalogue,
             recorder,
             page_text,
+            events,
         }
     }
 }
@@ -41,20 +44,16 @@ impl<'a> Followers<'a> {
 pub(super) struct Finished {
     pub(super) history: ClearedHistory,
     site_zooms: usize,
-    /// A `SiteZoom` request was applied, so the window's copy of the levels is stale even when
-    /// a retried clear found nothing left to remove (#121).
-    zoom_applied: bool,
 }
 
 impl Finished {
-    fn from_applied(applied: &AppliedDeletions, category: DeletionCategory) -> Self {
+    fn from_applied(applied: &AppliedDeletions) -> Self {
         Self {
             history: ClearedHistory {
                 visits: applied.history.visits,
                 addresses: applied.history.removed.len(),
             },
             site_zooms: applied.site_zooms,
-            zoom_applied: category == DeletionCategory::SiteZoom,
         }
     }
 
@@ -65,7 +64,6 @@ impl Finished {
                 addresses: self.history.addresses + other.history.addresses,
             },
             site_zooms: self.site_zooms + other.site_zooms,
-            zoom_applied: self.zoom_applied || other.zoom_applied,
         }
     }
 }
@@ -173,20 +171,34 @@ fn journaled_clear(
 ) -> Result<Finished, SessionError> {
     let range = DeletionRange::new(start, end).map_err(journal_error)?;
     // An earlier clear that stopped part-way is finished before a new one may start.
-    let earlier = finish_pending(store, journal, &mut followers)?;
+    let earlier = finish_interrupted(store, journal, &mut followers)?;
     let request = journal
         .log()
         .request(category, range)
         .map_err(journal_error)?;
     journal.append(request).map_err(SessionError::Deletion)?;
-    let cleared = finish_pending(store, journal, &mut followers)?;
+    let cleared = finish_pending(store, journal, &mut followers, false)?;
     Ok(earlier.plus(cleared))
 }
 
-pub(super) fn finish_pending(
+/// Finishes a clear that an earlier run left pending, which the window did not just ask for.
+/// If it cleared zoom levels the window hears the levels left as soon as they are gone, even
+/// when a later step fails (#121, #159).
+pub(super) fn finish_interrupted(
     store: &Store,
     journal: &mut DeletionJournal,
     followers: &mut Followers<'_>,
+) -> Result<Finished, SessionError> {
+    finish_pending(store, journal, followers, true)
+}
+
+/// Applies the pending request and completes it. `report_zooms` is false for a clear the window
+/// asked for, which reports its levels in `SiteZoomsCleared` instead.
+fn finish_pending(
+    store: &Store,
+    journal: &mut DeletionJournal,
+    followers: &mut Followers<'_>,
+    report_zooms: bool,
 ) -> Result<Finished, SessionError> {
     let Some(pending) = journal.log().pending() else {
         return Ok(Finished::default());
@@ -194,23 +206,25 @@ pub(super) fn finish_pending(
     let applied = store
         .apply_deletions(&[pending])
         .map_err(SessionError::Store)?;
+    // Sent before the steps that can still fail, so a failure cannot leave the window stale.
+    // Its own failure waits until the clear is complete, so it cannot strand the request.
+    let reported = if report_zooms && pending.category() == DeletionCategory::SiteZoom {
+        report_replaced_site_zooms(store, followers.events)
+    } else {
+        Ok(())
+    };
     follow(followers.catalogue, followers.recorder, &applied.history)?;
     followers.page_text.follow(journal.log());
     complete_pending(journal)?;
-    Ok(Finished::from_applied(&applied, pending.category()))
+    reported?;
+    Ok(Finished::from_applied(&applied))
 }
 
-/// Hands the window the levels left when a clear it did not ask for removed zoom levels: one a
-/// busy database interrupted, which the idle loop or a later history clear finished (#121). A
-/// clear the window asked for reports its levels in `SiteZoomsCleared` instead.
-pub(super) fn report_replaced_site_zooms(
+/// Hands the window the zoom levels the database now holds.
+fn report_replaced_site_zooms(
     store: &Store,
-    finished: &Finished,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
-    if !finished.zoom_applied {
-        return Ok(());
-    }
     let levels = preferences::restore_site_zooms(store)?;
     emit(events, SessionEvent::SiteZoomsReplaced(levels))
 }
