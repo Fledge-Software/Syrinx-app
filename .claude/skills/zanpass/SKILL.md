@@ -117,7 +117,9 @@ Then ask, in one AskUserQuestion call:
      any issue that sets architecture.
 3. **When it's done:**
    - *Merge into `<working branch>` and push*, offered only when there is a
-     separate working branch;
+     separate working branch. For Reviewer, offer it only when the PR's base
+     is that working branch; a PR based on the default branch lands under
+     the guardrail on main instead;
    - *Open the PR and ping me*;
    - *Ask me then*.
 
@@ -411,7 +413,10 @@ still blocked after those, ask the user.
 Do what the user chose in step 1, or ask now if they chose *Ask me then*.
 
 - **Merge into the working branch.** Allowed only when the working branch is
-  not the default branch and not protected, and only after step 4 is clean.
+  not the default branch and not protected, the PR's base is that working
+  branch (`merge_pull_request` always merges into the PR's base, so a PR
+  based on the default branch would land on main), and only after step 4 is
+  clean.
   1. Mark the PR ready and re-fetch it.
   2. Merge it into the working branch with `merge_pull_request`, passing the
      head SHA, as a merge commit so history is never rewritten.
@@ -590,6 +595,10 @@ opus.
   conversation. Each brief contains:
   - the repository, default branch, working branch, `verify`, the target and
     its spec, and the project kind;
+  - the PR's base branch, with this instruction: "Wherever the skill says to
+    merge `origin/<default>` into your branch, merge `origin/<base>` instead",
+    so the default branch's unrelated commits never ride into the working
+    branch;
   - the absolute path of the skill's SKILL.md, with this instruction: "Read
     it and follow it as if a person had typed `/<skill> <arguments>`.
     Someone is in the chat but you cannot ask them. Return any question only
