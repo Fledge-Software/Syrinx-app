@@ -902,12 +902,8 @@ impl Worker {
         )?;
         page_text.expire_if_due(now);
         // Capture is off: finish an erase that failed or was cut short (owner, 2026-10-27).
-        let settings = &stored_preferences.settings;
-        if page_text::capture_switched_off(
-            settings
-                .iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        ) {
+        let saved = stored_preferences.settings.get(page_text::CAPTURE_KEY);
+        if page_text::capture_switched_off(saved.map(String::as_str)) {
             page_text.erase();
         }
         let stored = store.load().map_err(SessionError::Store)?;
@@ -1212,19 +1208,20 @@ impl Worker {
             command => command,
         };
         let erases = match &command {
-            SessionCommand::SaveSettings(entries) => page_text::capture_switched_off(
-                entries
+            SessionCommand::SaveSettings(entries) => {
+                let saving = entries
                     .iter()
-                    .map(|(key, value)| (key.as_str(), value.as_str())),
-            ),
+                    .find(|(key, _)| key == page_text::CAPTURE_KEY);
+                page_text::capture_switched_off(saving.map(|(_, value)| value.as_str()))
+            }
             _ => false,
         };
-        let Some(command) = preferences::intercept(store, &mut self.destinations, command, events)?
-        else {
-            // Only once the switch-off is saved, so a refused save erases nothing yet.
-            if erases {
-                self.page_text.erase();
-            }
+        let intercepted = preferences::intercept(store, &mut self.destinations, command, events);
+        // Erasing is the safe direction, so it runs even when saving the switch-off failed.
+        if erases {
+            self.page_text.erase();
+        }
+        let Some(command) = intercepted? else {
             return Ok(());
         };
 

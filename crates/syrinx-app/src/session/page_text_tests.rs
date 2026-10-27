@@ -880,9 +880,20 @@ fn an_erase_the_index_cannot_make_is_reported_not_swallowed() {
 #[test]
 fn only_a_saved_value_other_than_on_counts_as_switched_off() {
     use page_text::capture_switched_off as off;
-    assert!(off([(CAPTURE_KEY, "off")].into_iter()));
-    assert!(off([(CAPTURE_KEY, "garbled")].into_iter()));
-    assert!(!off([(CAPTURE_KEY, CAPTURE_ON)].into_iter()));
-    assert!(!off([("appearance.theme", "off")].into_iter()));
-    assert!(!off(std::iter::empty()));
+    assert!(off(Some("off")));
+    assert!(off(Some("garbled")));
+    assert!(!off(Some(CAPTURE_ON)));
+    assert!(!off(None), "never set: nothing was ever captured");
+}
+
+#[test]
+fn a_captured_page_never_shows_its_address_title_or_text_in_debug_output() {
+    let page = CapturedPage {
+        address: "https://debug-sentinel.example.test/".to_owned(),
+        title: "debug-sentinel title".to_owned(),
+        text: "debug-sentinel words".to_owned(),
+    };
+    assert!(!format!("{page:?}").contains("sentinel"));
+    let command = SessionCommand::StorePageText(page);
+    assert!(!format!("{command:?}").contains("sentinel"));
 }

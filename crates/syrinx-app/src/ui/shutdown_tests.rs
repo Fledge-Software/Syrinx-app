@@ -6,7 +6,7 @@ use syrinx_core::{Activation, TabId, TabKind, TabMetadata, TabModel, TabModelSna
 use syrinx_platform::browser::{BrowserCommand, PageBounds};
 use syrinx_search::Scope;
 
-use super::{HomePaletteIntent, page_command_allowed, queue_session_command};
+use super::{HomePaletteIntent, loaded_address, page_command_allowed, queue_session_command};
 use crate::session::{HomeEntryAction, SessionCommand};
 
 /// Queues a command the way Ctrl T and every ordinary command do.
@@ -283,4 +283,35 @@ fn closing_page_host_accepts_teardown_but_no_late_focus_or_navigation() {
     }
     assert!(page_command_allowed(false, &BrowserCommand::Shutdown));
     assert!(page_command_allowed(true, &BrowserCommand::Shutdown));
+}
+
+#[test]
+fn every_command_that_loads_an_address_exposes_it_to_the_acceptance_guard() {
+    // A reopened tab loads its address too, so an acceptance run must check it first (#54).
+    for (command, address) in [
+        (
+            BrowserCommand::Create {
+                id: 1,
+                url: "https://created.example.test/".into(),
+            },
+            "https://created.example.test/",
+        ),
+        (
+            BrowserCommand::Reopen {
+                id: 1,
+                url: "https://reopened.example.test/".into(),
+            },
+            "https://reopened.example.test/",
+        ),
+        (
+            BrowserCommand::Navigate {
+                id: 1,
+                url: "https://navigated.example.test/".into(),
+            },
+            "https://navigated.example.test/",
+        ),
+    ] {
+        assert_eq!(loaded_address(&command), Some(address));
+    }
+    assert_eq!(loaded_address(&BrowserCommand::Reload { id: 1 }), None);
 }

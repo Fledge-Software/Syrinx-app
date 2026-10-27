@@ -1201,7 +1201,7 @@ impl BrowserView {
         if !page_command_allowed(self.closing, &command) {
             return false;
         }
-        if let BrowserCommand::Create { url, .. } | BrowserCommand::Navigate { url, .. } = &command
+        if let Some(url) = loaded_address(&command)
             && !self.acceptance_permits(url)
         {
             return false;
@@ -2305,6 +2305,16 @@ fn queue_session_command(
     }
     send(home, sender, command)?;
     Ok(true)
+}
+
+/// The address a command loads into a page, which an acceptance run must check first.
+fn loaded_address(command: &BrowserCommand) -> Option<&str> {
+    match command {
+        BrowserCommand::Create { url, .. }
+        | BrowserCommand::Reopen { url, .. }
+        | BrowserCommand::Navigate { url, .. } => Some(url),
+        _ => None,
+    }
 }
 
 fn page_command_allowed(closing: bool, command: &BrowserCommand) -> bool {

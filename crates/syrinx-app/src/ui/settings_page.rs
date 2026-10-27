@@ -197,6 +197,7 @@ impl BrowserView {
     pub(super) fn close_settings_subviews(&mut self) {
         self.home.site_permissions.close();
         self.usage.report.close();
+        self.page_text_site = None;
     }
 
     /// Whether the active tab is the Settings page.

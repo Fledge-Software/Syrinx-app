@@ -269,12 +269,10 @@ fn store_page(index: &mut FullText, page: CapturedPage, now: i64) -> Result<(), 
     index.commit().or_else(cleanup_later)
 }
 
-/// Whether saved settings say capture is off after having been set: then any page text
-/// left by an erase that failed or was interrupted goes at start-up or with the save.
-pub(super) fn capture_switched_off<'a>(
-    mut entries: impl Iterator<Item = (&'a str, &'a str)>,
-) -> bool {
-    entries.any(|(key, value)| key == CAPTURE_KEY && value != CAPTURE_ON)
+/// Whether a saved capture value means off after having been set: then any page text left
+/// by an erase that failed or was interrupted goes at start-up or with the save.
+pub(super) fn capture_switched_off(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value != CAPTURE_ON)
 }
 
 /// What a failed erase is reported as.

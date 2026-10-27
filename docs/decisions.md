@@ -24,7 +24,8 @@ entry names it.
   coordinator's record, and the owner may correct it. Turning "Remember page
   text" off in Settings > Privacy removes every stored page from the
   full-text index in one reset of its page namespace, run by the session
-  worker once the switch-off is saved, as switching usage counting off
+  worker with the switch-off (even if saving it fails, since erasing is the
+  safe direction), as switching usage counting off
   deletes the counts (AN-01). Notes and other feeds in the index are kept.
   A failed erase is reported, never swallowed, and tried again the next
   time the setting is saved or Syrinx starts while capture is off. Letting
