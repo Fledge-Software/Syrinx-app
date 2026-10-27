@@ -10,8 +10,8 @@ use syrinx_store::{
 };
 
 use super::{
-    ClearedHistory, ClearedSiteZooms, SessionError, SessionEvent, emit, history,
-    page_text::PageText, preferences,
+    ClearedHistory, ClearedSiteZooms, SessionError, SessionEvent, history,
+    page_text::PageText, preferences, zoom_levels::ZoomLevelsReport,
 };
 
 /// Everything besides the database that a clear must reach before the journal completes it:
@@ -20,6 +20,7 @@ pub(super) struct Followers<'a> {
     catalogue: &'a mut Catalogue,
     recorder: &'a mut history::HistoryRecorder,
     page_text: &'a mut PageText,
+    zoom_levels: &'a mut ZoomLevelsReport,
     events: &'a UnboundedSender<SessionEvent>,
 }
 
@@ -28,12 +29,14 @@ impl<'a> Followers<'a> {
         catalogue: &'a mut Catalogue,
         recorder: &'a mut history::HistoryRecorder,
         page_text: &'a mut PageText,
+        zoom_levels: &'a mut ZoomLevelsReport,
         events: &'a UnboundedSender<SessionEvent>,
     ) -> Self {
         Self {
             catalogue,
             recorder,
             page_text,
+            zoom_levels,
             events,
         }
     }
@@ -255,7 +258,7 @@ fn finish_pending(
     // Its own failure waits until the clear is complete, so it cannot strand the request.
     let report =
         if origin == Origin::Interrupted && pending.category() == DeletionCategory::SiteZoom {
-            report_replaced_site_zooms(store, followers.events)
+            followers.zoom_levels.send(store, followers.events)
         } else {
             Ok(())
         };
@@ -278,15 +281,6 @@ fn follow_and_complete(
     follow(followers.catalogue, followers.recorder, &applied.history)?;
     followers.page_text.follow(journal.log());
     complete_pending(journal)
-}
-
-/// Hands the window the zoom levels the database now holds.
-fn report_replaced_site_zooms(
-    store: &Store,
-    events: &UnboundedSender<SessionEvent>,
-) -> Result<(), SessionError> {
-    let levels = preferences::restore_site_zooms(store)?;
-    emit(events, SessionEvent::SiteZoomsReplaced(levels))
 }
 
 /// Writes a held report failure to the diagnostic stream when a later error is returned

@@ -13,6 +13,7 @@ mod stop;
 mod synthetic;
 mod unsaved;
 mod usage;
+mod zoom_levels;
 
 pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
@@ -868,6 +869,8 @@ struct Worker {
     survival: stop::Survival,
     /// A tab model a busy database refused, and when to try it again (#9).
     unsaved: unsaved::Unsaved,
+    /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
+    zoom_levels: zoom_levels::ZoomLevelsReport,
 }
 
 /// The tabs a command created, and those of them that put back an earlier tab's page.
@@ -943,6 +946,7 @@ impl Worker {
             usage: Arc::default(),
             survival: stop::Survival::new(),
             unsaved: unsaved::Unsaved::default(),
+            zoom_levels: zoom_levels::ZoomLevelsReport::default(),
         })
     }
 
@@ -1055,6 +1059,10 @@ impl Worker {
         self.survival.operation = "saving the tabs";
         let retried = self.retry_unsaved(store);
         self.survival.result(retried, events)?;
+        // A failed report of the zoom levels a clear left is sent again on a later tick (#196).
+        self.survival.operation = "resending the zoom levels";
+        let resent = self.zoom_levels.retry(store, events);
+        self.survival.result(resent, events)?;
         // A clear that a busy database interrupted must not leave cleared data showing (D47).
         self.survival.operation = "finishing an interrupted clear";
         let cleared = self.finish_pending_clear(store, events);
@@ -1375,6 +1383,7 @@ impl Worker {
                 &mut self.catalogue,
                 &mut self.history,
                 &mut self.page_text,
+                &mut self.zoom_levels,
                 events,
             ),
         )
@@ -1481,6 +1490,7 @@ impl Worker {
                 &mut self.catalogue,
                 &mut self.history,
                 &mut self.page_text,
+                &mut self.zoom_levels,
                 events,
             ),
             start,
@@ -1509,6 +1519,7 @@ impl Worker {
                 &mut self.catalogue,
                 &mut self.history,
                 &mut self.page_text,
+                &mut self.zoom_levels,
                 events,
             ),
             start,
@@ -1568,6 +1579,7 @@ impl Worker {
                 &mut self.catalogue,
                 &mut self.history,
                 &mut self.page_text,
+                &mut self.zoom_levels,
                 events,
             ),
             now,

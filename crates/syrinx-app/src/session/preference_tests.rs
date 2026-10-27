@@ -434,6 +434,64 @@ fn a_pending_zoom_clear_finished_while_idle_replaces_the_windows_levels() {
     fixture.cleanup();
 }
 
+/// Whether the window was told a failure, which the worker reports without stopping.
+fn heard_failure(events: &mut UnboundedReceiver<SessionEvent>) -> bool {
+    let mut heard = false;
+    while let Ok(event) = events.try_recv() {
+        heard |= matches!(event, SessionEvent::Failure { fatal: false, .. });
+    }
+    heard
+}
+
+#[test]
+fn a_levels_read_that_fails_after_the_apply_is_retried_on_a_later_idle_tick() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    worker.zoom_levels.refuse_reads(1);
+    worker
+        .idle(&store, &sender)
+        .expect("the worker survives a refused read");
+    // The clear is applied and complete, but the window has heard nothing yet.
+    assert_eq!(worker.deletions.log().pending(), None);
+    assert!(worker.zoom_levels.is_stale());
+    assert!(heard_failure(&mut events));
+    worker
+        .idle(&store, &sender)
+        .expect("resend the synthetic levels");
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    assert!(!worker.zoom_levels.is_stale());
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}
+
+#[test]
+fn a_levels_read_that_keeps_failing_is_retried_a_bounded_number_of_times() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    worker.zoom_levels.refuse_reads(u32::MAX);
+    // The first send fails inside the clear, and each idle tick after it is one retry.
+    worker
+        .idle(&store, &sender)
+        .expect("the worker survives a refused read");
+    for _ in 1..zoom_levels::MAX_ATTEMPTS {
+        assert!(worker.zoom_levels.is_stale());
+        worker
+            .idle(&store, &sender)
+            .expect("the worker survives a refused retry");
+    }
+    // The last retry gave up and told the window; later ticks read nothing more.
+    assert!(!worker.zoom_levels.is_stale());
+    assert!(heard_failure(&mut events));
+    worker
+        .idle(&store, &sender)
+        .expect("an idle tick with nothing stale");
+    assert_eq!(replaced_levels(&mut events), None);
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}
+
 #[test]
 fn a_history_clear_that_finishes_a_pending_zoom_clear_replaces_the_windows_levels() {
     let fixture = Fixture::new();
