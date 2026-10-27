@@ -669,7 +669,7 @@ fn captured(address: &str, body: &str) -> CapturedPage {
     visited(address, body, now - 60)
 }
 
-/// A synthetic capture of a page that finished loading at `visited_at`.
+/// A synthetic capture of a page visited (loaded, or moved to by the History API) at `visited_at`.
 fn visited(address: &str, body: &str, visited_at: i64) -> CapturedPage {
     CapturedPage {
         address: address.to_owned(),

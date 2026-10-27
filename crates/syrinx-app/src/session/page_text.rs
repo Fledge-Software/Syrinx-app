@@ -297,8 +297,9 @@ pub struct CapturedPage {
     pub address: String,
     pub title: String,
     pub text: String,
-    /// Unix seconds when the page finished loading. The text is dated by this visit, so a
-    /// clear of the time it was visited removes it wherever its capture is.
+    /// Unix seconds of the visit the capture belongs to: the page finishing loading, or its
+    /// address changing through the History API. The text is dated by it, so a clear of that
+    /// time removes it wherever its capture is.
     pub visited_at: i64,
 }
 
