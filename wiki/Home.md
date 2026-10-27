@@ -64,6 +64,8 @@ places that can drift apart.
   the gate.
 - [Plugin system](Plugin-system): the 2026-10-15 decision to build plugins as
   sandboxed WebAssembly, and the order the work will happen in.
+- [Product and services](Product-and-services): what stays free, the planned
+  paid services and their prices, and the one Syrinx account.
 - Background research notes, written before and during Phase 0:
   - [01 Shell and engine](Background-01-shell-and-engine)
   - [02 Browser v1 scope](Background-02-browser-v1-scope),

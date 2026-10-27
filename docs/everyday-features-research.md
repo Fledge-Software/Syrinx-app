@@ -17,6 +17,9 @@
 > for six people, and repeatable 30 GB storage units at $2/month. Cloudflare R2
 > stores encrypted files; Supabase manages accounts/subscriptions. The paid plan
 > is authoritative for all approved limits and later billing/security details.
+> On 2026-10-26 the owner's product map changed Household to $20/month or
+> $200/year and AI to one $20 subscription with credit packs
+> ([`product-map.md`](product-map.md)).
 
 ## Recommendation
 
