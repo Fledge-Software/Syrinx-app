@@ -459,3 +459,115 @@ impl Drop for Fixture {
         fs::remove_dir_all(&self.root).expect("remove disposable synthetic directory");
     }
 }
+
+#[test]
+fn a_cache_folder_is_created_beside_the_database_and_held_in_place() {
+    let fixture = Fixture::new();
+    let destination = fixture.root.join("data");
+    let lease = prepare(&destination);
+    let folder = lease
+        .cache_folder("synthetic-cache")
+        .expect("create a synthetic cache folder");
+    // Compare resolved paths: the CI runner's temp folder is spelled as an 8.3 short name.
+    let resolve = |path: &Path| fs::canonicalize(path).expect("resolve the synthetic path");
+    assert_eq!(
+        resolve(folder.path()),
+        resolve(&destination.join("synthetic-cache"))
+    );
+    assert!(folder.path().is_dir());
+
+    // Files inside stay the cache's own to create and delete; the folder itself cannot move.
+    let inside = folder.path().join("segment.bin");
+    fs::write(&inside, b"synthetic cache bytes").expect("write inside the cache folder");
+    fs::remove_file(&inside).expect("delete inside the cache folder");
+    assert!(fs::rename(folder.path(), destination.join("moved")).is_err());
+    let path = folder.path().to_owned();
+    drop(folder);
+    fs::rename(&path, destination.join("moved")).expect("release the cache folder's name");
+
+    // An existing folder is opened again rather than replaced.
+    fs::rename(destination.join("moved"), &path).expect("restore the synthetic folder");
+    fs::write(path.join("kept.bin"), b"kept").expect("write a synthetic kept file");
+    let reopened = lease
+        .cache_folder("synthetic-cache")
+        .expect("reopen the synthetic cache folder");
+    assert_eq!(
+        fs::read(reopened.path().join("kept.bin")).expect("read the kept file"),
+        b"kept"
+    );
+}
+
+#[test]
+fn a_cache_folder_in_a_synced_location_is_refused_before_it_is_created() {
+    let fixture = Fixture::new();
+    let probe = Arc::new(StubProbe::with_roots(Vec::new()));
+    let destination = fixture.root.join("data");
+    let lease = WindowsDirectoryLease::prepare_with_probe(&destination, probe.clone())
+        .expect("prepare a synthetic database");
+    *probe.roots.lock().expect("lock synthetic root list") = Ok(vec![fixture.root.clone()]);
+    assert_eq!(
+        lease.cache_folder("synthetic-cache").err(),
+        Some(LocationError::SyncedDirectory)
+    );
+    assert!(!destination.join("synthetic-cache").exists());
+}
+
+#[test]
+fn a_cache_folder_must_be_a_plain_folder_with_a_plain_name() {
+    let fixture = Fixture::new();
+    let destination = fixture.root.join("data");
+    let lease = prepare(&destination);
+    fs::write(destination.join("not-a-folder"), b"synthetic file").expect("write synthetic file");
+    assert_eq!(
+        lease.cache_folder("not-a-folder").err(),
+        Some(LocationError::UnexpectedEntryKind)
+    );
+    for name in ["", "..", "nested\name", "CON", "trailing."] {
+        assert_eq!(
+            lease.cache_folder(name).err(),
+            Some(LocationError::InvalidPath),
+            "a cache folder name must be one plain component"
+        );
+    }
+}
+
+#[test]
+fn cache_folder_diagnostics_redact_the_location() {
+    let fixture = Fixture::new();
+    let lease = prepare(&fixture.root.join("private-synthetic-sentinel"));
+    let folder = lease
+        .cache_folder("synthetic-cache")
+        .expect("create a synthetic cache folder");
+    assert_eq!(
+        format!("{folder:?}"),
+        "CacheFolder { location: [redacted] }"
+    );
+}
+
+#[test]
+fn emptying_a_cache_folder_removes_its_files_and_refuses_anything_else() {
+    let fixture = Fixture::new();
+    let lease = prepare(&fixture.root.join("data"));
+    let folder = lease
+        .cache_folder("synthetic-cache")
+        .expect("create a synthetic cache folder");
+    fs::write(folder.path().join("segment.bin"), b"synthetic").expect("write synthetic file");
+    fs::write(folder.path().join(".synthetic-lock"), b"synthetic").expect("write synthetic file");
+    folder.empty().expect("empty the synthetic cache folder");
+    assert!(
+        fs::read_dir(folder.path())
+            .expect("list the synthetic cache folder")
+            .next()
+            .is_none()
+    );
+
+    // A subfolder is refused before anything is deleted, so a link inside cannot be followed.
+    fs::create_dir(folder.path().join("nested")).expect("create synthetic subfolder");
+    fs::write(folder.path().join("kept.bin"), b"kept").expect("write synthetic file");
+    assert_eq!(
+        folder.empty().err(),
+        Some(LocationError::UnexpectedEntryKind)
+    );
+    assert!(folder.path().join("nested").is_dir());
+    assert!(folder.path().join("kept.bin").is_file());
+}

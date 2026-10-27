@@ -103,6 +103,8 @@ pub(super) fn survivable(error: &SessionError) -> bool {
         SessionError::During { error, .. } => survivable(error),
         SessionError::Store(error) => store_survivable(error),
         SessionError::Search(_)
+        | SessionError::FullText(_)
+        | SessionError::IndexFolder(_)
         | SessionError::EventReceiverClosed
         | SessionError::Model(_)
         | SessionError::Destination(_)

@@ -725,6 +725,15 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Repository and research
 
+- **A child test process's first report shares libtest's line.** A crash
+  test that reruns its own binary with `--exact --nocapture` reads the
+  child's reports from its output, but libtest prints `test <name> ... `
+  without a line break first, so the child's first line arrives as
+  `test <name> ... BEGIN`. A parent waiting for a line equal to `BEGIN`
+  waits out its whole timeout. Match the end of the line, as
+  `crates/syrinx-search/tests/fulltext_maintenance_crash.rs` does. Source:
+  #53's maintenance crash tests (observed 2026-10-26).
+
 - **Windows PowerShell can replace Unicode in a native-program pipeline.**
   An edit piped to Python lost its middle-dot separator, so a replacement did
   not match and a P1-14 label regression failed. Use direct patches for Unicode
