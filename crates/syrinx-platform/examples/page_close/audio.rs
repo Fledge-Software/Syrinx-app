@@ -23,7 +23,7 @@ const TONE_ID: u64 = 1600;
 /// Enter starts it, so the posted key press gives Chromium's autoplay rule its user gesture;
 /// S stops it.
 const TONE: &str = r#"<!doctype html><meta charset=utf-8><title>tone-ready</title>
-<link rel=icon href=data:,><p>Enter: start a faint synthetic tone. S: stop it.</p><script>
+<link rel=icon href=data:,><p>Enter: start a synthetic tone. S: stop it.</p><script>
 let context,tone;
 addEventListener('keydown',event=>{
 if(event.key==='Enter'&&!tone){context=new AudioContext();tone=new OscillatorNode(context,{frequency:30});
@@ -136,10 +136,10 @@ fn start_tone(
     loop {
         match checked_event(events, deadline)? {
             BrowserEvent::Title { id: TONE_ID, title } if title == "tone-playing" => break,
-            BrowserEvent::Title { id: TONE_ID, title } if title == "tone-error" => {
-                return Err("Synthetic tone page could not start or stop its tone.".into());
+            event => {
+                fail_on_tone_error(&event)?;
+                reported_playing |= is_muted_and_playing(&event);
             }
-            event => reported_playing |= is_muted_and_playing(&event),
         }
     }
     if !reported_playing {
@@ -154,16 +154,16 @@ fn wait_muted_and_playing(
     events: &mut UnboundedReceiver<BrowserEvent>,
     deadline: Instant,
 ) -> Result<(), String> {
-    let until = (Instant::now() + PLAYING_REPORT_WAIT).min(deadline);
+    let started = Instant::now();
+    let until = (started + PLAYING_REPORT_WAIT).min(deadline);
     while let Some(event) = next_event_until(events, until)? {
         if is_muted_and_playing(&event) {
             return Ok(());
         }
     }
     Err(format!(
-        "WebView2 did not report the muted tone page as playing audio within {} s of its tone \
-         starting (check the machine has an audio output device).",
-        PLAYING_REPORT_WAIT.as_secs()
+        "WebView2 did not report the muted tone page as playing audio within {:.1} s of its          tone starting (check the machine has an audio output device).",
+        started.elapsed().as_secs_f64()
     ))
 }
 
@@ -189,6 +189,9 @@ fn hold_hidden_while_playing(
     let hidden = Instant::now();
     let until = (hidden + PLAYING_HOLD).min(deadline);
     while let Some(event) = next_event_until(events, until)? {
+        if went_quiet(&event) {
+            return Err(reported_quiet_while_hidden(hidden.elapsed()));
+        }
         if is_suspended(&event) {
             return Err(suspended_while_playing(hidden.elapsed()));
         }
@@ -200,12 +203,33 @@ fn hold_hidden_while_playing(
     Ok(())
 }
 
-/// Names an early suspension of the muted, playing page. The playing report was already seen
-/// before hiding, so the runtime stopped reporting audio while muted, or Syrinx's rule failed.
+/// Whether `event` is WebView2 reporting the tone page no longer playing audio.
+fn went_quiet(event: &BrowserEvent) -> bool {
+    matches!(
+        event,
+        BrowserEvent::AudioChanged {
+            id: TONE_ID,
+            playing: false,
+            ..
+        }
+    )
+}
+
+/// Names the runtime going quiet while the muted tone still plays. The timer sleeps a page only
+/// after `AUDIO_GRACE` of quiet, so a suspension inside the hold would follow this report.
+fn reported_quiet_while_hidden(after: Duration) -> String {
+    format!(
+        "WebView2 reported the muted tone page quiet {:.1} s after hiding while its tone still          played: the runtime stops reporting audio for a muted page once it is hidden, so Syrinx          would let it sleep.",
+        after.as_secs_f64()
+    )
+}
+
+/// Names a suspension inside the hold, which the audio grace should make impossible.
 fn suspended_while_playing(after: Duration) -> String {
     format!(
-        "Synthetic muted tone page was suspended {:.1} s after hiding while its tone played:          the runtime stops reporting audio while muted (if about 5 s), or Syrinx's playback          rule failed (if later).",
-        after.as_secs_f64()
+        "Synthetic muted tone page was suspended {:.1} s after hiding, inside the {} s hold          while its tone played and without a quiet report: Syrinx's playback rule failed.",
+        after.as_secs_f64(),
+        PLAYING_HOLD.as_secs()
     )
 }
 
@@ -278,13 +302,21 @@ fn wait_title(
     deadline: Instant,
 ) -> Result<(), String> {
     loop {
-        match checked_event(events, deadline)? {
-            BrowserEvent::Title { id: TONE_ID, title } if title == expected => return Ok(()),
-            BrowserEvent::Title { id: TONE_ID, title } if title == "tone-error" => {
-                return Err("Synthetic tone page could not start or stop its tone.".into());
-            }
-            _ => {}
+        let event = checked_event(events, deadline)?;
+        fail_on_tone_error(&event)?;
+        if matches!(&event, BrowserEvent::Title { id: TONE_ID, title } if title == expected) {
+            return Ok(());
         }
+    }
+}
+
+/// Fails when the tone page reports `tone-error` for its start or stop.
+fn fail_on_tone_error(event: &BrowserEvent) -> Result<(), String> {
+    match event {
+        BrowserEvent::Title { id: TONE_ID, title } if title == "tone-error" => {
+            Err("Synthetic tone page could not start or stop its tone.".into())
+        }
+        _ => Ok(()),
     }
 }
 
