@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use gpui::{ClipboardItem, Context, Pixels, Point, Window};
 use syrinx_core::{
-    BrowserAction, CommandAction, CommandRegistry, PageOrigin, SavedFolderId, SavedPageId,
-    Shortcut, TabId, TabModelSnapshot,
+    BrowserAction, BulkScope, CommandAction, CommandRegistry, PageOrigin, SavedFolderId,
+    SavedPageId, Shortcut, TabId, TabModelSnapshot,
 };
 use syrinx_platform::browser::BrowserCommand;
 
@@ -53,14 +53,15 @@ pub(super) enum LinkSource {
 /// A bulk close and the tab it keeps.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct BulkClose {
-    pub(super) kind: BulkKind,
+    pub(super) kind: BulkScope,
     pub(super) tab: TabId,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum BulkKind {
-    Others,
-    Below,
+impl BulkClose {
+    /// The tabs it would close now, read by the same rule the tab model closes them by.
+    pub(super) fn targets(self, model: &TabModelSnapshot) -> Vec<TabId> {
+        model.bulk_close_targets(self.kind, self.tab)
+    }
 }
 
 impl TabAction {
@@ -76,11 +77,11 @@ impl TabAction {
             TabAction::Close(_) => "Close tab",
             TabAction::Unload(_) => "Unload page",
             TabAction::Bulk(BulkClose {
-                kind: BulkKind::Others,
+                kind: BulkScope::Others,
                 ..
             }) => "Close other tabs",
             TabAction::Bulk(BulkClose {
-                kind: BulkKind::Below,
+                kind: BulkScope::Below,
                 ..
             }) => "Close tabs below",
             TabAction::ReopenClosed => "Reopen closed tab",
@@ -246,8 +247,8 @@ fn open_tab_groups(
     let save_keys = keys.save.clone().filter(|_| page.active);
     let mut closing = vec![(TabAction::Close(tab), close_keys)];
     // A bulk close that would close nothing is left out, as Firefox greys it out.
-    closing.extend(when(others > 0, bulk(BulkKind::Others, tab)));
-    closing.extend(when(below > 0, bulk(BulkKind::Below, tab)));
+    closing.extend(when(others > 0, bulk(BulkScope::Others, tab)));
+    closing.extend(when(below > 0, bulk(BulkScope::Below, tab)));
     vec![
         page_items(tab, page, keys),
         when(page.web, (TabAction::Save(tab), save_keys)),
@@ -270,7 +271,7 @@ fn page_items(tab: TabId, page: PageFacts, keys: &RowKeys) -> Vec<Item> {
     ]
 }
 
-fn bulk(kind: BulkKind, tab: TabId) -> Item {
+fn bulk(kind: BulkScope, tab: TabId) -> Item {
     (TabAction::Bulk(BulkClose { kind, tab }), None)
 }
 
@@ -337,27 +338,10 @@ pub(super) fn row_subject(
         TreeId::Tab(tab) => Some(RowSubject::OpenTab {
             tab,
             page: facts(tab)?,
-            others: bulk_close_count(model, BulkKind::Others, tab),
-            below: bulk_close_count(model, BulkKind::Below, tab),
+            others: model.bulk_close_targets(BulkScope::Others, tab).len(),
+            below: model.bulk_close_targets(BulkScope::Below, tab).len(),
         }),
     }
-}
-
-/// How many tabs a bulk close would close: the ordinary tabs other than `tab` (Others), or
-/// those after it (Below). Open saved pages are spared, as `TabModel::close_others` and
-/// `close_below` spare them.
-pub(super) fn bulk_close_count(model: &TabModelSnapshot, kind: BulkKind, tab: TabId) -> usize {
-    let Some(position) = model.tabs.iter().position(|candidate| candidate.id == tab) else {
-        return 0;
-    };
-    let start = match kind {
-        BulkKind::Others => 0,
-        BulkKind::Below => position + 1,
-    };
-    model.tabs[start..]
-        .iter()
-        .filter(|candidate| candidate.saved_page_id.is_none() && candidate.id != tab)
-        .count()
 }
 
 /// What choosing a bulk close does now.
@@ -389,31 +373,36 @@ pub(super) fn bulk_close_setting(ask: bool) -> (String, String) {
     (ASK_BULK_CLOSE_KEY.to_owned(), ask.to_string())
 }
 
-/// What a confirmed bulk close does once the tabs are counted again.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// What a confirmed bulk close does once its tabs are read again.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Recount {
-    /// The count the question named still holds.
+    /// The tabs the question named are still exactly the ones that would close.
     Close,
-    /// Tabs opened or closed meanwhile; ask again with the new count.
-    AskAgain(usize),
+    /// Tabs opened, closed or moved meanwhile; ask again about these.
+    AskAgain(Vec<TabId>),
     Nothing,
 }
 
-/// Closes only what the question counted: a changed count asks again.
-pub(super) fn recount(asked: usize, now: usize) -> Recount {
-    match now {
-        0 => Recount::Nothing,
-        now if now == asked => Recount::Close,
-        now => Recount::AskAgain(now),
+/// Closes only the tabs the question named: any other set, even of the same size, asks again.
+pub(super) fn recount(asked: &[TabId], now: Vec<TabId>) -> Recount {
+    if now.is_empty() {
+        Recount::Nothing
+    } else if now == asked {
+        Recount::Close
+    } else {
+        Recount::AskAgain(now)
     }
 }
 
+/// The status line when a bulk close finds nothing left to close.
+const NOTHING_TO_CLOSE: &str = "No other tabs would close.";
+
 /// The confirmation's question, such as "Close 3 other tabs?".
-pub(super) fn bulk_question(kind: BulkKind, count: usize) -> String {
+pub(super) fn bulk_question(kind: BulkScope, count: usize) -> String {
     let tabs = tabs_phrase(count);
     match kind {
-        BulkKind::Others => format!("Close {count} other {tabs}?"),
-        BulkKind::Below => format!("Close {count} {tabs} below?"),
+        BulkScope::Others => format!("Close {count} other {tabs}?"),
+        BulkScope::Below => format!("Close {count} {tabs} below?"),
     }
 }
 
@@ -435,11 +424,16 @@ pub(super) enum ActionFocus {
     Unplaced,
 }
 
-/// The menu a row action came from, so a confirmation can open in its place.
+/// The menu an action came from: where it hung, so a confirmation can open in its place,
+/// and what it was opened on.
 #[derive(Clone)]
 pub(super) struct MenuOrigin {
     pub(super) anchor: MenuAnchor,
     pub(super) returns: MenuReturn,
+    /// The tab active when the menu opened; the ⋯ menu's Close tab closes this one.
+    pub(super) active: Option<TabId>,
+    /// The tabs a bulk-close question named; empty for every other menu.
+    pub(super) asked: Vec<TabId>,
 }
 
 impl BrowserView {
@@ -534,10 +528,10 @@ impl BrowserView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let count = bulk_close_count(&self.model, bulk.kind, bulk.tab);
-        match bulk_plan(self.ask_before_bulk_close, count) {
+        let targets = bulk.targets(&self.model);
+        match bulk_plan(self.ask_before_bulk_close, targets.len()) {
             BulkPlan::Nothing => {
-                self.message = "No other tabs would close.".to_owned();
+                self.message = NOTHING_TO_CLOSE.to_owned();
                 false
             }
             BulkPlan::Close => {
@@ -550,31 +544,30 @@ impl BrowserView {
                     self.message = "Close several tabs from a tab's menu.".to_owned();
                     return false;
                 };
-                self.show_bulk_confirmation(bulk, count, menu, window, cx);
+                self.show_bulk_confirmation(bulk, targets, menu, window, cx);
                 true
             }
         }
     }
 
-    /// Closes the tabs the confirmation named; with `remember`, it never asks again. Tabs
-    /// opened or closed while it was asking make it ask again with the new count.
+    /// Closes the tabs the confirmation named (`origin.asked`); with `remember`, it never asks
+    /// again. Tabs opened, closed or moved while it was asking make it ask again about the
+    /// tabs that would close now.
     pub(super) fn confirm_bulk_close(
         &mut self,
         bulk: BulkClose,
         remember: bool,
-        asked: usize,
         origin: MenuOrigin,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> ActionFocus {
-        let now = bulk_close_count(&self.model, bulk.kind, bulk.tab);
-        match recount(asked, now) {
+        match recount(&origin.asked, bulk.targets(&self.model)) {
             Recount::Nothing => {
-                self.message = "No other tabs would close.".to_owned();
+                self.message = NOTHING_TO_CLOSE.to_owned();
                 ActionFocus::Unplaced
             }
-            Recount::AskAgain(count) => {
-                self.show_bulk_confirmation(bulk, count, origin, window, cx);
+            Recount::AskAgain(targets) => {
+                self.show_bulk_confirmation(bulk, targets, origin, window, cx);
                 ActionFocus::Placed
             }
             Recount::Close => {
@@ -589,8 +582,8 @@ impl BrowserView {
 
     fn close_in_bulk(&mut self, bulk: BulkClose) {
         self.command(match bulk.kind {
-            BulkKind::Others => SessionCommand::CloseOthers(bulk.tab),
-            BulkKind::Below => SessionCommand::CloseBelow(bulk.tab),
+            BulkScope::Others => SessionCommand::CloseOthers(bulk.tab),
+            BulkScope::Below => SessionCommand::CloseBelow(bulk.tab),
         });
     }
 
@@ -616,6 +609,7 @@ impl BrowserView {
             },
             returns: MenuReturn::Was(self.chrome_return_focus(window, cx)),
             select_first: false,
+            asked: Vec::new(),
         };
         self.show_row_menu(row, opening, window, cx);
     }
@@ -638,6 +632,7 @@ impl BrowserView {
             },
             returns: MenuReturn::Row(row),
             select_first: true,
+            asked: Vec::new(),
         };
         self.show_row_menu(row, opening, window, cx);
     }
@@ -990,20 +985,16 @@ mod tests {
     }
 
     #[test]
-    fn bulk_counts_spare_saved_pages_and_match_the_tab_model() {
-        let (mut tabs, first, middle) = bulk_model();
+    fn a_rows_bulk_counts_spare_saved_pages_as_the_tab_model_does() {
+        let (tabs, first, middle) = bulk_model();
         let snapshot = tabs.snapshot();
-        assert_eq!(bulk_close_count(&snapshot, BulkKind::Others, middle), 2);
-        assert_eq!(bulk_close_count(&snapshot, BulkKind::Below, first), 2);
-        assert_eq!(bulk_close_count(&snapshot, BulkKind::Below, middle), 1);
-        assert_eq!(
-            bulk_close_count(&snapshot, BulkKind::Others, tab_id(999)),
-            0
-        );
-        // The model closes exactly the tabs counted.
-        assert_eq!(tabs.close_below(first).expect("close below").len(), 2);
-        let (mut tabs, _, middle) = bulk_model();
-        assert_eq!(tabs.close_others(middle).expect("close others").len(), 2);
+        let none = HashSet::new();
+        let counts = |tab| match row_subject(&snapshot, TreeId::Tab(tab), &none, &none) {
+            Some(RowSubject::OpenTab { others, below, .. }) => (others, below),
+            other => panic!("an open tab: {other:?}"),
+        };
+        assert_eq!(counts(first), (2, 2));
+        assert_eq!(counts(middle), (2, 1));
     }
 
     #[test]
@@ -1025,11 +1016,20 @@ mod tests {
     }
 
     #[test]
-    fn a_confirmation_closes_only_the_tabs_it_counted() {
-        assert_eq!(recount(3, 3), Recount::Close);
-        assert_eq!(recount(3, 4), Recount::AskAgain(4));
-        assert_eq!(recount(3, 1), Recount::AskAgain(1));
-        assert_eq!(recount(3, 0), Recount::Nothing);
+    fn a_confirmation_closes_only_the_tabs_it_named() {
+        let [a, b, c, d] = [1, 2, 3, 4].map(tab_id);
+        assert_eq!(recount(&[a, b, c], vec![a, b, c]), Recount::Close);
+        assert_eq!(
+            recount(&[a, b, c], vec![a, b, c, d]),
+            Recount::AskAgain(vec![a, b, c, d])
+        );
+        assert_eq!(recount(&[a, b, c], vec![a]), Recount::AskAgain(vec![a]));
+        assert_eq!(recount(&[a, b, c], Vec::new()), Recount::Nothing);
+        // One tab closed and another opened: the same count, but not the tabs it named.
+        assert_eq!(
+            recount(&[a, b, c], vec![a, b, d]),
+            Recount::AskAgain(vec![a, b, d])
+        );
     }
 
     #[test]
@@ -1051,8 +1051,8 @@ mod tests {
 
     #[test]
     fn the_confirmation_names_how_many_tabs_close() {
-        assert_eq!(bulk_question(BulkKind::Others, 3), "Close 3 other tabs?");
-        assert_eq!(bulk_question(BulkKind::Below, 1), "Close 1 tab below?");
+        assert_eq!(bulk_question(BulkScope::Others, 3), "Close 3 other tabs?");
+        assert_eq!(bulk_question(BulkScope::Below, 1), "Close 1 tab below?");
         assert_eq!(bulk_confirm_label(1), "Close 1 tab");
         assert_eq!(bulk_confirm_label(4), "Close 4 tabs");
     }

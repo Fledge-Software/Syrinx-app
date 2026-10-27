@@ -20,6 +20,38 @@ use std::num::NonZeroU64;
 
 const CLOSED_TAB_LIMIT: usize = 20;
 
+/// Which tabs a bulk close takes around the tab it keeps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BulkScope {
+    /// Close other tabs: every ordinary tab but the kept one.
+    Others,
+    /// Close tabs below: the ordinary tabs after the kept one.
+    Below,
+}
+
+/// The ordinary tabs a bulk close would close, in display order, from `tabs` listed as
+/// (identity, is an open saved page). Open saved pages are spared; nothing closes when `keep`
+/// is not listed. The model's closes and the sidebar's question both read this one rule.
+pub fn bulk_close_targets(
+    tabs: impl IntoIterator<Item = (TabId, bool)>,
+    scope: BulkScope,
+    keep: TabId,
+) -> Vec<TabId> {
+    let mut seen_keep = false;
+    let mut targets = Vec::new();
+    for (id, saved) in tabs {
+        if id == keep {
+            seen_keep = true;
+            continue;
+        }
+        let in_scope = scope == BulkScope::Others || seen_keep;
+        if in_scope && !saved {
+            targets.push(id);
+        }
+    }
+    if seen_keep { targets } else { Vec::new() }
+}
+
 /// An immutable identity for one open tab, independent of its displayed position.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TabId(NonZeroU64);
@@ -583,27 +615,24 @@ impl TabModel {
     /// Closes every ordinary tab except `keep`, sparing open saved pages. `keep` is selected
     /// only when something closed; a no-op leaves the selection alone.
     pub fn close_others(&mut self, keep: TabId) -> Result<Vec<Tab>, TabError> {
-        self.index_of(keep)?;
-        let targets = self.ordinary_ids_from(0, keep);
-        self.close_many(keep, &targets)
+        self.close_in_bulk(BulkScope::Others, keep)
     }
 
     /// Closes the ordinary tabs after `id`, sparing open saved pages. `id` is selected only
     /// when something closed; a no-op leaves the selection alone.
     pub fn close_below(&mut self, id: TabId) -> Result<Vec<Tab>, TabError> {
-        let index = self.index_of(id)?;
-        let targets = self.ordinary_ids_from(index + 1, id);
-        self.close_many(id, &targets)
+        self.close_in_bulk(BulkScope::Below, id)
     }
 
-    /// The ordinary tabs from position `start` on, other than `keep`, in display order.
-    fn ordinary_ids_from(&self, start: usize, keep: TabId) -> Vec<TabId> {
-        let start = start.max(self.saved_tab_count());
-        self.tabs[start..]
+    /// Closes what `bulk_close_targets` names around `keep`, which must be open.
+    fn close_in_bulk(&mut self, scope: BulkScope, keep: TabId) -> Result<Vec<Tab>, TabError> {
+        self.index_of(keep)?;
+        let listed = self
+            .tabs
             .iter()
-            .map(Tab::id)
-            .filter(|id| *id != keep)
-            .collect()
+            .map(|tab| (tab.id, tab.saved_page_id.is_some()));
+        let targets = bulk_close_targets(listed, scope, keep);
+        self.close_many(keep, &targets)
     }
 
     /// Closes `targets` bottom-up, so reopening restores them top-down in their old positions.

@@ -12,10 +12,7 @@ use gpui::{
 use syrinx_core::{BrowserAction, DestinationSurface, DownloadControl, Shortcut};
 use syrinx_platform::browser::{BrowserError, OverlayRect, hide_overlay, syrinx_in_foreground};
 
-use super::row_menu::{
-    ActionFocus, BulkClose, MenuOrigin, RowEntry, RowPlace, TabAction, browser_key_label,
-    bulk_confirm_label, bulk_question,
-};
+use super::row_menu::{BulkClose, MenuOrigin, TabAction, browser_key_label};
 use super::sidebar_tree::TreeId;
 use super::title_bar::{CAPTION_GAP, caption_buttons_width};
 use super::{
@@ -26,6 +23,8 @@ use super::{
     },
     *,
 };
+
+mod tab_rows;
 
 /// The menu's width, narrow enough that the sidebar menu stays inside a wide sidebar.
 const MENU_WIDTH: f32 = 220.;
@@ -85,17 +84,17 @@ enum MenuItem {
     ClearDownloads,
     /// A line between groups; never selected or chosen.
     Separator,
-    /// The ⋯ menu's Close tab, on the active tab.
+    /// The ⋯ menu's Close tab, on the tab active when the menu opened.
     CloseActiveTab,
     /// A sidebar row's action (#95).
     Tab(TabAction),
     /// The confirmation's question; shown, never chosen.
     ConfirmPrompt,
-    /// Closes the `asked` tabs the confirmation named; `remember` stops it asking again.
+    /// Closes the tabs the confirmation named (`OpenMenu::asked`); `remember` stops it
+    /// asking again.
     ConfirmBulk {
         bulk: BulkClose,
         remember: bool,
-        asked: usize,
     },
     Cancel,
 }
@@ -252,6 +251,10 @@ pub(super) struct OpenMenu {
     /// Where it hangs, so a confirmation can open in its place.
     anchor: MenuAnchor,
     returns: MenuReturn,
+    /// The tab active when it opened, which the ⋯ menu's Close tab closes.
+    active: Option<TabId>,
+    /// The tabs a bulk-close question named; empty for every other menu.
+    asked: Vec<TabId>,
 }
 
 /// Where the keys go when a menu closes by Escape or after an item that does not place them.
@@ -263,6 +266,13 @@ pub(super) enum MenuReturn {
     Row(TreeId),
     /// Where they were when a click opened the menu: a chrome control, or the page.
     Was(ReturnFocus),
+}
+
+impl MenuReturn {
+    /// Whether a key opened the menu on a focused row (Shift F10 or the Menu key).
+    pub(super) fn keyed(&self) -> bool {
+        matches!(self, MenuReturn::Row(_))
+    }
 }
 
 /// The menu a press on the main window closed, and when, so that press does not reopen it.
@@ -404,50 +414,9 @@ impl BrowserView {
             anchor: MenuAnchor { position, corner },
             returns: MenuReturn::Page,
             select_first: false,
+            asked: Vec::new(),
         };
         self.show_menu_rows(kind, rows, opening, window, cx);
-    }
-
-    /// Opens a sidebar row's menu, or the ⋯ menu when the row offers nothing here (a folder
-    /// in the favicon-only sidebar). A row gone from the model opens nothing.
-    pub(super) fn show_row_menu(
-        &mut self,
-        row: TreeId,
-        opening: MenuOpening,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let place = RowPlace {
-            wide: self.sidebar_sizing.labels_visible(),
-            keyed: matches!(opening.returns, MenuReturn::Row(_)),
-        };
-        let rows = row_menu_rows(self.row_entries(row, place));
-        if rows.is_empty() {
-            let rows = self.menu_rows(MenuKind::Sidebar);
-            self.show_menu_rows(MenuKind::Sidebar, rows, opening, window, cx);
-            return;
-        }
-        self.show_menu_rows(MenuKind::Row, rows, opening, window, cx);
-    }
-
-    /// Asks before a bulk close, in the place of the menu it was chosen from.
-    pub(super) fn show_bulk_confirmation(
-        &mut self,
-        bulk: BulkClose,
-        count: usize,
-        origin: MenuOrigin,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // A question reached by keys starts on its first choice, as the row menu did.
-        let select_first = matches!(origin.returns, MenuReturn::Row(_));
-        let opening = MenuOpening {
-            anchor: origin.anchor,
-            returns: origin.returns,
-            select_first,
-        };
-        let rows = confirm_rows(bulk, count);
-        self.show_menu_rows(MenuKind::Confirm, rows, opening, window, cx);
     }
 
     /// Records the menu and opens its popup once this update ends (see `open_requested_menu`).
@@ -472,6 +441,7 @@ impl BrowserView {
             anchor,
             returns,
             select_first,
+            asked,
         } = opening;
         let size = kind_size(kind, &rows);
         let rect = menu_rect(window.bounds(), window.scale_factor(), anchor, size);
@@ -487,6 +457,8 @@ impl BrowserView {
             view: None,
             anchor,
             returns,
+            active: self.model.active_id,
+            asked,
         });
         let request = MenuRequest {
             generation,
@@ -698,6 +670,8 @@ impl BrowserView {
         let origin = MenuOrigin {
             anchor: menu.anchor,
             returns: menu.returns.clone(),
+            active: menu.active,
+            asked: menu.asked.clone(),
         };
         self.retire_menu(cx);
         match action {
@@ -742,11 +716,7 @@ impl BrowserView {
                 self.move_keys_to_chrome() && self.sidebar_trees.focus_main_row(row, window, cx)
             }
             MenuReturn::Was(ReturnFocus::Control(handle)) => {
-                let moved = self.move_keys_to_chrome();
-                if moved {
-                    window.focus(&handle, cx);
-                }
-                moved
+                self.return_keys_to_control(&handle, window, cx)
             }
         };
         if !returned {
@@ -754,28 +724,19 @@ impl BrowserView {
         }
     }
 
-    /// Runs a row menu's or confirmation's item; the keys go back where the menu found them
-    /// unless the item placed them.
-    fn run_row_item(
+    /// Gives the keys to a chrome control the main window still draws; returns whether it did.
+    fn return_keys_to_control(
         &mut self,
-        item: MenuItem,
-        origin: MenuOrigin,
+        handle: &FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let returns = origin.returns.clone();
-        let focus = match item {
-            MenuItem::Tab(action) => self.run_tab_action(action, Some(origin), window, cx),
-            MenuItem::ConfirmBulk {
-                bulk,
-                remember,
-                asked,
-            } => self.confirm_bulk_close(bulk, remember, asked, origin, window, cx),
-            _ => ActionFocus::Unplaced,
-        };
-        if focus == ActionFocus::Unplaced {
-            self.return_menu_focus(returns, window, cx);
+    ) -> bool {
+        // The root's own handle contains every control drawn in the last frame, and only those.
+        if !self.focus.contains(handle, window) || !self.move_keys_to_chrome() {
+            return false;
         }
+        window.focus(handle, cx);
+        true
     }
 
     /// Does what the chosen item names; the keys go back to the page unless it places them.
@@ -813,7 +774,11 @@ impl BrowserView {
                 };
             }
             MenuItem::ClearDownloads => self.downloads.clear_finished(),
-            MenuItem::CloseActiveTab => self.close_tab(),
+            MenuItem::CloseActiveTab => {
+                if let Some(command) = close_opened_on(origin.active) {
+                    self.command(command);
+                }
+            }
             // A row menu's or confirmation's item puts the keys back itself.
             MenuItem::Tab(_) | MenuItem::ConfirmBulk { .. } | MenuItem::Cancel => {
                 self.run_row_item(item, origin, window, cx);
@@ -1268,6 +1233,14 @@ pub(super) struct MenuOpening {
     pub(super) anchor: MenuAnchor,
     pub(super) returns: MenuReturn,
     pub(super) select_first: bool,
+    /// The tabs a bulk-close question names; empty for every other menu.
+    pub(super) asked: Vec<TabId>,
+}
+
+/// The ⋯ menu's Close tab closes the tab that was active when the menu opened, never one
+/// selected since; with no tab active then, it closes nothing.
+fn close_opened_on(active: Option<TabId>) -> Option<SessionCommand> {
+    active.map(SessionCommand::CloseTab)
 }
 
 /// The selection after an arrow, Home or End, skipping rows that cannot be selected; `None`
@@ -1294,50 +1267,6 @@ fn step_selection(step: MenuStep, selected: Option<usize>, rows: &[MenuRow]) -> 
 
 fn first_selectable(rows: &[MenuRow]) -> Option<usize> {
     rows.iter().position(|row| row.item.is_selectable())
-}
-
-/// A row's menu entries as menu rows.
-fn row_menu_rows(entries: Vec<RowEntry>) -> Vec<MenuRow> {
-    entries
-        .into_iter()
-        .map(|entry| match entry {
-            RowEntry::Action { action, keys } => MenuRow {
-                item: MenuItem::Tab(action),
-                label: action.label().to_owned(),
-                shortcut: keys,
-                controls: &[],
-            },
-            RowEntry::Separator => fixed_row(MenuItem::Separator),
-        })
-        .collect()
-}
-
-/// The confirmation: its question, then Close, Close and don't ask again, and Cancel.
-fn confirm_rows(bulk: BulkClose, count: usize) -> Vec<MenuRow> {
-    let labelled = |item: MenuItem, label: String| MenuRow {
-        item,
-        label,
-        shortcut: None,
-        controls: &[],
-    };
-    vec![
-        labelled(MenuItem::ConfirmPrompt, bulk_question(bulk.kind, count)),
-        fixed_row(MenuItem::Separator),
-        labelled(
-            MenuItem::ConfirmBulk {
-                bulk,
-                remember: false,
-                asked: count,
-            },
-            bulk_confirm_label(count),
-        ),
-        fixed_row(MenuItem::ConfirmBulk {
-            bulk,
-            remember: true,
-            asked: count,
-        }),
-        fixed_row(MenuItem::Cancel),
-    ]
 }
 
 /// A row with its item's own label and no shortcut.
@@ -1411,7 +1340,6 @@ fn control_face(control: DownloadControl) -> (&'static str, &'static str, &'stat
 /// The Downloads flyout's rows: the newest downloads, or a line saying there are none, then
 /// Clear when any has finished.
 fn download_rows(list: &syrinx_core::DownloadList) -> Vec<MenuRow> {
-    let fixed = fixed_row;
     let mut rows: Vec<MenuRow> = list
         .downloads()
         .iter()
@@ -1424,10 +1352,10 @@ fn download_rows(list: &syrinx_core::DownloadList) -> Vec<MenuRow> {
         })
         .collect();
     if rows.is_empty() {
-        rows.push(fixed(MenuItem::NoDownloads));
+        rows.push(fixed_row(MenuItem::NoDownloads));
     }
     if list.has_finished() {
-        rows.push(fixed(MenuItem::ClearDownloads));
+        rows.push(fixed_row(MenuItem::ClearDownloads));
     }
     rows
 }
@@ -1661,6 +1589,16 @@ mod tests {
     }
 
     #[test]
+    fn the_sidebar_menus_close_tab_closes_the_tab_active_when_it_opened() {
+        let opened_on = syrinx_core::TabId::new(5).expect("synthetic tab id");
+        assert!(matches!(
+            close_opened_on(Some(opened_on)),
+            Some(SessionCommand::CloseTab(tab)) if tab == opened_on
+        ));
+        assert!(close_opened_on(None).is_none());
+    }
+
+    #[test]
     fn the_sidebar_menu_ends_with_close_tab_after_a_separator() {
         assert_eq!(
             SIDEBAR_ITEMS[3..],
@@ -1668,80 +1606,6 @@ mod tests {
         );
         assert!(MenuItem::CloseActiveTab.returns_keys_to_page());
         assert!(!MenuItem::Separator.is_choosable());
-    }
-
-    /// A row menu's shape: an item, a separator, two items, a separator and an item.
-    fn grouped_rows() -> Vec<MenuRow> {
-        let tab = syrinx_core::TabId::new(5).expect("synthetic tab id");
-        row_menu_rows(vec![
-            RowEntry::Action {
-                action: TabAction::Reload(tab),
-                keys: None,
-            },
-            RowEntry::Separator,
-            RowEntry::Action {
-                action: TabAction::Close(tab),
-                keys: Some("Ctrl W, Delete".to_owned()),
-            },
-            RowEntry::Action {
-                action: TabAction::Duplicate(tab),
-                keys: None,
-            },
-            RowEntry::Separator,
-            RowEntry::Action {
-                action: TabAction::ReopenClosed,
-                keys: None,
-            },
-        ])
-    }
-
-    #[test]
-    fn arrows_skip_separators_in_both_directions_and_wrap() {
-        let rows = grouped_rows();
-        let step = |step, from| step_selection(step, from, &rows);
-        assert_eq!(step(MenuStep::Next, None), Some(0));
-        assert_eq!(step(MenuStep::Next, Some(0)), Some(2));
-        assert_eq!(step(MenuStep::Previous, Some(2)), Some(0));
-        assert_eq!(step(MenuStep::Next, Some(3)), Some(5));
-        assert_eq!(step(MenuStep::Next, Some(5)), Some(0));
-        assert_eq!(step(MenuStep::Previous, Some(0)), Some(5));
-        assert_eq!(step(MenuStep::Last, Some(2)), Some(5));
-        assert_eq!(first_selectable(&rows), Some(0));
-        assert_eq!(rows[2].shortcut.as_deref(), Some("Ctrl W, Delete"));
-    }
-
-    #[test]
-    fn the_confirmation_names_the_count_and_its_question_cannot_be_chosen() {
-        let bulk = BulkClose {
-            kind: super::super::row_menu::BulkKind::Others,
-            tab: syrinx_core::TabId::new(5).expect("synthetic tab id"),
-        };
-        let rows = confirm_rows(bulk, 3);
-        let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
-        assert_eq!(
-            labels,
-            [
-                "Close 3 other tabs?",
-                "",
-                "Close 3 tabs",
-                "Close and don't ask again",
-                "Cancel"
-            ]
-        );
-        assert!(!rows[0].item.is_selectable());
-        // Arrows start on Close, never on the question.
-        assert_eq!(step_selection(MenuStep::Next, None, &rows), Some(2));
-        assert_eq!(step_selection(MenuStep::First, None, &rows), Some(2));
-        assert!(matches!(
-            key_action("enter", Some(rows[3].item)),
-            Some(MenuAction::Choose(MenuItem::ConfirmBulk {
-                remember: true,
-                ..
-            }))
-        ));
-        assert!(key_action("enter", Some(rows[0].item)).is_none());
-        assert_eq!(menu_name(MenuKind::Confirm, &rows), "Close 3 other tabs?");
-        assert_eq!(menu_name(MenuKind::Row, &[]), "Tab menu");
     }
 
     #[test]

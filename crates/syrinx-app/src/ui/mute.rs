@@ -62,8 +62,10 @@ impl BrowserView {
     }
 }
 
-/// Records the owner's mute choice; returns the command for the tab's live page, sent only
-/// when the page `reported` the other state (WebView2 raises no event for an unchanged one).
+/// Records the owner's mute choice; returns the command for the tab's live page. It is left
+/// out only when both what the page last `reported` and the choice last sent already match
+/// (WebView2 raises no event for an unchanged state); a choice sent but not yet reported
+/// still differs, so a quick Mute then Unmute always ends where the owner left it.
 fn change_mute(
     muted: &mut HashSet<TabId>,
     live: bool,
@@ -71,12 +73,13 @@ fn change_mute(
     id: TabId,
     mute: bool,
 ) -> Option<BrowserCommand> {
-    if mute {
-        muted.insert(id);
+    let previously = if mute {
+        !muted.insert(id)
     } else {
-        muted.remove(&id);
-    }
-    (live && reported != mute).then_some(BrowserCommand::SetMuted {
+        muted.remove(&id)
+    };
+    let settled = reported == mute && previously == mute;
+    (live && !settled).then_some(BrowserCommand::SetMuted {
         id: id.get(),
         muted: mute,
     })
@@ -159,12 +162,37 @@ mod tests {
     #[test]
     fn a_page_already_in_the_chosen_state_is_sent_nothing() {
         let tab = TabId::new(7).unwrap();
-        let mut muted = HashSet::new();
-        // WebView2 raises no event for an unchanged state, so nothing would answer.
+        // WebView2 raises no event for an unchanged state, so nothing would answer. The page
+        // reported muted and muted is what was last asked for.
+        let mut muted = HashSet::from([tab]);
         assert!(change_mute(&mut muted, true, true, tab, true).is_none());
         assert!(muted.contains(&tab), "the choice is still kept");
+        // Audible as reported and as last asked for.
+        let mut muted = HashSet::new();
         assert!(change_mute(&mut muted, true, false, tab, false).is_none());
         assert!(muted.is_empty());
+    }
+
+    #[test]
+    fn a_change_of_mind_before_the_page_reports_still_reaches_it() {
+        let tab = TabId::new(7).unwrap();
+        let mut muted = HashSet::new();
+        // Mute is sent; the page has not reported it yet when the owner unmutes.
+        assert!(change_mute(&mut muted, true, false, tab, true).is_some());
+        assert!(matches!(
+            change_mute(&mut muted, true, false, tab, false),
+            Some(BrowserCommand::SetMuted {
+                id: 7,
+                muted: false
+            })
+        ));
+        // The same the other way: a muted page is unmuted, then muted again before it reports.
+        let mut muted = HashSet::from([tab]);
+        assert!(change_mute(&mut muted, true, true, tab, false).is_some());
+        assert!(matches!(
+            change_mute(&mut muted, true, true, tab, true),
+            Some(BrowserCommand::SetMuted { id: 7, muted: true })
+        ));
     }
 
     #[test]
