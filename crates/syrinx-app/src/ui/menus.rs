@@ -9,6 +9,7 @@ use gpui::{KeyDownEvent, MouseDownEvent, Pixels, Point, WeakEntity, prelude::Flu
 use syrinx_core::{DestinationSurface, DownloadControl, Shortcut};
 use syrinx_platform::browser::{BrowserError, OverlayRect, hide_overlay, syrinx_in_foreground};
 
+use super::title_bar::{CAPTION_GAP, caption_buttons_width};
 use super::{
     owned_popup::{
         OwnedPopup, OwnedPopupError, PopupSpec, open_owned_popup, round_popup_corners,
@@ -1041,12 +1042,19 @@ fn download_rows(list: &syrinx_core::DownloadList) -> Vec<MenuRow> {
 }
 
 /// Where the ☰ menu and the Downloads flyout hang from: the right edge of the title bar's own
-/// controls, left of the three window buttons (each a `TITLE_BAR_HEIGHT` square) and their
-/// 4 px gap. Ctrl J and the palette open the flyout with no button press to measure, so the
-/// corner follows the title bar's layout rather than a button's painted bounds.
+/// controls, left of the caption buttons and the gap before them. Ctrl J and the palette
+/// open the flyout with no button press to measure, so the corner follows the title bar's
+/// layout constants rather than a button's painted bounds.
 fn title_bar_corner(window: &Window) -> Point<Pixels> {
-    let right = f32::from(window.viewport_size().width) - 3. * TITLE_BAR_HEIGHT - 4.;
-    point(px(right), px(TITLE_BAR_HEIGHT))
+    corner_for_width(f32::from(window.viewport_size().width))
+}
+
+/// The corner for a window `width` logical pixels wide.
+fn corner_for_width(width: f32) -> Point<Pixels> {
+    point(
+        px(width - caption_buttons_width() - CAPTION_GAP),
+        px(TITLE_BAR_HEIGHT),
+    )
 }
 
 /// The popup's logical size for `rows` items of `kind`.
@@ -1105,6 +1113,21 @@ mod tests {
             position: point(px(x), px(y)),
             corner,
         }
+    }
+
+    #[test]
+    fn the_corner_sits_left_of_the_caption_buttons_and_their_gap_at_any_width() {
+        for width in [800., 1280., 1920.] {
+            let corner = corner_for_width(width);
+            assert_eq!(
+                f32::from(corner.x) + CAPTION_GAP + caption_buttons_width(),
+                width,
+                "{width}"
+            );
+            assert_eq!(f32::from(corner.y), TITLE_BAR_HEIGHT);
+        }
+        // Today's layout: three 36 px buttons and a 4 px gap.
+        assert_eq!(f32::from(corner_for_width(1280.).x), 1168.);
     }
 
     #[test]
