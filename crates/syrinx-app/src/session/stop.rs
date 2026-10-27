@@ -98,6 +98,7 @@ pub(super) fn during(operation: &'static str) -> impl FnOnce(SessionError) -> Se
 pub(super) fn survivable(error: &SessionError) -> bool {
     match error {
         SessionError::During { error, .. } => survivable(error),
+        SessionError::AfterEarlier { earlier, error } => survivable(earlier) && survivable(error),
         SessionError::Store(error) => store_survivable(error),
         SessionError::Search(_)
         | SessionError::FullText(_)
@@ -117,7 +118,9 @@ pub(super) fn survivable(error: &SessionError) -> bool {
 /// Whether the window can no longer hear the worker, so a report has nowhere to go.
 pub(super) fn window_lost(error: &SessionError) -> bool {
     match error {
-        SessionError::During { error, .. } => window_lost(error),
+        SessionError::During { error, .. } | SessionError::AfterEarlier { error, .. } => {
+            window_lost(error)
+        }
         error => *error == SessionError::EventReceiverClosed,
     }
 }
@@ -281,10 +284,11 @@ impl Survival {
         self.log.record(survived_line(error));
     }
 
-    /// Names the operation the loop is running, unless the failure already names one.
+    /// Names the operation the loop is running, unless the failure already names one. A
+    /// chain of the index's failures names each of its own.
     pub(super) fn tagged(&self, error: SessionError) -> SessionError {
         match error {
-            SessionError::During { .. } => error,
+            SessionError::During { .. } | SessionError::AfterEarlier { .. } => error,
             error => during(self.operation)(error),
         }
     }
