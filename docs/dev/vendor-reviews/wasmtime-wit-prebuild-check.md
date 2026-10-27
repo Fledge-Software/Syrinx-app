@@ -122,7 +122,7 @@ scratchpad problem only.
 | Check the WIT draft with the template's findings applied; answer the Windows points; confirm one world with default stubs | All three, with one limit: the stubs were written by hand, and wit-bindgen's generated ones trap | the next two sections |
 | Review the paper shapes of Notes' capability interfaces | `documents` and `watch` reviewed and run; two names must change before they parse; `drafts`, `editor` and `open-external` have no paper shapes yet | "Notes' paper shapes" |
 | One end-to-end run with a trap on an expired deadline and a refused growth | Done, with one addition: a real allocation past the cap traps rather than failing typed | "The end-to-end run" |
-| The owner confirms the exact 48.0.x patch | Partly answered 2026-10-26: wasmtime `=48.0.7` (`docs/decisions.md`); whether `wasmtime-wasi` is pinned waits on question 1 | "Open questions" |
+| The owner confirms the exact 48.0.x patch | Answered 2026-10-26: option (b), so the pin is `wasmtime =48.0.7` alone, with no `wasmtime-wasi` (`docs/decisions.md`) | "Open questions" |
 
 ## The WIT draft on Windows
 
