@@ -10,8 +10,31 @@ use syrinx_store::{
 };
 
 use super::{
-    ClearedHistory, ClearedSiteZooms, SessionError, SessionEvent, emit, history, preferences,
+    ClearedHistory, ClearedSiteZooms, SessionError, SessionEvent, emit, history,
+    page_text::PageText, preferences,
 };
+
+/// Everything besides the database that a clear must reach before the journal completes it:
+/// the running catalogue, the history recorder's cursors and the index's page text.
+pub(super) struct Followers<'a> {
+    catalogue: &'a mut Catalogue,
+    recorder: &'a mut history::HistoryRecorder,
+    page_text: &'a mut PageText,
+}
+
+impl<'a> Followers<'a> {
+    pub(super) fn new(
+        catalogue: &'a mut Catalogue,
+        recorder: &'a mut history::HistoryRecorder,
+        page_text: &'a mut PageText,
+    ) -> Self {
+        Self {
+            catalogue,
+            recorder,
+            page_text,
+        }
+    }
+}
 
 /// What finishing journal requests removed, by category, in the counts the dialog shows.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -51,8 +74,13 @@ impl Finished {
 ///
 /// A restored or older database replays later clears; an interrupted clear is finished.
 /// A database ahead of its journal means records were lost, which is refused. A repaired
-/// journal arrives with a requested all-time clear, which this applies and completes.
-pub(super) fn reconcile(store: &Store, journal: &mut DeletionJournal) -> Result<(), SessionError> {
+/// journal arrives with a requested all-time clear, which this applies and completes. The
+/// index keeps its own generation, so it catches up apart from the database.
+pub(super) fn reconcile(
+    store: &Store,
+    journal: &mut DeletionJournal,
+    page_text: &mut PageText,
+) -> Result<(), SessionError> {
     let applied = store.deletion_generation().map_err(SessionError::Store)?;
     let missing = journal.log().unapplied(applied).map_err(journal_error)?;
     if !missing.is_empty() {
@@ -60,13 +88,16 @@ pub(super) fn reconcile(store: &Store, journal: &mut DeletionJournal) -> Result<
             .apply_deletions(missing)
             .map_err(SessionError::Store)?;
     }
+    page_text.follow(journal.log());
     complete_pending(journal)
 }
 
-/// Runs one history clear before the catalogue exists, so only the store and the journal change.
+/// Runs one history clear before the catalogue exists, so only the store, the index and the
+/// journal change.
 pub(super) fn clear_before_catalogue(
     store: &Store,
     journal: &mut DeletionJournal,
+    page_text: &mut PageText,
     range: DeletionRange,
 ) -> Result<(), SessionError> {
     let request = journal
@@ -81,27 +112,26 @@ pub(super) fn clear_before_catalogue(
     store
         .apply_deletions(&[pending])
         .map_err(SessionError::Store)?;
+    page_text.follow(journal.log());
     complete_pending(journal)
 }
 
 /// Clears history visited in `[start, end)` Unix seconds and reports how much went away, with
 /// whatever an interrupted earlier clear of either category removed on the way.
 ///
-/// The request is durable before anything is deleted and completion is written after both
-/// the database and the catalogue follow, so a crash in between finishes at the next start.
+/// The request is durable before anything is deleted and completion is written after the
+/// database and its followers act, so a crash in between finishes at the next start.
 pub(super) fn clear(
     store: &Store,
     journal: &mut DeletionJournal,
-    catalogue: &mut Catalogue,
-    recorder: &mut history::HistoryRecorder,
+    followers: Followers<'_>,
     start: i64,
     end: i64,
 ) -> Result<Finished, SessionError> {
     journaled_clear(
         store,
         journal,
-        catalogue,
-        recorder,
+        followers,
         DeletionCategory::History,
         start,
         end,
@@ -113,16 +143,14 @@ pub(super) fn clear(
 pub(super) fn clear_site_zooms(
     store: &Store,
     journal: &mut DeletionJournal,
-    catalogue: &mut Catalogue,
-    recorder: &mut history::HistoryRecorder,
+    followers: Followers<'_>,
     start: i64,
     end: i64,
 ) -> Result<ClearedSiteZooms, SessionError> {
     let finished = journaled_clear(
         store,
         journal,
-        catalogue,
-        recorder,
+        followers,
         DeletionCategory::SiteZoom,
         start,
         end,
@@ -138,29 +166,27 @@ pub(super) fn clear_site_zooms(
 fn journaled_clear(
     store: &Store,
     journal: &mut DeletionJournal,
-    catalogue: &mut Catalogue,
-    recorder: &mut history::HistoryRecorder,
+    mut followers: Followers<'_>,
     category: DeletionCategory,
     start: i64,
     end: i64,
 ) -> Result<Finished, SessionError> {
     let range = DeletionRange::new(start, end).map_err(journal_error)?;
     // An earlier clear that stopped part-way is finished before a new one may start.
-    let earlier = finish_pending(store, journal, catalogue, recorder)?;
+    let earlier = finish_pending(store, journal, &mut followers)?;
     let request = journal
         .log()
         .request(category, range)
         .map_err(journal_error)?;
     journal.append(request).map_err(SessionError::Deletion)?;
-    let cleared = finish_pending(store, journal, catalogue, recorder)?;
+    let cleared = finish_pending(store, journal, &mut followers)?;
     Ok(earlier.plus(cleared))
 }
 
 pub(super) fn finish_pending(
     store: &Store,
     journal: &mut DeletionJournal,
-    catalogue: &mut Catalogue,
-    recorder: &mut history::HistoryRecorder,
+    followers: &mut Followers<'_>,
 ) -> Result<Finished, SessionError> {
     let Some(pending) = journal.log().pending() else {
         return Ok(Finished::default());
@@ -168,7 +194,8 @@ pub(super) fn finish_pending(
     let applied = store
         .apply_deletions(&[pending])
         .map_err(SessionError::Store)?;
-    follow(catalogue, recorder, &applied.history)?;
+    follow(followers.catalogue, followers.recorder, &applied.history)?;
+    followers.page_text.follow(journal.log());
     complete_pending(journal)?;
     Ok(Finished::from_applied(&applied, pending.category()))
 }

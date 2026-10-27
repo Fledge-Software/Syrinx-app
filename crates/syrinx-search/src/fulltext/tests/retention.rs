@@ -165,8 +165,10 @@ fn journal_clears_reach_only_page_text_in_their_range() {
 
     let clear = ClearRequest {
         generation: 1,
-        start: NOW - 200,
-        end: NOW,
+        scope: ClearScope::Pages {
+            start: NOW - 200,
+            end: NOW,
+        },
     };
     assert_eq!(index.apply_clears(&[clear]), Ok(1));
     let mut found = fixture.ids_in(
@@ -189,8 +191,10 @@ fn replaying_the_journal_applies_each_clear_once_across_restarts() {
     let mut index = fixture.open();
     let first = ClearRequest {
         generation: 1,
-        start: 0,
-        end: NOW - 1_000,
+        scope: ClearScope::Pages {
+            start: 0,
+            end: NOW - 1_000,
+        },
     };
     assert_eq!(index.apply_clears(&[first]), Ok(1));
     index
@@ -212,8 +216,10 @@ fn replaying_the_journal_applies_each_clear_once_across_restarts() {
     assert_eq!(reopened.cleared_generation(), 1);
     let all_time = ClearRequest {
         generation: 2,
-        start: 0,
-        end: i64::MAX,
+        scope: ClearScope::Pages {
+            start: 0,
+            end: i64::MAX,
+        },
     };
     assert_eq!(reopened.apply_clears(&[first]), Ok(0));
     assert_eq!(fixture.ids(&reopened, "journalsigil"), ["later"]);
@@ -233,8 +239,10 @@ fn a_gap_in_the_journal_is_refused_and_applies_nothing() {
     index.commit().expect("commit page");
     let skipped = ClearRequest {
         generation: 2,
-        start: 0,
-        end: i64::MAX,
+        scope: ClearScope::Pages {
+            start: 0,
+            end: i64::MAX,
+        },
     };
     assert_eq!(
         index.apply_clears(&[skipped]),
@@ -242,4 +250,72 @@ fn a_gap_in_the_journal_is_refused_and_applies_nothing() {
     );
     assert_eq!(fixture.ids(&index, "gapsigil"), ["a"]);
     assert_eq!(index.cleared_generation(), 0);
+}
+
+#[test]
+fn a_clear_of_something_else_advances_the_generation_and_keeps_page_text() {
+    let fixture = Fixture::new();
+    let mut index = fixture.open();
+    index
+        .stage(
+            &[upsert(page_document("kept", 1, NOW - 100, "zoomsigil"))],
+            NOW,
+        )
+        .expect("stage page");
+    index.commit().expect("commit page");
+
+    // A site-zoom clear shares the journal's numbering but names no page text.
+    let zoom = ClearRequest {
+        generation: 1,
+        scope: ClearScope::Elsewhere,
+    };
+    let history = ClearRequest {
+        generation: 2,
+        scope: ClearScope::Pages {
+            start: 0,
+            end: NOW - 1_000,
+        },
+    };
+    assert_eq!(index.apply_clears(&[zoom, history]), Ok(2));
+    assert_eq!(fixture.ids(&index, "zoomsigil"), ["kept"]);
+    assert_eq!(index.cleared_generation(), 2);
+}
+
+#[test]
+fn restarting_clears_removes_page_text_only_and_counts_from_zero() {
+    let fixture = Fixture::new();
+    let mut index = fixture.open();
+    index
+        .stage(
+            &[
+                upsert(page_document("page", 1, NOW - 100, "restartsigil")),
+                delete(Namespace::page(), "gone", 1),
+                upsert(document(notes(), "note", 1, NOW - 100, "restartsigil")),
+            ],
+            NOW,
+        )
+        .expect("stage a page, a tombstone and a note");
+    index.commit().expect("commit them");
+    let ahead = ClearRequest {
+        generation: 1,
+        scope: ClearScope::Elsewhere,
+    };
+    assert_eq!(index.apply_clears(&[ahead]), Ok(1));
+
+    // A journal recreated behind the index cannot say what it cleared, so page text goes.
+    index.restart_clears().expect("restart the clear count");
+    assert_eq!(fixture.ids(&index, "restartsigil"), ["note"]);
+    assert!(
+        fixture
+            .audit(&index)
+            .iter()
+            .all(|row| !row.key.starts_with("page"))
+    );
+    assert_eq!(index.cleared_generation(), 0);
+    drop(index);
+
+    // Both the removal and the new count are durable.
+    let reopened = fixture.open();
+    assert_eq!(reopened.cleared_generation(), 0);
+    assert_eq!(fixture.ids(&reopened, "restartsigil"), ["note"]);
 }

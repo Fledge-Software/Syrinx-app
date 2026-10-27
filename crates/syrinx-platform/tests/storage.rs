@@ -511,6 +511,35 @@ fn native_guard_refuses_a_junction_at_the_destination_and_in_its_ancestors() {
 }
 
 #[test]
+fn native_guard_refuses_a_junction_in_place_of_a_cache_folder() {
+    let directory = DisposableDirectory::new();
+    let data = directory.path.join("data");
+    let target = directory.path.join("synthetic-target");
+    checked_io(fs::create_dir(&data), "create synthetic data directory");
+    checked_io(fs::create_dir(&target), "create synthetic junction target");
+    let link = data.join("synthetic-cache");
+    create_junction(&link, &target);
+
+    // A cache folder redirected elsewhere, perhaps into a synced folder, is never written.
+    let lease = WindowsDirectoryLease::prepare(&data).expect("guard synthetic data");
+    assert_eq!(
+        lease.cache_folder("synthetic-cache").err(),
+        Some(LocationError::ReparsePoint)
+    );
+    drop(lease);
+    assert!(!exists(&target.join("meta.json")));
+
+    // Remove the junction itself without traversing its target.
+    checked_io(fs::remove_dir(&link), "remove synthetic junction");
+    checked_io(fs::remove_dir(&target), "remove synthetic junction target");
+    for name in DATABASE_FILES.into_iter().chain(CONTROL_FILES) {
+        remove_file_if_present(&data.join(name));
+    }
+    checked_io(fs::remove_dir(&data), "remove synthetic data directory");
+    directory.cleanup();
+}
+
+#[test]
 fn native_session_excludes_an_alias_and_retains_ownership_after_lease_drop() {
     let directory = DisposableDirectory::new();
     let alias = checked_io(fs::canonicalize(&directory.path), "resolve synthetic alias");

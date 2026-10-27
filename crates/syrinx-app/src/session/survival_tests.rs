@@ -74,8 +74,9 @@ fn direct_worker(fixture: &Fixture) -> (Store, Worker) {
     let lease =
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let page_text = page_text::PageText::open(&lease);
     let store = Store::open(lease).expect("open synthetic store");
-    let worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
     (store, worker)
 }
 

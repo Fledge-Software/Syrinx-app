@@ -4,6 +4,7 @@ mod deletions;
 mod folders;
 mod history;
 mod history_repair;
+mod page_text;
 mod preferences;
 mod recovery;
 mod retention;
@@ -40,6 +41,7 @@ use syrinx_core::{
 use syrinx_platform::{DeletionJournal, JournalError, StartupStorage, WindowsDirectoryLease};
 use syrinx_search::{
     Catalogue, Entry, Scope, SearchError, SearchPolicy, SearchResults, Target, Usage,
+    fulltext::FullTextError,
 };
 use syrinx_store::{BackupOutcome, HistoryVisit, LocationError, ShutdownState, Store, StoreError};
 use usage::UsageCollector;
@@ -342,6 +344,11 @@ pub enum SessionError {
     Model(TabError),
     Snapshot(SnapshotError),
     Search(SearchError),
+    /// The full-text index failed; it is closed for the session and catches up at the next
+    /// start (#53). Never fatal: the index is a cache.
+    FullText(FullTextError),
+    /// The full-text index's folder failed the storage guard; the session runs without it.
+    IndexFolder(LocationError),
     Destination(DestinationError),
     /// The deletion journal refused or failed a record (D47).
     Deletion(JournalError),
@@ -394,6 +401,10 @@ impl fmt::Display for SessionError {
             Self::Model(error) => write!(formatter, "Cannot change this tab: {error}"),
             Self::Snapshot(error) => write!(formatter, "Cannot restore the session: {error}"),
             Self::Search(error) => write!(formatter, "Local search failed: {error}"),
+            Self::FullText(error) => write!(formatter, "{error}"),
+            Self::IndexFolder(error) => {
+                write!(formatter, "Cannot open the search index's folder: {error}")
+            }
             Self::Destination(error) => write!(formatter, "Cannot change this tile: {error}"),
             Self::Deletion(error) => write!(formatter, "Cannot clear history safely: {error}"),
             Self::Usage(error) => write!(formatter, "{error}"),
@@ -737,8 +748,12 @@ fn open_session(
 ) -> Result<(Store, Worker), SessionError> {
     let lease = Arc::new(lease);
     let store = Store::open(lease.clone()).map_err(SessionError::Store)?;
-    let opened =
-        open_journal(&store, &lease, repair).and_then(|journal| Worker::restore(&store, journal));
+    let mut page_text = page_text::PageText::open(&lease);
+    if repair {
+        page_text.after_journal_repair();
+    }
+    let opened = open_journal(&store, &lease, repair)
+        .and_then(|journal| Worker::restore(&store, journal, page_text));
     match opened {
         Ok(worker) => Ok((store, worker)),
         Err(error) => {
@@ -785,6 +800,8 @@ struct Worker {
     deletions: DeletionJournal,
     /// When history retention next expires old visits, and how far it last reached (DW-4).
     retention: retention::Schedule,
+    /// The full-text index's page text, kept level with the journal and D40 (#53).
+    page_text: page_text::PageText,
     revision: u64,
     previous_shutdown: ShutdownState,
     destinations: QuickDestinations,
@@ -811,20 +828,27 @@ struct Persisted {
 }
 
 impl Worker {
-    fn restore(store: &Store, mut deletions: DeletionJournal) -> Result<Self, SessionError> {
-        // Cleared history must be gone before the catalogue or any list can read it.
-        deletions::reconcile(store, &mut deletions)?;
+    fn restore(
+        store: &Store,
+        mut deletions: DeletionJournal,
+        mut page_text: page_text::PageText,
+    ) -> Result<Self, SessionError> {
+        // Cleared history and page text must be gone before the catalogue or any list reads them.
+        deletions::reconcile(store, &mut deletions, &mut page_text)?;
         let mut stored_preferences = preferences::restore(store)?;
         let site_zooms = preferences::restore_site_zooms(store)?;
         // Expired visits go before the catalogue loads; a large backlog continues while idle.
+        let now = utc_seconds()?;
         let mut schedule = retention::Schedule::take_saved(&mut stored_preferences.settings);
         retention::expire_at_startup(
             store,
             &mut deletions,
-            utc_seconds()?,
+            &mut page_text,
+            now,
             &mut schedule,
             retention::EXPIRY_BATCH,
         )?;
+        page_text.expire_if_due(now);
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
         let snapshot = model.snapshot();
@@ -849,6 +873,7 @@ impl Worker {
             history: HistoryRecorder::restored(&snapshot),
             deletions,
             retention: schedule,
+            page_text,
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
@@ -880,6 +905,7 @@ impl Worker {
         .map_err(stop::during("sending the saved settings"))?;
         self.publish(events, self.model.snapshot(), Vec::new(), None, None, None)
             .map_err(stop::during("sending the restored tabs"))?;
+        self.report_page_text(events)?;
         let mut delay = IDLE_DELAY;
         loop {
             // Held page titles are written once they settle, even while nothing else happens.
@@ -934,6 +960,7 @@ impl Worker {
                     self.survival.operation = command.operation();
                     let handled = self.handle(store, command, events);
                     self.survival.result(handled, events)?;
+                    self.report_page_text(events)?;
                     delay = IDLE_DELAY;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
@@ -972,7 +999,10 @@ impl Worker {
             self.survival.operation = "expiring old history";
             let expired = self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events);
             self.survival.result(expired, events)?;
+            self.page_text.expire_if_due(*now);
         }
+        self.page_text.retry_cleanup();
+        self.report_page_text(events)?;
         // The store retains its daily due state; retries remain idle and bounded.
         self.survival.operation = "taking the daily backup";
         let backed_up = backup_while_idle(store, now, &self.usage, events);
@@ -1251,8 +1281,11 @@ impl Worker {
         let finished = deletions::finish_pending(
             store,
             &mut self.deletions,
-            &mut self.catalogue,
-            &mut self.history,
+            &mut deletions::Followers::new(
+                &mut self.catalogue,
+                &mut self.history,
+                &mut self.page_text,
+            ),
         )?;
         deletions::report_replaced_site_zooms(store, &finished, events)
     }
@@ -1351,8 +1384,7 @@ impl Worker {
         let result = deletions::clear(
             store,
             &mut self.deletions,
-            &mut self.catalogue,
-            &mut self.history,
+            deletions::Followers::new(&mut self.catalogue, &mut self.history, &mut self.page_text),
             start,
             end,
         )
@@ -1378,8 +1410,7 @@ impl Worker {
         let result = deletions::clear_site_zooms(
             store,
             &mut self.deletions,
-            &mut self.catalogue,
-            &mut self.history,
+            deletions::Followers::new(&mut self.catalogue, &mut self.history, &mut self.page_text),
             start,
             end,
         );
@@ -1409,6 +1440,16 @@ impl Worker {
         delivered
     }
 
+    /// Shows the owner, once, a failure that closed the full-text index; the session goes on.
+    /// The failure already names what the index was doing.
+    fn report_page_text(
+        &mut self,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let problem = self.page_text.take_problem();
+        self.survival.result(problem, events)
+    }
+
     /// Expires history past the retention when due, one bounded batch per idle check.
     fn expire_while_idle(
         &mut self,
@@ -1423,8 +1464,7 @@ impl Worker {
         let expired = retention::expire_live(
             store,
             &mut self.deletions,
-            &mut self.catalogue,
-            &mut self.history,
+            deletions::Followers::new(&mut self.catalogue, &mut self.history, &mut self.page_text),
             now,
             &mut self.retention,
             limit,

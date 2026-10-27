@@ -18,6 +18,6 @@ mod storage;
 pub mod window_frame;
 
 pub use storage::{
-    DeletionJournal, JournalError, RecoveryError, RecoveryOffer, RecoveryOutcome, StartupStorage,
-    WindowsDirectoryLease, offer_recovery, prepare_startup, read_deletion_log,
+    CacheFolder, DeletionJournal, JournalError, RecoveryError, RecoveryOffer, RecoveryOutcome,
+    StartupStorage, WindowsDirectoryLease, offer_recovery, prepare_startup, read_deletion_log,
 };

@@ -21,8 +21,8 @@ use tantivy::{
 
 use schema::{Fields, Held, RowKind};
 pub use types::{
-    Change, ClearRequest, Deletion, FullTextDocument, FullTextError, FullTextHit, Namespace,
-    NamespaceFilter, Outcome, PAGE_RETENTION_SECONDS, Retention, SearchRequest,
+    Change, ClearRequest, ClearScope, Deletion, FullTextDocument, FullTextError, FullTextHit,
+    Namespace, NamespaceFilter, Outcome, PAGE_RETENTION_SECONDS, Retention, SearchRequest,
 };
 
 /// The writer's indexing memory; Tantivy's minimum is 15 MB.
@@ -167,17 +167,18 @@ impl FullText {
         self.cleared
     }
 
-    /// Applies D47 history clears to page text, skipping generations already applied.
+    /// Applies D47 journal clears to page text, skipping generations already applied.
     ///
-    /// Each clear removes page documents and tombstones dated inside its range; tombstones
-    /// go too because their ids can name the cleared pages. The new generation is committed
+    /// Each history clear removes page documents and tombstones dated inside its range;
+    /// tombstones go too because their ids can name the cleared pages. A clear of anything
+    /// else only advances the generation. The new generation is committed
     /// with the deletions, so a crash repeats the clear, never skips it, and replaying the
     /// same journal twice deletes nothing twice. Returns how many clears were newly applied.
     ///
     /// `CleanupPending` means the clears and their generation are durable but the text is
     /// still on disk; a retry then reports 0. An index whose generation is ahead of the
-    /// journal cannot be detected here; the caller compares the two first, as the history
-    /// store's reconcile does.
+    /// journal cannot be detected here; the caller compares the two first and calls
+    /// `restart_clears` when the journal is behind.
     pub fn apply_clears(&mut self, clears: &[ClearRequest]) -> Result<usize, FullTextError> {
         self.require_nothing_staged()?;
         let unapplied: Vec<_> = clears
@@ -190,16 +191,32 @@ impl FullText {
         let in_order = unapplied
             .iter()
             .zip(self.cleared + 1..)
-            .all(|(clear, expected)| clear.generation == expected && clear.start < clear.end);
+            .all(|(clear, expected)| clear.generation == expected && well_formed(clear.scope));
         if !in_order {
             return Err(FullTextError::ClearOutOfOrder);
         }
         for clear in &unapplied {
-            let range = self.page_dated(Bound::Included(clear.start), Bound::Excluded(clear.end));
+            // A clear of something else only moves the generation on.
+            let ClearScope::Pages { start, end } = clear.scope else {
+                continue;
+            };
+            let range = self.page_dated(Bound::Included(start), Bound::Excluded(end));
             self.stage_deletion(range)?;
         }
         self.commit_with(last.generation)?;
         Ok(unapplied.len())
+    }
+
+    /// Removes all page text and its tombstones and counts clears from generation 0 again.
+    ///
+    /// For a journal recreated behind this index: its generations no longer say what was
+    /// cleared, so nothing dated can be trusted to stay. Feeds are untouched. The caller
+    /// then applies the journal from its start.
+    pub fn restart_clears(&mut self) -> Result<(), FullTextError> {
+        self.require_nothing_staged()?;
+        self.writer
+            .delete_term(self.fields.namespace_term(&Namespace::page()));
+        self.commit_with(0)
     }
 
     /// Ranks committed documents against the owner's words.
@@ -357,6 +374,14 @@ impl FullText {
     fn searcher(&self) -> Result<Searcher, FullTextError> {
         let reader = self.reader.as_ref().ok_or(FullTextError::Engine)?;
         Ok(reader.searcher())
+    }
+}
+
+/// A page clear must name a non-empty range; anything else carries no range.
+fn well_formed(scope: ClearScope) -> bool {
+    match scope {
+        ClearScope::Pages { start, end } => start < end,
+        ClearScope::Elsewhere => true,
     }
 }
 

@@ -19,76 +19,146 @@ entry names it.
 
 ## 2026-10-26
 
-- **The product map "Version A2" sets the free features, the paid services
-  and their prices (owner's own decision, 2026-10-26).** The owner drew
-  Syrinx's features and paid products on a Miro board titled "Version A2"
-  and asked that the plans, issues, wiki and website be brought into line
-  with it. The board is transcribed, with every conflict against earlier
-  records and how each was settled, in
-  [`docs/product-map.md`](product-map.md). The quoted phrases below are the
-  owner's words, from the board or from answers given in chat; the rest is
-  recorded by the coordinator, and the owner may correct it.
-  - **Free features, as recorded.** Plugins ("allows users to create
-    personal or publishable add-ons to the source"), Customize ("currently a
-    small visual editor for how Syrinx looks. I want to grow it to be an
-    editor for how Syrinx looks, functions, and allows the user to create
-    workflows and such") and the ad and tracker blocker are free. The
-    browser itself stays free, as on 2026-10-25.
-  - **Household Sync costs $20 a month or $200 a year.** The owner chose
-    this in chat over the $10/$100 approved on 2026-10-25; six people and
-    100 GB pooled storage stay as they were. The annual price follows Sync's
-    rule of ten months' price.
-  - **AI is one $20 subscription plus credit packs, and a person's own API
-    key is free.** The owner chose in chat: "One $20 tier + credit packs".
-    The $100 and $200 tiers of 2026-10-25 are withdrawn. Extra usage is a
-    one-off credit pack priced by the same three-times-provider-cost rule,
-    never charged automatically; pack sizes, expiry and refunds are still
-    open (AIP-01). The board's "User can also hook in their personal API
-    key for one of the many providers" is free and needs no subscription,
-    because that person pays the provider directly. The hosted models are
-    "for now OpenAI, claude", with OpenRouter later ("We can later offer
-    all kinds of models through openrouter"). The AI area is a "built in AI
-    harness/chat area" that "integrates with Notes, Forge, and more plugins
-    coming soon".
-  - **VPN is $8 a month.** The board's $8 replaces the proposed $7.99; the
-    annual price is still open (the plan proposes $80). Guardian remains
-    the provider to evaluate, and nothing is sold before its terms are known.
-  - **The Browser Package is an idea, not a decision.** The board shows
-    "Browser Package $30mo / $246yr Includes VPN, 50gb of Sync, and $20 of AI
-    usage". Asked whether to record it as decided, the owner chose "Idea
-    only, not decided", so the 2026-10-25 rule that no cross-service bundle
-    is promised stands until the owner decides it; it is tracked as a
-    question.
-  - **One Syrinx account signs in to both the website and the app.** The
-    owner's words: "The Syrinx site will also need to be able to be logged
-    into to edit account info, that same log in will need to be used to log
-    into Syrinx App to use any of the features paid for". Accounts use the
-    Supabase Auth selected on 2026-10-25, in a dedicated Syrinx project the
-    owner will create ("We'll make a supabase project soon"). The owner
-    chose in chat to scaffold the website's account pages now, switched off
-    until that project exists. An account is still optional: free browsing
-    never needs one.
-  - **Recorded as direction, each needing its own plan before work starts:**
-    Customize growing into an editor for functions and workflows; publishing
-    plugins (a directory, after v1, since v1 installs plugins only from a
-    folder); "Syrinx Distros", forks of Syrinx that the project supports and
-    promotes, including "a preconfigured 'plugin-pack'", while still being
-    able to add plugins and the subscriptions; and a desktop or phone app
-    "that would directly integrate with Fledge App". None of these changes a
-    standing decision: Windows 11 only in v1 (D2), no network plugin fetch
-    in v1, and the Fledge plugin's hold of 2026-10-20 all stand.
-  - **What it supersedes, as recorded.** From the 2026-10-25 records in
-    [`docs/paid-services-plan.md`](paid-services-plan.md): the AI 100 and AI
-    200 tiers, Household's $10/$100, VPN's $7.99, and "provider selection
-    remains open" for hosted AI (now OpenAI and Anthropic first).
-  - **What stays, as the coordinator reads it.** Sync at $4/$40 with 10 GB,
-    the $2-per-30 GB storage add-on, the $5/$50 voluntary support, the
-    three-times AI cost rule, end-to-end encrypted Sync, Supabase plus
-    Cloudflare R2, Guardian as the VPN to evaluate, and every privacy and
-    page-web-view guardrail in `AGENTS.md`. The board's "Syrinx does not
-    collect user information" is read with the 2026-10-25 account design:
-    Syrinx collects no browsing data or content, and an account holds only
-    what sign-in and billing need.
+- **The plugin runtime starts now, before Plan 1's exit, with wasmtime
+  pinned at exactly 48.0.7 (owner, 2026-10-26).** The owner's words: "Yes.
+  Start the plugin runtime now, before Plan 1's exit (P1-40), with wasmtime
+  pinned at exactly 48.0.7. Record this as my decision in
+  docs/decisions.md and run #28 with the usual plan, review and build
+  loop." The rest of this entry is the coordinator's record, and the owner
+  may correct it.
+  - **Why.** Notes PR #14 (Fledge-Software/Syrinx-Notes-Plugin) added a
+    folder tree whose Owner check asked for a look in the real window, and
+    nobody could do it: Syrinx has no plugin host, so it cannot load Notes.
+    The owner moved that check to Notes #15, which waits for the host.
+    Every Notes and Forge slice is in the same position. The runtime is
+    what makes plugin work visible, so the owner chose not to let it wait
+    for P1-40, the owner's one-week daily-driver acceptance.
+  - **What changes.** The plugin host (#28 first, then #134 to #137 and
+    Plan 2's Phase 2 slices) no longer waits for Plan 1's exit. The
+    coordinator reads "the plugin runtime" as all of #25, Phase 2's window
+    slices included; the owner may narrow this to Phase 1. This narrows
+    the 2026-10-15 rule that no plugin work starts until Plan 1 closes, as
+    2026-10-20 already did for #26 and #30. Plan 1's open work, P1-40
+    included, stays open and keeps its own order. The plugin host still
+    follows its own order inside #25, and the owner still accepts Plan 2
+    at #25's exit. `AGENTS.md`'s work order, the in-repo wiki page
+    `wiki/Plugin-system.md` and the bodies of #25, #27 and #28 are updated
+    to match.
+  - **The pin.** 2026-10-21's decision 1 pinned wasmtime to `=48.0.x`.
+    The exact version is now `=48.0.7`, the version the template's WIT
+    build ran. The owner's words fix wasmtime itself; the rest of the
+    wasmtime family follows at the versions 48.0.7 requires. Whether
+    `wasmtime-wasi` is a dependency at all is still open: it is the first
+    open question in `docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md`,
+    where option (b) drops it and Syrinx's host provides the WASI
+    interfaces, and option (c) pins it at `=48.0.7`. The owner decides it
+    before #28 adds the dependency. *(Answered later on 2026-10-26:
+    option (b), so `wasmtime-wasi` is not added; see the next entry.)* #27's audit of every transitive crate,
+    under the 2026-10-21 licence exception, is still done before wasmtime
+    enters `Cargo.lock`. Moving to a later 48.0 security patch remains a
+    routine pin bump that must pass the gate.
+  - **What it costs.** Plugin-host code lands in Syrinx's own crates while
+    Plan 1 is still being accepted, so the gate and the release carry
+    wasmtime before the browser core is signed off. Research note 10, the
+    WASM runtime note at
+    `docs/dev/background-10-wasm-plugin-runtime-draft.md`, measured about
+    17 MiB added on Linux; #28 records the build-time and size cost on
+    Windows. Rejected: waiting for P1-40, which leaves every plugin slice
+    unverifiable in the window until then.
+
+- **The plugin host's first slice (#28): WASI, the licence check and the
+  shape of `syrinx:plugin@0.1.0` (owner, 2026-10-26).** The owner's words:
+  "I accept all the #28 recommendations as written: G1 option (b), G2, G3,
+  G10, G9's eight items, G4, G5 and G7. I'll do O1 and O2 when you ask."
+  The recommendations are those of #28's reviewed plan; the summary below
+  is the coordinator's record of them, and the owner may correct it.
+  - **G1: Syrinx's host provides WASI itself.** A plugin compiled from
+    Rust for `wasm32-wasip2` imports sixteen WASI 0.2 interfaces (output,
+    clocks, randomness and similar basics). Syrinx's plugin host
+    implements them in its own code, about 300 lines, instead of using
+    `wasmtime-wasi`. So the pin is `wasmtime =48.0.7` alone. Why:
+    `wasmtime-wasi` 48.0.7 fails Syrinx's network-code check (D9), because
+    `io-extras` asks `windows-sys` for WinSock, and it brings about eleven
+    more crates and a `tokio` move. Rejected: option (c), pinning
+    `wasmtime-wasi =48.0.7`, which would need a ninth network entry and a
+    change to the headless network rule
+    (`docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md`, open
+    question 1).
+  - **G2: the WASI interface files are copied in.** The 692 lines of WASI
+    0.2 WIT that the host implements may be committed under
+    `vendor/wasi-0.2.12-wit/`, under `Apache-2.0 WITH LLVM-exception`,
+    with a provenance file. Rejected: registering the interfaces by hand
+    without the files.
+  - **G3: `async` is not compiled in.** The sentence of 2026-10-21's
+    decision 1 that keeps wasmtime's `async` Cargo feature "because
+    `wasmtime-wasi` requires it" no longer applies. Syrinx calls plugins
+    synchronously and builds wasmtime without `async`.
+  - **G10: three compiler crates fall under the licence exception.**
+    `regalloc2` and `target-lexicon` (and `winx`, which option (b) no
+    longer compiles) are covered by the 2026-10-21 exception at the
+    versions wasmtime 48.0.7 requires, as `docs/dev/wasmtime-audit.md`
+    reads it.
+  - **G4: the gate checks licences.** #28 adds to `cargo xtask check` the
+    plugin template's licence check: every package in `Cargo.lock` must
+    carry an allowed licence or its exact approval: `unicode-ident
+    1.0.26`, `foldhash 0.2.0`, the 18 ICU crates, `encoding_rs 0.8.42`,
+    and the wasmtime family by exact name and version (29 lockfile entries
+    under G1's option (b)). Until now only a manual audit protected them.
+  - **G9: the shape of plugin interface 0.1.0 is approved.** It counts as
+    frozen once #28's contract tests pass, and the template (#30) and
+    Notes keep their own draft copies until #28's closing comment names
+    the commit to copy:
+    1. Within 0.1.x, only imports marked `@since` may be added; any other
+       change starts a new version.
+    2. There is no cancel export into a plugin's view code; Syrinx drops
+       queued requests for a cancelled id before delivery.
+    3. `forms.submit` receives a host-chosen request id, and a `pending`
+       answer must return exactly that id.
+    4. Forms gain `date` and `date-time` fields and an `email` or
+       `web-address` text format. `forms.validate` can report its own
+       failure, and the host never runs a command that has a form.
+    5. Thirteen icons are added: file, code, git, diff, symbol, link, tag,
+       calendar, mail, list, image, settings and error.
+    6. `plugin-error` gains `cancelled`, which is never used where a write
+       may have happened.
+    7. A search entry may carry up to 16 keywords of up to 120 characters;
+       an over-limit keyword is dropped and logged, not used to refuse the
+       batch.
+    8. The search-change kinds, the log levels and what a plugin is told
+       when it starts stay as they are; anything new at start, such as a
+       per-call time budget, comes later as a new `@since` service
+       (planned for #135).
+
+    The same approval writes two rules into the contract. The form rule:
+    the host calls `forms.form-for` on preview, `forms.validate` as fields
+    change and `forms.submit` on Enter, never `commands.run` for a command
+    declared with a form, and `form-for` and `validate` have no side
+    effects. The delivery order: the host never calls an export from
+    inside an import; deferred calls run first in, first out, after the
+    current export returns; for each view, `opened` comes before any
+    `message` and `closed` comes last; and `events.deliver(r, ...)` follows
+    the export that returned `pending(r)` or armed `r`.
+
+    The new date fields and icons have no design art yet; they are drawn
+    under `design/README.md` in #29 and #141.
+  - **G5: plugin-view memory moves to #138.** 2026-10-21's decision 3 put
+    it in #28's measurements, but no plugin view exists until #138, so
+    #138 measures it.
+  - **G7: the toolchain is pinned.** A `rust-toolchain.toml` pins Rust
+    1.97.1 (CI's existing pin) with `wasm32-wasip2`, `rustfmt` and
+    `clippy`. The CI `setup-rust` step installs the target, fetches the
+    fixture lockfile and adds it to the cache key, and `LOCAL-DEV.md`
+    records how rustup's auto-install behaves. Because the weekly release
+    uses the same step, it builds on this toolchain too, with unchanged
+    output; inside this repository the file overrides the machine's
+    `stable` default.
+  - **A correction to 2026-10-24's decision 5 (a note, not an owner
+    decision).** The default stubs are
+    written by hand in the guest, because the ones `wit-bindgen` generates
+    trap (#27's pre-build check). The decision itself stands.
+  - **Still the owner's to do.** O1: install `wasm32-wasip2` for 1.97.1
+    and allow downloads of audited crates. O2: give the go-ahead for #28's
+    measurement run on a quiet machine.
 
 ## 2026-10-25
 
@@ -307,7 +377,9 @@ entry names it.
   `plugin` world; the guest crate generated by `wit-bindgen` supplies
   default stubs (for example `not-found` or empty results) so a plugin
   implements only what its manifest declares. #27's pre-build check
-  confirms this works. Rejected: one world per plugin role, which would
+  confirms this works. *(Corrected on 2026-10-26: the stubs are
+  written by hand, because the generated ones trap; see that date's
+  entries.)* Rejected: one world per plugin role, which would
   multiply the version tracks to keep compatible.
 
 - **(6) Notes' capability interfaces arrive with `@since(0.1.x)` in the
@@ -562,10 +634,12 @@ entry names it.
   plugin host (#28, #29) start once Plan 1 closes, as the 2026-10-20 entry
   required; it does not itself add a dependency, which #27's audit and
   #28's slice still do. `AGENTS.md`'s plugin guardrails are updated by a
-  separate proposal, not by these entries.
+  separate proposal, not by these entries. *(On 2026-10-26 the owner let
+  the host start before Plan 1 closes; see that date's entry.)*
 
 - **Runtime and pin (decision 1): wasmtime with the component model,
-  pinned exactly `=48.0.x`.** Syrinx embeds wasmtime with the component
+  pinned exactly `=48.0.x`.** *(On 2026-10-26 the owner fixed the
+  exact version at `=48.0.7`; see that date's entry.)* Syrinx embeds wasmtime with the component
   model and WIT (WebAssembly Interface Types, the typed interface
   language the owner chose on 2026-10-15), host bindings generated with
   `wasmtime::component::bindgen!`, pinned with `=` on the 48.x
@@ -574,7 +648,9 @@ entry names it.
   `component-model-async`, WASI 0.3 and `wasi-http` off. Syrinx calls
   plugins synchronously; wasmtime's plain `async` Cargo feature is still
   compiled in because `wasmtime-wasi` requires it, so the dependency audit
-  covers the graph with it. Security patch releases within 48.0.x are
+  covers the graph with it. *(Amended on 2026-10-26: `wasmtime-wasi`
+  is not used and `async` is not compiled in; see that date's
+  entries.)* Security patch releases within 48.0.x are
   routine pin bumps that pass the gate; a move to another major line still
   needs the owner. Why: it is the only runtime that meets the WIT decision
   with a support policy Syrinx can pin to; following wasmtime's monthly
@@ -609,7 +685,8 @@ entry names it.
   D6"; section 4, "Memory per extra web view"). Plugin views are reported
   separately, with the ten page tabs still within D6's 10%-of-Edge budget.
   Rejected: counting plugin views inside that budget, which would let a
-  Notes tab push page tabs out of it.
+  Notes tab push page tabs out of it. *(On 2026-10-26 plugin-view memory
+  moved to #138; see that date's entries.)*
 
 - **Interface rules (decision 4): one `syrinx:plugin@0.1.0` WIT package.**
   Typed records everywhere except two named JSON channels (view messages
@@ -800,7 +877,9 @@ entry names it.
   The plugin host (#28, #29) is different: it adds the interface and host
   to Syrinx's own crates, so it still waits for Plan 1 to close and, in
   addition, for the owner to approve the research note *(approved on
-  2026-10-21; see that date's entries)*. Rejected: holding
+  2026-10-21; see that date's entries)*. *(Superseded on 2026-10-26: the
+  plugin host no longer waits for Plan 1 to close. See that date's
+  entry.)* Rejected: holding
   all plugin work until Plan 1 closes, which would leave the research and
   template idle although they cannot affect Plan 1; and starting the host
   now too, which would change product crates while Plan 1 is still being
@@ -862,7 +941,8 @@ entry names it.
   reading and writing, not code; the plugin interface, host and template
   still wait for Plan 1's exit, as decided on 2026-10-15. *(The template
   part is superseded on 2026-10-20: the template may also start now; the
-  interface and host still wait. See that entry.)*
+  interface and host still wait. See that entry.)* *(The host's wait for
+  Plan 1 ended on 2026-10-26; see that date's entry.)*
 
 ## 2026-10-15
 
@@ -903,7 +983,8 @@ entry names it.
     template now, ahead of Plan 1. *(Superseded on 2026-10-20: the plugin
     order is now runtime, template, Notes, Forge, with Fledge on hold, and
     the research note and the template may start before Plan 1 closes;
-    the host still waits. See that date's entries.)*
+    the host still waits. See that date's entries.)* *(The host's wait for
+    Plan 1 ended on 2026-10-26; see that date's entry.)*
   - *Form.* Each plugin is Rust compiled to WebAssembly (WASM) and run by
     Syrinx in a sandbox (the Zed model). It reaches files, git, processes
     and the network only through host functions its manifest asks for and

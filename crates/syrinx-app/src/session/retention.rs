@@ -3,10 +3,9 @@
 use std::collections::BTreeMap;
 
 use syrinx_platform::DeletionJournal;
-use syrinx_search::Catalogue;
 use syrinx_store::{Store, deletion::DeletionRange};
 
-use super::{SessionError, deletions, history};
+use super::{SessionError, deletions, page_text::PageText};
 
 /// Visits are kept for 90 days (DW-4, the owner's decision of 2026-10-12).
 pub(super) const RETENTION_SECS: i64 = 90 * DAY_SECS;
@@ -41,17 +40,23 @@ impl Schedule {
         }
     }
 
-    /// Whether an expiry ran within the last day. A due time more than a day ahead was
-    /// left by a clock that moved back, so it does not count.
+    /// Whether an expiry ran within the last day.
     pub(super) fn waiting(&self, now: i64) -> bool {
-        now < self.due && self.due - now <= DAY_SECS
+        waiting(self.due, now)
     }
+}
+
+/// Whether a daily job due at `due` must still wait. A due time more than a day ahead was
+/// left by a clock that moved back, so it does not count.
+pub(super) fn waiting(due: i64, now: i64) -> bool {
+    now < due && due - now <= DAY_SECS
 }
 
 /// Expires one bounded batch before the catalogue loads, unless one ran within the day.
 pub(super) fn expire_at_startup(
     store: &Store,
     journal: &mut DeletionJournal,
+    page_text: &mut PageText,
     now: i64,
     schedule: &mut Schedule,
     limit: usize,
@@ -62,7 +67,7 @@ pub(super) fn expire_at_startup(
     let cutoff = expiry_cutoff(store, now, schedule.cutoff)?;
     let batch = expiry_batch(store, cutoff, limit)?;
     if let Some((range, _)) = batch {
-        deletions::clear_before_catalogue(store, journal, range)?;
+        deletions::clear_before_catalogue(store, journal, page_text, range)?;
     }
     save(store, schedule, now, cutoff, batch)
 }
@@ -71,8 +76,7 @@ pub(super) fn expire_at_startup(
 pub(super) fn expire_live(
     store: &Store,
     journal: &mut DeletionJournal,
-    catalogue: &mut Catalogue,
-    recorder: &mut history::HistoryRecorder,
+    followers: deletions::Followers<'_>,
     now: i64,
     schedule: &mut Schedule,
     limit: usize,
@@ -80,14 +84,7 @@ pub(super) fn expire_live(
     let cutoff = expiry_cutoff(store, now, schedule.cutoff)?;
     let batch = expiry_batch(store, cutoff, limit)?;
     if let Some((range, _)) = batch {
-        deletions::clear(
-            store,
-            journal,
-            catalogue,
-            recorder,
-            range.start(),
-            range.end(),
-        )?;
+        deletions::clear(store, journal, followers, range.start(), range.end())?;
     }
     save(store, schedule, now, cutoff, batch)
 }

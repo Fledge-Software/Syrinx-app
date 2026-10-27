@@ -95,6 +95,12 @@ impl Fixture {
             remove_if_present(&self.0.join(name), false);
         }
         remove_if_present(&self.0.join("backups"), true);
+        // The index's files are Tantivy's own names, so its whole folder goes.
+        match fs::remove_dir_all(self.0.join(page_text::INDEX_FOLDER)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => checked_io(Err(error)),
+        }
         checked_io(fs::remove_dir(self.0));
         checked_io(fs::remove_dir(self.1));
     }
@@ -686,7 +692,8 @@ fn worker_idle_path_publishes_the_acknowledged_snapshot_without_waiting_for_a_ti
     let archive = lease.backup_archive().expect("native backup archive");
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let store = Store::open(lease.clone()).expect("open guarded synthetic store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, page_text::PageText::open(&lease))
+        .expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -845,8 +852,9 @@ fn failed_close_save_reports_fatal_failure_without_acknowledging_native_cleanup(
         WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic failure store"),
     );
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let page_text = page_text::PageText::open(&lease);
     let store = Store::open(lease).expect("open synthetic failure store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -895,8 +903,9 @@ fn a_command_that_stops_the_worker_loop_names_its_reason_and_operation() {
     let lease =
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic stop store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let page_text = page_text::PageText::open(&lease);
     let store = Store::open(lease).expect("open synthetic stop store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -954,8 +963,9 @@ fn a_failure_saving_settled_titles_names_that_operation_not_the_running_command(
     let lease =
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic title store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let page_text = page_text::PageText::open(&lease);
     let store = Store::open(lease).expect("open synthetic title store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -2064,3 +2074,6 @@ mod permission_tests;
 
 #[path = "tab_action_tests.rs"]
 mod tab_action_tests;
+
+#[path = "page_text_tests.rs"]
+mod page_text_tests;
