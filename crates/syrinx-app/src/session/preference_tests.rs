@@ -470,7 +470,8 @@ fn a_zoom_clear_finished_before_a_failing_history_clear_still_replaces_the_windo
     // A second link to the journal makes every later append refuse it (hard-linked file), so
     // the pending zoom clear is applied but its completion fails, and the history clear is
     // never journaled. This is the completion-failure variant of #159: a failure after an
-    // earlier clear completes cannot be built here, since the link refuses that append too.
+    // earlier clear completes is not practical here: the link refuses that append too, and the
+    // journal's size cap would need about 175,000 requests.
     fs::hard_link(
         fixture.0.join("syrinx.deletions"),
         fixture.1.join("journal-alias"),
@@ -548,7 +549,7 @@ fn a_failed_levels_send_and_a_failed_completion_leave_the_request_pending() {
         },
         &sender,
     );
-    // Neither failure completes the request; the send failure is logged, not dropped.
+    // Neither failure completes the request, and the worker keeps running.
     assert!(result.is_err());
     assert!(worker.deletions.log().pending().is_some());
     drop(worker);
