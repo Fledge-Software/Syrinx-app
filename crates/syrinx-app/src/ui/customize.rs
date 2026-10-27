@@ -33,7 +33,8 @@ pub(super) struct CustomAccent {
 }
 
 impl BrowserView {
-    /// Shows the stored appearance, saved themes, sidebar width state and tiles. Only an old
+    /// Shows the stored appearance, saved themes, sidebar width state, bulk-close choice and
+    /// tiles. Only an old
     /// palette choice carried over into a saved theme is written back, once.
     pub(super) fn restore_preferences(
         &mut self,
@@ -44,6 +45,7 @@ impl BrowserView {
     ) {
         self.home.destinations = destinations;
         self.restore_sidebar_state(settings);
+        self.ask_before_bulk_close = super::row_menu::asks_before_bulk_close(settings);
         let loaded = appearance::load(settings);
         if !loaded.unreadable.0.is_empty() {
             self.message =

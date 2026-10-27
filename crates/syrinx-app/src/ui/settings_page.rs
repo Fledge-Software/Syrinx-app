@@ -11,6 +11,7 @@ use syrinx_ui::Palette;
 use syrinx_ui::metrics::{chrome, radius, text};
 
 use super::BrowserView;
+use super::customize::switch_control;
 use super::home_palette::HomePaletteIntent;
 use super::updates::pill;
 use crate::controls::control;
@@ -30,6 +31,7 @@ const SECTION_MAX_WIDTH: f32 = 560.;
 pub(super) enum SettingsSection {
     #[default]
     Appearance,
+    Tabs,
     Privacy,
     UsageReport,
     Updates,
@@ -38,8 +40,9 @@ pub(super) enum SettingsSection {
 impl SettingsSection {
     /// The sections in list order. #91 also names About, which waits until Syrinx has
     /// something to say there beyond the version Updates already shows.
-    pub(super) const ALL: [Self; 4] = [
+    pub(super) const ALL: [Self; 5] = [
         Self::Appearance,
+        Self::Tabs,
         Self::Privacy,
         Self::UsageReport,
         Self::Updates,
@@ -48,6 +51,7 @@ impl SettingsSection {
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
+            Self::Tabs => "Tabs",
             Self::Privacy => "Privacy",
             Self::UsageReport => "Usage report",
             Self::Updates => "Updates",
@@ -58,15 +62,17 @@ impl SettingsSection {
     fn index(self) -> usize {
         match self {
             Self::Appearance => 0,
-            Self::Privacy => 1,
-            Self::UsageReport => 2,
-            Self::Updates => 3,
+            Self::Tabs => 1,
+            Self::Privacy => 2,
+            Self::UsageReport => 3,
+            Self::Updates => 4,
         }
     }
 
     fn element_id(self) -> &'static str {
         match self {
             Self::Appearance => "settings-appearance",
+            Self::Tabs => "settings-tabs",
             Self::Privacy => "settings-privacy",
             Self::UsageReport => "settings-usage-report",
             Self::Updates => "settings-updates",
@@ -360,6 +366,7 @@ impl BrowserView {
                 .child(self.theme_choices(palette, window, cx))
                 .child(self.accent_choices(palette, window, cx))
                 .child(self.transparency_switch(palette, cx)),
+            SettingsSection::Tabs => column.child(self.bulk_close_entry(palette, cx)),
             // Managing permissions or reading the report replaces its section's summary.
             SettingsSection::Privacy if self.home.site_permissions.is_open() => {
                 self.site_permissions_view(palette, cx)
@@ -373,6 +380,28 @@ impl BrowserView {
             SettingsSection::UsageReport => self.usage_section(palette, cx),
             SettingsSection::Updates => self.updates_section(palette, cx),
         }
+    }
+
+    /// Whether Close other tabs and Close tabs below ask first; the confirmation's "Close and
+    /// don't ask again" turns it off, and this turns it back on (owner, 2026-10-27).
+    fn bulk_close_entry(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
+        let on = self.ask_before_bulk_close;
+        let switch = switch_control(
+            "ask-before-bulk-close",
+            "Ask before closing several tabs",
+            on,
+            palette,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.set_ask_before_bulk_close(!on);
+            cx.notify();
+        }));
+        entry_row(
+            palette,
+            "Ask before closing several tabs",
+            "Close other tabs and Close tabs below say how many tabs will close first.",
+            switch,
+        )
     }
 
     /// Privacy's way to the existing clear browsing data dialog, which asks before deleting.
@@ -599,7 +628,10 @@ mod tests {
     #[test]
     fn the_sections_are_the_settings_syrinx_has_in_list_order() {
         let names: Vec<_> = SettingsSection::ALL.map(SettingsSection::name).into();
-        assert_eq!(names, ["Appearance", "Privacy", "Usage report", "Updates"]);
+        assert_eq!(
+            names,
+            ["Appearance", "Tabs", "Privacy", "Usage report", "Updates"]
+        );
         assert_eq!(SettingsSection::default(), SettingsSection::Appearance);
         // Each section's list entry has its own element id, as GPUI's accessibility tree needs.
         let mut ids: Vec<_> = SettingsSection::ALL.map(SettingsSection::element_id).into();

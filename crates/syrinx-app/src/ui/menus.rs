@@ -1,16 +1,22 @@
-//! The chrome's drop-down menus: the page menu behind ☰, the sidebar's ⋯ menu and the
-//! Downloads flyout behind ↓ (#143). The first two also open where the owner right-clicks.
+//! The chrome's drop-down menus: the page menu behind ☰, the sidebar's ⋯ menu, a sidebar
+//! row's menu and its bulk-close confirmation (#95), and the Downloads flyout behind ↓ (#143).
 //! A menu is its own owned popup window: GPUI content drawn over the page card in the
 //! main window never receives the page's clicks or keys (#12).
 
 use std::time::{Duration, Instant};
 
 use gpui::{KeyDownEvent, MouseDownEvent, Pixels, Point, WeakEntity, prelude::FluentBuilder as _};
-use syrinx_core::{DestinationSurface, DownloadControl, Shortcut};
+use syrinx_core::{BrowserAction, DestinationSurface, DownloadControl, Shortcut};
 use syrinx_platform::browser::{BrowserError, OverlayRect, hide_overlay, syrinx_in_foreground};
 
+use super::row_menu::{
+    ActionFocus, BulkClose, MenuOrigin, RowEntry, TabAction, browser_key_label, bulk_confirm_label,
+    bulk_question,
+};
+use super::sidebar_tree::TreeId;
 use super::title_bar::{CAPTION_GAP, caption_buttons_width};
 use super::{
+    history_list::ReturnFocus,
     owned_popup::{
         OwnedPopup, OwnedPopupError, PopupSpec, open_owned_popup, round_popup_corners,
         show_and_activate,
@@ -25,6 +31,8 @@ const DOWNLOADS_WIDTH: f32 = 380.;
 /// The flyout lists this many downloads, newest first; the session's list keeps more.
 const MAX_DOWNLOAD_ROWS: usize = 8;
 const ITEM_HEIGHT: f32 = 30.;
+/// A separator between a menu's groups: a 1 px line centred in this height.
+const SEPARATOR_HEIGHT: f32 = 9.;
 /// The card's padding around its rows and its border, in logical pixels.
 const MENU_PADDING: f32 = 4.;
 const MENU_BORDER: f32 = 1.;
@@ -40,6 +48,10 @@ pub(super) enum MenuKind {
     Page,
     Sidebar,
     Downloads,
+    /// A sidebar row's actions; its rows come from `row_menu::row_actions`.
+    Row,
+    /// Asks before Close other tabs or Close tabs below.
+    Confirm,
 }
 
 /// One menu entry.
@@ -62,6 +74,20 @@ enum MenuItem {
     /// The flyout's only row when nothing has downloaded this session.
     NoDownloads,
     ClearDownloads,
+    /// A line between groups; never selected or chosen.
+    Separator,
+    /// The ⋯ menu's Close tab, on the active tab.
+    CloseActiveTab,
+    /// A sidebar row's action (#95).
+    Tab(TabAction),
+    /// The confirmation's question; shown, never chosen.
+    ConfirmPrompt,
+    /// Closes the tabs the confirmation named; `remember` stops it asking again.
+    ConfirmBulk {
+        bulk: BulkClose,
+        remember: bool,
+    },
+    Cancel,
 }
 
 const PAGE_ITEMS: [MenuItem; 7] = [
@@ -73,10 +99,12 @@ const PAGE_ITEMS: [MenuItem; 7] = [
     MenuItem::SavePage,
     MenuItem::History,
 ];
-const SIDEBAR_ITEMS: [MenuItem; 3] = [
+const SIDEBAR_ITEMS: [MenuItem; 5] = [
     MenuItem::NewTab,
     MenuItem::NewFolder,
     MenuItem::EditFavorites,
+    MenuItem::Separator,
+    MenuItem::CloseActiveTab,
 ];
 
 impl MenuKind {
@@ -85,7 +113,7 @@ impl MenuKind {
         match self {
             MenuKind::Page => &PAGE_ITEMS,
             MenuKind::Sidebar => &SIDEBAR_ITEMS,
-            MenuKind::Downloads => &[],
+            MenuKind::Downloads | MenuKind::Row | MenuKind::Confirm => &[],
         }
     }
 
@@ -94,13 +122,15 @@ impl MenuKind {
             MenuKind::Page => "Page menu",
             MenuKind::Sidebar => "Sidebar menu",
             MenuKind::Downloads => "Downloads",
+            MenuKind::Row => "Tab menu",
+            MenuKind::Confirm => "Close tabs",
         }
     }
 
     fn width(self) -> f32 {
         match self {
             MenuKind::Downloads => DOWNLOADS_WIDTH,
-            MenuKind::Page | MenuKind::Sidebar => MENU_WIDTH,
+            MenuKind::Page | MenuKind::Sidebar | MenuKind::Row | MenuKind::Confirm => MENU_WIDTH,
         }
     }
 }
@@ -121,6 +151,15 @@ impl MenuItem {
             MenuItem::Download(_) => "Download",
             MenuItem::NoDownloads => "No downloads this session",
             MenuItem::ClearDownloads => "Clear finished downloads",
+            MenuItem::Separator => "",
+            MenuItem::CloseActiveTab => "Close tab",
+            MenuItem::Tab(action) => action.label(),
+            MenuItem::ConfirmPrompt => "Close tabs?",
+            MenuItem::ConfirmBulk {
+                remember: false, ..
+            } => "Close tabs",
+            MenuItem::ConfirmBulk { remember: true, .. } => "Close and don't ask again",
+            MenuItem::Cancel => "Cancel",
         }
     }
 
@@ -136,11 +175,18 @@ impl MenuItem {
             MenuItem::SavePage => "ctrl-d",
             MenuItem::History => "ctrl-h",
             MenuItem::NewTab => "ctrl-t",
+            // The ⋯ menu's Close tab and the row items read the registry (`menu_rows`).
             MenuItem::NewFolder
             | MenuItem::EditFavorites
             | MenuItem::Download(_)
             | MenuItem::NoDownloads
-            | MenuItem::ClearDownloads => return None,
+            | MenuItem::ClearDownloads
+            | MenuItem::Separator
+            | MenuItem::CloseActiveTab
+            | MenuItem::Tab(_)
+            | MenuItem::ConfirmPrompt
+            | MenuItem::ConfirmBulk { .. }
+            | MenuItem::Cancel => return None,
         };
         Shortcut::new(keys).ok().map(|shortcut| shortcut.label())
     }
@@ -163,10 +209,17 @@ impl MenuItem {
 
     /// Whether Enter, Space or a click runs the item; a download row only shows its state.
     fn is_choosable(self) -> bool {
-        !matches!(
-            self,
-            MenuItem::Zoom | MenuItem::Download(_) | MenuItem::NoDownloads
-        )
+        self.is_selectable()
+            && !matches!(
+                self,
+                MenuItem::Zoom | MenuItem::Download(_) | MenuItem::NoDownloads
+            )
+    }
+
+    /// Whether arrows and the pointer can select the row; separators and the confirmation's
+    /// question are drawn only.
+    fn is_selectable(self) -> bool {
+        !matches!(self, MenuItem::Separator | MenuItem::ConfirmPrompt)
     }
 }
 
@@ -186,6 +239,20 @@ pub(super) struct OpenMenu {
     generation: u64,
     popup: Option<OwnedPopup>,
     view: Option<WeakEntity<MenuView>>,
+    /// Where it hangs, so a confirmation can open in its place.
+    anchor: MenuAnchor,
+    returns: MenuReturn,
+}
+
+/// Where the keys go when a menu closes by Escape or after an item that does not place them.
+#[derive(Clone)]
+pub(super) enum MenuReturn {
+    /// The page, as for the title bar's menus.
+    Page,
+    /// The sidebar row a key opened the menu from.
+    Row(TreeId),
+    /// Where they were when a click opened the menu: a chrome control, or the page.
+    Was(ReturnFocus),
 }
 
 /// The menu a press on the main window closed, and when, so that press does not reopen it.
@@ -217,6 +284,8 @@ struct MenuRequest {
     zoom: f64,
     rect: OverlayRect,
     parent: isize,
+    /// A menu opened by a key starts with its first item selected, as Windows menus do.
+    select_first: bool,
 }
 
 impl BrowserView {
@@ -311,12 +380,67 @@ impl BrowserView {
         true
     }
 
-    /// Records the menu and opens its popup once this update ends (see `open_requested_menu`).
+    /// Opens one of the fixed menus; the keys go back to the page when it closes.
     fn show_menu(
         &mut self,
         kind: MenuKind,
         position: Point<Pixels>,
         corner: Corner,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rows = self.menu_rows(kind);
+        let opening = MenuOpening {
+            anchor: MenuAnchor { position, corner },
+            returns: MenuReturn::Page,
+            select_first: false,
+        };
+        self.show_menu_rows(kind, rows, opening, window, cx);
+    }
+
+    /// Opens a sidebar row's menu, or the ⋯ menu when the row offers nothing here (a folder
+    /// in the favicon-only sidebar). A row gone from the model opens nothing.
+    pub(super) fn show_row_menu(
+        &mut self,
+        row: TreeId,
+        opening: MenuOpening,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let wide = self.sidebar_sizing.labels_visible();
+        let rows = row_menu_rows(self.row_entries(row, wide));
+        if rows.is_empty() {
+            let rows = self.menu_rows(MenuKind::Sidebar);
+            self.show_menu_rows(MenuKind::Sidebar, rows, opening, window, cx);
+            return;
+        }
+        self.show_menu_rows(MenuKind::Row, rows, opening, window, cx);
+    }
+
+    /// Asks before a bulk close, in the place of the menu it was chosen from.
+    pub(super) fn show_bulk_confirmation(
+        &mut self,
+        bulk: BulkClose,
+        count: usize,
+        origin: MenuOrigin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let opening = MenuOpening {
+            anchor: origin.anchor,
+            returns: origin.returns,
+            select_first: false,
+        };
+        let rows = confirm_rows(bulk, count);
+        self.show_menu_rows(MenuKind::Confirm, rows, opening, window, cx);
+    }
+
+    /// Records the menu and opens its popup once this update ends (see `open_requested_menu`).
+    fn show_menu_rows(
+        &mut self,
+        kind: MenuKind,
+        rows: Vec<MenuRow>,
+        opening: MenuOpening,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -329,9 +453,12 @@ impl BrowserView {
         self.retire_palette(cx);
         self.retire_peek(cx);
         self.retire_menu(cx);
-        let rows = self.menu_rows(kind);
-        let size = kind_size(kind, rows.len());
-        let anchor = MenuAnchor { position, corner };
+        let MenuOpening {
+            anchor,
+            returns,
+            select_first,
+        } = opening;
+        let size = kind_size(kind, &rows);
         let rect = menu_rect(window.bounds(), window.scale_factor(), anchor, size);
         self.menu_generation = self
             .menu_generation
@@ -343,6 +470,8 @@ impl BrowserView {
             generation,
             popup: None,
             view: None,
+            anchor,
+            returns,
         });
         let request = MenuRequest {
             generation,
@@ -351,6 +480,7 @@ impl BrowserView {
             zoom: self.shown_zoom(),
             rect,
             parent: self.parent_hwnd,
+            select_first,
         };
         let browser = cx.weak_entity();
         cx.defer(move |cx| open_requested_menu(browser, request, cx));
@@ -372,7 +502,13 @@ impl BrowserView {
                     MenuItem::EditFavorites if editing => "Done editing favorites".to_owned(),
                     _ => item.label().to_owned(),
                 },
-                shortcut: item.shortcut(),
+                shortcut: match item {
+                    // The window's own close-tab key, read from the registry that binds it.
+                    MenuItem::CloseActiveTab => {
+                        browser_key_label(&self.commands, BrowserAction::CloseTab)
+                    }
+                    _ => item.shortcut(),
+                },
                 controls: &[],
             })
             .collect()
@@ -540,17 +676,24 @@ impl BrowserView {
         }
         // A queued key or click must not reactivate Syrinx after Alt Tab.
         let in_front = syrinx_in_foreground();
-        let kind = self.menu.as_ref().map(|menu| menu.kind);
+        let Some(menu) = self.menu.as_ref() else {
+            return;
+        };
+        let kind = menu.kind;
+        let origin = MenuOrigin {
+            anchor: menu.anchor,
+            returns: menu.returns.clone(),
+        };
         self.retire_menu(cx);
         match action {
             MenuAction::Deactivated => {
-                self.menu_dismissal = kind.map(|kind| MenuDismissal {
+                self.menu_dismissal = Some(MenuDismissal {
                     kind,
                     at: Instant::now(),
                 });
             }
-            MenuAction::Dismiss if in_front => self.focus_page(window, cx),
-            MenuAction::Choose(item) if in_front => self.run_menu_item(item, window, cx),
+            MenuAction::Dismiss if in_front => self.return_menu_focus(origin.returns, window, cx),
+            MenuAction::Choose(item) if in_front => self.run_menu_item(item, origin, window, cx),
             MenuAction::Dismiss
             | MenuAction::Choose(_)
             | MenuAction::Zoom(_)
@@ -570,8 +713,71 @@ impl BrowserView {
         }
     }
 
+    /// Gives the keys back after a menu closes: to the page, the row a key opened it from, or
+    /// the control a click found them on. A row or control gone since falls back to the page.
+    fn return_menu_focus(
+        &mut self,
+        returns: MenuReturn,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let returned = match returns {
+            MenuReturn::Page | MenuReturn::Was(ReturnFocus::Page) => false,
+            MenuReturn::Row(row) => {
+                self.move_keys_to_chrome() && self.sidebar_trees.focus_main_row(row, window, cx)
+            }
+            MenuReturn::Was(ReturnFocus::Control(handle)) => {
+                let moved = self.move_keys_to_chrome();
+                if moved {
+                    window.focus(&handle, cx);
+                }
+                moved
+            }
+        };
+        if !returned {
+            self.focus_page(window, cx);
+        }
+    }
+
+    /// Runs a row menu's or confirmation's item; the keys go back where the menu found them
+    /// unless the item placed them.
+    fn run_row_item(
+        &mut self,
+        item: MenuItem,
+        origin: MenuOrigin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let returns = origin.returns.clone();
+        let focus = match item {
+            MenuItem::Tab(action) => self.run_tab_action(action, Some(origin), window, cx),
+            MenuItem::ConfirmBulk { bulk, remember } => {
+                self.confirm_bulk_close(bulk, remember);
+                ActionFocus::Unplaced
+            }
+            _ => ActionFocus::Unplaced,
+        };
+        if focus == ActionFocus::Unplaced {
+            self.return_menu_focus(returns, window, cx);
+        }
+        cx.notify();
+    }
+
     /// Does what the chosen item names; the keys go back to the page unless it places them.
-    fn run_menu_item(&mut self, item: MenuItem, window: &mut Window, cx: &mut Context<Self>) {
+    fn run_menu_item(
+        &mut self,
+        item: MenuItem,
+        origin: MenuOrigin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(
+            item,
+            MenuItem::Tab(_) | MenuItem::ConfirmBulk { .. } | MenuItem::Cancel
+        ) {
+            self.run_row_item(item, origin, window, cx);
+            return;
+        }
         if item.takes_keys() {
             self.move_keys_to_chrome();
         }
@@ -599,8 +805,16 @@ impl BrowserView {
                 };
             }
             MenuItem::ClearDownloads => self.downloads.clear_finished(),
-            // Shown for their state only; `is_choosable` keeps them from being chosen.
-            MenuItem::Download(_) | MenuItem::NoDownloads => {}
+            MenuItem::CloseActiveTab => self.close_tab(),
+            // Shown for their state only, which `is_choosable` keeps from being chosen; row
+            // items ran above.
+            MenuItem::Download(_)
+            | MenuItem::NoDownloads
+            | MenuItem::Separator
+            | MenuItem::ConfirmPrompt
+            | MenuItem::Tab(_)
+            | MenuItem::ConfirmBulk { .. }
+            | MenuItem::Cancel => {}
         }
         if item.returns_keys_to_page() {
             self.focus_page(window, cx);
@@ -624,6 +838,7 @@ fn open_requested_menu(browser: WeakEntity<BrowserView>, request: MenuRequest, c
         zoom,
         rect,
         parent,
+        select_first,
     } = request;
     let spec = PopupSpec {
         title: "Syrinx menu",
@@ -634,7 +849,7 @@ fn open_requested_menu(browser: WeakEntity<BrowserView>, request: MenuRequest, c
             titlebar: None,
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 point(px(0.), px(0.)),
-                kind_size(kind, rows.len()),
+                kind_size(kind, &rows),
             ))),
             focus: false,
             show: false,
@@ -654,7 +869,17 @@ fn open_requested_menu(browser: WeakEntity<BrowserView>, request: MenuRequest, c
             });
             queued.is_err() // With no owner entity, nothing else will close this window.
         });
-        let menu = MenuContent { kind, rows, zoom };
+        let selected = if select_first {
+            first_selectable(&rows)
+        } else {
+            None
+        };
+        let menu = MenuContent {
+            kind,
+            rows,
+            zoom,
+            selected,
+        };
         let view = cx.new(|cx| MenuView::new(browser, generation, menu, popup, cx));
         *retained.borrow_mut() = Some(view.downgrade());
         view.into()
@@ -689,6 +914,7 @@ struct MenuContent {
     rows: Vec<MenuRow>,
     /// The page's zoom level, which the Zoom row shows and the browser keeps current.
     zoom: f64,
+    selected: Option<usize>,
 }
 
 /// The popup's content: the rows, the keyboard selection, and the keys and clicks on them.
@@ -714,7 +940,12 @@ impl MenuView {
         popup: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let MenuContent { kind, rows, zoom } = menu;
+        let MenuContent {
+            kind,
+            rows,
+            zoom,
+            selected,
+        } = menu;
         let activation = cx.observe_window_activation(popup, |this: &mut Self, popup, cx| {
             if popup.is_window_active() {
                 this.was_active = true;
@@ -729,7 +960,7 @@ impl MenuView {
             kind,
             rows,
             zoom,
-            selected: None,
+            selected,
             focus: cx.focus_handle(),
             was_active: false,
             _activation: activation,
@@ -750,7 +981,7 @@ impl MenuView {
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         if let Some(step) = MenuStep::for_key(key) {
-            self.selected = Some(step.apply(self.selected, self.rows.len()));
+            self.selected = step_selection(step, self.selected, &self.rows);
             cx.notify();
             return;
         }
@@ -867,6 +1098,10 @@ impl Render for MenuView {
             }));
         for (index, row) in self.rows.iter().enumerate() {
             let item = row.item;
+            if !item.is_selectable() {
+                card = card.child(drawn_only_row(index, row, &palette));
+                continue;
+            }
             let selected = self.selected == Some(index);
             let drawn = menu_row(index, row, selected, &palette).on_hover(cx.listener(
                 move |this, hovered: &bool, _, cx| {
@@ -901,6 +1136,37 @@ impl Render for MenuView {
         }
         crate::controls::watch_pointer(card)
     }
+}
+
+/// A separator, or the confirmation's question in the menu's own type.
+fn drawn_only_row(index: usize, row: &MenuRow, palette: &syrinx_ui::Palette) -> Stateful<Div> {
+    if row.item == MenuItem::Separator {
+        return div()
+            .id(("menu-separator", index))
+            .h(px(SEPARATOR_HEIGHT))
+            .flex_shrink_0()
+            .px(px(6.))
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .h(px(1.))
+                    .w_full()
+                    .bg(theme::rgba(palette.panel_divider)),
+            );
+    }
+    // A named label, so a screen reader reads the question with the menu.
+    div()
+        .id(("menu-prompt", index))
+        .role(gpui::Role::Label)
+        .aria_label(row.label.clone())
+        .h(px(ITEM_HEIGHT))
+        .flex_shrink_0()
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .child(div().flex_1().min_w_0().truncate().child(row.label.clone()))
 }
 
 /// One item: its name on the left and its shortcut, dimmed, on the right. Rows take no Tab
@@ -942,16 +1208,101 @@ fn menu_row(
 
 /// Which corner of the menu sits at its anchor point.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Corner {
+pub(super) enum Corner {
     TopLeft,
     TopRight,
 }
 
 /// Where the menu is anchored in the main window, in logical pixels.
 #[derive(Clone, Copy, Debug)]
-struct MenuAnchor {
-    position: Point<Pixels>,
-    corner: Corner,
+pub(super) struct MenuAnchor {
+    pub(super) position: Point<Pixels>,
+    pub(super) corner: Corner,
+}
+
+/// How a menu opens: where, where the keys go when it closes, and whether a key opened it.
+pub(super) struct MenuOpening {
+    pub(super) anchor: MenuAnchor,
+    pub(super) returns: MenuReturn,
+    pub(super) select_first: bool,
+}
+
+/// The selection after an arrow, Home or End, skipping rows that cannot be selected; `None`
+/// when the menu has no selectable row.
+fn step_selection(step: MenuStep, selected: Option<usize>, rows: &[MenuRow]) -> Option<usize> {
+    // From First or Last, later tries move inwards; Next and Previous keep their direction.
+    let onward = match step {
+        MenuStep::First => MenuStep::Next,
+        MenuStep::Last => MenuStep::Previous,
+        other => other,
+    };
+    let mut candidate = step.apply(selected, rows.len());
+    for _ in 0..rows.len() {
+        if rows
+            .get(candidate)
+            .is_some_and(|row| row.item.is_selectable())
+        {
+            return Some(candidate);
+        }
+        candidate = onward.apply(Some(candidate), rows.len());
+    }
+    None
+}
+
+fn first_selectable(rows: &[MenuRow]) -> Option<usize> {
+    rows.iter().position(|row| row.item.is_selectable())
+}
+
+/// A row's menu entries as menu rows.
+fn row_menu_rows(entries: Vec<RowEntry>) -> Vec<MenuRow> {
+    entries
+        .into_iter()
+        .map(|entry| match entry {
+            RowEntry::Action { action, keys } => MenuRow {
+                item: MenuItem::Tab(action),
+                label: action.label().to_owned(),
+                shortcut: keys,
+                controls: &[],
+            },
+            RowEntry::Separator => fixed_row(MenuItem::Separator),
+        })
+        .collect()
+}
+
+/// The confirmation: its question, then Close, Close and don't ask again, and Cancel.
+fn confirm_rows(bulk: BulkClose, count: usize) -> Vec<MenuRow> {
+    let labelled = |item: MenuItem, label: String| MenuRow {
+        item,
+        label,
+        shortcut: None,
+        controls: &[],
+    };
+    vec![
+        labelled(MenuItem::ConfirmPrompt, bulk_question(bulk.kind, count)),
+        fixed_row(MenuItem::Separator),
+        labelled(
+            MenuItem::ConfirmBulk {
+                bulk,
+                remember: false,
+            },
+            bulk_confirm_label(count),
+        ),
+        fixed_row(MenuItem::ConfirmBulk {
+            bulk,
+            remember: true,
+        }),
+        fixed_row(MenuItem::Cancel),
+    ]
+}
+
+/// A row with its item's own label and no shortcut.
+fn fixed_row(item: MenuItem) -> MenuRow {
+    MenuRow {
+        item,
+        label: item.label().to_owned(),
+        shortcut: None,
+        controls: &[],
+    }
 }
 
 /// A keyboard move of the selection.
@@ -1015,12 +1366,7 @@ fn control_face(control: DownloadControl) -> (&'static str, &'static str, &'stat
 /// The Downloads flyout's rows: the newest downloads, or a line saying there are none, then
 /// Clear when any has finished.
 fn download_rows(list: &syrinx_core::DownloadList) -> Vec<MenuRow> {
-    let fixed = |item: MenuItem| MenuRow {
-        item,
-        label: item.label().to_owned(),
-        shortcut: None,
-        controls: &[],
-    };
+    let fixed = fixed_row;
     let mut rows: Vec<MenuRow> = list
         .downloads()
         .iter()
@@ -1057,14 +1403,21 @@ fn corner_for_width(width: f32) -> Point<Pixels> {
     )
 }
 
-/// The popup's logical size for `rows` items of `kind`.
-fn kind_size(kind: MenuKind, rows: usize) -> gpui::Size<Pixels> {
-    size(px(kind.width()), menu_size(rows).height)
+/// The popup's logical size for `rows` of `kind`, separators counted at their own height.
+fn kind_size(kind: MenuKind, rows: &[MenuRow]) -> gpui::Size<Pixels> {
+    let separators = rows
+        .iter()
+        .filter(|row| row.item == MenuItem::Separator)
+        .count();
+    let items = rows.len() - separators;
+    size(px(kind.width()), menu_size(items, separators).height)
 }
 
-/// The popup's logical size for `rows` items.
-fn menu_size(rows: usize) -> gpui::Size<Pixels> {
-    let height = rows as f32 * ITEM_HEIGHT + 2. * (MENU_PADDING + MENU_BORDER);
+/// The popup's logical size for `items` rows and `separators` lines between groups.
+fn menu_size(items: usize, separators: usize) -> gpui::Size<Pixels> {
+    let height = items as f32 * ITEM_HEIGHT
+        + separators as f32 * SEPARATOR_HEIGHT
+        + 2. * (MENU_PADDING + MENU_BORDER);
     size(px(MENU_WIDTH), px(height))
 }
 
@@ -1231,9 +1584,105 @@ mod tests {
 
     #[test]
     fn the_popup_fits_its_rows_exactly() {
-        assert_eq!(menu_size(PAGE_ITEMS.len()), size(px(220.), px(220.)));
-        assert_eq!(menu_size(8), size(px(220.), px(250.)));
-        assert_eq!(menu_size(3), size(px(220.), px(100.)));
+        assert_eq!(menu_size(PAGE_ITEMS.len(), 0), size(px(220.), px(220.)));
+        assert_eq!(menu_size(8, 0), size(px(220.), px(250.)));
+        assert_eq!(menu_size(3, 0), size(px(220.), px(100.)));
+    }
+
+    #[test]
+    fn separators_count_at_their_own_height() {
+        // The ⋯ menu: four items and one separator.
+        let rows: Vec<MenuRow> = SIDEBAR_ITEMS.iter().map(|&item| fixed_row(item)).collect();
+        assert_eq!(
+            kind_size(MenuKind::Sidebar, &rows),
+            size(px(220.), px(4. * 30. + 9. + 10.))
+        );
+        assert_eq!(
+            menu_size(9, 3),
+            size(px(220.), px(9. * 30. + 3. * 9. + 10.))
+        );
+    }
+
+    #[test]
+    fn the_sidebar_menu_ends_with_close_tab_after_a_separator() {
+        assert_eq!(
+            SIDEBAR_ITEMS[3..],
+            [MenuItem::Separator, MenuItem::CloseActiveTab]
+        );
+        assert!(MenuItem::CloseActiveTab.returns_keys_to_page());
+        assert!(!MenuItem::Separator.is_choosable());
+    }
+
+    /// A row menu's shape: an item, a separator, two items, a separator and an item.
+    fn grouped_rows() -> Vec<MenuRow> {
+        let tab = syrinx_core::TabId::new(5).expect("synthetic tab id");
+        row_menu_rows(vec![
+            RowEntry::Action {
+                action: TabAction::Reload(tab),
+                keys: None,
+            },
+            RowEntry::Separator,
+            RowEntry::Action {
+                action: TabAction::Close(tab),
+                keys: Some("Ctrl W, Delete".to_owned()),
+            },
+            RowEntry::Action {
+                action: TabAction::Duplicate(tab),
+                keys: None,
+            },
+            RowEntry::Separator,
+            RowEntry::Action {
+                action: TabAction::ReopenClosed,
+                keys: None,
+            },
+        ])
+    }
+
+    #[test]
+    fn arrows_skip_separators_in_both_directions_and_wrap() {
+        let rows = grouped_rows();
+        let step = |step, from| step_selection(step, from, &rows);
+        assert_eq!(step(MenuStep::Next, None), Some(0));
+        assert_eq!(step(MenuStep::Next, Some(0)), Some(2));
+        assert_eq!(step(MenuStep::Previous, Some(2)), Some(0));
+        assert_eq!(step(MenuStep::Next, Some(3)), Some(5));
+        assert_eq!(step(MenuStep::Next, Some(5)), Some(0));
+        assert_eq!(step(MenuStep::Previous, Some(0)), Some(5));
+        assert_eq!(step(MenuStep::Last, Some(2)), Some(5));
+        assert_eq!(first_selectable(&rows), Some(0));
+        assert_eq!(rows[2].shortcut.as_deref(), Some("Ctrl W, Delete"));
+    }
+
+    #[test]
+    fn the_confirmation_names_the_count_and_its_question_cannot_be_chosen() {
+        let bulk = BulkClose {
+            kind: super::super::row_menu::BulkKind::Others,
+            tab: syrinx_core::TabId::new(5).expect("synthetic tab id"),
+        };
+        let rows = confirm_rows(bulk, 3);
+        let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Close 3 other tabs?",
+                "",
+                "Close 3 tabs",
+                "Close and don't ask again",
+                "Cancel"
+            ]
+        );
+        assert!(!rows[0].item.is_selectable());
+        // Arrows start on Close, never on the question.
+        assert_eq!(step_selection(MenuStep::Next, None, &rows), Some(2));
+        assert_eq!(step_selection(MenuStep::First, None, &rows), Some(2));
+        assert!(matches!(
+            key_action("enter", Some(rows[3].item)),
+            Some(MenuAction::Choose(MenuItem::ConfirmBulk {
+                remember: true,
+                ..
+            }))
+        ));
+        assert!(key_action("enter", Some(rows[0].item)).is_none());
     }
 
     #[test]
@@ -1243,7 +1692,7 @@ mod tests {
             main_window(100., 50., 1280., 800.),
             1.,
             anchor(1176., 36., Corner::TopRight),
-            menu_size(8),
+            menu_size(8, 0),
         );
         assert_eq!(
             rect,
@@ -1259,9 +1708,19 @@ mod tests {
     #[test]
     fn a_right_click_near_an_edge_keeps_the_menu_inside_the_window() {
         let main = main_window(0., 0., 1000., 600.);
-        let rect = menu_rect(main, 1., anchor(990., 590., Corner::TopLeft), menu_size(8));
+        let rect = menu_rect(
+            main,
+            1.,
+            anchor(990., 590., Corner::TopLeft),
+            menu_size(8, 0),
+        );
         assert_eq!((rect.left, rect.top), (772, 342));
-        let rect = menu_rect(main, 1., anchor(-20., -5., Corner::TopLeft), menu_size(3));
+        let rect = menu_rect(
+            main,
+            1.,
+            anchor(-20., -5., Corner::TopLeft),
+            menu_size(3, 0),
+        );
         assert_eq!((rect.left, rect.top), (8, 8));
     }
 
@@ -1271,7 +1730,7 @@ mod tests {
             main_window(-1600., 40., 1280., 800.),
             1.5,
             anchor(20., 100., Corner::TopLeft),
-            menu_size(3),
+            menu_size(3, 0),
         );
         assert_eq!(
             rect,

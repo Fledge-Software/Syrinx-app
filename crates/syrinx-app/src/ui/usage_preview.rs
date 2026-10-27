@@ -945,7 +945,17 @@ mod tests {
     fn only_the_export_buttons_reach_the_clipboard_or_a_chosen_file() {
         // Needles are split so this test's own text never matches them.
         let clipboard = concat!("write_to_", "clipboard(");
-        assert_eq!(occurrences(clipboard), [("usage_preview.rs".to_owned(), 1)]);
+        let mut writers = occurrences(clipboard);
+        writers.sort();
+        // The usage report's one write, and the sidebar row menu's Copy link (#95), which
+        // copies only the row's own address and never anything from the report.
+        assert_eq!(
+            writers,
+            [
+                ("row_menu.rs".to_owned(), 1),
+                ("usage_preview.rs".to_owned(), 1)
+            ]
+        );
         // Defined once, called by Copy report and Copy prompt only.
         let helper = concat!("put_on_", "clipboard(");
         assert_eq!(occurrences(helper), [("usage_preview.rs".to_owned(), 3)]);

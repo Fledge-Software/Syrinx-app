@@ -1,20 +1,62 @@
-//! Keeps each tab's mute for this run only and reapplies it when its page is rebuilt (#95).
+//! Keeps each tab's mute for this run only, reapplies it when its page is rebuilt, and shows
+//! what each page reports (#95).
 
 use super::*;
+
+/// What the status line says when the WebView2 runtime refuses to mute a page.
+const CANNOT_MUTE: &str = "This WebView2 runtime cannot mute pages.";
 
 impl BrowserView {
     /// A new or restored page starts audible, so a muted tab is muted again.
     pub(super) fn reapply_mute(&mut self, id: u64) {
-        if let Some(command) = reapplied_mute(&self.muted, id) {
-            self.page_command(command);
+        let Some(command) = reapplied_mute(&self.muted, id) else {
+            return;
+        };
+        if self.page_command(command)
+            && let Ok(tab) = TabId::new(id)
+        {
+            self.mute_requests.insert(tab);
         }
+    }
+
+    /// The page reported its mute state. It is stored as reported, never flipped, so a
+    /// repeated event changes nothing; the sidebar's badge follows only this.
+    pub(super) fn audio_reported(&mut self, id: u64, muted: bool, cx: &mut Context<Self>) {
+        let Ok(tab) = TabId::new(id) else {
+            return;
+        };
+        self.mute_requests.remove(&tab);
+        if record_reported_mute(&mut self.shown_muted, tab, muted) {
+            cx.notify();
+        }
+    }
+
+    /// A page control failed. When it was a mute this run asked for, the runtime cannot mute:
+    /// the choice is dropped, so no badge or Unmute item claims otherwise, and the status line
+    /// says why. Returns whether the failure was a mute.
+    pub(super) fn mute_refused(&mut self, id: u64) -> bool {
+        let Ok(tab) = TabId::new(id) else {
+            return false;
+        };
+        if !self.mute_requests.remove(&tab) {
+            return false;
+        }
+        self.muted.remove(&tab);
+        self.message = CANNOT_MUTE.to_owned();
+        true
+    }
+
+    /// Forgets mute state for tabs that have closed.
+    pub(super) fn retain_mute(&mut self) {
+        let open: HashSet<TabId> = self.model.tabs.iter().map(|tab| tab.id).collect();
+        self.muted.retain(|id| open.contains(id));
+        self.shown_muted.retain(|id| open.contains(id));
+        self.mute_requests.retain(|id| open.contains(id));
     }
 }
 
-// TODO(#95): call from the row menu's Mute action, then drop cfg(test).
 /// Records the owner's mute choice; returns the command for the tab's live page, if any.
-#[cfg(test)]
-fn change_mute(
+pub(super) fn change_mute(
     muted: &mut HashSet<TabId>,
     loaded: &HashSet<TabId>,
     id: TabId,
@@ -29,6 +71,15 @@ fn change_mute(
         id: id.get(),
         muted: mute,
     })
+}
+
+/// Sets the tab's reported state; returns whether it changed.
+fn record_reported_mute(shown: &mut HashSet<TabId>, tab: TabId, muted: bool) -> bool {
+    if muted {
+        shown.insert(tab)
+    } else {
+        shown.remove(&tab)
+    }
 }
 
 /// The command that mutes a rebuilt page again, or `None` for a tab left audible.
@@ -74,5 +125,19 @@ mod tests {
             })
         ));
         assert_eq!(muted, HashSet::from([unloaded]));
+    }
+
+    #[test]
+    fn a_reported_state_is_set_never_toggled() {
+        let tab = TabId::new(7).unwrap();
+        let mut shown = HashSet::new();
+        assert!(record_reported_mute(&mut shown, tab, true));
+        // WebView2 can report one change twice; the second changes nothing, and a muted page
+        // that starts playing reports muted again, so the badge stays.
+        assert!(!record_reported_mute(&mut shown, tab, true));
+        assert_eq!(shown, HashSet::from([tab]));
+        assert!(record_reported_mute(&mut shown, tab, false));
+        assert!(!record_reported_mute(&mut shown, tab, false));
+        assert!(shown.is_empty());
     }
 }

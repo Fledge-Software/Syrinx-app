@@ -107,15 +107,11 @@ pub enum SessionCommand {
         backwards: bool,
     },
     FocusTab(TabId),
-    // TODO(#95): send from the row menu, then drop cfg(test).
     /// Opens a selected copy of a web tab right after it (#95).
-    #[cfg(test)]
     Duplicate(TabId),
     /// Closes every ordinary tab but this one, sparing open saved pages (#95).
-    #[cfg(test)]
     CloseOthers(TabId),
     /// Closes the ordinary tabs below this one, sparing open saved pages (#95).
-    #[cfg(test)]
     CloseBelow(TabId),
     OpenSaved(SavedPageId),
     SaveActive,
@@ -1613,7 +1609,6 @@ fn counted_feature(command: &SessionCommand) -> Counted {
         SessionCommand::Unsave(_) => Counted::IfChanged(Feature::SavedRemoved),
         SessionCommand::SaveTab(_) => Counted::IfChanged(Feature::SavedSaved),
         // D39's schema has no counter for duplicating or bulk closes until the owner approves one.
-        #[cfg(test)]
         SessionCommand::Duplicate(_)
         | SessionCommand::CloseOthers(_)
         | SessionCommand::CloseBelow(_) => Counted::Nothing,
@@ -1698,15 +1693,12 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         }
         SessionCommand::CycleActive { backwards } => cycle_active(model, backwards)?,
         SessionCommand::FocusTab(id) => model.select(id).map_err(SessionError::Model)?,
-        #[cfg(test)]
         SessionCommand::Duplicate(id) => {
             model.duplicate(id).map_err(SessionError::Model)?;
         }
-        #[cfg(test)]
         SessionCommand::CloseOthers(id) => {
             model.close_others(id).map_err(SessionError::Model)?;
         }
-        #[cfg(test)]
         SessionCommand::CloseBelow(id) => {
             model.close_below(id).map_err(SessionError::Model)?;
         }

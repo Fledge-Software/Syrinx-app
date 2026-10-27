@@ -165,6 +165,25 @@ design.
   still selects the tab. Firefox's vertical tabs are the reference. Open for
   the owner: whether the active row shows it without hover or focus, and
   how it reads over a real favicon once favicons land.
+- **The sidebar row menu and the ⋯ menu's Close tab (#95, #58; owner's
+  Direction 1, 2026-10-27).** A right-click on a sidebar row, or Shift F10
+  or the Menu key on a focused row, opens that row's menu: the drop-down
+  menu's 220 px card and 30 px rows, with the key that does the same
+  dimmed on the right, and groups split by a 9 px separator holding a 1 px
+  line in the panel divider colour. The items per row kind are recorded in
+  `docs/decisions.md` (2026-10-27). The ⋯ menu ends with a separator and
+  Close tab (Ctrl W). Close other tabs and Close tabs below first ask in
+  the same card at the same place: the question in semibold ("Close 3
+  other tabs?"), a separator, then Close 3 tabs, Close and don't ask again,
+  and Cancel. Settings gains a Tabs section whose one switch, "Ask before
+  closing several tabs", turns the question back on.
+- **The muted marker (#95; "Mute icon only", 2026-10-27).** A muted tab's
+  wide row shows the Segoe MDL2 mute glyph (E74F) in the icon colour before
+  its ×, which unmutes on a click. In the favicon-only sidebar it is a
+  12 px round badge with the same glyph on the icon's bottom-right corner,
+  clear of the close badge above it, in the close badge's colours, and shown
+  only. No speaker icon appears while a page plays sound. The canvas has no
+  board for any of these; adding one is the owner's.
 
 ## Forge
 

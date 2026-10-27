@@ -28,6 +28,7 @@ actions!(
         RenameRow,
         RemoveRow,
         CloseRowPage,
+        OpenRowMenu,
         DeleteFolderContents,
         MoveRowUp,
         MoveRowDown,
@@ -42,14 +43,20 @@ actions!(
 pub(super) const ROW_CONTEXT: &str = "SyrinxSavedRow";
 /// The key context of the naming form and the removal cards.
 pub(super) const CARD_CONTEXT: &str = "SyrinxFolderCard";
+/// The row keys the row menu also shows beside its items (#95).
+pub(super) const REMOVE_ROW_KEY: &str = "delete";
+pub(super) const RENAME_ROW_KEY: &str = "f2";
+/// Shift F10 and the Menu key open a focused row's menu, as in Windows' own lists.
+const ROW_MENU_KEYS: [&str; 2] = ["shift-f10", "menu"];
 
 /// Row keys win over the window's own (Alt Left is Back elsewhere) only while a row has focus.
 /// Enter and Space on a focused row or button are GPUI keyboard clicks (P1-36's `control`),
 /// so they reach the same `on_click` handler as the mouse.
 pub(super) fn bind_keys(cx: &mut App) {
+    cx.bind_keys(row_menu_bindings());
     cx.bind_keys([
-        KeyBinding::new("f2", RenameRow, Some(ROW_CONTEXT)),
-        KeyBinding::new("delete", RemoveRow, Some(ROW_CONTEXT)),
+        KeyBinding::new(RENAME_ROW_KEY, RenameRow, Some(ROW_CONTEXT)),
+        KeyBinding::new(REMOVE_ROW_KEY, RemoveRow, Some(ROW_CONTEXT)),
         KeyBinding::new("shift-delete", DeleteFolderContents, Some(ROW_CONTEXT)),
         KeyBinding::new("alt-up", MoveRowUp, Some(ROW_CONTEXT)),
         KeyBinding::new("alt-down", MoveRowDown, Some(ROW_CONTEXT)),
@@ -59,6 +66,11 @@ pub(super) fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", CancelFolderCard, Some(CARD_CONTEXT)),
         KeyBinding::new("shift-delete", DeleteFolderContents, Some(CARD_CONTEXT)),
     ]);
+}
+
+/// Shift F10 and the Menu key on a focused row open its menu (#95).
+fn row_menu_bindings() -> [KeyBinding; 2] {
+    ROW_MENU_KEYS.map(|keys| KeyBinding::new(keys, OpenRowMenu, Some(ROW_CONTEXT)))
 }
 
 /// The window's close-tab key (Ctrl W) on a focused row closes that row's live page instead
@@ -583,7 +595,24 @@ pub(super) fn contents_phrase(contents: &FolderContents) -> String {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{KeyContext, Keymap, Keystroke};
+
     use super::*;
+
+    #[test]
+    fn shift_f10_and_the_menu_key_open_a_focused_rows_menu_and_nothing_else() {
+        let keymap = Keymap::new(row_menu_bindings().to_vec());
+        let row = [KeyContext::parse(ROW_CONTEXT).expect("row context")];
+        for keys in ["shift-f10", "menu"] {
+            let keystroke = Keystroke::parse(keys).expect("the key parses");
+            let (bindings, _) = keymap.bindings_for_input(&[keystroke.clone()], &row);
+            assert_eq!(bindings.len(), 1, "{keys}");
+            assert!(bindings[0].action().partial_eq(&OpenRowMenu), "{keys}");
+            // Away from a row the keys stay the page's and the window's.
+            let (elsewhere, _) = keymap.bindings_for_input(&[keystroke], &[]);
+            assert!(elsewhere.is_empty(), "{keys}");
+        }
+    }
 
     /// Synthetic contents with `pages` pages (IDs from 1) and `folders` folders (IDs from 100).
     fn held(pages: u64, folders: u64) -> FolderContents {
