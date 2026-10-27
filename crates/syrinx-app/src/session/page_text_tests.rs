@@ -569,6 +569,8 @@ fn a_repair_is_refused_when_the_data_folder_fails_its_guard_though_the_index_fol
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
     // A folder where SQLite's journal belongs fails the data folder's own guard with the same
     // kind of error a misplaced index entry gives; it is not the index's to report and go on.
+    // The index's own folder is a plain folder, so only the data folder's fault remains.
+    checked_io(fs::create_dir(index_folder(&fixture)));
     let sidecar = fixture.0.join("syrinx.db-journal");
     checked_io(fs::create_dir(&sidecar));
     let mut page_text = page_text::PageText::open(&lease);

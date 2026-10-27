@@ -1,7 +1,6 @@
 //! Keeps page text in the full-text index level with D47's clears and D40's seven days (#53).
 
 use std::fs;
-use std::os::windows::fs::MetadataExt;
 
 use syrinx_platform::{CacheFolder, WindowsDirectoryLease};
 use syrinx_search::fulltext::{ClearRequest, ClearScope, FullText, FullTextError};
@@ -258,9 +257,6 @@ fn open_index(
     Ok((folder, index))
 }
 
-/// Windows' `FILE_ATTRIBUTE_REPARSE_POINT`, set on a link or junction itself.
-const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-
 /// Whether the guard refused the index's folder because a file or a link stands where it
 /// belongs, rather than for a fault in the data folder, the database or a sync root.
 fn wrong_entry_where_the_folder_belongs(
@@ -276,12 +272,14 @@ fn wrong_entry_where_the_folder_belongs(
     let Some(data_folder) = lease.database_path().parent() else {
         return false;
     };
-    // The entry's own metadata, never a link's target. An entry that cannot be read is not
+    // The entry's own metadata, never a link's target: a symbolic link or junction is not a
+    // folder here, while a real folder with another reparse tag (a cloud placeholder, say)
+    // still is, so its refusal is not waved through. An entry that cannot be read is not
     // known to be wrong, so the guard's error refuses the repair instead.
     let Ok(entry) = fs::symlink_metadata(data_folder.join(INDEX_FOLDER)) else {
         return false;
     };
-    !entry.is_dir() || entry.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    !entry.is_dir()
 }
 
 /// Brings the index level with the journal, first restarting its count when the journal is

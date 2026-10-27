@@ -287,10 +287,11 @@ impl Survival {
         self.log.record(survived_line(error));
     }
 
-    /// Names the operation the loop is running, unless the failure already names one.
+    /// Names the operation the loop is running, unless the failure already names one. A
+    /// chain of the index's failures names each of its own.
     pub(super) fn tagged(&self, error: SessionError) -> SessionError {
         match error {
-            SessionError::During { .. } => error,
+            SessionError::During { .. } | SessionError::AfterEarlier { .. } => error,
             error => during(self.operation)(error),
         }
     }
