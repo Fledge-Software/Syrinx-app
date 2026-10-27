@@ -38,8 +38,11 @@ entry names it.
   a restored tab cannot tell whether its page was reached from a bank's or
   Google's sign-in. Such tabs, and tabs reopened with Ctrl Shift T or
   duplicated, therefore open tainted, as crash recovery already does, and
-  are read again once the owner navigates them from the address bar, the
-  palette, a bookmark, a tile or Home. Saving taint with each tab was
+  are read again only once the owner navigates the tab to a new address
+  from the address bar, the palette, a tile or Home (corrected 2026-10-27,
+  owner). A saved page that is restored at start-up and then opened, as
+  the tab itself or from a bookmark, is not read: the code fails closed
+  there and keeps doing so. Saving taint with each tab was
   rejected: it needs a schema change for the small gain of reading a
   restored ordinary page before the owner next navigates it.
 - **Excluding a site erases its stored page text at once; the switch stays
