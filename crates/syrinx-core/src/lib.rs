@@ -50,5 +50,5 @@ pub use tabs::{
     NewSavedItem, PageOrigin, RemovedSavedEntries, SETTINGS_ADDRESS, SavedEntryId, SavedFolder,
     SavedFolderId, SavedFolderSnapshot, SavedPage, SavedPageId, SavedPageSnapshot, SavedPlacement,
     SidebarRow, SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata, TabModel,
-    TabModelSnapshot, TabSnapshot, bulk_close_targets, saved_folder_contents,
+    TabModelSnapshot, TabSnapshot, saved_folder_contents,
 };

@@ -775,7 +775,7 @@ impl BrowserView {
             }
             MenuItem::ClearDownloads => self.downloads.clear_finished(),
             MenuItem::CloseActiveTab => {
-                if let Some(command) = close_opened_on(origin.active) {
+                if let Some(command) = close_opened_on(origin.active, &self.model) {
                     self.command(command);
                 }
             }
@@ -1238,9 +1238,17 @@ pub(super) struct MenuOpening {
 }
 
 /// The ⋯ menu's Close tab closes the tab that was active when the menu opened, never one
-/// selected since; with no tab active then, it closes nothing.
-fn close_opened_on(active: Option<TabId>) -> Option<SessionCommand> {
-    active.map(SessionCommand::CloseTab)
+/// selected since; with no tab active then, or that tab closed meanwhile, it closes nothing.
+fn close_opened_on(
+    active: Option<TabId>,
+    model: &syrinx_core::TabModelSnapshot,
+) -> Option<SessionCommand> {
+    let tab = active?;
+    model
+        .tabs
+        .iter()
+        .any(|open| open.id == tab)
+        .then_some(SessionCommand::CloseTab(tab))
 }
 
 /// The selection after an arrow, Home or End, skipping rows that cannot be selected; `None`
@@ -1590,12 +1598,34 @@ mod tests {
 
     #[test]
     fn the_sidebar_menus_close_tab_closes_the_tab_active_when_it_opened() {
-        let opened_on = syrinx_core::TabId::new(5).expect("synthetic tab id");
+        let mut tabs = syrinx_core::TabModel::new();
+        let mut open = || {
+            let metadata = syrinx_core::TabMetadata {
+                title: "Synthetic".to_owned(),
+                address: "https://example.test/".to_owned(),
+                favicon: None,
+                badge: None,
+            };
+            tabs.open(
+                syrinx_core::TabKind::Web,
+                metadata,
+                syrinx_core::Activation::Foreground,
+            )
+            .expect("synthetic tab opens")
+        };
+        let opened_on = open();
+        // Another tab became active after the menu opened; Close tab still closes the first.
+        let selected_since = open();
+        let model = tabs.snapshot();
+        assert_eq!(model.active_id, Some(selected_since));
         assert!(matches!(
-            close_opened_on(Some(opened_on)),
+            close_opened_on(Some(opened_on), &model),
             Some(SessionCommand::CloseTab(tab)) if tab == opened_on
         ));
-        assert!(close_opened_on(None).is_none());
+        assert!(close_opened_on(None, &model).is_none());
+        // A tab that closed while the menu was open is not closed again.
+        let gone = syrinx_core::TabId::new(999).expect("synthetic tab id");
+        assert!(close_opened_on(Some(gone), &model).is_none());
     }
 
     #[test]

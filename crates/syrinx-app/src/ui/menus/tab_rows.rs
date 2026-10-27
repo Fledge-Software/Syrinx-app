@@ -1,10 +1,10 @@
 //! Builds a sidebar row's menu and the bulk-close confirmation that takes its place, and
 //! runs their items (#95).
 
+use super::*;
 use crate::ui::row_menu::{
     ActionFocus, BulkClose, MenuOrigin, RowEntry, RowPlace, bulk_confirm_label, bulk_question,
 };
-use super::*;
 
 impl BrowserView {
     /// Opens a sidebar row's menu, or the ⋯ menu when the row offers nothing here (a folder

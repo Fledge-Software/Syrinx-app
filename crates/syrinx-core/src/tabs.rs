@@ -32,7 +32,7 @@ pub enum BulkScope {
 /// The ordinary tabs a bulk close would close, in display order, from `tabs` listed as
 /// (identity, is an open saved page). Open saved pages are spared; nothing closes when `keep`
 /// is not listed. The model's closes and the sidebar's question both read this one rule.
-pub fn bulk_close_targets(
+pub(crate) fn bulk_close_targets(
     tabs: impl IntoIterator<Item = (TabId, bool)>,
     scope: BulkScope,
     keep: TabId,
