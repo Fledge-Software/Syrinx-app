@@ -1813,7 +1813,7 @@ impl BrowserView {
         div()
             .size_full()
             .min_w_0()
-            .pr_1()
+            .pr(px(title_bar::CAPTION_GAP))
             .flex()
             .items_center()
             .child(

@@ -13,6 +13,15 @@ use crate::theme;
 /// Each caption button is a square as tall as the title bar, flush with its right edge.
 const CAPTION_BUTTON_SIZE: f32 = TITLE_BAR_HEIGHT;
 
+/// The gap between the title bar's own controls and the caption buttons; `title_contents` pads
+/// by it and the menus' corner subtracts it, so the drawn gap and the anchor cannot drift apart.
+pub(super) const CAPTION_GAP: f32 = 4.;
+
+/// The caption buttons' total width, from their size and count.
+pub(super) fn caption_buttons_width() -> f32 {
+    CAPTION_BUTTON_SIZE * CaptionButton::LEFT_TO_RIGHT.len() as f32
+}
+
 /// Native hit areas retain Windows dragging, snap, minimize and durable close callbacks.
 pub(super) fn title_bar(content: Div, maximized: bool) -> Div {
     div()
