@@ -571,3 +571,40 @@ fn emptying_a_cache_folder_removes_its_files_and_refuses_anything_else() {
     assert!(folder.path().join("nested").is_dir());
     assert!(folder.path().join("kept.bin").is_file());
 }
+
+#[test]
+fn a_failed_empty_keeps_the_index_metadata_so_the_next_open_retries() {
+    use std::os::windows::fs::OpenOptionsExt;
+    /// Windows' `FILE_SHARE_READ`: others may read the file but not delete it.
+    const SHARE_READ_ONLY: u32 = 0x1;
+
+    let fixture = Fixture::new();
+    let lease = prepare(&fixture.root.join("data"));
+    let folder = lease
+        .cache_folder("synthetic-cache")
+        .expect("create a synthetic cache folder");
+    // The held segment is named to list after the metadata, so listing order cannot save it.
+    for name in ["0a1b2c.idx", ".managed.json", "meta.json", "zz-synthetic.store"] {
+        fs::write(folder.path().join(name), b"synthetic").expect("write synthetic file");
+    }
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_READ_ONLY)
+        .open(folder.path().join("zz-synthetic.store"))
+        .expect("hold a synthetic segment");
+
+    assert!(folder.empty().is_err(), "a held segment cannot be deleted");
+    // The metadata survives, so the next open sees the old index and empties it again.
+    assert!(folder.path().join("meta.json").is_file());
+    assert!(folder.path().join(".managed.json").is_file());
+    assert!(!folder.path().join("0a1b2c.idx").exists());
+
+    drop(held);
+    folder.empty().expect("empty once the segment is free");
+    assert!(
+        fs::read_dir(folder.path())
+            .expect("list the synthetic cache folder")
+            .next()
+            .is_none()
+    );
+}
