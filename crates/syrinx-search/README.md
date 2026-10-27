@@ -110,6 +110,22 @@ levels, arrives as `ClearScope::Elsewhere` and only advances the generation. An
 index ahead of its journal (the journal was lost and recreated) cannot know
 what the new journal cleared: its owner calls `restart_clears`, which removes
 all page text and counts from generation 0 again, and then applies the journal.
+An owner-confirmed journal repair restarts generations at the database's, so
+Syrinx calls `restart_clears` before rebuilding the journal; if the index cannot
+open or restart, it empties the index's folder instead. If the folder cannot be
+emptied (another program holds a file open, say), the repair is refused and
+that start fails, telling the owner to free or clear the `fulltext` folder; the
+next start offers the repair again. A file or link where the folder belongs is
+only reported, since no index is ever opened through it.
+
+Emptying the folder removes every namespace, plugin feeds included, not only
+page text. That is unavoidable: an index that will not open, or will not
+commit, cannot be read to remove page text alone, and leaving its files would
+strand that page text past D40. It is also what already happens to a damaged
+index. A feed's text is a cache of what the plugin keeps, so it is rebuilt by
+feeding it again: plugin feeds (#141) must notice an emptied index, which no
+longer holds their documents, and re-feed from their source. The restart
+itself, the usual path, leaves feeds untouched.
 
 Search does not filter by age, so whoever owns the index calls `expire` at
 start-up and at least daily. A feed's tombstones never expire; `reset` is how

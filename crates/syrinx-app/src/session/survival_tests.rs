@@ -101,6 +101,12 @@ fn stop_classification_keeps_damaged_storage_fatal_and_one_refused_write_surviva
         SessionError::Search(syrinx_search::SearchError::TooManyEntries),
         SessionError::EventReceiverClosed,
         SessionError::ClockUnavailable,
+        SessionError::AfterEarlier {
+            earlier: Box::new(busy()),
+            error: Box::new(SessionError::IndexFolder(
+                LocationError::UnexpectedEntryKind,
+            )),
+        },
     ] {
         let tagged = stop::during("switching tabs")(error.clone());
         assert!(stop::survivable(&error), "{error:?}");
@@ -138,9 +144,19 @@ fn stop_classification_keeps_damaged_storage_fatal_and_one_refused_write_surviva
         },
         SessionError::WorkerPanicked,
         SessionError::RecoveryUnavailable,
+        // A chain stops the loop when either of its failures would.
+        SessionError::AfterEarlier {
+            earlier: Box::new(SessionError::WorkerPanicked),
+            error: Box::new(busy()),
+        },
     ] {
         assert!(!stop::survivable(&error), "{error:?}");
     }
+    // A window that stopped listening is recognised at the end of a chain.
+    assert!(stop::window_lost(&SessionError::AfterEarlier {
+        earlier: Box::new(busy()),
+        error: Box::new(SessionError::EventReceiverClosed),
+    }));
 }
 
 #[test]
