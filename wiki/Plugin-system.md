@@ -78,6 +78,9 @@ fill in the 2026-10-15 outline:
 - **2026-10-24.** Phase 2 is approved and re-cut for WASM plugins: the host
   crate is `crates/syrinx-plugin-host`, the only crate that links wasmtime,
   and the WIT package lives at `wit/v0_1/` in the Syrinx repository.
+- **2026-10-26.** The owner let the plugin host start before Plan 1's exit
+  (P1-40), with wasmtime pinned at exactly `=48.0.7`; Plan 1's open work
+  stays open.
 
 ## The order of work
 
@@ -85,7 +88,7 @@ The 2026-10-15 decision held all plugin work until Plan 1 closes, which is
 its last slice, the owner's one-week daily-driver acceptance. The order in
 force since 2026-10-20 is: the plugin runtime, then the template, then
 Notes, then Forge. The research note and the template may run alongside
-Plan 1; the plugin host (#28, #29) still waits for Plan 1's exit.
+Plan 1, and since 2026-10-26 so may the plugin host (#28 first).
 
 1. **[#26](https://github.com/Fledge-Software/Syrinx-app/issues/26), the
    research note.** It compares the WASM runtime and interface choices and
