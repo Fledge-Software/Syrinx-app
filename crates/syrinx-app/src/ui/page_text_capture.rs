@@ -1,60 +1,51 @@
 //! The window's side of page-text capture (#54): the owner's setting and excluded sites, the
 //! policy the page host reads by, and which captured text the session worker keeps (D35, D40).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use syrinx_core::{PageTextPolicy, PolicyError, TabId, TabModelSnapshot, excluded_site};
 use syrinx_platform::browser::{BrowserCommand, CapturedText, PageTextOutcome};
 
 use super::BrowserView;
-use crate::session::{CAPTURE_KEY, CAPTURE_ON as ON, CapturedPage, SessionCommand};
+use crate::session::{self, CapturedPage, PageTextSetting, SessionCommand};
 
-/// The owner's excluded sites: normalized host names, separated by spaces, in the order added.
-pub(super) const EXCLUDED_SITES_KEY: &str = "page_text.excluded_sites";
-
-const OFF: &str = "off";
-
-/// The capture setting as the window holds it, and the tabs whose next page must not be read.
+/// The capture setting as the window holds it, and what it knows about each tab's page.
 #[derive(Default)]
 pub(super) struct PageTextCapture {
-    /// Off until the owner switches it on (D35).
-    on: bool,
-    excluded: Vec<String>,
+    setting: PageTextSetting,
+    /// Set when the stored list could not be read; capture stays off until switched on again.
+    unreadable: bool,
     /// The policy the page host was last sent, rebuilt whenever the setting changes.
     policy: Option<PageTextPolicy>,
     /// Tabs whose next page puts back an earlier one: restored at start-up, reopened or
     /// duplicated. Taint is not saved, so such a page is never read until the owner
     /// navigates the tab (P1-25's production recommendation).
     reopened: HashSet<TabId>,
-    /// Set when the stored list could not be read; capture stays off until switched on again.
-    pub(super) unreadable: bool,
+    /// Unix seconds when each tab's page last finished loading. A capture is dated by this
+    /// visit, so a clear of that time removes it even when the capture arrives later.
+    loaded: HashMap<u64, i64>,
 }
 
 impl PageTextCapture {
-    /// The stored setting; an unreadable site list keeps capture off rather than read a site
-    /// the owner may have excluded.
-    pub(super) fn restored(settings: &BTreeMap<String, String>) -> Self {
-        let on = settings.get(CAPTURE_KEY).is_some_and(|value| value == ON);
-        let (excluded, unreadable) = match settings.get(EXCLUDED_SITES_KEY) {
-            None => (Vec::new(), false),
-            Some(stored) => parse_sites(stored),
-        };
-        let mut capture = Self {
-            on: on && !unreadable,
-            excluded,
-            unreadable,
-            ..Self::default()
-        };
-        capture.rebuild_policy();
-        capture
+    /// Takes the stored setting, keeping what is known about the tabs.
+    pub(super) fn restore(&mut self, settings: &BTreeMap<String, String>) {
+        let restored = PageTextSetting::restored(settings);
+        self.setting = restored.setting;
+        self.unreadable = restored.unreadable;
+        self.rebuild_policy();
     }
 
     pub(super) fn is_on(&self) -> bool {
-        self.on
+        self.setting.on
     }
 
     pub(super) fn excluded(&self) -> &[String] {
-        &self.excluded
+        &self.setting.excluded
+    }
+
+    /// Whether the stored list could not be read, which keeps capture off.
+    pub(super) fn unreadable(&self) -> bool {
+        self.unreadable
     }
 
     /// The policy for the page host: `None` while capture is off.
@@ -62,38 +53,35 @@ impl PageTextCapture {
         self.policy.clone()
     }
 
-    /// Switches capture on or off; returns the settings to save.
-    pub(super) fn switch(&mut self, on: bool) -> Vec<(String, String)> {
-        self.on = on;
+    /// Switches capture on or off; returns the setting to save.
+    pub(super) fn switch(&mut self, on: bool) -> PageTextSetting {
+        self.setting.on = on;
         self.unreadable = false;
         self.rebuild_policy();
-        self.stored()
+        self.setting.clone()
     }
 
-    /// Adds a site to the exclusion list; returns the settings to save, or why it was refused.
-    pub(super) fn add_exclusion(
-        &mut self,
-        entry: &str,
-    ) -> Result<Vec<(String, String)>, &'static str> {
+    /// Adds a site to the exclusion list; returns the setting to save, or why it was refused.
+    pub(super) fn add_exclusion(&mut self, entry: &str) -> Result<PageTextSetting, &'static str> {
         let site = excluded_site(entry)
             .map_err(|_| "Enter a site such as example.com, or paste its address.")?;
-        if self.excluded.contains(&site) {
+        if self.setting.excluded.contains(&site) {
             return Err("That site is already excluded.");
         }
-        self.excluded.push(site);
+        self.setting.excluded.push(site);
         self.rebuild_policy();
-        Ok(self.stored())
+        Ok(self.setting.clone())
     }
 
-    /// Takes a site off the exclusion list; returns the settings to save.
-    pub(super) fn remove_exclusion(&mut self, site: &str) -> Vec<(String, String)> {
-        self.excluded.retain(|excluded| excluded != site);
+    /// Takes a site off the exclusion list; returns the setting to save.
+    pub(super) fn remove_exclusion(&mut self, site: &str) -> PageTextSetting {
+        self.setting.excluded.retain(|excluded| excluded != site);
         self.rebuild_policy();
-        self.stored()
+        self.setting.clone()
     }
 
-    /// Keeps the reopened marks level with a new model: at start-up every restored tab is
-    /// marked, later only the tabs the worker reports as reopened or duplicated.
+    /// Keeps the tab marks level with a new model: at start-up every restored tab is marked
+    /// reopened, later only the tabs the worker reports as reopened or duplicated.
     pub(super) fn tabs_changed(
         &mut self,
         model: &TabModelSnapshot,
@@ -106,6 +94,8 @@ impl PageTextCapture {
         self.reopened.extend(reopened.iter().copied());
         self.reopened
             .retain(|id| model.tabs.iter().any(|tab| tab.id == *id));
+        self.loaded
+            .retain(|id, _| model.tabs.iter().any(|tab| tab.id.get() == *id));
     }
 
     /// The owner chose an address for the tab, so its next page is Syrinx's own navigation.
@@ -127,11 +117,18 @@ impl PageTextCapture {
         self.reopened.remove(&id);
     }
 
-    /// The text to keep from a capture, judged by the setting now rather than when the
-    /// snapshot was taken: one already parsing when capture was switched off, or when the
-    /// owner excluded its site, still arrives and is dropped here.
+    /// The tab's page finished loading at `at`, which dates any capture of it.
+    pub(super) fn page_loaded(&mut self, id: u64, at: i64) {
+        self.loaded.insert(id, at);
+    }
+
+    /// The text to keep from tab `id`'s capture, judged by the setting now rather than when
+    /// the snapshot was taken: one already parsing when capture was switched off, or when the
+    /// owner excluded its site, still arrives and is dropped here. A capture whose visit time
+    /// is unknown is dropped too, since no clear could be matched against it.
     pub(super) fn keepable(
         &self,
+        id: u64,
         captured: CapturedText,
         title: Option<&str>,
     ) -> Option<CapturedPage> {
@@ -142,53 +139,33 @@ impl PageTextCapture {
         if captured.text.trim().is_empty() {
             return None;
         }
+        let visited_at = *self.loaded.get(&id)?;
         let address = without_fragment(&captured.address).to_owned();
         let title = title.unwrap_or(&address).to_owned();
         Some(CapturedPage {
             address,
             title,
             text: captured.text,
+            visited_at,
         })
     }
 
     fn rebuild_policy(&mut self) {
-        if !self.on {
+        if !self.setting.on {
             self.policy = None;
             return;
         }
         // Every listed site was normalized when added, so this should not fail; if it does,
         // capture goes off and says so rather than read without the owner's list.
-        match PageTextPolicy::new(&self.excluded) {
+        match PageTextPolicy::new(&self.setting.excluded) {
             Ok(policy) => self.policy = Some(policy),
             Err(PolicyError) => {
-                self.on = false;
+                self.setting.on = false;
                 self.unreadable = true;
                 self.policy = None;
             }
         }
     }
-
-    fn stored(&self) -> Vec<(String, String)> {
-        let on = if self.on { ON } else { OFF };
-        vec![
-            (CAPTURE_KEY.to_owned(), on.to_owned()),
-            (EXCLUDED_SITES_KEY.to_owned(), self.excluded.join(" ")),
-        ]
-    }
-}
-
-/// The stored sites, and whether any entry could not be read.
-fn parse_sites(stored: &str) -> (Vec<String>, bool) {
-    let mut sites = Vec::new();
-    let mut unreadable = false;
-    for entry in stored.split_whitespace() {
-        match excluded_site(entry) {
-            Ok(site) if !sites.contains(&site) => sites.push(site),
-            Ok(_) => {}
-            Err(_) => unreadable = true,
-        }
-    }
-    (sites, unreadable)
 }
 
 /// The address the index keys a page by: a fragment names a place in the same page.
@@ -199,11 +176,7 @@ fn without_fragment(address: &str) -> &str {
 impl BrowserView {
     /// Reads the stored setting before the first state arrives, and tells the page host.
     pub(super) fn restore_page_text(&mut self, settings: &BTreeMap<String, String>) {
-        let reopened = std::mem::take(&mut self.page_text.reopened);
-        self.page_text = PageTextCapture {
-            reopened,
-            ..PageTextCapture::restored(settings)
-        };
+        self.page_text.restore(settings);
         if self.browser.is_some() {
             self.send_page_text_policy();
         }
@@ -216,10 +189,18 @@ impl BrowserView {
         self.page_command(BrowserCommand::SetPageTextPolicy(policy));
     }
 
-    /// Saves and applies a changed setting.
-    pub(super) fn page_text_setting_changed(&mut self, entries: Vec<(String, String)>) {
+    /// Saves and applies a changed setting; the worker erases what it no longer allows.
+    pub(super) fn page_text_setting_changed(&mut self, setting: PageTextSetting) {
         self.send_page_text_policy();
-        self.command(SessionCommand::SaveSettings(entries));
+        self.command(SessionCommand::SavePageTextSetting(setting));
+    }
+
+    /// Notes when a tab's page finished loading. Without a clock no visit is recorded, so a
+    /// capture of that page is not kept.
+    pub(super) fn page_text_page_loaded(&mut self, id: u64) {
+        if let Ok(now) = session::utc_seconds() {
+            self.page_text.page_loaded(id, now);
+        }
     }
 
     /// Hands a capture the setting still allows to the worker; every other outcome is only
@@ -229,7 +210,7 @@ impl BrowserView {
             return;
         };
         let title = self.captured_page_title(id, &captured.address);
-        if let Some(page) = self.page_text.keepable(captured, title.as_deref()) {
+        if let Some(page) = self.page_text.keepable(id, captured, title.as_deref()) {
             self.command(SessionCommand::StorePageText(page));
         }
     }
@@ -250,12 +231,9 @@ mod tests {
 
     use super::*;
 
-    fn settings(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
-        entries
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .collect()
-    }
+    /// The synthetic tab every capture below comes from, and when its page loaded.
+    const TAB: u64 = 7;
+    const LOADED_AT: i64 = 1_700_000_000;
 
     fn captured(address: &str, text: &str) -> CapturedText {
         CapturedText {
@@ -272,39 +250,38 @@ mod tests {
     fn switched_on() -> PageTextCapture {
         let mut capture = PageTextCapture::default();
         capture.switch(true);
+        capture.page_loaded(TAB, LOADED_AT);
         capture
     }
 
     #[test]
     fn capture_is_off_until_the_owner_switches_it_on() {
-        let fresh = PageTextCapture::restored(&BTreeMap::new());
-        assert!(!fresh.is_on());
-        assert!(fresh.policy().is_none());
-        let odd = PageTextCapture::restored(&settings(&[(CAPTURE_KEY, "yes")]));
-        assert!(
-            !odd.is_on(),
-            "only the exact stored value switches capture on"
-        );
-        let on = PageTextCapture::restored(&settings(&[(CAPTURE_KEY, ON)]));
-        assert!(on.is_on());
-        assert!(on.policy().is_some());
+        let mut capture = PageTextCapture::default();
+        capture.restore(&BTreeMap::new());
+        assert!(!capture.is_on());
+        assert!(capture.policy().is_none());
+        let saved = capture.switch(true);
+        capture.restore(&saved.entries().into_iter().collect());
+        assert!(capture.is_on());
+        assert!(capture.policy().is_some());
     }
 
     #[test]
     fn an_unreadable_site_list_keeps_capture_off() {
-        let stored = settings(&[
-            (CAPTURE_KEY, ON),
-            (EXCLUDED_SITES_KEY, "owner.test not/a/site"),
-        ]);
-        let capture = PageTextCapture::restored(&stored);
-        assert!(capture.unreadable);
+        let mut capture = PageTextCapture::default();
+        let stored = PageTextSetting {
+            on: true,
+            excluded: vec!["owner.test".to_owned(), "not/a/site".to_owned()],
+        };
+        capture.restore(&stored.entries().into_iter().collect());
+        assert!(capture.unreadable());
         assert!(!capture.is_on());
         assert!(capture.policy().is_none());
         assert_eq!(capture.excluded(), ["owner.test"]);
     }
 
     #[test]
-    fn the_setting_round_trips_through_the_stored_entries() {
+    fn exclusions_are_normalized_and_refused_twice() {
         let mut capture = switched_on();
         capture
             .add_exclusion("https://Owner.test/account")
@@ -312,17 +289,23 @@ mod tests {
         let saved = capture
             .add_exclusion("second.example.test")
             .expect("second site");
-        let restored = PageTextCapture::restored(&saved.into_iter().collect());
-        assert!(restored.is_on());
-        assert_eq!(restored.excluded(), ["owner.test", "second.example.test"]);
+        assert_eq!(saved.excluded, ["owner.test", "second.example.test"]);
         assert!(
             capture.add_exclusion("owner.test").is_err(),
             "no duplicate entries"
         );
         assert!(capture.add_exclusion("has space.test").is_err());
         let saved = capture.remove_exclusion("owner.test");
-        let restored = PageTextCapture::restored(&saved.into_iter().collect());
-        assert_eq!(restored.excluded(), ["second.example.test"]);
+        assert_eq!(saved.excluded, ["second.example.test"]);
+    }
+
+    #[test]
+    fn restoring_the_setting_keeps_what_is_known_about_the_tabs() {
+        let mut capture = switched_on();
+        capture.restore(&BTreeMap::new());
+        capture.switch(true);
+        let page = capture.keepable(TAB, captured("https://page.example.test/", "words"), None);
+        assert!(page.is_some(), "the tab's load time survives a restore");
     }
 
     #[test]
@@ -330,6 +313,7 @@ mod tests {
         let mut capture = switched_on();
         capture.switch(false);
         let page = capture.keepable(
+            TAB,
             captured("https://page.example.test/", "synthetic words"),
             None,
         );
@@ -348,7 +332,7 @@ mod tests {
         ] {
             assert!(
                 capture
-                    .keepable(captured(address, "synthetic words"), None)
+                    .keepable(TAB, captured(address, "synthetic words"), None)
                     .is_none(),
                 "{address}"
             );
@@ -356,10 +340,11 @@ mod tests {
     }
 
     #[test]
-    fn an_allowed_page_is_kept_by_its_address_without_a_fragment() {
+    fn an_allowed_page_is_kept_by_its_address_without_a_fragment_and_dated_by_its_load() {
         let capture = switched_on();
         let page = capture
             .keepable(
+                TAB,
                 captured("https://page.example.test/a?b=1#section", "synthetic words"),
                 Some("Synthetic title"),
             )
@@ -367,15 +352,27 @@ mod tests {
         assert_eq!(page.address, "https://page.example.test/a?b=1");
         assert_eq!(page.title, "Synthetic title");
         assert_eq!(page.text, "synthetic words");
+        assert_eq!(page.visited_at, LOADED_AT);
         let untitled = capture
-            .keepable(captured("https://page.example.test/", "words"), None)
+            .keepable(TAB, captured("https://page.example.test/", "words"), None)
             .expect("an untitled synthetic page");
         assert_eq!(untitled.title, "https://page.example.test/");
         assert!(
             capture
-                .keepable(captured("https://page.example.test/", " \n "), None)
+                .keepable(TAB, captured("https://page.example.test/", " \n "), None)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_capture_from_a_tab_with_no_finished_load_is_not_kept() {
+        let capture = switched_on();
+        let page = capture.keepable(
+            TAB + 1,
+            captured("https://page.example.test/", "synthetic words"),
+            None,
+        );
+        assert!(page.is_none(), "no visit time to match a clear against");
     }
 
     fn model_with(addresses: &[&str]) -> (TabModel, Vec<TabId>) {
@@ -428,9 +425,11 @@ mod tests {
         capture.tabs_changed(&model.snapshot(), false, &[reopened]);
         assert!(!reopens(&capture, fresh));
         assert!(reopens(&capture, reopened));
-        // A closed tab's mark goes with it.
+        // A closed tab's marks go with it.
+        capture.page_loaded(reopened.get(), LOADED_AT);
         model.close(reopened).expect("close synthetic tab");
         capture.tabs_changed(&model.snapshot(), false, &[]);
         assert!(capture.reopened.is_empty());
+        assert!(!capture.loaded.contains_key(&reopened.get()));
     }
 }

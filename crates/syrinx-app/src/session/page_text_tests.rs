@@ -663,12 +663,19 @@ fn a_damaged_index_is_emptied_and_started_afresh() {
     fixture.cleanup();
 }
 
-/// A synthetic capture as the window hands it over.
+/// A synthetic capture as the window hands it over, of a page that loaded a minute ago.
 fn captured(address: &str, body: &str) -> CapturedPage {
+    let now = utc_seconds().expect("synthetic clock");
+    visited(address, body, now - 60)
+}
+
+/// A synthetic capture of a page that finished loading at `visited_at`.
+fn visited(address: &str, body: &str, visited_at: i64) -> CapturedPage {
     CapturedPage {
         address: address.to_owned(),
         title: "Synthetic captured page".to_owned(),
         text: body.to_owned(),
+        visited_at,
     }
 }
 
@@ -744,13 +751,14 @@ fn a_later_capture_replaces_the_text_and_seven_days_remove_it() {
     let now = utc_seconds().expect("synthetic clock");
     let address = "https://replaced.example.test/";
     let (lease, mut page_text) = open_page_text(&fixture);
-    page_text.store(captured(address, "firstcapture words"), now);
-    page_text.store(captured(address, "secondcapture words"), now + 60);
+    page_text.store(visited(address, "firstcapture words", now), now);
+    // Within the same second, the later capture still replaces the earlier one.
+    page_text.store(visited(address, "secondcapture words", now), now);
     let index = page_text.index().expect("the index is open");
     assert!(pages_with(index, "firstcapture").is_empty());
     assert_eq!(pages_with(index, "secondcapture"), [address]);
 
-    page_text.expire_if_due(now + 60 + PAGE_RETENTION_SECONDS + 1);
+    page_text.expire_if_due(now + PAGE_RETENTION_SECONDS + 1);
     let index = page_text.index().expect("the index is open");
     assert!(pages_with(index, "secondcapture").is_empty());
     assert_eq!(page_text.take_problem(), Ok(()));
@@ -760,7 +768,7 @@ fn a_later_capture_replaces_the_text_and_seven_days_remove_it() {
 }
 
 #[test]
-fn an_address_too_long_to_key_is_left_unread_and_the_index_stays_open() {
+fn an_address_too_long_to_key_is_left_unread_reported_and_the_index_stays_open() {
     let fixture = Fixture::new();
     let now = utc_seconds().expect("synthetic clock");
     let long = format!("https://long.example.test/{}", "a".repeat(4_096));
@@ -776,18 +784,27 @@ fn an_address_too_long_to_key_is_left_unread_and_the_index_stays_open() {
         pages_with(index, "shortaddress"),
         ["https://short.example.test/"]
     );
-    assert_eq!(page_text.take_problem(), Ok(()));
+    // The skipped page is reported, without its address.
+    let problem = page_text.take_problem().expect_err("the skip is reported");
+    assert!(
+        !problem.to_string().contains("long.example.test"),
+        "{problem}"
+    );
     drop(page_text);
     drop(lease);
     fixture.cleanup();
 }
 
-/// The settings a switch-off saves, as the window sends them.
-fn capture(value: &str) -> SessionCommand {
-    SessionCommand::SaveSettings(vec![
-        (CAPTURE_KEY.to_owned(), value.to_owned()),
-        ("page_text.excluded_sites".to_owned(), String::new()),
-    ])
+/// The setting as the window sends it, with no excluded sites.
+fn capture(on: bool) -> SessionCommand {
+    excluding(on, &[])
+}
+
+fn excluding(on: bool, sites: &[&str]) -> SessionCommand {
+    SessionCommand::SavePageTextSetting(PageTextSetting {
+        on,
+        excluded: sites.iter().map(|site| (*site).to_owned()).collect(),
+    })
 }
 
 #[test]
@@ -796,13 +813,13 @@ fn switching_capture_off_erases_page_text_at_once_and_keeps_notes() {
     seed_index(&fixture, &[note("kept")]);
     let (handle, mut events) = fixture.start();
     state(&mut events);
-    send(&handle, capture(CAPTURE_ON));
+    send(&handle, capture(true));
     let body = format!("{WORD} erasedcapture words");
     send(
         &handle,
         SessionCommand::StorePageText(captured("https://erased.example.test/", &body)),
     );
-    send(&handle, capture("off"));
+    send(&handle, capture(false));
     stop(handle, &mut events);
 
     let index = FullText::open(&index_folder(&fixture)).expect("reopen synthetic index");
@@ -826,7 +843,7 @@ fn page_text_left_behind_while_capture_is_off_is_erased_at_start_up() {
     // An erase cut short: the setting is saved off, the text is still there.
     let (handle, mut events) = fixture.start();
     state(&mut events);
-    send(&handle, capture("off"));
+    send(&handle, capture(false));
     stop(handle, &mut events);
     seed_index(&fixture, &[page("left", now - 60), note("kept")]);
 
@@ -846,7 +863,7 @@ fn erased_page_text_does_not_return_with_a_restored_backup() {
     seed_index(&fixture, &[page("before", now - 600)]);
     let (handle, mut events) = fixture.start();
     state(&mut events);
-    send(&handle, capture("off"));
+    send(&handle, capture(false));
     stop(handle, &mut events);
     assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
 
@@ -870,7 +887,7 @@ fn an_erase_the_index_cannot_make_is_reported_not_swallowed() {
     // Close the index the way a failed operation does, then switch capture off.
     page_text.store(captured("https://kept.example.test/", "words"), now);
     page_text.close_for_test();
-    page_text.erase();
+    page_text.erase(now);
     assert!(page_text.take_problem().is_err());
     drop(page_text);
     drop(lease);
@@ -878,21 +895,141 @@ fn an_erase_the_index_cannot_make_is_reported_not_swallowed() {
 }
 
 #[test]
-fn only_a_saved_value_other_than_on_counts_as_switched_off() {
-    use page_text::capture_switched_off as off;
-    assert!(off(Some("off")));
-    assert!(off(Some("garbled")));
-    assert!(!off(Some(CAPTURE_ON)));
-    assert!(!off(None), "never set: nothing was ever captured");
+fn excluding_a_site_erases_its_text_and_its_subdomains_and_spares_lookalikes() {
+    let fixture = Fixture::new();
+    seed_index(&fixture, &[note("kept")]);
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(true));
+    for address in [
+        "https://owner.test/account",
+        "https://www.owner.test/",
+        "https://notowner.test/",
+        "https://owner.test.example/",
+    ] {
+        let body = format!("{WORD} exclusioncapture words");
+        send(
+            &handle,
+            SessionCommand::StorePageText(captured(address, &body)),
+        );
+    }
+    send(&handle, excluding(true, &["owner.test"]));
+    stop(handle, &mut events);
+
+    let mut kept = stored_ids(&fixture, Namespace::page()).0;
+    kept.sort();
+    assert_eq!(
+        kept,
+        ["https://notowner.test/", "https://owner.test.example/"]
+    );
+    assert_eq!(stored_ids(&fixture, notes()).0, ["kept"]);
+    fixture.cleanup();
+}
+
+#[test]
+fn text_of_an_excluded_site_left_behind_is_erased_at_start_up() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, excluding(true, &["owner.test"]));
+    stop(handle, &mut events);
+    // An erase cut short: the site is excluded, its text is still there.
+    seed_index(
+        &fixture,
+        &[
+            page("https://www.owner.test/", now - 60),
+            page("https://other.test/", now - 60),
+        ],
+    );
+
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    stop(handle, &mut events);
+    assert_eq!(
+        stored_ids(&fixture, Namespace::page()).0,
+        ["https://other.test/"]
+    );
+    fixture.cleanup();
+}
+
+#[test]
+fn a_capture_of_a_page_visited_before_a_history_clear_never_lands_after_it() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(true));
+    // Clear browsing data's last hour, as the window computes it.
+    clear_history(&handle, &mut events, now - 3_600, now + 1);
+    // A capture that was still in flight arrives after the clear; one of a page visited
+    // after the clear is kept.
+    let before = format!("{WORD} inflightcapture words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(visited("https://flight.example.test/", &before, now - 2)),
+    );
+    let after = format!("{WORD} aftercapture words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(visited("https://after.example.test/", &after, now + 5)),
+    );
+    stop(handle, &mut events);
+
+    let index = FullText::open(&index_folder(&fixture)).expect("reopen synthetic index");
+    assert!(pages_with(&index, "inflightcapture").is_empty());
+    assert_eq!(
+        pages_with(&index, "aftercapture"),
+        ["https://after.example.test/"]
+    );
+    fixture.cleanup();
+}
+
+#[test]
+fn a_capture_stored_just_before_a_clear_is_dated_by_its_visit_and_cleared() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(true));
+    let body = format!("{WORD} visitdatedcapture words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(visited("https://dated.example.test/", &body, now - 30)),
+    );
+    // A range that holds the visit but ends before the store: only the visit's date matches.
+    clear_history(&handle, &mut events, now - 60, now - 10);
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    fixture.cleanup();
+}
+
+#[test]
+fn a_capture_from_before_a_switch_off_is_not_kept_after_capture_comes_back_on() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(true));
+    send(&handle, capture(false));
+    send(&handle, capture(true));
+    let body = format!("{WORD} togglecapture words");
+    send(
+        &handle,
+        SessionCommand::StorePageText(visited("https://toggle.example.test/", &body, now - 2)),
+    );
+    stop(handle, &mut events);
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    fixture.cleanup();
 }
 
 #[test]
 fn a_captured_page_never_shows_its_address_title_or_text_in_debug_output() {
-    let page = CapturedPage {
-        address: "https://debug-sentinel.example.test/".to_owned(),
-        title: "debug-sentinel title".to_owned(),
-        text: "debug-sentinel words".to_owned(),
-    };
+    let page = visited(
+        "https://debug-sentinel.example.test/",
+        "debug-sentinel words",
+        0,
+    );
     assert!(!format!("{page:?}").contains("sentinel"));
     let command = SessionCommand::StorePageText(page);
     assert!(!format!("{command:?}").contains("sentinel"));

@@ -73,6 +73,9 @@ impl SessionCommand {
             Self::Usage(_) => CHANGING_USAGE,
             Self::UsageReport { .. } => BUILDING_USAGE_REPORT,
             Self::StorePageText(_) => "keeping a page's text",
+            Self::SavePageTextSetting(_) => {
+                "saving the page text setting (Syrinx tries again until it is saved)"
+            }
             Self::Shutdown => "shutting down",
         }
     }

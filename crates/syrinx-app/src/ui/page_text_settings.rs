@@ -1,6 +1,5 @@
 //! Settings' page-text rows (#54): the capture switch, the owner's excluded sites and the
-//! field that adds one. The switch's text never promises that every `no-store` page is
-//! skipped, because WebView2 can hide a repeated header (F2).
+//! field that adds one.
 
 use gpui::{
     AppContext, Context, Div, Entity, FontWeight, InteractiveElement, ParentElement, Role,
@@ -20,10 +19,11 @@ use crate::controls::control;
 use crate::text_field;
 use crate::theme::rgba;
 
+/// Never promises that every `no-store` page is skipped: WebView2 can hide a repeated header (F2).
 const CAPTURE_DESCRIPTION: &str = "Keeps the words on pages you open after switching this on, \
     on this computer only, and deletes them after seven days, or at once when you switch \
-    this off. Never reads Google's sites, \
-    banks and payment sites, pages with a password or card field, or the sites you exclude. \
+    this off. Never reads Google's sites, banks and payment sites, pages with a password or \
+    card field, or the sites you exclude, and excluding a site deletes what was kept from it. \
     Pages that ask not to be stored are skipped whenever Syrinx can see that request.";
 
 /// The open "add a site" field, created on the owner's click like the tile form.
@@ -46,7 +46,7 @@ impl BrowserView {
             .flex_col()
             .gap(px(10.))
             .child(self.capture_switch_row(palette, cx));
-        if self.page_text.unreadable {
+        if self.page_text.unreadable() {
             section = section.child(note(
                 palette,
                 "Syrinx could not read part of your excluded sites, so page text is off. \
@@ -62,8 +62,8 @@ impl BrowserView {
         let on = self.page_text.is_on();
         let switch = switch_control("page-text-capture", "Remember page text", on, palette)
             .on_click(cx.listener(move |this, _, _, cx| {
-                let entries = this.page_text.switch(!on);
-                this.page_text_setting_changed(entries);
+                let setting = this.page_text.switch(!on);
+                this.page_text_setting_changed(setting);
                 cx.notify();
             }));
         entry_row(palette, "Remember page text", CAPTURE_DESCRIPTION, switch)
@@ -93,8 +93,8 @@ impl BrowserView {
             )
             .child("Remove")
             .on_click(cx.listener(move |this, _, _, cx| {
-                let entries = this.page_text.remove_exclusion(&removed);
-                this.page_text_setting_changed(entries);
+                let setting = this.page_text.remove_exclusion(&removed);
+                this.page_text_setting_changed(setting);
                 cx.notify();
             }));
             rows = rows.child(
@@ -191,9 +191,9 @@ impl BrowserView {
         };
         let entry = field.input.read(cx).value().to_string();
         match self.page_text.add_exclusion(&entry) {
-            Ok(entries) => {
+            Ok(setting) => {
                 self.page_text_site = None;
-                self.page_text_setting_changed(entries);
+                self.page_text_setting_changed(setting);
             }
             Err(message) => field.error = Some(message),
         }

@@ -2,6 +2,7 @@
 
 use std::{fmt, fs};
 
+use syrinx_core::address_within_site;
 use syrinx_platform::{CacheFolder, WindowsDirectoryLease};
 use syrinx_search::fulltext::{
     Change, ClearRequest, ClearScope, FullText, FullTextDocument, FullTextError, Namespace,
@@ -10,11 +11,6 @@ use syrinx_store::deletion::{DeletionCategory, DeletionLog, DeletionRequest};
 use syrinx_store::{DirectoryLease, LocationError};
 
 use super::{SessionError, deletions, retention, stop};
-
-/// Whether page text is captured: `on`, or anything else for off (#54).
-pub const CAPTURE_KEY: &str = "page_text.capture";
-/// The one stored value that switches capture on.
-pub const CAPTURE_ON: &str = "on";
 
 /// The index's folder beside the database. Backups copy only the database, so the index stays
 /// outside D13's snapshots as D40 requires.
@@ -36,6 +32,11 @@ pub(super) struct PageText {
     /// The failures the owner has not been shown yet, each named with what the index was
     /// doing; a later one is kept after an earlier one, never in its place.
     problem: Option<SessionError>,
+    /// The clears and erases made this session, which a capture still in flight must not
+    /// outlive (#54).
+    fences: Vec<Fence>,
+    /// The revision the last stored capture took, so a later one always replaces it.
+    last_revision: u64,
 }
 
 impl PageText {
@@ -54,6 +55,8 @@ impl PageText {
             folder,
             expiry_due: 0,
             problem,
+            fences: Vec::new(),
+            last_revision: 0,
         }
     }
 
@@ -86,25 +89,73 @@ impl PageText {
     }
 
     /// Keeps one page's text for D40's seven days, replacing an earlier capture of its address.
+    /// A page visited before a clear or erase that covers it is not kept, however late its
+    /// capture arrives.
     pub(super) fn store(&mut self, page: CapturedPage, now: i64) {
+        if self.fences.iter().any(|fence| fence.covers(&page)) {
+            return;
+        }
         let Some(index) = self.index.as_mut() else {
             return;
         };
-        let stored = store_page(index, page, now);
-        self.settle(stored, "keeping a page's text");
+        let Some(revision) = next_revision(self.last_revision, now) else {
+            self.report(stop::during(KEEPING)(SessionError::ClockUnavailable));
+            return;
+        };
+        self.last_revision = revision;
+        match store_page(index, page, revision, now) {
+            // An address too long to key the index is left unread; the index itself is sound.
+            Err(error @ SessionError::FullText(FullTextError::InvalidDocument)) => {
+                self.report(stop::during(KEEPING)(error));
+            }
+            stored => self.settle(stored, KEEPING),
+        }
+    }
+
+    /// Keeps a capture of a page visited inside a history clear's `[start, end)` from landing
+    /// after the clear (D47). Only visits up to `now` can be in flight, so a clear that runs
+    /// to the end of time does not refuse pages visited after it.
+    pub(super) fn fence_clear(&mut self, start: i64, end: i64, now: i64) {
+        self.fences.push(Fence {
+            start,
+            end: end.min(now.saturating_add(1)),
+            site: None,
+        });
     }
 
     /// Erases all page text at once, as switching capture off does (owner, 2026-10-27).
     /// An index closed by an earlier failure cannot be erased now, so that is reported too;
     /// the next start, or the next save of the setting, tries again.
-    pub(super) fn erase(&mut self) {
+    pub(super) fn erase(&mut self, now: i64) {
+        self.fences.push(Fence::visited_by(now, None));
         let Some(index) = self.index.as_mut() else {
-            let closed = SessionError::FullText(FullTextError::NeedsReopen);
-            self.report(stop::during(ERASING)(closed));
+            self.report_closed(ERASING);
             return;
         };
         let erased = index.reset(&Namespace::page()).or_else(cleanup_later);
         self.settle(erased, ERASING);
+    }
+
+    /// Erases the text of every page on `sites` or their subdomains at once, as excluding a
+    /// site does (owner, 2026-10-27). The rows go without tombstones, whose ids would keep
+    /// the excluded addresses. A failure is reported, and the next start tries again.
+    pub(super) fn erase_sites(&mut self, sites: &[String], now: i64) {
+        if sites.is_empty() {
+            return;
+        }
+        for site in sites {
+            self.fences.push(Fence::visited_by(now, Some(site.clone())));
+        }
+        let Some(index) = self.index.as_mut() else {
+            self.report_closed(ERASING_SITES);
+            return;
+        };
+        let on_a_site = |id: &str| sites.iter().any(|site| address_within_site(id, site));
+        let erased = index
+            .remove_pages(on_a_site)
+            .map(drop)
+            .or_else(cleanup_later);
+        self.settle(erased, ERASING_SITES);
     }
 
     /// Removes page text past D40's seven days at start-up and then once a day.
@@ -205,6 +256,12 @@ impl PageText {
         }
     }
 
+    /// Reports that an erase could not run because an earlier failure closed the index.
+    fn report_closed(&mut self, operation: &'static str) {
+        let closed = SessionError::FullText(FullTextError::NeedsReopen);
+        self.report(stop::during(operation)(closed));
+    }
+
     /// Closes the index after a failure and keeps the failure, named with `operation`.
     fn settle(&mut self, result: Result<(), SessionError>, operation: &'static str) {
         let Err(error) = result else {
@@ -239,6 +296,9 @@ pub struct CapturedPage {
     pub address: String,
     pub title: String,
     pub text: String,
+    /// Unix seconds when the page finished loading. The text is dated by this visit, so a
+    /// clear of the time it was visited removes it wherever its capture is.
+    pub visited_at: i64,
 }
 
 impl fmt::Debug for CapturedPage {
@@ -248,35 +308,69 @@ impl fmt::Debug for CapturedPage {
     }
 }
 
-/// Stages and commits one page. Captures are seconds apart, so `now` orders them as
-/// revisions; a second capture within the same second is the same page and changes nothing.
-fn store_page(index: &mut FullText, page: CapturedPage, now: i64) -> Result<(), SessionError> {
-    let revision = u64::try_from(now).map_err(|_| SessionError::ClockUnavailable)?;
+/// A clear or erase that a capture still in flight must not outlive: the text of a page
+/// visited inside its range, and on its site when it names one, is not kept.
+struct Fence {
+    start: i64,
+    end: i64,
+    site: Option<String>,
+}
+
+impl Fence {
+    /// Covers every page visited up to `now`, on `site` or anywhere.
+    fn visited_by(now: i64, site: Option<String>) -> Self {
+        Self {
+            start: i64::MIN,
+            end: now.saturating_add(1),
+            site,
+        }
+    }
+
+    fn covers(&self, page: &CapturedPage) -> bool {
+        (self.start..self.end).contains(&page.visited_at)
+            && self
+                .site
+                .as_ref()
+                .is_none_or(|site| address_within_site(&page.address, site))
+    }
+}
+
+/// The revision for the next capture: the clock's seconds, but always past the last one, so
+/// two captures of a page within one second still replace each other in order.
+fn next_revision(last: u64, now: i64) -> Option<u64> {
+    let seconds = u64::try_from(now).ok()?;
+    Some(seconds.max(last.saturating_add(1)))
+}
+
+/// Stages and commits one page, dated by its visit.
+fn store_page(
+    index: &mut FullText,
+    page: CapturedPage,
+    revision: u64,
+    now: i64,
+) -> Result<(), SessionError> {
     let document = FullTextDocument {
         namespace: Namespace::page(),
         id: page.address,
         revision,
-        captured_at: now,
+        captured_at: page.visited_at,
         title: page.title,
         body: page.text,
     };
-    match index.stage(&[Change::Upsert(document)], now) {
-        Ok(_) => {}
-        // An address too long to key the index is left unread; the index itself is sound.
-        Err(FullTextError::InvalidDocument) => return Ok(()),
-        Err(error) => return Err(SessionError::FullText(error)),
-    }
+    index
+        .stage(&[Change::Upsert(document)], now)
+        .map_err(SessionError::FullText)?;
     index.commit().or_else(cleanup_later)
 }
 
-/// Whether a saved capture value means off after having been set: then any page text left
-/// by an erase that failed or was interrupted goes at start-up or with the save.
-pub(super) fn capture_switched_off(value: Option<&str>) -> bool {
-    value.is_some_and(|value| value != CAPTURE_ON)
-}
+/// What a failure to keep a page is reported as.
+const KEEPING: &str = "keeping a page's text";
 
 /// What a failed erase is reported as.
 const ERASING: &str = "erasing page text after capture was switched off";
+
+/// What a failed erase of excluded sites is reported as.
+const ERASING_SITES: &str = "erasing the page text of a site you excluded";
 
 /// What a failure to open the index is reported as.
 const OPENING: &str = "opening the search index";

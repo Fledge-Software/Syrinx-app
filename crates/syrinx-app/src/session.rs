@@ -5,6 +5,7 @@ mod folders;
 mod history;
 mod history_repair;
 mod page_text;
+mod page_text_setting;
 mod preferences;
 mod recovery;
 mod retention;
@@ -15,7 +16,8 @@ mod usage;
 
 pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
-pub use page_text::{CAPTURE_KEY, CAPTURE_ON, CapturedPage};
+pub use page_text::CapturedPage;
+pub use page_text_setting::PageTextSetting;
 pub use recovery::RecoveryPrompt;
 pub use synthetic::SyntheticCatalogue;
 pub use usage::{STATE_FOLDER, UsageControl, UsageError, UsageStatus, usage_file};
@@ -200,6 +202,10 @@ pub enum SessionCommand {
     /// sends it only while capture is on and the page is still allowed, so nothing else is
     /// checked here.
     StorePageText(CapturedPage),
+    /// Saves the owner's page-text setting (#54). Switching capture off erases all page text,
+    /// and excluding a site erases that site's, before the save and whatever it returns; a
+    /// refused save is retried until it is kept.
+    SavePageTextSetting(PageTextSetting),
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -843,6 +849,8 @@ struct Worker {
     retention: retention::Schedule,
     /// The full-text index's page text, kept level with the journal and D40 (#53).
     page_text: page_text::PageText,
+    /// The owner's page-text setting, held until the database has taken it (#54).
+    page_text_setting: page_text_setting::AppliedSetting,
     revision: u64,
     previous_shutdown: ShutdownState,
     destinations: QuickDestinations,
@@ -897,11 +905,8 @@ impl Worker {
             retention::EXPIRY_BATCH,
         )?;
         page_text.expire_if_due(now);
-        // Capture is off: finish an erase that failed or was cut short (owner, 2026-10-27).
-        let saved = stored_preferences.settings.get(page_text::CAPTURE_KEY);
-        if page_text::capture_switched_off(saved.map(String::as_str)) {
-            page_text.erase();
-        }
+        let restored = PageTextSetting::restored(&stored_preferences.settings);
+        erase_what_the_setting_forbids(&mut page_text, &restored, now);
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
         let snapshot = model.snapshot();
@@ -927,6 +932,7 @@ impl Worker {
             deletions,
             retention: schedule,
             page_text,
+            page_text_setting: page_text_setting::AppliedSetting::restored(restored.setting),
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
@@ -1063,6 +1069,9 @@ impl Worker {
         }
         self.page_text.retry_cleanup();
         self.report_page_text(events)?;
+        self.survival.operation = SAVING_PAGE_TEXT_SETTING_AGAIN;
+        let resaved = self.page_text_setting.retry(store);
+        self.survival.result(resaved, events)?;
         // The store retains its daily due state; retries remain idle and bounded.
         self.survival.operation = "taking the daily backup";
         let backed_up = backup_while_idle(store, now, &self.usage, events);
@@ -1081,6 +1090,10 @@ impl Worker {
             self.save_model(store, &model)
                 .map_err(stop::during("saving the tabs at shutdown"))?;
         }
+        // The last chance to keep a page-text switch-off the database refused.
+        self.survival.operation = SAVING_PAGE_TEXT_SETTING_AGAIN;
+        let resaved = self.page_text_setting.retry(store);
+        self.survival.result(resaved, events)?;
         // A title still held at exit most likely names the tab's current page.
         self.survival.operation = "saving page titles at shutdown";
         let settled = self.settle_titles(store, true);
@@ -1131,6 +1144,12 @@ impl Worker {
             SessionCommand::StorePageText(page) => {
                 self.page_text.store(page, utc_seconds()?);
                 return Ok(());
+            }
+            SessionCommand::SavePageTextSetting(setting) => {
+                let now = utc_seconds()?;
+                return self
+                    .page_text_setting
+                    .apply(setting, &mut self.page_text, store, now);
             }
             SessionCommand::RecentHistory { request_id, limit } => {
                 let result = store.recent_visits(limit).map_err(SessionError::Store);
@@ -1203,21 +1222,8 @@ impl Worker {
             }
             command => command,
         };
-        let erases = match &command {
-            SessionCommand::SaveSettings(entries) => {
-                let saving = entries
-                    .iter()
-                    .find(|(key, _)| key == page_text::CAPTURE_KEY);
-                page_text::capture_switched_off(saving.map(|(_, value)| value.as_str()))
-            }
-            _ => false,
-        };
-        let intercepted = preferences::intercept(store, &mut self.destinations, command, events);
-        // Erasing is the safe direction, so it runs even when saving the switch-off failed.
-        if erases {
-            self.page_text.erase();
-        }
-        let Some(command) = intercepted? else {
+        let Some(command) = preferences::intercept(store, &mut self.destinations, command, events)?
+        else {
             return Ok(());
         };
 
@@ -1465,6 +1471,9 @@ impl Worker {
         end: i64,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
+        // A capture of a page visited in this range may still be in flight; it must not land
+        // after the clear (D47).
+        self.page_text.fence_clear(start, end, utc_seconds()?);
         let result = deletions::clear(
             store,
             &mut self.deletions,
@@ -1713,18 +1722,80 @@ fn counted_feature(command: &SessionCommand) -> Counted {
 
 /// Whether a command puts back a page an earlier tab showed, which may have been reached from
 /// an excluded site, so page text must not read it from the start (#54, D35).
+/// Every command is listed, so a new one that puts back a page cannot be read by default.
 fn reopens_a_page(command: &SessionCommand) -> bool {
     match command {
         SessionCommand::ReopenClosed
+        | SessionCommand::Duplicate(_)
         | SessionCommand::HomeEntry {
             action: HomeEntryAction::ReopenClosed,
             ..
         } => true,
-        #[cfg(test)]
-        SessionCommand::Duplicate(_) => true,
-        _ => false,
+        SessionCommand::HomeEntry {
+            action: HomeEntryAction::NewTab | HomeEntryAction::OpenSaved(_),
+            ..
+        }
+        | SessionCommand::CheckPermission { .. }
+        | SessionCommand::RememberPermission { .. }
+        | SessionCommand::RememberedPermissions { .. }
+        | SessionCommand::ForgetPermission { .. }
+        | SessionCommand::ConfirmRecovery { .. }
+        | SessionCommand::ConfirmHistoryRepair { .. }
+        | SessionCommand::NewTab { .. }
+        | SessionCommand::AdoptPopup { .. }
+        | SessionCommand::NavigateActive { .. }
+        | SessionCommand::CloseTab(_)
+        | SessionCommand::ObserveClosed(_)
+        | SessionCommand::CloseActive
+        | SessionCommand::CycleActive { .. }
+        | SessionCommand::FocusTab(_)
+        | SessionCommand::CloseOthers(_)
+        | SessionCommand::CloseBelow(_)
+        | SessionCommand::OpenSaved(_)
+        | SessionCommand::SaveActive
+        | SessionCommand::SaveTab(_)
+        | SessionCommand::Unsave(_)
+        | SessionCommand::Folder(_)
+        | SessionCommand::UpdateMetadata { .. }
+        | SessionCommand::ObserveMetadata { .. }
+        | SessionCommand::ImportBookmarks { .. }
+        | SessionCommand::SaveSettings(_)
+        | SessionCommand::SiteZoom { .. }
+        | SessionCommand::ClearSiteZooms { .. }
+        | SessionCommand::EditDestinations { .. }
+        | SessionCommand::Query { .. }
+        | SessionCommand::ObserveNavigation { .. }
+        | SessionCommand::OpenHistory(_)
+        | SessionCommand::RecentHistory { .. }
+        | SessionCommand::ClearHistory { .. }
+        | SessionCommand::GrowSyntheticCatalogue { .. }
+        | SessionCommand::SnapshotBeforeUpdate
+        | SessionCommand::Usage(_)
+        | SessionCommand::UsageReport { .. }
+        | SessionCommand::StorePageText(_)
+        | SessionCommand::SavePageTextSetting(_)
+        | SessionCommand::Shutdown => false,
     }
 }
+
+/// What the stored page-text setting no longer allows, erased at start-up: everything when
+/// capture is off, or text of an excluded site an earlier erase left behind (#54).
+fn erase_what_the_setting_forbids(
+    page_text: &mut page_text::PageText,
+    restored: &page_text_setting::RestoredSetting,
+    now: i64,
+) {
+    if restored.leaves_text_to_erase() {
+        page_text.erase(now);
+        return;
+    }
+    if restored.setting.on {
+        page_text.erase_sites(&restored.setting.excluded, now);
+    }
+}
+
+/// What a refused page-text setting is retried as, while idle and at shutdown.
+const SAVING_PAGE_TEXT_SETTING_AGAIN: &str = "saving the page text setting again";
 
 fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), SessionError> {
     match command {
@@ -1877,6 +1948,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::Usage(_)
         | SessionCommand::UsageReport { .. }
         | SessionCommand::StorePageText(_)
+        | SessionCommand::SavePageTextSetting(_)
         | SessionCommand::Shutdown => {}
     }
     Ok(())
