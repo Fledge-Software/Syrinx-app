@@ -250,7 +250,14 @@ impl fmt::Display for CommandError {
             Self::DuplicateId => "a command with this identifier is already registered",
             Self::DuplicateShortcut => "another command already uses this shortcut",
             Self::ReservedShortcut => "this shortcut belongs to the command palette",
-            Self::TooManyCommands => "the command registry is full",
+            Self::TooManyCommands => {
+                // Name the cap from its constant so the message cannot drift from it.
+                return write!(
+                    formatter,
+                    "the command registry is full ({} commands)",
+                    CommandRegistry::MAX_COMMANDS
+                );
+            }
         };
         formatter.write_str(message)
     }
@@ -265,6 +272,9 @@ pub struct CommandRegistry {
 }
 
 impl CommandRegistry {
+    /// The most commands the registry holds, so the palette's per-keystroke ranking stays bounded.
+    pub const MAX_COMMANDS: usize = 1_024;
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -282,6 +292,10 @@ impl CommandRegistry {
 
     /// Adds a command and returns its key; an invalid or conflicting command changes nothing.
     pub fn register(&mut self, command: Command) -> Result<NonZeroU64, CommandError> {
+        // Refuse a command past the cap before anything else is checked or stored.
+        if self.commands.len() >= Self::MAX_COMMANDS {
+            return Err(CommandError::TooManyCommands);
+        }
         self.validate(&command)?;
         let key = u64::try_from(self.commands.len() + 1)
             .ok()
@@ -632,6 +646,42 @@ mod tests {
             .expect("plugin command registers");
         assert_eq!(key.get(), before as u64 + 1);
         assert!(registry.get(key).is_some_and(Command::is_plugin_action));
+    }
+
+    #[test]
+    fn registry_holds_exactly_its_cap_and_refuses_the_next_command_whole() {
+        // Fill the browser registry to the cap with synthetic plugin commands.
+        let mut registry = CommandRegistry::browser();
+        for index in registry.len()..CommandRegistry::MAX_COMMANDS {
+            let id = format!("synthetic.action-{index}");
+            registry
+                .register(plugin_command(&id, None))
+                .expect("commands up to the cap register");
+        }
+        assert_eq!(registry.len(), CommandRegistry::MAX_COMMANDS);
+        let (last, _) = registry
+            .find(&format!(
+                "synthetic.action-{}",
+                CommandRegistry::MAX_COMMANDS - 1
+            ))
+            .expect("the last command fits");
+        assert_eq!(last.get(), CommandRegistry::MAX_COMMANDS as u64);
+
+        // One more is refused by name and leaves no trace, even a valid, distinct one.
+        let extra = plugin_command("synthetic.one-too-many", Some("ctrl-alt-n"));
+        assert_eq!(registry.register(extra), Err(CommandError::TooManyCommands));
+        assert_eq!(registry.len(), CommandRegistry::MAX_COMMANDS);
+        assert!(registry.find("synthetic.one-too-many").is_none());
+        let refused_shortcut = Shortcut::new("ctrl-alt-n").expect("synthetic shortcut");
+        assert!(
+            registry
+                .iter()
+                .all(|(_, command)| command.shortcut.as_ref() != Some(&refused_shortcut))
+        );
+        assert_eq!(
+            CommandError::TooManyCommands.to_string(),
+            "the command registry is full (1024 commands)"
+        );
     }
 
     #[test]
