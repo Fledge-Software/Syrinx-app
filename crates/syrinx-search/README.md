@@ -110,6 +110,10 @@ levels, arrives as `ClearScope::Elsewhere` and only advances the generation. An
 index ahead of its journal (the journal was lost and recreated) cannot know
 what the new journal cleared: its owner calls `restart_clears`, which removes
 all page text and counts from generation 0 again, and then applies the journal.
+An owner-confirmed journal repair restarts generations at the database's, so
+Syrinx calls `restart_clears` before rebuilding the journal; if the index cannot
+open or restart, it empties the index's folder instead, and if even that fails
+it refuses the repair, which the next start offers again.
 
 Search does not filter by age, so whoever owns the index calls `expire` at
 start-up and at least daily. A feed's tombstones never expire; `reset` is how

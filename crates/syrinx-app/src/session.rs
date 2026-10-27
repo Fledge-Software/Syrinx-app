@@ -748,12 +748,10 @@ fn open_session(
 ) -> Result<(Store, Worker), SessionError> {
     let lease = Arc::new(lease);
     let store = Store::open(lease.clone()).map_err(SessionError::Store)?;
-    let mut page_text = page_text::PageText::open(&lease);
-    if repair {
-        page_text.after_journal_repair();
-    }
-    let opened = open_journal(&store, &lease, repair)
-        .and_then(|journal| Worker::restore(&store, journal, page_text));
+    let opened = open_page_text(&lease, repair).and_then(|page_text| {
+        open_journal(&store, &lease, repair)
+            .and_then(|journal| Worker::restore(&store, journal, page_text))
+    });
     match opened {
         Ok(worker) => Ok((store, worker)),
         Err(error) => {
@@ -761,6 +759,19 @@ fn open_session(
             finish_store(Err(error), store.shutdown())
         }
     }
+}
+
+/// Opens the full-text index; a repair first removes its page text, before the journal is
+/// rebuilt (#53).
+fn open_page_text(
+    lease: &WindowsDirectoryLease,
+    repair: bool,
+) -> Result<page_text::PageText, SessionError> {
+    let mut page_text = page_text::PageText::open(lease);
+    if repair {
+        page_text.restart_before_repair(lease)?;
+    }
+    Ok(page_text)
 }
 
 /// The journal lives beside the database and is held for the whole session (D47).

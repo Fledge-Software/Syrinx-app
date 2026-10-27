@@ -359,6 +359,77 @@ fn a_confirmed_history_repair_clears_page_text_even_when_the_index_matches_the_n
     fixture.cleanup();
 }
 
+/// An index one generation ahead of the journal a repair of a database at generation 0
+/// rebuilds, holding page text the repair must remove.
+fn seed_index_ahead_of_a_repair(fixture: &Fixture) {
+    let now = utc_seconds().expect("synthetic clock");
+    seed_index(fixture, &[page("cleared", now - 600), note("kept")]);
+    advance_index(fixture, 1);
+}
+
+/// Holds the index's `meta.json` open, sharing only `share_mode`, so Tantivy cannot read it.
+fn hold_index_metadata(fixture: &Fixture, share_mode: u32) -> fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .share_mode(share_mode)
+        .open(index_folder(fixture).join("meta.json"))
+        .expect("hold synthetic index metadata")
+}
+
+/// Windows' `FILE_SHARE_DELETE`: others may delete the file but not read it.
+const SHARE_DELETE_ONLY: u32 = 0x4;
+
+#[test]
+fn a_repair_whose_index_cannot_open_empties_its_folder_and_starts_afresh() {
+    let fixture = Fixture::new();
+    seed_index_ahead_of_a_repair(&fixture);
+    // The index cannot open, so it cannot restart its count, but its files can be deleted.
+    let held = hold_index_metadata(&fixture, SHARE_DELETE_ONLY);
+
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
+    drop(held);
+    let index = worker.page_text.index().expect("a fresh index is open");
+    assert!(ids_in(index, Namespace::page()).is_empty());
+    assert_eq!(index.cleared_generation(), 1);
+    assert_eq!(worker.page_text.take_problem(), Ok(()));
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    assert_eq!(completed_clears(&fixture), 1);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can() {
+    let fixture = Fixture::new();
+    seed_index_ahead_of_a_repair(&fixture);
+    // Nothing may read or delete the metadata, so the old page text cannot be removed.
+    let held = hold_index_metadata(&fixture, 0);
+
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    match open_session(lease, true) {
+        Err(SessionError::During { operation, .. }) => {
+            assert_eq!(operation, "emptying the search index before a history repair");
+        }
+        Err(error) => panic!("expected the repair to be refused, got {error:?}"),
+        Ok(_) => panic!("a repair went ahead while the old page text could not be removed"),
+    }
+    // The journal was never rebuilt, so the next start offers the repair again.
+    assert!(!fixture.0.join("syrinx.deletions").exists());
+    drop(held);
+
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let (store, worker) = open_session(lease, true).expect("repair once the index is free");
+    let index = worker.page_text.index().expect("the index is open");
+    assert!(ids_in(index, Namespace::page()).is_empty());
+    assert_eq!(index.cleared_generation(), 1);
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    assert_eq!(completed_clears(&fixture), 1);
+    fixture.cleanup();
+}
+
 #[test]
 fn a_clear_the_index_applied_before_a_crash_is_completed_but_not_applied_again() {
     let fixture = Fixture::new();
