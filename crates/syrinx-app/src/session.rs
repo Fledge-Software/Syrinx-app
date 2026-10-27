@@ -349,6 +349,9 @@ pub enum SessionError {
     FullText(FullTextError),
     /// The full-text index's folder failed the storage guard; the session runs without it.
     IndexFolder(LocationError),
+    /// A confirmed history repair was refused because the index's folder could not be
+    /// emptied, so old page text would outlive the rebuilt journal (#53).
+    IndexNotEmptied(LocationError),
     Destination(DestinationError),
     /// The deletion journal refused or failed a record (D47).
     Deletion(JournalError),
@@ -385,6 +388,11 @@ pub enum SessionError {
         attempts: u32,
         error: Box<SessionError>,
     },
+    /// A failure that came after an earlier one; both are kept, so neither cause is lost.
+    AfterEarlier {
+        earlier: Box<SessionError>,
+        error: Box<SessionError>,
+    },
     /// The error that ended the worker's loop, with the fixed name of what it was doing.
     During {
         operation: &'static str,
@@ -405,6 +413,14 @@ impl fmt::Display for SessionError {
             Self::IndexFolder(error) => {
                 write!(formatter, "Cannot open the search index's folder: {error}")
             }
+            Self::IndexNotEmptied(error) => write!(
+                formatter,
+                "The history repair was not done, because Syrinx could not empty its search \
+                 index. Close any program using a file in the \"fulltext\" folder of Syrinx's \
+                 data folder (normally %LOCALAPPDATA%\\Syrinx\\data\\fulltext), or delete \
+                 everything inside that folder, then start Syrinx again; the index is a cache \
+                 Syrinx rebuilds ({error})"
+            ),
             Self::Destination(error) => write!(formatter, "Cannot change this tile: {error}"),
             Self::Deletion(error) => write!(formatter, "Cannot clear history safely: {error}"),
             Self::Usage(error) => write!(formatter, "{error}"),
@@ -446,6 +462,9 @@ impl fmt::Display for SessionError {
                     formatter,
                     "The tabs could not be saved ({attempts} tries): {error}"
                 )
+            }
+            Self::AfterEarlier { earlier, error } => {
+                write!(formatter, "{error} (after an earlier failure: {earlier})")
             }
             Self::During { operation, error } => write!(formatter, "{error} (while {operation})"),
         }
@@ -748,11 +767,7 @@ fn open_session(
 ) -> Result<(Store, Worker), SessionError> {
     let lease = Arc::new(lease);
     let store = Store::open(lease.clone()).map_err(SessionError::Store)?;
-    let opened = open_page_text(&lease, repair).and_then(|page_text| {
-        open_journal(&store, &lease, repair)
-            .and_then(|journal| Worker::restore(&store, journal, page_text))
-    });
-    match opened {
+    match open_worker(&store, &lease, repair) {
         Ok(worker) => Ok((store, worker)),
         Err(error) => {
             // Recovery cannot overlap live connections or conceal a failed close.
@@ -761,8 +776,19 @@ fn open_session(
     }
 }
 
+/// Opens the full-text index, then the journal, then restores the worker from the store.
+fn open_worker(
+    store: &Store,
+    lease: &WindowsDirectoryLease,
+    repair: bool,
+) -> Result<Worker, SessionError> {
+    let page_text = open_page_text(lease, repair)?;
+    let journal = open_journal(store, lease, repair)?;
+    Worker::restore(store, journal, page_text)
+}
+
 /// Opens the full-text index; a repair first removes its page text, before the journal is
-/// rebuilt (#53).
+/// rebuilt (#53). Only a repair can fail here: an index that will not open is reported later.
 fn open_page_text(
     lease: &WindowsDirectoryLease,
     repair: bool,

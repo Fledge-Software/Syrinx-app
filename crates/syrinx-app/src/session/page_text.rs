@@ -1,9 +1,12 @@
 //! Keeps page text in the full-text index level with D47's clears and D40's seven days (#53).
 
+use std::fs;
+use std::os::windows::fs::MetadataExt;
+
 use syrinx_platform::{CacheFolder, WindowsDirectoryLease};
 use syrinx_search::fulltext::{ClearRequest, ClearScope, FullText, FullTextError};
-use syrinx_store::LocationError;
 use syrinx_store::deletion::{DeletionCategory, DeletionLog, DeletionRequest};
+use syrinx_store::{DirectoryLease, LocationError};
 
 use super::{SessionError, deletions, retention, stop};
 
@@ -24,16 +27,21 @@ pub(super) struct PageText {
     folder: Option<CacheFolder>,
     /// Unix seconds when D40's expiry next runs; zero, so start-up always runs it.
     expiry_due: i64,
-    /// A failure the owner has not been shown yet, named with what the index was doing.
+    /// The failures the owner has not been shown yet, each named with what the index was
+    /// doing; a later one is kept after an earlier one, never in its place.
     problem: Option<SessionError>,
 }
 
 impl PageText {
     /// Opens the index in its guarded folder; a failure leaves the session running without it.
     pub(super) fn open(lease: &WindowsDirectoryLease) -> Self {
-        let (index, folder, problem) = match open_index(lease) {
+        let (index, folder, problem) = match open_index(lease, Emptying::WhenUnreadable) {
             Ok((folder, index)) => (Some(index), Some(folder), None),
-            Err(error) => (None, None, Some(stop::during(OPENING)(error))),
+            Err(failure) => (
+                None,
+                None,
+                Some(stop::during(OPENING)(failure.into_error())),
+            ),
         };
         Self {
             index,
@@ -44,8 +52,11 @@ impl PageText {
     }
 
     /// Removes all page text and restarts the index's count before a confirmed repair rebuilds
-    /// the journal, whose new generations cannot say what the index cleared. Failing to empty
-    /// the folder refuses the repair, so the next start offers it again.
+    /// the journal, whose new generations cannot say what the index cleared.
+    ///
+    /// The restart keeps plugin feeds. An index that is closed or fails to restart is emptied
+    /// instead, feeds and all, because nothing in it can be read to remove page text alone;
+    /// failing to empty it refuses the repair, so the next start offers it again.
     pub(super) fn restart_before_repair(
         &mut self,
         lease: &WindowsDirectoryLease,
@@ -53,9 +64,7 @@ impl PageText {
         if self.restart_open_index() {
             return Ok(());
         }
-        self.start_afresh(lease).map_err(stop::during(
-            "emptying the search index before a history repair",
-        ))
+        self.start_afresh(lease)
     }
 
     /// Applies every journal clear the index has not, before the journal marks one complete.
@@ -95,7 +104,7 @@ impl PageText {
         self.settle(retried, "removing deleted text from the search index");
     }
 
-    /// The failure to show the owner once, if any.
+    /// The failures to show the owner once, if any.
     pub(super) fn take_problem(&mut self) -> Result<(), SessionError> {
         self.problem.take().map_or(Ok(()), Err)
     }
@@ -104,6 +113,12 @@ impl PageText {
     #[cfg(test)]
     pub(super) fn index(&self) -> Option<&FullText> {
         self.index.as_ref()
+    }
+
+    /// The open index, for tests that stage work in it.
+    #[cfg(test)]
+    pub(super) fn index_mut(&mut self) -> Option<&mut FullText> {
+        self.index.as_mut()
     }
 
     /// Restarts the open index's count; false when it is closed or the restart failed.
@@ -120,30 +135,39 @@ impl PageText {
         succeeded
     }
 
-    /// Empties the index's folder and opens a fresh index in it. Once the folder is empty no
-    /// page text is left, so a fresh index that will not open is only reported.
+    /// Empties the index's folder and opens a fresh index in it. The repair is refused only
+    /// when old page text could be left behind.
     fn start_afresh(&mut self, lease: &WindowsDirectoryLease) -> Result<(), SessionError> {
         // Release the old index's files and folder before deleting them.
         self.index = None;
         self.folder = None;
-        let folder = match lease.cache_folder(INDEX_FOLDER) {
-            Ok(folder) => folder,
-            // Syrinx never opens an index through a file or link, so none can strand page text.
-            Err(error) if never_an_index(&error) => {
-                self.problem = Some(stop::during(OPENING)(SessionError::IndexFolder(error)));
-                return Ok(());
-            }
-            Err(error) => return Err(SessionError::IndexFolder(error)),
-        };
-        folder.empty().map_err(SessionError::IndexFolder)?;
-        match FullText::open(folder.path()) {
-            Ok(index) => {
+        let failure = match open_index(lease, Emptying::First) {
+            Ok((folder, index)) => {
                 self.index = Some(index);
                 self.folder = Some(folder);
+                return Ok(());
             }
-            Err(error) => self.problem = Some(stop::during(OPENING)(SessionError::FullText(error))),
+            Err(failure) => failure,
+        };
+        match failure {
+            // The folder is empty, so no page text is left: a fresh index that will not open
+            // is only reported.
+            OpenFailure::Opening(error) => {
+                self.report(stop::during(OPENING)(SessionError::FullText(error)));
+                Ok(())
+            }
+            // Syrinx never opens an index through a file or link, so none can strand page text.
+            OpenFailure::Folder(error) if wrong_entry_where_the_folder_belongs(lease, &error) => {
+                self.report(stop::during(REPAIRING)(SessionError::IndexFolder(error)));
+                Ok(())
+            }
+            OpenFailure::Folder(error) => {
+                Err(self.after_problem(stop::during(REPAIRING)(SessionError::IndexFolder(error))))
+            }
+            OpenFailure::Emptying(error) => {
+                Err(self.after_problem(SessionError::IndexNotEmptied(error)))
+            }
         }
-        Ok(())
     }
 
     /// Closes the index after a failure and keeps the failure, named with `operation`.
@@ -153,39 +177,111 @@ impl PageText {
         };
         self.index = None;
         self.folder = None;
-        self.problem = Some(stop::during(operation)(error));
+        self.report(stop::during(operation)(error));
+    }
+
+    /// Keeps `error` to show the owner, after any failure not yet shown.
+    fn report(&mut self, error: SessionError) {
+        let error = self.after_problem(error);
+        self.problem = Some(error);
+    }
+
+    /// `error`, carrying any failure not yet shown as its earlier cause.
+    fn after_problem(&mut self, error: SessionError) -> SessionError {
+        match self.problem.take() {
+            None => error,
+            Some(earlier) => SessionError::AfterEarlier {
+                earlier: Box::new(earlier),
+                error: Box::new(error),
+            },
+        }
     }
 }
 
 /// What a failure to open the index is reported as.
 const OPENING: &str = "opening the search index";
 
-/// Guards the index's folder beside the database, then opens the index inside it.
+/// What a guard failure that refuses a repair is reported as.
+const REPAIRING: &str = "emptying the search index before a history repair";
+
+/// When the index's folder is emptied before the index opens.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Emptying {
+    /// Only when the index is damaged or from another version.
+    WhenUnreadable,
+    /// Always, so the fresh index holds nothing from before.
+    First,
+}
+
+/// Which step of opening the index failed, since a repair treats each differently.
+enum OpenFailure {
+    /// The storage guard refused the index's folder.
+    Folder(LocationError),
+    /// A file inside the folder could not be deleted.
+    Emptying(LocationError),
+    /// Tantivy could not open an index in the folder.
+    Opening(FullTextError),
+}
+
+impl OpenFailure {
+    fn into_error(self) -> SessionError {
+        match self {
+            Self::Folder(error) | Self::Emptying(error) => SessionError::IndexFolder(error),
+            Self::Opening(error) => SessionError::FullText(error),
+        }
+    }
+}
+
+/// Guards the index's folder beside the database, empties it when `emptying` says so, then
+/// opens the index inside it.
 ///
 /// The index is a cache, so one that is damaged or from another version starts afresh:
 /// left alone, its unreadable page text would never expire (D40).
-fn open_index(lease: &WindowsDirectoryLease) -> Result<(CacheFolder, FullText), SessionError> {
+fn open_index(
+    lease: &WindowsDirectoryLease,
+    emptying: Emptying,
+) -> Result<(CacheFolder, FullText), OpenFailure> {
     let folder = lease
         .cache_folder(INDEX_FOLDER)
-        .map_err(SessionError::IndexFolder)?;
+        .map_err(OpenFailure::Folder)?;
+    if emptying == Emptying::First {
+        folder.empty().map_err(OpenFailure::Emptying)?;
+    }
     let opened = match FullText::open(folder.path()) {
         Err(FullTextError::Damaged | FullTextError::IncompatibleIndex) => {
-            folder.empty().map_err(SessionError::IndexFolder)?;
+            folder.empty().map_err(OpenFailure::Emptying)?;
             FullText::open(folder.path())
         }
         opened => opened,
     };
-    let index = opened.map_err(SessionError::FullText)?;
+    let index = opened.map_err(OpenFailure::Opening)?;
     Ok((folder, index))
 }
 
-/// Whether the guard refused the index folder's entry itself: a file or a link stands where
-/// the folder belongs, which every start refuses in the same way.
-fn never_an_index(error: &LocationError) -> bool {
-    matches!(
+/// Windows' `FILE_ATTRIBUTE_REPARSE_POINT`, set on a link or junction itself.
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+/// Whether the guard refused the index's folder because a file or a link stands where it
+/// belongs, rather than for a fault in the data folder, the database or a sync root.
+fn wrong_entry_where_the_folder_belongs(
+    lease: &WindowsDirectoryLease,
+    error: &LocationError,
+) -> bool {
+    if !matches!(
         error,
         LocationError::UnexpectedEntryKind | LocationError::ReparsePoint
-    )
+    ) {
+        return false;
+    }
+    let Some(data_folder) = lease.database_path().parent() else {
+        return false;
+    };
+    // The entry's own metadata, never a link's target. An entry that cannot be read is not
+    // known to be wrong, so the guard's error refuses the repair instead.
+    let Ok(entry) = fs::symlink_metadata(data_folder.join(INDEX_FOLDER)) else {
+        return false;
+    };
+    !entry.is_dir() || entry.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 /// Brings the index level with the journal, first restarting its count when the journal is

@@ -341,11 +341,9 @@ fn an_index_that_cannot_open_is_reported_and_the_session_goes_on() {
 #[test]
 fn a_confirmed_history_repair_clears_page_text_even_when_the_index_matches_the_new_journal() {
     let fixture = Fixture::new();
-    let now = utc_seconds().expect("synthetic clock");
-    seed_index(&fixture, &[page("cleared", now - 600), note("kept")]);
     // The rebuilt journal of a database at generation 0 ends with a pending all-time clear at
     // generation 1; an index that already counted to 1 would otherwise skip that clear.
-    advance_index(&fixture, 1);
+    seed_index_ahead_of_a_repair(&fixture);
 
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
     let (store, worker) = open_session(lease, true).expect("open with a confirmed repair");
@@ -353,19 +351,30 @@ fn a_confirmed_history_repair_clears_page_text_even_when_the_index_matches_the_n
     assert!(ids_in(index, Namespace::page()).is_empty());
     assert_eq!(ids_in(index, notes()), ["kept"]);
     assert_eq!(index.cleared_generation(), 1);
+    finish_repaired_session(fixture, store, worker);
+}
+
+/// An index one generation ahead of the journal a repair of a database at generation 0
+/// rebuilds, holding page text the repair must remove and a note a restart keeps.
+fn seed_index_ahead_of_a_repair(fixture: &Fixture) {
+    let now = utc_seconds().expect("synthetic clock");
+    seed_index(fixture, &[page("cleared", now - 600), note("kept")]);
+    advance_index(fixture, 1);
+}
+
+/// Closes a session opened with a confirmed repair, checks its one rebuilt clear completed,
+/// and removes the fixture.
+fn finish_repaired_session(fixture: Fixture, store: Store, worker: Worker) {
     drop(worker);
     store.shutdown().expect("close synthetic store");
     assert_eq!(completed_clears(&fixture), 1);
     fixture.cleanup();
 }
 
-/// An index one generation ahead of the journal a repair of a database at generation 0
-/// rebuilds, holding page text the repair must remove.
-fn seed_index_ahead_of_a_repair(fixture: &Fixture) {
-    let now = utc_seconds().expect("synthetic clock");
-    seed_index(fixture, &[page("cleared", now - 600), note("kept")]);
-    advance_index(fixture, 1);
-}
+/// Windows' `FILE_SHARE_DELETE`: others may delete the file but not read it.
+const SHARE_DELETE_ONLY: u32 = 0x4;
+/// No sharing: others may neither read nor delete the file.
+const SHARE_NOTHING: u32 = 0;
 
 /// Holds the index's `meta.json` open, sharing only `share_mode`, so Tantivy cannot read it.
 fn hold_index_metadata(fixture: &Fixture, share_mode: u32) -> fs::File {
@@ -377,14 +386,13 @@ fn hold_index_metadata(fixture: &Fixture, share_mode: u32) -> fs::File {
         .expect("hold synthetic index metadata")
 }
 
-/// Windows' `FILE_SHARE_DELETE`: others may delete the file but not read it.
-const SHARE_DELETE_ONLY: u32 = 0x4;
-
 #[test]
 fn a_repair_whose_index_cannot_open_empties_its_folder_and_starts_afresh() {
     let fixture = Fixture::new();
     seed_index_ahead_of_a_repair(&fixture);
     // The index cannot open, so it cannot restart its count, but its files can be deleted.
+    // NTFS's POSIX-style deletion frees the held file's name at once, so the fresh index can
+    // write its own `meta.json` while this handle is still open.
     let held = hold_index_metadata(&fixture, SHARE_DELETE_ONLY);
 
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
@@ -392,6 +400,8 @@ fn a_repair_whose_index_cannot_open_empties_its_folder_and_starts_afresh() {
     drop(held);
     let index = worker.page_text.index().expect("a fresh index is open");
     assert!(ids_in(index, Namespace::page()).is_empty());
+    // Emptying cannot spare a feed: nothing in an index that will not open can be read.
+    assert!(ids_in(index, notes()).is_empty());
     assert_eq!(index.cleared_generation(), 1);
     // The owner still hears that the old index could not open.
     match worker.page_text.take_problem() {
@@ -400,9 +410,41 @@ fn a_repair_whose_index_cannot_open_empties_its_folder_and_starts_afresh() {
         }
         problem => panic!("expected the open failure to be reported, got {problem:?}"),
     }
-    drop(worker);
-    store.shutdown().expect("close synthetic store");
-    assert_eq!(completed_clears(&fixture), 1);
+    finish_repaired_session(fixture, store, worker);
+}
+
+#[test]
+fn a_repair_whose_index_opens_but_cannot_restart_empties_its_folder_and_starts_afresh() {
+    let fixture = Fixture::new();
+    seed_index_ahead_of_a_repair(&fixture);
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let mut page_text = page_text::PageText::open(&lease);
+    // Uncommitted work makes the restart refuse; the open index must then let go of its files.
+    let now = utc_seconds().expect("synthetic clock");
+    page_text
+        .index_mut()
+        .expect("the seeded index opens")
+        .stage(&[page("staged", now)], now)
+        .expect("stage synthetic document");
+
+    page_text
+        .restart_before_repair(&lease)
+        .expect("the folder is emptied instead");
+    let index = page_text.index().expect("a fresh index is open");
+    assert!(ids_in(index, Namespace::page()).is_empty());
+    assert!(ids_in(index, notes()).is_empty());
+    assert_eq!(index.cleared_generation(), 0);
+    match page_text.take_problem() {
+        Err(SessionError::During { operation, .. }) => {
+            assert_eq!(
+                operation,
+                "restarting the search index for a history repair"
+            );
+        }
+        problem => panic!("expected the restart failure to be reported, got {problem:?}"),
+    }
+    drop(page_text);
+    drop(lease);
     fixture.cleanup();
 }
 
@@ -411,19 +453,26 @@ fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can(
     let fixture = Fixture::new();
     seed_index_ahead_of_a_repair(&fixture);
     // Nothing may read or delete the metadata, so the old page text cannot be removed.
-    let held = hold_index_metadata(&fixture, 0);
+    let held = hold_index_metadata(&fixture, SHARE_NOTHING);
 
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    match open_session(lease, true) {
-        Err(SessionError::During { operation, .. }) => {
-            assert_eq!(
-                operation,
-                "emptying the search index before a history repair"
-            );
-        }
-        Err(error) => panic!("expected the repair to be refused, got {error:?}"),
+    let refusal = match open_session(lease, true) {
+        Err(error) => error,
         Ok(_) => panic!("a repair went ahead while the old page text could not be removed"),
-    }
+    };
+    // Both causes reach the owner: the open failure, then the refusal naming what to clear.
+    let SessionError::AfterEarlier { earlier, error } = &refusal else {
+        panic!("expected both failures to be kept, got {refusal:?}");
+    };
+    assert!(matches!(
+        **earlier,
+        SessionError::During {
+            operation: "opening the search index",
+            ..
+        }
+    ));
+    assert!(matches!(**error, SessionError::IndexNotEmptied(_)));
+    assert!(refusal.to_string().contains("\"fulltext\" folder"));
     // Nothing was rebuilt, so a damaged journal would still offer the repair at the next start.
     assert!(!fixture.0.join("syrinx.deletions").exists());
     drop(held);
@@ -433,10 +482,7 @@ fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can(
     let index = worker.page_text.index().expect("the index is open");
     assert!(ids_in(index, Namespace::page()).is_empty());
     assert_eq!(index.cleared_generation(), 1);
-    drop(worker);
-    store.shutdown().expect("close synthetic store");
-    assert_eq!(completed_clears(&fixture), 1);
-    fixture.cleanup();
+    finish_repaired_session(fixture, store, worker);
 }
 
 #[test]
@@ -449,20 +495,100 @@ fn a_repair_goes_ahead_when_a_file_stands_where_the_index_folder_belongs() {
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
     let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
     assert!(worker.page_text.index().is_none());
-    match worker.page_text.take_problem() {
-        Err(SessionError::During { operation, error }) => {
-            assert_eq!(operation, "opening the search index");
-            assert_eq!(
-                *error,
-                SessionError::IndexFolder(LocationError::UnexpectedEntryKind)
-            );
-        }
-        problem => panic!("expected the blocked folder to be reported, got {problem:?}"),
-    }
+    // The guard's refusal at opening and again at the repair are both kept.
+    let blocked = |operation| SessionError::During {
+        operation,
+        error: Box::new(SessionError::IndexFolder(
+            LocationError::UnexpectedEntryKind,
+        )),
+    };
+    assert_eq!(
+        worker.page_text.take_problem(),
+        Err(SessionError::AfterEarlier {
+            earlier: Box::new(blocked("opening the search index")),
+            error: Box::new(blocked("emptying the search index before a history repair")),
+        })
+    );
     drop(worker);
     store.shutdown().expect("close synthetic store");
     assert_eq!(completed_clears(&fixture), 1);
     checked_io(fs::remove_file(index_folder(&fixture)));
+    fixture.cleanup();
+}
+
+#[test]
+fn a_repair_goes_ahead_when_a_junction_stands_where_the_index_folder_belongs() {
+    let fixture = Fixture::new();
+    drop(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data"));
+    let target = fixture.1.join("junction-target");
+    checked_io(fs::create_dir(&target));
+    // Only fixed relative names reach the shell; its working directory is this owned fixture.
+    let output = std::process::Command::new("cmd.exe")
+        .current_dir(&fixture.0)
+        .args([
+            "/d",
+            "/c",
+            "mklink",
+            "/J",
+            page_text::INDEX_FOLDER,
+            r"..\junction-target",
+        ])
+        .output()
+        .expect("create disposable directory junction");
+    assert!(
+        output.status.success(),
+        "synthetic junction creation must succeed"
+    );
+
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
+    assert!(worker.page_text.index().is_none());
+    let Err(SessionError::AfterEarlier { error, .. }) = worker.page_text.take_problem() else {
+        panic!("expected the junction to be reported");
+    };
+    assert_eq!(
+        *error,
+        SessionError::During {
+            operation: "emptying the search index before a history repair",
+            error: Box::new(SessionError::IndexFolder(LocationError::ReparsePoint)),
+        }
+    );
+    // Nothing was written through the junction.
+    assert_eq!(checked_io(fs::read_dir(&target)).count(), 0);
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    assert_eq!(completed_clears(&fixture), 1);
+    checked_io(fs::remove_dir(index_folder(&fixture)));
+    checked_io(fs::remove_dir(&target));
+    fixture.cleanup();
+}
+
+#[test]
+fn a_repair_is_refused_when_the_data_folder_fails_its_guard_though_the_index_folder_is_fine() {
+    let fixture = Fixture::new();
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    // A folder where SQLite's journal belongs fails the data folder's own guard with the same
+    // kind of error a misplaced index entry gives; it is not the index's to report and go on.
+    let sidecar = fixture.0.join("syrinx.db-journal");
+    checked_io(fs::create_dir(&sidecar));
+    let mut page_text = page_text::PageText::open(&lease);
+    assert!(page_text.index().is_none());
+
+    match page_text.restart_before_repair(&lease) {
+        Err(SessionError::AfterEarlier { error, .. }) => assert_eq!(
+            *error,
+            SessionError::During {
+                operation: "emptying the search index before a history repair",
+                error: Box::new(SessionError::IndexFolder(
+                    LocationError::UnexpectedEntryKind,
+                )),
+            }
+        ),
+        result => panic!("expected the repair to be refused, got {result:?}"),
+    }
+    drop(page_text);
+    drop(lease);
+    checked_io(fs::remove_dir(&sidecar));
     fixture.cleanup();
 }
 
