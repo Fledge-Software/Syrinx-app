@@ -528,6 +528,18 @@ owner runs it; agents never create, open or name a release key. Its tests
 use in-memory keys only. Format and checks:
 `docs/update-format.md`, "P1-39a: the latest-version statement".
 
+The weekly release workflow signs the same way with the key from its
+`SYRINX_RELEASE_KEY` secret, through `cargo xtask import-release-key --key
+<name> --from-env <variable>` and `cargo xtask delete-release-key --key
+<name>` around `sign-update`, then `cargo xtask host-layout --package
+<folder> --output <folder> --files <include|omit>` for the host's files
+(issue #55, `docs/releasing.md`, "Signed updates"). `cargo xtask
+pinned-release-keys` prints the pinned keys' identifiers and points. The
+import tests use fresh throwaway keys under unique names in the current
+user's software key storage and delete them; to check nothing was left
+behind, run `certutil -user -csp "Microsoft Software Key Storage Provider"
+-key` and look for `syrinx-update-test-key-`.
+
 ## Restricted-token reproduction (#59)
 
 `crates/syrinx-platform/examples/restricted_token/repro.ps1` reproduces
