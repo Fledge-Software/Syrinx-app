@@ -1,7 +1,7 @@
 //! Matches registered commands on the palette's thread, because enablement depends on live browser state.
 //!
-//! The registry is small and bounded (built-in commands now, plugin commands with Plan 2), so this
-//! ranks a few dozen rows per keystroke; tab, saved-page and history search stays on the worker.
+//! The registry refuses commands past `CommandRegistry::MAX_COMMANDS`, so each keystroke ranks at
+//! most that many rows here; tab, saved-page and history search stays on the worker.
 
 use std::{num::NonZeroU64, rc::Rc};
 
@@ -58,7 +58,6 @@ impl CommandMatcher {
     }
 
     /// Ranks enabled commands for `text` and keeps the rows `view` shows.
-    // TODO(#28): bound this before plugins register commands: cap the registry or rank off the UI thread.
     pub fn matches(
         &mut self,
         text: &str,
@@ -199,6 +198,85 @@ mod tests {
             })
             .expect("register synthetic plugin command");
         CommandMatcher::new(Rc::new(registry)).expect("index commands")
+    }
+
+    /// The browser's commands plus synthetic plugin commands up to the registry's cap; every
+    /// other synthetic command needs a loaded page.
+    fn full_matcher() -> CommandMatcher {
+        let mut registry = CommandRegistry::browser();
+        for index in registry.len()..CommandRegistry::MAX_COMMANDS {
+            let enablement = if index % 2 == 0 {
+                Enablement::Always
+            } else {
+                Enablement::ActivePage
+            };
+            registry
+                .register(Command {
+                    id: CommandId::new(format!("synthetic.action-{index:04}"))
+                        .expect("synthetic identifier"),
+                    title: format!("Synthetic action {index:04}"),
+                    keywords: String::new(),
+                    scope: CommandScope::Plugin {
+                        plugin: "synthetic".to_owned(),
+                    },
+                    enablement,
+                    action: CommandAction::Plugin {
+                        plugin: "synthetic".to_owned(),
+                        action: format!("action-{index:04}"),
+                    },
+                    shortcut: None,
+                })
+                .expect("register up to the cap");
+        }
+        CommandMatcher::new(Rc::new(registry)).expect("index a full registry")
+    }
+
+    #[test]
+    fn a_full_registry_still_ranks_and_filters_correctly() {
+        let mut matcher = full_matcher();
+        let synthetic = CommandRegistry::MAX_COMMANDS - 20;
+
+        // `>` with no text lists every enabled command, counted by provider.
+        let all = matcher
+            .matches("", View::Commands, PAGE)
+            .expect("blank command query");
+        assert_eq!(all.hits.len(), CommandRegistry::MAX_COMMANDS);
+        assert_eq!(
+            all.counts,
+            CommandCounts {
+                browser: 20,
+                plugin: synthetic
+            }
+        );
+
+        // An exact built-in title still leads Everything among a thousand plugin rows.
+        let exact = matcher
+            .matches("close tab", View::Everything, PAGE)
+            .expect("exact query");
+        assert_eq!(exact.strong, 1);
+        assert_eq!(titles(&matcher, &exact.hits[..1]), ["Close tab"]);
+        assert!(exact.hits.len() <= EVERYTHING_COMMAND_LIMIT);
+
+        // A synthetic title typed in full ranks its own command first.
+        let named = matcher
+            .matches("synthetic action 0517", View::PluginActions, PAGE)
+            .expect("named query");
+        assert_eq!(
+            titles(&matcher, &named.hits[..1]),
+            ["Synthetic action 0517"]
+        );
+
+        // Without a page, the page-only half of the synthetic commands neither shows nor counts.
+        let home = CommandContext {
+            active_page: false,
+            tab_count: 1,
+            ..PAGE
+        };
+        let plugins = matcher
+            .matches("synthetic", View::PluginActions, home)
+            .expect("plugin query");
+        assert_eq!(plugins.hits.len(), synthetic / 2);
+        assert_eq!(plugins.counts.plugin, synthetic / 2);
     }
 
     #[test]
