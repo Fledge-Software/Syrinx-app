@@ -426,10 +426,12 @@ impl BrowserView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A question reached by keys starts on its first choice, as the row menu did.
+        let select_first = matches!(origin.returns, MenuReturn::Row(_));
         let opening = MenuOpening {
             anchor: origin.anchor,
             returns: origin.returns,
-            select_first: false,
+            select_first,
         };
         let rows = confirm_rows(bulk, count);
         self.show_menu_rows(MenuKind::Confirm, rows, opening, window, cx);

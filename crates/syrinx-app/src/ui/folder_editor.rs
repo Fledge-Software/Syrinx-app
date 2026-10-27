@@ -605,7 +605,7 @@ mod tests {
         let row = [KeyContext::parse(ROW_CONTEXT).expect("row context")];
         for keys in ["shift-f10", "menu"] {
             let keystroke = Keystroke::parse(keys).expect("the key parses");
-            let (bindings, _) = keymap.bindings_for_input(&[keystroke.clone()], &row);
+            let (bindings, _) = keymap.bindings_for_input(std::slice::from_ref(&keystroke), &row);
             assert_eq!(bindings.len(), 1, "{keys}");
             assert!(bindings[0].action().partial_eq(&OpenRowMenu), "{keys}");
             // Away from a row the keys stay the page's and the window's.
