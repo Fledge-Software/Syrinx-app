@@ -1272,7 +1272,7 @@ impl Worker {
     }
 
     /// Finishes a clear of either category that a busy database interrupted, if one is pending,
-    /// and hands the window the zoom levels left when that clear removed any (#121).
+    /// and hands the window the zoom levels left whenever that clear was of zoom levels (#121).
     fn finish_pending_clear(
         &mut self,
         store: &Store,
