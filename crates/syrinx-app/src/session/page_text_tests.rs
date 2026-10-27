@@ -375,6 +375,8 @@ fn finish_repaired_session(fixture: Fixture, store: Store, worker: Worker) {
 const SHARE_DELETE_ONLY: u32 = 0x4;
 /// No sharing: others may neither read nor delete the file.
 const SHARE_NOTHING: u32 = 0;
+/// Windows' `FILE_SHARE_READ`: others may read the file but not delete it.
+const SHARE_READ_ONLY: u32 = 0x1;
 
 /// Holds the index's `meta.json` open, sharing only `share_mode`, so Tantivy cannot read it.
 fn hold_index_metadata(fixture: &Fixture, share_mode: u32) -> fs::File {
@@ -484,9 +486,6 @@ fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can(
     assert_eq!(index.cleared_generation(), 1);
     finish_repaired_session(fixture, store, worker);
 }
-
-/// Windows' `FILE_SHARE_READ`: others may read the file but not delete it.
-const SHARE_READ_ONLY: u32 = 0x1;
 
 /// Holds one of the index's segment files open so it cannot be deleted, and names it.
 fn hold_a_segment(fixture: &Fixture) -> (PathBuf, fs::File) {

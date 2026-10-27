@@ -30,8 +30,8 @@ impl CacheFolder {
     ///
     /// Every entry is checked first: a subfolder or a link is refused before anything is
     /// deleted, so nothing outside this folder can be reached through one. The index's
-    /// metadata goes last, so a deletion that fails part-way leaves an index the next open
-    /// finds and empties again.
+    /// metadata goes last, so a deletion that fails part-way leaves the old index for the next
+    /// open to find, and a retried repair empties it.
     pub fn empty(&self) -> Result<(), LocationError> {
         self.directory
             .revalidate(true, LocationOperation::OpenDirectory)?;
