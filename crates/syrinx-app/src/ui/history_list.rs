@@ -16,6 +16,7 @@ use crate::{
 const RECENT_LIMIT: usize = 200;
 
 /// Where the keys go when the list closes: the page it hid, or the chrome control that had them.
+#[derive(Clone)]
 pub(super) enum ReturnFocus {
     Page,
     Control(FocusHandle),

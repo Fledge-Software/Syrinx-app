@@ -131,6 +131,7 @@ pub(crate) mod glyph {
     pub(crate) const HISTORY: &str = "\u{E81C}";
     pub(crate) const ADD: &str = "\u{E710}";
     pub(crate) const REMOVE: &str = "\u{E738}";
+    pub(crate) const MUTE: &str = "\u{E74F}";
 }
 
 /// The design's square icon button: transparent until hovered, with its glyph centred.

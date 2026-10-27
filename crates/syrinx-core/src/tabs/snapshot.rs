@@ -170,6 +170,15 @@ impl fmt::Display for SnapshotError {
 impl std::error::Error for SnapshotError {}
 
 impl TabModelSnapshot {
+    /// The tabs a bulk close around `keep` would close now (`super::bulk_close_targets`).
+    pub fn bulk_close_targets(&self, scope: super::BulkScope, keep: TabId) -> Vec<TabId> {
+        let listed = self
+            .tabs
+            .iter()
+            .map(|tab| (tab.id, tab.saved_page_id.is_some()));
+        super::bulk_close_targets(listed, scope, keep)
+    }
+
     /// Whether the active tab shows Syrinx's Settings page (#91).
     pub fn active_is_settings(&self) -> bool {
         self.active_metadata()
