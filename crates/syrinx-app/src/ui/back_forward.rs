@@ -350,12 +350,11 @@ impl BrowserView {
         let unavailable = !self.history_engine_available(direction);
         button
             .child(self.anchor_probe(direction))
-            // Dimmed, but a click still reaches the engine: the reach can lag a fresh page.
+            // Dimmed, but it keeps its hover and a click still reaches the engine: the reach can
+            // lag a fresh page. (`icon_button` sets the hover; GPUI allows only one.)
             .when(unavailable, |button| {
                 button
                     .text_color(theme::rgba(theme::current().disabled))
-                    .cursor_default()
-                    .hover(|style| style.bg(gpui::transparent_black()))
                     .aria_description(match direction {
                         HistoryDirection::Back => "No earlier page",
                         HistoryDirection::Forward => "No later page",

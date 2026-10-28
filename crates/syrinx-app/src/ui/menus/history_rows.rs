@@ -92,14 +92,18 @@ fn unlisted_note(direction: HistoryDirection) -> &'static str {
 
 /// A page's label and host. The label is its title or, without one, its path, or its host
 /// when the path is bare; the host drops a leading "www." and is left out when it is already
-/// the label. An address that is not http(s) is shown whole, with no host.
+/// the label. An address that is not http(s) is shown whole, with no host. WebView2 names an
+/// untitled page by its address without the scheme, which counts as no title.
 fn row_face(address: &str, title: &str) -> (String, Option<String>) {
     let readable = syrinx_core::readable_address(address);
-    let parts = readable
+    let bare = readable
         .split_once("://")
         .filter(|(scheme, _)| matches!(*scheme, "http" | "https"))
-        .map(|(_, rest)| rest.split_at(rest.find('/').unwrap_or(rest.len())));
-    let title = title.trim();
+        .map(|(_, rest)| rest);
+    let title = Some(title.trim())
+        .filter(|title| Some(*title) != bare && *title != readable)
+        .unwrap_or_default();
+    let parts = bare.map(|rest| rest.split_at(rest.find('/').unwrap_or(rest.len())));
     let Some((host, path)) = parts else {
         let label = if title.is_empty() {
             readable
@@ -189,6 +193,11 @@ mod tests {
         assert_eq!(
             row_face("about:blank", ""),
             ("about:blank".to_owned(), None)
+        );
+        // WebView2's own name for an untitled page is its address without the scheme.
+        assert_eq!(
+            row_face("http://127.0.0.1:8765/b.html", "127.0.0.1:8765/b.html"),
+            ("/b.html".to_owned(), Some("127.0.0.1:8765".to_owned()))
         );
     }
 

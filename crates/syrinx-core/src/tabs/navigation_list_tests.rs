@@ -467,6 +467,31 @@ mod in_the_tab_model {
     }
 
     #[test]
+    fn a_typed_navigation_does_not_erase_the_title_of_the_page_it_leaves() {
+        // Found in #126's window check: typing an address resets the tab's metadata to a blank
+        // title before the new page commits, which named the page being left "".
+        let (mut model, id) = model_with_tab();
+        model
+            .observe_history(id, &typed("https://a.test/", false))
+            .unwrap();
+        let titled = TabMetadata {
+            title: "Synthetic A".into(),
+            ..TabMetadata::default()
+        };
+        model.update_metadata(id, titled).unwrap();
+        let typing = TabMetadata {
+            address: "https://b.test/".into(),
+            ..TabMetadata::default()
+        };
+        model.update_metadata(id, typing).unwrap();
+        model
+            .observe_history(id, &typed("https://b.test/", true))
+            .unwrap();
+        let rows = model.history_rows(id, HistoryDirection::Back, HISTORY_ROW_LIMIT);
+        assert_eq!(rows[0].title, "Synthetic A");
+    }
+
+    #[test]
     fn a_jump_is_planned_on_the_tab_model() {
         let (mut model, id) = model_with_tab();
         model
