@@ -467,6 +467,54 @@ mod in_the_tab_model {
     }
 
     #[test]
+    fn a_page_with_the_same_title_as_the_last_still_names_its_row() {
+        // Review of #126: the title check compared with the tab's last title, not the row's.
+        let (mut model, id) = model_with_tab();
+        let titled = || TabMetadata {
+            title: "Synthetic shared title".into(),
+            ..TabMetadata::default()
+        };
+        model
+            .observe_history(id, &typed("https://a.test/", false))
+            .unwrap();
+        model.update_metadata(id, titled()).unwrap();
+        model
+            .observe_history(id, &typed("https://b.test/", true))
+            .unwrap();
+        model.update_metadata(id, titled()).unwrap();
+        model
+            .observe_history(id, &typed("https://c.test/", true))
+            .unwrap();
+        let rows = model.history_rows(id, HistoryDirection::Back, HISTORY_ROW_LIMIT);
+        assert_eq!(rows[0].title, "Synthetic shared title");
+    }
+
+    #[test]
+    fn a_typed_navigation_does_not_erase_the_title_of_the_page_it_leaves() {
+        // Found in #126's window check: typing an address resets the tab's metadata to a blank
+        // title before the new page commits, which named the page being left "".
+        let (mut model, id) = model_with_tab();
+        model
+            .observe_history(id, &typed("https://a.test/", false))
+            .unwrap();
+        let titled = TabMetadata {
+            title: "Synthetic A".into(),
+            ..TabMetadata::default()
+        };
+        model.update_metadata(id, titled).unwrap();
+        let typing = TabMetadata {
+            address: "https://b.test/".into(),
+            ..TabMetadata::default()
+        };
+        model.update_metadata(id, typing).unwrap();
+        model
+            .observe_history(id, &typed("https://b.test/", true))
+            .unwrap();
+        let rows = model.history_rows(id, HistoryDirection::Back, HISTORY_ROW_LIMIT);
+        assert_eq!(rows[0].title, "Synthetic A");
+    }
+
+    #[test]
     fn a_jump_is_planned_on_the_tab_model() {
         let (mut model, id) = model_with_tab();
         model
@@ -497,5 +545,69 @@ fn the_page_changing_its_own_address_during_a_back_keeps_the_jump() {
     assert_eq!(
         addresses(&list, HistoryDirection::Forward),
         ["https://e.test/?tracking-removed"]
+    );
+}
+
+#[test]
+fn an_abandoned_jump_is_dropped_without_renaming_the_current_row() {
+    // Review of #212, nit: a failed Back is reported with the next change, so its report
+    // carries the address of the page typed after it, which is not the current row's.
+    let mut list = five_pages();
+    assert!(list.start_jump(HistoryDirection::Back, 2));
+    let dropped = list.observe(&report(
+        HistoryChange::JumpAbandoned,
+        "https://f.test/",
+        true,
+        false,
+    ));
+    assert_eq!(dropped, HistoryObserved::Followed);
+    list.observe(&typed("https://f.test/", true));
+    assert_eq!(
+        addresses(&list, HistoryDirection::Back),
+        [
+            "https://e.test/",
+            "https://d.test/",
+            "https://c.test/",
+            "https://b.test/",
+            "https://a.test/"
+        ]
+    );
+    // The dropped jump no longer judges a later, unrequested step.
+    let stepped = list.observe(&back_or_forward("https://e.test/", true, true));
+    assert_eq!(stepped, HistoryObserved::Followed);
+}
+
+#[test]
+fn a_reset_list_still_knows_the_engine_can_go_back() {
+    // After a reset, Back still works though nothing is listed, so the menu can say so.
+    let mut list = five_pages();
+    assert!(list.start_jump(HistoryDirection::Back, 1));
+    let observed = list.observe(&back_or_forward("https://elsewhere.test/", true, true));
+    assert_eq!(observed, HistoryObserved::Reset);
+    assert_eq!(list.reach(), HistoryReach::default());
+    assert_eq!(
+        list.engine_reach(),
+        HistoryReach {
+            back: true,
+            forward: true
+        }
+    );
+}
+
+#[test]
+fn an_abandoned_jump_does_not_change_the_engine_reach() {
+    let mut list = five_pages();
+    list.observe(&report(
+        HistoryChange::JumpAbandoned,
+        "https://f.test/",
+        false,
+        true,
+    ));
+    assert_eq!(
+        list.engine_reach(),
+        HistoryReach {
+            back: true,
+            forward: false
+        }
     );
 }

@@ -82,8 +82,27 @@ impl Pending {
             },
             HistoryChange::NewDocument { .. }
             | HistoryChange::BackOrForward
-            | HistoryChange::Unchanged => Self::default(),
+            | HistoryChange::Unchanged
+            | HistoryChange::JumpAbandoned => Self::default(),
         }
+    }
+
+    /// The changes one `HistoryChanged` reports, in order, and the facts left afterwards. An
+    /// abandoned jump is reported first as `JumpAbandoned`, which only drops the jump, so the
+    /// change after it is not checked against it and no row is renamed (review of #212).
+    fn reports(self) -> (Vec<HistoryChange>, Self) {
+        let change = self.change();
+        let mut reports = Vec::with_capacity(2);
+        if self.abandoned {
+            reports.push(HistoryChange::JumpAbandoned);
+        }
+        reports.push(change);
+        let next = Self {
+            abandoned: false,
+            ..self
+        }
+        .after(change);
+        (reports, next)
     }
 
     /// Navigation `id` has started; any abandoned step before it was a middle step.
@@ -234,19 +253,13 @@ impl Watch {
         Ok(())
     }
 
-    /// Reports the change the gathered facts describe, with the engine's current state.
+    /// Reports the changes the gathered facts describe, with the engine's current state.
     fn changed(&self, core: &ICoreWebView2) {
-        // An abandoned jump is dropped first, so this change is not checked against it.
-        if self.pending.get().abandoned {
-            self.report(core, HistoryChange::Unchanged);
-            self.update(|pending| Pending {
-                abandoned: false,
-                ..pending
-            });
+        let (reports, next) = self.pending.get().reports();
+        self.update(|_| next);
+        for change in reports {
+            self.report(core, change);
         }
-        let change = self.pending.get().change();
-        self.update(|pending| pending.after(change));
-        self.report(core, change);
     }
 
     /// Emits `change` with the address shown and where the engine can go.
@@ -359,6 +372,28 @@ mod tests {
     const TYPED: Option<Started> = Some(Started::NewDocument {
         user_initiated: true,
     });
+
+    #[test]
+    fn an_abandoned_jump_is_reported_as_dropped_before_the_change_that_revealed_it() {
+        // Review of #213: it was reported as `Unchanged`, which renamed the current row.
+        let typed_after_a_failed_back = Pending {
+            abandoned: true,
+            ..pending(TYPED, Some(true))
+        };
+        let (reports, next) = typed_after_a_failed_back.reports();
+        assert_eq!(
+            reports,
+            [
+                HistoryChange::JumpAbandoned,
+                HistoryChange::NewDocument {
+                    user_initiated: true
+                }
+            ]
+        );
+        assert!(!next.abandoned);
+        let (quiet, _) = pending(TYPED, Some(true)).reports();
+        assert_eq!(quiet.len(), 1, "no abandonment, no extra report");
+    }
 
     #[test]
     fn a_same_document_address_change_is_a_same_page_change() {

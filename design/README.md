@@ -190,6 +190,31 @@ design.
   corner, clear of the close badge above it, in the close badge's colours,
   and shown only. No speaker icon appears while a page plays sound. The
   canvas has no board for any of these; adding one is the owner's.
+- **Back and Forward's history menu (#126; owner's Direction 3, "menu rows
+  with a host column", 2026-10-28).** A right-click on Back or Forward, a
+  press held for half a second, or Alt Down on the focused button lists the
+  pages that way, nearest first; choosing one goes straight there. It is the
+  drop-down menu's card and 30 px rows at 320 px wide, hanging from the
+  button's bottom-left, from the title bar when the sidebar is hidden. Each
+  row shows the sidebar's 20 px placeholder icon, the title (its path when
+  it has none, its host when the path is bare), cut short with "…", and the
+  host without "www." dimmed on the right where other menus show a key,
+  taking at most 40% of the row. Up to 15 rows, then a separator and "Show
+  full history" (Ctrl H), whose text lines up with the titles. The current
+  page gets no row. A short window drops the furthest rows; the menu never
+  scrolls or animates. When a wrong landing has reset the list but the
+  engine can still go that way, the menu shows one muted, unselectable note,
+  "Earlier pages aren't listed" (or "Later pages aren't listed"), above
+  "Show full history". When the tab cannot go that way, nothing opens, and a
+  right-click on the button does not fall through to ☰. Rejected:
+  Direction 1, the title alone, because same-titled rows on single-page
+  sites look identical; Direction 2, a two-line timeline with a "Now"
+  header, because it is taller and needs a new row component. Back and
+  Forward look dimmed when the tab cannot go that way: their icon fades to
+  3:1 against the ground, the WCAG minimum for a control (3.01:1 to 3.03:1
+  across the five palettes), not the 2:1 disabled grey, because they still
+  respond to a click (owner, 2026-10-28). The canvas has no board for it;
+  adding one is the owner's.
 
 ## Forge
 

@@ -67,6 +67,7 @@ impl SessionCommand {
             Self::ObserveNavigation { .. } => "recording a finished navigation",
             Self::ObserveHistory { .. } => "following a tab's back and forward list",
             Self::StartHistoryJump { .. } => "planning a back or forward step",
+            Self::HistoryRows { .. } => "listing a tab's back or forward pages",
             Self::OpenHistory(_) => "opening a history entry",
             Self::RecentHistory { .. } => "listing history",
             Self::ClearHistory { .. } => "clearing history",

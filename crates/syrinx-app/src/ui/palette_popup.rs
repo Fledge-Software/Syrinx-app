@@ -85,6 +85,8 @@ impl BrowserView {
         }
         self.retire_peek(cx);
         self.retire_menu(cx);
+        // A Back or Forward menu still waiting for its rows must not open over the palette.
+        self.cancel_history_request();
         if self.closing || self.session_revision.is_none() {
             return;
         }

@@ -833,7 +833,12 @@ impl BrowserView {
             SessionEvent::HistoryCleared { request_id, result } => {
                 self.history_cleared(request_id, result);
             }
-            SessionEvent::HistoryReach { id, reach } => self.history_reach_changed(id, reach),
+            SessionEvent::HistoryReach { id, reach, engine } => {
+                self.history_reach_changed(id, reach, engine, window, cx);
+            }
+            SessionEvent::HistoryRows { request_id, rows } => {
+                self.history_rows_arrived(request_id, &rows, window, cx);
+            }
             SessionEvent::SiteZoomsCleared { request_id, result } => {
                 self.site_zooms_cleared(request_id, result);
             }
@@ -1086,7 +1091,7 @@ impl BrowserView {
                 self.forget_find(id, true);
                 self.metadata(id, None, Some(url));
             }
-            BrowserEvent::History { id, report } => self.history_reported(id, report),
+            BrowserEvent::History { id, report } => self.history_reported(id, report, window, cx),
             BrowserEvent::Loading { .. } => {}
             BrowserEvent::DataCleared { request, outcome } => {
                 self.browser_data_cleared(request, outcome);
@@ -1865,10 +1870,10 @@ impl BrowserView {
             .occlude()
             .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
         let back = icon_button(div().id("back"), glyph::BACK, "Back")
-            .aria_keyshortcuts("Alt+ArrowLeft")
+            .aria_keyshortcuts("Alt+ArrowLeft Alt+ArrowDown")
             .occlude();
         let forward = icon_button(div().id("forward"), glyph::FORWARD, "Forward")
-            .aria_keyshortcuts("Alt+ArrowRight")
+            .aria_keyshortcuts("Alt+ArrowRight Alt+ArrowDown")
             .occlude();
         let buttons = [
             self.history_button(back, HistoryDirection::Back, cx),

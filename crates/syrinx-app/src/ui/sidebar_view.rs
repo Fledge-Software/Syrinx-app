@@ -43,7 +43,7 @@ use crate::{session::SessionCommand, theme};
 const ROW_HEIGHT: f32 = 36.;
 /// How far each folder level indents its contents in the wide sidebar.
 const FOLDER_INDENT: f32 = 12.;
-const MONOGRAM_SIZE: f32 = 20.;
+pub(super) const MONOGRAM_SIZE: f32 = 20.;
 /// The compact row's hover group, which shows its close badge (#128).
 const COMPACT_ROW_GROUP: &str = "compact-row";
 /// The compact close badge: its hit target, how far below the row's top it sits, and its ×.
@@ -722,7 +722,7 @@ fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<
 }
 
 /// The placeholder favicon: a letter in a small square, accent-coloured for saved rows.
-fn row_icon(letter: &str, saved: bool) -> Div {
+pub(super) fn row_icon(letter: &str, saved: bool) -> Div {
     div()
         .size(px(MONOGRAM_SIZE))
         .flex_none()
