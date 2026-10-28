@@ -584,7 +584,12 @@ fn a_failed_empty_keeps_the_index_metadata_so_the_next_open_retries() {
         .cache_folder("synthetic-cache")
         .expect("create a synthetic cache folder");
     // The held segment is named to list after the metadata, so listing order cannot save it.
-    for name in ["0a1b2c.idx", ".managed.json", "meta.json", "zz-synthetic.store"] {
+    for name in [
+        "0a1b2c.idx",
+        ".managed.json",
+        "meta.json",
+        "zz-synthetic.store",
+    ] {
         fs::write(folder.path().join(name), b"synthetic").expect("write synthetic file");
     }
     let held = fs::OpenOptions::new()
