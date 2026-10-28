@@ -17,6 +17,49 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-10-28
+
+- **Syrinx may ship an optional Chromium "media engine" for protected
+  video; this is the one exception to "Syrinx bundles no Chromium"
+  (2026-10-15).** The owner wants Syrinx usable on Windows, macOS and Linux,
+  with Disney+, Hulu and YouTube working on each. Linux's system engine,
+  WebKitGTK, cannot load Widevine, Google's DRM module, and only Chromium and
+  Gecko can; Gecko would mean a Firefox fork, dropped on 2026-10-09. The
+  exception is narrow:
+  - every tab still uses its platform's system engine (WebView2, WKWebView,
+    WebKitGTK); only sites the owner marks as needing protected video open
+    in the media engine, and Google's own sites never do;
+  - the media engine is CEF or castLabs' Electron for Content Security,
+    never Chrome's interface or settings, and is downloaded only when the
+    owner asks for protected-video support;
+  - it is built during the macOS work, where it is a fallback only if a
+    service refuses WKWebView, and is what gives Linux protected video.
+
+  The plan, the order of work and the open questions are in
+  `docs/web-engine-plan.md`, tracked by epic #211. Rejected: no protected video on Linux at all
+  (the third-build proposal's option D, read at `af3de53`), which leaves
+  Linux without the services the owner wants; a self-built, stripped
+  Chromium, which saves little because the engine core cannot be removed and
+  would mean building Chromium on every release.
+- **The Widevine licence and Verified Media Path signing go through
+  castLabs.** castLabs, a DRM company, licenses Widevine to small developers
+  and signs builds for Google's Verified Media Path (VMP), the check that the
+  program loading Widevine is the genuine signed build. Rejected as the main
+  route: applying to Google directly, which refused an open-source Electron
+  browser in 2019 (`docs/widevine-licence-guide.md`). Which engine to use,
+  castLabs' Electron with its EVS signing service or CEF with castLabs' paid
+  certification, is chosen after castLabs answers. The owner signs any
+  agreement.
+- **Once Widevine works, Syrinx is updated to run on Windows, macOS and
+  Linux.** This sets the direction after v1; it does not change D2. v1 is
+  still Windows 11 only, and no macOS or Linux work starts before it ships.
+  Each step still needs its own approval when it comes: the castLabs
+  agreement, the Widevine download as a network call Syrinx makes on its
+  own, the VMP signing step in the release workflow, and the media engine's
+  dependency audit. ⚠️ Chromium's media code includes FFmpeg under the LGPL,
+  which `AGENTS.md` does not allow, so that audit may need a further,
+  explicit licence exception.
+
 ## 2026-10-24
 
 - **Syrinx's full-text index uses Tantivy, not SQLite's FTS5 (#52).** The
