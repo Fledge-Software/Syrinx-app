@@ -96,7 +96,8 @@ impl Pending {
     }
 
     /// Navigation `id` finished. It is forgotten either way, so a later `HistoryChanged` is
-    /// never read as its own; a failed latest step back or forward abandons its jump.
+    /// never read as its own; a failed latest step back or forward abandons its jump. A commit's
+    /// `HistoryChanged` always came before its `NavigationCompleted` in the spike.
     fn complete(self, id: u64, success: bool) -> Self {
         let latest_step =
             matches!(self.started, Some((started, Started::BackOrForward)) if started == id);
@@ -219,8 +220,7 @@ impl Watch {
         Ok(())
     }
 
-    /// Forgets a navigation that ended without committing. A step back or forward that
-    /// failed is reported as unchanged, so the tab's list drops the jump it was waiting for.
+    /// Forgets a navigation that finished; a failed latest step marks its jump abandoned.
     fn completed(
         &self,
         args: &ICoreWebView2NavigationCompletedEventArgs,
@@ -390,6 +390,15 @@ mod tests {
             .start(34, Started::BackOrForward)
             .complete(34, false)
             .start(35, Started::BackOrForward);
+        assert!(!jump.abandoned);
+    }
+
+    #[test]
+    fn a_middle_step_that_completes_after_the_next_start_does_not_abandon_it() {
+        let jump = Pending::default()
+            .start(33, Started::BackOrForward)
+            .start(34, Started::BackOrForward)
+            .complete(33, false);
         assert!(!jump.abandoned);
     }
 
