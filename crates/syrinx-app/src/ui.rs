@@ -833,7 +833,12 @@ impl BrowserView {
             SessionEvent::HistoryCleared { request_id, result } => {
                 self.history_cleared(request_id, result);
             }
-            SessionEvent::HistoryReach { id, reach } => self.history_reach_changed(id, reach),
+            SessionEvent::HistoryReach { id, reach, engine } => {
+                self.history_reach_changed(id, reach, engine);
+            }
+            SessionEvent::HistoryRows { request_id, rows } => {
+                self.history_rows_arrived(request_id, &rows, window, cx);
+            }
             SessionEvent::SiteZoomsCleared { request_id, result } => {
                 self.site_zooms_cleared(request_id, result);
             }

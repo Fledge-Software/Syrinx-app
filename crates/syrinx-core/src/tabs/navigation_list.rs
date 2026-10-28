@@ -109,6 +109,8 @@ pub struct NavigationList {
     current: usize,
     /// The entry a requested jump should land on.
     jump: Option<usize>,
+    /// Where the engine itself last said it can go, which a reset list does not change.
+    engine: HistoryReach,
 }
 
 impl fmt::Debug for NavigationList {
@@ -119,6 +121,7 @@ impl fmt::Debug for NavigationList {
             .field("entries", &self.entries.len())
             .field("current", &self.current)
             .field("jump", &self.jump)
+            .field("engine", &self.engine)
             .finish()
     }
 }
@@ -132,6 +135,10 @@ impl NavigationList {
             self.jump = None;
             return HistoryObserved::Followed;
         }
+        self.engine = HistoryReach {
+            back: report.can_go_back,
+            forward: report.can_go_forward,
+        };
         if self.entries.is_empty() {
             self.reset(&report.address);
         } else if !self.apply(report) {
@@ -186,6 +193,12 @@ impl NavigationList {
             back: self.visible(HistoryDirection::Back).next().is_some(),
             forward: self.visible(HistoryDirection::Forward).next().is_some(),
         }
+    }
+
+    /// Whether the engine can go back and forward, as its latest report said. It can when the
+    /// list cannot, after a reset: Back then still works, but its pages are not listed.
+    pub fn engine_reach(&self) -> HistoryReach {
+        self.engine
     }
 
     /// Indices of the visible entries in `direction`, nearest first.
@@ -355,6 +368,14 @@ impl TabModel {
         self.navigation
             .get(id)
             .map(|list| list.rows(direction, limit))
+            .unwrap_or_default()
+    }
+
+    /// Whether tab `id`'s engine can go back and forward; a tab with no reports can do neither.
+    pub fn history_engine_reach(&self, id: TabId) -> HistoryReach {
+        self.navigation
+            .get(id)
+            .map(NavigationList::engine_reach)
             .unwrap_or_default()
     }
 

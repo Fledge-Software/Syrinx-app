@@ -528,3 +528,38 @@ fn an_abandoned_jump_is_dropped_without_renaming_the_current_row() {
     let stepped = list.observe(&back_or_forward("https://e.test/", true, true));
     assert_eq!(stepped, HistoryObserved::Followed);
 }
+
+#[test]
+fn a_reset_list_still_knows_the_engine_can_go_back() {
+    // After a reset, Back still works though nothing is listed, so the menu can say so.
+    let mut list = five_pages();
+    assert!(list.start_jump(HistoryDirection::Back, 1));
+    let observed = list.observe(&back_or_forward("https://elsewhere.test/", true, true));
+    assert_eq!(observed, HistoryObserved::Reset);
+    assert_eq!(list.reach(), HistoryReach::default());
+    assert_eq!(
+        list.engine_reach(),
+        HistoryReach {
+            back: true,
+            forward: true
+        }
+    );
+}
+
+#[test]
+fn an_abandoned_jump_does_not_change_the_engine_reach() {
+    let mut list = five_pages();
+    list.observe(&report(
+        HistoryChange::JumpAbandoned,
+        "https://f.test/",
+        false,
+        true,
+    ));
+    assert_eq!(
+        list.engine_reach(),
+        HistoryReach {
+            back: true,
+            forward: false
+        }
+    );
+}

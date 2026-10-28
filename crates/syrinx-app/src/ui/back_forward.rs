@@ -1,15 +1,17 @@
-//! Routes Back, Forward and their list requests to the tab model's back and forward lists (#126).
+//! Routes Back, Forward and their menus to the tab model's back and forward lists (#126).
 
-use std::{collections::HashMap, time::Duration};
+use std::{cell::Cell, collections::HashMap, rc::Rc, time::Duration};
 
 use gpui::{
-    Context, InteractiveElement, KeyBinding, MouseButton, StatefulInteractiveElement, Task,
+    Context, InteractiveElement, KeyBinding, MouseButton, ParentElement, Pixels, Point,
+    StatefulInteractiveElement, Styled, Task, Window, canvas, prelude::FluentBuilder as _,
 };
 use syrinx_core::{HistoryDirection, HistoryReach, TabId, usage::Feature};
 use syrinx_platform::browser::BrowserCommand;
 
-use super::BrowserView;
-use crate::session::SessionCommand;
+use super::{BrowserView, menus::MenuKind};
+use crate::session::{HistoryListRow, SessionCommand};
+use crate::theme;
 
 gpui::actions!(back_forward, [OpenBackList, OpenForwardList]);
 
@@ -27,14 +29,49 @@ pub(super) fn bind_keys(cx: &mut gpui::App) {
     ]);
 }
 
-/// What the window keeps for Back and Forward: where each tab's list reaches, as the tab
-/// model last reported, and the press being held. The lists themselves live in the model.
+/// What the window keeps for Back and Forward: where each tab's list and engine reach, as the
+/// tab model last reported, the press being held, the menu whose rows are being read and where
+/// each button was drawn. The lists themselves live in the model.
 #[derive(Default)]
 pub(super) struct BackForward {
-    reach: HashMap<TabId, HistoryReach>,
+    reach: HashMap<TabId, Reach>,
     hold: HoldState,
     /// The held press's timer; its result is an error only once the view has closed.
     hold_timer: Option<Task<gpui::Result<()>>>,
+    /// The menu whose rows the worker is reading, and the last request number used.
+    request: Option<RowsRequest>,
+    requests: u64,
+    /// Each button's bottom-left in the main window, where its menu hangs.
+    back_anchor: Anchor,
+    forward_anchor: Anchor,
+}
+
+/// Where one tab's list reaches, and where its engine can still go after the list reset.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Reach {
+    listed: HistoryReach,
+    engine: HistoryReach,
+}
+
+/// Whether `reach` goes `direction`.
+fn goes(reach: HistoryReach, direction: HistoryDirection) -> bool {
+    match direction {
+        HistoryDirection::Back => reach.back,
+        HistoryDirection::Forward => reach.forward,
+    }
+}
+
+/// A button's bottom-left as its last main-window paint placed it.
+type Anchor = Rc<Cell<Option<Point<Pixels>>>>;
+
+/// A Back or Forward menu waiting for its rows from the worker.
+#[derive(Clone, Copy, Debug)]
+struct RowsRequest {
+    id: u64,
+    tab: TabId,
+    direction: HistoryDirection,
+    /// Opened by Alt Down, so it starts with its first row selected.
+    keyed: bool,
 }
 
 /// Which button a held press began on, and which one it opened a list from. GPUI runs a
@@ -99,9 +136,14 @@ impl BrowserView {
         self.command(SessionCommand::ObserveHistory { id: tab, report });
     }
 
-    /// Remembers where tab `id`'s list reaches, for Back and Forward's list requests.
-    pub(super) fn history_reach_changed(&mut self, id: TabId, reach: HistoryReach) {
-        self.back_forward.reach.insert(id, reach);
+    /// Remembers where tab `id`'s list and engine reach, for Back and Forward's menus and looks.
+    pub(super) fn history_reach_changed(
+        &mut self,
+        id: TabId,
+        listed: HistoryReach,
+        engine: HistoryReach,
+    ) {
+        self.back_forward.reach.insert(id, Reach { listed, engine });
     }
 
     /// Forgets the reach of tabs that are no longer open.
@@ -152,26 +194,119 @@ impl BrowserView {
         });
     }
 
-    /// Whether the shown tab's list has a row in `direction`, so its list may open. The reach
-    /// can lag the worker by one report: a Back pressed just after a commit plans no jump and
-    /// lands by address instead, which is harmless.
+    /// Whether the shown tab's list has a row in `direction`. The reach can lag the worker by
+    /// one report: a Back pressed just after a commit plans no jump and lands by address
+    /// instead, which is harmless.
     fn history_list_available(&self, direction: HistoryDirection) -> bool {
-        let Some(reach) = self
-            .shown
-            .and_then(|shown| self.back_forward.reach.get(&shown))
-        else {
-            return false;
-        };
-        match direction {
-            HistoryDirection::Back => reach.back,
-            HistoryDirection::Forward => reach.forward,
-        }
+        goes(self.shown_reach().listed, direction)
     }
 
-    /// Asks for the shown tab's list in `direction`; true when there is one to show.
-    fn request_history_list(&mut self, direction: HistoryDirection) -> bool {
-        // TODO(#126): the interface slice opens the menu here, in an owned popup.
-        self.history_list_available(direction)
+    /// Whether the shown tab's engine can go `direction`; Back and Forward look disabled when
+    /// it cannot. A tab with no reports yet can go neither way.
+    fn history_engine_available(&self, direction: HistoryDirection) -> bool {
+        goes(self.shown_reach().engine, direction)
+    }
+
+    fn shown_reach(&self) -> Reach {
+        self.shown
+            .and_then(|shown| self.back_forward.reach.get(&shown))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Asks the worker for the shown tab's rows in `direction`, or closes that menu when it is
+    /// open. True when this took the press, so it is neither a click nor a right-click for ☰.
+    fn request_history_list(
+        &mut self,
+        direction: HistoryDirection,
+        keyed: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(tab) = self.shown else {
+            return false;
+        };
+        // With nothing either way the menu would be empty; a reset list still has its note.
+        if !self.history_list_available(direction) && !self.history_engine_available(direction) {
+            return false;
+        }
+        if self.toggled_closed(MenuKind::History(direction), cx) {
+            return true;
+        }
+        self.back_forward.requests += 1;
+        let id = self.back_forward.requests;
+        self.back_forward.request = Some(RowsRequest {
+            id,
+            tab,
+            direction,
+            keyed,
+        });
+        self.command(SessionCommand::HistoryRows {
+            request_id: id,
+            id: tab,
+            direction,
+        });
+        true
+    }
+
+    /// Opens the menu the rows were read for, if it is still wanted: the same tab is shown,
+    /// and its button was drawn in the main window.
+    pub(super) fn history_rows_arrived(
+        &mut self,
+        request_id: u64,
+        rows: &[HistoryListRow],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(request) = self
+            .back_forward
+            .request
+            .take_if(|request| request.id == request_id)
+        else {
+            return; // A later request replaced this one.
+        };
+        if self.shown != Some(request.tab) {
+            return;
+        }
+        // The note is true only while the engine can still go that way.
+        if rows.is_empty() && !self.history_engine_available(request.direction) {
+            return;
+        }
+        let Some(anchor) = self.history_anchor(request.direction).get() else {
+            return; // The button was never drawn, so there is nowhere to hang the menu.
+        };
+        self.show_history_menu(
+            (request.tab, request.direction),
+            rows,
+            anchor,
+            request.keyed,
+            window,
+            cx,
+        );
+    }
+
+    /// Jumps the tab the menu opened on straight to a row. A tab switched away since is left
+    /// alone; choosing a row counts no new feature (D39).
+    pub(super) fn jump_to_history_row(
+        &mut self,
+        tab: TabId,
+        direction: HistoryDirection,
+        steps: usize,
+    ) {
+        if self.shown != Some(tab) {
+            return;
+        }
+        // A list shows at most fifteen rows, so a count past `u32` is never a row.
+        let Ok(steps) = u32::try_from(steps) else {
+            return;
+        };
+        self.go_history(direction, steps);
+    }
+
+    fn history_anchor(&self, direction: HistoryDirection) -> &Anchor {
+        match direction {
+            HistoryDirection::Back => &self.back_forward.back_anchor,
+            HistoryDirection::Forward => &self.back_forward.forward_anchor,
+        }
     }
 
     /// Starts timing a press on Back or Forward; a press held for `HOLD` opens the list.
@@ -180,17 +315,17 @@ impl BrowserView {
         self.back_forward.hold_timer = Some(cx.spawn(async move |view, cx| {
             cx.background_executor().timer(HOLD).await;
             // Fails only when the view closed with its window: no press is left to finish.
-            view.update(cx, |view, _| view.hold_elapsed(direction))
+            view.update(cx, |view, cx| view.hold_elapsed(direction, cx))
         }));
     }
 
     /// Opens the list if the press is still down. With nothing to list, the release stays an
     /// ordinary click, so a slow click still steps.
-    fn hold_elapsed(&mut self, direction: HistoryDirection) {
+    fn hold_elapsed(&mut self, direction: HistoryDirection, cx: &mut Context<Self>) {
         if !self.back_forward.hold.elapse(direction) {
             return;
         }
-        if self.request_history_list(direction) {
+        if self.request_history_list(direction, false, cx) {
             self.back_forward.hold.open(direction);
         }
     }
@@ -204,14 +339,28 @@ impl BrowserView {
         cx.notify();
     }
 
-    /// Back or Forward's own listeners: click, right-click, hold and Alt Down.
+    /// Back or Forward's own listeners (click, right-click, hold and Alt Down), where its menu
+    /// hangs, and its dimmed look when the engine cannot go that way.
     pub(super) fn history_button(
         &self,
         button: gpui::Stateful<gpui::Div>,
         direction: HistoryDirection,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        let unavailable = !self.history_engine_available(direction);
         button
+            .child(self.anchor_probe(direction))
+            // Dimmed, but a click still reaches the engine: the reach can lag a fresh page.
+            .when(unavailable, |button| {
+                button
+                    .text_color(theme::rgba(theme::current().disabled))
+                    .cursor_default()
+                    .hover(|style| style.bg(gpui::transparent_black()))
+                    .aria_description(match direction {
+                        HistoryDirection::Back => "No earlier page",
+                        HistoryDirection::Forward => "No later page",
+                    })
+            })
             .key_context(match direction {
                 HistoryDirection::Back => BACK_CONTEXT,
                 HistoryDirection::Forward => FORWARD_CONTEXT,
@@ -223,7 +372,7 @@ impl BrowserView {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, _, _, cx| {
-                    if this.request_history_list(direction) {
+                    if this.request_history_list(direction, false, cx) {
                         cx.stop_propagation();
                     }
                 }),
@@ -240,12 +389,29 @@ impl BrowserView {
                 MouseButton::Left,
                 cx.listener(move |this, _, _, _| this.back_forward.hold.release(direction, false)),
             )
-            .on_action(cx.listener(|this, _: &OpenBackList, _, _| {
-                this.request_history_list(HistoryDirection::Back);
+            .on_action(cx.listener(|this, _: &OpenBackList, _, cx| {
+                this.request_history_list(HistoryDirection::Back, true, cx);
             }))
-            .on_action(cx.listener(|this, _: &OpenForwardList, _, _| {
-                this.request_history_list(HistoryDirection::Forward);
+            .on_action(cx.listener(|this, _: &OpenForwardList, _, cx| {
+                this.request_history_list(HistoryDirection::Forward, true, cx);
             }))
+    }
+
+    /// An invisible layer over the button that records its bottom-left, where its menu hangs.
+    /// Only the main window's paint counts: menus open only there.
+    fn anchor_probe(&self, direction: HistoryDirection) -> impl gpui::IntoElement {
+        let anchor = self.history_anchor(direction).clone();
+        let main = self.main_window;
+        canvas(
+            move |bounds, window, _| {
+                if window.window_handle() == main {
+                    anchor.set(Some(bounds.bottom_left()));
+                }
+            },
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .size_full()
     }
 }
 

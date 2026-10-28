@@ -722,7 +722,7 @@ fn row_frame(id: impl Into<ElementId>, look: RowLook, labels: bool) -> Stateful<
 }
 
 /// The placeholder favicon: a letter in a small square, accent-coloured for saved rows.
-fn row_icon(letter: &str, saved: bool) -> Div {
+pub(super) fn row_icon(letter: &str, saved: bool) -> Div {
     div()
         .size(px(MONOGRAM_SIZE))
         .flex_none()

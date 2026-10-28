@@ -1,5 +1,6 @@
 //! The chrome's drop-down menus: the page menu behind ☰, the sidebar's ⋯ menu, a sidebar
-//! row's menu and its bulk-close confirmation (#95), and the Downloads flyout behind ↓ (#143).
+//! row's menu and its bulk-close confirmation (#95), the Downloads flyout behind ↓ (#143), and
+//! Back and Forward's lists of the tab's recent pages (#126).
 //! A menu is its own owned popup window: GPUI content drawn over the page card in the
 //! main window never receives the page's clicks or keys (#12).
 
@@ -24,6 +25,7 @@ use super::{
     *,
 };
 
+mod history_rows;
 mod tab_rows;
 
 /// The menu's width, narrow enough that the sidebar menu stays inside a wide sidebar.
@@ -49,6 +51,8 @@ const WINDOW_MARGIN: f32 = 8.;
 /// A press on the menu's own button this soon after the press closed it is that same
 /// press, so it closes the menu rather than opening it again.
 const RECLICK_WINDOW: Duration = Duration::from_millis(400);
+/// The most of a history row's width its host may take before it is cut short.
+const HOST_SHARE: f32 = 0.4;
 
 /// Which menu is open.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,6 +64,8 @@ pub(super) enum MenuKind {
     Row,
     /// Asks before Close other tabs or Close tabs below.
     Confirm,
+    /// Back's or Forward's list of the tab's pages that way (#126).
+    History(syrinx_core::HistoryDirection),
 }
 
 /// One menu entry.
@@ -97,6 +103,14 @@ enum MenuItem {
         remember: bool,
     },
     Cancel,
+    /// A page in Back's or Forward's list, `steps` presses away on `tab` (#126).
+    HistoryPage {
+        tab: TabId,
+        direction: syrinx_core::HistoryDirection,
+        steps: usize,
+    },
+    /// Says the list was reset, so pages the engine can still reach are not listed; shown only.
+    HistoryUnlisted,
 }
 
 const PAGE_ITEMS: [MenuItem; 7] = [
@@ -122,7 +136,7 @@ impl MenuKind {
         match self {
             MenuKind::Page => &PAGE_ITEMS,
             MenuKind::Sidebar => &SIDEBAR_ITEMS,
-            MenuKind::Downloads | MenuKind::Row | MenuKind::Confirm => &[],
+            MenuKind::Downloads | MenuKind::Row | MenuKind::Confirm | MenuKind::History(_) => &[],
         }
     }
 
@@ -133,12 +147,15 @@ impl MenuKind {
             MenuKind::Downloads => "Downloads",
             MenuKind::Row => "Tab menu",
             MenuKind::Confirm => "Close tabs",
+            MenuKind::History(syrinx_core::HistoryDirection::Back) => "Back history",
+            MenuKind::History(syrinx_core::HistoryDirection::Forward) => "Forward history",
         }
     }
 
     fn width(self) -> f32 {
         match self {
             MenuKind::Downloads => DOWNLOADS_WIDTH,
+            MenuKind::History(_) => history_rows::HISTORY_WIDTH,
             MenuKind::Page | MenuKind::Sidebar | MenuKind::Row | MenuKind::Confirm => MENU_WIDTH,
         }
     }
@@ -169,6 +186,8 @@ impl MenuItem {
             } => "Close tabs",
             MenuItem::ConfirmBulk { remember: true, .. } => "Close and don't ask again",
             MenuItem::Cancel => "Cancel",
+            MenuItem::HistoryPage { .. } => "Page",
+            MenuItem::HistoryUnlisted => "Pages aren't listed",
         }
     }
 
@@ -195,7 +214,9 @@ impl MenuItem {
             | MenuItem::Tab(_)
             | MenuItem::ConfirmPrompt
             | MenuItem::ConfirmBulk { .. }
-            | MenuItem::Cancel => return None,
+            | MenuItem::Cancel
+            | MenuItem::HistoryPage { .. }
+            | MenuItem::HistoryUnlisted => return None,
         };
         Shortcut::new(keys).ok().map(|shortcut| shortcut.label())
     }
@@ -225,10 +246,13 @@ impl MenuItem {
             )
     }
 
-    /// Whether arrows and the pointer can select the row; separators and the confirmation's
-    /// question are drawn only.
+    /// Whether arrows and the pointer can select the row; separators, the confirmation's
+    /// question and the history list's note are drawn only.
     fn is_selectable(self) -> bool {
-        !matches!(self, MenuItem::Separator | MenuItem::ConfirmPrompt)
+        !matches!(
+            self,
+            MenuItem::Separator | MenuItem::ConfirmPrompt | MenuItem::HistoryUnlisted
+        )
     }
 }
 
@@ -389,7 +413,7 @@ impl BrowserView {
 
     /// A press on an open menu's button closes it. Depending on when Windows reports the
     /// popup's deactivation, the menu is either still open or was closed by this press.
-    fn toggled_closed(&mut self, kind: MenuKind, cx: &mut Context<Self>) -> bool {
+    pub(super) fn toggled_closed(&mut self, kind: MenuKind, cx: &mut Context<Self>) -> bool {
         let open = self.menu.as_ref().map(|menu| menu.kind);
         let dismissed = self.menu_dismissal.take();
         if !closes_on_reclick(open, dismissed, kind, Instant::now()) {
@@ -784,11 +808,17 @@ impl BrowserView {
                 self.run_row_item(item, origin, window, cx);
                 return;
             }
+            MenuItem::HistoryPage {
+                tab,
+                direction,
+                steps,
+            } => self.jump_to_history_row(tab, direction, steps),
             // Shown for their state only, which `is_choosable` keeps from being chosen.
             MenuItem::Download(_)
             | MenuItem::NoDownloads
             | MenuItem::Separator
-            | MenuItem::ConfirmPrompt => {}
+            | MenuItem::ConfirmPrompt
+            | MenuItem::HistoryUnlisted => {}
         }
         if item.returns_keys_to_page() {
             self.focus_page(window, cx);
@@ -1105,9 +1135,12 @@ impl Render for MenuView {
                     .aria_label(name)
                     .children(self.download_buttons(index, row, cx))
             } else {
-                drawn.on_click(cx.listener(move |this, _, _, cx| {
-                    this.send(MenuAction::Choose(item), cx);
-                }))
+                // A page is heard with its host and distance, such as "Intro, 2 pages back".
+                drawn
+                    .aria_label(history_rows::spoken_page(row))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.send(MenuAction::Choose(item), cx);
+                    }))
             });
         }
         crate::controls::watch_pointer(card)
@@ -1141,6 +1174,8 @@ fn drawn_only_row(index: usize, row: &MenuRow, palette: &syrinx_ui::Palette) -> 
                     .bg(theme::rgba(palette.panel_divider)),
             );
     }
+    // The history list's note is quieter than a question: it explains, it does not ask.
+    let note = row.item == MenuItem::HistoryUnlisted;
     // A named label, so a screen reader reads the question with the menu.
     div()
         .id(("menu-prompt", index))
@@ -1151,11 +1186,18 @@ fn drawn_only_row(index: usize, row: &MenuRow, palette: &syrinx_ui::Palette) -> 
         .px(px(ITEM_PAD_X))
         .flex()
         .items_center()
-        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .when(note, |prompt| {
+            prompt.text_color(theme::rgba(palette.text_muted))
+        })
+        .when(!note, |prompt| {
+            prompt.font_weight(gpui::FontWeight::SEMIBOLD)
+        })
         .child(div().flex_1().min_w_0().truncate().child(row.label.clone()))
 }
 
-/// One item: its name on the left and its shortcut, dimmed, on the right. Rows take no Tab
+/// One item: its name on the left and its shortcut, dimmed, on the right. A history page
+/// also shows its site's placeholder icon first, as its sidebar row does, and its host on
+/// the right. Rows take no Tab
 /// stop; the selected one is the focused menu's active descendant for screen readers.
 fn menu_row(
     index: usize,
@@ -1163,6 +1205,7 @@ fn menu_row(
     selected: bool,
     palette: &syrinx_ui::Palette,
 ) -> Stateful<Div> {
+    let page = matches!(row.item, MenuItem::HistoryPage { .. });
     div()
         .id(("menu-item", index))
         .role(gpui::Role::MenuItem)
@@ -1182,13 +1225,24 @@ fn menu_row(
         .gap_3()
         .rounded(px(ITEM_RADIUS))
         .cursor_pointer()
+        .when(page, |drawn| {
+            drawn.child(super::sidebar_view::row_icon(
+                &super::tiles::monogram(&row.label),
+                false,
+            ))
+        })
         .child(div().flex_1().min_w_0().truncate().child(row.label.clone()))
         .children(row.shortcut.clone().map(|keys| {
-            div()
-                .flex_shrink_0()
+            let detail = div()
                 .text_size(px(syrinx_ui::metrics::text::SMALL))
                 .text_color(theme::rgba(palette.text_muted))
-                .child(keys)
+                .child(keys);
+            // A page's host gives way to its title; a shortcut is never cut short.
+            if page {
+                detail.max_w(gpui::relative(HOST_SHARE)).truncate()
+            } else {
+                detail.flex_shrink_0()
+            }
         }))
 }
 
