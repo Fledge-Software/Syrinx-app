@@ -30,22 +30,31 @@ impl ZoomLevelsReport {
     pub(super) fn current(&mut self, store: &Store) -> Result<SiteZoomLevels, SessionError> {
         let levels = self.read(store);
         if levels.is_err() {
-            self.failures = self.failures.saturating_add(1);
+            self.count_failure();
         }
         levels
     }
 
-    /// Reads the levels and sends them to the window. A failed read is retried on idle ticks;
-    /// a window that has gone has nothing to resend to. Either failure is returned.
+    /// Reads the levels and sends them to the window. Either failure counts toward
+    /// `MAX_ATTEMPTS` and is returned, so a window whose event stream has closed is retried
+    /// a bounded number of times too. Only a delivered send clears the count: a successful
+    /// read alone must not, or a closed window would be retried for the whole session.
     pub(super) fn send(
         &mut self,
         store: &Store,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
         let levels = self.current(store)?;
-        emit(events, SessionEvent::SiteZoomsReplaced(levels))?;
+        if let Err(error) = emit(events, SessionEvent::SiteZoomsReplaced(levels)) {
+            self.count_failure();
+            return Err(error);
+        }
         self.failures = 0;
         Ok(())
+    }
+
+    fn count_failure(&mut self) {
+        self.failures = self.failures.saturating_add(1);
     }
 
     /// The idle tick: resends the levels if an earlier report failed. Each failed retry is
