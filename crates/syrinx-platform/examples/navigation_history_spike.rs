@@ -1,5 +1,5 @@
 //! Records which host-side WebView2 events a tab's back and forward list can be rebuilt from (#126),
-//! against synthetic loopback pages only; run with `cargo run -p syrinx-platform --example navigation_history_spike`.
+//! against synthetic loopback pages only, then checks Syrinx's own list through `BrowserHost`; run with `cargo run -p syrinx-platform --example navigation_history_spike`.
 
 use std::{
     cell::RefCell,
@@ -18,9 +18,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use futures::channel::mpsc::{TryRecvError, UnboundedReceiver};
 use raw_window_handle::{
     HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle,
 };
+use syrinx_core::{HISTORY_ROW_LIMIT, HistoryDirection, HistoryObserved, NavigationList};
+use syrinx_platform::browser::{BrowserCommand, BrowserEvent, BrowserHost, PageBounds};
 use webview2_com::{
     CoTaskMemPWSTR, ContentLoadingEventHandler, HistoryChangedEventHandler,
     Microsoft::Web::WebView2::Win32::{
@@ -87,8 +90,9 @@ fn run() -> Result<(), String> {
     let parent = create_parent()?;
     let result = run_steps(&server, &profile, parent);
     let cleanup = destroy_parent(parent);
+    let checked = result.and(cleanup).and_then(|()| host_check(&server));
     server.stop();
-    result.and(cleanup)
+    checked
 }
 
 fn run_steps(server: &Server, profile: &std::path::Path, parent: HWND) -> Result<(), String> {
@@ -593,4 +597,163 @@ fn pump_messages() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Drives Syrinx's real page host and its `NavigationList`: four pages, a three-row jump
+/// back, a two-row jump forward and a same-page change, checking the list each time.
+fn host_check(server: &Server) -> Result<(), String> {
+    let parent = create_parent()?;
+    let profile = reserve_profile()?;
+    let (host, events) = BrowserHost::spawn(parent.0 as isize, profile)
+        .map_err(|error| format!("Start page host failed: {error}"))?;
+    let mut tab = HostTab {
+        host,
+        events,
+        list: NavigationList::default(),
+    };
+    let checked = tab.run(server);
+    let stopped = tab.stop();
+    let destroyed = destroy_parent(parent);
+    checked.and(stopped).and(destroyed)
+}
+
+struct HostTab {
+    host: BrowserHost,
+    events: UnboundedReceiver<BrowserEvent>,
+    list: NavigationList,
+}
+
+impl HostTab {
+    const ID: u64 = 1;
+
+    fn run(&mut self, server: &Server) -> Result<(), String> {
+        self.wait(|_, event| matches!(event, Some(BrowserEvent::Ready)))?;
+        self.send(BrowserCommand::Resize(PageBounds {
+            x: 0,
+            y: 0,
+            width: 900,
+            height: 700,
+        }))?;
+        self.send(BrowserCommand::Create {
+            id: Self::ID,
+            url: server.url("/p/40"),
+        })?;
+        self.send(BrowserCommand::ShowActive(Some(Self::ID)))?;
+        self.wait_at(&server.url("/p/40"))?;
+        for page in 41..=44 {
+            let url = server.url(&format!("/p/{page}"));
+            self.send(BrowserCommand::Navigate {
+                id: Self::ID,
+                url: url.clone(),
+            })?;
+            self.wait_at(&url)?;
+        }
+        self.jump(HistoryDirection::Back, 3, &server.url("/p/41"))?;
+        self.expect_rows(HistoryDirection::Forward, &[42, 43, 44], server)?;
+        self.jump(HistoryDirection::Forward, 2, &server.url("/p/43"))?;
+        self.expect_rows(HistoryDirection::Back, &[42, 41, 40], server)?;
+        self.send(BrowserCommand::Navigate {
+            id: Self::ID,
+            url: server.url("/p/45?do=replace:45r"),
+        })?;
+        self.wait_at(&server.url("/p/45r"))?;
+        self.expect_rows(HistoryDirection::Back, &[43, 42, 41, 40], server)?;
+        println!(
+            "
+## BrowserHost and NavigationList agree: jumps of 3 and 2 rows, same-page replace"
+        );
+        Ok(())
+    }
+
+    fn jump(
+        &mut self,
+        direction: HistoryDirection,
+        steps: usize,
+        expected: &str,
+    ) -> Result<(), String> {
+        let sent = self
+            .list
+            .start_jump(direction, steps)
+            .ok_or("The list refused a jump it should allow.")?;
+        let steps = i32::try_from(sent).map_err(|e| e.to_string())?;
+        let offset = if direction == HistoryDirection::Back {
+            -steps
+        } else {
+            steps
+        };
+        self.send(BrowserCommand::GoToOffset {
+            id: Self::ID,
+            offset,
+        })?;
+        self.wait_at(expected)
+    }
+
+    fn expect_rows(
+        &self,
+        direction: HistoryDirection,
+        pages: &[u32],
+        server: &Server,
+    ) -> Result<(), String> {
+        let actual: Vec<String> = self
+            .list
+            .rows(direction, HISTORY_ROW_LIMIT)
+            .iter()
+            .map(|row| server.short(row.address))
+            .collect();
+        let expected: Vec<String> = pages.iter().map(|page| format!("/p/{page}")).collect();
+        if actual == expected {
+            return Ok(());
+        }
+        Err(format!(
+            "{direction:?} rows were {actual:?}, expected {expected:?}."
+        ))
+    }
+
+    /// Waits until the list's current row is `url` after a report that agreed with the engine.
+    fn wait_at(&mut self, url: &str) -> Result<(), String> {
+        self.wait(|list, _| list.current_address() == Some(url))
+    }
+
+    fn send(&self, command: BrowserCommand) -> Result<(), String> {
+        self.host.send(command).map_err(|error| error.to_string())
+    }
+
+    /// Feeds history reports to the list until `done` accepts it, or fails after ten seconds.
+    fn wait(
+        &mut self,
+        mut done: impl FnMut(&NavigationList, Option<&BrowserEvent>) -> bool,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + STEP_LIMIT;
+        while Instant::now() < deadline {
+            pump_messages()?;
+            let event = match self.events.try_recv() {
+                Ok(event) => event.into_current(),
+                Err(TryRecvError::Closed) => return Err("Page host stopped early.".into()),
+                Err(TryRecvError::Empty) => {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+            };
+            match &event {
+                Some(BrowserEvent::History { report, .. }) => {
+                    if self.list.observe(report) == HistoryObserved::Reset {
+                        println!("  list reset after a {:?}", report.change);
+                    }
+                }
+                Some(BrowserEvent::Title { title, .. }) => self.list.retitle(title),
+                Some(BrowserEvent::Error { error, .. }) => return Err(error.to_string()),
+                _ => {}
+            }
+            if done(&self.list, event.as_ref()) {
+                return Ok(());
+            }
+        }
+        Err("Timed out waiting for the page host.".into())
+    }
+
+    fn stop(mut self) -> Result<(), String> {
+        self.send(BrowserCommand::Shutdown)?;
+        self.wait(|_, event| matches!(event, Some(BrowserEvent::Stopped)))?;
+        self.host.join().map_err(|error| error.to_string())
+    }
 }

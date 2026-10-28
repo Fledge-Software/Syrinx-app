@@ -1,5 +1,6 @@
 //! Connects the shared session to browser chrome without running storage or search on the UI thread.
 
+mod back_forward;
 mod chrome_focus;
 mod clear_data;
 mod customize;
@@ -84,8 +85,9 @@ use main_window::update_in_main;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use syrinx_core::usage::{ErrorCategory, Feature, UsageRecorder};
 use syrinx_core::{
-    ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry, PageOrigin,
-    Route, SavedFolderId, TabId, TabModelSnapshot, TabSnapshot, route,
+    ActivationTarget, BrowserAction, CommandAction, CommandContext, CommandRegistry,
+    HistoryDirection, PageOrigin, Route, SavedFolderId, TabId, TabModelSnapshot, TabSnapshot,
+    route,
 };
 use syrinx_platform::browser::{
     BrowserCommand, BrowserEvent, BrowserHost, BrowserShortcut, PageBounds, set_overlay_owner,
@@ -149,6 +151,7 @@ pub fn bind_keys(cx: &mut App) {
     crate::palette::bind_keys(cx);
     import::bind_keys(cx);
     essentials::bind_zoom_keys(cx);
+    back_forward::bind_keys(cx);
     find::bind_keys(cx);
     folder_editor::bind_keys(cx);
     panes::bind_keys(cx);
@@ -328,6 +331,7 @@ pub struct BrowserView {
     find: Option<find::FindBar>,
     find_sequence: u64,
     site_zoom: site_zoom::SiteZoom,
+    back_forward: back_forward::BackForward,
     /// Tabs the owner muted in this run; never saved (#95).
     muted: HashSet<TabId>,
     /// Tabs whose page last reported itself muted, which the sidebar's badge shows (#95).
@@ -452,6 +456,7 @@ impl BrowserView {
             find: None,
             find_sequence: 0,
             site_zoom: site_zoom::SiteZoom::default(),
+            back_forward: back_forward::BackForward::default(),
             muted: HashSet::new(),
             shown_muted: HashSet::new(),
             ask_before_bulk_close: true,
@@ -707,6 +712,7 @@ impl BrowserView {
                     self.close_settings_subviews();
                 }
                 self.model = snapshot.model;
+                self.forget_closed_history();
                 if initial {
                     self.usage.session_restored();
                 }
@@ -987,6 +993,7 @@ impl BrowserView {
             BrowserEvent::RuntimeVersion(version) => self.runtime_version_observed(version),
             BrowserEvent::Title { id, title } => {
                 self.acceptance_title(id, &title);
+                self.history_retitled(id, &title);
                 self.metadata(id, Some(title), None);
             }
             BrowserEvent::CloseRequested { id } => self.page_requested_close(id),
@@ -1079,6 +1086,7 @@ impl BrowserView {
                 self.forget_find(id, true);
                 self.metadata(id, None, Some(url));
             }
+            BrowserEvent::History { id, report } => self.history_reported(id, &report),
             BrowserEvent::Loading { .. } => {}
             BrowserEvent::DataCleared { request, outcome } => {
                 self.browser_data_cleared(request, outcome);
@@ -1405,12 +1413,8 @@ impl BrowserView {
             BrowserShortcut::PreviousTab => self.switch_tab(true, by_key),
             BrowserShortcut::ReopenTab => self.command(SessionCommand::ReopenClosed),
             BrowserShortcut::SavePage => self.command(SessionCommand::SaveActive),
-            BrowserShortcut::Back => {
-                self.shown_page_action(Feature::NavBack, |id| BrowserCommand::Back { id });
-            }
-            BrowserShortcut::Forward => {
-                self.shown_page_action(Feature::NavForward, |id| BrowserCommand::Forward { id });
-            }
+            BrowserShortcut::Back => self.step_history(HistoryDirection::Back),
+            BrowserShortcut::Forward => self.step_history(HistoryDirection::Forward),
             BrowserShortcut::Reload => {
                 self.shown_page_action(Feature::NavReload, |id| BrowserCommand::Reload { id });
             }
@@ -1860,17 +1864,15 @@ impl BrowserView {
             .aria_keyshortcuts("Control+Alt+S")
             .occlude()
             .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
+        let back = icon_button(div().id("back"), glyph::BACK, "Back")
+            .aria_keyshortcuts("Alt+ArrowLeft")
+            .occlude();
+        let forward = icon_button(div().id("forward"), glyph::FORWARD, "Forward")
+            .aria_keyshortcuts("Alt+ArrowRight")
+            .occlude();
         let buttons = [
-            self.navigation_button(
-                ("back", glyph::BACK, "Back", "Alt+ArrowLeft"),
-                (Feature::NavBack, |id| BrowserCommand::Back { id }),
-                cx,
-            ),
-            self.navigation_button(
-                ("forward", glyph::FORWARD, "Forward", "Alt+ArrowRight"),
-                (Feature::NavForward, |id| BrowserCommand::Forward { id }),
-                cx,
-            ),
+            self.history_button(back, HistoryDirection::Back, cx),
+            self.history_button(forward, HistoryDirection::Forward, cx),
             self.navigation_button(
                 ("reload", glyph::RELOAD, "Reload", "Control+R"),
                 (Feature::NavReload, |id| BrowserCommand::Reload { id }),
@@ -2159,10 +2161,10 @@ impl Render for BrowserView {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Back, _, _| {
-                this.shown_page_action(Feature::NavBack, |id| BrowserCommand::Back { id });
+                this.step_history(HistoryDirection::Back);
             }))
             .on_action(cx.listener(|this, _: &Forward, _, _| {
-                this.shown_page_action(Feature::NavForward, |id| BrowserCommand::Forward { id });
+                this.step_history(HistoryDirection::Forward);
             }))
             .on_action(cx.listener(|this, _: &Reload, _, _| {
                 this.shown_page_action(Feature::NavReload, |id| BrowserCommand::Reload { id });

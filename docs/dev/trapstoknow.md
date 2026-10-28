@@ -51,6 +51,17 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   the document being left, carry the taint forward, and match a redirect's
   response to any hop of the navigation, since it can arrive after the next
   hop starts. Source: [`docs/p1-25-page-text.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-25-page-text.md), F21–F26 (observed).
+- **The host cannot tell `pushState` from `replaceState`.** Both raise
+  `SourceChanged` with `IsNewDocument` false and then `HistoryChanged`, with the
+  same `CanGoBack` and `CanGoForward`, and whether a `pushState` adds an entry
+  depends on a user gesture the host never sees. Chromium also skips, on Back
+  and Forward, a page that moved on without a user gesture. Syrinx's per-tab
+  back list (#126) therefore replaces the current row on a same-page change,
+  hides pages left with `IsUserInitiated` false, and resets when a jump lands
+  elsewhere; do not "fix" it with a DevTools history call (owner, 2026-10-28).
+  Several `GoBack` calls in a row commit only the last entry. Source:
+  `crates/syrinx-platform/examples/navigation_history_spike.rs` and its results
+  on #126 (observed on runtime 155, three runs).
 - **An adopted popup's first document has no matching response event.** On
   this runtime the popup's page was judged `NoResponse`, so popups fail
   closed and are never read (F27). Do not "fix" this by assuming headers;
