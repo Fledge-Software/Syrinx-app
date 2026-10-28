@@ -89,6 +89,11 @@ pub(crate) fn icon() -> Rgba {
     token(|palette| palette.icon)
 }
 
+/// An icon whose control cannot act now but still responds, at 3:1 on the ground (#126).
+pub(crate) fn unavailable_icon() -> Rgba {
+    token(syrinx_ui::contrast::unavailable_icon)
+}
+
 pub(crate) fn icon_dim() -> Rgba {
     token(|palette| palette.icon_dim)
 }
