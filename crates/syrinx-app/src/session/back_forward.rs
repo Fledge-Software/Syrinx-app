@@ -38,7 +38,9 @@ impl Worker {
         steps: u32,
     ) {
         // A count past the address space has no row, so it plans nothing.
-        let steps = usize::try_from(steps).unwrap_or(usize::MAX);
+        let Ok(steps) = usize::try_from(steps) else {
+            return;
+        };
         self.model.start_history_jump(id, direction, steps);
     }
 }

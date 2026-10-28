@@ -182,6 +182,15 @@ fn steps(server: &Server) -> Vec<Step> {
         step("typed p32", Action::Navigate(url("/p/32"))),
         step("GoBack once after a replaceState", Action::Back(1)),
         step("GoBack once more ", Action::Back(1)),
+        step("typed p60", Action::Navigate(url("/p/60"))),
+        step(
+            "fragment link on p61",
+            Action::Navigate(url("/p/61?do=frag")),
+        ),
+        step("typed p62", Action::Navigate(url("/p/62"))),
+        step("GoBack to the fragment entry", Action::Back(1)),
+        step("GoBack within the same document", Action::Back(1)),
+        step("GoForward within the same document", Action::Forward(1)),
     ]
 }
 

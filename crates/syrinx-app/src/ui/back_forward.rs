@@ -152,7 +152,9 @@ impl BrowserView {
         });
     }
 
-    /// Whether the shown tab's list has a row in `direction`, so its list may open.
+    /// Whether the shown tab's list has a row in `direction`, so its list may open. The reach
+    /// can lag the worker by one report: a Back pressed just after a commit plans no jump and
+    /// lands by address instead, which is harmless.
     fn history_list_available(&self, direction: HistoryDirection) -> bool {
         let Some(reach) = self
             .shown

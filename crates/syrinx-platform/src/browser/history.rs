@@ -36,6 +36,10 @@ struct Pending {
     started: Option<(u64, Started)>,
     /// Set by `SourceChanged`: whether the new address came with a new document.
     new_document: Option<bool>,
+    /// The latest step back or forward failed and no navigation has started since, so the
+    /// jump it was for is abandoned. Reported with the next history change: each middle step
+    /// of a jump fails just before the next one starts (spike, cacheable pages).
+    abandoned: bool,
 }
 
 impl Pending {
@@ -82,17 +86,25 @@ impl Pending {
         }
     }
 
-    /// Forgets navigation `id` if it never committed (cancelled, failed or a download), so a
-    /// later `HistoryChanged` is not read as that navigation's.
-    fn without_failed(self, id: u64) -> Self {
-        let started = self.started.filter(|(started, _)| *started != id);
-        Self { started, ..self }
+    /// Navigation `id` has started; any abandoned step before it was a middle step.
+    fn start(self, id: u64, started: Started) -> Self {
+        Self {
+            started: Some((id, started)),
+            abandoned: false,
+            ..self
+        }
     }
 
-    /// Whether failed navigation `id` was the latest step back or forward, so the jump it was
-    /// for is abandoned. The cancelled middle steps of one jump are older and do not count.
-    fn abandons_step(self, id: u64) -> bool {
-        matches!(self.started, Some((started, Started::BackOrForward)) if started == id)
+    /// Navigation `id` finished. It is forgotten either way, so a later `HistoryChanged` is
+    /// never read as its own; a failed latest step back or forward abandons its jump.
+    fn complete(self, id: u64, success: bool) -> Self {
+        let latest_step =
+            matches!(self.started, Some((started, Started::BackOrForward)) if started == id);
+        Self {
+            started: self.started.filter(|(started, _)| *started != id),
+            abandoned: self.abandoned || (latest_step && !success),
+            ..self
+        }
     }
 }
 
@@ -192,10 +204,7 @@ impl Watch {
                 user_initiated: user.as_bool(),
             },
         };
-        self.update(|pending| Pending {
-            started: Some((navigation, started)),
-            ..pending
-        });
+        self.update(|pending| pending.start(navigation, started));
         Ok(())
     }
 
@@ -214,7 +223,6 @@ impl Watch {
     /// failed is reported as unchanged, so the tab's list drops the jump it was waiting for.
     fn completed(
         &self,
-        core: &ICoreWebView2,
         args: &ICoreWebView2NavigationCompletedEventArgs,
     ) -> windows::core::Result<()> {
         let (mut navigation, mut success) = (0, BOOL::default());
@@ -222,19 +230,20 @@ impl Watch {
             args.NavigationId(&mut navigation)?;
             args.IsSuccess(&mut success)?;
         }
-        if success.as_bool() {
-            return Ok(());
-        }
-        let abandoned = self.pending.get().abandons_step(navigation);
-        self.update(|pending| pending.without_failed(navigation));
-        if abandoned {
-            self.report(core, HistoryChange::Unchanged);
-        }
+        self.update(|pending| pending.complete(navigation, success.as_bool()));
         Ok(())
     }
 
     /// Reports the change the gathered facts describe, with the engine's current state.
     fn changed(&self, core: &ICoreWebView2) {
+        // An abandoned jump is dropped first, so this change is not checked against it.
+        if self.pending.get().abandoned {
+            self.report(core, HistoryChange::Unchanged);
+            self.update(|pending| Pending {
+                abandoned: false,
+                ..pending
+            });
+        }
         let change = self.pending.get().change();
         self.update(|pending| pending.after(change));
         self.report(core, change);
@@ -287,11 +296,11 @@ fn register_source(core: &ICoreWebView2, watch: Watch) -> Result<(), BrowserErro
 }
 
 fn register_failure(core: &ICoreWebView2, watch: Watch) -> Result<(), BrowserError> {
-    let handler = NavigationCompletedEventHandler::create(Box::new(move |core, args| {
-        let (Some(core), Some(args)) = (core, args) else {
-            return watch.reported(Err(missing()));
-        };
-        watch.reported(watch.completed(&core, &args))
+    let handler = NavigationCompletedEventHandler::create(Box::new(move |_, args| {
+        watch.reported(
+            args.ok_or_else(missing)
+                .and_then(|args| watch.completed(&args)),
+        )
     }));
     let mut token = 0;
     unsafe { core.add_NavigationCompleted(&handler, &mut token) }
@@ -339,6 +348,7 @@ mod tests {
         Pending {
             started: started.map(|started| (7, started)),
             new_document,
+            abandoned: false,
         }
     }
 
@@ -372,12 +382,44 @@ mod tests {
     }
 
     #[test]
-    fn only_the_latest_failed_step_abandons_its_jump() {
-        let stepping = pending(Some(Started::BackOrForward), None);
-        assert!(stepping.abandons_step(7));
-        // A cancelled middle step of the same jump is older than the latest start.
-        assert!(!stepping.abandons_step(6));
-        assert!(!pending(TYPED, None).abandons_step(7));
+    fn the_middle_steps_of_a_jump_do_not_abandon_it() {
+        // The spike: each cancelled middle step completes just before the next one starts.
+        let jump = Pending::default()
+            .start(33, Started::BackOrForward)
+            .complete(33, false)
+            .start(34, Started::BackOrForward)
+            .complete(34, false)
+            .start(35, Started::BackOrForward);
+        assert!(!jump.abandoned);
+    }
+
+    #[test]
+    fn a_failed_last_step_abandons_its_jump() {
+        let stayed = Pending::default()
+            .start(40, Started::BackOrForward)
+            .complete(40, false);
+        assert!(stayed.abandoned);
+        let typed = Pending::default()
+            .start(
+                41,
+                Started::NewDocument {
+                    user_initiated: true,
+                },
+            )
+            .complete(41, false);
+        assert!(
+            !typed.abandoned,
+            "only a step back or forward abandons a jump"
+        );
+    }
+
+    #[test]
+    fn a_finished_navigation_is_forgotten_either_way() {
+        let done = Pending::default()
+            .start(50, Started::BackOrForward)
+            .complete(50, true);
+        assert_eq!(done.change(), HistoryChange::Unchanged);
+        assert!(!done.abandoned);
     }
 
     #[test]
@@ -431,10 +473,13 @@ mod tests {
     #[test]
     fn a_navigation_that_never_committed_is_forgotten() {
         let started = pending(Some(Started::BackOrForward), None);
-        assert_eq!(started.without_failed(7).change(), HistoryChange::Unchanged);
+        assert_eq!(
+            started.complete(7, false).change(),
+            HistoryChange::Unchanged
+        );
         // A late failure of an older navigation leaves the newer one in place.
         assert_eq!(
-            started.without_failed(6).change(),
+            started.complete(6, false).change(),
             HistoryChange::BackOrForward
         );
     }
