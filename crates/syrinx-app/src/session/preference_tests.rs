@@ -466,6 +466,39 @@ fn a_levels_read_that_fails_after_the_apply_is_retried_on_a_later_idle_tick() {
 }
 
 #[test]
+fn a_levels_read_that_fails_after_a_requested_zoom_clear_is_retried_on_an_idle_tick() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    // Finish the fixture's pending clear first, so the requested clear is the only one left.
+    worker
+        .idle(&store, &sender)
+        .expect("finish the synthetic clear");
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    let now = utc_seconds().expect("synthetic clock");
+    worker.zoom_levels.refuse_reads(1);
+    worker
+        .handle(
+            &store,
+            SessionCommand::ClearSiteZooms {
+                request_id: 21,
+                start: now - 3_600,
+                end: now + 1,
+            },
+            &sender,
+        )
+        .expect("the worker reports a failed read instead of stopping");
+    assert!(worker.zoom_levels.is_stale());
+    worker
+        .idle(&store, &sender)
+        .expect("resend the synthetic levels");
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    assert!(!worker.zoom_levels.is_stale());
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}
+
+#[test]
 fn a_levels_read_that_keeps_failing_is_retried_a_bounded_number_of_times() {
     let fixture = Fixture::new();
     let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);

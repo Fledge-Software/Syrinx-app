@@ -10,8 +10,8 @@ use syrinx_store::{
 };
 
 use super::{
-    ClearedHistory, ClearedSiteZooms, SessionError, SessionEvent, history,
-    page_text::PageText, preferences, zoom_levels::ZoomLevelsReport,
+    ClearedHistory, ClearedSiteZooms, SessionError, SessionEvent, history, page_text::PageText,
+    zoom_levels::ZoomLevelsReport,
 };
 
 /// Everything besides the database that a clear must reach before the journal completes it:
@@ -125,14 +125,14 @@ pub(super) fn clear_before_catalogue(
 pub(super) fn clear(
     store: &Store,
     journal: &mut DeletionJournal,
-    followers: Followers<'_>,
+    mut followers: Followers<'_>,
     start: i64,
     end: i64,
 ) -> Result<Finished, SessionError> {
     journaled_clear(
         store,
         journal,
-        followers,
+        &mut followers,
         DeletionCategory::History,
         start,
         end,
@@ -144,19 +144,20 @@ pub(super) fn clear(
 pub(super) fn clear_site_zooms(
     store: &Store,
     journal: &mut DeletionJournal,
-    followers: Followers<'_>,
+    mut followers: Followers<'_>,
     start: i64,
     end: i64,
 ) -> Result<ClearedSiteZooms, SessionError> {
     let finished = journaled_clear(
         store,
         journal,
-        followers,
+        &mut followers,
         DeletionCategory::SiteZoom,
         start,
         end,
     )?;
-    let remaining = preferences::restore_site_zooms(store)?;
+    // A failed read leaves the clear durable, so the idle tick resends the levels (#196).
+    let remaining = followers.zoom_levels.current(store)?;
     Ok(ClearedSiteZooms {
         sites: finished.site_zooms,
         remaining,
@@ -167,15 +168,15 @@ pub(super) fn clear_site_zooms(
 fn journaled_clear(
     store: &Store,
     journal: &mut DeletionJournal,
-    mut followers: Followers<'_>,
+    followers: &mut Followers<'_>,
     category: DeletionCategory,
     start: i64,
     end: i64,
 ) -> Result<Finished, SessionError> {
     let range = DeletionRange::new(start, end).map_err(journal_error)?;
     // An earlier clear that stopped part-way is finished before a new one may start.
-    let earlier = finish_pending(store, journal, &mut followers, Origin::Interrupted)?;
-    let cleared = journal_and_finish(store, journal, &mut followers, category, range);
+    let earlier = finish_pending(store, journal, followers, Origin::Interrupted)?;
+    let cleared = journal_and_finish(store, journal, followers, category, range);
     // The earlier clear's failed report waits until the new clear has run, so a closed window
     // cannot cancel the owner's deletion.
     match cleared {

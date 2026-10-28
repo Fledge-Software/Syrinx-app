@@ -20,26 +20,32 @@ pub(super) struct ZoomLevelsReport {
 }
 
 impl ZoomLevelsReport {
-    /// Whether the window may still be showing levels the database no longer holds.
+    /// Whether a resend is still scheduled because the window may show old levels.
     pub(super) fn is_stale(&self) -> bool {
         self.failures > 0
     }
 
-    /// Reads the levels the database now holds and sends them to the window. A failure marks
-    /// the window stale so the next idle tick tries again, and is returned to the caller.
+    /// Reads the levels the database now holds. A failed read marks the window stale, so the
+    /// next idle tick tries again even when the caller cannot send the levels itself.
+    pub(super) fn current(&mut self, store: &Store) -> Result<SiteZoomLevels, SessionError> {
+        let levels = self.read(store);
+        if levels.is_err() {
+            self.failures = self.failures.saturating_add(1);
+        }
+        levels
+    }
+
+    /// Reads the levels and sends them to the window. A failed read is retried on idle ticks;
+    /// a window that has gone has nothing to resend to. Either failure is returned.
     pub(super) fn send(
         &mut self,
         store: &Store,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        let sent = self
-            .read(store)
-            .and_then(|levels| emit(events, SessionEvent::SiteZoomsReplaced(levels)));
-        match &sent {
-            Ok(()) => self.failures = 0,
-            Err(_) => self.failures = self.failures.saturating_add(1),
-        }
-        sent
+        let levels = self.current(store)?;
+        emit(events, SessionEvent::SiteZoomsReplaced(levels))?;
+        self.failures = 0;
+        Ok(())
     }
 
     /// The idle tick: resends the levels if an earlier report failed. Each failed retry is
