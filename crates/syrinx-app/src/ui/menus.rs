@@ -148,8 +148,7 @@ impl MenuKind {
             MenuKind::Downloads => "Downloads",
             MenuKind::Row => "Tab menu",
             MenuKind::Confirm => "Close tabs",
-            MenuKind::History(syrinx_core::HistoryDirection::Back) => "Back history",
-            MenuKind::History(syrinx_core::HistoryDirection::Forward) => "Forward history",
+            MenuKind::History(direction) => super::back_forward::way(direction).menu_name,
         }
     }
 
@@ -265,6 +264,8 @@ struct MenuRow {
     shortcut: Option<String>,
     /// A download row's buttons; empty for every other row.
     controls: &'static [DownloadControl],
+    /// A history page's placeholder icon letter; `None` for every other row.
+    icon: Option<String>,
 }
 
 impl fmt::Debug for MenuRow {
@@ -534,8 +535,18 @@ impl BrowserView {
                     _ => item.shortcut(),
                 },
                 controls: &[],
+                icon: None,
             })
             .collect()
+    }
+
+    /// Closes the open menu as Escape does: the keys go back where it took them from, if
+    /// Syrinx is in front, as every other close does.
+    pub(super) fn dismiss_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(generation) = self.menu.as_ref().map(|menu| menu.generation) else {
+            return;
+        };
+        self.apply_menu_action(generation, MenuAction::Dismiss, window, cx);
     }
 
     /// Which menu is open or opening, if any.
@@ -1252,8 +1263,14 @@ fn menu_row(
         .gap_3()
         .rounded(px(ITEM_RADIUS))
         .cursor_pointer()
-        .when(page, |drawn| drawn.child(page_icon(row)))
-        .when(inset && !page, |drawn| drawn.child(icon_space()))
+        .children(
+            row.icon
+                .as_deref()
+                .map(|letter| super::sidebar_view::row_icon(letter, false)),
+        )
+        .when(inset && row.icon.is_none(), |drawn| {
+            drawn.child(icon_space())
+        })
         .child(div().flex_1().min_w_0().truncate().child(row.label.clone()))
         .children(row.shortcut.clone().map(|keys| {
             let detail = div()
@@ -1267,16 +1284,6 @@ fn menu_row(
                 detail.flex_shrink_0()
             }
         }))
-}
-
-/// A page's placeholder icon, lettered as its sidebar row is: by its title, or by its host
-/// when the row shows a path because the page has no title.
-fn page_icon(row: &MenuRow) -> Div {
-    let source = match &row.shortcut {
-        Some(host) if row.label.starts_with('/') => host.as_str(),
-        _ => row.label.as_str(),
-    };
-    super::sidebar_view::row_icon(&super::tiles::monogram(source), false)
 }
 
 /// An empty space as wide as a page's icon, so a row without one lines its text up.
@@ -1378,6 +1385,7 @@ fn fixed_row(item: MenuItem) -> MenuRow {
         label: item.label().to_owned(),
         shortcut: None,
         controls: &[],
+        icon: None,
     }
 }
 
@@ -1451,6 +1459,7 @@ fn download_rows(list: &syrinx_core::DownloadList) -> Vec<MenuRow> {
             label: download.file_name.clone(),
             shortcut: Some(download.detail()),
             controls: download.controls(),
+            icon: None,
         })
         .collect();
     if rows.is_empty() {

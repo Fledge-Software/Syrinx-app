@@ -6,26 +6,67 @@ use gpui::{
     Context, InteractiveElement, KeyBinding, MouseButton, ParentElement, Pixels, Point,
     StatefulInteractiveElement, Styled, Task, Window, canvas, prelude::FluentBuilder as _,
 };
-use syrinx_core::{HistoryChange, HistoryDirection, HistoryReach, TabId, usage::Feature};
+use syrinx_core::{HistoryDirection, HistoryReach, TabId, usage::Feature};
 use syrinx_platform::browser::{BrowserCommand, syrinx_in_foreground};
 
 use super::{BrowserView, menus::MenuKind};
 use crate::session::{HistoryListRow, SessionCommand};
 use crate::theme;
+use requests::{Press, RowsRequests, Stale};
+
+mod requests;
 
 gpui::actions!(back_forward, [OpenBackList, OpenForwardList]);
 
 /// How long Back or Forward must be held before its list opens, as in Chrome.
 const HOLD: Duration = Duration::from_millis(500);
-/// The key contexts of the two buttons, where Alt Down opens their list (owner, 2026-10-28).
-const BACK_CONTEXT: &str = "SyrinxBack";
-const FORWARD_CONTEXT: &str = "SyrinxForward";
+/// Everything that differs between Back and Forward, in one place.
+pub(super) struct Way {
+    /// The menu's accessible name.
+    pub(super) menu_name: &'static str,
+    /// The note a reset list shows when the engine can still go this way.
+    pub(super) unlisted: &'static str,
+    /// The word a row's distance ends with, as in "3 pages back".
+    pub(super) distance: &'static str,
+    /// What a screen reader hears on the dimmed button.
+    unavailable: &'static str,
+    /// The button's key context, where Alt Down opens its menu (owner, 2026-10-28).
+    key_context: &'static str,
+    /// The existing usage count a step adds to (AN-01); the menu itself counts nothing.
+    feature: Feature,
+}
+
+const BACK_WAY: Way = Way {
+    menu_name: "Back history",
+    unlisted: "Earlier pages aren't listed",
+    distance: "back",
+    unavailable: "No earlier page",
+    key_context: "SyrinxBack",
+    feature: Feature::NavBack,
+};
+
+const FORWARD_WAY: Way = Way {
+    menu_name: "Forward history",
+    unlisted: "Later pages aren't listed",
+    distance: "forward",
+    unavailable: "No later page",
+    key_context: "SyrinxForward",
+    feature: Feature::NavForward,
+};
+
+/// Back's or Forward's facts.
+pub(super) fn way(direction: HistoryDirection) -> &'static Way {
+    match direction {
+        HistoryDirection::Back => &BACK_WAY,
+        HistoryDirection::Forward => &FORWARD_WAY,
+    }
+}
 
 /// Binds Alt Down on a focused Back or Forward button.
 pub(super) fn bind_keys(cx: &mut gpui::App) {
     cx.bind_keys([
-        KeyBinding::new("alt-down", OpenBackList, Some(BACK_CONTEXT)),
-        KeyBinding::new("alt-down", OpenForwardList, Some(FORWARD_CONTEXT)),
+        KeyBinding::new("alt-down", OpenBackList, Some(BACK_WAY.key_context)),
+        KeyBinding::new("alt-down", OpenForwardList, Some(FORWARD_WAY.key_context)),
     ]);
 }
 
@@ -38,9 +79,8 @@ pub(super) struct BackForward {
     hold: HoldState,
     /// The held press's timer; its result is an error only once the view has closed.
     hold_timer: Option<Task<gpui::Result<()>>>,
-    /// The menu whose rows the worker is reading, and the last request number used.
-    request: Option<RowsRequest>,
-    requests: u64,
+    /// The menu whose rows the worker is reading.
+    requests: RowsRequests,
     /// Each button's bottom-left in the main window, where its menu hangs.
     back_anchor: Anchor,
     forward_anchor: Anchor,
@@ -61,27 +101,8 @@ fn goes(reach: HistoryReach, direction: HistoryDirection) -> bool {
     }
 }
 
-/// Whether a change moves the shown page within its list, which shifts every row's step count.
-/// A same-page change or a reload only renames the current row, which no menu lists.
-fn shifts_rows(change: HistoryChange) -> bool {
-    matches!(
-        change,
-        HistoryChange::NewDocument { .. } | HistoryChange::BackOrForward
-    )
-}
-
 /// A button's bottom-left as its last main-window paint placed it.
 type Anchor = Rc<Cell<Option<Point<Pixels>>>>;
-
-/// A Back or Forward menu waiting for its rows from the worker.
-#[derive(Clone, Copy, Debug)]
-struct RowsRequest {
-    id: u64,
-    tab: TabId,
-    direction: HistoryDirection,
-    /// Opened by Alt Down, so it starts with its first row selected.
-    keyed: bool,
-}
 
 /// Which button a held press began on, and which one it opened a list from. GPUI runs a
 /// mouse-up-outside listener on every button the pointer is not over, so each release must
@@ -128,11 +149,22 @@ impl HoldState {
     }
 }
 
-/// The existing usage count each direction adds to (AN-01); the list itself counts nothing.
-fn feature(direction: HistoryDirection) -> Feature {
-    match direction {
-        HistoryDirection::Back => Feature::NavBack,
-        HistoryDirection::Forward => Feature::NavForward,
+/// What a right-click on Back or Forward does. It never reaches the page menu, even on a
+/// dimmed button (owner, 2026-10-28), so no variant passes it on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RightClick {
+    OpenMenu,
+    Nothing,
+}
+
+impl RightClick {
+    /// A menu opens only when the list or the engine can go that way.
+    fn on(offered: bool) -> Self {
+        if offered {
+            Self::OpenMenu
+        } else {
+            Self::Nothing
+        }
     }
 }
 
@@ -142,30 +174,37 @@ impl BrowserView {
         &mut self,
         id: u64,
         report: syrinx_core::HistoryReport,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(tab) = self.open_tab(id) else {
             return;
         };
-        if self.shown == Some(tab) && shifts_rows(report.change) {
-            self.drop_stale_history_menu(cx);
+        if self.shown == Some(tab) {
+            let stale = self.back_forward.requests.page_reported(report.change);
+            self.close_stale_history_menu(stale, window, cx);
         }
         self.command(SessionCommand::ObserveHistory { id: tab, report });
     }
 
-    /// The shown page moved, so every row's step count is off by its move: a menu open or
-    /// still being read would jump to the wrong page (review of #126), so it closes.
-    fn drop_stale_history_menu(&mut self, cx: &mut Context<Self>) {
-        self.cancel_history_request();
-        if matches!(self.open_menu_kind(), Some(MenuKind::History(_))) {
-            self.retire_menu(cx);
-            cx.notify();
+    /// Closes an open history menu whose rows went stale as Escape does, so the keys go back
+    /// to the page (review of #213; trap: "Keys go to the page while GPUI still shows a
+    /// caret"). Its rows would otherwise jump to the wrong page.
+    fn close_stale_history_menu(
+        &mut self,
+        stale: Stale,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if stale == Stale::Keep || !matches!(self.open_menu_kind(), Some(MenuKind::History(_))) {
+            return;
         }
+        self.dismiss_menu(window, cx);
     }
 
     /// Forgets a menu whose rows are still being read, so its late reply opens nothing.
     pub(super) fn cancel_history_request(&mut self) {
-        self.back_forward.request = None;
+        self.back_forward.requests.cancel();
     }
 
     /// Remembers where tab `id`'s list and engine reach, for Back and Forward's menus and looks.
@@ -174,14 +213,17 @@ impl BrowserView {
         id: TabId,
         listed: HistoryReach,
         engine: HistoryReach,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let before = self.back_forward.reach.insert(id, Reach { listed, engine });
         // A reset the page did not cause by moving still leaves an open menu's rows gone.
         let relisted = before.is_none_or(|before| before.listed != listed);
-        if self.shown == Some(id) && relisted {
-            self.drop_stale_history_menu(cx);
+        if self.shown != Some(id) || !relisted {
+            return;
         }
+        let stale = self.back_forward.requests.relisted();
+        self.close_stale_history_menu(stale, window, cx);
     }
 
     /// Forgets the reach of tabs that are no longer open.
@@ -206,7 +248,7 @@ impl BrowserView {
         if self.shown.is_none() {
             return;
         }
-        self.count(feature(direction));
+        self.count(way(direction).feature);
         self.go_history(direction, 1);
     }
 
@@ -264,36 +306,30 @@ impl BrowserView {
         let Some(tab) = self.shown else {
             return false;
         };
-        // With nothing either way the menu would be empty; a reset list still has its note.
-        if !self.history_list_available(direction) && !self.history_engine_available(direction) {
+        if !self.history_menu_offered(direction) {
             return false;
         }
         if self.toggled_closed(MenuKind::History(direction), cx) {
             return true;
         }
-        // A second press before the rows arrive closes the menu that was about to open.
-        if self
-            .back_forward
-            .request
-            .take_if(|pending| pending.direction == direction)
-            .is_some()
-        {
-            return true;
-        }
-        self.back_forward.requests += 1;
-        let id = self.back_forward.requests;
-        self.back_forward.request = Some(RowsRequest {
-            id,
-            tab,
-            direction,
-            keyed,
-        });
-        self.command(SessionCommand::HistoryRows {
+        let Press::Ask(id) = self.back_forward.requests.press(tab, direction, keyed) else {
+            return true; // A second press before the rows arrived: nothing opens.
+        };
+        let sent = self.try_command(SessionCommand::HistoryRows {
             request_id: id,
             id: tab,
             direction,
         });
+        if !sent {
+            self.back_forward.requests.unsent(id);
+        }
         true
+    }
+
+    /// Whether `direction`'s menu has anything to show: rows, or the note a reset list shows
+    /// while the engine can still go that way.
+    fn history_menu_offered(&self, direction: HistoryDirection) -> bool {
+        self.history_list_available(direction) || self.history_engine_available(direction)
     }
 
     /// Opens the menu the rows were read for, if it is still wanted: Syrinx is in front, the
@@ -306,12 +342,8 @@ impl BrowserView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(request) = self
-            .back_forward
-            .request
-            .take_if(|request| request.id == request_id)
-        else {
-            return; // A later request replaced this one.
+        let Some(request) = self.back_forward.requests.arrived(request_id) else {
+            return; // A later press, menu or move of the page replaced or cancelled it.
         };
         // A reply that waited behind slow work must not take the keys from another program.
         if self.shown != Some(request.tab) || !syrinx_in_foreground() {
@@ -416,29 +448,27 @@ impl BrowserView {
         button
             .child(self.anchor_probe(direction))
             .aria_expanded(expanded)
-            // Dimmed, but it keeps its hover and a click still reaches the engine: the reach can
-            // lag a fresh page. (`icon_button` sets the hover; GPUI allows only one.)
+            // Dimmed to 3:1 (owner, 2026-10-28), but it keeps its hover and a click still reaches
+            // the engine: the reach can lag a fresh page. (`icon_button` sets the hover; GPUI
+            // allows only one.)
             .when(unavailable, |button| {
                 button
-                    .text_color(theme::rgba(theme::current().disabled))
-                    .aria_description(match direction {
-                        HistoryDirection::Back => "No earlier page",
-                        HistoryDirection::Forward => "No later page",
-                    })
+                    .text_color(theme::unavailable_icon())
+                    .aria_description(way(direction).unavailable)
             })
-            .key_context(match direction {
-                HistoryDirection::Back => BACK_CONTEXT,
-                HistoryDirection::Forward => FORWARD_CONTEXT,
-            })
+            .key_context(way(direction).key_context)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.history_button_clicked(direction, cx);
             }))
-            // On the button itself; with no list to open, the right-click goes on to ☰.
+            // On the button itself, and never passed on to the group's page menu (owner,
+            // 2026-10-28), even when there is nothing to list.
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, _, _, cx| {
-                    if this.request_history_list(direction, false, cx) {
-                        cx.stop_propagation();
+                    cx.stop_propagation();
+                    let offered = this.history_menu_offered(direction);
+                    if RightClick::on(offered) == RightClick::OpenMenu {
+                        this.request_history_list(direction, false, cx);
                     }
                 }),
             )
@@ -488,6 +518,14 @@ mod tests {
     const FORWARD: HistoryDirection = HistoryDirection::Forward;
 
     #[test]
+    fn a_right_click_on_a_dimmed_button_opens_nothing_and_never_reaches_the_page_menu() {
+        // The owner, 2026-10-28: a dimmed Back or Forward keeps its right-click from the page
+        // menu. `RightClick` has no variant that passes it on, and the handler always stops it.
+        assert_eq!(RightClick::on(false), RightClick::Nothing);
+        assert_eq!(RightClick::on(true), RightClick::OpenMenu);
+    }
+
+    #[test]
     fn a_held_press_released_on_its_button_does_not_also_step() {
         // Review B1: GPUI runs Forward's mouse-up-outside on a release over Back.
         let mut hold = HoldState::default();
@@ -531,22 +569,15 @@ mod tests {
         assert!(hold.click(FORWARD));
     }
 
-    #[test]
-    fn only_a_move_of_the_page_closes_an_open_history_menu() {
-        // Review of #126: a commit while the menu is open shifts every row's step count.
-        assert!(shifts_rows(HistoryChange::NewDocument {
-            user_initiated: false
-        }));
-        assert!(shifts_rows(HistoryChange::BackOrForward));
-        // A single-page site's own address changes and reloads rename only the current row.
-        assert!(!shifts_rows(HistoryChange::SamePage { navigating: false }));
-        assert!(!shifts_rows(HistoryChange::Unchanged));
-        assert!(!shifts_rows(HistoryChange::JumpAbandoned));
-    }
+    // Which history changes close an open menu is tested with the request bookkeeping, in
+    // `requests.rs` (`a_move_of_the_shown_page_closes_the_menu_and_drops_its_rows` and
+    // `a_single_page_sites_own_address_change_keeps_the_menu`).
 
     #[test]
-    fn each_direction_counts_its_own_existing_feature() {
-        assert_eq!(feature(BACK), Feature::NavBack);
-        assert_eq!(feature(FORWARD), Feature::NavForward);
+    fn each_direction_counts_its_own_existing_feature_and_names_its_menu() {
+        assert_eq!(way(BACK).feature, Feature::NavBack);
+        assert_eq!(way(FORWARD).feature, Feature::NavForward);
+        assert_eq!(way(BACK).menu_name, "Back history");
+        assert_eq!(way(FORWARD).unlisted, "Later pages aren't listed");
     }
 }

@@ -834,7 +834,7 @@ impl BrowserView {
                 self.history_cleared(request_id, result);
             }
             SessionEvent::HistoryReach { id, reach, engine } => {
-                self.history_reach_changed(id, reach, engine, cx);
+                self.history_reach_changed(id, reach, engine, window, cx);
             }
             SessionEvent::HistoryRows { request_id, rows } => {
                 self.history_rows_arrived(request_id, &rows, window, cx);
@@ -1091,7 +1091,7 @@ impl BrowserView {
                 self.forget_find(id, true);
                 self.metadata(id, None, Some(url));
             }
-            BrowserEvent::History { id, report } => self.history_reported(id, report, cx),
+            BrowserEvent::History { id, report } => self.history_reported(id, report, window, cx),
             BrowserEvent::Loading { .. } => {}
             BrowserEvent::DataCleared { request, outcome } => {
                 self.browser_data_cleared(request, outcome);

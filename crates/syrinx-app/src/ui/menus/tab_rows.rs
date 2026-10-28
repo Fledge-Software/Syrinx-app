@@ -83,6 +83,7 @@ fn row_menu_rows(entries: Vec<RowEntry>) -> Vec<MenuRow> {
                 label: action.label().to_owned(),
                 shortcut: keys,
                 controls: &[],
+                icon: None,
             },
             RowEntry::Separator => fixed_row(MenuItem::Separator),
         })
@@ -96,6 +97,7 @@ fn confirm_rows(bulk: BulkClose, count: usize) -> Vec<MenuRow> {
         label,
         shortcut: None,
         controls: &[],
+        icon: None,
     };
     vec![
         labelled(MenuItem::ConfirmPrompt, bulk_question(bulk.kind, count)),
