@@ -569,7 +569,7 @@ fn a_repair_whose_index_is_only_partly_emptied_is_refused_and_retried_until_it_i
     // not a fresh one that would never track the leftover segment.
     assert!(index_folder(&fixture).join("meta.json").is_file());
     assert!(index_folder(&fixture).join(".managed.json").is_file());
-    assert_eq!(segment_files(&fixture), [segment.clone()]);
+    assert_eq!(segment_files(&fixture), std::slice::from_ref(&segment));
 
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
     let (store, worker) = open_session(lease, true).expect("repair once the segment is free");
