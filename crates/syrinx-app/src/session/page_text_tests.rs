@@ -375,6 +375,8 @@ fn finish_repaired_session(fixture: Fixture, store: Store, worker: Worker) {
 const SHARE_DELETE_ONLY: u32 = 0x4;
 /// No sharing: others may neither read nor delete the file.
 const SHARE_NOTHING: u32 = 0;
+/// Windows' `FILE_SHARE_READ`: others may read the file but not delete it.
+const SHARE_READ_ONLY: u32 = 0x1;
 
 /// Holds the index's `meta.json` open, sharing only `share_mode`, so Tantivy cannot read it.
 fn hold_index_metadata(fixture: &Fixture, share_mode: u32) -> fs::File {
@@ -482,6 +484,99 @@ fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can(
     let index = worker.page_text.index().expect("the index is open");
     assert!(ids_in(index, Namespace::page()).is_empty());
     assert_eq!(index.cleared_generation(), 1);
+    finish_repaired_session(fixture, store, worker);
+}
+
+/// The index's segment files in listing order: not a `.tantivy-*` lock and not `*.json`.
+fn segment_files(fixture: &Fixture) -> Vec<PathBuf> {
+    checked_io(fs::read_dir(index_folder(fixture)))
+        .map(|entry| checked_io(entry).path())
+        .filter(|path| is_segment_file(path))
+        .collect()
+}
+
+fn is_segment_file(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+        !name.starts_with('.') && !name.ends_with(".json")
+    })
+}
+
+/// Holds one of the index's segment files open so it cannot be deleted, and names it.
+fn hold_a_segment(fixture: &Fixture) -> (PathBuf, fs::File) {
+    use std::os::windows::fs::OpenOptionsExt;
+    let segment = segment_files(fixture)
+        .into_iter()
+        .next()
+        .expect("the synthetic index has a segment file");
+    let held = checked_io(
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(SHARE_READ_ONLY)
+            .open(&segment),
+    );
+    (segment, held)
+}
+
+#[test]
+fn an_ordinary_start_empties_an_index_a_failed_empty_left_without_some_segment_files() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    seed_index(&fixture, &[page("leftover", now - 600), note("lost")]);
+    // A failed empty deletes in listing order and stops at the held file, leaving the
+    // metadata and the rest of the segment behind.
+    let segment = segment_files(&fixture);
+    let (deleted, kept) = segment
+        .split_first()
+        .expect("the synthetic index has a segment");
+    checked_io(fs::remove_file(deleted));
+
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let mut page_text = page_text::PageText::open(&lease);
+    let index = page_text.index().expect("a fresh index is open");
+    assert!(ids_in(index, Namespace::page()).is_empty());
+    assert!(ids_in(index, notes()).is_empty());
+    assert!(
+        kept.iter().all(|file| !file.exists()),
+        "the leftover segment was removed"
+    );
+    assert_eq!(page_text.take_problem(), Ok(()));
+    drop(page_text);
+    drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_repair_whose_index_is_only_partly_emptied_is_refused_and_retried_until_it_is_gone() {
+    let fixture = Fixture::new();
+    seed_index_ahead_of_a_repair(&fixture);
+    // The index cannot open, so the repair empties it, but one segment cannot be deleted.
+    let metadata = hold_index_metadata(&fixture, SHARE_DELETE_ONLY);
+    let (segment, held) = hold_a_segment(&fixture);
+
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let refusal = match open_session(lease, true) {
+        Err(error) => error,
+        Ok(_) => panic!("a repair went ahead while a segment of old page text was left"),
+    };
+    let SessionError::AfterEarlier { error, .. } = &refusal else {
+        panic!("expected both failures to be kept, got {refusal:?}");
+    };
+    assert!(matches!(**error, SessionError::IndexNotEmptied(_)));
+    drop(metadata);
+    drop(held);
+    // The metadata went last, so it survives: the next open finds the old index damaged,
+    // not a fresh one that would never track the leftover segment.
+    assert!(index_folder(&fixture).join("meta.json").is_file());
+    assert!(index_folder(&fixture).join(".managed.json").is_file());
+    assert_eq!(segment_files(&fixture), std::slice::from_ref(&segment));
+
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let (store, worker) = open_session(lease, true).expect("repair once the segment is free");
+    let index = worker.page_text.index().expect("the index is open");
+    assert!(ids_in(index, Namespace::page()).is_empty());
+    assert_eq!(index.cleared_generation(), 1);
+    assert!(!segment.exists(), "the leftover segment was removed");
     finish_repaired_session(fixture, store, worker);
 }
 

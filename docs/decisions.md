@@ -1498,9 +1498,8 @@ entry names it.
   (P1-25, "skip all exits").** A page reached by leaving an excluded document
   (Google, a bank or payment site, or a site the owner excluded) is never
   read, unless Syrinx itself started that navigation from the address bar,
-  the palette, a bookmark, a saved page, a tile or Home. Links, page
-  scripts, auto-submitting forms, popups, back, forward and reload all count
-  as leaving. The taint carries on: a page reached that way passes it to the
+  the palette, a tile or Home. Links, page scripts, auto-submitting forms,
+  popups, back, forward and reload all count as leaving. The taint carries on: a page reached that way passes it to the
   next page it leads to, until Syrinx navigates the tab, so a sign-in
   callback that moves on by script is not read either. A popup opened from
   an excluded or tainted page starts tainted. This replaces the
@@ -1508,7 +1507,13 @@ entry names it.
   follows Chromium's short-lived user activation, so a "Continue" click on a
   bank page counted as the owner's own navigation and its next page was
   read. Keeping the user-initiated test was rejected for that reason. The
-  form-`POST` rule below stands.
+  form-`POST` rule below stands. *(Corrected on 2026-10-27, owner, on #54: the
+  list of navigations that clear the taint first named "a bookmark" and "a
+  saved page". Opening either focuses that saved page's tab if it is
+  already open, and that tab stays unread; once it is closed, opening the
+  bookmark makes a fresh tab, and that tab is read. Resubmitting the same
+  address from the address bar also clears the taint, while reload, back
+  and forward do not. See the 2026-10-27 entry on restored tabs.)*
 
 - **Page text skips sign-in hops (P1-25).** *(Its user-initiated test was
   replaced the same day by "skip all exits" above; the `POST` rule stands.)* A page reached by a navigation
