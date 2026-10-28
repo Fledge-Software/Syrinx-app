@@ -82,7 +82,8 @@ impl Pending {
             },
             HistoryChange::NewDocument { .. }
             | HistoryChange::BackOrForward
-            | HistoryChange::Unchanged => Self::default(),
+            | HistoryChange::Unchanged
+            | HistoryChange::JumpAbandoned => Self::default(),
         }
     }
 
@@ -238,7 +239,7 @@ impl Watch {
     fn changed(&self, core: &ICoreWebView2) {
         // An abandoned jump is dropped first, so this change is not checked against it.
         if self.pending.get().abandoned {
-            self.report(core, HistoryChange::Unchanged);
+            self.report(core, HistoryChange::JumpAbandoned);
             self.update(|pending| Pending {
                 abandoned: false,
                 ..pending

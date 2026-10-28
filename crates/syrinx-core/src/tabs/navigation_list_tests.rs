@@ -499,3 +499,32 @@ fn the_page_changing_its_own_address_during_a_back_keeps_the_jump() {
         ["https://e.test/?tracking-removed"]
     );
 }
+
+#[test]
+fn an_abandoned_jump_is_dropped_without_renaming_the_current_row() {
+    // Review of #212, nit: a failed Back is reported with the next change, so its report
+    // carries the address of the page typed after it, which is not the current row's.
+    let mut list = five_pages();
+    assert!(list.start_jump(HistoryDirection::Back, 2));
+    let dropped = list.observe(&report(
+        HistoryChange::JumpAbandoned,
+        "https://f.test/",
+        true,
+        false,
+    ));
+    assert_eq!(dropped, HistoryObserved::Followed);
+    list.observe(&typed("https://f.test/", true));
+    assert_eq!(
+        addresses(&list, HistoryDirection::Back),
+        [
+            "https://e.test/",
+            "https://d.test/",
+            "https://c.test/",
+            "https://b.test/",
+            "https://a.test/"
+        ]
+    );
+    // The dropped jump no longer judges a later, unrequested step.
+    let stepped = list.observe(&back_or_forward("https://e.test/", true, true));
+    assert_eq!(stepped, HistoryObserved::Followed);
+}

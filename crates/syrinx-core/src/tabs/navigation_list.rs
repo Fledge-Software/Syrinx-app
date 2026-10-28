@@ -23,6 +23,9 @@ pub enum HistoryChange {
     SamePage { navigating: bool },
     /// The history changed without a new address, such as a reload.
     Unchanged,
+    /// The last step of a jump failed, so the jump is dropped. It is reported with the next
+    /// change, so its address and reach describe that change, not the abandoned jump.
+    JumpAbandoned,
 }
 
 /// One engine report: the change, the address now shown, and where the engine can go.
@@ -124,6 +127,11 @@ impl NavigationList {
     /// Applies one engine report, then resets to the current page if the list and the
     /// engine disagree about whether anything lies behind or ahead.
     pub fn observe(&mut self, report: &HistoryReport) -> HistoryObserved {
+        // The change reported next carries the address and reach, and is checked on its own.
+        if report.change == HistoryChange::JumpAbandoned {
+            self.jump = None;
+            return HistoryObserved::Followed;
+        }
         if self.entries.is_empty() {
             self.reset(&report.address);
         } else if !self.apply(report) {
@@ -206,6 +214,8 @@ impl NavigationList {
                 self.readdress(address);
                 true
             }
+            // `observe` drops the jump before any list is applied, so nothing is left to do.
+            HistoryChange::JumpAbandoned => true,
             HistoryChange::Unchanged => {
                 // A reload ends any jump it interrupted.
                 self.jump = None;
