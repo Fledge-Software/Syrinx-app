@@ -487,18 +487,27 @@ fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can(
     finish_repaired_session(fixture, store, worker);
 }
 
+/// The index's segment files in listing order: not a `.tantivy-*` lock and not `*.json`.
+fn segment_files(fixture: &Fixture) -> Vec<PathBuf> {
+    checked_io(fs::read_dir(index_folder(fixture)))
+        .map(|entry| checked_io(entry).path())
+        .filter(|path| is_segment_file(path))
+        .collect()
+}
+
+fn is_segment_file(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+        !name.starts_with('.') && !name.ends_with(".json")
+    })
+}
+
 /// Holds one of the index's segment files open so it cannot be deleted, and names it.
 fn hold_a_segment(fixture: &Fixture) -> (PathBuf, fs::File) {
     use std::os::windows::fs::OpenOptionsExt;
-    let segment = checked_io(fs::read_dir(index_folder(fixture)))
-        .map(|entry| checked_io(entry).path())
-        // Not a lock file (`.tantivy-*`) and not the metadata (`*.json`).
-        .find(|path| {
-            path.file_name().is_some_and(|name| {
-                let name = name.to_string_lossy();
-                !name.starts_with('.') && !name.ends_with(".json")
-            })
-        })
+    let segment = segment_files(fixture)
+        .into_iter()
+        .next()
         .expect("the synthetic index has a segment file");
     let held = checked_io(
         fs::OpenOptions::new()
@@ -507,6 +516,34 @@ fn hold_a_segment(fixture: &Fixture) -> (PathBuf, fs::File) {
             .open(&segment),
     );
     (segment, held)
+}
+
+#[test]
+fn an_ordinary_start_empties_an_index_a_failed_empty_left_without_some_segment_files() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    seed_index(&fixture, &[page("leftover", now - 600), note("lost")]);
+    // A failed empty deletes in listing order and stops at the held file, leaving the
+    // metadata and the rest of the segment behind.
+    let segment = segment_files(&fixture);
+    let (deleted, kept) = segment
+        .split_first()
+        .expect("the synthetic index has a segment");
+    checked_io(fs::remove_file(deleted));
+
+    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+    let mut page_text = page_text::PageText::open(&lease);
+    let index = page_text.index().expect("a fresh index is open");
+    assert!(ids_in(index, Namespace::page()).is_empty());
+    assert!(ids_in(index, notes()).is_empty());
+    assert!(
+        kept.iter().all(|file| !file.exists()),
+        "the leftover segment was removed"
+    );
+    assert_eq!(page_text.take_problem(), Ok(()));
+    drop(page_text);
+    drop(lease);
+    fixture.cleanup();
 }
 
 #[test]
@@ -528,18 +565,17 @@ fn a_repair_whose_index_is_only_partly_emptied_is_refused_and_retried_until_it_i
     assert!(matches!(**error, SessionError::IndexNotEmptied(_)));
     drop(metadata);
     drop(held);
-    // The metadata went last, so it survives: the next open finds the old index, not a
-    // fresh one that would never track the leftover segment.
+    // The metadata went last, so it survives: the next open finds the old index damaged,
+    // not a fresh one that would never track the leftover segment.
     assert!(index_folder(&fixture).join("meta.json").is_file());
     assert!(index_folder(&fixture).join(".managed.json").is_file());
-    assert!(segment.is_file());
+    assert_eq!(segment_files(&fixture), [segment.clone()]);
 
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
     let (store, worker) = open_session(lease, true).expect("repair once the segment is free");
     let index = worker.page_text.index().expect("the index is open");
     assert!(ids_in(index, Namespace::page()).is_empty());
     assert_eq!(index.cleared_generation(), 1);
-    // Garbage collection could find it only because `.managed.json` still listed it.
     assert!(!segment.exists(), "the leftover segment was removed");
     finish_repaired_session(fixture, store, worker);
 }

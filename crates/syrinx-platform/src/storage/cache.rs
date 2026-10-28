@@ -29,15 +29,23 @@ impl CacheFolder {
     /// Deletes every file inside, so a damaged cache can start afresh.
     ///
     /// Every entry is checked first: a subfolder or a link is refused before anything is
-    /// deleted, so nothing outside this folder can be reached through one. The index's
-    /// metadata goes last, so a deletion that fails part-way leaves the old index for the next
-    /// open to find, and a retried repair empties it.
+    /// deleted, so nothing outside this folder can be reached through one.
+    ///
+    /// Every other file is tried before the index's metadata, which is deleted only once they
+    /// are all gone. So if one cannot be deleted, `meta.json` still names the deleted files,
+    /// the next open of the index finds it damaged, and that open empties the folder again.
     pub fn empty(&self) -> Result<(), LocationError> {
         self.directory
             .revalidate(true, LocationOperation::OpenDirectory)?;
-        for file in metadata_last(self.plain_files()?) {
-            fs::remove_file(&file)
-                .map_err(|error| native::io_error(LocationOperation::EmptyCacheFolder, error))?;
+        let (mut metadata, others): (Vec<_>, Vec<_>) = self
+            .plain_files()?
+            .into_iter()
+            .partition(|file| metadata_rank(file).is_some());
+        remove_each(&others)?;
+        metadata.sort_by_key(|file| metadata_rank(file));
+        // Stops at the first failure, so `.managed.json` outlives `meta.json`, never the reverse.
+        for file in &metadata {
+            remove(file)?;
         }
         Ok(())
     }
@@ -58,31 +66,39 @@ impl CacheFolder {
     }
 }
 
-/// The full-text index's metadata, Tantivy's `MANAGED_FILEPATH` and `META_FILEPATH`, in the
+/// The full-text index's metadata, Tantivy's `META_FILEPATH` and `MANAGED_FILEPATH`, in the
 /// order `empty` deletes it after every other file.
 ///
-/// Tantivy's garbage collection removes only the files `.managed.json` lists, and while
-/// `meta.json` exists the next open reads the old index rather than create a fresh one, so
-/// a segment left by a failed empty stays tracked and is removed later (D40).
-const METADATA_DELETED_LAST: [&str; 2] = [".managed.json", "meta.json"];
+/// While `meta.json` exists, an open reads the old index instead of creating a fresh one
+/// beside its leftovers, which Tantivy's garbage collection would never track (D40). Once
+/// it is gone, a leftover `.managed.json` only names missing files, which Tantivy skips.
+const METADATA_DELETED_LAST: [&str; 2] = ["meta.json", ".managed.json"];
 
-/// `files` in deletion order: listing order, then the index's metadata in its fixed order.
-fn metadata_last(mut files: Vec<PathBuf>) -> Vec<PathBuf> {
-    // A stable sort, so every other file keeps its listing order.
-    files.sort_by_key(|file| metadata_rank(file));
-    files
+/// Deletes every file in `files`, trying each even after a failure, so a file that cannot be
+/// deleted leaves no more behind than itself; the first failure is returned.
+fn remove_each(files: &[PathBuf]) -> Result<(), LocationError> {
+    let mut first_failure = Ok(());
+    for file in files {
+        let removed = remove(file);
+        if first_failure.is_ok() {
+            first_failure = removed;
+        }
+    }
+    first_failure
 }
 
-/// Zero for an ordinary file, otherwise one more than its place in `METADATA_DELETED_LAST`.
-fn metadata_rank(file: &Path) -> usize {
-    let Some(name) = file.file_name() else {
-        return 0;
-    };
+fn remove(file: &Path) -> Result<(), LocationError> {
+    fs::remove_file(file)
+        .map_err(|error| native::io_error(LocationOperation::EmptyCacheFolder, error))
+}
+
+/// The file's place in `METADATA_DELETED_LAST`, or `None` for every other file.
+fn metadata_rank(file: &Path) -> Option<usize> {
+    let name = file.file_name()?;
     // Windows names are case-insensitive, so `META.JSON` is the same file.
     METADATA_DELETED_LAST
         .iter()
         .position(|metadata| name.eq_ignore_ascii_case(metadata))
-        .map_or(0, |place| place + 1)
 }
 
 impl fmt::Debug for CacheFolder {
