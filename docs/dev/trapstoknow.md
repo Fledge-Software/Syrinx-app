@@ -59,9 +59,15 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   back list (#126) therefore replaces the current row on a same-page change,
   hides pages left with `IsUserInitiated` false, and resets when a jump lands
   elsewhere; do not "fix" it with a DevTools history call (owner, 2026-10-28).
-  Several `GoBack` calls in a row commit only the last entry. Source:
-  `crates/syrinx-platform/examples/navigation_history_spike.rs` and its results
-  on #126 (observed on runtime 155, three runs).
+  Source: `crates/syrinx-platform/examples/navigation_history_spike.rs` and its
+  results on #126 (observed on runtime 155, three runs).
+- **Several `GoBack` calls in a row make one jump, not several loads.** The
+  engine counts each call from the pending entry, so N back-to-back calls commit
+  only the entry N steps away; the intermediate navigations start and are
+  cancelled (`IsSuccess` false) without committing a document, though a
+  `no-store` page may still get one request. Syrinx jumps this way
+  (`BrowserCommand::GoToOffset`); do not step one call per committed load.
+  Source: the same spike (observed on runtime 155, three runs).
 - **An adopted popup's first document has no matching response event.** On
   this runtime the popup's page was judged `NoResponse`, so popups fail
   closed and are never read (F27). Do not "fix" this by assuming headers;
