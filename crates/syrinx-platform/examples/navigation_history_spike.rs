@@ -671,19 +671,13 @@ impl HostTab {
         steps: usize,
         expected: &str,
     ) -> Result<(), String> {
-        let sent = self
-            .list
-            .start_jump(direction, steps)
-            .ok_or("The list refused a jump it should allow.")?;
-        let steps = i32::try_from(sent).map_err(|e| e.to_string())?;
-        let offset = if direction == HistoryDirection::Back {
-            -steps
-        } else {
-            steps
-        };
+        if !self.list.start_jump(direction, steps) {
+            return Err("The list refused a jump it should allow.".into());
+        }
         self.send(BrowserCommand::GoToOffset {
             id: Self::ID,
-            offset,
+            direction,
+            steps: u32::try_from(steps).map_err(|e| e.to_string())?,
         })?;
         self.wait_at(expected)
     }

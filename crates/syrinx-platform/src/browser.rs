@@ -145,17 +145,12 @@ pub enum BrowserCommand {
     },
     ShowActive(Option<u64>),
     Resize(PageBounds),
-    Back {
-        id: u64,
-    },
-    Forward {
-        id: u64,
-    },
-    /// Steps `offset` entries back (negative) or forward in one go, as N Back or Forward
-    /// calls in a row, which commit only the last entry (#126's spike).
+    /// Steps back or forward `steps` entries in one go, as that many Back or Forward calls
+    /// in a row, which commit only the last entry (#126's spike).
     GoToOffset {
         id: u64,
-        offset: i32,
+        direction: syrinx_core::HistoryDirection,
+        steps: u32,
     },
     Reload {
         id: u64,
@@ -1130,8 +1125,6 @@ impl BrowserCommand {
             | Self::Reopen { id, .. }
             | Self::Navigate { id, .. }
             | Self::Close { id }
-            | Self::Back { id }
-            | Self::Forward { id }
             | Self::GoToOffset { id, .. }
             | Self::Reload { id }
             | Self::Focus { id }

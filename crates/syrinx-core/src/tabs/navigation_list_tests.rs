@@ -93,7 +93,7 @@ fn the_engine_replacing_its_initial_blank_entry_resets_to_the_first_page() {
 #[test]
 fn a_jump_back_lands_on_the_chosen_page_and_keeps_the_pages_between() {
     let mut list = five_pages();
-    assert_eq!(list.start_jump(HistoryDirection::Back, 4), Some(4));
+    assert!(list.start_jump(HistoryDirection::Back, 4));
     let observed = list.observe(&back_or_forward("https://a.test/", false, true));
     assert_eq!(observed, HistoryObserved::Followed);
     assert_eq!(list.current_address(), Some("https://a.test/"));
@@ -112,7 +112,7 @@ fn a_jump_back_lands_on_the_chosen_page_and_keeps_the_pages_between() {
 #[test]
 fn a_jump_that_lands_somewhere_else_resets_the_list_to_the_landed_page() {
     let mut list = five_pages();
-    assert_eq!(list.start_jump(HistoryDirection::Back, 2), Some(2));
+    assert!(list.start_jump(HistoryDirection::Back, 2));
     let observed = list.observe(&back_or_forward("https://elsewhere.test/", true, true));
     assert_eq!(observed, HistoryObserved::Reset);
     assert_eq!(list.current_address(), Some("https://elsewhere.test/"));
@@ -123,9 +123,9 @@ fn a_jump_that_lands_somewhere_else_resets_the_list_to_the_landed_page() {
 #[test]
 fn a_jump_past_the_end_of_the_list_is_refused() {
     let mut list = five_pages();
-    assert_eq!(list.start_jump(HistoryDirection::Forward, 1), None);
-    assert_eq!(list.start_jump(HistoryDirection::Back, 5), None);
-    assert_eq!(list.start_jump(HistoryDirection::Back, 0), None);
+    assert!(!list.start_jump(HistoryDirection::Forward, 1));
+    assert!(!list.start_jump(HistoryDirection::Back, 5));
+    assert!(!list.start_jump(HistoryDirection::Back, 0));
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn a_page_left_without_a_user_gesture_is_hidden_and_not_counted_as_a_step() {
         addresses(&list, HistoryDirection::Back)[..2],
         ["https://e.test/", "https://d.test/"]
     );
-    assert_eq!(list.start_jump(HistoryDirection::Back, 2), Some(2));
+    assert!(list.start_jump(HistoryDirection::Back, 2));
     assert_eq!(
         list.observe(&back_or_forward("https://d.test/", true, true)),
         HistoryObserved::Followed
@@ -324,7 +324,7 @@ fn lists_are_kept_per_tab_and_dropped_with_the_tab() {
         lists.get(one).and_then(NavigationList::current_address),
         Some("https://a.test/")
     );
-    lists.retain(|id| id == two);
+    lists.remove(one);
     assert!(lists.get(one).is_none());
     assert!(lists.get(two).is_some());
 }
@@ -332,9 +332,150 @@ fn lists_are_kept_per_tab_and_dropped_with_the_tab() {
 #[test]
 fn a_refused_jump_clears_an_earlier_target() {
     let mut list = five_pages();
-    assert_eq!(list.start_jump(HistoryDirection::Back, 3), Some(3));
-    assert_eq!(list.start_jump(HistoryDirection::Forward, 1), None);
+    assert!(list.start_jump(HistoryDirection::Back, 3));
+    assert!(!list.start_jump(HistoryDirection::Forward, 1));
     // An unrequested step to d.test is matched by address, not failed against b.test.
     let observed = list.observe(&back_or_forward("https://d.test/", true, true));
     assert_eq!(observed, HistoryObserved::Followed);
+}
+
+#[test]
+fn a_jump_that_lands_inside_the_same_document_on_another_page_resets() {
+    // Review B2: the engine kept a pushState entry the list replaced, so one GoForward
+    // lands on it, inside the same document, instead of on the chosen row.
+    let mut list = five_pages();
+    list.start_jump(HistoryDirection::Back, 2);
+    list.observe(&back_or_forward("https://c.test/", true, true));
+    assert!(list.start_jump(HistoryDirection::Forward, 1));
+    let observed = list.observe(&report(
+        HistoryChange::SamePage,
+        "https://c.test/pushed",
+        true,
+        true,
+    ));
+    assert_eq!(observed, HistoryObserved::Reset);
+    assert_eq!(list.current_address(), Some("https://c.test/pushed"));
+}
+
+#[test]
+fn a_jump_that_lands_inside_the_same_document_on_its_row_follows() {
+    let mut list = five_pages();
+    list.start_jump(HistoryDirection::Back, 1);
+    list.observe(&back_or_forward("https://d.test/", true, true));
+    assert!(list.start_jump(HistoryDirection::Forward, 1));
+    let observed = list.observe(&report(
+        HistoryChange::SamePage,
+        "https://e.test/",
+        true,
+        false,
+    ));
+    assert_eq!(observed, HistoryObserved::Followed);
+    assert_eq!(
+        addresses(&list, HistoryDirection::Back)[0],
+        "https://d.test/"
+    );
+}
+
+#[test]
+fn a_reload_ends_a_pending_jump() {
+    let mut list = five_pages();
+    assert!(list.start_jump(HistoryDirection::Back, 3));
+    list.observe(&report(
+        HistoryChange::Unchanged,
+        "https://e.test/",
+        true,
+        false,
+    ));
+    // A later unrequested step is matched by address, not failed against the old target.
+    let observed = list.observe(&back_or_forward("https://d.test/", true, true));
+    assert_eq!(observed, HistoryObserved::Followed);
+}
+
+mod in_the_tab_model {
+    use super::*;
+    use crate::tabs::{Activation, TabKind, TabMetadata, TabModel};
+
+    fn model_with_tab() -> (TabModel, TabId) {
+        let mut model = TabModel::new();
+        let id = model
+            .open(TabKind::Web, TabMetadata::default(), Activation::Foreground)
+            .unwrap();
+        (model, id)
+    }
+
+    #[test]
+    fn each_open_tab_keeps_its_own_list() {
+        let (mut model, id) = model_with_tab();
+        model
+            .observe_history(id, &typed("https://a.test/", false))
+            .unwrap();
+        model
+            .observe_history(id, &typed("https://b.test/", true))
+            .unwrap();
+        let rows = model.history_rows(id, HistoryDirection::Back, HISTORY_ROW_LIMIT);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].address, "https://a.test/");
+        assert_eq!(
+            model.history_reach(id),
+            HistoryReach {
+                back: true,
+                forward: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_report_for_a_tab_that_is_not_open_is_refused() {
+        let (mut model, _) = model_with_tab();
+        let stranger = TabId::new(99).unwrap();
+        assert_eq!(
+            model.observe_history(stranger, &typed("https://a.test/", false)),
+            Err(TabError::UnknownTab(stranger))
+        );
+    }
+
+    #[test]
+    fn closing_a_tab_drops_its_list() {
+        let (mut model, id) = model_with_tab();
+        model
+            .observe_history(id, &typed("https://a.test/", false))
+            .unwrap();
+        model
+            .observe_history(id, &typed("https://b.test/", true))
+            .unwrap();
+        model.close(id).unwrap();
+        assert_eq!(model.history_reach(id), HistoryReach::default());
+        assert!(!model.start_history_jump(id, HistoryDirection::Back, 1));
+    }
+
+    #[test]
+    fn a_new_title_names_the_current_row() {
+        let (mut model, id) = model_with_tab();
+        model
+            .observe_history(id, &typed("https://a.test/", false))
+            .unwrap();
+        let metadata = TabMetadata {
+            title: "Synthetic A".into(),
+            ..TabMetadata::default()
+        };
+        model.update_metadata(id, metadata).unwrap();
+        model
+            .observe_history(id, &typed("https://b.test/", true))
+            .unwrap();
+        let rows = model.history_rows(id, HistoryDirection::Back, HISTORY_ROW_LIMIT);
+        assert_eq!(rows[0].title, "Synthetic A");
+    }
+
+    #[test]
+    fn a_jump_is_planned_on_the_tab_model() {
+        let (mut model, id) = model_with_tab();
+        model
+            .observe_history(id, &typed("https://a.test/", false))
+            .unwrap();
+        model
+            .observe_history(id, &typed("https://b.test/", true))
+            .unwrap();
+        assert!(model.start_history_jump(id, HistoryDirection::Back, 1));
+        assert!(!model.start_history_jump(id, HistoryDirection::Forward, 1));
+    }
 }

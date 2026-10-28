@@ -48,8 +48,8 @@ pub use downloads::{
 pub use tabs::{
     Activation, AppendedSavedTree, BLANK_ADDRESS, BulkScope, FolderContents, FolderRemoval,
     HISTORY_ENTRY_LIMIT, HISTORY_ROW_LIMIT, HistoryChange, HistoryDirection, HistoryObserved,
-    HistoryReport, HistoryRow, NavigationList, NavigationLists, NewSavedItem, PageOrigin,
-    RemovedSavedEntries, SETTINGS_ADDRESS, SavedEntryId, SavedFolder, SavedFolderId,
+    HistoryReach, HistoryReport, HistoryRow, NavigationList, NavigationLists, NewSavedItem,
+    PageOrigin, RemovedSavedEntries, SETTINGS_ADDRESS, SavedEntryId, SavedFolder, SavedFolderId,
     SavedFolderSnapshot, SavedPage, SavedPageId, SavedPageSnapshot, SavedPlacement, SidebarRow,
     SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot,
     TabSnapshot, saved_folder_contents,

@@ -290,10 +290,7 @@ impl Page {
     pub(super) fn apply(&self, command: BrowserCommand) -> Result<(), BrowserError> {
         if matches!(
             command,
-            BrowserCommand::Back { .. }
-                | BrowserCommand::Forward { .. }
-                | BrowserCommand::GoToOffset { .. }
-                | BrowserCommand::Reload { .. }
+            BrowserCommand::GoToOffset { .. } | BrowserCommand::Reload { .. }
         ) {
             self.lifecycle.resume(&self.view)?;
             // Back, forward and reload replace a pending Syrinx navigation request.
@@ -309,11 +306,9 @@ impl Page {
             BrowserCommand::Focus { .. } => self.view.focus().map_err(|_| BrowserError::Focus),
             // Not resumed first: muting a suspended page works and leaves it frozen (essentials fixture).
             BrowserCommand::SetMuted { muted, .. } => self.essentials.set_muted(&self.view, muted),
-            BrowserCommand::Back { .. } => super::history::step(&self.view.webview(), true, 1),
-            BrowserCommand::Forward { .. } => super::history::step(&self.view.webview(), false, 1),
-            BrowserCommand::GoToOffset { offset, .. } => {
-                super::history::step(&self.view.webview(), offset < 0, offset.unsigned_abs())
-            }
+            BrowserCommand::GoToOffset {
+                direction, steps, ..
+            } => super::history::step(&self.view.webview(), direction, steps),
             BrowserCommand::Reload { .. } => {
                 unsafe { self.view.webview().Reload() }.map_err(|_| BrowserError::Navigation)
             }

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use super::TabId;
+use super::{TabError, TabId, TabModel};
 
 /// The most rows a back or forward list shows, as Chrome does.
 pub const HISTORY_ROW_LIMIT: usize = 15;
@@ -161,13 +161,21 @@ impl NavigationList {
             .collect()
     }
 
-    /// Expects the engine to land on the row `steps` away; returns the steps to send.
-    pub fn start_jump(&mut self, direction: HistoryDirection, steps: usize) -> Option<usize> {
+    /// Expects the engine to land on the row `steps` away; false when there is no such row.
+    pub fn start_jump(&mut self, direction: HistoryDirection, steps: usize) -> bool {
         // A refused jump leaves no stale target for a later, unrelated step to fail against.
-        self.jump = None;
-        let target = self.visible(direction).nth(steps.checked_sub(1)?)?;
-        self.jump = Some(target);
-        Some(steps)
+        self.jump = steps
+            .checked_sub(1)
+            .and_then(|skip| self.visible(direction).nth(skip));
+        self.jump.is_some()
+    }
+
+    /// Whether any row lies behind and ahead.
+    pub fn reach(&self) -> HistoryReach {
+        HistoryReach {
+            back: self.visible(HistoryDirection::Back).next().is_some(),
+            forward: self.visible(HistoryDirection::Forward).next().is_some(),
+        }
     }
 
     /// Indices of the visible entries in `direction`, nearest first.
@@ -188,12 +196,15 @@ impl NavigationList {
                 true
             }
             HistoryChange::BackOrForward => self.land(address),
+            // A jump can land on an entry the same document added, with no new document.
+            HistoryChange::SamePage if self.jump.is_some() => self.land(address),
             HistoryChange::SamePage => {
-                self.jump = None;
                 self.readdress(address);
                 true
             }
             HistoryChange::Unchanged => {
+                // A reload ends any jump it interrupted.
+                self.jump = None;
                 self.readdress(address);
                 true
             }
@@ -218,7 +229,7 @@ impl NavigationList {
     }
 
     /// Moves to the page the engine stepped to: the requested jump's target, or else the
-    /// nearest page with that address. False when neither matches.
+    /// nearest page with that address. False when neither matches, so the list resets.
     fn land(&mut self, address: &str) -> bool {
         let landed = match self.jump.take() {
             Some(target) => (self.entries[target].address == address).then_some(target),
@@ -257,15 +268,25 @@ impl NavigationList {
     }
 }
 
+/// Whether a tab's list has a row behind it and a row ahead of it. It carries no address or
+/// title, so it may travel to the interface freely.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HistoryReach {
+    pub back: bool,
+    pub forward: bool,
+}
+
 /// Every open tab's list, held in memory only: never saved, logged or restored.
 #[derive(Debug, Default)]
 pub struct NavigationLists(HashMap<TabId, NavigationList>);
 
 impl NavigationLists {
+    /// Applies a report to `tab`'s list, starting one if the tab has none yet.
     pub fn observe(&mut self, tab: TabId, report: &HistoryReport) -> HistoryObserved {
         self.0.entry(tab).or_default().observe(report)
     }
 
+    /// Names the current row of `tab`'s list.
     pub fn retitle(&mut self, tab: TabId, title: &str) {
         if let Some(list) = self.0.get_mut(&tab) {
             list.retitle(title);
@@ -280,9 +301,55 @@ impl NavigationLists {
         self.0.get_mut(&tab)
     }
 
-    /// Drops the lists of tabs `keep` rejects, such as closed tabs.
-    pub fn retain(&mut self, mut keep: impl FnMut(TabId) -> bool) {
-        self.0.retain(|&tab, _| keep(tab));
+    /// Forgets a closed tab's list.
+    pub fn remove(&mut self, tab: TabId) {
+        self.0.remove(&tab);
+    }
+}
+
+/// The tab model owns each open tab's list (owner, 2026-10-28); the interface only draws it.
+impl TabModel {
+    /// Follows an engine report for an open tab.
+    pub fn observe_history(
+        &mut self,
+        id: TabId,
+        report: &HistoryReport,
+    ) -> Result<HistoryObserved, TabError> {
+        self.index_of(id)?;
+        Ok(self.navigation.observe(id, report))
+    }
+
+    /// Expects tab `id` to land on the row `steps` away; false when there is no such row.
+    pub fn start_history_jump(
+        &mut self,
+        id: TabId,
+        direction: HistoryDirection,
+        steps: usize,
+    ) -> bool {
+        self.navigation
+            .get_mut(id)
+            .is_some_and(|list| list.start_jump(direction, steps))
+    }
+
+    /// Tab `id`'s rows in `direction`, nearest first.
+    pub fn history_rows(
+        &self,
+        id: TabId,
+        direction: HistoryDirection,
+        limit: usize,
+    ) -> Vec<HistoryRow<'_>> {
+        self.navigation
+            .get(id)
+            .map(|list| list.rows(direction, limit))
+            .unwrap_or_default()
+    }
+
+    /// Whether tab `id` has rows behind and ahead; a tab with no list has neither.
+    pub fn history_reach(&self, id: TabId) -> HistoryReach {
+        self.navigation
+            .get(id)
+            .map(NavigationList::reach)
+            .unwrap_or_default()
     }
 }
 

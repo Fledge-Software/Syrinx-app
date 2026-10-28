@@ -575,7 +575,11 @@ fn f28(browser: &mut Browser, server: &Server) -> Result<CaseResult, String> {
     browser.navigate(id, &server.sites.url(Role::Plain, "/landing?via=syrinx"))?;
     let cleared = browser.wait_finals(id, finals + 1, OUTCOME_TIMEOUT);
     let known = browser.log.outcomes(id).len();
-    browser.send(BrowserCommand::Back { id })?;
+    browser.send(BrowserCommand::GoToOffset {
+        id,
+        direction: syrinx_core::HistoryDirection::Back,
+        steps: 1,
+    })?;
     browser.pump_for(Duration::from_secs(6))?;
     let back = browser.log.outcomes(id)[known..].to_vec();
     let shown = browser.log.urls.get(&id).cloned().unwrap_or_default();
@@ -822,7 +826,11 @@ fn cache_sequence(
     let mut steps = vec![("first visit", step(browser, id, capture_on)?)];
     browser.navigate(id, &server.sites.url(Role::Plain, &cacheable))?;
     steps.push(("cacheable", step(browser, id, capture_on)?));
-    browser.send(BrowserCommand::Back { id })?;
+    browser.send(BrowserCommand::GoToOffset {
+        id,
+        direction: syrinx_core::HistoryDirection::Back,
+        steps: 1,
+    })?;
     steps.push(("back", step(browser, id, capture_on)?));
     browser.navigate(id, &server.sites.url(Role::Plain, &cacheable))?;
     steps.push(("cacheable again", step(browser, id, capture_on)?));

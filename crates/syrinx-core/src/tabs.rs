@@ -13,7 +13,7 @@ pub(crate) use folders::{UNTITLED_FOLDER, is_blank_folder_title};
 pub use import::{AppendedSavedTree, NewSavedItem};
 pub use navigation_list::{
     HISTORY_ENTRY_LIMIT, HISTORY_ROW_LIMIT, HistoryChange, HistoryDirection, HistoryObserved,
-    HistoryReport, HistoryRow, NavigationList, NavigationLists,
+    HistoryReach, HistoryReport, HistoryRow, NavigationList, NavigationLists,
 };
 pub use snapshot::{
     SavedFolderSnapshot, SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot,
@@ -372,6 +372,8 @@ pub struct TabModel {
     last_saved_id: u64,
     last_folder_id: u64,
     closed: VecDeque<ClosedTab>,
+    /// Each open tab's back and forward list, in memory only (#126).
+    navigation: NavigationLists,
 }
 
 impl TabModel {
@@ -548,6 +550,9 @@ impl TabModel {
     pub fn update_metadata(&mut self, id: TabId, metadata: TabMetadata) -> Result<(), TabError> {
         // Live navigation cannot replace identity, saved destination or order.
         let index = self.index_of(id)?;
+        if self.tabs[index].metadata.title != metadata.title {
+            self.navigation.retitle(id, &metadata.title);
+        }
         self.tabs[index].metadata = metadata;
         Ok(())
     }
@@ -583,6 +588,7 @@ impl TabModel {
         let index = self.index_of(id)?;
         let ordinary_position = index.saturating_sub(self.saved_tab_count());
         let tab = self.tabs.remove(index);
+        self.navigation.remove(id);
         if self.active == Some(id) {
             self.active = self
                 .tabs

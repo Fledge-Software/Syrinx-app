@@ -833,6 +833,7 @@ impl BrowserView {
             SessionEvent::HistoryCleared { request_id, result } => {
                 self.history_cleared(request_id, result);
             }
+            SessionEvent::HistoryReach { id, reach } => self.history_reach_changed(id, reach),
             SessionEvent::SiteZoomsCleared { request_id, result } => {
                 self.site_zooms_cleared(request_id, result);
             }
@@ -993,7 +994,6 @@ impl BrowserView {
             BrowserEvent::RuntimeVersion(version) => self.runtime_version_observed(version),
             BrowserEvent::Title { id, title } => {
                 self.acceptance_title(id, &title);
-                self.history_retitled(id, &title);
                 self.metadata(id, Some(title), None);
             }
             BrowserEvent::CloseRequested { id } => self.page_requested_close(id),
@@ -1086,7 +1086,7 @@ impl BrowserView {
                 self.forget_find(id, true);
                 self.metadata(id, None, Some(url));
             }
-            BrowserEvent::History { id, report } => self.history_reported(id, &report),
+            BrowserEvent::History { id, report } => self.history_reported(id, report),
             BrowserEvent::Loading { .. } => {}
             BrowserEvent::DataCleared { request, outcome } => {
                 self.browser_data_cleared(request, outcome);
