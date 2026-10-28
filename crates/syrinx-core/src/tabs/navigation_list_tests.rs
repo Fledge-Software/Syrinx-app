@@ -467,6 +467,29 @@ mod in_the_tab_model {
     }
 
     #[test]
+    fn a_page_with_the_same_title_as_the_last_still_names_its_row() {
+        // Review of #126: the title check compared with the tab's last title, not the row's.
+        let (mut model, id) = model_with_tab();
+        let titled = || TabMetadata {
+            title: "Synthetic shared title".into(),
+            ..TabMetadata::default()
+        };
+        model
+            .observe_history(id, &typed("https://a.test/", false))
+            .unwrap();
+        model.update_metadata(id, titled()).unwrap();
+        model
+            .observe_history(id, &typed("https://b.test/", true))
+            .unwrap();
+        model.update_metadata(id, titled()).unwrap();
+        model
+            .observe_history(id, &typed("https://c.test/", true))
+            .unwrap();
+        let rows = model.history_rows(id, HistoryDirection::Back, HISTORY_ROW_LIMIT);
+        assert_eq!(rows[0].title, "Synthetic shared title");
+    }
+
+    #[test]
     fn a_typed_navigation_does_not_erase_the_title_of_the_page_it_leaves() {
         // Found in #126's window check: typing an address resets the tab's metadata to a blank
         // title before the new page commits, which named the page being left "".

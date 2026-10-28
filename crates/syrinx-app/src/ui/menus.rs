@@ -4,6 +4,7 @@
 //! A menu is its own owned popup window: GPUI content drawn over the page card in the
 //! main window never receives the page's clicks or keys (#12).
 
+use std::fmt;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -257,13 +258,23 @@ impl MenuItem {
 }
 
 /// One row as the popup draws it, captured when the menu opens.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct MenuRow {
     item: MenuItem,
     label: String,
     shortcut: Option<String>,
     /// A download row's buttons; empty for every other row.
     controls: &'static [DownloadControl],
+}
+
+impl fmt::Debug for MenuRow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // A history row's label and host are the owner's browsing; never print them.
+        formatter
+            .debug_struct("MenuRow")
+            .field("item", &self.item)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The open menu: its popup once the window exists, `None` while it is opening.
@@ -1212,8 +1223,8 @@ fn drawn_only_row(
 
 /// One item: its name on the left and its shortcut, dimmed, on the right. A history page
 /// also shows its site's placeholder icon first, as its sidebar row does, and its host on
-/// the right. Rows take no Tab
-/// stop; the selected one is the focused menu's active descendant for screen readers.
+/// the right. Rows take no Tab stop; the selected one is the focused menu's active
+/// descendant for screen readers.
 fn menu_row(
     index: usize,
     row: &MenuRow,

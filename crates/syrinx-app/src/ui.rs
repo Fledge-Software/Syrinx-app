@@ -834,7 +834,7 @@ impl BrowserView {
                 self.history_cleared(request_id, result);
             }
             SessionEvent::HistoryReach { id, reach, engine } => {
-                self.history_reach_changed(id, reach, engine);
+                self.history_reach_changed(id, reach, engine, cx);
             }
             SessionEvent::HistoryRows { request_id, rows } => {
                 self.history_rows_arrived(request_id, &rows, window, cx);

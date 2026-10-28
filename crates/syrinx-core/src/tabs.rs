@@ -550,9 +550,10 @@ impl TabModel {
     pub fn update_metadata(&mut self, id: TabId, metadata: TabMetadata) -> Result<(), TabError> {
         // Live navigation cannot replace identity, saved destination or order.
         let index = self.index_of(id)?;
-        // A typed address clears the title before its page commits, while the row is still the
+        // Names the current row whenever a title arrives, even one the last page also had. A
+        // typed address clears the title before its page commits, while the row is still the
         // page being left; a new page's row starts untitled anyway.
-        if !metadata.title.is_empty() && self.tabs[index].metadata.title != metadata.title {
+        if !metadata.title.is_empty() {
             self.navigation.retitle(id, &metadata.title);
         }
         self.tabs[index].metadata = metadata;

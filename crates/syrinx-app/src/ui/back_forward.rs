@@ -174,8 +174,14 @@ impl BrowserView {
         id: TabId,
         listed: HistoryReach,
         engine: HistoryReach,
+        cx: &mut Context<Self>,
     ) {
-        self.back_forward.reach.insert(id, Reach { listed, engine });
+        let before = self.back_forward.reach.insert(id, Reach { listed, engine });
+        // A reset the page did not cause by moving still leaves an open menu's rows gone.
+        let relisted = before.is_none_or(|before| before.listed != listed);
+        if self.shown == Some(id) && relisted {
+            self.drop_stale_history_menu(cx);
+        }
     }
 
     /// Forgets the reach of tabs that are no longer open.
@@ -239,6 +245,7 @@ impl BrowserView {
         goes(self.shown_reach().engine, direction)
     }
 
+    /// Where the shown tab's list and engine reach; nowhere for a tab with no reports.
     fn shown_reach(&self) -> Reach {
         self.shown
             .and_then(|shown| self.back_forward.reach.get(&shown))
@@ -345,6 +352,7 @@ impl BrowserView {
         self.go_history(direction, steps);
     }
 
+    /// Where `direction`'s button was last drawn, which its menu hangs from.
     fn history_anchor(&self, direction: HistoryDirection) -> &Anchor {
         match direction {
             HistoryDirection::Back => &self.back_forward.back_anchor,
@@ -385,6 +393,10 @@ impl BrowserView {
     /// A click on Back or Forward steps once, unless its press was held open into the list.
     fn history_button_clicked(&mut self, direction: HistoryDirection, cx: &mut Context<Self>) {
         if !self.back_forward.hold.click(direction) {
+            return;
+        }
+        // A click on the button of the open menu only closes it, as in Chrome.
+        if self.toggled_closed(MenuKind::History(direction), cx) {
             return;
         }
         self.step_history(direction);
