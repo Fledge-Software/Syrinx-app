@@ -571,3 +571,58 @@ fn emptying_a_cache_folder_removes_its_files_and_refuses_anything_else() {
     assert!(folder.path().join("nested").is_dir());
     assert!(folder.path().join("kept.bin").is_file());
 }
+
+#[test]
+fn a_failed_empty_keeps_the_index_metadata_so_the_next_open_retries() {
+    use std::os::windows::fs::OpenOptionsExt;
+    /// Windows' `FILE_SHARE_READ`: others may read the file but not delete it.
+    const SHARE_READ_ONLY: u32 = 0x1;
+
+    let fixture = Fixture::new();
+    let lease = prepare(&fixture.root.join("data"));
+    let folder = lease
+        .cache_folder("synthetic-cache")
+        .expect("create a synthetic cache folder");
+    // The held segment lists after the metadata, so listing order cannot save the metadata,
+    // and another file lists after it. `META.JSON` checks names are matched without case.
+    for name in [
+        "0a1b2c.idx",
+        ".managed.json",
+        "META.JSON",
+        "x-synthetic.store",
+        "zz-synthetic.term",
+    ] {
+        fs::write(folder.path().join(name), b"synthetic").expect("write synthetic file");
+    }
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_READ_ONLY)
+        .open(folder.path().join("x-synthetic.store"))
+        .expect("hold a synthetic segment");
+
+    /// Windows' `ERROR_SHARING_VIOLATION`.
+    const SHARING_VIOLATION: i32 = 32;
+    assert_eq!(
+        folder.empty().err(),
+        Some(LocationError::Os {
+            operation: LocationOperation::EmptyCacheFolder,
+            code: Some(SHARING_VIOLATION),
+        }),
+        "a held segment cannot be deleted"
+    );
+    // The metadata survives, so the next open finds the old index damaged and empties it.
+    assert!(folder.path().join("META.JSON").is_file());
+    assert!(folder.path().join(".managed.json").is_file());
+    // Every other file was still tried, before and after the held one.
+    assert!(!folder.path().join("0a1b2c.idx").exists());
+    assert!(!folder.path().join("zz-synthetic.term").exists());
+
+    drop(held);
+    folder.empty().expect("empty once the segment is free");
+    assert!(
+        fs::read_dir(folder.path())
+            .expect("list the synthetic cache folder")
+            .next()
+            .is_none()
+    );
+}
