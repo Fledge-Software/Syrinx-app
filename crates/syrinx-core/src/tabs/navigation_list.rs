@@ -96,7 +96,8 @@ impl Entry {
 /// cannot tell pushState from replaceState, so a same-page change replaces the current row.
 /// Known limits: a `location.replace` after a user gesture adds a row the engine did not,
 /// and a page hidden for moving on without a fresh gesture may still be one Back lands on;
-/// a jump across either lands elsewhere and resets the list.
+/// a form posted back to the shown address adds an engine entry but no row; a jump across
+/// any of these lands elsewhere and resets the list.
 #[derive(Clone, Default)]
 pub struct NavigationList {
     entries: Vec<Entry>,
