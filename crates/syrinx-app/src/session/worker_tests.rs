@@ -2077,3 +2077,6 @@ mod tab_action_tests;
 
 #[path = "page_text_tests.rs"]
 mod page_text_tests;
+
+#[path = "back_forward_tests.rs"]
+mod back_forward_tests;

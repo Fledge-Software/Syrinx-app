@@ -9,6 +9,7 @@ mod overlay;
 pub use essentials::PageAction;
 pub const RENDER_PROCESS_UNRESPONSIVE: i32 = webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE.0;
 mod hidden_timer;
+mod history;
 pub use hidden_timer::AUDIO_GRACE;
 mod lifecycle;
 mod page;
@@ -144,11 +145,12 @@ pub enum BrowserCommand {
     },
     ShowActive(Option<u64>),
     Resize(PageBounds),
-    Back {
+    /// Steps back or forward `steps` entries in one go, as that many Back or Forward calls
+    /// in a row, which commit only the last entry (#126's spike).
+    GoToOffset {
         id: u64,
-    },
-    Forward {
-        id: u64,
+        direction: syrinx_core::HistoryDirection,
+        steps: u32,
     },
     Reload {
         id: u64,
@@ -346,6 +348,11 @@ pub enum BrowserEvent {
     Url {
         id: u64,
         url: String,
+    },
+    /// The page's back and forward list changed; the app keeps its own copy (#126).
+    History {
+        id: u64,
+        report: syrinx_core::HistoryReport,
     },
     Loading {
         id: u64,
@@ -626,6 +633,7 @@ impl EventSink {
                 BrowserEvent::ProcessFailed { .. }
                     | BrowserEvent::Title { .. }
                     | BrowserEvent::Url { .. }
+                    | BrowserEvent::History { .. }
                     | BrowserEvent::Loading { .. }
                     | BrowserEvent::NavigationCompleted { .. }
                     | BrowserEvent::Fullscreen { .. }
@@ -1117,8 +1125,7 @@ impl BrowserCommand {
             | Self::Reopen { id, .. }
             | Self::Navigate { id, .. }
             | Self::Close { id }
-            | Self::Back { id }
-            | Self::Forward { id }
+            | Self::GoToOffset { id, .. }
             | Self::Reload { id }
             | Self::Focus { id }
             | Self::SetMuted { id, .. } => Some(*id),

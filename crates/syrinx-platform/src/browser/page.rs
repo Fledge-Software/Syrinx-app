@@ -130,6 +130,7 @@ impl Page {
         super::lifecycle::register_fullscreen(&view, id, events.clone())?;
         register_source(&view, id, events.clone(), destination.clone())?;
         register_navigation(&view, id, events.clone())?;
+        super::history::register(&view, id, events.clone())?;
         lifecycle.register_navigation(&view)?;
         lifecycle.register_audio(&view)?;
         register_process_failure(&view, id, events.clone(), shortcuts.clone())?;
@@ -289,9 +290,7 @@ impl Page {
     pub(super) fn apply(&self, command: BrowserCommand) -> Result<(), BrowserError> {
         if matches!(
             command,
-            BrowserCommand::Back { .. }
-                | BrowserCommand::Forward { .. }
-                | BrowserCommand::Reload { .. }
+            BrowserCommand::GoToOffset { .. } | BrowserCommand::Reload { .. }
         ) {
             self.lifecycle.resume(&self.view)?;
             // Back, forward and reload replace a pending Syrinx navigation request.
@@ -307,34 +306,13 @@ impl Page {
             BrowserCommand::Focus { .. } => self.view.focus().map_err(|_| BrowserError::Focus),
             // Not resumed first: muting a suspended page works and leaves it frozen (essentials fixture).
             BrowserCommand::SetMuted { muted, .. } => self.essentials.set_muted(&self.view, muted),
-            BrowserCommand::Back { .. } => self.history(true),
-            BrowserCommand::Forward { .. } => self.history(false),
+            BrowserCommand::GoToOffset {
+                direction, steps, ..
+            } => super::history::step(&self.view.webview(), direction, steps),
             BrowserCommand::Reload { .. } => {
                 unsafe { self.view.webview().Reload() }.map_err(|_| BrowserError::Navigation)
             }
             _ => Err(BrowserError::InvalidTab),
-        }
-    }
-
-    fn history(&self, backward: bool) -> Result<(), BrowserError> {
-        let core = self.view.webview();
-        let mut allowed = BOOL::default();
-        unsafe {
-            if backward {
-                core.CanGoBack(&mut allowed)
-            } else {
-                core.CanGoForward(&mut allowed)
-            }
-            .map_err(|_| BrowserError::Navigation)?;
-            if !allowed.as_bool() {
-                return Ok(());
-            }
-            if backward {
-                core.GoBack()
-            } else {
-                core.GoForward()
-            }
-            .map_err(|_| BrowserError::Navigation)
         }
     }
 }

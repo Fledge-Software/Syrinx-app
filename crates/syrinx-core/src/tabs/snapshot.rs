@@ -417,6 +417,7 @@ impl TabModel {
             last_saved_id: snapshot.last_saved_page_id,
             last_folder_id: snapshot.last_saved_folder_id,
             closed: VecDeque::new(),
+            navigation: super::NavigationLists::default(),
         })
     }
 }

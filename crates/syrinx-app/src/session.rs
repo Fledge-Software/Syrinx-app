@@ -1,5 +1,6 @@
 //! Keeps model, persistence and catalogue work off the browser's event thread.
 
+mod back_forward;
 mod deletions;
 mod folders;
 mod history;
@@ -166,6 +167,17 @@ pub enum SessionCommand {
         scope: Scope,
         policy: SearchPolicy,
     },
+    /// A page's back and forward list changed; its tab's list follows it, in memory only.
+    ObserveHistory {
+        id: TabId,
+        report: syrinx_core::HistoryReport,
+    },
+    /// The window is sending `steps` Back or Forward calls; the tab's list checks the landing.
+    StartHistoryJump {
+        id: TabId,
+        direction: syrinx_core::HistoryDirection,
+        steps: u32,
+    },
     /// A page's navigation finished; a failure retracts the visit its address change recorded.
     ObserveNavigation {
         id: TabId,
@@ -291,6 +303,11 @@ pub enum SessionEvent {
     /// The saved zoom levels after a clear the window did not ask for finished (#121): one a
     /// busy database interrupted, completed while idle or ahead of any later journaled clear.
     SiteZoomsReplaced(SiteZoomLevels),
+    /// Whether tab `id`'s list now has rows behind and ahead; it carries no address or title.
+    HistoryReach {
+        id: TabId,
+        reach: syrinx_core::HistoryReach,
+    },
     /// What a `ClearSiteZooms` request removed, or why it failed.
     SiteZoomsCleared {
         request_id: u64,
@@ -1129,6 +1146,17 @@ impl Worker {
             | SessionCommand::ConfirmHistoryRepair { .. } => {
                 return recovery::reject_command(events);
             }
+            SessionCommand::ObserveHistory { id, report } => {
+                return self.observe_history(id, &report, events);
+            }
+            SessionCommand::StartHistoryJump {
+                id,
+                direction,
+                steps,
+            } => {
+                self.start_history_jump(id, direction, steps);
+                return Ok(());
+            }
             SessionCommand::ObserveNavigation { id, success } => {
                 let result = self.history.navigation(
                     store,
@@ -1777,6 +1805,8 @@ fn reopens_a_page(command: &SessionCommand) -> bool {
         | SessionCommand::EditDestinations { .. }
         | SessionCommand::Query { .. }
         | SessionCommand::ObserveNavigation { .. }
+        | SessionCommand::ObserveHistory { .. }
+        | SessionCommand::StartHistoryJump { .. }
         | SessionCommand::OpenHistory(_)
         | SessionCommand::RecentHistory { .. }
         | SessionCommand::ClearHistory { .. }
@@ -1951,6 +1981,8 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::ClearHistory { .. }
         | SessionCommand::OpenHistory(_)
         | SessionCommand::ObserveNavigation { .. }
+        | SessionCommand::ObserveHistory { .. }
+        | SessionCommand::StartHistoryJump { .. }
         | SessionCommand::SaveSettings(_)
         | SessionCommand::SiteZoom { .. }
         | SessionCommand::ClearSiteZooms { .. }

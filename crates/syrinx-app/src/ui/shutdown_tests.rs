@@ -272,8 +272,16 @@ fn closing_page_host_accepts_teardown_but_no_late_focus_or_navigation() {
         BrowserCommand::ShowActive(Some(1)),
         BrowserCommand::ShowActive(None),
         BrowserCommand::Resize(PageBounds::default()),
-        BrowserCommand::Back { id: 1 },
-        BrowserCommand::Forward { id: 1 },
+        BrowserCommand::GoToOffset {
+            id: 1,
+            direction: syrinx_core::HistoryDirection::Back,
+            steps: 1,
+        },
+        BrowserCommand::GoToOffset {
+            id: 1,
+            direction: syrinx_core::HistoryDirection::Forward,
+            steps: 1,
+        },
         BrowserCommand::Reload { id: 1 },
         BrowserCommand::Focus { id: 1 },
     ];

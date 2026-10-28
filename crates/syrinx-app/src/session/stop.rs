@@ -65,6 +65,8 @@ impl SessionCommand {
             Self::EditDestinations { .. } => "editing tiles",
             Self::Query { .. } => "searching",
             Self::ObserveNavigation { .. } => "recording a finished navigation",
+            Self::ObserveHistory { .. } => "following a tab's back and forward list",
+            Self::StartHistoryJump { .. } => "planning a back or forward step",
             Self::OpenHistory(_) => "opening a history entry",
             Self::RecentHistory { .. } => "listing history",
             Self::ClearHistory { .. } => "clearing history",
