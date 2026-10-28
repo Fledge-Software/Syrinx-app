@@ -43,7 +43,7 @@ use crate::{session::SessionCommand, theme};
 const ROW_HEIGHT: f32 = 36.;
 /// How far each folder level indents its contents in the wide sidebar.
 const FOLDER_INDENT: f32 = 12.;
-const MONOGRAM_SIZE: f32 = 20.;
+pub(super) const MONOGRAM_SIZE: f32 = 20.;
 /// The compact row's hover group, which shows its close badge (#128).
 const COMPACT_ROW_GROUP: &str = "compact-row";
 /// The compact close badge: its hit target, how far below the row's top it sits, and its ×.

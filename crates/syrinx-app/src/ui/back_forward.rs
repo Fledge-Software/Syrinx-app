@@ -6,8 +6,8 @@ use gpui::{
     Context, InteractiveElement, KeyBinding, MouseButton, ParentElement, Pixels, Point,
     StatefulInteractiveElement, Styled, Task, Window, canvas, prelude::FluentBuilder as _,
 };
-use syrinx_core::{HistoryDirection, HistoryReach, TabId, usage::Feature};
-use syrinx_platform::browser::BrowserCommand;
+use syrinx_core::{HistoryChange, HistoryDirection, HistoryReach, TabId, usage::Feature};
+use syrinx_platform::browser::{BrowserCommand, syrinx_in_foreground};
 
 use super::{BrowserView, menus::MenuKind};
 use crate::session::{HistoryListRow, SessionCommand};
@@ -59,6 +59,15 @@ fn goes(reach: HistoryReach, direction: HistoryDirection) -> bool {
         HistoryDirection::Back => reach.back,
         HistoryDirection::Forward => reach.forward,
     }
+}
+
+/// Whether a change moves the shown page within its list, which shifts every row's step count.
+/// A same-page change or a reload only renames the current row, which no menu lists.
+fn shifts_rows(change: HistoryChange) -> bool {
+    matches!(
+        change,
+        HistoryChange::NewDocument { .. } | HistoryChange::BackOrForward
+    )
 }
 
 /// A button's bottom-left as its last main-window paint placed it.
@@ -129,11 +138,34 @@ fn feature(direction: HistoryDirection) -> Feature {
 
 impl BrowserView {
     /// Hands a page's history report to the tab model, which keeps the list (owner, 2026-10-28).
-    pub(super) fn history_reported(&mut self, id: u64, report: syrinx_core::HistoryReport) {
+    pub(super) fn history_reported(
+        &mut self,
+        id: u64,
+        report: syrinx_core::HistoryReport,
+        cx: &mut Context<Self>,
+    ) {
         let Some(tab) = self.open_tab(id) else {
             return;
         };
+        if self.shown == Some(tab) && shifts_rows(report.change) {
+            self.drop_stale_history_menu(cx);
+        }
         self.command(SessionCommand::ObserveHistory { id: tab, report });
+    }
+
+    /// The shown page moved, so every row's step count is off by its move: a menu open or
+    /// still being read would jump to the wrong page (review of #126), so it closes.
+    fn drop_stale_history_menu(&mut self, cx: &mut Context<Self>) {
+        self.cancel_history_request();
+        if matches!(self.open_menu_kind(), Some(MenuKind::History(_))) {
+            self.retire_menu(cx);
+            cx.notify();
+        }
+    }
+
+    /// Forgets a menu whose rows are still being read, so its late reply opens nothing.
+    pub(super) fn cancel_history_request(&mut self) {
+        self.back_forward.request = None;
     }
 
     /// Remembers where tab `id`'s list and engine reach, for Back and Forward's menus and looks.
@@ -232,6 +264,15 @@ impl BrowserView {
         if self.toggled_closed(MenuKind::History(direction), cx) {
             return true;
         }
+        // A second press before the rows arrive closes the menu that was about to open.
+        if self
+            .back_forward
+            .request
+            .take_if(|pending| pending.direction == direction)
+            .is_some()
+        {
+            return true;
+        }
         self.back_forward.requests += 1;
         let id = self.back_forward.requests;
         self.back_forward.request = Some(RowsRequest {
@@ -248,8 +289,9 @@ impl BrowserView {
         true
     }
 
-    /// Opens the menu the rows were read for, if it is still wanted: the same tab is shown,
-    /// and its button was drawn in the main window.
+    /// Opens the menu the rows were read for, if it is still wanted: Syrinx is in front, the
+    /// same tab is shown, and its button was drawn in the main window. Another menu, the
+    /// palette or a move of the page cancels the request first (`cancel_history_request`).
     pub(super) fn history_rows_arrived(
         &mut self,
         request_id: u64,
@@ -264,7 +306,8 @@ impl BrowserView {
         else {
             return; // A later request replaced this one.
         };
-        if self.shown != Some(request.tab) {
+        // A reply that waited behind slow work must not take the keys from another program.
+        if self.shown != Some(request.tab) || !syrinx_in_foreground() {
             return;
         }
         // The note is true only while the engine can still go that way.
@@ -330,6 +373,15 @@ impl BrowserView {
         }
     }
 
+    /// A release reported by `direction`'s button. Its own release drops the hold timer, so
+    /// an ordinary click wakes nothing half a second later.
+    fn hold_released(&mut self, direction: HistoryDirection, on_button: bool) {
+        if self.back_forward.hold.pressed == Some(direction) {
+            self.back_forward.hold_timer = None;
+        }
+        self.back_forward.hold.release(direction, on_button);
+    }
+
     /// A click on Back or Forward steps once, unless its press was held open into the list.
     fn history_button_clicked(&mut self, direction: HistoryDirection, cx: &mut Context<Self>) {
         if !self.back_forward.hold.click(direction) {
@@ -348,8 +400,10 @@ impl BrowserView {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let unavailable = !self.history_engine_available(direction);
+        let expanded = self.open_menu_kind() == Some(MenuKind::History(direction));
         button
             .child(self.anchor_probe(direction))
+            .aria_expanded(expanded)
             // Dimmed, but it keeps its hover and a click still reaches the engine: the reach can
             // lag a fresh page. (`icon_button` sets the hover; GPUI allows only one.)
             .when(unavailable, |button| {
@@ -382,11 +436,11 @@ impl BrowserView {
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, _| this.back_forward.hold.release(direction, true)),
+                cx.listener(move |this, _, _, _| this.hold_released(direction, true)),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, _| this.back_forward.hold.release(direction, false)),
+                cx.listener(move |this, _, _, _| this.hold_released(direction, false)),
             )
             .on_action(cx.listener(|this, _: &OpenBackList, _, cx| {
                 this.request_history_list(HistoryDirection::Back, true, cx);
@@ -463,6 +517,19 @@ mod tests {
         assert!(hold.elapse(FORWARD));
         hold.release(FORWARD, true);
         assert!(hold.click(FORWARD));
+    }
+
+    #[test]
+    fn only_a_move_of_the_page_closes_an_open_history_menu() {
+        // Review of #126: a commit while the menu is open shifts every row's step count.
+        assert!(shifts_rows(HistoryChange::NewDocument {
+            user_initiated: false
+        }));
+        assert!(shifts_rows(HistoryChange::BackOrForward));
+        // A single-page site's own address changes and reloads rename only the current row.
+        assert!(!shifts_rows(HistoryChange::SamePage { navigating: false }));
+        assert!(!shifts_rows(HistoryChange::Unchanged));
+        assert!(!shifts_rows(HistoryChange::JumpAbandoned));
     }
 
     #[test]

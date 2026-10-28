@@ -1091,7 +1091,7 @@ impl BrowserView {
                 self.forget_find(id, true);
                 self.metadata(id, None, Some(url));
             }
-            BrowserEvent::History { id, report } => self.history_reported(id, report),
+            BrowserEvent::History { id, report } => self.history_reported(id, report, cx),
             BrowserEvent::Loading { .. } => {}
             BrowserEvent::DataCleared { request, outcome } => {
                 self.browser_data_cleared(request, outcome);
@@ -1870,10 +1870,10 @@ impl BrowserView {
             .occlude()
             .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
         let back = icon_button(div().id("back"), glyph::BACK, "Back")
-            .aria_keyshortcuts("Alt+ArrowLeft")
+            .aria_keyshortcuts("Alt+ArrowLeft Alt+ArrowDown")
             .occlude();
         let forward = icon_button(div().id("forward"), glyph::FORWARD, "Forward")
-            .aria_keyshortcuts("Alt+ArrowRight")
+            .aria_keyshortcuts("Alt+ArrowRight Alt+ArrowDown")
             .occlude();
         let buttons = [
             self.history_button(back, HistoryDirection::Back, cx),

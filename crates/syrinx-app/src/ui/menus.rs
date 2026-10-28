@@ -461,6 +461,8 @@ impl BrowserView {
         self.retire_palette(cx);
         self.retire_peek(cx);
         self.retire_menu(cx);
+        // A Back or Forward menu still waiting for its rows must not replace this one.
+        self.cancel_history_request();
         let MenuOpening {
             anchor,
             returns,
@@ -523,6 +525,11 @@ impl BrowserView {
                 controls: &[],
             })
             .collect()
+    }
+
+    /// Which menu is open or opening, if any.
+    pub(super) fn open_menu_kind(&self) -> Option<MenuKind> {
+        self.menu.as_ref().map(|menu| menu.kind)
     }
 
     /// Whether a popup opened for `generation` is still wanted.
@@ -1102,14 +1109,16 @@ impl Render for MenuView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 this.key_down(event, cx);
             }));
+        // A history menu's pages have icons; its other rows line their text up with the titles.
+        let inset = matches!(self.kind, MenuKind::History(_));
         for (index, row) in self.rows.iter().enumerate() {
             let item = row.item;
             if !item.is_selectable() {
-                card = card.child(drawn_only_row(index, row, &palette));
+                card = card.child(drawn_only_row(index, row, inset, &palette));
                 continue;
             }
             let selected = self.selected == Some(index);
-            let drawn = menu_row(index, row, selected, &palette).on_mouse_move(cx.listener(
+            let drawn = menu_row(index, row, selected, inset, &palette).on_mouse_move(cx.listener(
                 move |this, event: &MouseMoveEvent, _, cx| {
                     if this.hover.may_select(event.position) && this.selected != Some(index) {
                         this.selected = Some(index);
@@ -1158,7 +1167,12 @@ fn menu_name(kind: MenuKind, rows: &[MenuRow]) -> String {
 }
 
 /// A separator, or the confirmation's question in the menu's own type.
-fn drawn_only_row(index: usize, row: &MenuRow, palette: &syrinx_ui::Palette) -> Stateful<Div> {
+fn drawn_only_row(
+    index: usize,
+    row: &MenuRow,
+    inset: bool,
+    palette: &syrinx_ui::Palette,
+) -> Stateful<Div> {
     if row.item == MenuItem::Separator {
         return div()
             .id(("menu-separator", index))
@@ -1192,6 +1206,7 @@ fn drawn_only_row(index: usize, row: &MenuRow, palette: &syrinx_ui::Palette) -> 
         .when(!note, |prompt| {
             prompt.font_weight(gpui::FontWeight::SEMIBOLD)
         })
+        .when(inset, |prompt| prompt.gap_3().child(icon_space()))
         .child(div().flex_1().min_w_0().truncate().child(row.label.clone()))
 }
 
@@ -1203,6 +1218,7 @@ fn menu_row(
     index: usize,
     row: &MenuRow,
     selected: bool,
+    inset: bool,
     palette: &syrinx_ui::Palette,
 ) -> Stateful<Div> {
     let page = matches!(row.item, MenuItem::HistoryPage { .. });
@@ -1225,12 +1241,8 @@ fn menu_row(
         .gap_3()
         .rounded(px(ITEM_RADIUS))
         .cursor_pointer()
-        .when(page, |drawn| {
-            drawn.child(super::sidebar_view::row_icon(
-                &super::tiles::monogram(&row.label),
-                false,
-            ))
-        })
+        .when(page, |drawn| drawn.child(page_icon(row)))
+        .when(inset && !page, |drawn| drawn.child(icon_space()))
         .child(div().flex_1().min_w_0().truncate().child(row.label.clone()))
         .children(row.shortcut.clone().map(|keys| {
             let detail = div()
@@ -1244,6 +1256,23 @@ fn menu_row(
                 detail.flex_shrink_0()
             }
         }))
+}
+
+/// A page's placeholder icon, lettered as its sidebar row is: by its title, or by its host
+/// when the row shows a path because the page has no title.
+fn page_icon(row: &MenuRow) -> Div {
+    let source = match &row.shortcut {
+        Some(host) if row.label.starts_with('/') => host.as_str(),
+        _ => row.label.as_str(),
+    };
+    super::sidebar_view::row_icon(&super::tiles::monogram(source), false)
+}
+
+/// An empty space as wide as a page's icon, so a row without one lines its text up.
+fn icon_space() -> Div {
+    div()
+        .size(px(super::sidebar_view::MONOGRAM_SIZE))
+        .flex_none()
 }
 
 /// Lets the pointer select a row only once it has really moved. Windows sends a mouse move
