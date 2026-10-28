@@ -133,7 +133,7 @@ fn a_same_page_change_replaces_the_current_row_instead_of_adding_one() {
     // pushState and replaceState raise the same events, so both replace (owner, 2026-10-28).
     let mut list = five_pages();
     list.observe(&report(
-        HistoryChange::SamePage,
+        HistoryChange::SamePage { navigating: false },
         "https://e.test/pushed",
         true,
         false,
@@ -348,7 +348,7 @@ fn a_jump_that_lands_inside_the_same_document_on_another_page_resets() {
     list.observe(&back_or_forward("https://c.test/", true, true));
     assert!(list.start_jump(HistoryDirection::Forward, 1));
     let observed = list.observe(&report(
-        HistoryChange::SamePage,
+        HistoryChange::SamePage { navigating: false },
         "https://c.test/pushed",
         true,
         true,
@@ -364,7 +364,7 @@ fn a_jump_that_lands_inside_the_same_document_on_its_row_follows() {
     list.observe(&back_or_forward("https://d.test/", true, true));
     assert!(list.start_jump(HistoryDirection::Forward, 1));
     let observed = list.observe(&report(
-        HistoryChange::SamePage,
+        HistoryChange::SamePage { navigating: false },
         "https://e.test/",
         true,
         false,
@@ -478,4 +478,24 @@ mod in_the_tab_model {
         assert!(model.start_history_jump(id, HistoryDirection::Back, 1));
         assert!(!model.start_history_jump(id, HistoryDirection::Forward, 1));
     }
+}
+
+#[test]
+fn the_page_changing_its_own_address_during_a_back_keeps_the_jump() {
+    // Review of round 2: a replaceState while a slow Back loads is not the Back's landing.
+    let mut list = five_pages();
+    assert!(list.start_jump(HistoryDirection::Back, 1));
+    let observed = list.observe(&report(
+        HistoryChange::SamePage { navigating: true },
+        "https://e.test/?tracking-removed",
+        true,
+        false,
+    ));
+    assert_eq!(observed, HistoryObserved::Followed);
+    let landed = list.observe(&back_or_forward("https://d.test/", true, true));
+    assert_eq!(landed, HistoryObserved::Followed);
+    assert_eq!(
+        addresses(&list, HistoryDirection::Forward),
+        ["https://e.test/?tracking-removed"]
+    );
 }

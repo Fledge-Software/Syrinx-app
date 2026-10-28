@@ -2,7 +2,7 @@
 //! Back and Forward can reach (#126, owner 2026-10-28).
 
 use futures::channel::mpsc::UnboundedSender;
-use syrinx_core::{HistoryDirection, HistoryReport, TabId};
+use syrinx_core::{HistoryDirection, HistoryReport, TabError, TabId};
 
 use super::{SessionError, SessionEvent, Worker, emit};
 
@@ -16,8 +16,11 @@ impl Worker {
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
         let before = self.model.history_reach(id);
-        if self.model.observe_history(id, report).is_err() {
-            return Ok(());
+        match self.model.observe_history(id, report) {
+            Ok(_) => {}
+            // The tab closed after its page reported; the report is stale.
+            Err(TabError::UnknownTab(_)) => return Ok(()),
+            Err(error) => return Err(SessionError::Model(error)),
         }
         let reach = self.model.history_reach(id);
         if reach == before {
@@ -32,8 +35,10 @@ impl Worker {
         &mut self,
         id: TabId,
         direction: HistoryDirection,
-        steps: usize,
+        steps: u32,
     ) {
+        // A count past the address space has no row, so it plans nothing.
+        let steps = usize::try_from(steps).unwrap_or(usize::MAX);
         self.model.start_history_jump(id, direction, steps);
     }
 }

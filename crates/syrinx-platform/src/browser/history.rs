@@ -44,7 +44,9 @@ impl Pending {
     fn change(self) -> HistoryChange {
         let started = self.started.map(|(_, started)| started);
         match (self.new_document, started) {
-            (Some(false), _) => HistoryChange::SamePage,
+            (Some(false), started) => HistoryChange::SamePage {
+                navigating: started.is_some(),
+            },
             (Some(true), Some(Started::BackOrForward)) => HistoryChange::BackOrForward,
             (Some(true), Some(Started::NewDocument { user_initiated })) => {
                 HistoryChange::NewDocument { user_initiated }
@@ -70,7 +72,7 @@ impl Pending {
     /// a navigation still in flight, such as a Back during a slow load.
     fn after(self, change: HistoryChange) -> Self {
         match change {
-            HistoryChange::SamePage => Self {
+            HistoryChange::SamePage { .. } => Self {
                 new_document: None,
                 ..self
             },
@@ -85,6 +87,12 @@ impl Pending {
     fn without_failed(self, id: u64) -> Self {
         let started = self.started.filter(|(started, _)| *started != id);
         Self { started, ..self }
+    }
+
+    /// Whether failed navigation `id` was the latest step back or forward, so the jump it was
+    /// for is abandoned. The cancelled middle steps of one jump are older and do not count.
+    fn abandons_step(self, id: u64) -> bool {
+        matches!(self.started, Some((started, Started::BackOrForward)) if started == id)
     }
 }
 
@@ -159,6 +167,7 @@ impl Watch {
         result
     }
 
+    /// Replaces the gathered facts with `change` applied to them.
     fn update(&self, change: impl FnOnce(Pending) -> Pending) {
         self.pending.set(change(self.pending.get()));
     }
@@ -201,9 +210,11 @@ impl Watch {
         Ok(())
     }
 
-    /// Forgets a navigation that ended without committing.
+    /// Forgets a navigation that ended without committing. A step back or forward that
+    /// failed is reported as unchanged, so the tab's list drops the jump it was waiting for.
     fn completed(
         &self,
+        core: &ICoreWebView2,
         args: &ICoreWebView2NavigationCompletedEventArgs,
     ) -> windows::core::Result<()> {
         let (mut navigation, mut success) = (0, BOOL::default());
@@ -211,8 +222,13 @@ impl Watch {
             args.NavigationId(&mut navigation)?;
             args.IsSuccess(&mut success)?;
         }
-        if !success.as_bool() {
-            self.update(|pending| pending.without_failed(navigation));
+        if success.as_bool() {
+            return Ok(());
+        }
+        let abandoned = self.pending.get().abandons_step(navigation);
+        self.update(|pending| pending.without_failed(navigation));
+        if abandoned {
+            self.report(core, HistoryChange::Unchanged);
         }
         Ok(())
     }
@@ -221,6 +237,11 @@ impl Watch {
     fn changed(&self, core: &ICoreWebView2) {
         let change = self.pending.get().change();
         self.update(|pending| pending.after(change));
+        self.report(core, change);
+    }
+
+    /// Emits `change` with the address shown and where the engine can go.
+    fn report(&self, core: &ICoreWebView2, change: HistoryChange) {
         let event = match read_report(core, change) {
             Ok(report) => BrowserEvent::History {
                 id: self.id,
@@ -235,10 +256,12 @@ impl Watch {
     }
 }
 
+/// The error a handler returns when WebView2 passed it no sender or arguments.
 fn missing() -> windows::core::Error {
     windows::core::Error::from(E_POINTER)
 }
 
+/// Each `register_*` adds one host-side handler to the page's web view.
 fn register_starting(core: &ICoreWebView2, watch: Watch) -> Result<(), BrowserError> {
     let handler = NavigationStartingEventHandler::create(Box::new(move |_, args| {
         watch.reported(
@@ -264,11 +287,11 @@ fn register_source(core: &ICoreWebView2, watch: Watch) -> Result<(), BrowserErro
 }
 
 fn register_failure(core: &ICoreWebView2, watch: Watch) -> Result<(), BrowserError> {
-    let handler = NavigationCompletedEventHandler::create(Box::new(move |_, args| {
-        watch.reported(
-            args.ok_or_else(missing)
-                .and_then(|args| watch.completed(&args)),
-        )
+    let handler = NavigationCompletedEventHandler::create(Box::new(move |core, args| {
+        let (Some(core), Some(args)) = (core, args) else {
+            return watch.reported(Err(missing()));
+        };
+        watch.reported(watch.completed(&core, &args))
     }));
     let mut token = 0;
     unsafe { core.add_NavigationCompleted(&handler, &mut token) }
@@ -329,8 +352,32 @@ mod tests {
 
     #[test]
     fn a_same_document_address_change_is_a_same_page_change() {
-        assert_eq!(change(TYPED, Some(false)), HistoryChange::SamePage);
-        assert_eq!(change(None, Some(false)), HistoryChange::SamePage);
+        assert_eq!(
+            change(None, Some(false)),
+            HistoryChange::SamePage { navigating: false }
+        );
+    }
+
+    #[test]
+    fn a_same_page_change_during_another_navigation_is_the_page_s_own() {
+        // A replaceState while a Back loads must not be read as the Back's landing.
+        assert_eq!(
+            change(Some(Started::BackOrForward), Some(false)),
+            HistoryChange::SamePage { navigating: true }
+        );
+        assert_eq!(
+            change(TYPED, Some(false)),
+            HistoryChange::SamePage { navigating: true }
+        );
+    }
+
+    #[test]
+    fn only_the_latest_failed_step_abandons_its_jump() {
+        let stepping = pending(Some(Started::BackOrForward), None);
+        assert!(stepping.abandons_step(7));
+        // A cancelled middle step of the same jump is older than the latest start.
+        assert!(!stepping.abandons_step(6));
+        assert!(!pending(TYPED, None).abandons_step(7));
     }
 
     #[test]

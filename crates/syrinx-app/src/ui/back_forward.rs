@@ -132,16 +132,19 @@ impl BrowserView {
 
     /// Tells the tab model where `steps` Back or Forward calls should land, so a wrong
     /// landing resets its list, then sends them in one go. Both go in order through the
-    /// worker's queue, ahead of the landing's report. An unknown list still lets the engine step.
+    /// worker's queue, ahead of the landing's report. A list with nothing that way plans no
+    /// jump, but the engine still steps, so an unknown list never stops Back working.
     fn go_history(&mut self, direction: HistoryDirection, steps: u32) {
         let Some(shown) = self.shown else {
             return;
         };
-        self.command(SessionCommand::StartHistoryJump {
-            id: shown,
-            direction,
-            steps: steps as usize,
-        });
+        if self.history_list_available(direction) {
+            self.command(SessionCommand::StartHistoryJump {
+                id: shown,
+                direction,
+                steps,
+            });
+        }
         self.page_command(BrowserCommand::GoToOffset {
             id: shown.get(),
             direction,

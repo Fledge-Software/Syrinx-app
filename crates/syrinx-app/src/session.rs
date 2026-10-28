@@ -176,7 +176,7 @@ pub enum SessionCommand {
     StartHistoryJump {
         id: TabId,
         direction: syrinx_core::HistoryDirection,
-        steps: usize,
+        steps: u32,
     },
     /// A page's navigation finished; a failure retracts the visit its address change recorded.
     ObserveNavigation {

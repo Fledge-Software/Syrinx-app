@@ -17,8 +17,10 @@ pub enum HistoryChange {
     NewDocument { user_initiated: bool },
     /// The engine stepped back or forward, at Syrinx's request or the page's own.
     BackOrForward,
-    /// The address changed inside the same document (a fragment, pushState or replaceState).
-    SamePage,
+    /// The address changed inside the same document (a fragment, pushState or replaceState,
+    /// or a step to an entry the document added). `navigating` means a step or load to another
+    /// document was still in flight, so the change is the page's own and lands no jump.
+    SamePage { navigating: bool },
     /// The history changed without a new address, such as a reload.
     Unchanged,
 }
@@ -197,8 +199,10 @@ impl NavigationList {
             }
             HistoryChange::BackOrForward => self.land(address),
             // A jump can land on an entry the same document added, with no new document.
-            HistoryChange::SamePage if self.jump.is_some() => self.land(address),
-            HistoryChange::SamePage => {
+            HistoryChange::SamePage { navigating: false } if self.jump.is_some() => {
+                self.land(address)
+            }
+            HistoryChange::SamePage { .. } => {
                 self.readdress(address);
                 true
             }
