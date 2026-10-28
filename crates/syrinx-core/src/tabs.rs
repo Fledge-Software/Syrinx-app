@@ -12,8 +12,8 @@ pub use folders::{
 pub(crate) use folders::{UNTITLED_FOLDER, is_blank_folder_title};
 pub use import::{AppendedSavedTree, NewSavedItem};
 pub use navigation_list::{
-    HISTORY_ROW_LIMIT, HistoryChange, HistoryDirection, HistoryObserved, HistoryReport, HistoryRow,
-    NavigationList, NavigationLists,
+    HISTORY_ENTRY_LIMIT, HISTORY_ROW_LIMIT, HistoryChange, HistoryDirection, HistoryObserved,
+    HistoryReport, HistoryRow, NavigationList, NavigationLists,
 };
 pub use snapshot::{
     SavedFolderSnapshot, SavedPageSnapshot, SnapshotError, TabModelSnapshot, TabSnapshot,

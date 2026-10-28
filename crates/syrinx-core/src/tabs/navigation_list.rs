@@ -8,7 +8,7 @@ use super::TabId;
 /// The most rows a back or forward list shows, as Chrome does.
 pub const HISTORY_ROW_LIMIT: usize = 15;
 /// The most entries kept per tab: Chromium's own limit for a tab's history.
-pub const ENTRY_LIMIT: usize = 50;
+pub const HISTORY_ENTRY_LIMIT: usize = 50;
 
 /// What the engine says a committed change did to the tab's history.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,6 +44,7 @@ impl fmt::Debug for HistoryReport {
     }
 }
 
+/// Which side of the current page a list or a jump is on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HistoryDirection {
     Back,
@@ -93,6 +94,9 @@ impl Entry {
 
 /// A best-effort copy of one tab's back and forward list (owner, 2026-10-28). The engine
 /// cannot tell pushState from replaceState, so a same-page change replaces the current row.
+/// Known limits: a `location.replace` after a user gesture adds a row the engine did not,
+/// and a page hidden for moving on without a fresh gesture may still be one Back lands on;
+/// a jump across either lands elsewhere and resets the list.
 #[derive(Clone, Default)]
 pub struct NavigationList {
     entries: Vec<Entry>,
@@ -158,6 +162,8 @@ impl NavigationList {
 
     /// Expects the engine to land on the row `steps` away; returns the steps to send.
     pub fn start_jump(&mut self, direction: HistoryDirection, steps: usize) -> Option<usize> {
+        // A refused jump leaves no stale target for a later, unrelated step to fail against.
+        self.jump = None;
         let target = self.visible(direction).nth(steps.checked_sub(1)?)?;
         self.jump = Some(target);
         Some(steps)
@@ -204,7 +210,7 @@ impl NavigationList {
         self.entries[self.current].hidden |= !user_initiated;
         self.entries.truncate(self.current + 1);
         self.entries.push(Entry::at(address));
-        if self.entries.len() > ENTRY_LIMIT {
+        if self.entries.len() > HISTORY_ENTRY_LIMIT {
             self.entries.remove(0);
         }
         self.current = self.entries.len() - 1;

@@ -47,6 +47,7 @@ fn offset(direction: HistoryDirection, steps: usize) -> i32 {
     }
 }
 
+/// The existing usage count each direction adds to (AN-01); the list itself counts nothing.
 fn feature(direction: HistoryDirection) -> Feature {
     match direction {
         HistoryDirection::Back => Feature::NavBack,
@@ -119,9 +120,14 @@ impl BrowserView {
     }
 
     /// Asks for the shown tab's list in `direction`; nothing opens when it has no rows.
-    fn request_history_list(&mut self, direction: HistoryDirection, cx: &mut Context<Self>) {
+    /// Returns whether a list was asked for.
+    fn request_history_list(
+        &mut self,
+        direction: HistoryDirection,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(shown) = self.shown else {
-            return;
+            return false;
         };
         let has_rows = self
             .back_forward
@@ -129,11 +135,12 @@ impl BrowserView {
             .get(shown)
             .is_some_and(|list| !list.rows(direction, 1).is_empty());
         if !has_rows {
-            return;
+            return false;
         }
         // TODO(#126): the interface slice draws this request as a menu in an owned popup.
         self.back_forward.requested = Some((shown, direction));
         cx.notify();
+        true
     }
 
     /// Starts timing a press on Back or Forward; a press held for `HOLD` opens the list.
@@ -150,13 +157,22 @@ impl BrowserView {
         if self.back_forward.hold.take().is_none() {
             return;
         }
-        self.back_forward.hold_opened = true;
-        self.request_history_list(direction, cx);
+        // With nothing to list, the release stays an ordinary click, so a slow click still steps.
+        self.back_forward.hold_opened = self.request_history_list(direction, cx);
     }
 
-    /// A release ends the timing; dropping the task cancels it.
-    fn hold_ended(&mut self) {
+    /// A release ends the timing; dropping the task cancels it. A release off the button
+    /// is no click, so it also ends a held-open press.
+    fn hold_ended(&mut self, on_button: bool) {
         self.back_forward.hold = None;
+        if !on_button {
+            self.back_forward.hold_opened = false;
+        }
+    }
+
+    /// Alt Down on a focused Back or Forward button asks for its list.
+    fn list_key_pressed(&mut self, direction: HistoryDirection, cx: &mut Context<Self>) {
+        self.request_history_list(direction, cx);
     }
 
     /// A click on Back or Forward steps once, unless its press was held open into the list.
@@ -189,6 +205,7 @@ impl BrowserView {
                 MouseButton::Right,
                 cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
+                    // The menu that answers this request is #126's interface slice.
                     this.request_history_list(direction, cx);
                 }),
             )
@@ -198,17 +215,17 @@ impl BrowserView {
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| this.hold_ended()),
+                cx.listener(|this, _, _, _| this.hold_ended(true)),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| this.hold_ended()),
+                cx.listener(|this, _, _, _| this.hold_ended(false)),
             )
             .on_action(cx.listener(|this, _: &OpenBackList, _, cx| {
-                this.request_history_list(HistoryDirection::Back, cx);
+                this.list_key_pressed(HistoryDirection::Back, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenForwardList, _, cx| {
-                this.request_history_list(HistoryDirection::Forward, cx);
+                this.list_key_pressed(HistoryDirection::Forward, cx);
             }))
     }
 }

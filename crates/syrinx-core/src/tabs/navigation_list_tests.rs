@@ -292,14 +292,14 @@ fn rows_stop_at_the_limit() {
 fn the_list_keeps_at_most_the_engine_limit_of_entries() {
     let mut list = NavigationList::default();
     list.observe(&typed("https://page0.test/", false));
-    for page in 1..(ENTRY_LIMIT + 10) {
+    for page in 1..(HISTORY_ENTRY_LIMIT + 10) {
         list.observe(&typed(&format!("https://page{page}.test/"), true));
     }
     assert_eq!(
         list.rows(HistoryDirection::Back, usize::MAX).len(),
-        ENTRY_LIMIT - 1
+        HISTORY_ENTRY_LIMIT - 1
     );
-    let last = format!("https://page{}.test/", ENTRY_LIMIT + 9);
+    let last = format!("https://page{}.test/", HISTORY_ENTRY_LIMIT + 9);
     assert_eq!(list.current_address(), Some(last.as_str()));
 }
 
@@ -327,4 +327,14 @@ fn lists_are_kept_per_tab_and_dropped_with_the_tab() {
     lists.retain(|id| id == two);
     assert!(lists.get(one).is_none());
     assert!(lists.get(two).is_some());
+}
+
+#[test]
+fn a_refused_jump_clears_an_earlier_target() {
+    let mut list = five_pages();
+    assert_eq!(list.start_jump(HistoryDirection::Back, 3), Some(3));
+    assert_eq!(list.start_jump(HistoryDirection::Forward, 1), None);
+    // An unrequested step to d.test is matched by address, not failed against b.test.
+    let observed = list.observe(&back_or_forward("https://d.test/", true, true));
+    assert_eq!(observed, HistoryObserved::Followed);
 }
