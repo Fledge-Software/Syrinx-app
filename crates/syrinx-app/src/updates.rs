@@ -579,7 +579,7 @@ mod tests {
             .join(r"..\..\target\syrinx-app-update-tests")
             .join(format!("reset-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(root.join("Programs")).expect("synthetic programs");
-        std::fs::create_dir_all(root.join(r"data\Updates")).expect("synthetic data");
+        std::fs::create_dir_all(root.join("data").join("Updates")).expect("synthetic data");
         let layout = UpdateLayout::new(root.join("Programs"), root.join("data")).expect("layout");
         let context = UpdateContext {
             layout: Ok(layout.clone()),
@@ -664,6 +664,8 @@ mod tests {
         }
     }
 
+    // The apply helper and its drive-letter layout are the Windows installer's.
+    #[cfg(windows)]
     #[test]
     fn the_helper_never_works_from_a_folder_it_renames() {
         let layout = UpdateLayout::new(

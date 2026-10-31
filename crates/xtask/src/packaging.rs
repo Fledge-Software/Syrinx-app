@@ -191,7 +191,7 @@ fn run_tool(root: &Path, command: &[String]) -> Result<(), String> {
 }
 
 /// Design doc whose registry table is rendered from the same Rust table.
-const DESIGN_DOC: &str = r"docs\installing.md";
+const DESIGN_DOC: &str = "docs/installing.md";
 const TABLE_START: &str = "<!-- BEGIN GENERATED REGISTRY TABLE -->";
 const TABLE_END: &str = "<!-- END GENERATED REGISTRY TABLE -->";
 
@@ -212,8 +212,13 @@ pub fn check(root: &Path) -> Result<(), String> {
     check_design_doc_table(root)?;
     let scripts = script_paths(root);
     check_script_rules(&scripts)?;
-    parse_powershell(&scripts)?;
-    println!("Packaging scripts match the registration table and parse.");
+    // Windows PowerShell's parser is the reference; other platforms check the text rules only.
+    if cfg!(windows) {
+        parse_powershell(&scripts)?;
+        println!("Packaging scripts match the registration table and parse.");
+    } else {
+        println!("Packaging scripts match the registration table; the Windows gate parses them.");
+    }
     Ok(())
 }
 
@@ -440,7 +445,8 @@ mod tests {
 
     fn repository() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(r"..\..")
+            .join("..")
+            .join("..")
             .to_path_buf()
     }
 
@@ -499,6 +505,8 @@ mod tests {
         }
     }
 
+    // Runs the script under Windows PowerShell, as setup does.
+    #[cfg(windows)]
     #[test]
     fn register_script_finds_its_own_folder_when_run_as_setup_runs_it() -> Result<(), String> {
         // A synthetic folder without syrinx.exe: the script must stop before writing anything.
@@ -528,6 +536,7 @@ mod tests {
     }
 
     /// Copy the registration scripts into `folder` and run them with setup's arguments.
+    #[cfg(windows)]
     fn run_register_probe(folder: &Path) -> Result<(bool, String), String> {
         for script in ["register-syrinx.ps1", GENERATED_SCRIPT, "syrinx-common.ps1"] {
             let source = repository().join(SCRIPT_FOLDER).join(script);
@@ -588,6 +597,8 @@ mod tests {
         );
     }
 
+    // The packaged paths are Windows paths, spelled with drive letters and backslashes.
+    #[cfg(windows)]
     #[test]
     fn executable_comes_from_the_separate_package_build() {
         // Development builds' executable folder (`cargo syrinx`, the gate and launch checks).

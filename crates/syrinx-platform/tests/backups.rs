@@ -1,4 +1,5 @@
 //! Proves native snapshot publication and rotation against disposable SQLite stores.
+#![cfg(windows)]
 
 use std::{
     fs, io,

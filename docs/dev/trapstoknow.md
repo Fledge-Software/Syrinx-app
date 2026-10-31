@@ -566,6 +566,47 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   and test a release zip on a machine other than the one that built it.
   Source: `vendor/gpui-pre-windows-0.3.8.provenance.md` (observed; high).
 
+## Linux: WebKitGTK, X11 and POSIX
+
+- **wry's GTK backend injects `window.ipc` into every page.** Its
+  `InnerWebView::new_gtk` runs an initialization script defining
+  `window.ipc` whether or not an IPC handler is set, which is exactly what
+  the page rules forbid on Windows. Linux pages are therefore built with
+  `webkit2gtk` directly (`browser_gtk/page.rs`), never through wry. Source:
+  `vendor/wry-0.57.0/src/webkitgtk/mod.rs`, the `w.init("Object.defineProperty(window, 'ipc'…")`
+  call after the handlers (code-confirmed, 2026-10-31).
+- **A GTK page can sit inside Syrinx's window only through X11.** GTK 3 can
+  wrap a foreign X11 window but not a Wayland surface, so each page is a
+  GTK window whose GDK window is an X11 child of GPUI's window, as wry does
+  it. GPUI is built with its X11 backend only and GDK is limited to X11
+  (`gtk_thread.rs`), so under Hyprland Syrinx runs through XWayland. Source:
+  wry's `create_container_x11_window` and `create_gtk_window` (code-read).
+- **GTK may be used from one thread only.** gtk-rs records the thread that
+  initialised GTK and panics on use from any other, so every GTK call (pages,
+  file dialogs, the start-up warning) goes through `gtk_thread::run` or
+  `post` onto the one `syrinx-gtk` thread. Never call GTK from the GPUI
+  thread. Source: gtk-rs's `assert_initialized_main_thread!` (code-read).
+- **Linux reports a link where a folder was asked for as `ENOTDIR`, not
+  `ELOOP`.** `open` with `O_DIRECTORY | O_NOFOLLOW` on a symbolic link fails
+  with `ENOTDIR`, so a linked data folder looked like a wrong entry kind
+  instead of a link. `native_unix::open_with` checks the name with `lstat`
+  and reports a link as `ReparsePoint`. Source: `storage::tests_unix`'s
+  `a_linked_data_folder_is_refused` (observed 2026-10-31).
+- **Unix cannot hold a file against rename, write or delete.** Windows'
+  no-sharing opens are what many storage tests assert; on Unix the guard
+  instead revalidates retained identities (device and inode) and refuses a
+  moved or replaced entry, and those tests are Windows-only. Do not try to
+  emulate deny-sharing with advisory locks: only Syrinx would honour them.
+  The control file and instance lock do use `flock`, which only Syrinx's
+  own processes need to respect. Source: the storage and instance tests
+  run on Linux (observed 2026-10-31).
+- **A Unix socket read must also watch the stop signal.** A connected but
+  silent same-user client held the link listener in a 2 s read, so closing
+  Syrinx waited for it. `pipe_unix::read_message` reads in 100 ms slices and
+  answers `CLOSING` once the stop is raised, as the Windows pipe ends every
+  step on its stop event. Source: `instance::tests::a_silent_client_does_not_delay_shutdown`
+  (observed 2026-10-31).
+
 ## Update downloads: WinHTTP
 
 - **A loopback test through WinHTTP's automatic proxy can leave the

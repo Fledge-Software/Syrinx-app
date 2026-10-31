@@ -38,20 +38,37 @@ use syrinx_platform::{
     notice,
 };
 
-#[cfg(not(target_os = "windows"))]
-compile_error!("Syrinx v1 supports Windows 11 only.");
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+compile_error!("Syrinx builds for Windows and Linux; its macOS platform layer is not written yet.");
 
-/// Profile folder under `%LOCALAPPDATA%`: the installed package (owner decision, 2026-10-12)
-/// uses `Syrinx\data`; development and preview runs keep `SyrinxProductPreview`.
-const DATA_FOLDER: &str = if cfg!(feature = "installed") {
-    r"Syrinx\data"
+/// Profile folder under the local app-data folder: the installed package (owner decision,
+/// 2026-10-12) uses `Syrinx/data`; development and preview runs keep `SyrinxProductPreview`.
+const DATA_FOLDER: &[&str] = if cfg!(feature = "installed") {
+    &["Syrinx", "data"]
 } else {
-    "SyrinxProductPreview"
+    &["SyrinxProductPreview"]
 };
+
+/// `%LOCALAPPDATA%`, the per-user folder that is never roamed or synced (D13).
+#[cfg(windows)]
+fn local_app_data() -> Result<PathBuf, &'static str> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or("Windows local app data is unavailable.")
+}
+
+/// `$XDG_DATA_HOME`, or `~/.local/share`, as the storage guard resolves it.
+#[cfg(unix)]
+fn local_app_data() -> Result<PathBuf, &'static str> {
+    syrinx_platform::local_app_data()
+        .map_err(|_| "The local data folder ($XDG_DATA_HOME or ~/.local/share) is unavailable.")
+}
 
 fn main() -> ExitCode {
     // AN-01's start-up timings begin here, as close to process start as Syrinx can measure.
     let launched = Instant::now();
+    // SAFETY: nothing has started another thread yet.
+    unsafe { syrinx_platform::prepare_process() };
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     // Unattended runs report startup problems on stderr only, never in an invisible message box.
     let smoke_requested = arguments
@@ -521,10 +538,9 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
     } else if let Some(directory) = test_directory.clone() {
         directory
     } else {
-        PathBuf::from(
-            std::env::var_os("LOCALAPPDATA").ok_or("Windows local app data is unavailable.")?,
-        )
-        .join(DATA_FOLDER)
+        DATA_FOLDER
+            .iter()
+            .fold(local_app_data()?, |folder, name| folder.join(name))
     };
     // Only a smoke run deletes its profile; measurement and acceptance keep theirs as before.
     let mut smoke_profile = None;

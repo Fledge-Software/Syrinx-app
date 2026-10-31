@@ -1,11 +1,18 @@
 //! The WinHTTP adapter against loopback servers on 127.0.0.1, and the download bounds against an
 //! in-process fake. Nothing here resolves a name or reaches another machine.
 
-use std::io::{self, Read, Write};
+use std::io::Read;
+#[cfg(windows)]
+use std::io::{self, Write};
+#[cfg(windows)]
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread;
+#[cfg(windows)]
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use syrinx_update::install::{InstallError, PackageSource, SignedFile, TransferProblem};
@@ -13,7 +20,9 @@ use syrinx_update::{FileEntry, PackagePath, Version};
 
 use crate::endpoint::{Endpoint, Timeouts, UPDATE_BASE_URL};
 use crate::remote::RemotePackage;
-use crate::winhttp::{Body, Transport, USER_AGENT, WinHttp};
+use crate::transport::{Body, Transport};
+#[cfg(windows)]
+use crate::winhttp::{USER_AGENT, WinHttp};
 
 const VERSION: Version = Version::new(1, 4, 0);
 
@@ -24,6 +33,7 @@ const QUICK: Timeouts = Timeouts {
 };
 
 /// How a loopback server answers one connection.
+#[cfg(windows)]
 enum Reply {
     /// Send these bytes, then close.
     Raw(Vec<u8>),
@@ -34,12 +44,14 @@ enum Reply {
 }
 
 /// A plain-HTTP server on 127.0.0.1 that answers each connection in turn and keeps every request.
+#[cfg(windows)]
 struct Server {
     port: u16,
     requests: Arc<Mutex<Vec<String>>>,
     thread: Option<JoinHandle<()>>,
 }
 
+#[cfg(windows)]
 impl Server {
     fn start(replies: Vec<Reply>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
@@ -76,6 +88,7 @@ impl Server {
     }
 }
 
+#[cfg(windows)]
 impl Drop for Server {
     fn drop(&mut self) {
         if let Some(thread) = self.thread.take()
@@ -87,12 +100,14 @@ impl Drop for Server {
     }
 }
 
+#[cfg(windows)]
 fn package(endpoint: Endpoint) -> RemotePackage {
     let transport = WinHttp::open(endpoint).expect("WinHTTP session");
     RemotePackage::with_transport(Box::new(transport), endpoint.host())
 }
 
 /// The next connection within `patience`, in blocking mode, or `None`.
+#[cfg(windows)]
 fn accept(listener: &TcpListener, patience: Duration) -> Option<TcpStream> {
     listener
         .set_nonblocking(true)
@@ -119,6 +134,7 @@ fn accept(listener: &TcpListener, patience: Duration) -> Option<TcpStream> {
     }
 }
 
+#[cfg(windows)]
 fn answer(mut stream: TcpStream, reply: Reply, requests: &Mutex<Vec<String>>) {
     let head = read_head(&mut stream);
     requests.lock().expect("requests").push(head);
@@ -141,6 +157,7 @@ fn answer(mut stream: TcpStream, reply: Reply, requests: &Mutex<Vec<String>>) {
 }
 
 /// Write `bytes`; `false` once the client has closed, which several tests make it do.
+#[cfg(windows)]
 fn send(stream: &mut TcpStream, bytes: &[u8]) -> bool {
     match stream.write_all(bytes) {
         Ok(()) => true,
@@ -159,6 +176,7 @@ fn send(stream: &mut TcpStream, bytes: &[u8]) -> bool {
 }
 
 /// The request line and headers, up to the blank line.
+#[cfg(windows)]
 fn read_head(stream: &mut TcpStream) -> String {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -171,6 +189,7 @@ fn read_head(stream: &mut TcpStream) -> String {
     String::from_utf8_lossy(&head).into_owned()
 }
 
+#[cfg(windows)]
 fn ok(body: &[u8]) -> Reply {
     let mut bytes = format!(
         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -181,6 +200,7 @@ fn ok(body: &[u8]) -> Reply {
     Reply::Raw(bytes)
 }
 
+#[cfg(windows)]
 fn status(line: &str, extra: &str) -> Reply {
     Reply::Raw(
         format!("HTTP/1.1 {line}\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n")
@@ -231,8 +251,30 @@ fn the_production_endpoint_is_the_compiled_in_https_base() {
     assert_eq!(endpoint.timeouts.connect, Duration::from_secs(30));
     assert_eq!(endpoint.timeouts.receive, Duration::from_secs(60));
     // Opening the session makes no request; nothing here asks the host for anything.
-    let package = RemotePackage::production().expect("WinHTTP session");
-    assert_eq!(package.host(), "syrinxapp.dev");
+    #[cfg(windows)]
+    {
+        let package = RemotePackage::production().expect("WinHTTP session");
+        assert_eq!(package.host(), "syrinxapp.dev");
+    }
+    // Without WinHTTP no client exists, so the package refuses before any session.
+    #[cfg(not(windows))]
+    assert!(matches!(
+        RemotePackage::production(),
+        Err(InstallError::NotInstalled)
+    ));
+}
+
+#[test]
+fn only_the_test_loopback_endpoint_skips_tls_and_the_system_proxy() {
+    let loopback = Endpoint::loopback(8080, false, QUICK);
+    assert_eq!(loopback.host(), "127.0.0.1");
+    assert!(!loopback.secure);
+    assert!(
+        !loopback.system_proxy,
+        "no proxy detection for a loopback test"
+    );
+    assert_eq!(loopback.prefix, Endpoint::production().prefix);
+    assert_eq!(loopback.timeouts, QUICK);
 }
 
 #[test]
@@ -242,6 +284,7 @@ fn no_shipped_build_can_redirect_the_base_url() {
         include_str!("endpoint.rs"),
         include_str!("remote.rs"),
         include_str!("winhttp.rs"),
+        include_str!("transport.rs"),
         include_str!("lib.rs"),
     ];
     for source in sources {
@@ -261,6 +304,7 @@ fn no_shipped_build_can_redirect_the_base_url() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn a_request_carries_only_the_fixed_path_and_agent() {
     let server = Server::start(vec![ok(b"statement")]);
@@ -287,6 +331,7 @@ fn a_request_carries_only_the_fixed_path_and_agent() {
     assert!(requests[0].contains(&format!("User-Agent: {USER_AGENT}\r\n")));
 }
 
+#[cfg(windows)]
 #[test]
 fn manifests_and_payloads_live_under_their_checked_version() {
     let server = Server::start(vec![ok(b"manifest"), ok(b"exe!")]);
@@ -303,6 +348,7 @@ fn manifests_and_payloads_live_under_their_checked_version() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn the_signed_files_are_fetched_once_and_kept() {
     let server = Server::start(vec![ok(b"statement")]);
@@ -316,6 +362,7 @@ fn the_signed_files_are_fetched_once_and_kept() {
     assert_eq!(server.requests().len(), 1);
 }
 
+#[cfg(windows)]
 #[test]
 fn a_redirect_is_refused_and_never_followed() {
     let target = TcpListener::bind("127.0.0.1:0").expect("redirect target");
@@ -336,6 +383,7 @@ fn a_redirect_is_refused_and_never_followed() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn any_status_but_200_is_refused() {
     for (line, code) in [("404 Not Found", 404), ("503 Service Unavailable", 503)] {
@@ -345,6 +393,7 @@ fn any_status_but_200_is_refused() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn bodies_stop_at_their_bounds() {
     // A declared length over the limit is refused before the body is read.
@@ -384,6 +433,7 @@ fn bodies_stop_at_their_bounds() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn a_body_that_ends_early_is_refused() {
     let short =
@@ -403,6 +453,7 @@ fn a_body_that_ends_early_is_refused() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn a_stalled_host_times_out() {
     let wait = Duration::from_secs(8);
@@ -432,6 +483,7 @@ fn a_stalled_host_times_out() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn a_secure_request_never_speaks_plain_http() {
     // The production endpoint is HTTPS; a host that only speaks HTTP never sees a request.
@@ -451,6 +503,7 @@ fn a_secure_request_never_speaks_plain_http() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn an_unreachable_host_is_reported_as_such() {
     let unused = TcpListener::bind("127.0.0.1:0").expect("free port");

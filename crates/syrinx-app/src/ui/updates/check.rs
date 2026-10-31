@@ -339,12 +339,14 @@ impl BrowserView {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     use syrinx_update::install::TransferProblem;
 
     use super::*;
     use crate::updates::{StartupUpdates, UpdateContext};
 
     const OFFERED: Version = Version::new(1, 4, 0);
+    #[cfg(windows)]
     const BYTES: u64 = 38 * 1024 * 1024;
 
     fn panel() -> UpdatePanel {
@@ -352,10 +354,13 @@ mod tests {
     }
 
     /// The production host, opened but never asked anything: no test here makes a request.
+    #[cfg(windows)]
     fn unused_host() -> RemotePackage {
         RemotePackage::production().expect("WinHTTP session")
     }
 
+    // Only Windows builds a download host; elsewhere the panel never gets one.
+    #[cfg(windows)]
     #[test]
     fn an_offer_waits_for_the_owner_with_its_host_kept() {
         let mut panel = panel();
@@ -386,6 +391,8 @@ mod tests {
         assert!(panel.cancel_transfer(), "the download can be cancelled");
     }
 
+    // Only Windows builds a download host; elsewhere the panel never gets one.
+    #[cfg(windows)]
     #[test]
     fn a_cancel_after_the_last_read_offers_nothing_and_keeps_the_staged_copy() {
         let staged = Version::new(1, 3, 5);
@@ -405,6 +412,8 @@ mod tests {
         assert!(panel.accept_download().is_none(), "no download can start");
     }
 
+    // Only Windows builds a download host; elsewhere the panel never gets one.
+    #[cfg(windows)]
     #[test]
     fn a_download_starts_with_a_fresh_cancel() {
         let mut panel = panel();
@@ -428,6 +437,8 @@ mod tests {
         );
     }
 
+    // Only Windows builds a download host; elsewhere the panel never gets one.
+    #[cfg(windows)]
     #[test]
     fn declining_forgets_the_offer_and_downloads_nothing() {
         let mut panel = panel();
@@ -447,6 +458,8 @@ mod tests {
         );
     }
 
+    // Only Windows builds a download host; elsewhere the panel never gets one.
+    #[cfg(windows)]
     #[test]
     fn a_check_that_finds_nothing_returns_to_where_it_started() {
         let cases = [
@@ -473,6 +486,8 @@ mod tests {
         }
     }
 
+    // Only Windows builds a download host; elsewhere the panel never gets one.
+    #[cfg(windows)]
     #[test]
     fn an_offer_of_the_staged_version_is_not_downloaded_again() {
         let mut panel = panel();

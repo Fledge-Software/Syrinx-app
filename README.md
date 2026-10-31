@@ -1,10 +1,12 @@
 # Syrinx
 
-Syrinx is a browser-first workspace for Windows 11: a web browser with a
-vertical-tab sidebar and one command palette, where code (Forge), notes (Notes)
-and business tools (Fledge) will open as tabs beside your pages. Pages render
-in Microsoft Edge WebView2, driven from Rust; Syrinx's own interface is drawn
-in Rust with GPUI.
+Syrinx is a browser-first workspace for Windows, Linux and macOS: one web
+browser with a vertical-tab sidebar and one command palette, where code
+(Forge), notes (Notes) and business tools (Fledge) will open as tabs beside
+your pages. Pages render in the system's web engine, driven from Rust:
+Microsoft Edge WebView2 on Windows and WebKitGTK on Linux. Syrinx's own
+interface is drawn in Rust with GPUI. The macOS build (WKWebView) is the next
+platform to be written.
 
 Website: [syrinxapp.dev](https://syrinxapp.dev) · Documentation:
 [docs.syrinxapp.dev](https://docs.syrinxapp.dev)
@@ -20,14 +22,21 @@ previews are unsigned, so Windows SmartScreen warns before the first run.
 
 ## Building
 
-Syrinx builds only on Windows 11 with the MSVC Rust toolchain (1.97 or
-newer) and the Windows SDK. From a checkout:
+One workspace builds on every platform, with Rust 1.97 or newer. From a
+checkout:
 
-```powershell
+```sh
 cargo syrinx              # run Syrinx
 cargo xtask check         # the gate: dependencies, format, Clippy, tests, smoke run
-cargo xtask package       # the setup program and portable zip under target\package
 ```
+
+- **Windows 11**: the MSVC toolchain and the Windows SDK. `cargo xtask
+  package` builds the setup program and portable zip under `target\package`.
+- **Linux**: WebKitGTK 4.1 (2.38 or newer), GTK 3, libsoup 3 and
+  bubblewrap, and an X11 display; under Wayland (Hyprland, GNOME, KDE)
+  Syrinx runs through XWayland. Protected video (Disney+, Hulu) does not
+  play, because WebKitGTK has no Widevine.
+- **macOS**: not yet; its platform layer is the next one to be written.
 
 `docs/dev/LOCAL-DEV.md` has the details and the traps.
 

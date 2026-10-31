@@ -80,6 +80,7 @@ fn restored(fixture: &Fixture, expected: &StoredSnapshot) {
     store.shutdown().expect("close recovered synthetic store");
 }
 
+#[cfg(windows)]
 #[test]
 fn newest_valid_offer_preserves_primary_and_sidecars_until_confirmation() {
     let fixture = Fixture::new();

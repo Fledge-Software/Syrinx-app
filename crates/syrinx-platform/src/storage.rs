@@ -3,6 +3,7 @@
 mod backup;
 mod cache;
 mod deletions;
+#[cfg_attr(unix, path = "storage/native_unix.rs")]
 mod native;
 mod recovery;
 mod session;
@@ -10,26 +11,49 @@ mod startup;
 
 pub use cache::CacheFolder;
 pub use deletions::{DeletionJournal, JournalError, read_deletion_log};
+#[cfg(unix)]
+pub use native::local_app_data;
 pub use recovery::{RecoveryError, RecoveryOffer, RecoveryOutcome, offer_recovery};
 pub use startup::{StartupStorage, prepare_startup};
 
+#[cfg(unix)]
+#[path = "storage/paths_unix.rs"]
+mod paths_unix;
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, unix))]
+#[path = "storage/tests_unix.rs"]
+mod tests_unix;
+#[cfg(unix)]
+use paths_unix::{
+    normal_absolute_path, require_local_drive, sqlite_database_path, validate_component,
+};
 
 use std::{
     ffi::{OsStr, OsString},
     fmt,
     fs::{self, File},
     io,
-    os::windows::ffi::OsStrExt,
-    path::{Component, Path, PathBuf, Prefix},
+    path::{Path, PathBuf},
     sync::Arc,
+};
+#[cfg(windows)]
+use std::{
+    os::windows::ffi::OsStrExt,
+    path::{Component, Prefix},
 };
 
 use syrinx_store::{
     BackupArchive, DirectoryLease, LocationError, LocationOperation, SessionControl,
 };
+#[cfg(windows)]
 use windows::Win32::{Foundation::MAX_PATH, System::WindowsProgramming::DRIVE_FIXED};
+
+/// The probe's answer for a fixed local disk, the only place the database may live.
+#[cfg(windows)]
+const LOCAL_DRIVE: u32 = DRIVE_FIXED;
+#[cfg(unix)]
+const LOCAL_DRIVE: u32 = 3;
 
 const DATABASE_NAME: &str = "syrinx.db";
 const SIDECAR_NAMES: [&str; 3] = ["syrinx.db-wal", "syrinx.db-shm", "syrinx.db-journal"];
@@ -63,7 +87,7 @@ impl WindowsDirectoryLease {
     /// This may create the directory and an empty database, but never replaces
     /// an existing file. The caller must retain the lease while SQLite is open.
     pub fn prepare(data_directory: &Path) -> Result<Self, LocationError> {
-        Self::prepare_with_probe(data_directory, Arc::new(native::WindowsProbe))
+        Self::prepare_with_probe(data_directory, Arc::new(native::NativeProbe))
     }
 
     fn prepare_with_probe(
@@ -372,9 +396,10 @@ fn check_entry(information: &EntryInfo, directory: bool) -> Result<(), LocationE
     Ok(())
 }
 
+#[cfg(windows)]
 fn require_local_drive(path: &Path, probe: &dyn LocationProbe) -> Result<(), LocationError> {
     let root = path.ancestors().last().ok_or(LocationError::InvalidPath)?;
-    if probe.drive_type(root)? != DRIVE_FIXED {
+    if probe.drive_type(root)? != LOCAL_DRIVE {
         return Err(LocationError::NonLocalDrive);
     }
     Ok(())
@@ -416,6 +441,7 @@ fn refuse_root_identities(
     Ok(())
 }
 
+#[cfg(windows)]
 fn normal_absolute_path(path: &Path) -> Result<PathBuf, LocationError> {
     // Keep one normal DOS spelling for identity checks and native handle opens.
     let mut components = path.components();
@@ -440,6 +466,7 @@ fn normal_absolute_path(path: &Path) -> Result<PathBuf, LocationError> {
     Ok(normalized)
 }
 
+#[cfg(windows)]
 fn sqlite_database_path(path: &Path) -> PathBuf {
     // Keep ordinary DOS spelling when the database and its longest sidecar fit.
     // Include the sidecar suffix and terminator before choosing extended-path spelling.
@@ -452,6 +479,7 @@ fn sqlite_database_path(path: &Path) -> PathBuf {
     PathBuf::from(extended)
 }
 
+#[cfg(windows)]
 fn validate_component(name: &OsStr) -> Result<(), LocationError> {
     // DOS aliases, alternate streams and stripped trailing characters change identity.
     let wide: Vec<_> = name.encode_wide().collect();
@@ -471,6 +499,7 @@ fn validate_component(name: &OsStr) -> Result<(), LocationError> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn is_reserved_name(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or(name);
     if ["CON", "PRN", "AUX", "NUL"]

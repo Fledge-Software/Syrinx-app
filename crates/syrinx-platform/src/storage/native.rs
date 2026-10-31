@@ -62,9 +62,9 @@ use windows::{
 
 use super::{EntryInfo, FileIdentity, LocationProbe};
 
-pub(super) struct WindowsProbe;
+pub(super) struct NativeProbe;
 
-impl LocationProbe for WindowsProbe {
+impl LocationProbe for NativeProbe {
     fn drive_type(&self, root: &Path) -> Result<u32, LocationError> {
         // The caller supplies an absolute root, including its trailing separator.
         let wide = wide_path(root);

@@ -17,6 +17,37 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-10-31
+
+- **Syrinx is one app for Windows, Linux and macOS (owner, 2026-10-31).**
+  The owner's words: "one standalone app that can run on windows, linux
+  and mac. Just like the docs should say". The rest of this entry is the
+  coordinator's record, and the owner may correct it. This replaces D2's
+  "Windows 11 only": the same workspace builds on each platform, and only
+  `syrinx-platform` (the page engine, windows, storage guard, single
+  instance and dialogs) is written once per platform, as the 2026-10-15
+  macOS entry already planned. The core, store, search, UI and plugin
+  crates are shared unchanged.
+  - **Windows** stays as it is: WebView2 through the pinned, patched wry.
+  - **Linux** renders pages in WebKitGTK, driven directly through
+    `webkit2gtk` rather than wry, because wry's GTK backend injects a
+    `window.ipc` script into every page whether or not an IPC handler is
+    set, which the page rules in `AGENTS.md` forbid. Each page is a GTK
+    window embedded as an X11 child of Syrinx's window, so Syrinx runs on
+    X11, or XWayland under a Wayland compositor such as Hyprland; GPUI is
+    built with its X11 backend only. WebKit's bubblewrap sandbox is on.
+    Known limits, flagged rather than hidden: WebKitGTK has no Widevine, so
+    Disney+ and Hulu do not play; Google may treat WebKitGTK as an
+    unfamiliar browser at sign-in, and the user agent is still never
+    changed (D22); page-text capture, hidden-page suspension, pausing a
+    download and the update download are Windows-only for now.
+  - **macOS** is not built yet: its platform layer (WKWebView, AppKit
+    windows) is the next platform slice, and it needs a Mac to run on.
+  - Rejected: CEF on Linux (one Chromium everywhere, but it bundles
+    Chromium and Google's sign-in block names CEF); a separate Linux fork of
+    the repository (two copies of every rule drift apart); wry's GTK
+    backend (the injected script above).
+
 ## 2026-10-27
 
 - **Switching page text off erases it at once (#54, owner, 2026-10-27).**
@@ -1744,7 +1775,8 @@ These entries depart from `docs/spec.md`. Each is argued in
 `docs/architecture-decisions.md`, decision number in brackets.
 
 - **v1 runs on Windows 11 only** (D2). No macOS or Linux work or testing in
-  v1, so the Phase 0 verdict is for Windows, not per OS.
+  v1, so the Phase 0 verdict is for Windows, not per OS. *Superseded on
+  2026-10-31: Syrinx is one app for Windows, Linux and macOS (entry above).*
 - **Pages render in WebView2, driven from Rust through wry, without Tauri**
   (D3). Servo is added later as a per-tab engine.
 - **Syrinx's interface is drawn in Rust with GPUI, not Svelte** (D4), unless

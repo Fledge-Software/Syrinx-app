@@ -3,15 +3,16 @@
 
 # Syrinx
 
-Syrinx is a browser-first workspace app: a Windows desktop browser with a
-vertical-tab sidebar, where Notes, Forge (code) and Fledge will run as
+Syrinx is a browser-first workspace app: a desktop browser for Windows,
+Linux and macOS (owner, 2026-10-31) with a vertical-tab sidebar, where Notes, Forge (code) and Fledge will run as
 built-in plugins that open as tabs. Plugins are sandboxed WebAssembly
 components, each in its own repository, with the built-in ones bundled in
 Syrinx's release (owner, 2026-10-15 and 2026-10-21); none is built yet,
 and the Fledge plugin is on hold until Fledge's API is ready (2026-10-20).
 It was called Atlas, a working name, until the owner named it Syrinx on
 2026-10-12; the docs and wiki say Syrinx throughout. Pages render in WebView2 driven from
-Rust through wry, and Syrinx's own interface is drawn in Rust with the
+Rust through wry on Windows, and in WebKitGTK on Linux (X11 or XWayland); macOS's
+platform layer is not written yet. Syrinx's own interface is drawn in Rust with the
 conditionally approved GPUI base (D37's idle-patch gate still applies).
 
 - The product spec, the decisions already made and the phased plan are in
@@ -83,8 +84,8 @@ above, and `docs/spec.md` below. Before picking up work, also read:
   second pull request that "supersedes" the first. Merge the base branch into
   the PR branch and push; do not rebase, amend or force-push somebody else's
   branch.
-- **Build and test on this machine.** Syrinx is a Windows desktop app with no
-  server or deploy. Run `cargo xtask check` as defined in `docs/dev/LOCAL-DEV.md`:
+- **Build and test on this machine.** Syrinx is a desktop app for Windows and
+  Linux (macOS to follow) with no server or deploy. Run `cargo xtask check` as defined in `docs/dev/LOCAL-DEV.md`:
   dependency checks, formatting, Clippy, tests and an application smoke run
   under D38's `local` profile. After changing anything the owner sees, run
   the app and look at the window.

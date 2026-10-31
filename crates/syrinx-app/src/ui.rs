@@ -2381,7 +2381,12 @@ pub(crate) fn native_handle(window: &Window) -> Result<isize, &'static str> {
         HasWindowHandle::window_handle(window).map_err(|_| "The native window is unavailable.")?;
     match handle.as_raw() {
         RawWindowHandle::Win32(handle) => Ok(handle.hwnd.get()),
-        _ => Err("Syrinx requires a Windows window."),
+        // On Linux the platform layer addresses Syrinx's windows by their X11 ids.
+        RawWindowHandle::Xlib(handle) => isize::try_from(handle.window)
+            .map_err(|_| "The X11 window id does not fit Syrinx's handle."),
+        RawWindowHandle::Xcb(handle) => isize::try_from(handle.window.get())
+            .map_err(|_| "The X11 window id does not fit Syrinx's handle."),
+        _ => Err("Syrinx needs a Windows or X11 window."),
     }
 }
 

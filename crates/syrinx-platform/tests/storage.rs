@@ -1,4 +1,5 @@
 //! Exercises the native directory lease and SQLite together on disposable synthetic data.
+#![cfg(windows)]
 
 use std::{
     fs, io,

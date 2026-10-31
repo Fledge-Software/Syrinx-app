@@ -372,8 +372,14 @@ mod tests {
     fn installed_app_selects_the_same_data_folder() {
         // syrinx-app is a binary, so check its source rather than import its constant.
         let source = include_str!("../../../syrinx-app/src/main.rs");
+        // The app spells the folder as path parts, so it works on every platform.
+        let parts = DATA_FOLDER
+            .split('\\')
+            .map(|part| format!("\"{part}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
         let selection = format!(
-            "if cfg!(feature = \"installed\") {{\n    r\"{DATA_FOLDER}\"\n}} else {{\n    \"{PREVIEW_DATA_FOLDER}\"\n}}"
+            "if cfg!(feature = \"installed\") {{\n    &[{parts}]\n}} else {{\n    &[\"{PREVIEW_DATA_FOLDER}\"]\n}}"
         );
         assert!(
             source.replace("\r\n", "\n").contains(&selection),

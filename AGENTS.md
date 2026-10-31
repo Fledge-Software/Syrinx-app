@@ -40,7 +40,7 @@ failures instead of swallowing them. Follow the same shape in product code.
 
 ## Layout
 
-Syrinx is a Rust Cargo workspace on Windows 11. P1-01 provides `syrinx-app`
+Syrinx is a Rust Cargo workspace that builds on Windows and Linux. P1-01 provides `syrinx-app`
 and `xtask`; P1-02 adds the window-independent `syrinx-core` model. Later
 crates are added in their approved slice.
 The layout proposed in research note 03 (wiki: `Background-03-core-architecture`,
@@ -67,8 +67,9 @@ scaffold settles it:
   ships as a signed package bundled in Syrinx's release. The Fledge plugin
   and its client are on hold (2026-10-20).
 - `syrinx-app` and `syrinx-ui` draw the interface with the approved GPUI base;
-  `syrinx-platform` owns WebView2 and Win32, with plugin views a separate
-  type from page web views. Other product crates remain free of
+  `syrinx-platform` owns the page engine and the operating system (WebView2
+  and Win32 on Windows; WebKitGTK, X11 and POSIX on Linux), with plugin
+  views a separate type from page web views. Other product crates remain free of
   toolkit/web-view dependencies so the core stays testable without a window.
 - Plugin tabs draw in HTML inside Syrinx's own plugin views; palette forms
   and Home widgets are declarative and drawn by GPUI (2026-10-21). Notes and
@@ -411,6 +412,11 @@ style problem.
   permissions to Apache-2.0. This approves neither
   other packages under it nor a general licence-policy expansion; record the
   audit of every transitive crate before adding wasmtime.
+- **Approved narrow licence exception, 2026-10-31:** the Linux build may use
+  `target-lexicon 0.12.16` (Apache-2.0 WITH LLVM-exception) and
+  `tiny-keccak 2.0.2` (CC0-1.0), both compile-time only and never linked
+  into Syrinx; `docs/dev/dependency-audit.md`, "Linux platform layer",
+  records where each comes from. This approves only those versions.
 - **Pin GPUI and wasmtime exactly with `=`.** GPUI's snapshot releases change
   its API weekly, and a caret requirement has already broken builds (note 08,
   1.2). wasmtime stays on its 48.x long-term-support line; a security patch
@@ -429,7 +435,12 @@ style problem.
 
 **Scope:**
 
-- **Windows 11 only in v1** (D2). No macOS or Linux code paths or testing.
+- **One app for Windows, Linux and macOS (owner, 2026-10-31; replaces D2).**
+  Platform code lives only in `syrinx-platform`, chosen with `#[cfg]` per
+  platform beside a shared protocol (`browser/protocol.rs`, `keys.rs`,
+  `history_state.rs`); every other crate stays platform-free. A change to
+  shared code must build on Windows and Linux; macOS's layer is not
+  written yet. Linux pages use WebKitGTK directly, never wry's GTK backend.
 - **Known limits are flagged, not hidden**: no Chrome extensions, and no
   password manager or ad blocking in v1.
 
@@ -441,8 +452,8 @@ the gate, and fail somewhere else. Add a new trap there, not here.
 
 ## Develop and test on this machine
 
-Syrinx is a desktop app for one owner on Windows 11, so there is no server,
-deploy or cloud preview. Build, run and test it on the owner's machine; the
+Syrinx is a desktop app for one owner on Windows and Linux, so there is no
+server, deploy or cloud preview. Build, run and test it on the owner's machine; the
 scaffold writes how into `docs/dev/LOCAL-DEV.md`. Run the app and look at the
 window after changing anything the owner sees: a passing gate does not prove
 a page card resized, a popup stacked correctly or focus came back to the page.

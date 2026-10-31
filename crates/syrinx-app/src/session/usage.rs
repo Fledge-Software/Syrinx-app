@@ -351,8 +351,9 @@ fn remove_if_present(path: &Path) -> Result<(), UsageError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use std::os::windows::fs::OpenOptionsExt;
     use std::{
-        os::windows::fs::OpenOptionsExt,
         sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -485,6 +486,8 @@ mod tests {
         assert!(recorder.is_enabled());
     }
 
+    // Holding a file without delete sharing is a Windows behaviour.
+    #[cfg(windows)]
     #[test]
     fn a_switch_off_that_cannot_delete_stays_off_and_finishes_at_the_next_start() {
         let folder = Folder::new();
@@ -522,6 +525,8 @@ mod tests {
         assert!(!folder.has(FILE_NAME) && !folder.has(OFF_NAME));
     }
 
+    // Holding a file without delete sharing is a Windows behaviour.
+    #[cfg(windows)]
     #[test]
     fn a_failed_reset_reports_the_status_it_left() {
         let folder = Folder::new();
@@ -557,6 +562,8 @@ mod tests {
         assert!(!folder.has(FILE_NAME) && !folder.has(OFF_NAME));
     }
 
+    // Holding a file without delete sharing is a Windows behaviour.
+    #[cfg(windows)]
     #[test]
     fn a_switch_off_that_cannot_record_or_delete_says_counting_may_resume() {
         let folder = Folder::new();

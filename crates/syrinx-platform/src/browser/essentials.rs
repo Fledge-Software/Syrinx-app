@@ -14,33 +14,10 @@ use windows::{
 use wry::{WebView, WebViewExtWindows};
 
 use super::{
-    BrowserError, BrowserEvent, EventSink,
+    BrowserError, BrowserEvent, EventSink, PageAction,
     lifecycle::{emit_audio_changed, playing_audio},
+    next_zoom,
 };
-
-pub enum PageAction {
-    /// Searches the page for `text`, matching case only when `case_sensitive`; an empty
-    /// `text` stops the search instead.
-    Find {
-        request: u64,
-        text: String,
-        case_sensitive: bool,
-    },
-    FindNext,
-    FindPrevious,
-    StopFind,
-    Downloads,
-    CloseDownloads,
-    Print,
-    ZoomIn,
-    ZoomOut,
-    ZoomReset,
-    /// Restores a site's remembered level (#90); clamped to WebView2's 25% to 500%.
-    SetZoom(f64),
-    /// Points the profile's downloads at a synthetic folder. Only the native fixture sends
-    /// this; Syrinx itself never changes where WebView2 saves files.
-    SetDownloadFolder(std::path::PathBuf),
-}
 
 pub(super) struct Essentials {
     id: u64,
@@ -365,25 +342,6 @@ fn register_downloads(view: &WebView, id: u64, events: EventSink) -> windows::co
     }
 }
 
-fn next_zoom(factor: f64, action: &PageAction) -> f64 {
-    const LEVELS: [f64; 15] = [
-        0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1., 1.1, 1.25, 1.5, 1.75, 2., 2.5, 3., 5.,
-    ];
-    match action {
-        PageAction::ZoomIn => LEVELS
-            .into_iter()
-            .find(|level| *level > factor + 0.001)
-            .unwrap_or(5.),
-        PageAction::ZoomOut => LEVELS
-            .into_iter()
-            .rev()
-            .find(|level| *level < factor - 0.001)
-            .unwrap_or(0.25),
-        PageAction::SetZoom(level) if level.is_finite() => level.clamp(0.25, 5.),
-        _ => 1.,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,19 +355,5 @@ mod tests {
         // A stopped search reports nothing.
         assert_eq!(settled_request(None, Some(4)), None);
         assert_eq!(settled_request(None, None), None);
-    }
-
-    #[test]
-    fn zoom_steps_boundaries_and_reset_are_predictable() {
-        assert_eq!(next_zoom(1., &PageAction::ZoomIn), 1.1);
-        assert_eq!(next_zoom(1.1, &PageAction::ZoomOut), 1.);
-        assert_eq!(next_zoom(1.13, &PageAction::ZoomIn), 1.25);
-        assert_eq!(next_zoom(1.13, &PageAction::ZoomOut), 1.1);
-        assert_eq!(next_zoom(5., &PageAction::ZoomIn), 5.);
-        assert_eq!(next_zoom(0.25, &PageAction::ZoomOut), 0.25);
-        assert_eq!(next_zoom(3., &PageAction::ZoomReset), 1.);
-        assert_eq!(next_zoom(1., &PageAction::SetZoom(1.25)), 1.25);
-        assert_eq!(next_zoom(1., &PageAction::SetZoom(9.)), 5.);
-        assert_eq!(next_zoom(1.5, &PageAction::SetZoom(f64::NAN)), 1.);
     }
 }

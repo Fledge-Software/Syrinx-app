@@ -1,4 +1,4 @@
-# Local development on Windows 11
+# Local development on Windows and Linux
 
 This is how to build, run and check Syrinx on this machine. Work one
 approved slice at a time, each on its own branch, usually in its own git
@@ -63,7 +63,7 @@ are committed; building never runs Edge or Python (`design/brand/README.md`).
 
 ## Run and check
 
-Run these from the repository in PowerShell:
+Run these from the repository in PowerShell (on Linux, any shell; see "On Linux" below):
 
 ```powershell
 cargo syrinx
@@ -132,6 +132,58 @@ the gate fails, puts its end in the run summary. A separate Linux job checks
 only formatting, so a formatting slip is reported within a minute or two.
 The weekly release runs the gate the same way before it builds anything
 (`docs/releasing.md`).
+
+## On Linux (owner, 2026-10-31)
+
+The same commands run from a Linux checkout:
+
+```sh
+cargo syrinx
+cargo xtask check
+```
+
+You need Rust 1.97 (`rustup toolchain install 1.97.1`), WebKitGTK 4.1
+(2.38 or newer), GTK 3, libsoup 3, bubblewrap (WebKit's page sandbox) and an
+X11 display. On Arch-based systems such as Omarchy that is `webkit2gtk-4.1`,
+`gtk3`, `libsoup3` and `bubblewrap`. Under a Wayland compositor (Hyprland,
+GNOME, KDE) Syrinx runs through XWayland: GTK can embed a page only inside an
+X11 window, so GPUI is built with its X11 backend alone and GDK is limited to
+X11 (`syrinx-platform/src/linux/gtk_thread.rs`).
+
+What differs from Windows:
+
+- **Pages** render in WebKitGTK, driven directly through `webkit2gtk`
+  (`syrinx-platform/src/browser_gtk/`), each embedded as an X11 child of
+  Syrinx's window. The commands and events are the same protocol as the
+  WebView2 host (`browser/protocol.rs`). WebKit's bubblewrap sandbox is on,
+  and the engine refuses to start if `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS`
+  or an inspector-server variable is set.
+- **NVIDIA's proprietary driver** draws WebKit's DMA-BUF renderer black, so
+  Syrinx sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at start-up when
+  `/proc/driver/nvidia/version` exists and the owner has not set it
+  (`syrinx_platform::prepare_process`).
+- **Data** lives in `$XDG_DATA_HOME/SyrinxProductPreview` (normally
+  `~/.local/share`), or `Syrinx/data` for the installed feature. The storage
+  guard refuses network and FUSE filesystems and the folders of common sync
+  clients (Dropbox, OneDrive, Nextcloud and others) in place of Windows'
+  registered sync roots.
+- **One running Syrinx per profile** is kept with an `flock`ed lock file and
+  a mode-0600 Unix socket in `$XDG_RUNTIME_DIR`, which checks the peer's user
+  id as the Windows pipe checks its server's.
+- **Windows-only for now**: the setup program and packaging (`cargo xtask
+  package`), release signing, update downloads, page-text capture,
+  hidden-page suspension, pausing a download, the palette acceptance run, and
+  the WebView2 example fixtures (they print that they need Windows). Tests
+  that assert Windows file-sharing rules are `#[cfg(windows)]`; on Unix the
+  guard revalidates identities instead (`docs/dev/trapstoknow.md`, "Linux").
+- **Known limits**: no Widevine in WebKitGTK, so Disney+ and Hulu do not
+  play; Google may treat WebKitGTK as an unfamiliar browser at sign-in, and
+  the user agent is still never changed (D22). The toolbar icons use Windows'
+  Segoe MDL2 Assets font, which Linux does not have, so they show as wrong
+  glyphs until Syrinx ships its own icons.
+
+The Linux gate skips the release tool's two steps (it signs through Windows
+key storage) and parses no PowerShell; the Windows gate still runs both.
 
 ## Why the profile is explicit
 

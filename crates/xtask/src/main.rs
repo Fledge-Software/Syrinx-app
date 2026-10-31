@@ -12,9 +12,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-#[cfg(not(target_os = "windows"))]
-compile_error!("Syrinx's development gate supports Windows 11 only.");
-
 const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
@@ -39,11 +36,18 @@ fn run() -> Result<(), String> {
 
     // Only `sign-update` takes options, which the release tool itself checks.
     if command == "sign-update" {
+        if !cfg!(windows) {
+            return Err(
+                "`cargo xtask sign-update` uses Windows key storage and runs only on Windows."
+                    .to_owned(),
+            );
+        }
         return packaging::sign_update(&root, &unicode_arguments(rest)?);
     }
     if !rest.is_empty() {
         return Err(USAGE.to_owned());
     }
+    refuse_windows_only_elsewhere(&command)?;
     match command.to_str() {
         Some("check") => check_workspace(&root),
         Some("check-deps") => check_dependencies(&root),
@@ -59,6 +63,21 @@ fn run() -> Result<(), String> {
         }
         _ => Err(USAGE.to_owned()),
     }
+}
+
+/// The installer, release signing and the Win32 palette harness exist only on Windows.
+fn refuse_windows_only_elsewhere(command: &OsString) -> Result<(), String> {
+    let windows_only = matches!(
+        command.to_str(),
+        Some("package" | "palette-acceptance" | "write-registration")
+    );
+    if windows_only && !cfg!(windows) {
+        return Err(format!(
+            "`cargo xtask {}` builds or drives the Windows app and runs only on Windows.",
+            command.to_string_lossy()
+        ));
+    }
+    Ok(())
 }
 
 fn unicode_arguments(arguments: Vec<OsString>) -> Result<Vec<String>, String> {
@@ -153,11 +172,16 @@ fn check_workspace(root: &Path) -> Result<(), String> {
     )?;
     run_cargo(root, &workspace_step("test", &[], &[]))?;
     // The release tool is linted and tested on its own, so its feature never reaches the app.
-    run_cargo(
-        root,
-        &release_tool_step("clippy", &["--all-targets"], &["--", "-D", "warnings"]),
-    )?;
-    run_cargo(root, &release_tool_step("test", &[], &[]))?;
+    // It signs through Windows key storage, so only the Windows gate builds it.
+    if cfg!(windows) {
+        run_cargo(
+            root,
+            &release_tool_step("clippy", &["--all-targets"], &["--", "-D", "warnings"]),
+        )?;
+        run_cargo(root, &release_tool_step("test", &[], &[]))?;
+    } else {
+        println!("The release tool signs through Windows key storage; the Windows gate checks it.");
+    }
     run_cargo(
         root,
         &[

@@ -1414,9 +1414,20 @@ fn assert_unreplaced_primary(fixture: &Fixture) {
     assert!(!fixture.0.join("syrinx.recovery-intent").exists());
 }
 
-fn remove_preserved_recovery_bundle(fixture: &Fixture, expected_primary: Option<&[u8]>) {
+/// Whether an entry is a link or other reparse point, which cleanup must never follow.
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes() & 0x400 != 0
+}
 
+/// Whether an entry is a link, which cleanup must never follow.
+#[cfg(unix)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+fn remove_preserved_recovery_bundle(fixture: &Fixture, expected_primary: Option<&[u8]>) {
     // Only a successful recovery in this exclusively created fixture owns these originals.
     let mut bundles = Vec::new();
     for entry in checked_io(fs::read_dir(&fixture.0)) {
@@ -1443,11 +1454,7 @@ fn remove_preserved_recovery_bundle(fixture: &Fixture, expected_primary: Option<
         assert_eq!(path.parent(), Some(fixture.0.as_path()));
         let metadata = checked_io(fs::symlink_metadata(&path));
         assert!(metadata.is_dir());
-        assert_eq!(
-            metadata.file_attributes() & 0x400,
-            0,
-            "refuse reparse points"
-        );
+        assert!(!is_reparse_point(&metadata), "refuse reparse points");
         bundles.push(path);
     }
     assert_eq!(
@@ -1471,11 +1478,7 @@ fn remove_preserved_recovery_bundle(fixture: &Fixture, expected_primary: Option<
         assert_eq!(path.parent(), Some(bundle.as_path()));
         let metadata = checked_io(fs::symlink_metadata(&path));
         assert!(metadata.is_file());
-        assert_eq!(
-            metadata.file_attributes() & 0x400,
-            0,
-            "refuse reparse points"
-        );
+        assert!(!is_reparse_point(&metadata), "refuse reparse points");
         checked_io(fs::remove_file(path));
     }
     checked_io(fs::remove_dir(bundle));

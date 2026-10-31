@@ -1,6 +1,7 @@
 //! What Syrinx does with update files when it starts, and when it hands over to the helper.
 
 use std::fs::{File, OpenOptions};
+#[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
 
@@ -24,6 +25,7 @@ use crate::version::Version;
 use crate::{cng, verify_manifest};
 
 /// Share only reading, so the helper cannot be changed between its check and its start.
+#[cfg(windows)]
 const FILE_SHARE_READ: u32 = 0x0000_0001;
 /// Longer than any staging mark Syrinx writes.
 const MARK_LIMIT: usize = 64;
@@ -225,10 +227,21 @@ pub fn prepare_handoff(layout: &UpdateLayout, keys: &KeySet) -> Result<Handoff, 
 
 /// Open a file so that, while the handle lives, nothing can write, rename or delete it, yet
 /// Windows can still read it to start it.
+#[cfg(windows)]
 pub(crate) fn open_unchangeable(path: &Path) -> Result<File, InstallError> {
     OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ)
+        .open(path)
+        .map_err(io_error("checking the update helper"))
+}
+
+/// Open a file for reading; Unix cannot deny other writers, so unlike Windows this only
+/// keeps the checked file's contents reachable while the handle lives.
+#[cfg(unix)]
+pub(crate) fn open_unchangeable(path: &Path) -> Result<File, InstallError> {
+    OpenOptions::new()
+        .read(true)
         .open(path)
         .map_err(io_error("checking the update helper"))
 }

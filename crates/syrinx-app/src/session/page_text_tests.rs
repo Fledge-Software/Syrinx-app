@@ -371,13 +371,17 @@ fn finish_repaired_session(fixture: Fixture, store: Store, worker: Worker) {
     fixture.cleanup();
 }
 
+#[cfg(windows)]
 /// Windows' `FILE_SHARE_DELETE`: others may delete the file but not read it.
 const SHARE_DELETE_ONLY: u32 = 0x4;
+#[cfg(windows)]
 /// No sharing: others may neither read nor delete the file.
 const SHARE_NOTHING: u32 = 0;
+#[cfg(windows)]
 /// Windows' `FILE_SHARE_READ`: others may read the file but not delete it.
 const SHARE_READ_ONLY: u32 = 0x1;
 
+#[cfg(windows)]
 /// Holds the index's `meta.json` open, sharing only `share_mode`, so Tantivy cannot read it.
 fn hold_index_metadata(fixture: &Fixture, share_mode: u32) -> fs::File {
     use std::os::windows::fs::OpenOptionsExt;
@@ -388,6 +392,8 @@ fn hold_index_metadata(fixture: &Fixture, share_mode: u32) -> fs::File {
         .expect("hold synthetic index metadata")
 }
 
+// Holding a file so it cannot be read or deleted is a Windows behaviour.
+#[cfg(windows)]
 #[test]
 fn a_repair_whose_index_cannot_open_empties_its_folder_and_starts_afresh() {
     let fixture = Fixture::new();
@@ -450,6 +456,8 @@ fn a_repair_whose_index_opens_but_cannot_restart_empties_its_folder_and_starts_a
     fixture.cleanup();
 }
 
+// Holding a file so it cannot be read or deleted is a Windows behaviour.
+#[cfg(windows)]
 #[test]
 fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can() {
     let fixture = Fixture::new();
@@ -502,6 +510,7 @@ fn is_segment_file(path: &Path) -> bool {
     })
 }
 
+#[cfg(windows)]
 /// Holds one of the index's segment files open so it cannot be deleted, and names it.
 fn hold_a_segment(fixture: &Fixture) -> (PathBuf, fs::File) {
     use std::os::windows::fs::OpenOptionsExt;
@@ -546,6 +555,8 @@ fn an_ordinary_start_empties_an_index_a_failed_empty_left_without_some_segment_f
     fixture.cleanup();
 }
 
+// Holding a file so it cannot be read or deleted is a Windows behaviour.
+#[cfg(windows)]
 #[test]
 fn a_repair_whose_index_is_only_partly_emptied_is_refused_and_retried_until_it_is_gone() {
     let fixture = Fixture::new();
@@ -611,6 +622,8 @@ fn a_repair_goes_ahead_when_a_file_stands_where_the_index_folder_belongs() {
     fixture.cleanup();
 }
 
+// NTFS junctions exist only on Windows.
+#[cfg(windows)]
 #[test]
 fn a_repair_goes_ahead_when_a_junction_stands_where_the_index_folder_belongs() {
     let fixture = Fixture::new();

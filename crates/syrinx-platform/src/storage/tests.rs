@@ -2,21 +2,28 @@
 
 use std::{
     fs,
-    os::windows::ffi::OsStrExt,
-    path::{Component, Path, PathBuf, Prefix},
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(windows)]
+use std::{
+    os::windows::ffi::OsStrExt,
+    path::{Component, Prefix},
+};
 
 use super::{
     EntryInfo, FileIdentity, LocationProbe, SIDECAR_NAMES, WindowsDirectoryLease, check_entry,
-    native, normal_absolute_path, sqlite_database_path,
+    native,
 };
+#[cfg(windows)]
+use super::{normal_absolute_path, sqlite_database_path};
 use syrinx_store::{DirectoryLease, LocationError, LocationOperation};
 
+#[cfg(windows)]
 #[test]
 fn accepts_dos_spelling_and_removes_only_the_extended_dos_prefix() {
     let expected = PathBuf::from(r"C:\synthetic\database");
@@ -30,6 +37,7 @@ fn accepts_dos_spelling_and_removes_only_the_extended_dos_prefix() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn sqlite_path_reserves_space_for_the_longest_sidecar_and_terminator() {
     for length in [251, 252, 259, 260, 261] {
@@ -45,6 +53,7 @@ fn sqlite_path_reserves_space_for_the_longest_sidecar_and_terminator() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn sqlite_path_limit_counts_utf16_units_instead_of_utf8_bytes() {
     let component = "😀".repeat(119);
@@ -59,6 +68,7 @@ fn sqlite_path_limit_counts_utf16_units_instead_of_utf8_bytes() {
     assert_eq!(normal_absolute_path(&sqlite_path), Ok(longer_path));
 }
 
+#[cfg(windows)]
 #[test]
 fn rejects_relative_network_device_stream_and_ambiguous_names() {
     for value in [
@@ -190,6 +200,7 @@ fn creates_missing_children_and_keeps_existing_database_bytes() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn native_checks_support_a_disposable_path_beyond_the_legacy_length() {
     let fixture = Fixture::new();
@@ -228,6 +239,7 @@ fn new_sync_registration_is_detected_on_revalidation() {
     assert_eq!(lease.revalidate(), Err(LocationError::SyncedDirectory));
 }
 
+#[cfg(windows)]
 #[test]
 fn directory_and_database_names_remain_locked_until_the_lease_drops() {
     let fixture = Fixture::new();
@@ -419,7 +431,7 @@ impl LocationProbe for StubProbe {
     fn drive_type(&self, root: &Path) -> Result<u32, LocationError> {
         match self.drive {
             Some(value) => Ok(value),
-            None => native::WindowsProbe.drive_type(root),
+            None => native::NativeProbe.drive_type(root),
         }
     }
 
@@ -460,6 +472,7 @@ impl Drop for Fixture {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn a_cache_folder_is_created_beside_the_database_and_held_in_place() {
     let fixture = Fixture::new();
@@ -522,7 +535,13 @@ fn a_cache_folder_must_be_a_plain_folder_with_a_plain_name() {
         lease.cache_folder("not-a-folder").err(),
         Some(LocationError::UnexpectedEntryKind)
     );
-    for name in ["", "..", "nested\name", "CON", "trailing."] {
+    // Device names and trailing dots are ordinary names outside Windows.
+    let windows_only: &[&str] = if cfg!(windows) {
+        &["CON", "trailing."]
+    } else {
+        &[]
+    };
+    for name in ["", "..", "nested\name"].iter().chain(windows_only) {
         assert_eq!(
             lease.cache_folder(name).err(),
             Some(LocationError::InvalidPath),
@@ -572,6 +591,7 @@ fn emptying_a_cache_folder_removes_its_files_and_refuses_anything_else() {
     assert!(folder.path().join("kept.bin").is_file());
 }
 
+#[cfg(windows)]
 #[test]
 fn a_failed_empty_keeps_the_index_metadata_so_the_next_open_retries() {
     use std::os::windows::fs::OpenOptionsExt;

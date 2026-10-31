@@ -105,7 +105,7 @@ pub fn offer_recovery(
     directory: &Path,
     deletions: &DeletionLog,
 ) -> Result<RecoveryOffer, RecoveryError> {
-    let prepared = prepare_directory(directory, Arc::new(native::WindowsProbe))?;
+    let prepared = prepare_directory(directory, Arc::new(native::NativeProbe))?;
     offer_prepared(prepared, deletions)
 }
 

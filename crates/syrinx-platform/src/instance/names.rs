@@ -20,11 +20,41 @@ impl InstanceNames {
     ) -> Result<Self, InstanceError> {
         let key = profile_key(directory)?;
         let stem = format!("SyrinxInstance-{user_sid}-s{session}-{key:016x}");
-        Ok(Self {
+        Ok(Self::for_stem(&stem))
+    }
+
+    #[cfg(windows)]
+    fn for_stem(stem: &str) -> Self {
+        Self {
             mutex: format!("Local\\{stem}"),
             pipe: format!(r"\\.\pipe\{stem}"),
-        })
+        }
     }
+
+    /// A lock file and a socket in this user's private runtime folder.
+    #[cfg(unix)]
+    fn for_stem(stem: &str) -> Self {
+        let folder = runtime_folder();
+        Self {
+            mutex: folder
+                .join(format!("{stem}.lock"))
+                .to_string_lossy()
+                .into_owned(),
+            pipe: folder
+                .join(format!("{stem}.sock"))
+                .to_string_lossy()
+                .into_owned(),
+        }
+    }
+}
+
+/// `XDG_RUNTIME_DIR` is per user and mode 0700; without one, the user's own temporary folder.
+#[cfg(unix)]
+fn runtime_folder() -> std::path::PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|folder| folder.is_absolute() && folder.is_dir())
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 /// A stable key for a profile directory, the same for every spelling Windows treats as equal
@@ -46,7 +76,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use std::path::Path;
 

@@ -1,13 +1,19 @@
 //! Checks the adapter stays usable after a blocked cleanup, a discard or an oversized limit.
 
+#[cfg(windows)]
 use std::{fs, os::windows::fs::OpenOptionsExt};
 
 use super::super::*;
-use super::fixture::{Fixture, NOW, delete, page_document, upsert};
+#[cfg(windows)]
+use super::fixture::delete;
+use super::fixture::{Fixture, NOW, page_document, upsert};
 
+#[cfg(windows)]
 /// Windows' `FILE_SHARE_READ`: other readers may open the file, but nobody may delete it.
 const SHARE_READ_ONLY: u32 = 0x1;
 
+// A file held open without delete sharing is a Windows behaviour.
+#[cfg(windows)]
 #[test]
 fn a_blocked_cleanup_is_reported_and_retried() {
     let fixture = Fixture::new();

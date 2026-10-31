@@ -36,7 +36,7 @@ pub(super) struct AllowedFeature {
 
 /// GPUI's socket and system-information stack, exactly as resolved when DW-68 was built.
 /// Each entry must still match, so the list cannot outlive the crates that needed it.
-pub(super) const THIRD_PARTY_NETWORK_FEATURES: [AllowedFeature; 8] = [
+pub(super) const THIRD_PARTY_NETWORK_FEATURES: [AllowedFeature; 10] = [
     AllowedFeature {
         binding: "windows 0.62.2",
         feature: "Win32_Networking_WinSock",
@@ -84,6 +84,19 @@ pub(super) const THIRD_PARTY_NETWORK_FEATURES: [AllowedFeature; 8] = [
             "uds_windows 1.2.1",
             "zbus 5.19.0",
         ],
+    },
+    // Linux-only crates (GTK's gio-sys, GPUI-X11's filedescriptor) name winapi's socket
+    // modules for their own Windows builds, which Syrinx never compiles; metadata unifies
+    // features across platforms (owner, 2026-10-31, as for zbus).
+    AllowedFeature {
+        binding: "winapi 0.3.9",
+        feature: "winsock2",
+        requesters: &["filedescriptor 0.8.3", "gio-sys 0.18.1"],
+    },
+    AllowedFeature {
+        binding: "winapi 0.3.9",
+        feature: "ws2def",
+        requesters: &["gio-sys 0.18.1"],
     },
 ];
 

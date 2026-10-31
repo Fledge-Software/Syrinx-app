@@ -2,13 +2,12 @@
 
 use std::time::{Duration, Instant};
 
+use super::AUDIO_GRACE;
+
 /// How long a hidden page stays awake after its navigation finishes or it is hidden idle.
 pub(super) const GRACE: Duration = Duration::from_secs(5);
 /// A load that never finishes must not keep a hidden page awake forever.
 pub(super) const LOADING_LIMIT: Duration = Duration::from_secs(60);
-/// How long a hidden page stays awake after its sound stops, so a pause between tracks or a
-/// short buffer never puts a listening tab to sleep (#130).
-pub const AUDIO_GRACE: Duration = Duration::from_secs(60);
 /// The longest wait between two suspension attempts that WebView2 keeps refusing.
 pub(super) const REFUSAL_CAP: Duration = Duration::from_secs(240);
 

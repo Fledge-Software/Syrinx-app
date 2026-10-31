@@ -17,6 +17,11 @@ pub trait Signer {
 
     /// Sign a SHA-256 digest, returning `r || s`.
     fn sign_digest(&self, digest: &[u8; 32]) -> Result<[u8; 64], UpdateError>;
+
+    /// Sign the SHA-256 of `message`; keys that cannot sign a bare digest override this.
+    fn sign_message(&self, message: &[u8]) -> Result<[u8; 64], UpdateError> {
+        self.sign_digest(&cng::sha256(message)?)
+    }
 }
 
 /// What the release tool writes: `manifest.sig`, `latest` and `latest.sig`.
@@ -84,6 +89,6 @@ fn sign_bytes(
     kind: SignatureKind,
     bytes: &[u8],
 ) -> Result<DetachedSignature, UpdateError> {
-    let value = signer.sign_digest(&cng::sha256(bytes)?)?;
+    let value = signer.sign_message(bytes)?;
     Ok(DetachedSignature::new(kind, key_id, value))
 }

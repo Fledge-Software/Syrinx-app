@@ -1,8 +1,10 @@
 //! Keeps one running Syrinx per profile and forwards later launches' links to it (P1-34).
 
 mod names;
+#[cfg_attr(unix, path = "instance/pipe_unix.rs")]
 mod pipe;
 mod protocol;
+#[cfg_attr(unix, path = "instance/security_unix.rs")]
 mod security;
 #[cfg(test)]
 mod tests;
