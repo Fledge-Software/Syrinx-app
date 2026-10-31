@@ -512,25 +512,6 @@ fn clear_outcome(
     clear_data::clear(environment, parent, kinds, span)
 }
 
-#[cfg(test)]
-mod clear_tests {
-    use super::*;
-
-    #[test]
-    fn a_clear_during_engine_recovery_reports_recovery_without_touching_a_window() {
-        let kinds = BrowsingDataKinds {
-            history: true,
-            cookies_and_site_data: true,
-            cached_files: true,
-        };
-        for span in [None, Some(ClearSpan { start: 0, end: 60 })] {
-            let outcome = clear_outcome(None, 0, kinds, span);
-            assert_eq!(outcome.cleared, Err(BrowserError::Recovery));
-            assert_eq!(outcome.closed, Ok(()));
-        }
-    }
-}
-
 impl Drop for BrowserState {
     fn drop(&mut self) {
         // Complete pending requests while their openers and the COM apartment still exist.
@@ -603,4 +584,23 @@ pub fn set_overlay_owner(popup: isize, parent: isize) -> Result<(), BrowserError
         .map_err(|_| BrowserError::OverlayOwner)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod clear_tests {
+    use super::*;
+
+    #[test]
+    fn a_clear_during_engine_recovery_reports_recovery_without_touching_a_window() {
+        let kinds = BrowsingDataKinds {
+            history: true,
+            cookies_and_site_data: true,
+            cached_files: true,
+        };
+        for span in [None, Some(ClearSpan { start: 0, end: 60 })] {
+            let outcome = clear_outcome(None, 0, kinds, span);
+            assert_eq!(outcome.cleared, Err(BrowserError::Recovery));
+            assert_eq!(outcome.closed, Ok(()));
+        }
+    }
 }
