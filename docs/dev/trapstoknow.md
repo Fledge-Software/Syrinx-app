@@ -623,6 +623,14 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   `gpui-pre-0.3.8/src/window.rs` (`map_window` in `Window::new`) and
   `gpui-pre-linux-0.3.8/src/linux/x11/window.rs`, `set_bounds`
   (code-confirmed and observed 2026-10-31).
+- **A child process being started holds a copy of every open `flock`.** Until it
+  execs, the child shares the parent's open file descriptions, so a lock just
+  dropped by one thread still looked held to the next: the updater's
+  `a_helper_stopped_after_the_swap_leaves_the_new_version_working` failed once
+  in a full gate run, while another test of that program started a process.
+  `ApplyLock::try_acquire` on Unix retries a refusal for about 100 ms; a real
+  holder keeps the lock far longer. Source: the 2026-10-31 Linux gate (observed
+  once; mechanism from `fork`/`flock` semantics, not traced).
 - **A Unix socket read must also watch the stop signal.** A connected but
   silent same-user client held the link listener in a 2 s read, so closing
   Syrinx waited for it. `pipe_unix::read_message` reads in 100 ms slices and

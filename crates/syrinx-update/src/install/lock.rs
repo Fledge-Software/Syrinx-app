@@ -58,16 +58,17 @@ impl ApplyLock {
             .truncate(false)
             .open(layout.lock())
             .map_err(io_error("taking the update lock"))?;
-        // SAFETY: the descriptor belongs to `file`, which outlives this call.
-        let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if locked == 0 {
-            return Ok(Some(Self { _file: file }));
+        // A child this process is starting shares a just-released lock until it execs, so a
+        // refusal is retried briefly; Syrinx or the helper holds it for far longer than this.
+        for attempt in 0..=UNIX_LOCK_RETRIES {
+            if try_flock(&file)? {
+                return Ok(Some(Self { _file: file }));
+            }
+            if attempt < UNIX_LOCK_RETRIES {
+                thread::sleep(UNIX_LOCK_RETRY_POLL);
+            }
         }
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
-            return Ok(None);
-        }
-        Err(io_error("taking the update lock")(error))
+        Ok(None)
     }
 
     /// Wait up to `patience` for the lock, checking every `poll`.
@@ -89,4 +90,25 @@ impl ApplyLock {
             thread::sleep(poll);
         }
     }
+}
+
+/// How often, and how far apart, a refused Unix lock is retried before it counts as held.
+#[cfg(unix)]
+const UNIX_LOCK_RETRIES: u32 = 10;
+#[cfg(unix)]
+const UNIX_LOCK_RETRY_POLL: Duration = Duration::from_millis(10);
+
+/// Take `flock` without waiting: `true` once held, `false` while another holder has it.
+#[cfg(unix)]
+fn try_flock(file: &File) -> Result<bool, InstallError> {
+    // SAFETY: the descriptor belongs to `file`, which outlives this call.
+    let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if locked == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        return Ok(false);
+    }
+    Err(io_error("taking the update lock")(error))
 }

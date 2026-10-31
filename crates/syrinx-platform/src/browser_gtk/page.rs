@@ -786,8 +786,14 @@ impl Embed {
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         // A widget that adopts a GDK window must register it, or GTK asserts on unrealize.
         window.connect_realize(move |window| {
+            let created = window.window();
             window.set_window(adopted.clone());
             window.register_window(&adopted);
+            // Destroy the toplevel GTK made while realizing, or each page leaves an X window behind.
+            if let Some(created) = created.filter(|created| *created != adopted) {
+                window.unregister_window(&created);
+                created.destroy();
+            }
         });
         window.set_has_window(true);
         window.realize();
