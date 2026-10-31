@@ -16,9 +16,9 @@ use syrinx_store::PermissionKind;
 use webkit2gtk::{
     BackForwardListExt, FindControllerExt, FindOptions, GeolocationPermissionRequest, LoadEvent,
     NavigationPolicyDecision, NavigationType, NotificationPermissionRequest, PermissionRequest,
-    PermissionRequestExt, PolicyDecisionType, SettingsExt, URIRequestExt,
-    UserMediaPermissionRequest, UserMediaPermissionRequestExt, WebProcessTerminationReason,
-    WebView, WebViewExt,
+    PermissionRequestExt, PolicyDecisionExt, PolicyDecisionType, ResponsePolicyDecision,
+    ResponsePolicyDecisionExt, SettingsExt, URIRequestExt, UserMediaPermissionRequest,
+    UserMediaPermissionRequestExt, WebProcessTerminationReason, WebView, WebViewExt,
 };
 use x11_dl::xlib;
 
@@ -29,7 +29,9 @@ use super::{
     engine::{PendingPopup, Shared},
     history_state::{Pending, Started},
     keys::{peek_escape, shortcut_for_modifiers},
-    next_zoom, validate_url,
+    next_zoom,
+    page_text::{PageText, TextContext},
+    validate_url,
 };
 
 /// Permission prompts waiting on the owner, by request number.
@@ -45,6 +47,14 @@ pub(super) struct Page {
     life: CallbackLife,
     prompts: Prompts,
     find: Rc<FindState>,
+    /// P1-25's observation of this page; `None` when capture was off as it was created.
+    text: Option<PageText>,
+}
+
+/// How a new page's text is observed: the shared policy, and whether it starts tainted.
+pub(super) struct TextStart<'a> {
+    pub(super) context: &'a TextContext,
+    pub(super) tainted: bool,
 }
 
 impl Page {
@@ -53,6 +63,7 @@ impl Page {
         view: WebView,
         bounds: PageBounds,
         shared: Shared,
+        text: TextStart<'_>,
     ) -> Result<Self, BrowserError> {
         configure(&view);
         let life = CallbackLife::new();
@@ -60,6 +71,7 @@ impl Page {
             events: shared.events.for_page(life.clone()),
             ..shared
         };
+        let text = PageText::register(&view, id, text.context, text.tainted, shared.events.clone());
         let embed = Embed::new(shared.parent, bounds)?;
         let window = embed.gtk_window();
         window.add(&view);
@@ -73,6 +85,7 @@ impl Page {
             life,
             prompts: Rc::default(),
             find: Rc::default(),
+            text,
         };
         page.resize(bounds);
         page.show(false);
@@ -84,10 +97,33 @@ impl Page {
         &self.view
     }
 
+    /// Loads `url` as Syrinx's own navigation, which clears an excluded site's taint (P1-25).
     pub(super) fn navigate(&self, url: &str) -> Result<(), BrowserError> {
+        validate_url(url)?;
+        if let Some(text) = &self.text {
+            text.syrinx_navigation(url);
+        }
+        self.view.load_uri(url);
+        Ok(())
+    }
+
+    /// Loads a reopened tab's address without counting as Syrinx's navigation, so the taint
+    /// it started with stays.
+    pub(super) fn restore(&self, url: &str) -> Result<(), BrowserError> {
         validate_url(url)?;
         self.view.load_uri(url);
         Ok(())
+    }
+
+    /// Whether a popup this page opens starts tainted; an unobserved page fails closed.
+    pub(super) fn popup_tainted(&self) -> bool {
+        self.text.as_ref().is_none_or(PageText::popup_tainted)
+    }
+
+    fn withdraw_syrinx_request(&self) {
+        if let Some(text) = &self.text {
+            text.syrinx_navigation_cancelled();
+        }
     }
 
     pub(super) fn resize(&self, bounds: PageBounds) {
@@ -111,10 +147,16 @@ impl Page {
     pub(super) fn apply(&self, command: BrowserCommand) -> Result<(), BrowserError> {
         match command {
             BrowserCommand::Navigate { url, .. } => self.navigate(&url)?,
-            BrowserCommand::Reload { .. } => self.view.reload(),
+            BrowserCommand::Reload { .. } => {
+                self.withdraw_syrinx_request();
+                self.view.reload();
+            }
             BrowserCommand::GoToOffset {
                 direction, steps, ..
-            } => self.go_to_offset(direction, steps)?,
+            } => {
+                self.withdraw_syrinx_request();
+                self.go_to_offset(direction, steps)?;
+            }
             BrowserCommand::Focus { .. } => self.focus(),
             BrowserCommand::SetMuted { muted, .. } => self.view.set_is_muted(muted),
             BrowserCommand::PageAction { action, .. } => self.page_action(action)?,
@@ -315,15 +357,20 @@ impl Page {
             id: self.id,
             shared: self.shared.clone(),
             state: Rc::default(),
+            text: self.text.clone(),
         };
         let starting = watch.clone();
-        self.view.connect_decide_policy(move |_, decision, kind| {
-            if kind == PolicyDecisionType::NavigationAction {
-                starting.started(decision);
-            }
-            // Let WebKit make its own decision; Syrinx only observes.
-            false
-        });
+        self.view
+            .connect_decide_policy(move |view, decision, kind| {
+                if kind == PolicyDecisionType::NavigationAction {
+                    starting.started(decision);
+                }
+                if kind == PolicyDecisionType::Response {
+                    return download_unshowable(view, decision);
+                }
+                // Otherwise WebKit makes its own decision; Syrinx only observes.
+                false
+            });
         let changing = watch.clone();
         self.view.connect_load_changed(move |view, event| {
             changing.load_changed(view, event);
@@ -404,6 +451,10 @@ impl Page {
             }
             // Created now and related to its opener, so `window.opener` works once adopted.
             let view = WebView::with_related_view(opener);
+            // It loads before the UI adopts it, so a download it starts must not be ignored.
+            view.connect_decide_policy(|view, decision, kind| {
+                kind == PolicyDecisionType::Response && download_unshowable(view, decision)
+            });
             let request = shared.next_request();
             shared.popups.borrow_mut().insert(
                 request,
@@ -441,8 +492,11 @@ impl Page {
     }
 
     fn watch_processes(&self) {
-        let (id, events) = (self.id, self.shared.events.clone());
+        let (id, events, text) = (self.id, self.shared.events.clone(), self.text.clone());
         self.view.connect_web_process_terminated(move |_, reason| {
+            if let Some(text) = &text {
+                text.process_failed();
+            }
             if reason == WebProcessTerminationReason::TerminatedByApi {
                 return;
             }
@@ -451,10 +505,13 @@ impl Page {
                 kind: RENDER_PROCESS_EXITED,
             });
         });
-        let (id, events) = (self.id, self.shared.events.clone());
+        let (id, events, text) = (self.id, self.shared.events.clone(), self.text.clone());
         self.view
             .connect_is_web_process_responsive_notify(move |view| {
                 if view.is_web_process_responsive() {
+                    if let Some(text) = &text {
+                        text.responsive();
+                    }
                     return;
                 }
                 events.emit(BrowserEvent::ProcessFailed {
@@ -476,6 +533,27 @@ impl Drop for Page {
         // SAFETY: the window is ours alone; destroying it releases the view inside it.
         unsafe { self.window.destroy() };
     }
+}
+
+/// A page's own document that WebKit cannot show (a zip, an installer) is downloaded, as
+/// WebView2 does; WebKit's default ignores it unless it is sent as an attachment, so the
+/// navigation would silently do nothing (#143). Frames' responses are left to WebKit.
+fn download_unshowable(view: &WebView, decision: &webkit2gtk::PolicyDecision) -> bool {
+    let Some(response) = decision.downcast_ref::<ResponsePolicyDecision>() else {
+        return false;
+    };
+    if response.is_mime_type_supported() || !view.is_loading() {
+        return false;
+    }
+    // During the page's own load the view shows the address it requested; a frame's differs.
+    // A popup's first load shows none yet, and a view without a document has no frames.
+    let requested = response.request().and_then(|request| request.uri());
+    let shown = view.uri();
+    if requested.is_none() || shown.is_some() && requested != shown {
+        return false;
+    }
+    decision.download();
+    true
 }
 
 /// Page settings Syrinx owns; the user agent is never changed.
@@ -594,6 +672,7 @@ struct LoadWatch {
     id: u64,
     shared: Shared,
     state: Rc<LoadState>,
+    text: Option<PageText>,
 }
 
 impl LoadWatch {
@@ -605,6 +684,11 @@ impl LoadWatch {
         else {
             return;
         };
+        if let (Some(text), Some(request)) = (&self.text, action.request()) {
+            let address = request.uri().map(String::from).unwrap_or_default();
+            let method = request.http_method().map(String::from).unwrap_or_default();
+            text.asked(address, method);
+        }
         let started = match action.navigation_type() {
             NavigationType::BackForward => Started::BackOrForward,
             NavigationType::Reload => Started::Reload,
@@ -624,9 +708,20 @@ impl LoadWatch {
                 self.state.failed.set(None);
                 self.state.rejected.set(false);
                 self.connection(view, ConnectionStatus::Loading);
+                if let Some(text) = &self.text {
+                    text.started(view);
+                }
+            }
+            LoadEvent::Redirected => {
+                if let Some(text) = &self.text {
+                    text.provisional_address(view);
+                }
             }
             LoadEvent::Committed => {
                 self.state.provisional.set(false);
+                if let Some(text) = &self.text {
+                    text.committed(view);
+                }
                 self.emit_url(view);
                 self.update(|pending| Pending {
                     new_document: Some(true),
@@ -658,6 +753,9 @@ impl LoadWatch {
             success,
             cancelled: failure == Some(true),
         });
+        if let Some(text) = &self.text {
+            text.finished(success);
+        }
     }
 
     fn failed(&self, cancelled: bool) {
@@ -673,7 +771,13 @@ impl LoadWatch {
     /// An address change outside a load is the page's own: a fragment or the History API.
     fn address_changed(&self, view: &WebView) {
         if self.state.provisional.get() {
+            if let Some(text) = &self.text {
+                text.provisional_address(view);
+            }
             return;
+        }
+        if let Some(text) = &self.text {
+            text.same_document(view);
         }
         self.emit_url(view);
         if view.is_loading() {

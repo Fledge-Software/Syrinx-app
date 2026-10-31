@@ -78,6 +78,18 @@ impl Download {
 
     /// What the owner may do to it now. A blocked file offers nothing, not even Resume.
     pub fn controls(&self) -> &'static [DownloadControl] {
+        self.offered_controls(true)
+    }
+
+    /// What the owner may do to it now on an engine that can pause (`pauses`) or cannot, as
+    /// WebKitGTK cannot: there a running download offers only Cancel, and nothing resumes.
+    pub fn offered_controls(&self, pauses: bool) -> &'static [DownloadControl] {
+        if !pauses {
+            return match self.state {
+                DownloadState::InProgress => &[DownloadControl::Cancel],
+                DownloadState::Interrupted(_) | DownloadState::Completed => &[],
+            };
+        }
         match self.state {
             DownloadState::InProgress => &[DownloadControl::Pause, DownloadControl::Cancel],
             DownloadState::Interrupted(DownloadInterruption::Paused) => {
@@ -391,6 +403,18 @@ mod tests {
         assert!(controls(&list).is_empty(), "never past SmartScreen");
         assert_eq!(list.downloads()[0].detail(), "Blocked: unsafe file");
         assert!(!list.downloads()[0].is_active());
+        list.complete(1, 0);
+        assert!(controls(&list).is_empty());
+    }
+
+    #[test]
+    fn an_engine_that_cannot_pause_offers_only_cancel() {
+        let mut list = list_with(1, 10);
+        let controls = |list: &DownloadList| list.downloads()[0].offered_controls(false);
+        assert_eq!(controls(&list), [DownloadControl::Cancel]);
+        list.set_resumable(1, true);
+        list.fail(1, DownloadInterruption::Network, 0);
+        assert!(controls(&list).is_empty(), "nothing resumes there");
         list.complete(1, 0);
         assert!(controls(&list).is_empty());
     }

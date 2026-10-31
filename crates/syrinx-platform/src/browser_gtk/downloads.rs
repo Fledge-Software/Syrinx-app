@@ -1,32 +1,64 @@
 //! Saves downloads into the owner's Downloads folder and reports their progress (#143).
 
-use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    path::PathBuf,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use syrinx_core::{DownloadControl, DownloadInterruption, DownloadState};
 use webkit2gtk::{
     Download, DownloadError, DownloadExt, URIResponseExt, WebContext, WebContextExt, WebView, glib,
 };
 
-use super::{BrowserEvent, EventSink};
+use super::{BrowserError, BrowserEvent, EventSink, engine::Popups};
+
+/// Progress is reported at most this often, as on Windows; state changes are always reported.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The context's downloads and which page each one came from.
 #[derive(Clone)]
 pub(super) struct Downloads(Rc<RefCell<Registry>>);
 
-#[derive(Default)]
 struct Registry {
+    events: EventSink,
     pages: HashMap<u64, WebView>,
-    running: HashMap<u64, Download>,
+    /// Popups the UI has not adopted yet; a download can start in one before it is a tab.
+    popups: Popups,
+    running: HashMap<u64, (Owner, Download)>,
+    /// Reports of downloads started in a popup not yet adopted, released once it is.
+    held: HashMap<u64, Held>,
     next: u64,
 }
 
+/// Who started a download: a tab, or a popup still waiting on the UI (its request number).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Owner {
+    Tab(u64),
+    Popup(u64),
+}
+
+/// A popup's download announcement and its latest change, held until the popup has a tab.
+struct Held {
+    request: u64,
+    started: BrowserEvent,
+    latest: Option<BrowserEvent>,
+}
+
 impl Downloads {
-    pub(super) fn watch(context: &WebContext, events: EventSink) -> Self {
-        let downloads = Self(Rc::default());
+    pub(super) fn watch(context: &WebContext, events: EventSink, popups: Popups) -> Self {
+        let downloads = Self(Rc::new(RefCell::new(Registry {
+            events,
+            pages: HashMap::new(),
+            popups,
+            running: HashMap::new(),
+            held: HashMap::new(),
+            next: 0,
+        })));
         let watcher = downloads.clone();
-        context.connect_download_started(move |_, download| {
-            watcher.started(download, &events);
-        });
+        context.connect_download_started(move |_, download| watcher.started(download));
         downloads
     }
 
@@ -39,21 +71,40 @@ impl Downloads {
         self.0.borrow_mut().pages.remove(&tab);
     }
 
-    /// WebKitGTK can cancel a download but not pause it, so only Cancel acts.
+    /// Popup `request` became tab `tab`: its downloads are reported as that tab's.
+    pub(super) fn adopted(&self, request: u64, tab: u64) {
+        self.release(request, tab);
+    }
+
+    /// Popup `request` was refused or its opener closed: its downloads are the opener's.
+    pub(super) fn released(&self, request: u64, opener: u64) {
+        self.release(request, opener);
+    }
+
+    /// WebKitGTK can cancel a download but not pause or resume one; the flyout never offers
+    /// those here (`PAUSES_DOWNLOADS`), and a stray request is reported, not ignored.
     pub(super) fn control(&self, download: u64, control: DownloadControl) {
-        let running = self.0.borrow().running.get(&download).cloned();
-        let Some(running) = running else {
+        let registry = self.0.borrow();
+        let Some((owner, running)) = registry.running.get(&download).cloned() else {
             return;
         };
         if control == DownloadControl::Cancel {
+            drop(registry);
             running.cancel();
+            return;
         }
+        // A held popup download is not listed yet, so the flyout cannot have asked for it.
+        let Owner::Tab(tab) = owner else {
+            return;
+        };
+        registry.events.emit(BrowserEvent::Error {
+            tab: Some(tab),
+            error: BrowserError::PageControl,
+        });
     }
 
-    fn started(&self, download: &Download, events: &EventSink) {
+    fn started(&self, download: &Download) {
         let id = self.register(download);
-        let tab = self.tab_of(download);
-        let events = events.clone();
         let registry = self.clone();
         download.connect_decide_destination(move |download, suggested| {
             let Some(path) = destination(suggested) else {
@@ -62,34 +113,69 @@ impl Downloads {
             };
             download.set_allow_overwrite(false);
             download.set_destination(&glib::filename_to_uri(&path, None).unwrap_or_default());
-            events.emit(BrowserEvent::DownloadStarted {
-                download: id,
-                tab,
-                file_name: file_name(&path),
-                total: total_length(download),
-            });
-            registry.report_progress(id, download, &events);
+            registry.announce(id, download, &path);
+            registry.report_progress(id, download);
             true
         });
     }
 
-    fn report_progress(&self, id: u64, download: &Download, events: &EventSink) {
-        let progress = events.clone();
+    /// Reports the download's start, now or once its popup has a tab.
+    fn announce(&self, id: u64, download: &Download, path: &std::path::Path) {
+        let owner = self.owner_of(download);
+        let tab = match owner {
+            Owner::Tab(tab) => tab,
+            Owner::Popup(_) => 0,
+        };
+        let started = BrowserEvent::DownloadStarted {
+            download: id,
+            tab,
+            file_name: file_name(path),
+            total: total_length(download),
+        };
+        let mut registry = self.0.borrow_mut();
+        if let Some((recorded, _)) = registry.running.get_mut(&id) {
+            *recorded = owner;
+        }
+        match owner {
+            Owner::Tab(_) => registry.events.emit(started),
+            Owner::Popup(request) => {
+                registry.held.insert(
+                    id,
+                    Held {
+                        request,
+                        started,
+                        latest: None,
+                    },
+                );
+            }
+        }
+    }
+
+    fn report_progress(&self, id: u64, download: &Download) {
+        let progress = self.clone();
+        let last = Cell::new(None::<Instant>);
         download.connect_received_data(move |download, _| {
-            progress.emit(changed(id, download, DownloadState::InProgress));
+            let now = Instant::now();
+            if last
+                .get()
+                .is_some_and(|last| now.duration_since(last) < PROGRESS_INTERVAL)
+            {
+                return;
+            }
+            last.set(Some(now));
+            progress.report(changed(id, download, DownloadState::InProgress));
         });
-        let finished = events.clone();
-        let registry = self.clone();
+        let finished = self.clone();
         download.connect_finished(move |download| {
-            registry.0.borrow_mut().running.remove(&id);
+            finished.0.borrow_mut().running.remove(&id);
             // A failure emits its own report first; `finished` follows every download.
             if download.estimated_progress() >= 1.0 {
-                finished.emit(changed(id, download, DownloadState::Completed));
+                finished.report(changed(id, download, DownloadState::Completed));
             }
         });
-        let failed = events.clone();
+        let failed = self.clone();
         download.connect_failed(move |download, error| {
-            failed.emit(changed(
+            failed.report(changed(
                 id,
                 download,
                 DownloadState::Interrupted(interruption(error)),
@@ -97,24 +183,82 @@ impl Downloads {
         });
     }
 
+    /// Sends a change, or keeps it as the latest while the download's popup waits.
+    fn report(&self, event: BrowserEvent) {
+        let BrowserEvent::DownloadChanged { download, .. } = &event else {
+            return;
+        };
+        let mut registry = self.0.borrow_mut();
+        match registry.held.get_mut(download) {
+            Some(held) => held.latest = Some(event),
+            None => registry.events.emit(event),
+        }
+    }
+
+    /// Sends what was held for popup `request`'s downloads, as tab `tab`'s.
+    fn release(&self, request: u64, tab: u64) {
+        let mut registry = self.0.borrow_mut();
+        let ids: Vec<u64> = registry
+            .held
+            .iter()
+            .filter(|(_, held)| held.request == request)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            let Some(held) = registry.held.remove(&id) else {
+                continue;
+            };
+            if let Some((owner, _)) = registry.running.get_mut(&id) {
+                *owner = Owner::Tab(tab);
+            }
+            registry.events.emit(retarget(held.started, tab));
+            if let Some(latest) = held.latest {
+                registry.events.emit(latest);
+            }
+        }
+    }
+
     fn register(&self, download: &Download) -> u64 {
         let mut registry = self.0.borrow_mut();
         registry.next += 1;
         let id = registry.next;
-        registry.running.insert(id, download.clone());
+        registry
+            .running
+            .insert(id, (Owner::Tab(0), download.clone()));
         id
     }
 
-    fn tab_of(&self, download: &Download) -> u64 {
+    fn owner_of(&self, download: &Download) -> Owner {
         let Some(view) = download.web_view() else {
-            return 0;
+            return Owner::Tab(0);
         };
-        self.0
-            .borrow()
-            .pages
+        let registry = self.0.borrow();
+        if let Some((tab, _)) = registry.pages.iter().find(|(_, page)| **page == view) {
+            return Owner::Tab(*tab);
+        }
+        let popups = registry.popups.borrow();
+        popups
             .iter()
-            .find(|(_, page)| **page == view)
-            .map_or(0, |(tab, _)| *tab)
+            .find(|(_, pending)| pending.view == view)
+            .map_or(Owner::Tab(0), |(request, _)| Owner::Popup(*request))
+    }
+}
+
+/// A held announcement, now naming the tab its popup became.
+fn retarget(started: BrowserEvent, tab: u64) -> BrowserEvent {
+    match started {
+        BrowserEvent::DownloadStarted {
+            download,
+            file_name,
+            total,
+            ..
+        } => BrowserEvent::DownloadStarted {
+            download,
+            tab,
+            file_name,
+            total,
+        },
+        other => other,
     }
 }
 
@@ -182,7 +326,7 @@ fn file_name(path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_name;
+    use super::{BrowserEvent, retarget, safe_name};
 
     #[test]
     fn a_suggested_name_cannot_leave_the_downloads_folder_or_hide() {
@@ -191,5 +335,26 @@ mod tests {
         assert_eq!(safe_name(".bashrc"), "bashrc");
         assert_eq!(safe_name("   "), "download");
         assert_eq!(safe_name("report.pdf"), "report.pdf");
+    }
+
+    #[test]
+    fn a_held_popup_download_is_announced_as_the_tab_it_became() {
+        let held = BrowserEvent::DownloadStarted {
+            download: 4,
+            tab: 0,
+            file_name: "synthetic.zip".to_owned(),
+            total: Some(10),
+        };
+        let BrowserEvent::DownloadStarted {
+            download,
+            tab,
+            file_name,
+            total,
+        } = retarget(held, 7)
+        else {
+            panic!("still a start");
+        };
+        assert_eq!((download, tab, total), (4, 7, Some(10)));
+        assert_eq!(file_name, "synthetic.zip");
     }
 }

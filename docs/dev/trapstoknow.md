@@ -581,6 +581,23 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   it. GPUI is built with its X11 backend only and GDK is limited to X11
   (`gtk_thread.rs`), so under Hyprland Syrinx runs through XWayland. Source:
   wry's `create_container_x11_window` and `create_gtk_window` (code-read).
+- **A link or script navigation's address is not the view's yet at `Started`.**
+  When `load-changed` reports `Started` for a navigation the page began, the
+  view's `uri` still names the document being left; the new address arrives
+  in a `notify::uri` while the load is provisional. Taking the address at
+  `Started` judged the old page's response missing (`NoResponse`) and its
+  method unseen. `browser_gtk/page_text.rs` starts the chain at the first
+  provisional address that differs from the committed one, and a reload's at
+  commit. Syrinx's own `load_uri` sets the address at once. Source: a
+  synthetic sign-in page that moved on by script (observed, WebKitGTK 2.54.1).
+- **WebKitGTK ignores a page's document it cannot show.** Its default
+  response policy downloads only an attachment and drops any other type it
+  cannot display, so a link to a `.zip` served as `application/octet-stream`
+  did nothing and no download started. Syrinx calls `download()` for such a
+  main-frame response (`page.rs`, `download_unshowable`), on popups from their
+  creation too, since a popup loads before the UI adopts it and its `uri` is
+  still unset then. Source: WebKit's `webkitWebViewDecidePolicy` and a
+  synthetic loopback download (observed, WebKitGTK 2.54.1).
 - **GTK may be used from one thread only.** gtk-rs records the thread that
   initialised GTK and panics on use from any other, so every GTK call (pages,
   file dialogs, the start-up warning) goes through `gtk_thread::run` or

@@ -1,8 +1,9 @@
-//! Splits a bookmark export into tags and text without an HTML library or allocation per token.
+//! Splits a bookmark export, or a page's HTML as sent (P1-25 on Linux), into tags and text
+//! without an HTML library or allocation per token.
 
 /// One piece of the export. Names and attribute regions borrow from the input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Token<'a> {
+pub(crate) enum Token<'a> {
     Start(StartTag<'a>),
     End(&'a str),
     Text(&'a str),
@@ -11,7 +12,7 @@ pub(super) enum Token<'a> {
 
 /// A start tag's name and its unparsed attribute text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct StartTag<'a> {
+pub(crate) struct StartTag<'a> {
     pub name: &'a str,
     attributes: &'a str,
 }
@@ -32,14 +33,36 @@ impl<'a> StartTag<'a> {
 }
 
 /// Yields tokens and the byte offset where each begins.
-pub(super) struct Tokenizer<'a> {
+pub(crate) struct Tokenizer<'a> {
     input: &'a str,
     position: usize,
+    /// A `>` inside a quoted attribute value belongs to the value, as browsers read it.
+    quoted_values: bool,
 }
 
 impl<'a> Tokenizer<'a> {
     pub fn new(input: &'a str) -> Self {
-        Self { input, position: 0 }
+        Self {
+            input,
+            position: 0,
+            quoted_values: false,
+        }
+    }
+
+    /// Reads tags as browsers do, so an attribute value never spills into the text.
+    pub fn quoted(input: &'a str) -> Self {
+        Self {
+            quoted_values: true,
+            ..Self::new(input)
+        }
+    }
+
+    /// Skips the raw text of `name` (a script, a style), stopping before its end tag or at
+    /// the end of the input.
+    pub fn skip_raw_text(&mut self, name: &str) {
+        let rest = self.rest();
+        let end = raw_text_end(rest, name).unwrap_or(rest.len());
+        self.position += end;
     }
 
     fn rest(&self) -> &'a str {
@@ -62,7 +85,12 @@ impl<'a> Tokenizer<'a> {
             self.position += length;
             return None;
         }
-        let close = rest.find('>').unwrap_or(rest.len());
+        let close = if self.quoted_values {
+            quoted_tag_end(rest)
+        } else {
+            rest.find('>')
+        }
+        .unwrap_or(rest.len());
         self.position += (close + 1).min(rest.len());
         let inner = &rest[1..close];
         if let Some(declaration) = inner.strip_prefix('!') {
@@ -103,6 +131,49 @@ fn markup_start(text: &str) -> Option<usize> {
                 .get(index + 1)
                 .is_some_and(|next| next.is_ascii_alphabetic() || matches!(next, b'/' | b'!'))
     })
+}
+
+/// The `>` that ends the tag at the start of `markup`, skipping any inside quoted values.
+fn quoted_tag_end(markup: &str) -> Option<usize> {
+    let mut quote = None;
+    for (index, byte) in markup.bytes().enumerate() {
+        match (quote, byte) {
+            (Some(open), _) if byte == open => quote = None,
+            (Some(_), _) => {}
+            (None, b'"' | b'\'') if quoted_value_starts(&markup[..index]) => quote = Some(byte),
+            (None, b'>') => return Some(index),
+            (None, _) => {}
+        }
+    }
+    None
+}
+
+/// Whether a quote after `before` opens an attribute value: it follows the `=`.
+fn quoted_value_starts(before: &str) -> bool {
+    before
+        .trim_end_matches(|character: char| character.is_ascii_whitespace())
+        .ends_with('=')
+}
+
+/// Where `</name` begins in `text`, ignoring case; the raw text ends there.
+fn raw_text_end(text: &str, name: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(found) = text[from..].find("</") {
+        let start = from + found;
+        let after = start + 2;
+        let named = bytes
+            .get(after..after + name.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name.as_bytes()));
+        let ends = bytes
+            .get(after + name.len())
+            .is_none_or(|next| next.is_ascii_whitespace() || matches!(next, b'>' | b'/'));
+        if named && ends {
+            return Some(start);
+        }
+        from = after;
+    }
+    None
 }
 
 /// Splits a tag's inner text into its name and the remaining attribute text.
@@ -208,6 +279,29 @@ mod tests {
         let found = tokens("<A HREF=\"x>y\">T");
         assert_eq!(found.len(), 2);
         assert_eq!(found[1], Token::Text("y\">T"));
+    }
+
+    #[test]
+    fn the_quoted_mode_keeps_a_greater_than_sign_inside_its_value() {
+        let found: Vec<_> = Tokenizer::quoted("<A HREF=\"x>y\" b='>'>T")
+            .map(|(_, token)| token)
+            .collect();
+        assert_eq!(found.len(), 2);
+        assert!(matches!(found[0], Token::Start(tag) if tag.attribute("href") == Some("x>y")));
+        assert_eq!(found[1], Token::Text("T"));
+    }
+
+    #[test]
+    fn raw_text_is_skipped_up_to_its_own_end_tag_only() {
+        let mut tokens = Tokenizer::quoted("<script>a<b</p></scripts></SCRIPT >after");
+        assert!(matches!(tokens.next(), Some((_, Token::Start(tag))) if tag.is("script")));
+        tokens.skip_raw_text("script");
+        let rest: Vec<_> = tokens.map(|(_, token)| token).collect();
+        assert_eq!(rest, vec![Token::End("SCRIPT"), Token::Text("after")]);
+        let mut open = Tokenizer::quoted("<style>never closed");
+        open.next();
+        open.skip_raw_text("style");
+        assert_eq!(open.next(), None);
     }
 
     #[test]

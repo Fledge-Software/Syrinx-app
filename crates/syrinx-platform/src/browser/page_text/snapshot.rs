@@ -2,7 +2,7 @@
 //! non-editable text (P1-25 steps 9 to 11), off the interface thread.
 
 use serde_json::{Map, Value};
-use syrinx_core::{EligibleDocument, TEXT_LIMIT_BYTES};
+use syrinx_core::{EligibleDocument, bounded_page_text};
 
 use super::super::DiscardReason;
 
@@ -19,15 +19,6 @@ const TEXT_NODE: i64 = 3;
 /// Elements whose text is never kept: form fields, their internal trees, and non-content.
 const DROPPED_ELEMENTS: &[&str] = &[
     "INPUT", "TEXTAREA", "SELECT", "SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "TITLE",
-];
-
-/// `autocomplete` tokens that mark a payment-card field (step 10).
-const CARD_TOKENS: &[&str] = &[
-    "cc-number",
-    "cc-csc",
-    "cc-exp",
-    "cc-exp-month",
-    "cc-exp-year",
 ];
 
 /// The text kept from one snapshot.
@@ -61,7 +52,7 @@ pub(super) fn read(json: &str, document: &EligibleDocument) -> Result<SnapshotTe
     }
     // Step 11: rendered, non-editable text of the root document only.
     let pieces = visible_pieces(root, &nodes, &strings)?;
-    let (text, truncated) = bounded(normalize_whitespace(&join_pieces(&pieces)));
+    let (text, truncated) = bounded_page_text(normalize_whitespace(&join_pieces(&pieces)));
     Ok(SnapshotText {
         text,
         documents: documents.len(),
@@ -121,6 +112,7 @@ impl Nodes {
     }
 }
 
+/// The rule is shared with Linux's reading of a page as sent, so the two cannot drift.
 fn is_sign_in_or_card_field(name: &str, attributes: &[(String, String)]) -> bool {
     let attribute = |wanted: &str| {
         attributes
@@ -128,16 +120,7 @@ fn is_sign_in_or_card_field(name: &str, attributes: &[(String, String)]) -> bool
             .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
             .map(|(_, value)| value.as_str())
     };
-    let password = name == "INPUT"
-        && attribute("type").is_some_and(|kind| kind.trim().eq_ignore_ascii_case("password"));
-    let card = attribute("autocomplete").is_some_and(|tokens| {
-        tokens.split_ascii_whitespace().any(|token| {
-            CARD_TOKENS
-                .iter()
-                .any(|card| token.eq_ignore_ascii_case(card))
-        })
-    });
-    password || card
+    syrinx_core::is_sign_in_or_card_field(name, attribute("type"), attribute("autocomplete"))
 }
 
 /// Marks each node inside a dropped element or editable region. Nodes come in tree order,
@@ -292,19 +275,6 @@ fn continues(previous: &Piece<'_>, next: &Piece<'_>) -> bool {
 
 fn normalize_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Caps the text at `TEXT_LIMIT_BYTES`, on a character boundary.
-fn bounded(mut text: String) -> (String, bool) {
-    if text.len() <= TEXT_LIMIT_BYTES {
-        return (text, false);
-    }
-    let mut end = TEXT_LIMIT_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text.truncate(end);
-    (text, true)
 }
 
 fn strings(response: &Value) -> Result<Vec<&str>, DiscardReason> {

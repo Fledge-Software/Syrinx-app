@@ -170,9 +170,27 @@ What differs from Windows:
 - **One running Syrinx per profile** is kept with an `flock`ed lock file and
   a mode-0600 Unix socket in `$XDG_RUNTIME_DIR`, which checks the peer's user
   id as the Windows pipe checks its server's.
+- **Page text** follows the same eligibility check and taint rules as on
+  Windows (`browser_gtk/page_text.rs` shares `page_text/state.rs`), but
+  WebKitGTK has no host-side DOM snapshot. The only no-script method is
+  reading the page's HTML as the server sent it (`syrinx_core::sent_html_text`),
+  which misses text built by scripts and cannot see style-sheet hiding or a
+  password field added by script. The owner has not approved that method, so
+  `READS_SENT_HTML` is off: every due capture reports `Ineligible(CaptureOff)`
+  and Settings says nothing is kept on Linux.
+- **Hidden pages** are not suspended: WebKitGTK has no `TrySuspend`. A hidden
+  page's view is unmapped, so WebKit marks it hidden and throttles its timers
+  and drawing itself. Syrinx never discards a hidden page to save memory,
+  because that would lose its form contents, scroll position and back list,
+  which Windows' suspension keeps.
+- **Downloads** cannot be paused or resumed in WebKitGTK, so the flyout
+  offers only Cancel (`PAUSES_DOWNLOADS`). WebKit ignores a page's own
+  document it cannot show unless it is sent as an attachment, so Syrinx
+  downloads such a document, as WebView2 does; a popup gets the same rule from
+  the moment it is created. A download that starts in a popup before Syrinx
+  has made it a tab is reported once the popup becomes one (#143).
 - **Windows-only for now**: the setup program and packaging (`cargo xtask
-  package`), release signing, update downloads, page-text capture,
-  hidden-page suspension, pausing a download, the palette acceptance run, and
+  package`), release signing, update downloads, the palette acceptance run, and
   the WebView2 example fixtures (they print that they need Windows). Tests
   that assert Windows file-sharing rules are `#[cfg(windows)]`; on Unix the
   guard revalidates identities instead (`docs/dev/trapstoknow.md`, "Linux").
