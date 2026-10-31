@@ -98,6 +98,11 @@ pub fn show_overlay(popup: isize, rect: OverlayRect) -> Result<(), BrowserError>
     Ok(())
 }
 
+/// A correction for GPUI's window origin; `None` here because GPUI's Windows bounds are current.
+pub fn window_origin(_window: isize) -> Option<(i32, i32)> {
+    None
+}
+
 /// Hides a kept popup; when it is active, its owner is activated first, synchronously.
 ///
 /// Hiding the active window would let Windows choose what to activate next, possibly after

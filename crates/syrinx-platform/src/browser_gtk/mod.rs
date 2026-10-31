@@ -10,6 +10,7 @@ mod protocol;
 mod downloads;
 mod engine;
 mod page;
+mod page_keys;
 mod x11;
 
 pub use protocol::*;
@@ -17,7 +18,7 @@ pub use syrinx_core::{Ineligible, PageTextPolicy};
 pub use x11::{
     activate_if_foreground, chrome_has_keyboard_focus, focus_chrome, hide_overlay,
     holds_keyboard_focus, overlay_monitor, overlay_pointer, set_overlay_owner, show_overlay,
-    syrinx_in_foreground,
+    syrinx_in_foreground, window_origin,
 };
 
 use std::{

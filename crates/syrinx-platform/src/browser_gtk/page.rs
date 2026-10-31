@@ -29,7 +29,9 @@ use super::{
     engine::{PendingPopup, Shared},
     history_state::{Pending, Started},
     keys::{peek_escape, shortcut_for_modifiers},
-    next_zoom, validate_url,
+    next_zoom,
+    page_keys::KeyRouting,
+    validate_url,
 };
 
 /// Permission prompts waiting on the owner, by request number.
@@ -39,6 +41,7 @@ pub(super) struct Page {
     id: u64,
     view: WebView,
     window: gtk::Window,
+    keys: KeyRouting,
     embed: Embed,
     shared: Shared,
     /// Retired when the page closes, so its late events never reach the UI.
@@ -61,13 +64,14 @@ impl Page {
             ..shared
         };
         let embed = Embed::new(shared.parent, bounds)?;
-        let window = embed.gtk_window();
+        let (window, keys) = embed.gtk_window();
         window.add(&view);
         window.show_all();
         let page = Self {
             id,
             view,
             window,
+            keys,
             embed,
             shared,
             life,
@@ -144,7 +148,7 @@ impl Page {
     }
 
     fn focus(&self) {
-        self.embed.focus();
+        self.keys.focus();
         self.view.grab_focus();
     }
 
@@ -345,6 +349,11 @@ impl Page {
     }
 
     fn watch_keys(&self) {
+        let clicked = self.keys.click_focus();
+        self.view.connect_button_press_event(move |_, _| {
+            clicked.focus();
+            glib::Propagation::Proceed
+        });
         let shared = self.shared.clone();
         self.view.connect_key_press_event(move |_, key| {
             let generation = shared.peek_generation.load(Ordering::Acquire);
@@ -736,7 +745,7 @@ impl LoadWatch {
 
 /// The X11 container window that holds one page's GTK window inside Syrinx's window.
 struct Embed {
-    xlib: xlib::Xlib,
+    xlib: Rc<xlib::Xlib>,
     display: *mut xlib::Display,
     gdk_display: gdkx11::X11Display,
     container: c_ulong,
@@ -746,7 +755,7 @@ impl Embed {
     /// Creates the container as a child of `parent` on GTK's own X connection, as wry does.
     fn new(parent: isize, bounds: PageBounds) -> Result<Self, BrowserError> {
         let parent = c_ulong::try_from(parent).map_err(|_| BrowserError::InvalidWindow)?;
-        let xlib = xlib::Xlib::open().map_err(|_| BrowserError::CreatePage)?;
+        let xlib = Rc::new(xlib::Xlib::open().map_err(|_| BrowserError::CreatePage)?);
         let gdk_display = gdk::Display::default()
             .and_then(|display| display.downcast::<gdkx11::X11Display>().ok())
             .ok_or(BrowserError::CreatePage)?;
@@ -768,19 +777,24 @@ impl Embed {
         })
     }
 
-    /// A GTK window whose GDK window is the container, so widgets draw inside Syrinx.
-    fn gtk_window(&self) -> gtk::Window {
+    /// A GTK window whose GDK window is the container, so widgets draw inside Syrinx, and the
+    /// routing that gives the container keys only while it holds X11 focus.
+    fn gtk_window(&self) -> (gtk::Window, KeyRouting) {
         let foreign = gdkx11::X11Window::foreign_new_for_display(&self.gdk_display, self.container);
         let foreign: gdk::Window = foreign.upcast();
+        let adopted = foreign.clone();
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         // A widget that adopts a GDK window must register it, or GTK asserts on unrealize.
         window.connect_realize(move |window| {
-            window.set_window(foreign.clone());
-            window.register_window(&foreign);
+            window.set_window(adopted.clone());
+            window.register_window(&adopted);
         });
         window.set_has_window(true);
         window.realize();
-        window
+        // The container selects nothing by default; its focus events drive the key routing.
+        foreign.set_events(foreign.events() | gdk::EventMask::FOCUS_CHANGE_MASK);
+        let routing = KeyRouting::install(self.xlib.clone(), self.display, self.container, foreign);
+        (window, routing)
     }
 
     fn place(&self, bounds: PageBounds) {
@@ -804,18 +818,6 @@ impl Embed {
             } else {
                 (self.xlib.XUnmapWindow)(self.display, self.container);
             }
-            (self.xlib.XFlush)(self.display);
-        }
-    }
-
-    fn focus(&self) {
-        unsafe {
-            (self.xlib.XSetInputFocus)(
-                self.display,
-                self.container,
-                xlib::RevertToParent,
-                xlib::CurrentTime,
-            );
             (self.xlib.XFlush)(self.display);
         }
     }

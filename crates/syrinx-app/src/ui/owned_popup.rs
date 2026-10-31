@@ -1,8 +1,9 @@
 //! Opens the owned GPUI popups (palette, sidebar peek, menus) that may sit over the page card.
 
-use gpui::AnyView;
+use gpui::{AnyView, Pixels};
 use syrinx_platform::browser::{
-    BrowserError, OverlayRect, activate_if_foreground, show_overlay, syrinx_in_foreground,
+    BrowserError, OverlayRect, activate_if_foreground, hide_overlay, show_overlay,
+    syrinx_in_foreground, window_origin,
 };
 
 use super::*;
@@ -51,6 +52,7 @@ pub(super) fn open_owned_popup(
         owner,
         options,
     } = spec;
+    let starts_hidden = !options.show;
     let opened = cx.open_window(options, move |popup, cx| {
         popup.set_window_title(title);
         let owned = own_popup(popup, owner);
@@ -67,12 +69,50 @@ pub(super) fn open_owned_popup(
     };
     let native = native.borrow().clone();
     match native {
-        Ok(hwnd) => Ok(OwnedPopup { window, hwnd }),
+        Ok(hwnd) => {
+            if starts_hidden {
+                keep_hidden(hwnd, owner, noun);
+            }
+            Ok(OwnedPopup { window, hwnd })
+        }
         Err(error) => match window.update(cx, |_, popup, _| popup.remove_window()) {
             Ok(()) => Err(OwnedPopupError::Notice(error)),
             Err(_) => Err(OwnedPopupError::Orphaned),
         },
     }
+}
+
+/// Hides a popup opened with `show: false`. GPUI's X11 backend maps every window it opens,
+/// so without this the kept palette sat visible at its creation spot; on Windows it is a no-op.
+fn keep_hidden(hwnd: isize, owner: isize, noun: &str) {
+    if let Err(error) = hide_overlay(hwnd, owner) {
+        eprintln!("Cannot hide the new {noun}: {error}");
+    }
+}
+
+/// The main window's bounds with its origin read from the platform where GPUI's is stale
+/// (X11 after a move and resize in one step), so popups line up with where the window is.
+pub(super) fn main_window_bounds(window: &Window, parent: isize) -> Bounds<Pixels> {
+    corrected_bounds(
+        window.bounds(),
+        window_origin(parent),
+        window.scale_factor(),
+    )
+}
+
+/// `bounds` moved to `origin`, a physical point, at `scale`; unchanged without an origin.
+fn corrected_bounds(
+    bounds: Bounds<Pixels>,
+    origin: Option<(i32, i32)>,
+    scale: f32,
+) -> Bounds<Pixels> {
+    let Some((left, top)) = origin.filter(|_| scale > 0.) else {
+        return bounds;
+    };
+    Bounds::new(
+        point(px(left as f32 / scale), px(top as f32 / scale)),
+        bounds.size,
+    )
 }
 
 /// Makes the popup an owned, non-topmost window with Syrinx's icon, whose frame is drawn
@@ -110,4 +150,26 @@ pub(super) fn show_and_activate(hwnd: isize, rect: OverlayRect) -> Result<bool, 
         return Ok(false);
     }
     show_overlay(hwnd, rect).and_then(|()| activate_if_foreground(hwnd))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stale() -> Bounds<Pixels> {
+        Bounds::new(point(px(1536.), px(26.)), size(px(1024.), px(656.)))
+    }
+
+    #[test]
+    fn a_platform_origin_replaces_a_stale_one_and_keeps_the_size() {
+        let corrected = corrected_bounds(stale(), Some((2560, 326)), 1.25);
+        assert_eq!(corrected.origin, point(px(2048.), px(260.8)));
+        assert_eq!(corrected.size, stale().size);
+    }
+
+    #[test]
+    fn without_a_platform_origin_gpui_bounds_stand() {
+        assert_eq!(corrected_bounds(stale(), None, 1.25), stale());
+        assert_eq!(corrected_bounds(stale(), Some((10, 10)), 0.), stale());
+    }
 }

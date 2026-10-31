@@ -50,7 +50,7 @@ use windows::Win32::{
 
 pub use overlay::{
     activate_if_foreground, hide_overlay, overlay_monitor, overlay_pointer, show_overlay,
-    syrinx_in_foreground,
+    syrinx_in_foreground, window_origin,
 };
 use page::Page;
 pub use protocol::*;
