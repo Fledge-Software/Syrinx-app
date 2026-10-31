@@ -110,7 +110,8 @@ use navigation_intents::NavigationIntents;
 use navigation_status::NavigationStatus;
 
 use crate::{
-    controls::{glyph, icon_button},
+    controls::icon_button,
+    icon::{Icon, with_icon},
     navigation,
     palette::{self, PaletteEvent, PaletteView},
     session::{self, SessionCommand, SessionEvent, SessionHandle},
@@ -1842,7 +1843,7 @@ impl BrowserView {
             .on_mouse_down(MouseButton::Right, page_menu_listener(cx))
             .child(self.essential_controls(cx))
             .child(
-                icon_button(div().id("page-menu"), glyph::MENU, "Page menu")
+                icon_button(div().id("page-menu"), Icon::Menu, "Page menu")
                     .occlude()
                     .on_click(cx.listener(|this, _, window, cx| this.open_page_menu(window, cx))),
             );
@@ -1865,21 +1866,21 @@ impl BrowserView {
     /// canvas's window row (sidebar toggle, then back, forward and reload at the right);
     /// otherwise those buttons followed by the address field.
     fn navigation(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        let toggle = icon_button(div().id("toggle-sidebar"), glyph::SIDEBAR, "Hide sidebar")
+        let toggle = icon_button(div().id("toggle-sidebar"), Icon::Sidebar, "Hide sidebar")
             .aria_keyshortcuts("Control+Alt+S")
             .occlude()
             .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
-        let back = icon_button(div().id("back"), glyph::BACK, "Back")
+        let back = icon_button(div().id("back"), Icon::Back, "Back")
             .aria_keyshortcuts("Alt+ArrowLeft Alt+ArrowDown")
             .occlude();
-        let forward = icon_button(div().id("forward"), glyph::FORWARD, "Forward")
+        let forward = icon_button(div().id("forward"), Icon::Forward, "Forward")
             .aria_keyshortcuts("Alt+ArrowRight Alt+ArrowDown")
             .occlude();
         let buttons = [
             self.history_button(back, HistoryDirection::Back, cx),
             self.history_button(forward, HistoryDirection::Forward, cx),
             self.navigation_button(
-                ("reload", glyph::RELOAD, "Reload", "Control+R"),
+                ("reload", Icon::Reload, "Reload", "Control+R"),
                 (Feature::NavReload, |id| BrowserCommand::Reload { id }),
                 cx,
             ),
@@ -1911,11 +1912,11 @@ impl BrowserView {
         self.as_pane(group, Pane::Address, gpui::Role::Toolbar)
     }
 
-    /// Back, Forward or Reload: its id, glyph, name and keys, and the use it counts (AN-01)
+    /// Back, Forward or Reload: its id, icon, name and keys, and the use it counts (AN-01)
     /// with the command it sends.
     fn navigation_button(
         &self,
-        (id, icon, name, keys): (&'static str, &'static str, &'static str, &'static str),
+        (id, icon, name, keys): (&'static str, Icon, &'static str, &'static str),
         (feature, command): (Feature, fn(u64) -> BrowserCommand),
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
@@ -1990,13 +1991,7 @@ impl BrowserView {
         }
         field
             .text_color(theme::rgba(palette.text_muted))
-            .child(
-                div()
-                    .flex_none()
-                    .font_family(glyph::FONT)
-                    .text_size(px(12.))
-                    .child(glyph::SEARCH),
-            )
+            .child(with_icon(div().flex_none(), Icon::Search, 12.))
             .child(
                 div()
                     .flex_1()

@@ -11,6 +11,7 @@ use syrinx_ui::focus::{Modality, ModalityInput, RING_INNER_WIDTH, RING_WIDTH};
 use syrinx_ui::metrics::{chrome::ICON_BUTTON, radius, text};
 use syrinx_ui::{Band, Color, ShadowRole, bands_outside};
 
+use crate::icon::{Icon, with_icon};
 use crate::theme;
 
 /// Glyphs sit at the size of the design's 16-pixel stroke icons.
@@ -114,45 +115,23 @@ pub(crate) fn push_button(element: Stateful<Div>, name: impl Into<SharedString>)
     control(element, Role::Button, name)
 }
 
-/// Icon glyphs from Segoe MDL2 Assets, which ships with Windows, so no icon files are bundled.
-pub(crate) mod glyph {
-    pub(crate) const FONT: &str = "Segoe MDL2 Assets";
-    pub(crate) const BACK: &str = "\u{E76B}";
-    pub(crate) const FORWARD: &str = "\u{E76C}";
-    pub(crate) const SIDEBAR: &str = "\u{E89F}";
-    pub(crate) const MENU: &str = "\u{E700}";
-    pub(crate) const MORE: &str = "\u{E712}";
-    pub(crate) const BOOKMARKS: &str = "\u{E734}";
-    pub(crate) const PASSWORDS: &str = "\u{E8D7}";
-    pub(crate) const APPEARANCE: &str = "\u{E713}";
-    pub(crate) const RELOAD: &str = "\u{E72C}";
-    pub(crate) const SEARCH: &str = "\u{E721}";
-    pub(crate) const DOWNLOADS: &str = "\u{E896}";
-    pub(crate) const HISTORY: &str = "\u{E81C}";
-    pub(crate) const ADD: &str = "\u{E710}";
-    pub(crate) const REMOVE: &str = "\u{E738}";
-    pub(crate) const MUTE: &str = "\u{E74F}";
-}
-
-/// The design's square icon button: transparent until hovered, with its glyph centred.
+/// The design's square icon button: transparent until hovered, with its icon centred.
 pub(crate) fn icon_button(
     element: Stateful<Div>,
-    glyph: &'static str,
+    icon: Icon,
     name: impl Into<SharedString>,
 ) -> Stateful<Div> {
-    push_button(element, name)
+    let button = push_button(element, name)
         .size(px(ICON_BUTTON))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(radius::CONTROL))
-        .font_family(glyph::FONT)
-        .text_size(px(GLYPH_SIZE))
         .text_color(theme::icon())
         .cursor_pointer()
-        .hover(|style| style.bg(theme::line()))
-        .child(glyph)
+        .hover(|style| style.bg(theme::line()));
+    with_icon(button, icon, GLYPH_SIZE)
 }
 
 /// The design's text button: a quiet field-coloured shape that brightens when hovered.
