@@ -170,8 +170,10 @@ What differs from Windows:
 - **One running Syrinx per profile** is kept with an `flock`ed lock file and
   a mode-0600 Unix socket in `$XDG_RUNTIME_DIR`, which checks the peer's user
   id as the Windows pipe checks its server's.
-- **Windows-only for now**: the setup program and packaging (`cargo xtask
-  package`), release signing, update downloads, page-text capture,
+- **Packaging**: `cargo xtask package` writes the portable Linux tarball
+  (`target/package/Syrinx-<version>-<commit>-linux-x64.tar.gz`) instead of
+  the setup program and zip; see `docs/installing.md`, "Linux".
+- **Windows-only for now**: the setup program, release signing, update downloads, page-text capture,
   hidden-page suspension, pausing a download, the palette acceptance run, and
   the WebView2 example fixtures (they print that they need Windows). Tests
   that assert Windows file-sharing rules are `#[cfg(windows)]`; on Unix the

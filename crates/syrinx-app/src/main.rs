@@ -166,6 +166,8 @@ fn main() -> ExitCode {
                 // page's child window and hides it (`docs/dev/trapstoknow.md`).
                 window_background: WindowBackgroundAppearance::MicaBackdrop,
                 window_min_size: Some(size(px(800.), px(500.))),
+                // Linux's X11 WM_CLASS, which pairs the window with `syrinx.desktop`.
+                app_id: Some("syrinx".into()),
                 ..Default::default()
             },
             |window, cx| {

@@ -65,11 +65,11 @@ fn run() -> Result<(), String> {
     }
 }
 
-/// The installer, release signing and the Win32 palette harness exist only on Windows.
+/// Release signing, the registration table and the Win32 palette harness exist only on Windows.
 fn refuse_windows_only_elsewhere(command: &OsString) -> Result<(), String> {
     let windows_only = matches!(
         command.to_str(),
-        Some("package" | "palette-acceptance" | "write-registration")
+        Some("palette-acceptance" | "write-registration")
     );
     if windows_only && !cfg!(windows) {
         return Err(format!(

@@ -575,3 +575,80 @@ only the owner can do it: running the install, registering, choosing Syrinx as
 default after P1-34, one upgrade with data intact, and one uninstall that
 keeps data. Until those are done and recorded, P1-37 is "prepared, owner
 operation pending", not complete.
+
+## Linux (2026-10-31)
+
+Syrinx is one app for Windows and Linux (`docs/decisions.md`, 2026-10-31), so
+`cargo xtask package` run on Linux builds the Linux package instead of the
+setup program. Linux has no setup program, registry or WebView2: the package
+is a portable tarball with two short shell scripts, which the person
+installing it reads and runs themselves, the same "the owner runs it, the
+agent never does" rule as the PowerShell scripts above.
+
+**Runtime requirement.** Syrinx's pages render in WebKitGTK, so the machine
+needs **WebKitGTK 4.1** (the `webkit2gtk-4.1` API, 2.38 or newer), **GTK 3**,
+libsoup 3 and bubblewrap, WebKit's page sandbox. It needs an **X11 session,
+or XWayland** under a Wayland compositor (GNOME, KDE, Hyprland): GTK can
+embed a page only inside an X11 window (`docs/dev/LOCAL-DEV.md`, "On Linux").
+On Arch-based systems that is `webkit2gtk-4.1 gtk3 libsoup3 bubblewrap`;
+Debian and Ubuntu call the library `libwebkit2gtk-4.1-0`, Fedora
+`webkit2gtk4.1`. Protected video (Disney+, Hulu) does not play, because
+WebKitGTK has no Widevine.
+
+**What `cargo xtask package` writes on Linux.** It runs `cargo xtask
+check-packaging`, builds the `syrinx` binary with the `local` profile and the
+`installed` feature into `target/package-build`, exactly as on Windows but
+with debug information stripped (Windows keeps it in a separate `.pdb`; on
+Linux it would grow the binary from about 90 MB to over 400 MB), and
+writes `target/package/Syrinx-<version>-<commit>[-dirty]-linux-x64/` and
+`Syrinx-<version>-<commit>[-dirty]-linux-x64.tar.gz`. The name is the Windows
+package's name with `linux-` before the architecture
+(`manifest::linux_package_name`). The tarball holds one folder of that name:
+
+| File | What it is |
+| --- | --- |
+| `syrinx` | The program (mode 0755). |
+| `syrinx.desktop` | The freedesktop desktop entry: name, icon, `Categories=Network;WebBrowser;` and `StartupWMClass=syrinx`, which matches the X11 window class Syrinx sets so the window gets the icon. |
+| `syrinx.png` | The 256 px app icon, `design/brand/icon/syrinx-icon-256.png`. |
+| `INSTALL.txt` | Requirements, install, update and uninstall in plain text. |
+| `LICENSE` | Syrinx's MPL-2.0 licence. |
+| `install.sh`, `uninstall.sh` | The per-user scripts below (mode 0755). |
+| `SHA256SUMS` | Every file's SHA-256 in `sha256sum` format, so `sha256sum -c SHA256SUMS` checks the unpacked copy. |
+
+The fixed files live in `packaging/linux/`. The tar entries are owned by
+root with numeric ids and sorted by name, so the archive does not record who
+built it. The gate checks that every source exists and parses both scripts
+with `sh -n`, which runs nothing; tests in
+`crates/xtask/src/packaging/linux.rs` pin the layout, the desktop entry and
+the scripts' rules.
+
+**`install.sh`** installs for the current user only, never with root (it
+refuses to run as root, because a per-user install would land in root's
+home):
+
+1. It checks every file against `SHA256SUMS` and stops on a mismatch
+   (`sha256sum` missing gives a warning instead).
+2. It warns, without stopping, if `ldconfig` does not list WebKitGTK 4.1.
+3. It copies `syrinx` to `~/.local/bin/syrinx` and the icon to
+   `~/.local/share/icons/hicolor/256x256/apps/syrinx.png`, each through a
+   temporary name and a rename, so a running Syrinx keeps its file.
+4. It writes `~/.local/share/applications/syrinx.desktop` last, with `Exec=`
+   naming the installed program by its full path, because `~/.local/bin` is
+   not on every PATH. `$XDG_DATA_HOME` replaces `~/.local/share` when set.
+
+It does not make Syrinx the default browser and does not declare it a link
+handler: the entry has no `MimeType=` line. Syrinx accepts a link only after
+`--` and refuses a bare `--`, so an entry that passed `%u` would fail when
+started from the menu with no link. Handling links on Linux is a follow-up.
+
+**`uninstall.sh`** removes only what `install.sh` wrote. It acts only if the
+desktop entry carries the marker line `X-Syrinx-Packaging=syrinx-packaging-v1`,
+removes the program and icon first and the entry last (so an interrupted run
+can be repeated), and never touches the data folder,
+`~/.local/share/Syrinx/data`; it names that folder for the person to delete
+by hand if they want their data gone.
+
+**Updates.** In-app updates install only on Windows. On Linux, Settings and
+"Check for updates" say that Syrinx doesn't update itself on Linux yet and
+point at syrinxapp.dev; updating means unpacking the newer tarball and
+running its `install.sh`, which keeps the data folder.
