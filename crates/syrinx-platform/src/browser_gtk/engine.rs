@@ -15,7 +15,11 @@ use webkit2gtk::{
 
 use super::{
     BrowserCommand, BrowserError, BrowserEvent, BrowsingDataKinds, ClearOutcome, ClearSpan,
-    EventSink, PageBounds, downloads::Downloads, page::Page, show_active, validate_url,
+    EventSink, PageBounds,
+    downloads::Downloads,
+    page::{Page, TextStart},
+    page_text::TextContext,
+    show_active, validate_url,
 };
 
 /// A popup the page asked for, held until the owner's UI adopts or cancels it.
@@ -51,6 +55,7 @@ pub(super) struct Engine {
     shared: Shared,
     pages: HashMap<u64, Page>,
     downloads: Downloads,
+    page_text: TextContext,
     active: Option<u64>,
     bounds: PageBounds,
 }
@@ -71,12 +76,13 @@ impl Engine {
             requests: Rc::default(),
         };
         // Downloads outlive the page that started them, so their events carry no page life.
-        let downloads = Downloads::watch(&context, shared.events.detached());
+        let downloads = Downloads::watch(&context, shared.events.detached(), shared.popups.clone());
         Ok(Self {
             context,
             shared,
             pages: HashMap::new(),
             downloads,
+            page_text: TextContext::default(),
             active: None,
             bounds: PageBounds::default(),
         })
@@ -89,11 +95,19 @@ impl Engine {
 
     pub(super) fn apply(&mut self, command: BrowserCommand) -> Result<(), BrowserError> {
         match command {
-            BrowserCommand::Create { id, url } | BrowserCommand::Reopen { id, url } => {
+            BrowserCommand::Create { id, url } => {
                 validate_url(&url)?;
                 let view = WebView::with_context(&self.context);
-                let page = self.new_page(id, view)?;
+                let page = self.new_page(id, view, false)?;
                 page.navigate(&url)?;
+                self.pages.insert(id, page);
+            }
+            BrowserCommand::Reopen { id, url } => {
+                validate_url(&url)?;
+                let view = WebView::with_context(&self.context);
+                // A tab Syrinx puts back starts tainted and its load is not Syrinx's own (#54).
+                let page = self.new_page(id, view, true)?;
+                page.restore(&url)?;
                 self.pages.insert(id, page);
             }
             BrowserCommand::AdoptPopup { request, id } => {
@@ -103,15 +117,21 @@ impl Engine {
                     .borrow_mut()
                     .remove(&request)
                     .ok_or(BrowserError::Popup)?;
-                if !self.pages.contains_key(&pending.opener) {
-                    return Err(BrowserError::UnknownTab);
-                }
+                let tainted = self
+                    .pages
+                    .get(&pending.opener)
+                    .ok_or(BrowserError::UnknownTab)?
+                    .popup_tainted();
                 // The popup's view was created related to its opener, so `window.opener` works.
-                let page = self.new_page(id, pending.view)?;
+                let page = self.new_page(id, pending.view, tainted)?;
                 self.pages.insert(id, page);
+                self.downloads.adopted(request, id);
             }
             BrowserCommand::CancelPopup { request } => {
-                drop(self.shared.popups.borrow_mut().remove(&request));
+                let pending = self.shared.popups.borrow_mut().remove(&request);
+                if let Some(pending) = pending {
+                    self.downloads.released(request, pending.opener);
+                }
             }
             BrowserCommand::Close { id } => self.close(id)?,
             BrowserCommand::ShowActive(active) => self.show(active)?,
@@ -120,8 +140,7 @@ impl Engine {
                 kinds,
                 span,
             } => self.clear(request, kinds, span),
-            // Page-text capture reads a DevTools snapshot on Windows; Linux never captures.
-            BrowserCommand::SetPageTextPolicy(_) => {}
+            BrowserCommand::SetPageTextPolicy(policy) => self.page_text.set_policy(policy),
             BrowserCommand::ControlDownload { download, control } => {
                 self.downloads.control(download, control);
             }
@@ -141,23 +160,36 @@ impl Engine {
         Ok(())
     }
 
-    fn new_page(&self, id: u64, view: WebView) -> Result<Page, BrowserError> {
+    /// A page for tab `id`; `tainted` when it puts back an earlier page or opens from one.
+    fn new_page(&self, id: u64, view: WebView, tainted: bool) -> Result<Page, BrowserError> {
         if id == 0 {
             return Err(BrowserError::InvalidTab);
         }
         if self.pages.contains_key(&id) {
             return Err(BrowserError::DuplicateTab);
         }
-        let page = Page::new(id, view, self.bounds, self.shared.clone())?;
+        let text = TextStart {
+            context: &self.page_text,
+            tainted,
+        };
+        let page = Page::new(id, view, self.bounds, self.shared.clone(), text)?;
         self.downloads.track(id, page.view());
         Ok(page)
     }
 
     fn close(&mut self, id: u64) -> Result<(), BrowserError> {
-        self.shared
+        let dropped: Vec<u64> = self
+            .shared
             .popups
-            .borrow_mut()
-            .retain(|_, pending| pending.opener != id);
+            .borrow()
+            .iter()
+            .filter(|(_, pending)| pending.opener == id)
+            .map(|(request, _)| *request)
+            .collect();
+        for request in dropped {
+            drop(self.shared.popups.borrow_mut().remove(&request));
+            self.downloads.released(request, id);
+        }
         let page = self.pages.remove(&id).ok_or(BrowserError::UnknownTab)?;
         self.downloads.forget(id);
         drop(page);

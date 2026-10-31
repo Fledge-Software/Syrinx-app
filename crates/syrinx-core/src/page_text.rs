@@ -2,6 +2,7 @@
 //! `judge` creates the `EligibleDocument` the platform's capture call requires.
 
 mod cache_control;
+mod sent_html;
 mod sites;
 
 use std::{
@@ -10,6 +11,10 @@ use std::{
 };
 
 use cache_control::Storing;
+pub use sent_html::{
+    SENT_HTML_LIMIT_BYTES, SentHtmlRefusal, SentHtmlText, bounded_page_text,
+    is_sign_in_or_card_field, sent_html_text,
+};
 
 /// How long a finished page may run its own scripts before its text is read.
 pub const SETTLE_DELAY: Duration = Duration::from_secs(2);

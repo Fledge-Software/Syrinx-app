@@ -2,7 +2,7 @@
 
 use super::*;
 use serde_json::json;
-use syrinx_core::{DocumentFacts, ObservedResponse, PageTextPolicy, judge};
+use syrinx_core::{DocumentFacts, ObservedResponse, PageTextPolicy, TEXT_LIMIT_BYTES, judge};
 
 const PAGE: &str = "https://plain.example.test/article";
 

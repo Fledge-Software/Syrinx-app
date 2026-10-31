@@ -3,8 +3,8 @@
 mod address;
 mod builder;
 mod commit;
-mod text;
-mod tokenizer;
+pub(crate) mod text;
+pub(crate) mod tokenizer;
 
 use std::fmt;
 

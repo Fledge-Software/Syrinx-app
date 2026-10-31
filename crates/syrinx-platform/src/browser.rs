@@ -23,6 +23,11 @@ mod security;
 
 pub use syrinx_core::{Ineligible, PageTextPolicy};
 
+/// WebView2 pauses and resumes downloads, so the flyout offers both.
+pub const PAUSES_DOWNLOADS: bool = true;
+/// Pages' text is read with one DevTools snapshot once the owner switches capture on.
+pub const READS_PAGE_TEXT: bool = true;
+
 use std::{
     collections::HashMap,
     os::windows::io::AsRawHandle,

@@ -521,7 +521,7 @@ impl BrowserView {
     /// its level from the open menu (`menu_zoom_changed`).
     fn menu_rows(&self, kind: MenuKind) -> Vec<MenuRow> {
         if kind == MenuKind::Downloads {
-            return download_rows(&self.downloads);
+            return download_rows(&self.downloads, syrinx_platform::browser::PAUSES_DOWNLOADS);
         }
         let editing = self.home.editing == Some(DestinationSurface::Favorites);
         kind.items()
@@ -1037,14 +1037,18 @@ impl MenuView {
     }
 }
 
-/// On a download row, Enter or Space presses its first button (Pause or Resume) and Delete
-/// cancels it.
+/// On a download row, Enter or Space presses its first button when that is Pause or Resume,
+/// never Cancel (the only button where a download cannot pause), and Delete cancels it.
 fn download_key(key: &str, row: &MenuRow) -> Option<MenuAction> {
     let MenuItem::Download(download) = row.item else {
         return None;
     };
     let control = match key {
-        "enter" | "space" => row.controls.first().copied(),
+        "enter" | "space" => row
+            .controls
+            .first()
+            .copied()
+            .filter(|control| *control != DownloadControl::Cancel),
         "delete" => row
             .controls
             .contains(&DownloadControl::Cancel)
@@ -1453,8 +1457,8 @@ fn control_face(control: DownloadControl) -> (&'static str, Icon, &'static str) 
 }
 
 /// The Downloads flyout's rows: the newest downloads, or a line saying there are none, then
-/// Clear when any has finished.
-fn download_rows(list: &syrinx_core::DownloadList) -> Vec<MenuRow> {
+/// Clear when any has finished. Without `pauses` (Linux) no row offers Pause or Resume.
+fn download_rows(list: &syrinx_core::DownloadList, pauses: bool) -> Vec<MenuRow> {
     let mut rows: Vec<MenuRow> = list
         .downloads()
         .iter()
@@ -1463,7 +1467,7 @@ fn download_rows(list: &syrinx_core::DownloadList) -> Vec<MenuRow> {
             item: MenuItem::Download(download.id),
             label: download.file_name.clone(),
             shortcut: Some(download.detail()),
-            controls: download.controls(),
+            controls: download.offered_controls(pauses),
             icon: None,
         })
         .collect();
@@ -1625,7 +1629,7 @@ mod tests {
     fn download_rows_carry_their_controls_and_keys_press_them() {
         let mut list = syrinx_core::DownloadList::default();
         list.add(3, 1, "synthetic.zip", None);
-        let rows = download_rows(&list);
+        let rows = download_rows(&list, true);
         assert_eq!(rows.len(), 1, "no Clear row while nothing has finished");
         let row = &rows[0];
         assert_eq!(
@@ -1646,10 +1650,24 @@ mod tests {
             syrinx_core::DownloadInterruption::Blocked(syrinx_core::BlockReason::Unsafe),
             0,
         );
-        let rows = download_rows(&list);
+        let rows = download_rows(&list, true);
         assert!(rows[0].controls.is_empty(), "a blocked file is never kept");
         assert!(download_key("enter", &rows[0]).is_none());
         assert_eq!(rows[1].item, MenuItem::ClearDownloads);
+    }
+
+    #[test]
+    fn an_engine_that_cannot_pause_offers_cancel_and_enter_never_presses_it() {
+        let mut list = syrinx_core::DownloadList::default();
+        list.add(3, 1, "synthetic.zip", None);
+        let rows = download_rows(&list, false);
+        assert_eq!(rows[0].controls, [DownloadControl::Cancel]);
+        assert!(download_key("enter", &rows[0]).is_none());
+        assert!(download_key("space", &rows[0]).is_none());
+        assert!(matches!(
+            download_key("delete", &rows[0]),
+            Some(MenuAction::Download(3, DownloadControl::Cancel))
+        ));
     }
 
     #[test]

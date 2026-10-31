@@ -20,8 +20,9 @@ pub use web_address::{WebAddressError, web_address};
 
 pub use page_text::{
     DocumentFacts, EligibleDocument, Ineligible, LeftDocument, ObservedResponse, PageTextPolicy,
-    PolicyError, SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, TEXT_LIMIT_BYTES, address_within_site,
-    excluded_site, judge, same_document_address, same_document_due,
+    PolicyError, SAME_DOCUMENT_INTERVAL, SENT_HTML_LIMIT_BYTES, SETTLE_DELAY, SentHtmlRefusal,
+    SentHtmlText, TEXT_LIMIT_BYTES, address_within_site, bounded_page_text, excluded_site,
+    is_sign_in_or_card_field, judge, same_document_address, same_document_due, sent_html_text,
 };
 
 pub use bookmark_import::{

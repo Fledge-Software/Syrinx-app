@@ -4,7 +4,7 @@
 const MAX_ENTITY_LEN: usize = 12;
 
 /// Decodes the entity references bookmark exports use; unknown references stay literal.
-pub(super) fn decode_entities(raw: &str) -> String {
+pub(crate) fn decode_entities(raw: &str) -> String {
     let mut decoded = String::with_capacity(raw.len());
     let mut rest = raw;
     while let Some(ampersand) = rest.find('&') {
@@ -72,7 +72,7 @@ fn decode_named(name: &str) -> Option<char> {
 }
 
 /// Collapses runs of whitespace (including CR, LF and no-break space) and trims the ends.
-pub(super) fn collapse_whitespace(text: &str) -> String {
+pub(crate) fn collapse_whitespace(text: &str) -> String {
     let mut collapsed = String::with_capacity(text.len());
     for word in text
         .split(char::is_whitespace)

@@ -11,6 +11,7 @@ mod downloads;
 mod engine;
 mod page;
 mod page_keys;
+mod page_text;
 mod x11;
 
 pub use protocol::*;
@@ -37,6 +38,11 @@ use futures::channel::mpsc::{UnboundedReceiver, unbounded};
 
 use crate::gtk_thread;
 use engine::Engine;
+
+/// WebKitGTK can cancel a download but never pause or resume one, so the flyout offers neither.
+pub const PAUSES_DOWNLOADS: bool = false;
+/// Whether pages' text is read when the owner switches capture on; see `page_text.rs`.
+pub const READS_PAGE_TEXT: bool = page_text::READS_SENT_HTML;
 
 /// The `ProcessFailed` kind for a page whose web process stopped answering, as on Windows.
 pub const RENDER_PROCESS_UNRESPONSIVE: i32 = 2;
