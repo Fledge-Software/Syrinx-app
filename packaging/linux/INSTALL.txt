@@ -1,0 +1,57 @@
+Syrinx for Linux
+================
+
+Syrinx is a browser-first workspace: a web browser with a vertical-tab sidebar
+and a command palette. This folder is the portable Linux package.
+
+What you need
+-------------
+
+- An x86-64 Linux desktop with an X11 session, or XWayland under a Wayland
+  compositor such as GNOME, KDE or Hyprland.
+- WebKitGTK 4.1 (2.38 or newer), GTK 3, libsoup 3 and bubblewrap, which is
+  WebKit's page sandbox. Package names:
+    Arch, Omarchy:   webkit2gtk-4.1 gtk3 libsoup3 bubblewrap
+    Debian, Ubuntu:  libwebkit2gtk-4.1-0 libgtk-3-0 libsoup-3.0-0 bubblewrap
+    Fedora:          webkit2gtk4.1 gtk3 libsoup3 bubblewrap
+- Protected video (Disney+, Hulu) does not play: WebKitGTK has no Widevine.
+
+Install
+-------
+
+Run, as yourself and not with sudo:
+
+    ./install.sh
+
+It checks every file against SHA256SUMS, then copies:
+
+    syrinx          to ~/.local/bin/syrinx
+    syrinx.desktop  to ~/.local/share/applications/syrinx.desktop
+    syrinx.png      to ~/.local/share/icons/hicolor/256x256/apps/syrinx.png
+
+(~/.local/share is $XDG_DATA_HOME when that is set.) Nothing outside your home
+folder changes, and Syrinx is not made your default browser. Syrinx keeps its
+data in ~/.local/share/Syrinx/data.
+
+You can also run ./syrinx straight from this folder without installing.
+
+Update
+------
+
+Syrinx does not update itself on Linux yet. Download the new version from
+https://syrinxapp.dev, check it against the release's SHA256SUMS.txt, unpack
+it and run its install.sh. Your tabs, bookmarks and sign-ins stay.
+
+Uninstall
+---------
+
+    ./uninstall.sh
+
+It removes the three files above and keeps your data. To erase your data too,
+delete ~/.local/share/Syrinx/data yourself afterwards.
+
+Licence
+-------
+
+Syrinx is free software under the Mozilla Public License 2.0; see LICENSE.
+Source code: https://github.com/Fledge-Software/Syrinx-app

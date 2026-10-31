@@ -16,3 +16,5 @@
 # Brand rasters and icons are binary; never convert their line endings.
 *.png binary
 *.ico binary
+# The Linux package's shell scripts and desktop entry must keep LF line endings.
+/packaging/linux/** text eol=lf

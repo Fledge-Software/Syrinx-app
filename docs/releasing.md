@@ -57,6 +57,19 @@ To release outside the schedule, run the workflow from the Actions tab
 ("Run workflow"). Tick **force** to release even when `main` has not
 changed.
 
+## The Linux package
+
+Since 2026-10-31 Syrinx is one app for Windows and Linux, and `cargo xtask
+package` run on Linux writes the Linux artifact:
+`target/package/Syrinx-<version>-<commit>-linux-x64.tar.gz`, a portable
+folder with the `syrinx` binary, its desktop entry and icon, `INSTALL.txt`,
+the licence, a `SHA256SUMS` list and per-user `install.sh` and `uninstall.sh`
+scripts (`docs/installing.md`, "Linux"). The weekly workflow does not build or
+publish it yet: that needs a Linux packaging job in
+`.github/workflows/weekly-release.yml` and the tarball added to the release
+and to `SHA256SUMS.txt`, a CI change that waits for the owner's approval.
+Until then a Linux tarball is built by hand on a Linux machine.
+
 ## Keeping main releasable
 
 `.github/workflows/gate.yml` runs the same `cargo xtask check` on every push

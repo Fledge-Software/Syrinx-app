@@ -34,7 +34,8 @@ cargo xtask check         # the gate: dependencies, format, Clippy, tests, smoke
   package` builds the setup program and portable zip under `target\package`.
 - **Linux**: WebKitGTK 4.1 (2.38 or newer), GTK 3, libsoup 3 and
   bubblewrap, and an X11 display; under Wayland (Hyprland, GNOME, KDE)
-  Syrinx runs through XWayland. Protected video (Disney+, Hulu) does not
+  Syrinx runs through XWayland. `cargo xtask package` builds a portable
+  `.tar.gz` with per-user install scripts under `target/package`. Protected video (Disney+, Hulu) does not
   play, because WebKitGTK has no Widevine.
 - **macOS**: not yet; its platform layer is the next one to be written.
 
