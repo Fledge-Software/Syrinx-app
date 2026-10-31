@@ -22,7 +22,8 @@ use syrinx_ui::{
     sidebar_setting,
 };
 
-use crate::controls::{control, glyph, icon_button, raised, ring_shown};
+use crate::controls::{control, icon_button, raised, ring_shown};
+use crate::icon::{Icon, with_icon};
 
 use super::{
     BrowserView,
@@ -509,19 +510,18 @@ impl BrowserView {
         if !labels {
             return row.child(muted_badge(tab));
         }
+        let unmute = row_action_box(row_button(("unmute", tab.get()), "Unmute tab"))
+            .text_color(theme::icon())
+            .hover(|style| style.text_color(theme::text()));
         row.child(
-            row_action_box(row_button(("unmute", tab.get()), "Unmute tab"))
-                .font_family(glyph::FONT)
-                .text_size(px(MUTE_GLYPH_SIZE))
-                .text_color(theme::icon())
-                .hover(|style| style.text_color(theme::text()))
-                .child(glyph::MUTE)
-                .on_click(cx.listener(move |this, _, window, cx| {
+            with_icon(unmute, Icon::Mute, MUTE_GLYPH_SIZE).on_click(cx.listener(
+                move |this, _, window, cx| {
                     cx.stop_propagation();
                     this.run_tab_action(TabAction::SetMuted(tab, false), None, window, cx);
                     // The row stays, so its keys must not stay armed after the click.
                     this.release_row_focus(window, cx);
-                })),
+                },
+            )),
         )
     }
 
@@ -834,7 +834,7 @@ fn close_badge(id: impl Into<ElementId>, name: &'static str, shown: bool) -> Sta
 /// corner. It is drawn only, with no role, focus or click of its own; the row's own
 /// description says "Muted" to screen readers.
 fn muted_badge(tab: TabId) -> Stateful<Div> {
-    div()
+    let badge = div()
         .id(("muted-badge", tab.get()))
         .absolute()
         .bottom(px(MUTED_BADGE_INSET))
@@ -847,10 +847,8 @@ fn muted_badge(tab: TabId) -> Stateful<Div> {
         .flex()
         .items_center()
         .justify_center()
-        .font_family(glyph::FONT)
-        .text_size(px(MUTED_BADGE_GLYPH_SIZE))
-        .text_color(theme::icon())
-        .child(glyph::MUTE)
+        .text_color(theme::icon());
+    with_icon(badge, Icon::Mute, MUTED_BADGE_GLYPH_SIZE)
 }
 
 /// Keeps a mouse press from focusing a row or its buttons, so a right-click, a middle-click
@@ -898,10 +896,8 @@ fn new_tab_row(labels: bool, cx: &mut Context<BrowserView>) -> Stateful<Div> {
         .border_color(theme::rgba(palette.dash))
         .flex()
         .items_center()
-        .justify_center()
-        .font_family(glyph::FONT)
-        .text_size(px(10.))
-        .child(glyph::ADD);
+        .justify_center();
+    let plus = with_icon(plus, Icon::Add, 10.);
     if !labels {
         return row.w(px(ICON_BUTTON)).justify_center().child(plus);
     }
@@ -910,7 +906,7 @@ fn new_tab_row(labels: bool, cx: &mut Context<BrowserView>) -> Stateful<Div> {
         .child(plus)
         .child(div().flex_1().child("New tab"))
         .child(
-            icon_button(div().id("sidebar-more"), glyph::MORE, "More")
+            icon_button(div().id("sidebar-more"), Icon::More, "More")
                 .tab_stop(false)
                 .size(px(26.))
                 .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
@@ -925,28 +921,28 @@ fn new_tab_row(labels: bool, cx: &mut Context<BrowserView>) -> Stateful<Div> {
 /// Passwords and Appearance. Bookmarks and Passwords say what is coming until they exist.
 fn library_row(labels: bool, cx: &mut Context<BrowserView>) -> Div {
     let buttons = [
-        icon_button(div().id("library-history"), glyph::HISTORY, "History")
+        icon_button(div().id("library-history"), Icon::History, "History")
             .aria_keyshortcuts("Control+H")
             .on_click(cx.listener(|this, _, window, cx| {
                 let return_focus = this.chrome_return_focus(window, cx);
                 this.toggle_history(return_focus, window, cx);
                 cx.notify();
             })),
-        icon_button(div().id("library-bookmarks"), glyph::BOOKMARKS, "Bookmarks").on_click(
+        icon_button(div().id("library-bookmarks"), Icon::Bookmarks, "Bookmarks").on_click(
             cx.listener(|this, _, _, cx| {
                 this.message =
                     "Saved pages live in the sidebar; a bookmarks manager comes later.".to_owned();
                 cx.notify();
             }),
         ),
-        icon_button(div().id("library-passwords"), glyph::PASSWORDS, "Passwords").on_click(
+        icon_button(div().id("library-passwords"), Icon::Passwords, "Passwords").on_click(
             cx.listener(|this, _, _, cx| {
                 this.message = "Password saving is not part of Syrinx v1.".to_owned();
                 cx.notify();
             }),
         ),
         // The gear opens Settings in its own tab from any tab (owner, 2026-10-21; #91).
-        icon_button(div().id("library-settings"), glyph::APPEARANCE, "Settings")
+        icon_button(div().id("library-settings"), Icon::Settings, "Settings")
             .aria_keyshortcuts("Ctrl+,")
             .on_click(cx.listener(|this, _, _, cx| {
                 this.open_settings(None);

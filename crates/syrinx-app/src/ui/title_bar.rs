@@ -1,4 +1,4 @@
-//! Draws Windows caption controls without requiring a separate icon asset bundle.
+//! Draws the window's caption controls, minimize, maximize or restore, and close.
 
 use gpui::{
     Div, InteractiveElement, ParentElement, Role, StatefulInteractiveElement, Styled,
@@ -8,6 +8,7 @@ use gpui::{
 use syrinx_platform::caption::{self, CaptionButton};
 
 use super::TITLE_BAR_HEIGHT;
+use crate::icon::{Icon, with_icon};
 use crate::theme;
 
 /// Each caption button is a square as tall as the title bar, flush with its right edge.
@@ -43,8 +44,8 @@ pub(super) fn title_bar(content: Div, maximized: bool) -> Div {
                 .child(content),
         )
         .children(CaptionButton::LEFT_TO_RIGHT.map(|button| {
-            let (id, label, glyph, area) = caption_control(button, maximized);
-            div()
+            let (id, label, icon, area) = caption_control(button, maximized);
+            let caption = div()
                 .id(id)
                 .role(Role::Button)
                 .aria_label(label)
@@ -54,11 +55,9 @@ pub(super) fn title_bar(content: Div, maximized: bool) -> Div {
                 .flex()
                 .items_center()
                 .justify_center()
-                .font_family("Segoe MDL2 Assets")
-                .text_size(px(10.))
                 .window_control_area(area)
-                .hover(|style| style.bg(theme::line()))
-                .child(glyph)
+                .hover(|style| style.bg(theme::line()));
+            with_icon(caption, icon, 10.)
         }))
 }
 
@@ -69,37 +68,37 @@ pub(super) fn correct_caption_hit_test(hwnd: isize) {
     }
 }
 
-/// The element id, accessible label, glyph and native hit area of one caption button.
+/// The element id, accessible label, icon and native hit area of one caption button.
 fn caption_control(
     button: CaptionButton,
     maximized: bool,
-) -> (&'static str, &'static str, &'static str, WindowControlArea) {
+) -> (&'static str, &'static str, Icon, WindowControlArea) {
     match button {
         CaptionButton::Minimize => (
             "caption-minimize",
             "Minimize",
-            "\u{E921}",
+            Icon::Minimize,
             WindowControlArea::Min,
         ),
         CaptionButton::Maximize => {
-            let (label, glyph) = maximize_control(maximized);
-            ("caption-maximize", label, glyph, WindowControlArea::Max)
+            let (label, icon) = maximize_control(maximized);
+            ("caption-maximize", label, icon, WindowControlArea::Max)
         }
         CaptionButton::Close => (
             "caption-close",
             "Close Syrinx",
-            "\u{E8BB}",
+            Icon::Close,
             WindowControlArea::Close,
         ),
     }
 }
 
-/// Segoe MDL2 Assets supplies the Windows caption outlines without bundled assets.
-fn maximize_control(maximized: bool) -> (&'static str, &'static str) {
+/// The middle caption button: Restore while maximized, otherwise Maximize.
+fn maximize_control(maximized: bool) -> (&'static str, Icon) {
     if maximized {
-        ("Restore", "\u{E923}")
+        ("Restore", Icon::Restore)
     } else {
-        ("Maximize", "\u{E922}")
+        ("Maximize", Icon::Maximize)
     }
 }
 
@@ -109,8 +108,8 @@ mod tests {
 
     #[test]
     fn maximize_caption_tracks_window_state() {
-        assert_eq!(maximize_control(false), ("Maximize", "\u{E922}"));
-        assert_eq!(maximize_control(true), ("Restore", "\u{E923}"));
+        assert_eq!(maximize_control(false), ("Maximize", Icon::Maximize));
+        assert_eq!(maximize_control(true), ("Restore", Icon::Restore));
     }
 
     #[test]

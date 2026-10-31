@@ -5,6 +5,7 @@ mod acceptance;
 mod appearance;
 mod controls;
 mod ground_image;
+mod icon;
 mod navigation;
 mod palette;
 mod palette_sample;
@@ -144,7 +145,7 @@ fn main() -> ExitCode {
     let options_smoke = options.smoke;
     // Smoke and acceptance runs succeed only when they report success themselves.
     let mut links = Some(links);
-    gpui_platform::application().run(move |cx: &mut App| {
+    application().run(move |cx: &mut App| {
         gpui_component::init(cx);
         theme::apply_component_theme(cx);
         ui::bind_keys(cx);
@@ -316,11 +317,23 @@ fn hand_off_update(
     }
 }
 
+/// GPUI's application; Windows draws icons from a system font and needs no assets.
+#[cfg(windows)]
+fn application() -> gpui::Application {
+    gpui_platform::application()
+}
+
+/// GPUI's application, serving Syrinx's own icons to its SVG renderer.
+#[cfg(not(windows))]
+fn application() -> gpui::Application {
+    gpui_platform::application().with_assets(icon::svg::Assets)
+}
+
 fn run_review(review: Review) -> ExitCode {
     // Development review windows open no profile, page or worker.
     let failed = Arc::new(AtomicU8::new(0));
     let result = failed.clone();
-    gpui_platform::application().run(move |cx: &mut App| {
+    application().run(move |cx: &mut App| {
         let opened = match review {
             Review::PaletteSample => palette_sample::open(cx),
             Review::ThemeLab => theme_lab::open(cx),

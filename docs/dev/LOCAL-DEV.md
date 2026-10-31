@@ -178,9 +178,11 @@ What differs from Windows:
   guard revalidates identities instead (`docs/dev/trapstoknow.md`, "Linux").
 - **Known limits**: no Widevine in WebKitGTK, so Disney+ and Hulu do not
   play; Google may treat WebKitGTK as an unfamiliar browser at sign-in, and
-  the user agent is still never changed (D22). The toolbar icons use Windows'
-  Segoe MDL2 Assets font, which Linux does not have, so they show as wrong
-  glyphs until Syrinx ships its own icons.
+  the user agent is still never changed (D22).
+- **Icons**: Windows draws them from its Segoe MDL2 Assets font; Linux has no
+  such font, so Syrinx draws its own stroke SVGs from
+  `crates/syrinx-app/assets/icons`, embedded in the executable
+  (`crates/syrinx-app/src/icon.rs`).
 
 The Linux gate skips the release tool's two steps (it signs through Windows
 key storage) and parses no PowerShell; the Windows gate still runs both.

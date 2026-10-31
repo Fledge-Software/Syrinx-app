@@ -1075,24 +1075,24 @@ impl MenuView {
         row.controls
             .iter()
             .map(|&control| {
-                let (id, glyph, verb) = control_face(control);
-                crate::controls::push_button(div().id((id, index)), format!("{verb} {}", row.label))
-                    .h(px(22.))
-                    .w(px(22.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(11.))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme::line()))
-                    .font_family(crate::controls::glyph::FONT)
-                    .text_size(px(10.))
-                    .child(glyph)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.send(MenuAction::Download(download, control), cx);
-                    }))
+                let (id, icon, verb) = control_face(control);
+                let button = crate::controls::push_button(
+                    div().id((id, index)),
+                    format!("{verb} {}", row.label),
+                )
+                .h(px(22.))
+                .w(px(22.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(11.))
+                .cursor_pointer()
+                .hover(|style| style.bg(theme::line()));
+                with_icon(button, icon, 10.).on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.send(MenuAction::Download(download, control), cx);
+                }))
             })
             .collect()
     }
@@ -1438,12 +1438,12 @@ fn closes_on_reclick(
         })
 }
 
-/// A download button's element id, glyph and spoken verb.
-fn control_face(control: DownloadControl) -> (&'static str, &'static str, &'static str) {
+/// A download button's element id, icon and spoken verb.
+fn control_face(control: DownloadControl) -> (&'static str, Icon, &'static str) {
     match control {
-        DownloadControl::Pause => ("download-pause", "\u{E769}", "Pause"),
-        DownloadControl::Resume => ("download-resume", "\u{E768}", "Resume"),
-        DownloadControl::Cancel => ("download-cancel", "\u{E711}", "Cancel"),
+        DownloadControl::Pause => ("download-pause", Icon::Pause, "Pause"),
+        DownloadControl::Resume => ("download-resume", Icon::Resume, "Resume"),
+        DownloadControl::Cancel => ("download-cancel", Icon::Cancel, "Cancel"),
     }
 }
 
