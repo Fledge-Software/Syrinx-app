@@ -522,7 +522,8 @@ impl BrowserView {
             peek_state: peek_state::PeekState::default(),
             peek_monitoring: false,
             peek_generation: 0,
-            peek_owner_geometry: peek::OwnerGeometry::of(window),
+            // The native window is not known yet; the first bounds report fills its origin in.
+            peek_owner_geometry: peek::OwnerGeometry::of(window, 0),
             _peek_bounds_watch: cx.observe_window_bounds(window, |this, window, cx| {
                 this.owner_bounds_observed(window, cx);
                 this.follow_palette(window, cx);

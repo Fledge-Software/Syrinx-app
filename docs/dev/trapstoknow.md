@@ -600,6 +600,29 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   The control file and instance lock do use `flock`, which only Syrinx's
   own processes need to respect. Source: the storage and instance tests
   run on Linux (observed 2026-10-31).
+- **X11 gives a key to the window under the pointer when it lies inside the
+  focused window.** With the chrome focused and the pointer over the page,
+  the page's WebKit window took the find bar's typing; with the page focused
+  and the pointer over the sidebar, its keys climbed past the container
+  (which selected none) to GPUI. `browser_gtk/page_keys.rs` lets the page's
+  windows select keys only while X11 focus is inside its container, and a
+  click in the page focuses it, as WebView2 does. Do not forward keys with
+  `XSendEvent` instead: fcitx's XIM drops synthetic key events, so forwarded
+  typing vanished (it worked only with `XMODIFIERS` unset). GDK selects focus
+  and key events through XInput2, so the core masks `XGetWindowAttributes`
+  reports never show them, and a filter must match XI2 `GenericEvent`s too.
+  Source: the 2026-10-31 Linux QA under XWayland with fcitx5 (observed).
+- **GPUI's X11 backend ignores `show: false` and keeps a stale window
+  origin.** `Window::new` maps every window it opens, so the kept palette sat
+  visible at the screen's corner from start-up; `open_owned_popup` hides such
+  popups. And `set_bounds` ignores the origin of a ConfigureNotify that also
+  resizes, so after Hyprland moved and resized Syrinx in one step,
+  `window.bounds()` kept the old origin and the palette opened beside the
+  window. Popups place themselves from `owned_popup::main_window_bounds`,
+  which reads the origin from the X server. Source:
+  `gpui-pre-0.3.8/src/window.rs` (`map_window` in `Window::new`) and
+  `gpui-pre-linux-0.3.8/src/linux/x11/window.rs`, `set_bounds`
+  (code-confirmed and observed 2026-10-31).
 - **A Unix socket read must also watch the stop signal.** A connected but
   silent same-user client held the link listener in a 2 s read, so closing
   Syrinx waited for it. `pipe_unix::read_message` reads in 100 ms slices and

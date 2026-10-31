@@ -20,8 +20,8 @@ use super::title_bar::{CAPTION_GAP, caption_buttons_width};
 use super::{
     history_list::ReturnFocus,
     owned_popup::{
-        OwnedPopup, OwnedPopupError, PopupSpec, open_owned_popup, round_popup_corners,
-        show_and_activate,
+        OwnedPopup, OwnedPopupError, PopupSpec, main_window_bounds, open_owned_popup,
+        round_popup_corners, show_and_activate,
     },
     *,
 };
@@ -482,7 +482,12 @@ impl BrowserView {
             asked,
         } = opening;
         let size = kind_size(kind, &rows);
-        let rect = menu_rect(window.bounds(), window.scale_factor(), anchor, size);
+        let rect = menu_rect(
+            main_window_bounds(window, self.parent_hwnd),
+            window.scale_factor(),
+            anchor,
+            size,
+        );
         self.menu_generation = self
             .menu_generation
             .checked_add(1)

@@ -274,13 +274,35 @@ pub fn show_overlay(popup: isize, rect: OverlayRect) -> Result<(), BrowserError>
     Ok(())
 }
 
-/// Hides a kept popup; `owner` keeps focus where it was.
-pub fn hide_overlay(popup: isize, _owner: isize) -> Result<(), BrowserError> {
+/// Hides a kept popup. A popup holding the keys hands them to `owner` first, as on Windows:
+/// unmapping a focused override-redirect window reverts X focus to the root, outside Syrinx.
+pub fn hide_overlay(popup: isize, owner: isize) -> Result<(), BrowserError> {
     let window = Connection::window(popup)?;
+    let owner = Connection::window(owner)?;
     let connection = connection().ok_or(BrowserError::OverlayPlacement)?;
+    if connection.focused() == window {
+        unsafe {
+            (connection.xlib.XSetInputFocus)(
+                connection.display,
+                owner,
+                xlib::RevertToParent,
+                xlib::CurrentTime,
+            )
+        };
+    }
     unsafe { (connection.xlib.XUnmapWindow)(connection.display, window) };
     connection.flush();
     Ok(())
+}
+
+/// The window's top-left in physical root coordinates, read from the X server. GPUI's own
+/// X11 bounds keep a stale origin after a window manager moves and resizes in one step.
+pub fn window_origin(window: isize) -> Option<(i32, i32)> {
+    let window = Connection::window(window).ok()?;
+    let connection = connection()?;
+    connection
+        .root_rect(window)
+        .map(|(left, top, _, _)| (left, top))
 }
 
 /// The pointer in root coordinates, so leaving is seen over the page child and outside Syrinx.

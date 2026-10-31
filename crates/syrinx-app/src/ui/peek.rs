@@ -8,7 +8,9 @@ use syrinx_ui::sidebar::{PEEK_EDGE_ZONE, PEEK_WIDTH, in_peek_zone};
 
 use super::{
     customize::show_backdrop,
-    owned_popup::{OwnedPopupError, PopupSpec, open_owned_popup, round_popup_corners},
+    owned_popup::{
+        OwnedPopupError, PopupSpec, main_window_bounds, open_owned_popup, round_popup_corners,
+    },
     peek_state::{HoverSample, PeekState, SAMPLE_INTERVAL},
     *,
 };
@@ -178,7 +180,7 @@ impl BrowserView {
     /// Places the popup now and opens it after this update ends (see `open_requested_peek`).
     pub(super) fn request_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_peek_editor();
-        let main_bounds = window.bounds();
+        let main_bounds = main_window_bounds(window, self.parent_hwnd);
         let scale = window.scale_factor();
         let anchor = peek_anchor(main_bounds, scale);
         let monitor = match overlay_monitor(anchor.0, anchor.1) {
@@ -344,7 +346,7 @@ impl BrowserView {
     /// screen coordinates. GPUI also reports bounds on every activation change; those leave
     /// it alone, so clicking into the peek keeps it and Alt Tab back can rearm the edge.
     pub(super) fn owner_bounds_observed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let current = OwnerGeometry::of(window);
+        let current = OwnerGeometry::of(window, self.parent_hwnd);
         if !owner_moved(self.peek_owner_geometry, current) {
             return;
         }
@@ -425,9 +427,9 @@ pub(super) struct OwnerGeometry {
 }
 
 impl OwnerGeometry {
-    pub(super) fn of(window: &Window) -> Self {
+    pub(super) fn of(window: &Window, parent: isize) -> Self {
         Self {
-            bounds: window.bounds(),
+            bounds: main_window_bounds(window, parent),
             viewport: window.viewport_size(),
             scale: window.scale_factor(),
         }
