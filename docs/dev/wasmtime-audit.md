@@ -18,6 +18,39 @@ missed; that is now its own section, "Windows networking (D9, DW-68)", and the
 owner's choice it raises is in the report's "Owner decides". It also corrected
 several counts, which are fixed below.
 
+## Rerun against the committed lockfile (#28, 2026-11-02)
+
+#28 added the pin to `crates/syrinx-plugin-host` under option (b), without
+`wasmtime-wasi`, and reran both `cargo tree` commands from "Reproducing this audit" below
+against the resulting `Cargo.lock`. Where this section and the older ones
+disagree, this section is the lockfile's answer.
+
+- **Features.** wasmtime resolves exactly the six features #27 asked for
+  (`anyhow`, `component-model`, `cranelift`, `parallel-compilation`,
+  `runtime`, `std`) plus the internal `once_cell`,
+  `wasmtime-jit-icache-coherence` and `wasmtime-unwinder`. `async` is not
+  among them, as option (b) predicted.
+- **New packages.** `Cargo.lock` gains 48 entries: the host crate itself and
+  47 third-party name-and-version pairs, the count option (b) predicted. Every
+  one appears in this audit, and none was removed. Of them, 39 are compiled for
+  `x86_64-pc-windows-msvc`: 37 new crates plus `gimli 0.33.0` and
+  `object 0.39.1`.
+- **Cranelift held at 0.135.7.** A plain resolution picked five Cranelift
+  crates at 0.135.8, published after this audit; #28 pinned them back to the
+  audited 0.135.7 with `cargo update --precise`. Moving them is a routine
+  patch bump that needs its own audit row.
+- **Graph size.** The host crate compiles 130 third-party crates on Windows,
+  counting `syrinx-core` and `serde_json`. Measured inside Syrinx's
+  workspace, wasmtime's own subtree is 107 crates, against 103 in the
+  throwaway crate. All the extra crates were already in Syrinx's lockfile, so
+  the difference is probably feature unification across the workspace. That
+  cause is inferred, not traced.
+- **The test plugins' lockfile.** The synthetic plugins in
+  `crates/syrinx-plugin-host/tests/fixtures/plugins` are a separate workspace
+  with their own `Cargo.lock`: 32 packages, built for `wasm32-wasip2` and
+  never shipped. They match "Guest side: `wit-bindgen 0.63.0`" below
+  (`wit-bindgen =0.63.0`, `unicode-ident` held at 1.0.26).
+
 The companion report, `docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md`,
 records the WIT parse-and-load check and the end-to-end run done the same day.
 
