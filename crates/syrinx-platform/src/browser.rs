@@ -28,6 +28,9 @@ pub const PAUSES_DOWNLOADS: bool = true;
 /// Pages' text is read with one DevTools snapshot once the owner switches capture on.
 pub const READS_PAGE_TEXT: bool = true;
 
+/// Engine limitations that the owner must see in Settings on this platform.
+pub const ENGINE_LIMITS: &[(&str, &str)] = &[];
+
 /// WebView2 identifies the origin that made the permission request.
 pub fn permission_question(origin: &str, kind: syrinx_store::PermissionKind) -> String {
     format!("{origin} wants to {}", kind.label())
