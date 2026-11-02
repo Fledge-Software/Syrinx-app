@@ -86,6 +86,32 @@ Screenshots below show only those windows.
 | NVIDIA black-page workaround | Not applicable: no proprietary NVIDIA driver was present. The sandbox also exposes no `/dev/dri`, so these are software-rendered correctness checks, not GPU acceptance. |
 | Closing the app | The scratch main process exited with status 0, including with Print open, and its windows disappeared. The native teardown regressions additionally prove retained context/registry release and active-download cancellation. |
 
+## Package and scratch install
+
+`cargo xtask package` succeeded for source commit
+`b01bf7f539e40bbf49b4f432143980fa1bbb7eaa`, producing
+`Syrinx-0.1.0-b01bf7f539e4-linux-x64.tar.gz`. The separate package build took
+20 minutes 13 seconds. Its archive SHA-256 was
+`2ef02e6e736e0c06255d75a8ea644a763ccba639fbac8affefa4c4f98a5bc484`.
+
+The archive was extracted into a fresh scratch directory. Every
+`SHA256SUMS` entry passed. With HOME and all four XDG locations pointed into
+scratch directories, `install.sh` succeeded; the installed program and icon
+matched the archive bytes, the program mode was 0755, and the desktop entry
+named the scratch program's full path. No owner's desktop entry or default
+browser setting was touched.
+
+`uninstall.sh` removed the program, entry and icon while preserving a
+synthetic data sentinel. A second uninstall was harmless. Reinstall also
+succeeded and `ldd` reported no missing library. The installed program then
+rendered a loopback page under the unchanged display/session bus/input-method
+environment. [Packaged app](linux-port-evidence/packaged-loopback-page.png).
+After closing it, the main process exited with status 0 and all seven
+tracked descendant process identities disappeared. Tracking read children
+from every thread, including GTK's, rather than only the process leader.
+The final scratch uninstall again retained the synthetic data. Nothing was
+installed into the owner's real HOME.
+
 ## Review and remaining limits
 
 A fresh independent reviewer audited the whole Linux delta, independently ran
