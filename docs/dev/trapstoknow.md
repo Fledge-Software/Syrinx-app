@@ -585,9 +585,12 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 - **WebKit's public permission request omits the requesting frame's origin.**
   `WebKitUIClient.cpp` discards frame information for geolocation and exposes
   no requesting-origin getter through `WebKitUserMediaPermissionRequest`.
-  The owner chose top-level delegation after undelegated cross-origin
-  location, notifications, camera and microphone were blocked before the
-  handler. Prompts must say "or a site it embeds" and keep the top-level
+  Delegation enforcement is verified for geolocation and notifications
+  only. Camera and microphone delegation are unverified on this machine:
+  their positive controls had no usable device, so zero handler calls do
+  not establish a policy block. The owner retains the delegation prompt for
+  all four kinds and tracks device-backed iframe checks in #234.
+  Prompts must say "or a site it embeds" and keep the top-level
   origin as the remembered-choice key. Never present that origin as a proven
   requesting frame. Source: [WebKitUIClient.cpp, WebKitGTK 2.54.1](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/API/glib/WebKitUIClient.cpp#L259),
   native loopback matrix in `linux-permission-delegation.md` (observed,
