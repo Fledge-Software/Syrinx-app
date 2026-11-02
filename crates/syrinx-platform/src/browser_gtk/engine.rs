@@ -89,6 +89,7 @@ impl Engine {
     }
 
     pub(super) fn close_all(&mut self) {
+        self.downloads.shutdown();
         self.shared.popups.borrow_mut().clear();
         self.pages.clear();
     }

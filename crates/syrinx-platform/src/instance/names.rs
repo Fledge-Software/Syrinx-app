@@ -59,6 +59,7 @@ fn runtime_folder() -> std::path::PathBuf {
 
 /// A stable key for a profile directory, the same for every spelling Windows treats as equal
 /// here: either slash, any letter case, a trailing separator or the `\\?\` prefix.
+#[cfg(windows)]
 pub(super) fn profile_key(directory: &Path) -> Result<u64, InstanceError> {
     let absolute = std::path::absolute(directory).map_err(|_| InstanceError::Directory)?;
     let spelled = absolute.to_string_lossy().replace('/', "\\").to_lowercase();
@@ -69,11 +70,50 @@ pub(super) fn profile_key(directory: &Path) -> Result<u64, InstanceError> {
     Ok(fnv1a(unprefixed.trim_end_matches('\\').as_bytes()))
 }
 
+/// Unix names are case-sensitive byte strings; only equivalent path components are folded.
+#[cfg(unix)]
+pub(super) fn profile_key(directory: &Path) -> Result<u64, InstanceError> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let absolute = std::path::absolute(directory).map_err(|_| InstanceError::Directory)?;
+    let normalized: std::path::PathBuf = absolute.components().collect();
+    Ok(fnv1a(normalized.as_os_str().as_bytes()))
+}
+
 /// 64-bit FNV-1a: small, stable across Rust releases and needs no dependency.
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
     })
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+    use super::*;
+
+    #[test]
+    fn distinct_unix_names_never_share_windows_normalization() {
+        let profile = profile_key(Path::new("/synthetic/Profile")).expect("profile key");
+        assert_ne!(profile_key(Path::new("/synthetic/profile")), Ok(profile));
+        assert_ne!(profile_key(Path::new(r"/synthetic\Profile")), Ok(profile));
+        let first = Path::new(OsStr::from_bytes(b"/synthetic/\xff"));
+        let second = Path::new(OsStr::from_bytes(b"/synthetic/\xfe"));
+        assert_ne!(profile_key(first), profile_key(second));
+    }
+
+    #[test]
+    fn equivalent_unix_spellings_share_the_same_key() {
+        let profile = profile_key(Path::new("/synthetic/Profile")).expect("profile key");
+        for spelling in [
+            "/synthetic/Profile/",
+            "/synthetic/./Profile",
+            "/synthetic//Profile",
+        ] {
+            assert_eq!(profile_key(Path::new(spelling)), Ok(profile));
+        }
+    }
 }
 
 #[cfg(all(test, windows))]

@@ -568,6 +568,70 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Linux: WebKitGTK, X11 and POSIX
 
+- **A download observer can keep a closed host's WebKit context alive.**
+  The context's signal owns the registry, tracked views own their context,
+  and clearing only `Engine.pages` leaves a cycle. Shutdown must release
+  tracked views and held reports, take active downloads out of the registry,
+  and cancel them outside its borrow; late starts are refused. Source:
+  independent native context/registry weak-reference reproduction and
+  `downloads_shutdown_tests.rs` (observed and regression tested, 2026-11-02).
+- **A native test must use the same foreign-window host as a page.**
+  A conventional GTK toplevel with WebKit hit an X11 MIT-SHM `BadAccess` in
+  this restricted session; an unrealized view did not deliver location
+  prompts. `permission_tests.rs` uses the production `Embed` host and proves
+  both positive controls before accepting a missing handler call as policy
+  enforcement. Source: the fixture's native trial runs (observed,
+  2026-11-02). This does not claim that ordinary app windows fail to open.
+- **WebKit's public permission request omits the requesting frame's origin.**
+  `WebKitUIClient.cpp` discards frame information for geolocation and exposes
+  no requesting-origin getter through `WebKitUserMediaPermissionRequest`.
+  The owner chose top-level delegation after undelegated cross-origin
+  location, notifications, camera and microphone were blocked before the
+  handler. Prompts must say "or a site it embeds" and keep the top-level
+  origin as the remembered-choice key. Never present that origin as a proven
+  requesting frame. Source: [WebKitUIClient.cpp, WebKitGTK 2.54.1](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/API/glib/WebKitUIClient.cpp#L259),
+  native loopback matrix in `linux-permission-delegation.md` (observed,
+  2026-11-02), and `browser_gtk/permission_tests.rs`.
+- **A camera-and-microphone request grants both when `allow()` is called.**
+  Mapping it to the first matching device can reuse camera consent to grant
+  a microphone too. Syrinx refuses the compound request because its prompt
+  represents one permission only. Separate requests still have separate
+  choices. Source: `browser_gtk/page.rs` and WebKit's
+  `UserMediaPermissionRequest::allow` contract (code-read, 2026-11-02).
+- **The print dialog runs a nested GTK loop.** Opening it while the command
+  pump borrows `HOST` lets resize or close reenter that borrow. Defer it with
+  a real idle source and a page-lifetime ticket. `MainContext::invoke`, used
+  by `gtk_thread::post`, may execute immediately on the GTK thread and does
+  not provide that deferral. Source: `PrintOperation::run_dialog`, GLib's
+  `MainContext::invoke` contract and `page_tests.rs` (code-read and regression
+  tested, 2026-11-02).
+- **GTK allocations use logical units; X11 page bounds use physical pixels.**
+  With inherited `GDK_SCALE=2`, using physical dimensions directly doubled
+  the WebKit child inside its container. Convert through the widget's scale
+  factor, rounding up partial pixels. Do not reset the owner's scale to hide
+  it. Source: the native X11 window tree, 1236×1916 inside a 618×958 container
+  before correction, and `page_tests.rs` (observed, 2026-11-02).
+- **Unix profile names must retain their original bytes and case.** Windows'
+  lowercase/backslash normalization aliases different Unix profiles, and
+  lossy UTF-8 conversion aliases invalid byte sequences. Hash normalized
+  absolute Unix path components as bytes. Source: `instance/names.rs` and
+  its case, backslash and non-UTF-8 regression tests (code-read and tested,
+  2026-11-02).
+- **A restricted runtime directory can look like an instance-test failure.**
+  The agent sandbox makes `/run/user/1000` read-only; ten instance tests
+  failed there but all passed with a fresh mode-0700 `XDG_RUNTIME_DIR`.
+  Keep `DISPLAY`, `DBUS_SESSION_BUS_ADDRESS` and the input-method environment
+  unchanged alongside scratch data/cache/config. This is an environmental
+  test setup, not a reason to change product code or assertions. Source:
+  the baseline gate and coordinator's outside-sandbox check (observed,
+  2026-11-02).
+- **This sandbox has no GPU device.** Without `/dev/dri`, Mesa reports
+  "Failed to query drm device" and uses software rendering. Its CPU, memory,
+  startup and frame timings cannot represent the development machine.
+  GDK frame-clock freeze/thaw critical messages appeared in both the gate's
+  smoke run and an ordinary `cargo syrinx` run on the untouched branch;
+  they are not confined to the smoke mode. Source: baseline native and gate
+  logs and the coordinator's environment report (observed, 2026-11-02).
 - **wry's GTK backend injects `window.ipc` into every page.** Its
   `InnerWebView::new_gtk` runs an initialization script defining
   `window.ipc` whether or not an IPC handler is set, which is exactly what

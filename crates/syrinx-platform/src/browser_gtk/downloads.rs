@@ -8,6 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+#[path = "downloads_shutdown_tests.rs"]
+mod shutdown_tests;
+
 use syrinx_core::{DownloadControl, DownloadInterruption, DownloadState};
 use webkit2gtk::{
     Download, DownloadError, DownloadExt, URIResponseExt, WebContext, WebContextExt, WebView, glib,
@@ -31,6 +35,7 @@ struct Registry {
     /// Reports of downloads started in a popup not yet adopted, released once it is.
     held: HashMap<u64, Held>,
     next: u64,
+    stopped: bool,
 }
 
 /// Who started a download: a tab, or a popup still waiting on the UI (its request number).
@@ -56,6 +61,7 @@ impl Downloads {
             running: HashMap::new(),
             held: HashMap::new(),
             next: 0,
+            stopped: false,
         })));
         let watcher = downloads.clone();
         context.connect_download_started(move |_, download| watcher.started(download));
@@ -69,6 +75,24 @@ impl Downloads {
     /// The page closed; its downloads keep running and reporting, as on Windows.
     pub(super) fn forget(&self, tab: u64) {
         self.0.borrow_mut().pages.remove(&tab);
+    }
+
+    /// Releases resources retained by the host's download observer at shutdown.
+    pub(super) fn shutdown(&self) {
+        let (pages, running) = {
+            let mut registry = self.0.borrow_mut();
+            registry.stopped = true;
+            registry.held.clear();
+            (
+                std::mem::take(&mut registry.pages),
+                std::mem::take(&mut registry.running),
+            )
+        };
+        // Native teardown and cancellation may invoke this registry's signal handlers.
+        drop(pages);
+        for (_, (_, download)) in running {
+            download.cancel();
+        }
     }
 
     /// Popup `request` became tab `tab`: its downloads are reported as that tab's.
@@ -104,6 +128,10 @@ impl Downloads {
     }
 
     fn started(&self, download: &Download) {
+        if self.0.borrow().stopped {
+            download.cancel();
+            return;
+        }
         let id = self.register(download);
         let registry = self.clone();
         download.connect_decide_destination(move |download, suggested| {

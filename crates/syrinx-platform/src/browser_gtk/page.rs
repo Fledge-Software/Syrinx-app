@@ -22,6 +22,13 @@ use webkit2gtk::{
 };
 use x11_dl::xlib;
 
+#[cfg(test)]
+#[path = "permission_tests.rs"]
+mod permission_tests;
+#[cfg(test)]
+#[path = "page_tests.rs"]
+mod tests;
+
 use super::{
     BrowserCommand, BrowserError, BrowserEvent, BrowserShortcut, CallbackLife, ConnectionScheme,
     ConnectionState, ConnectionStatus, PageAction, PageBounds, RENDER_PROCESS_EXITED,
@@ -131,8 +138,8 @@ impl Page {
 
     pub(super) fn resize(&self, bounds: PageBounds) {
         self.embed.place(bounds);
-        let width = i32::try_from(bounds.width).unwrap_or(i32::MAX).max(1);
-        let height = i32::try_from(bounds.height).unwrap_or(i32::MAX).max(1);
+        let width = logical_extent(bounds.width, self.window.scale_factor());
+        let height = logical_extent(bounds.height, self.window.scale_factor());
         self.window.resize(width, height);
         self.window
             .size_allocate(&gtk::Allocation::new(0, 0, width, height));
@@ -203,7 +210,10 @@ impl Page {
             PageAction::FindNext => self.step_find(true),
             PageAction::FindPrevious => self.step_find(false),
             PageAction::StopFind => self.stop_find(),
-            PageAction::Print => print(&self.view),
+            PageAction::Print => {
+                let view = self.view.clone();
+                run_page_dialog(self.life.ticket(true), move || print(&view));
+            }
             action @ (PageAction::ZoomIn
             | PageAction::ZoomOut
             | PageAction::ZoomReset
@@ -579,6 +589,23 @@ fn print(view: &WebView) {
     let _response = webkit2gtk::PrintOperationExt::run_dialog(&operation, None::<&gtk::Window>);
 }
 
+/// Defers modal GTK loops until the command pump has released HOST.
+fn run_page_dialog(ticket: super::CallbackTicket, dialog: impl FnOnce() + 'static) {
+    // MainContext::invoke can run immediately here; a real idle source cannot.
+    glib::idle_add_local_once(move || {
+        if ticket.current() {
+            dialog();
+        }
+    });
+}
+
+/// Converts X11's physical extent to GTK's widget allocation units.
+fn logical_extent(physical: u32, scale: i32) -> i32 {
+    let scale = u32::try_from(scale).unwrap_or(1).max(1);
+    let logical = physical.div_ceil(scale);
+    i32::try_from(logical).unwrap_or(i32::MAX).max(1)
+}
+
 /// Which Syrinx permission a WebKit request asks for; `None` for kinds Syrinx never offers.
 fn permission_kind(request: &PermissionRequest) -> Option<PermissionKind> {
     if request.is::<GeolocationPermissionRequest>() {
@@ -588,12 +615,16 @@ fn permission_kind(request: &PermissionRequest) -> Option<PermissionKind> {
         return Some(PermissionKind::Notifications);
     }
     let media = request.downcast_ref::<UserMediaPermissionRequest>()?;
-    if media.is_for_video_device() {
-        Some(PermissionKind::Camera)
-    } else if media.is_for_audio_device() {
-        Some(PermissionKind::Microphone)
-    } else {
-        None
+    media_permission_kind(media.is_for_video_device(), media.is_for_audio_device())
+}
+
+/// Maps a media request to the single consent that Syrinx can display.
+fn media_permission_kind(video: bool, audio: bool) -> Option<PermissionKind> {
+    // One prompt cannot represent independent consent for both devices.
+    match (video, audio) {
+        (true, false) => Some(PermissionKind::Camera),
+        (false, true) => Some(PermissionKind::Microphone),
+        _ => None,
     }
 }
 

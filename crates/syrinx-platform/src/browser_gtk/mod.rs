@@ -44,6 +44,11 @@ pub const PAUSES_DOWNLOADS: bool = false;
 /// Whether pages' text is read when the owner switches capture on; see `page_text.rs`.
 pub const READS_PAGE_TEXT: bool = page_text::READS_SENT_HTML;
 
+/// Names the accountable top-level site without claiming that it owns the requesting frame.
+pub fn permission_question(origin: &str, kind: syrinx_store::PermissionKind) -> String {
+    format!("{origin}, or a site it embeds, wants to {}", kind.label())
+}
+
 /// The `ProcessFailed` kind for a page whose web process stopped answering, as on Windows.
 pub const RENDER_PROCESS_UNRESPONSIVE: i32 = 2;
 /// The `ProcessFailed` kind for a page whose web process exited or crashed.

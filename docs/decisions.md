@@ -17,6 +17,26 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-11-02
+
+- **Linux site permissions use the top-level site's delegation (owner,
+  2026-11-02).** The owner's instruction was "test first, then decide".
+  Synthetic cross-origin frames on WebKitGTK 2.54.1 requested location,
+  notifications, camera and microphone without an `allow` attribute or a
+  Permissions-Policy header. All four were refused before Syrinx's
+  `permission-request` handler ran. Delegated location and top-level
+  notifications reached it and were denied by the tester. Camera and
+  microphone controls found no usable devices in the restricted test
+  environment; they establish no hardware acceptance. The outcome selects
+  the owner's Chrome/Safari delegation model: the top-level origin is the
+  accountable principal, and remembered choices stay keyed by that origin.
+  Prompts explicitly say the request comes from that site "or a site it
+  embeds". WebKit's public request API does not identify the requesting
+  frame; claiming it does was rejected, as was refusing every Linux
+  permission despite the engine's delegation checks. The native location
+  regression and the limits of the four-kind test are recorded in
+  `docs/dev/linux-permission-delegation.md`. No permission was granted.
+
 ## 2026-10-31
 
 - **Syrinx is one app for Windows, Linux and macOS (owner, 2026-10-31).**
