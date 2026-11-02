@@ -7,7 +7,7 @@
 
 mod synthetic;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use synthetic::Deferred;
 pub use synthetic::{SYNTHETIC_NOW, SyntheticHost, ViewRecord};
@@ -63,8 +63,6 @@ impl Declarations {
 pub struct TestHost {
     plugin: LoadedPlugin<SyntheticHost>,
     next_request: u64,
-    /// Requests a `pending` answer armed, waiting for `complete`.
-    armed: BTreeSet<u64>,
     replies: BTreeMap<u64, Result<String, PluginError>>,
     refused_views: Vec<(u64, PluginError)>,
 }
@@ -83,7 +81,6 @@ impl TestHost {
         Ok(Self {
             plugin,
             next_request: 1,
-            armed: BTreeSet::new(),
             replies: BTreeMap::new(),
             refused_views: Vec::new(),
         })
@@ -94,7 +91,9 @@ impl TestHost {
             host_version: HOST_VERSION.into(),
             granted: Vec::new(),
         };
-        self.call(|plugin, store| plugin.syrinx_plugin_lifecycle().call_activate(store, &info))
+        let activated = self
+            .call(|plugin, store| plugin.syrinx_plugin_lifecycle().call_activate(store, &info))?;
+        Ok(activated.map_err(validate::bound_error))
     }
 
     pub fn deactivate(&mut self) -> CallResult<()> {
@@ -105,7 +104,9 @@ impl TestHost {
     pub fn run_command(&mut self, id: &str) -> CallResult<Result<(), PluginError>> {
         self.require_command(id, false)?;
         let id = id.to_owned();
-        self.call(|plugin, store| plugin.syrinx_plugin_commands().call_run(store, &id))
+        let ran =
+            self.call(|plugin, store| plugin.syrinx_plugin_commands().call_run(store, &id))?;
+        Ok(ran.map_err(validate::bound_error))
     }
 
     pub fn form_for(&mut self, id: &str) -> CallResult<Result<FormSpec, PluginError>> {
@@ -113,7 +114,9 @@ impl TestHost {
         let id = id.to_owned();
         let spec =
             self.call(|plugin, store| plugin.syrinx_plugin_forms().call_form_for(store, &id))?;
-        Ok(spec.and_then(|spec| validate::form_spec(&spec).map(|()| spec)))
+        Ok(spec
+            .map_err(validate::bound_error)
+            .and_then(|spec| validate::form_spec(&spec).map(|()| spec)))
     }
 
     pub fn validate_form(
@@ -128,37 +131,39 @@ impl TestHost {
                 .syrinx_plugin_forms()
                 .call_validate(store, &id, &values)
         })?;
-        Ok(errors.and_then(|errors| validate::field_errors(&errors).map(|()| errors)))
+        Ok(errors
+            .map_err(validate::bound_error)
+            .and_then(|errors| validate::field_errors(&errors).map(|()| errors)))
     }
 
     /// Submit a form under a fresh request id. A `pending` answer must return that id,
-    /// and arms it for `complete`.
+    /// and arms it for `complete`; the answer is checked before deferred calls run.
     pub fn submit(&mut self, id: &str, values: &[(&str, &str)]) -> CallResult<(u64, SubmitResult)> {
         self.require_command(id, true)?;
         let request = self.allocate_request();
         let (id, values) = (id.to_owned(), field_values(values));
-        let result = self.call(|plugin, store| {
+        let result = self.plugin.call(|plugin, store| {
             plugin
                 .syrinx_plugin_forms()
                 .call_submit(store, &id, request, &values)
         })?;
-        Ok((request, self.check_submit(request, result)))
+        let result = self.check_submit(request, result);
+        self.run_deferred()?;
+        Ok((request, result))
     }
 
     /// The synthetic service behind an armed request finished; deliver its outcome.
     pub fn complete(&mut self, request: u64, outcome: Outcome) -> CallResult<()> {
-        if !self.armed.remove(&request) {
+        // The plugin gave up on it through `host.cancel`; nothing is delivered.
+        if self.host_mut().cancelled.remove(&request) {
+            return Ok(());
+        }
+        if !self.host_mut().armed.remove(&request) {
             return Err(HostError::Refused(format!(
                 "request {request} is not armed"
             )));
         }
-        // The plugin gave up on it through `host.cancel`; nothing is delivered.
-        if self.host().cancelled.contains(&request) {
-            return Ok(());
-        }
-        self.host_mut()
-            .deferred
-            .push_back(Deferred::Deliver(request, outcome));
+        self.defer(Deferred::Deliver(request, outcome))?;
         self.run_deferred()
     }
 
@@ -176,16 +181,21 @@ impl TestHost {
             json: json.into(),
         };
         let request_id = request.request_id;
-        self.host_mut()
-            .deferred
-            .push_back(Deferred::Message(request));
+        self.defer(Deferred::Message(request))?;
         Ok(request_id)
     }
 
     /// The view gave up on a request; anything still queued for it is dropped.
     pub fn cancel_request(&mut self, request: u64) {
-        self.armed.remove(&request);
-        self.host_mut().cancel_request(request);
+        self.host_mut().armed.remove(&request);
+        self.host_mut().drop_queued(request);
+    }
+
+    /// The view's interface reads what the plugin posted to it, oldest first;
+    /// `None` when the view is not open.
+    pub fn take_view_events(&mut self, view: u64) -> Option<Vec<String>> {
+        let record = self.host_mut().views.get_mut(&view)?;
+        Some(std::mem::take(&mut record.events))
     }
 
     /// The plugin's answer to a view message, once delivered.
@@ -221,8 +231,9 @@ impl TestHost {
                 .syrinx_plugin_search_feed()
                 .call_changes(store, &feed, after.as_deref(), max)
         })?;
-        let Ok(mut batch) = batch else {
-            return Ok(batch);
+        let mut batch = match batch {
+            Ok(batch) => batch,
+            Err(error) => return Ok(Err(validate::bound_error(error))),
         };
         match validate::batch(&mut batch, max) {
             Ok(dropped) => {
@@ -244,12 +255,13 @@ impl TestHost {
                 .syrinx_plugin_search_feed()
                 .call_resolve(store, &feed, &id)
         })?;
-        Ok(address.and_then(|address| {
+        Ok(address.map_err(validate::bound_error).and_then(|address| {
             validate::bytes("address", &address, limits::MAX_ADDRESS_BYTES).map(|()| address)
         }))
     }
 
-    /// Deliver every deferred call, first in, first out.
+    /// Deliver every deferred call, first in, first out. A plugin that keeps
+    /// queueing more is stopped, as a trap would stop it.
     pub fn run_deferred(&mut self) -> CallResult<()> {
         for _ in 0..limits::MAX_DEFERRED_PER_EXPORT {
             let Some(deferred) = self.host_mut().deferred.pop_front() else {
@@ -257,8 +269,10 @@ impl TestHost {
             };
             self.deliver(deferred)?;
         }
+        self.host_mut().deferred.clear();
+        self.plugin.discard();
         Err(HostError::Refused(
-            "the plugin keeps queueing deferred calls".into(),
+            "the plugin kept queueing deferred calls, so it was stopped".into(),
         ))
     }
 
@@ -347,10 +361,18 @@ impl TestHost {
 
     fn deliver_message(&mut self, request: ViewRequest) -> CallResult<()> {
         let request_id = request.request_id;
+        // A view refused or closed since the message was queued never reaches the plugin.
+        if !self.host().views.contains_key(&request.view) {
+            let closed = PluginError::Unavailable(format!("view {} is not open", request.view));
+            self.replies.insert(request_id, Err(closed));
+            return Ok(());
+        }
         let reply = self
             .plugin
             .call(|plugin, store| plugin.syrinx_plugin_views().call_message(store, &request))?;
-        let reply = reply.and_then(|json| validate::json("view reply", &json).map(|()| json));
+        let reply = reply
+            .map_err(validate::bound_error)
+            .and_then(|json| validate::json("view reply", &json).map(|()| json));
         self.replies.insert(request_id, reply);
         Ok(())
     }
@@ -359,7 +381,7 @@ impl TestHost {
     fn check_submit(&mut self, request: u64, result: SubmitResult) -> SubmitResult {
         match result {
             SubmitResult::Pending(returned) if returned == request => {
-                self.armed.insert(request);
+                self.host_mut().armed.insert(request);
                 SubmitResult::Pending(returned)
             }
             SubmitResult::Pending(returned) => {
@@ -371,8 +393,17 @@ impl TestHost {
                 Ok(()) => SubmitResult::Invalid(errors),
                 Err(error) => SubmitResult::Finished(Outcome::Failed(error)),
             },
-            finished @ SubmitResult::Finished(_) => finished,
+            SubmitResult::Finished(outcome) => {
+                SubmitResult::Finished(validate::bound_outcome(outcome))
+            }
         }
+    }
+
+    /// Queue a host-side deferred call, unless the queue is full.
+    fn defer(&mut self, deferred: Deferred) -> CallResult<()> {
+        self.host_mut()
+            .defer(deferred)
+            .map_err(|error| HostError::Refused(format!("{error:?}")))
     }
 
     /// Request ids are never reused, across views, forms and reloads.

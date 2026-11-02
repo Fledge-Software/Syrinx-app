@@ -52,6 +52,7 @@ fn check_metadata_against(
     // Then Cargo's resolved graph, which third-party manifests also shape.
     let graph = read_resolved_graph(metadata)?;
     check_headless_network_reach(metadata, &graph, &mut violations)?;
+    check_wasmtime_reach(metadata, &graph, &mut violations)?;
     resolved_windows::check(metadata, &graph, allowed_network_features, &mut violations)?;
     Ok(violations.into_iter().collect())
 }
@@ -690,6 +691,53 @@ fn read_node_features(node: &Value, id: &str) -> Result<BTreeSet<String>, String
 
 // Breadth-first search for the shortest package path to a network crate.
 fn network_path(start: &str, graph: &ResolvedGraph) -> Option<Vec<String>> {
+    shortest_path(
+        start,
+        graph,
+        |name| NETWORK_CRATES.contains(&name),
+        |_| false,
+    )
+}
+
+/// Follows Cargo's resolved graph from each workspace crate, so wasmtime reaches the build only
+/// through the plugin host and `wasmtime-wasi` not at all, even through a third-party library.
+fn check_wasmtime_reach(
+    metadata: &Value,
+    graph: &ResolvedGraph,
+    violations: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    for member in required_array(metadata, "workspace_members", "cargo metadata")? {
+        let Some(id) = member.as_str() else {
+            continue;
+        };
+        let Some(name) = graph.names.get(id) else {
+            continue;
+        };
+        let refused: &[&str] = if name == PLUGIN_HOST {
+            &["wasmtime-wasi"]
+        } else {
+            &["wasmtime", "wasmtime-wasi"]
+        };
+        // A path through the plugin host is the host's own, checked from the host itself.
+        let through_host = |step: &str| step == PLUGIN_HOST;
+        if let Some(path) = shortest_path(id, graph, |step| refused.contains(&step), through_host) {
+            violations.insert(format!(
+                "{}: only {PLUGIN_HOST} may reach wasmtime, and nothing may reach wasmtime-wasi",
+                path.join(" -> ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Breadth-first search for the shortest package path from `start` to a package `is_target`
+/// accepts, never stepping into a package `is_skipped` names.
+fn shortest_path(
+    start: &str,
+    graph: &ResolvedGraph,
+    is_target: impl Fn(&str) -> bool,
+    is_skipped: impl Fn(&str) -> bool,
+) -> Option<Vec<String>> {
     let mut pending = VecDeque::from([(start.to_owned(), vec![start.to_owned()])]);
     let mut visited = BTreeSet::new();
     while let Some((id, path)) = pending.pop_front() {
@@ -697,10 +745,17 @@ fn network_path(start: &str, graph: &ResolvedGraph) -> Option<Vec<String>> {
             continue;
         }
         let name = graph.names.get(&id).map_or(id.as_str(), String::as_str);
-        if NETWORK_CRATES.contains(&name) {
+        if is_target(name) {
             return Some(path.iter().map(|step| display_name(step, graph)).collect());
         }
         for dependency in graph.edges.get(&id).into_iter().flatten() {
+            let dependency_name = graph
+                .names
+                .get(dependency)
+                .map_or(dependency.as_str(), String::as_str);
+            if is_skipped(dependency_name) {
+                continue;
+            }
             let mut next = path.clone();
             next.push(dependency.clone());
             pending.push_back((dependency.clone(), next));
@@ -1718,6 +1773,52 @@ mod tests {
             !violations
                 .iter()
                 .any(|message| message.starts_with("syrinx-plugin-host -> wasmtime:"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn follows_wasmtime_through_third_party_libraries() -> Result<(), String> {
+        // A library that pulls wasmtime into the core, or wasmtime-wasi into the host, is refused;
+        // the app reaching wasmtime through the host is the approved route.
+        let mut input = metadata(vec![
+            package("syrinx-app", json!([{"name": "syrinx-plugin-host"}])),
+            package("syrinx-plugin-host", json!([{"name": "wasi-helper"}])),
+            package("syrinx-core", json!([{"name": "runner"}])),
+        ]);
+        input["packages"]
+            .as_array_mut()
+            .ok_or("synthetic packages")?
+            .extend([
+                package("runner", json!([])),
+                package("wasi-helper", json!([])),
+                package("wasmtime", json!([])),
+                package("wasmtime-wasi", json!([])),
+            ]);
+        input["resolve"]["nodes"] = json!([
+            node("syrinx-app", &["syrinx-plugin-host"]),
+            node("syrinx-plugin-host", &["wasmtime", "wasi-helper"]),
+            node("syrinx-core", &["runner"]),
+            node("runner", &["wasmtime"]),
+            node("wasi-helper", &["wasmtime-wasi"]),
+            node("wasmtime", &[]),
+            node("wasmtime-wasi", &[]),
+        ]);
+        let violations = check_metadata(&input)?;
+        for expected in [
+            "syrinx-core -> runner -> wasmtime: only syrinx-plugin-host may reach wasmtime",
+            "syrinx-plugin-host -> wasi-helper -> wasmtime-wasi: only syrinx-plugin-host",
+        ] {
+            assert!(
+                violations.iter().any(|message| message.contains(expected)),
+                "{expected} missing from {violations:?}"
+            );
+        }
+        assert!(
+            !violations
+                .iter()
+                .any(|message| message.starts_with("syrinx-app ->")),
+            "{violations:?}"
         );
         Ok(())
     }

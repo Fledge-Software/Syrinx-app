@@ -12,6 +12,9 @@ pub const INSTANCES: usize = 16;
 /// One memory, so the per-memory cap above is the store's whole budget.
 pub const MEMORIES: usize = 1;
 pub const TABLES: usize = 8;
+/// Entries per table. Tables live in host memory outside the memory cap and grow
+/// in host code the deadline cannot interrupt, so each is bounded too.
+pub const TABLE_ELEMENTS: usize = 64 * 1024;
 
 /// One epoch tick, and how many ticks a single export call may run.
 pub const EPOCH_TICK: Duration = Duration::from_millis(10);
@@ -19,12 +22,20 @@ pub const CALL_DEADLINE_TICKS: u64 = 100;
 
 /// Deferred calls drained after one export; a plugin that keeps queueing more is stopped.
 pub const MAX_DEFERRED_PER_EXPORT: usize = 1_024;
+/// Deferred calls waiting at once; an import that would queue more is refused.
+pub const MAX_DEFERRED_QUEUED: usize = 1_024;
+
+/// Views one plugin may hold open, and what may wait for each view's interface.
+pub const MAX_OPEN_VIEWS: usize = 64;
+pub const MAX_VIEW_EVENTS: usize = 256;
+pub const MAX_VIEW_EVENT_BYTES: usize = 4 * 1024 * 1024;
 
 /// Text the plugin hands the host.
 pub const MAX_LOG_CHARS: usize = 4 * 1024;
 pub const MAX_LOG_LINES: usize = 256;
 pub const MAX_TITLE_CHARS: usize = 200;
 pub const MAX_LABEL_CHARS: usize = 200;
+/// An error's or outcome's text; longer text is cut, not refused.
 pub const MAX_MESSAGE_CHARS: usize = 2 * 1024;
 pub const MAX_ADDRESS_BYTES: usize = 2 * 1024;
 pub const MAX_JSON_BYTES: usize = 1024 * 1024;

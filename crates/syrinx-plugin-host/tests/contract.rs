@@ -546,3 +546,55 @@ fn clocks_and_the_hash_seed_work() {
     host.run_command("test.clock").expect("runs").expect("ran");
     assert!(logged(&host).contains(&"clock elapsed_ok=true counts=1 wall_ok=true".into()));
 }
+
+#[test]
+fn a_plugin_cannot_hold_unbounded_views_or_waiting_events() {
+    let mut host = full();
+    let refused = host.run_command("test.views").expect("runs");
+    assert!(
+        matches!(refused, Err(PluginError::Unavailable(_))),
+        "{refused:?}"
+    );
+    let views_line = format!("views opened={}", limits::MAX_OPEN_VIEWS);
+    assert!(logged(&host).contains(&views_line), "{:?}", logged(&host));
+    assert_eq!(host.open_views().len(), limits::MAX_OPEN_VIEWS);
+
+    let refused = host.run_command("test.events").expect("runs");
+    assert!(
+        matches!(refused, Err(PluginError::Unavailable(_))),
+        "{refused:?}"
+    );
+    let waiting = host.take_view_events(1).expect("view 1 is open");
+    let waiting_bytes: usize = waiting.iter().map(String::len).sum();
+    assert!(!waiting.is_empty() && waiting_bytes <= limits::MAX_VIEW_EVENT_BYTES);
+    // Once the view reads them, the plugin may post again.
+    host.run_command("test.events")
+        .expect("runs")
+        .expect_err("refused again once full");
+    assert!(!host.take_view_events(1).expect("open").is_empty());
+}
+
+#[test]
+fn views_opening_views_stop_at_the_limit_and_the_plugin_keeps_running() {
+    let mut host = full();
+    host.run_command("test.chain")
+        .expect("runs")
+        .expect("the first view opens");
+    // The last view to open could not open another, so it refused its own `opened`.
+    assert_eq!(host.open_views().len(), limits::MAX_OPEN_VIEWS - 1);
+    assert!(matches!(
+        host.refused_views(),
+        [(_, PluginError::Unavailable(_))]
+    ));
+    assert!(!host.is_discarded());
+}
+
+#[test]
+fn a_long_error_message_is_cut_not_refused() {
+    let mut host = full();
+    let error = host.run_command("test.long-error").expect("runs");
+    let Err(PluginError::Internal(text)) = error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(text.chars().count(), limits::MAX_MESSAGE_CHARS);
+}

@@ -112,11 +112,18 @@ fn on_this_track(version: &str) -> bool {
 
 /// Within the track, a later patch may use `@since` imports this host lacks.
 fn is_newer_than_host(version: &str) -> bool {
-    patch(version) > patch(CONTRACT_VERSION)
+    match (patch(version), patch(CONTRACT_VERSION)) {
+        (Ok(plugin), Ok(host)) => plugin > host,
+        // A patch this host cannot read, such as a pre-release, is treated as newer.
+        _ => true,
+    }
 }
 
-fn patch(version: &str) -> Option<u64> {
-    version.rsplit('.').next()?.parse().ok()
+fn patch(version: &str) -> Result<u64, std::num::ParseIntError> {
+    version
+        .rsplit_once('.')
+        .map_or(version, |(_, last)| last)
+        .parse()
 }
 
 #[cfg(test)]
@@ -149,6 +156,11 @@ mod tests {
         assert!(
             other_track.contains("runs syrinx:plugin@0.1.x"),
             "{other_track}"
+        );
+        let pre_release = unsupported_import("syrinx:plugin/host@0.1.1-pre").expect("refused");
+        assert!(
+            pre_release.contains("built for syrinx:plugin@0.1.1-pre"),
+            "{pre_release}"
         );
         let unknown = unsupported_import("syrinx:plugin/documents@0.1.0").expect("refused");
         assert!(unknown.contains("does not provide"), "{unknown}");

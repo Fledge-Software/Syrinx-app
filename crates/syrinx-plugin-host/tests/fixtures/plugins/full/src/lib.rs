@@ -61,6 +61,10 @@ impl commands::Guest for Plugin {
                 Ok(())
             }
             "test.clock" => clock(),
+            "test.views" => many_views(),
+            "test.events" => many_events(),
+            "test.chain" => open_chain(),
+            "test.long-error" => Err(PluginError::Internal("e".repeat(10_000))),
             "test.cancel" => {
                 host::cancel(1);
                 Ok(())
@@ -113,6 +117,40 @@ fn open_views() -> Result<(), PluginError> {
     host::post_view_event(first, "test.hello", "{\"n\":1}")?;
     note(format!("opening {first} {second}"));
     Ok(())
+}
+
+/// Open views until the host refuses one, and report how many it allowed.
+fn many_views() -> Result<(), PluginError> {
+    let mut opened = 0;
+    loop {
+        match host::open_view("test.page", "syrinx-test:many") {
+            Ok(_) => opened += 1,
+            Err(error) => {
+                note(format!("views opened={opened}"));
+                return Err(error);
+            }
+        }
+    }
+}
+
+/// Post 64 KiB events to view 1 until the host refuses one.
+fn many_events() -> Result<(), PluginError> {
+    let body = format!("\"{}\"", "b".repeat(64 * 1024));
+    let mut posted = 0;
+    loop {
+        match host::post_view_event(1, "test.bulk", &body) {
+            Ok(()) => posted += 1,
+            Err(error) => {
+                note(format!("events posted={posted}"));
+                return Err(error);
+            }
+        }
+    }
+}
+
+/// Each chained view opens the next from its own `opened`.
+fn open_chain() -> Result<(), PluginError> {
+    host::open_view("test.page", "syrinx-test:chain").map(|_| ())
 }
 
 fn print() -> Result<(), PluginError> {
@@ -236,6 +274,9 @@ impl views::Guest for Plugin {
         note(format!("opened {view} {kind} {address}"));
         if address.ends_with("refuse") {
             return Err(PluginError::Denied("this view is refused".into()));
+        }
+        if address.ends_with("chain") {
+            return open_chain();
         }
         Ok(())
     }

@@ -95,6 +95,11 @@ impl<H: PluginHost> LoadedPlugin<H> {
         &self.store.data().wasi
     }
 
+    /// Stop this instance for good, as a trap would.
+    pub fn discard(&mut self) {
+        self.discarded = true;
+    }
+
     pub fn is_discarded(&self) -> bool {
         self.discarded
     }
@@ -125,6 +130,7 @@ fn store_limits() -> StoreLimits {
         .instances(limits::INSTANCES)
         .memories(limits::MEMORIES)
         .tables(limits::TABLES)
+        .table_elements(limits::TABLE_ELEMENTS)
         .build()
 }
 
@@ -163,5 +169,21 @@ impl Drop for EpochClock {
         if thread.join().is_err() {
             eprintln!("the plugin epoch clock thread panicked");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use wasmtime::ResourceLimiter;
+
+    use super::*;
+
+    #[test]
+    fn a_table_cannot_grow_past_its_element_limit() -> wasmtime::Result<()> {
+        let mut limits = store_limits();
+        assert!(limits.table_growing(0, limits::TABLE_ELEMENTS, None)?);
+        assert!(!limits.table_growing(0, limits::TABLE_ELEMENTS + 1, None)?);
+        assert!(!limits.table_growing(0, 10_000_000, None)?);
+        Ok(())
     }
 }

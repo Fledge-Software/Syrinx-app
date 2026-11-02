@@ -103,6 +103,10 @@ pub fn full_declarations() -> Declarations {
         "test.sleep",
         "test.clock",
         "test.cancel",
+        "test.views",
+        "test.events",
+        "test.chain",
+        "test.long-error",
     ]
     .into_iter()
     .map(|id| command(id, false))

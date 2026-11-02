@@ -1,11 +1,13 @@
 //! Bounds on every value lifted from a plugin. A value over a limit becomes a
 //! typed `plugin-error.invalid-input`, never a trap.
 
+use std::collections::BTreeSet;
+
 use syrinx_core::CommandId;
 
 use crate::bindings::exports::syrinx::plugin::forms::{FieldError, FieldKind, FormSpec};
 use crate::bindings::exports::syrinx::plugin::search_feed::{Batch, Change};
-use crate::bindings::syrinx::plugin::types::PluginError;
+use crate::bindings::syrinx::plugin::types::{Outcome, PluginError};
 use crate::limits;
 
 fn invalid(message: impl Into<String>) -> PluginError {
@@ -63,8 +65,12 @@ pub fn form_spec(spec: &FormSpec) -> Result<(), PluginError> {
             limits::MAX_FORM_FIELDS
         )));
     }
+    let mut names = BTreeSet::new();
     for field in &spec.fields {
         id("field name", &field.name)?;
+        if !names.insert(field.name.as_str()) {
+            return Err(invalid(format!("two fields are named {:?}", field.name)));
+        }
         chars("field label", &field.label, limits::MAX_LABEL_CHARS)?;
         if let Some(initial) = &field.initial {
             bytes("initial value", initial, limits::MAX_FIELD_TEXT_BYTES)?;
@@ -80,6 +86,12 @@ fn field_kind(kind: &FieldKind) -> Result<(), PluginError> {
             if let Some(placeholder) = &options.placeholder {
                 chars("placeholder", placeholder, limits::MAX_LABEL_CHARS)?;
             }
+            if options.max_length as usize > limits::MAX_FIELD_TEXT_BYTES {
+                return Err(invalid(format!(
+                    "a text field holds at most {} characters",
+                    limits::MAX_FIELD_TEXT_BYTES
+                )));
+            }
             Ok(())
         }
         FieldKind::Money(currency) => chars("currency", currency, 8),
@@ -90,14 +102,50 @@ fn field_kind(kind: &FieldKind) -> Result<(), PluginError> {
                     limits::MAX_CHOICE_OPTIONS
                 )));
             }
+            let mut values = BTreeSet::new();
             for option in options {
                 chars("choice value", &option.value, limits::MAX_LABEL_CHARS)?;
+                if !values.insert(option.value.as_str()) {
+                    return Err(invalid(format!(
+                        "two options share the value {:?}",
+                        option.value
+                    )));
+                }
                 chars("choice label", &option.label, limits::MAX_LABEL_CHARS)?;
             }
             Ok(())
         }
         FieldKind::Number(_) | FieldKind::Toggle | FieldKind::Date | FieldKind::DateTime => Ok(()),
     }
+}
+
+/// A plugin's error with its text cut to the message limit, so a long one still arrives.
+pub fn bound_error(error: PluginError) -> PluginError {
+    match error {
+        PluginError::NotFound(text) => PluginError::NotFound(cut(text)),
+        PluginError::InvalidInput(text) => PluginError::InvalidInput(cut(text)),
+        PluginError::Denied(text) => PluginError::Denied(cut(text)),
+        PluginError::Unavailable(text) => PluginError::Unavailable(cut(text)),
+        PluginError::Internal(text) => PluginError::Internal(cut(text)),
+        PluginError::Revoked(text) => PluginError::Revoked(cut(text)),
+        PluginError::Cancelled(text) => PluginError::Cancelled(cut(text)),
+    }
+}
+
+/// An outcome with its text cut the same way.
+pub fn bound_outcome(outcome: Outcome) -> Outcome {
+    match outcome {
+        Outcome::Done(detail) => Outcome::Done(detail.map(cut)),
+        Outcome::Failed(error) => Outcome::Failed(bound_error(error)),
+        Outcome::Uncertain(detail) => Outcome::Uncertain(cut(detail)),
+    }
+}
+
+fn cut(text: String) -> String {
+    if text.chars().count() <= limits::MAX_MESSAGE_CHARS {
+        return text;
+    }
+    text.chars().take(limits::MAX_MESSAGE_CHARS).collect()
 }
 
 /// Field errors name fields and carry short messages.
@@ -174,6 +222,9 @@ fn keep_keywords(keywords: &mut Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bindings::exports::syrinx::plugin::forms::{
+        ChoiceOption, Field, TextFormat, TextOptions,
+    };
 
     #[test]
     fn ids_follow_the_command_rule_and_the_plugin_prefix() {
@@ -197,5 +248,76 @@ mod tests {
     fn json_must_parse() {
         assert!(json("reply", "{\"ok\":true}").is_ok());
         assert!(json("reply", "{nope").is_err());
+    }
+
+    fn field(name: &str, kind: FieldKind) -> Field {
+        Field {
+            name: name.into(),
+            label: name.into(),
+            kind,
+            required: false,
+            initial: None,
+        }
+    }
+
+    fn form(fields: Vec<Field>) -> FormSpec {
+        FormSpec {
+            title: "Synthetic".into(),
+            fields,
+            submit_label: "Go".into(),
+        }
+    }
+
+    #[test]
+    fn a_form_refuses_duplicate_names_values_and_oversized_text() {
+        let twice = form(vec![
+            field("name", FieldKind::Toggle),
+            field("name", FieldKind::Date),
+        ]);
+        assert!(form_spec(&twice).is_err());
+        let option = |value: &str| ChoiceOption {
+            value: value.into(),
+            label: value.into(),
+        };
+        let shared = form(vec![field(
+            "source",
+            FieldKind::Choice(vec![option("web"), option("web")]),
+        )]);
+        assert!(form_spec(&shared).is_err());
+        let text = |max_length: usize| {
+            FieldKind::Text(TextOptions {
+                max_length: u32::try_from(max_length).expect("fits"),
+                placeholder: None,
+                format: TextFormat::Plain,
+            })
+        };
+        assert!(
+            form_spec(&form(vec![field(
+                "note",
+                text(limits::MAX_FIELD_TEXT_BYTES)
+            )]))
+            .is_ok()
+        );
+        assert!(
+            form_spec(&form(vec![field(
+                "note",
+                text(limits::MAX_FIELD_TEXT_BYTES + 1)
+            )]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn long_error_and_outcome_text_is_cut_not_refused() {
+        let long = "e".repeat(limits::MAX_MESSAGE_CHARS + 10);
+        let PluginError::Internal(cut_error) = bound_error(PluginError::Internal(long.clone()))
+        else {
+            panic!("the case is kept");
+        };
+        assert_eq!(cut_error.chars().count(), limits::MAX_MESSAGE_CHARS);
+        let Outcome::Uncertain(cut_detail) = bound_outcome(Outcome::Uncertain(long)) else {
+            panic!("the case is kept");
+        };
+        assert_eq!(cut_detail.chars().count(), limits::MAX_MESSAGE_CHARS);
     }
 }

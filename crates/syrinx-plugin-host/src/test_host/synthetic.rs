@@ -51,7 +51,11 @@ pub struct SyntheticHost {
     pub(super) views: BTreeMap<u64, ViewRecord>,
     next_view: u64,
     pub(super) deferred: VecDeque<Deferred>,
+    /// Requests a `pending` answer armed, waiting for `complete`.
+    pub(super) armed: BTreeSet<u64>,
+    /// Armed requests the plugin gave up on; never more than were armed.
     pub(super) cancelled: BTreeSet<u64>,
+    /// Feeds with a change to pull, each listed once however often it was signalled.
     pub(super) changed_feeds: Vec<String>,
 }
 
@@ -64,6 +68,7 @@ impl SyntheticHost {
             views: BTreeMap::new(),
             next_view: 1,
             deferred: VecDeque::new(),
+            armed: BTreeSet::new(),
             cancelled: BTreeSet::new(),
             changed_feeds: Vec::new(),
         }
@@ -78,11 +83,29 @@ impl SyntheticHost {
         self.logs.push((level, bounded));
     }
 
-    /// Drop anything still queued for a cancelled request.
-    pub(super) fn cancel_request(&mut self, request: u64) {
-        self.cancelled.insert(request);
+    /// The plugin gave up on a request: an armed one is never delivered, and
+    /// anything still queued for it is dropped.
+    pub(super) fn plugin_cancelled(&mut self, request: u64) {
+        if self.armed.remove(&request) {
+            self.cancelled.insert(request);
+        }
+        self.drop_queued(request);
+    }
+
+    pub(super) fn drop_queued(&mut self, request: u64) {
         self.deferred
             .retain(|deferred| deferred.request() != Some(request));
+    }
+
+    /// Queue a deferred call, unless the queue is full.
+    pub(super) fn defer(&mut self, deferred: Deferred) -> Result<(), PluginError> {
+        if self.deferred.len() >= limits::MAX_DEFERRED_QUEUED {
+            return Err(PluginError::Unavailable(
+                "too many calls are waiting for the plugin".into(),
+            ));
+        }
+        self.deferred.push_back(deferred);
+        Ok(())
     }
 
     fn view_mut(&mut self, view: u64) -> Result<&mut ViewRecord, PluginError> {
@@ -130,7 +153,14 @@ impl host::Host for SyntheticHost {
             )));
         }
         validate::bytes("view address", &address, limits::MAX_ADDRESS_BYTES)?;
+        if self.views.len() >= limits::MAX_OPEN_VIEWS {
+            return Err(PluginError::Unavailable(format!(
+                "a plugin may hold {} views open",
+                limits::MAX_OPEN_VIEWS
+            )));
+        }
         let view = self.next_view;
+        self.defer(Deferred::Opened(view))?;
         self.next_view += 1;
         let record = ViewRecord {
             title: kind.clone(),
@@ -140,7 +170,6 @@ impl host::Host for SyntheticHost {
             events: Vec::new(),
         };
         self.views.insert(view, record);
-        self.deferred.push_back(Deferred::Opened(view));
         Ok(view)
     }
 
@@ -170,13 +199,24 @@ impl host::Host for SyntheticHost {
         validate::json("event body", &json)?;
         let envelope =
             format!("{{\"v\":1,\"kind\":\"event\",\"topic\":\"{topic}\",\"body\":{json}}}");
-        self.view_mut(view)?.events.push(envelope);
+        let record = self.view_mut(view)?;
+        let waiting: usize = record.events.iter().map(String::len).sum();
+        let full = record.events.len() >= limits::MAX_VIEW_EVENTS
+            || waiting + envelope.len() > limits::MAX_VIEW_EVENT_BYTES;
+        if full {
+            return Err(PluginError::Unavailable(
+                "the view has not read its waiting events".into(),
+            ));
+        }
+        record.events.push(envelope);
         Ok(())
     }
 
     fn feed_changed(&mut self, feed: String) {
         if self.declarations.feeds.contains(&feed) {
-            self.changed_feeds.push(feed);
+            if !self.changed_feeds.contains(&feed) {
+                self.changed_feeds.push(feed);
+            }
             return;
         }
         self.note(
@@ -189,7 +229,7 @@ impl host::Host for SyntheticHost {
     fn widget_changed(&mut self, _widget: String) {}
 
     fn cancel(&mut self, request: u64) {
-        self.cancel_request(request);
+        self.plugin_cancelled(request);
     }
 
     fn now(&mut self) -> i64 {
