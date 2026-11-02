@@ -303,25 +303,39 @@ fn check_fulltext_quarantine(name: &str, dependency: &str, violations: &mut BTre
     }
 }
 
+/// The plugin host (#28); the only crate that links wasmtime.
+const PLUGIN_HOST: &str = "syrinx-plugin-host";
+/// Syrinx crates the plugin host may use: ids and command types, and later the store.
+const PLUGIN_HOST_SYRINX_DEPENDENCIES: [&str; 2] = ["syrinx-core", "syrinx-store"];
+
 fn check_plugin_dependency(
     name: &str,
     dependency: &str,
     workspace: &Workspace,
     violations: &mut BTreeSet<String>,
 ) {
-    // Plugins reach application services through their API, not another Syrinx crate.
-    if !is_syrinx_dependency(dependency, workspace) {
-        return;
-    }
-    if name == "syrinx-plugin-api" {
+    // Syrinx provides WASI itself, so nothing that opens files or sockets is compiled in (G1).
+    if dependency == "wasmtime-wasi" {
         violations.insert(format!(
-            "{name} -> {dependency}: syrinx-plugin-api must not depend on another Syrinx crate"
+            "{name} -> {dependency}: Syrinx's plugin host provides WASI itself (owner, 2026-10-26)"
         ));
-        return;
     }
-    if name.starts_with("plugin-") && dependency != "syrinx-plugin-api" {
+    if dependency == "wasmtime" && name != PLUGIN_HOST {
         violations.insert(format!(
-            "{name} -> {dependency}: a plugin's only Syrinx dependency may be syrinx-plugin-api"
+            "{name} -> {dependency}: only {PLUGIN_HOST} may depend on wasmtime"
+        ));
+    }
+    // The application wires the host to the window; nothing else reaches wasmtime through it.
+    if dependency == PLUGIN_HOST && name != "syrinx-app" {
+        violations.insert(format!(
+            "{name} -> {dependency}: only syrinx-app may depend on the plugin host"
+        ));
+    }
+    let host_dependency_allowed = !is_syrinx_dependency(dependency, workspace)
+        || PLUGIN_HOST_SYRINX_DEPENDENCIES.contains(&dependency);
+    if name == PLUGIN_HOST && !host_dependency_allowed {
+        violations.insert(format!(
+            "{name} -> {dependency}: the plugin host may use only syrinx-core and syrinx-store"
         ));
     }
 }
@@ -454,10 +468,7 @@ fn may_use_platform_library(name: &str, dependency: &str) -> bool {
 }
 
 fn is_syrinx_dependency(name: &str, workspace: &Workspace) -> bool {
-    workspace.contains_key(name)
-        || name.starts_with("syrinx-")
-        || name.starts_with("plugin-")
-        || name == "fledge-client"
+    workspace.contains_key(name) || name.starts_with("syrinx-") || name == "fledge-client"
 }
 
 fn needs_shell_isolation(name: &str) -> bool {
@@ -466,10 +477,10 @@ fn needs_shell_isolation(name: &str) -> bool {
         "syrinx-core"
             | "syrinx-store"
             | "syrinx-search"
-            | "syrinx-plugin-api"
+            | PLUGIN_HOST
             | "syrinx-update"
             | UPDATE_NET
-    ) || name.starts_with("plugin-")
+    )
 }
 
 fn check_shell_paths(name: &str, workspace: &Workspace, violations: &mut BTreeSet<String>) {
@@ -822,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn permits_shell_composition_and_headless_plugins() -> Result<(), String> {
+    fn permits_shell_composition_and_a_headless_plugin_host() -> Result<(), String> {
         // The app can reach platform libraries through the designated workspace boundary.
         let input = metadata(vec![
             package(
@@ -844,10 +855,9 @@ mod tests {
             package("syrinx-store", json!([{"name": "rusqlite"}])),
             package("syrinx-search", json!([{"name": "frizbee"}])),
             package(
-                "plugin-notes",
-                json!([{"name": "syrinx-plugin-api"}, {"name": "serde"}]),
+                "syrinx-plugin-host",
+                json!([{"name": "wasmtime"}, {"name": "syrinx-core"}]),
             ),
-            package("syrinx-plugin-api", json!([{"name": "serde"}])),
         ]);
         assert!(check_metadata(&input)?.is_empty());
         Ok(())
@@ -1682,28 +1692,32 @@ mod tests {
     }
 
     #[test]
-    fn rejects_plugin_service_imports_and_api_back_edges() -> Result<(), String> {
-        // Third-party helpers are allowed, but the Fledge client belongs behind Host.
+    fn confines_wasmtime_to_the_plugin_host() -> Result<(), String> {
+        // Only the host links wasmtime, nobody links wasmtime-wasi, and only the app uses the host.
         let input = metadata(vec![
             package(
-                "plugin-fledge",
-                json!([{"name": "fledge-client"}, {"name": "serde"}]),
+                "syrinx-plugin-host",
+                json!([{"name": "wasmtime"}, {"name": "wasmtime-wasi"}, {"name": "syrinx-search"}]),
             ),
-            package("fledge-client", json!([])),
-            package("syrinx-plugin-api", json!([{"name": "syrinx-store"}])),
-            package("syrinx-store", json!([])),
+            package("syrinx-core", json!([{"name": "wasmtime"}])),
+            package("syrinx-search", json!([{"name": "syrinx-plugin-host"}])),
         ]);
         let violations = check_metadata(&input)?;
-        assert_eq!(violations.len(), 2);
+        for expected in [
+            "syrinx-plugin-host -> wasmtime-wasi",
+            "syrinx-core -> wasmtime",
+            "syrinx-search -> syrinx-plugin-host",
+            "syrinx-plugin-host -> syrinx-search",
+        ] {
+            assert!(
+                violations.iter().any(|message| message.contains(expected)),
+                "{expected} missing from {violations:?}"
+            );
+        }
         assert!(
-            violations
+            !violations
                 .iter()
-                .any(|message| message.contains("plugin-fledge -> fledge-client"))
-        );
-        assert!(
-            violations
-                .iter()
-                .any(|message| message.contains("syrinx-plugin-api -> syrinx-store"))
+                .any(|message| message.starts_with("syrinx-plugin-host -> wasmtime:"))
         );
         Ok(())
     }

@@ -1,0 +1,18 @@
+[package]
+name = "syrinx-plugin-host"
+description = "Loads, links and runs Syrinx's WebAssembly plugins; the only crate that links wasmtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# Plugin command ids follow the same rule as Syrinx's own (syrinx_core::CommandId).
+syrinx-core = { path = "../syrinx-core" }
+serde_json.workspace = true
+# Exactly the audited configuration (docs/dev/wasmtime-audit.md); no `async`, no wasmtime-wasi (G1, G3).
+wasmtime = { version = "=48.0.7", default-features = false, features = ["runtime", "cranelift", "component-model", "std", "parallel-compilation", "anyhow"] }
+
+[lints]
+workspace = true

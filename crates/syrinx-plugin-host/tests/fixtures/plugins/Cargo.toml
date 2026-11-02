@@ -1,0 +1,22 @@
+# Synthetic test plugins for syrinx-plugin-host's contract tests. Its own
+# workspace, built for wasm32-wasip2 by the tests; never part of Syrinx's.
+[workspace]
+members = ["full", "minimal", "variant"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MPL-2.0"
+
+[workspace.dependencies]
+# The guest side audited with wasmtime (docs/dev/wasmtime-audit.md, "Guest side").
+wit-bindgen = { version = "=0.63.0", default-features = false, features = ["macros"] }
+
+# As the plugin template builds: small, and a panic aborts.
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+codegen-units = 1
