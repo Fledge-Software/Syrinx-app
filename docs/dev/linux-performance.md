@@ -147,3 +147,17 @@ but were not seen in the later ordinary-window logs. The complete record
 is [linux-port-acceptance.md](linux-port-acceptance.md), with diagnosis tracked
 in [#225](https://github.com/Fledge-Software/Syrinx-app/issues/225); the messages
 were not suppressed or attributed solely to smoke mode.
+
+## Branch verification
+
+The full Linux `cargo xtask check` passed on this branch: 1,704 tests passed,
+zero failed, ignored, measured or filtered out, followed by `Local gate passed.`
+The eight Python regression tests were also run separately. The gate used
+fresh scratch runtime/data/cache/config directories and retained the inherited
+display, session bus, input method and scale.
+
+An earlier invocation reused a shared build directory and selected an `xtask`
+executable compiled for another worktree. That result is withdrawn as branch
+evidence, including the claim in the earlier commit message. The corrected
+run compiled this branch's gate driver and workspace crates into its own
+`target` directory; its compiler paths were checked before accepting the result.

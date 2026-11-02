@@ -735,6 +735,15 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   step on its stop event. Source: `instance::tests::a_silent_client_does_not_delay_shutdown`
   (observed 2026-10-31).
 
+### Keep gate executables separate between worktrees
+
+**Observed, 2026-11-02:** sharing `CARGO_TARGET_DIR` between worktrees selected
+an `xtask` executable compiled in another worktree. `workspace_root` in
+`crates/xtask/src/main.rs` uses compile-time `CARGO_MANIFEST_DIR`, so the
+child commands checked that other source tree. Use a private target directory
+for each worktree, and check the compiler source paths before recording a
+branch's gate. An exit status alone does not identify which tree was checked.
+
 ## Update downloads: WinHTTP
 
 - **A loopback test through WinHTTP's automatic proxy can leave the
