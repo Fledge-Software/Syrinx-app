@@ -191,7 +191,14 @@ fn run<T: Send + 'static>(
 }
 
 pub(super) fn exists(window: isize) -> bool {
-    run(move |native| native.attributes(Native::id(window)?).map(|_| true)).unwrap_or(false)
+    match run(move |native| native.attributes(Native::id(window)?).map(|_| true)) {
+        Ok(found) => found,
+        Err(ProbeError::NotSyrinxWindow) => false,
+        Err(error) => {
+            eprintln!("X11 window-existence probe failed: {error}");
+            false
+        }
+    }
 }
 
 pub(super) fn focus(main: isize, popup: Option<isize>) -> Result<KeyboardFocus, ProbeError> {
@@ -226,14 +233,19 @@ pub(super) fn foreground() -> isize {
             if window <= 1 {
                 return Ok(0);
             }
-            if native.owned(window).is_ok() {
-                return isize::try_from(window).map_err(|_| ProbeError::NotSyrinxWindow);
+            match native.owned(window) {
+                Ok(()) => return isize::try_from(window).map_err(|_| ProbeError::NotSyrinxWindow),
+                Err(ProbeError::NotSyrinxWindow) => {}
+                Err(error) => return Err(error),
             }
             window = native.tree(window)?.0;
         }
         Ok(0)
     })
-    .unwrap_or(0)
+    .unwrap_or_else(|error| {
+        eprintln!("X11 foreground probe failed: {error}");
+        0
+    })
 }
 
 pub(super) fn stacking(popup: isize, main: isize) -> Result<OverlayStacking, ProbeError> {
