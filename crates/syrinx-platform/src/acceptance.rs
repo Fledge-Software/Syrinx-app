@@ -1,5 +1,8 @@
 //! Win32 queries and posted input for P1-33's palette acceptance run, on Syrinx's own windows only.
 
+/// Windows acceptance posts native messages to the palette's own window.
+pub const DISPATCH_INPUT_IN_WINDOW: bool = false;
+
 use std::time::Duration;
 
 use windows::Win32::{

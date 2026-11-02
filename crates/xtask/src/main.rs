@@ -65,12 +65,9 @@ fn run() -> Result<(), String> {
     }
 }
 
-/// Release signing, the registration table and the Win32 palette harness exist only on Windows.
+/// The registration table describes Windows registry keys; Linux packages use per-user scripts.
 fn refuse_windows_only_elsewhere(command: &OsString) -> Result<(), String> {
-    let windows_only = matches!(
-        command.to_str(),
-        Some("palette-acceptance" | "write-registration")
-    );
+    let windows_only = matches!(command.to_str(), Some("write-registration"));
     if windows_only && !cfg!(windows) {
         return Err(format!(
             "`cargo xtask {}` builds or drives the Windows app and runs only on Windows.",
@@ -196,6 +193,31 @@ fn check_workspace(root: &Path) -> Result<(), String> {
             "--smoke",
         ],
     )?;
+
+    // Linux proves native page lifecycles and palette behavior on the real X11 display.
+    if cfg!(target_os = "linux") {
+        for fixture in [
+            "page_close",
+            "cookie_persistence",
+            "navigation_history_spike",
+        ] {
+            run_cargo(
+                root,
+                &[
+                    "run",
+                    "--package",
+                    "syrinx-platform",
+                    "--example",
+                    fixture,
+                    "--profile",
+                    "local",
+                    "--offline",
+                    "--locked",
+                ],
+            )?;
+        }
+        palette_acceptance::run(root)?;
+    }
 
     println!("Local gate passed.");
     Ok(())

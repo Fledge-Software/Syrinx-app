@@ -9,6 +9,7 @@ mod protocol;
 
 mod downloads;
 mod engine;
+mod history_intent;
 mod page;
 mod page_keys;
 mod page_text;

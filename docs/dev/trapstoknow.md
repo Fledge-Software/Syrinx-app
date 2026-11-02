@@ -582,6 +582,21 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   both positive controls before accepting a missing handler call as policy
   enforcement. Source: the fixture's native trial runs (observed,
   2026-11-02). This does not claim that ordinary app windows fail to open.
+  A subsequent `page_close` example using the ordinary `BrowserHost` also
+  exited on MIT-SHM attach (`BadAccess`, request 130, minor 1). The coordinator
+  then ran the draft outside the sandbox: page-close and cookie fixtures
+  passed without MIT-SHM errors; history failed independently. This confirms
+  the attach failure was environmental. Source: [#221, comment 6585434681](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6585434681)
+  (observed, 2026-11-02). Run native acceptance outside this sandbox; do not
+  disable MIT-SHM or alter the display, input method or engine sandbox.
+- **A host load is not a WebKit user gesture.** `Page::navigate` uses
+  `load_uri`, whose navigation action can report no gesture. Mapping that
+  directly into `HistoryChange::NewDocument` hid all earlier rows in the
+  shared back/forward list. Preserve one matching Syrinx request separately
+  and consume it once; a later script move must stay page-initiated. Source:
+  `browser_gtk/history_intent.rs`, the display-free five-load regression and
+  the coordinator's failed native history run (code-read and observed,
+  2026-11-02; #221). Do not change the shared list's hiding rule to mask it.
 - **WebKit's public permission request omits the requesting frame's origin.**
   `WebKitUIClient.cpp` discards frame information for geolocation and exposes
   no requesting-origin getter through `WebKitUserMediaPermissionRequest`.

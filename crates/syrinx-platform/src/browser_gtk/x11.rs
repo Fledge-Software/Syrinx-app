@@ -222,10 +222,20 @@ pub fn holds_keyboard_focus(window: isize) -> bool {
     connection().is_some_and(|connection| connection.focused() == window)
 }
 
-/// Popups are override-redirect windows, so no owner is needed to keep them above Syrinx.
+/// Records the real transient parent; override-redirect popups still place themselves.
 pub fn set_overlay_owner(popup: isize, parent: isize) -> Result<(), BrowserError> {
     validate_window(popup)?;
-    validate_window(parent)
+    validate_window(parent)?;
+    let connection = connection().ok_or(BrowserError::InvalidWindow)?;
+    unsafe {
+        (connection.xlib.XSetTransientForHint)(
+            connection.display,
+            Connection::window(popup)?,
+            Connection::window(parent)?,
+        )
+    };
+    connection.flush();
+    Ok(())
 }
 
 /// Whether one of this process's windows holds keyboard focus.

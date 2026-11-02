@@ -669,14 +669,14 @@ impl Run {
     /// page (`None` when it never did) and where Windows keyboard focus was.
     async fn escape_to_page(&mut self, focus: TabId) -> Result<EscapeOutcome, String> {
         let (pressed, gains_before) = self.with(|view, _, cx| {
-            let popup = view.palette_hwnd(cx)?;
+            let _popup = view.palette_hwnd(cx)?;
             if let Some(acceptance) = view.acceptance.as_mut() {
                 acceptance.marks.clear();
             }
             let pressed = Instant::now();
-            probe_win32::post_key(popup, Key::Escape).map_err(|error| error.to_string())?;
             Ok::<_, String>((pressed, view.focus_gains(focus)))
         })??;
+        self.post_key(Key::Escape)?;
         let at_close = self
             .wait_for(
                 Duration::from_secs(3),
@@ -770,11 +770,8 @@ impl Run {
     /// Esc posted before the popup's first frame must still close it and return focus.
     async fn check_rapid_dismissal(&mut self) -> Result<(), String> {
         let focus = self.focus_tab()?;
-        let posted = self.with(|view, window, cx| {
-            view.shortcut(BrowserShortcut::Palette, window, cx);
-            let popup = view.palette_hwnd(cx)?;
-            probe_win32::post_key(popup, Key::Escape).map_err(|error| error.to_string())
-        })?;
+        self.with(|view, window, cx| view.shortcut(BrowserShortcut::Palette, window, cx))?;
+        let posted = self.post_key(Key::Escape);
         let returned = self
             .try_wait(Duration::from_secs(3), |view, _, _| {
                 (view.palette.is_none() && focused_or_deferred(view, focus).is_some()).then_some(())
@@ -937,10 +934,7 @@ impl Run {
             return Ok(());
         };
         self.open_timed().await?;
-        self.with(|view, _, cx| {
-            let popup = view.palette_hwnd(cx)?;
-            probe_win32::post_text(popup, &query).map_err(|error| error.to_string())
-        })??;
+        self.post_text(&query)?;
         // Enter only once the full text's own reply selects the target, as the bursts do.
         let target = Target::Tab(enter);
         let selected = self.select_enter_target(how, &query, target).await?;
@@ -951,10 +945,7 @@ impl Run {
             self.report_enter_not_run(how, detail);
             return Ok(());
         }
-        self.with(|view, _, cx| {
-            let popup = view.palette_hwnd(cx)?;
-            probe_win32::post_key(popup, Key::Enter).map_err(|error| error.to_string())
-        })??;
+        self.post_key(Key::Enter)?;
         let switched = self
             .try_wait(Duration::from_secs(5), |view, _, _| {
                 let done = view.palette.is_none() && view.model.active_id == Some(enter);
@@ -1214,6 +1205,59 @@ impl Run {
         self.with(|view, window, cx| view.toggle_sidebar(window, cx))
     }
 
+    /// Linux has no per-window Unicode message; dispatch only into this GPUI popup.
+    fn dispatch_palette_key(&mut self, key: gpui::Keystroke) -> Result<(), String> {
+        let target: AnyWindowHandle = self.with(|view, _, _| {
+            view.palette
+                .as_ref()
+                .map(|palette| palette.window.into())
+                .ok_or_else(|| "The palette closed before input dispatch.".to_owned())
+        })??;
+        self.cx
+            .update_window(target, |_, window, cx| {
+                window.dispatch_keystroke(key, cx);
+            })
+            .map_err(|error| format!("Palette input failed: {error:#}"))
+    }
+
+    /// Dispatch after the BrowserView borrow ends; key handlers may update that view.
+    fn post_key(&mut self, key: Key) -> Result<(), String> {
+        if probe_win32::DISPATCH_INPUT_IN_WINDOW {
+            let name = match key {
+                Key::Enter => "enter",
+                Key::Escape => "escape",
+                Key::Backspace => "backspace",
+            };
+            return self.dispatch_palette_key(
+                gpui::Keystroke::parse(name).map_err(|error| error.to_string())?,
+            );
+        }
+        let popup = self.with(|view, _, cx| view.palette_hwnd(cx))??;
+        probe_win32::post_key(popup, key).map_err(|error| error.to_string())
+    }
+
+    fn post_text(&mut self, text: &str) -> Result<(), String> {
+        if probe_win32::DISPATCH_INPUT_IN_WINDOW {
+            for character in text.chars() {
+                self.dispatch_palette_key(gpui::Keystroke {
+                    modifiers: gpui::Modifiers::default(),
+                    key: character.to_string(),
+                    key_char: Some(character.to_string()),
+                })?;
+            }
+            return Ok(());
+        }
+        let popup = self.with(|view, _, cx| view.palette_hwnd(cx))??;
+        probe_win32::post_text(popup, text).map_err(|error| error.to_string())
+    }
+
+    fn post_typed(&mut self, typed: Typed) -> Result<(), String> {
+        match typed {
+            Typed::Character(character) => self.post_text(character.encode_utf8(&mut [0; 4])),
+            Typed::Backspace => self.post_key(Key::Backspace),
+        }
+    }
+
     /// Moves to `at` in `target`, then presses and releases the left button there.
     fn click(&mut self, target: AnyWindowHandle, at: Point<Pixels>) -> Result<(), String> {
         for event in left_click(at) {
@@ -1337,11 +1381,8 @@ impl Run {
             if index > 0 {
                 self.sleep(BURST_CADENCE).await;
             }
-            last_posted = self.with(|view, _, cx| {
-                let posted = Instant::now();
-                post_typed(view, cx, *typed)?;
-                Ok::<_, String>(posted)
-            })??;
+            last_posted = Instant::now();
+            self.post_typed(*typed)?;
         }
         let probe = self.probe.clone();
         let settled = self
@@ -1366,12 +1407,9 @@ impl Run {
     /// Posts one key to the palette and waits for the frame that shows its rows.
     async fn keystroke(&mut self, typed: Typed) -> Result<KeySample, String> {
         let probe = self.probe.clone();
-        let posted = self.with(|view, _, cx| {
-            let posted = Instant::now();
-            probe.begin_key();
-            post_typed(view, cx, typed)?;
-            Ok::<_, String>(posted)
-        })??;
+        let posted = Instant::now();
+        probe.begin_key();
+        self.post_typed(typed)?;
         let probe = self.probe.clone();
         // A timeout is a measured failure (no rows), not a reason to stop the run.
         self.try_wait(KEY_LIMIT, |_, _, _| {
@@ -1549,18 +1587,6 @@ fn left_click(at: Point<Pixels>) -> [PlatformInput; 3] {
             click_count: 1,
         }),
     ]
-}
-
-/// Posts one typed key to the open palette's own window.
-fn post_typed(view: &BrowserView, cx: &mut App, typed: Typed) -> Result<(), String> {
-    let popup = view.palette_hwnd(cx)?;
-    let sent = match typed {
-        Typed::Character(character) => {
-            probe_win32::post_text(popup, character.encode_utf8(&mut [0; 4]))
-        }
-        Typed::Backspace => probe_win32::post_key(popup, Key::Backspace),
-    };
-    sent.map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

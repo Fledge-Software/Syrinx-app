@@ -1,6 +1,21 @@
-//! P1-33's palette acceptance probes; the run drives Win32 input, so Linux answers only CPU time.
+//! Measures palette acceptance against the real X11 display and process CPU counters.
 
 use std::time::Duration;
+
+#[path = "acceptance/window.rs"]
+mod fixture_window;
+#[path = "acceptance/x11.rs"]
+mod x11;
+pub use fixture_window::FixtureWindow;
+
+#[cfg(test)]
+#[path = "acceptance_tests.rs"]
+mod tests;
+
+/// Linux dispatches committed text and key events through GPUI's own window dispatcher.
+/// X11 has no per-window Unicode message equivalent to Win32 WM_CHAR; global keymap
+/// remapping would alter the owner's keyboard. Native focus/stacking remain X11 probes.
+pub const DISPATCH_INPUT_IN_WINDOW: bool = true;
 
 /// A key the acceptance run presses in the palette.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -16,13 +31,15 @@ pub enum ProbeError {
     /// The handle is not a window, or belongs to another process.
     NotSyrinxWindow,
     PostFailed,
-    /// Windows did not report the monitor or its current display mode.
+    /// The server reported an X error other than a stale window ID.
+    X11Error(i32),
+    /// X11 did not report the monitor or its current display mode.
     DisplayUnreadable,
-    /// Windows reported a refresh rate outside 24 to 1000 Hz.
+    /// X11 reported a refresh rate outside 24 to 1000 Hz.
     ImplausibleRefresh(u32),
-    /// Windows did not report the interface thread's focus window.
+    /// X11 did not report the interface thread's focus window.
     FocusUnreadable,
-    /// Windows did not report this process's CPU time.
+    /// X11 did not report this process's CPU time.
     CpuTimeUnreadable,
 }
 
@@ -32,27 +49,26 @@ impl std::fmt::Display for ProbeError {
             Self::NotSyrinxWindow => {
                 formatter.write_str("The window is not one of this Syrinx process's windows.")
             }
-            Self::PostFailed => formatter.write_str("Windows refused the posted input message."),
+            Self::PostFailed => formatter.write_str("X11 has no per-window Unicode input message; the Linux harness dispatches through GPUI."),
+            Self::X11Error(code) => write!(formatter, "The X11 probe failed with server error {code}."),
             Self::DisplayUnreadable => {
-                formatter.write_str("Windows did not report the display's current mode.")
+                formatter.write_str("X11 did not report the display's current mode.")
             }
-            Self::CpuTimeUnreadable => {
-                formatter.write_str("Windows did not report Syrinx's CPU time.")
-            }
+            Self::CpuTimeUnreadable => formatter.write_str("getrusage did not report Syrinx's CPU time."),
             Self::FocusUnreadable => {
-                formatter.write_str("Windows did not report which window has keyboard focus.")
+                formatter.write_str("X11 did not report which window has keyboard focus.")
             }
             Self::ImplausibleRefresh(hertz) => {
                 write!(
                     formatter,
-                    "Windows reported an implausible {hertz} Hz refresh rate."
+                    "X11 reported an implausible {hertz} Hz refresh rate."
                 )
             }
         }
     }
 }
 
-/// What Windows reports about an overlay popup's ownership and stacking.
+/// What X11 reports about an overlay popup's ownership and stacking.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OverlayStacking {
     pub owner: isize,
@@ -62,14 +78,14 @@ pub struct OverlayStacking {
     pub above_main: bool,
 }
 
-/// Which window holds Windows keyboard focus for Syrinx's interface thread.
+/// Which window holds X11 keyboard focus for Syrinx's interface thread.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum KeyboardFocus {
     /// No window on the thread's input queue has focus.
     Nobody,
     /// The main window itself, so keys go to GPUI rather than the page.
     MainWindow,
-    /// A descendant of the main window: the page host or a WebView2 child.
+    /// A descendant of the main window: the page host or a WebKit child.
     InsideMainWindow,
     /// The overlay popup passed to the query.
     Popup,
@@ -88,14 +104,14 @@ impl KeyboardFocus {
     }
 }
 
-/// Unsupported on Linux: X11 stacking is the window manager's, not Syrinx's.
-pub fn overlay_stacking(_popup: isize, _main: isize) -> Result<OverlayStacking, ProbeError> {
-    Err(ProbeError::NotSyrinxWindow)
+/// Reads the real transient parent, visibility and X11 stacking order.
+pub fn overlay_stacking(popup: isize, main: isize) -> Result<OverlayStacking, ProbeError> {
+    x11::stacking(popup, main)
 }
 
-/// Unsupported on Linux: the acceptance run reads Win32 keyboard focus.
-pub fn keyboard_focus(_main: isize, _popup: Option<isize>) -> Result<KeyboardFocus, ProbeError> {
-    Err(ProbeError::FocusUnreadable)
+/// Reads X11 focus and classifies a page child separately from the GPUI window.
+pub fn keyboard_focus(main: isize, popup: Option<isize>) -> Result<KeyboardFocus, ProbeError> {
+    x11::focus(main, popup)
 }
 
 /// The CPU time Syrinx's own process has used so far, user and system together.
@@ -115,19 +131,19 @@ pub fn process_cpu_time() -> Result<Duration, ProbeError> {
     ))
 }
 
-/// Whether the handle names a window; X11 ids are not checked against the server here.
+/// Whether the server still recognizes this window ID.
 pub fn window_exists(window: isize) -> bool {
-    window != 0
+    x11::exists(window)
 }
 
-/// Unknown on Linux; the acceptance run uses this only for diagnostics.
+/// The nearest Syrinx ancestor of the real X11 focus window, or zero.
 pub fn foreground_window() -> isize {
-    0
+    x11::foreground()
 }
 
-/// Unsupported on Linux: the acceptance run reads the Windows display mode.
-pub fn refresh_interval(_window: isize) -> Result<Duration, ProbeError> {
-    Err(ProbeError::DisplayUnreadable)
+/// Reads the actual monitor refresh rate through GDK; unknown rates remain errors.
+pub fn refresh_interval(window: isize) -> Result<Duration, ProbeError> {
+    x11::refresh(window)
 }
 
 /// Unsupported on Linux: the acceptance run posts Win32 keyboard messages.

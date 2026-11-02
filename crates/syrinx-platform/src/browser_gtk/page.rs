@@ -15,7 +15,7 @@ use syrinx_core::{HistoryChange, HistoryDirection, HistoryReport};
 use syrinx_store::PermissionKind;
 use webkit2gtk::{
     BackForwardListExt, FindControllerExt, FindOptions, GeolocationPermissionRequest, LoadEvent,
-    NavigationPolicyDecision, NavigationType, NotificationPermissionRequest, PermissionRequest,
+    NavigationPolicyDecision, NotificationPermissionRequest, PermissionRequest,
     PermissionRequestExt, PolicyDecisionExt, PolicyDecisionType, ResponsePolicyDecision,
     ResponsePolicyDecisionExt, SettingsExt, URIRequestExt, UserMediaPermissionRequest,
     UserMediaPermissionRequestExt, WebProcessTerminationReason, WebView, WebViewExt,
@@ -34,7 +34,8 @@ use super::{
     ConnectionState, ConnectionStatus, PageAction, PageBounds, RENDER_PROCESS_EXITED,
     RENDER_PROCESS_UNRESPONSIVE,
     engine::{PendingPopup, Shared},
-    history_state::{Pending, Started},
+    history_intent::HistoryIntent,
+    history_state::Pending,
     keys::{peek_escape, shortcut_for_modifiers},
     next_zoom,
     page_keys::KeyRouting,
@@ -56,6 +57,7 @@ pub(super) struct Page {
     life: CallbackLife,
     prompts: Prompts,
     find: Rc<FindState>,
+    load: Rc<LoadState>,
     /// P1-25's observation of this page; `None` when capture was off as it was created.
     text: Option<PageText>,
 }
@@ -95,6 +97,7 @@ impl Page {
             life,
             prompts: Rc::default(),
             find: Rc::default(),
+            load: Rc::default(),
             text,
         };
         page.resize(bounds);
@@ -113,6 +116,7 @@ impl Page {
         if let Some(text) = &self.text {
             text.syrinx_navigation(url);
         }
+        self.load.intent.borrow_mut().request(url);
         self.view.load_uri(url);
         Ok(())
     }
@@ -121,6 +125,7 @@ impl Page {
     /// it started with stays.
     pub(super) fn restore(&self, url: &str) -> Result<(), BrowserError> {
         validate_url(url)?;
+        self.load.intent.borrow_mut().request(url);
         self.view.load_uri(url);
         Ok(())
     }
@@ -131,6 +136,7 @@ impl Page {
     }
 
     fn withdraw_syrinx_request(&self) {
+        self.load.intent.borrow_mut().clear();
         if let Some(text) = &self.text {
             text.syrinx_navigation_cancelled();
         }
@@ -369,7 +375,7 @@ impl Page {
         let watch = LoadWatch {
             id: self.id,
             shared: self.shared.clone(),
-            state: Rc::default(),
+            state: self.load.clone(),
             text: self.text.clone(),
         };
         let starting = watch.clone();
@@ -699,6 +705,7 @@ impl FindState {
 #[derive(Default)]
 struct LoadState {
     history: Cell<Pending>,
+    intent: RefCell<HistoryIntent>,
     navigation: Cell<u64>,
     /// Between `Started` and `Committed`, address changes belong to the load, not the page.
     provisional: Cell<bool>,
@@ -719,7 +726,7 @@ impl LoadWatch {
         let Some(decision) = decision.downcast_ref::<NavigationPolicyDecision>() else {
             return;
         };
-        let Some(action) = webkit2gtk::NavigationPolicyDecisionExt::navigation_action(decision)
+        let Some(mut action) = webkit2gtk::NavigationPolicyDecisionExt::navigation_action(decision)
         else {
             return;
         };
@@ -728,13 +735,20 @@ impl LoadWatch {
             let method = request.http_method().map(String::from).unwrap_or_default();
             text.asked(address, method);
         }
-        let started = match action.navigation_type() {
-            NavigationType::BackForward => Started::BackOrForward,
-            NavigationType::Reload => Started::Reload,
-            _ => Started::NewDocument {
-                user_initiated: action.is_user_gesture(),
-            },
-        };
+        // A server redirect belongs to the same navigation, with the same host/user intent.
+        if action.is_redirect() && self.state.history.get().started.is_some() {
+            return;
+        }
+        let address = action
+            .request()
+            .and_then(|request| request.uri())
+            .map(String::from)
+            .unwrap_or_default();
+        let started = self.state.intent.borrow_mut().started(
+            action.navigation_type(),
+            action.is_user_gesture(),
+            &address,
+        );
         let navigation = self.state.navigation.get() + 1;
         self.state.navigation.set(navigation);
         self.update(|pending| pending.start(navigation, started));
