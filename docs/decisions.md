@@ -23,11 +23,15 @@ entry names it.
   2026-11-02).** The owner's instruction was "test first, then decide".
   Synthetic cross-origin frames on WebKitGTK 2.54.1 requested location,
   notifications, camera and microphone without an `allow` attribute or a
-  Permissions-Policy header. All four were refused before Syrinx's
-  `permission-request` handler ran. Delegated location and top-level
-  notifications reached it and were denied by the tester. Camera and
-  microphone controls found no usable devices in the restricted test
-  environment; they establish no hardware acceptance. The outcome selects
+  Permissions-Policy header; none reached Syrinx's `permission-request`
+  handler. Delegation enforcement is verified for geolocation and
+  notifications only. Delegated location and top-level notification
+  controls reached the handler and were denied. Camera and microphone
+  controls had no usable device, so their missing handler calls do not
+  establish a policy block: **camera and microphone delegation are
+  unverified on this machine**. The owner retains the delegation prompt for
+  all four kinds and requests the device-backed follow-up in
+  `docs/owner-checklist.md` (issue #234). The outcome selects
   the owner's Chrome/Safari delegation model: the top-level origin is the
   accountable principal, and remembered choices stay keyed by that origin.
   Prompts explicitly say the request comes from that site "or a site it

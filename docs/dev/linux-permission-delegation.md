@@ -32,11 +32,16 @@ frame reached `WebKitGeolocationPermissionRequest`; a top-level notification
 button reached `WebKitNotificationPermissionRequest`. Both were explicitly
 denied in Syrinx. Top-level camera and microphone returned
 `OverconstrainedError` with no native request: no usable devices were offered
-in this sandbox. Their controls therefore do not prove capture works with
-hardware. No request was granted, no device identifiers or location data were
+in this sandbox. Their controls therefore do not establish that the
+undelegated media requests were blocked by policy. **Camera and microphone
+delegation are unverified on this machine.** Geolocation and notification
+delegation enforcement are the verified outcomes. No request was granted, no device identifiers or location data were
 collected, and no real site or account was used.
 
-The outcome selects top-level delegation. Syrinx's prompt says
+The owner retains top-level delegation wording for all four kinds while
+requesting device-backed camera and microphone iframe checks in
+[issue #234](https://github.com/Fledge-Software/Syrinx-app/issues/234) and
+`docs/owner-checklist.md`. Syrinx's prompt says
 "<origin>, or a site it embeds, wants to …" and its remembered choices remain
 keyed by the top-level origin. A combined audio/video request is refused:
 one camera choice cannot grant independent microphone consent.
