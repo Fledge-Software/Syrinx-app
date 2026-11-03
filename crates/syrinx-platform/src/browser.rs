@@ -30,6 +30,8 @@ pub const READS_PAGE_TEXT: bool = true;
 
 /// Engine limitations that the owner must see in Settings on this platform.
 pub const ENGINE_LIMITS: &[(&str, &str)] = &[];
+/// The page engine's name as the owner reads it.
+pub const ENGINE_NAME: &str = "WebView2";
 
 /// WebView2 identifies the origin that made the permission request.
 pub fn permission_question(origin: &str, kind: syrinx_store::PermissionKind) -> String {

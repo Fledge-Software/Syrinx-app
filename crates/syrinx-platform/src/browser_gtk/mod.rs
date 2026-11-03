@@ -56,6 +56,9 @@ pub const ENGINE_LIMITS: &[(&str, &str)] = &[
     ),
 ];
 
+/// The page engine's name as the owner reads it.
+pub const ENGINE_NAME: &str = "WebKitGTK";
+
 /// Names the accountable top-level site without claiming that it owns the requesting frame.
 pub fn permission_question(origin: &str, kind: syrinx_store::PermissionKind) -> String {
     format!("{origin}, or a site it embeds, wants to {}", kind.label())

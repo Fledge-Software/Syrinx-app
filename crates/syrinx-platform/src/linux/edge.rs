@@ -5,6 +5,12 @@ use std::{fmt, process::Command};
 
 use syrinx_core::web_address;
 
+/// The other browser as the owner reads it in a sentence, and on the button that opens it.
+pub const OTHER_BROWSER: &str = "your default browser";
+pub const OPEN_BUTTON: &str = "Open in default browser";
+/// What the status line says once the page has been handed over.
+pub const OPENED_MESSAGE: &str = "Opened this page in your default browser.";
+
 /// Why a page could not be handed to the other browser.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EdgeError {
