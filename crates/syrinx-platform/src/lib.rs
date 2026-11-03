@@ -15,6 +15,8 @@ pub mod browser;
 pub mod calendar;
 #[cfg_attr(target_os = "linux", path = "linux/caption.rs")]
 pub mod caption;
+#[cfg(test)]
+mod conformance;
 #[cfg_attr(unix, path = "unix/disk.rs")]
 pub mod disk;
 #[cfg_attr(target_os = "linux", path = "linux/edge.rs")]

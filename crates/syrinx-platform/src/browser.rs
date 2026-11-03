@@ -5,13 +5,12 @@ mod downloads;
 mod engine_exit;
 mod environment;
 mod essentials;
-mod overlay;
-pub const RENDER_PROCESS_UNRESPONSIVE: i32 = webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE.0;
 mod hidden_timer;
 mod history;
 mod history_state;
 mod keys;
 mod lifecycle;
+mod overlay;
 mod page;
 mod page_text;
 mod permissions;
@@ -32,6 +31,8 @@ pub const READS_PAGE_TEXT: bool = true;
 pub const ENGINE_LIMITS: &[(&str, &str)] = &[];
 /// The page engine's name as the owner reads it.
 pub const ENGINE_NAME: &str = "WebView2";
+/// The `ProcessFailed` kind for a page whose renderer stopped answering.
+pub const RENDER_PROCESS_UNRESPONSIVE: i32 = webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE.0;
 
 /// WebView2 identifies the origin that made the permission request.
 pub fn permission_question(origin: &str, kind: syrinx_store::PermissionKind) -> String {
