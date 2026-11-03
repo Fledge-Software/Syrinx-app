@@ -74,7 +74,7 @@ fn private_folder(
     match std::fs::DirBuilder::new().mode(0o700).create(&folder) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(_) => return Err(InstanceError::Security),
+        Err(error) => return Err(InstanceError::RuntimeFolder(error.kind())),
     }
     // An existing folder of that name may belong to someone else, or be open to others.
     if !is_private(&folder, uid) {
@@ -201,6 +201,11 @@ mod unix_tests {
         assert_eq!(
             private_folder(None, &temporary, uid),
             Err(InstanceError::Security)
+        );
+        // An ordinary I/O failure keeps its cause rather than reading as a security refusal.
+        assert_eq!(
+            private_folder(None, &temporary.join("missing"), uid),
+            Err(InstanceError::RuntimeFolder(std::io::ErrorKind::NotFound))
         );
         let file = temporary.join("synthetic.lock");
         std::fs::write(&file, b"").expect("synthetic lock");

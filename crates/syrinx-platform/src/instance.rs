@@ -74,10 +74,18 @@ pub enum InstanceError {
     ThreadStart,
     /// The link queue was already handed out or has closed.
     Queue,
+    /// Unix only: the private folder for the lock and socket could not be created.
+    RuntimeFolder(std::io::ErrorKind),
 }
 
 impl fmt::Display for InstanceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::RuntimeFolder(kind) = self {
+            return write!(
+                formatter,
+                "Syrinx cannot create its private runtime folder ({kind})."
+            );
+        }
         formatter.write_str(match self {
             Self::Directory => "Syrinx cannot resolve its profile directory.",
             Self::Identity => "Syrinx cannot identify the signed-in Windows user.",
@@ -97,6 +105,8 @@ impl fmt::Display for InstanceError {
             }
             Self::ThreadStart => "Syrinx cannot start its link listener.",
             Self::Queue => "Syrinx's link queue is unavailable.",
+            // Written with its cause above; this arm only completes the match.
+            Self::RuntimeFolder(_) => "Syrinx cannot create its private runtime folder.",
         })
     }
 }
