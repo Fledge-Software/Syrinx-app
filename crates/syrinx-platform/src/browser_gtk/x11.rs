@@ -113,36 +113,38 @@ impl Connection {
         window
     }
 
-    /// The top-level window holding `window`: the root's child on its ancestor chain.
-    fn top_level(&self, mut window: c_ulong) -> Option<c_ulong> {
-        let root = self.root();
-        for _ in 0..64 {
-            let mut found_root = 0;
-            let mut parent = 0;
-            let mut children = ptr::null_mut();
-            let mut count: c_uint = 0;
-            let status = unsafe {
-                (self.xlib.XQueryTree)(
-                    self.display,
-                    window,
-                    &mut found_root,
-                    &mut parent,
-                    &mut children,
-                    &mut count,
-                )
-            };
-            if !children.is_null() {
-                unsafe { (self.xlib.XFree)(children.cast()) };
-            }
-            if status == 0 {
-                return None;
-            }
-            if parent == root || parent == 0 {
-                return Some(window);
-            }
-            window = parent;
+    /// `window`'s parent, or `None` at the root or for a window that no longer exists.
+    fn parent(&self, window: c_ulong) -> Option<c_ulong> {
+        let (mut found_root, mut parent) = (0, 0);
+        let mut children = ptr::null_mut();
+        let mut count: c_uint = 0;
+        let status = unsafe {
+            (self.xlib.XQueryTree)(
+                self.display,
+                window,
+                &mut found_root,
+                &mut parent,
+                &mut children,
+                &mut count,
+            )
+        };
+        if !children.is_null() {
+            unsafe { (self.xlib.XFree)(children.cast()) };
         }
-        None
+        (status != 0 && parent != 0).then_some(parent)
+    }
+
+    /// `window` and each ancestor below the root, nearest first. A reparenting window
+    /// manager puts its own frame between Syrinx's window and the root.
+    fn ancestry(&self, window: c_ulong) -> Vec<c_ulong> {
+        let root = self.root();
+        let mut chain = Vec::new();
+        let mut current = Some(window);
+        while let Some(window) = current.filter(|window| *window != root && chain.len() < 64) {
+            chain.push(window);
+            current = self.parent(window);
+        }
+        chain
     }
 
     /// Whether `window` belongs to this process, by the `_NET_WM_PID` its toolkit set.
@@ -177,13 +179,17 @@ impl Connection {
         pid == Some(c_ulong::from(std::process::id()))
     }
 
+    /// Whether the focused window is, or lies inside, a window this process marked as its own.
+    /// The page container carries no `_NET_WM_PID`, and under a reparenting window manager the
+    /// root's child is the manager's frame, so the whole chain is searched.
     fn syrinx_focused(&self) -> bool {
         let focus = self.focused();
         if focus <= 1 {
             return false;
         }
-        self.top_level(focus)
-            .is_some_and(|top| self.ours(top) || self.ours(focus))
+        self.ancestry(focus)
+            .into_iter()
+            .any(|window| self.ours(window))
     }
 
     /// The window's outer rectangle in root coordinates.
@@ -476,8 +482,70 @@ mod tests {
         destroy(window);
     }
 
+    /// The display's keyboard focus is shared by every test in the process.
+    static FOCUS: Mutex<()> = Mutex::new(());
+
+    /// A mapped window inside `parent`, marked as this process's when `ours` is true.
+    fn child_window(parent: c_ulong, ours: bool) -> c_ulong {
+        let connection = connection().expect("an X11 display for the test");
+        let window = unsafe {
+            (connection.xlib.XCreateSimpleWindow)(connection.display, parent, 0, 0, 16, 16, 0, 0, 0)
+        };
+        if ours {
+            let pid = c_ulong::from(std::process::id());
+            unsafe {
+                (connection.xlib.XChangeProperty)(
+                    connection.display,
+                    window,
+                    connection.pid_atom,
+                    xlib::XA_CARDINAL,
+                    32,
+                    xlib::PropModeReplace,
+                    (&raw const pid).cast(),
+                    1,
+                )
+            };
+        }
+        unsafe {
+            (connection.xlib.XMapWindow)(connection.display, window);
+            (connection.xlib.XSync)(connection.display, xlib::False);
+        }
+        window
+    }
+
+    #[test]
+    fn a_page_inside_a_window_managers_frame_counts_as_syrinx_in_front() {
+        let _focus = FOCUS.lock().expect("focus lock");
+        // A reparenting manager's frame (no PID) holds Syrinx's window, which holds the page's
+        // container (no PID either), and the container has the keys.
+        let frame = test_window(true);
+        let syrinx = child_window(frame, true);
+        let container = child_window(syrinx, false);
+        {
+            let connection = connection().expect("an X11 display for the test");
+            assert!(connection.set_focus(container));
+            unsafe { (connection.xlib.XSync)(connection.display, xlib::False) };
+        }
+        assert!(syrinx_in_foreground());
+        // Give the keys back to the pointer root before other focus tests run.
+        {
+            let connection = connection().expect("an X11 display for the test");
+            unsafe {
+                (connection.xlib.XSetInputFocus)(
+                    connection.display,
+                    xlib::PointerRoot as c_ulong,
+                    xlib::RevertToPointerRoot,
+                    xlib::CurrentTime,
+                );
+                (connection.xlib.XSync)(connection.display, xlib::False);
+            }
+        }
+        destroy(frame);
+    }
+
     #[test]
     fn focus_moves_nowhere_while_another_application_holds_the_keys() {
+        let _focus = FOCUS.lock().expect("focus lock");
         // In a test process no window carries Syrinx's `_NET_WM_PID`, so Syrinx is behind.
         let window = test_window(true);
         let before = connection().expect("an X11 display").focused();
