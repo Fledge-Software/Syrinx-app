@@ -72,7 +72,7 @@ impl PipeServer {
         owner: &OwnerOnly,
         requests: UnboundedSender<LinkRequest>,
     ) -> Result<Self, InstanceError> {
-        let listener = bind(name)?;
+        let listener = bind(name, owner.uid())?;
         listener
             .set_nonblocking(true)
             .map_err(|_| InstanceError::Pipe)?;
@@ -122,14 +122,17 @@ impl Drop for PipeServer {
     }
 }
 
-/// Binds the link socket, refusing one a live process still answers on.
-fn bind(name: &str) -> Result<UnixListener, InstanceError> {
+/// Binds the link socket, refusing one a live process still answers on or another user made.
+fn bind(name: &str, uid: libc::uid_t) -> Result<UnixListener, InstanceError> {
     match UnixListener::bind(name) {
         Ok(listener) => return restrict(name).map(|()| listener),
         Err(error) if error.kind() != io::ErrorKind::AddrInUse => {
             return Err(InstanceError::Pipe);
         }
         Err(_) => {}
+    }
+    if !super::names::owned_by(Path::new(name), uid) {
+        return Err(InstanceError::ForeignListener);
     }
     if UnixStream::connect(name).is_ok() {
         return Err(InstanceError::PipeTaken);
