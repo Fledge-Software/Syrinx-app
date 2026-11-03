@@ -42,6 +42,9 @@ Syrinx does not update itself on Linux yet. Download the new version from
 https://syrinxapp.dev, check it against the release's SHA256SUMS.txt, unpack
 it and run its install.sh. Your tabs, bookmarks and sign-ins stay.
 
+Linux packages are not signed yet. The checksums show that a download is
+complete, not who made it, so download Syrinx only from syrinxapp.dev.
+
 Uninstall
 ---------
 

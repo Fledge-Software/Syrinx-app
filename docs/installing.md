@@ -652,3 +652,15 @@ by hand if they want their data gone.
 "Check for updates" say that Syrinx doesn't update itself on Linux yet and
 point at syrinxapp.dev; updating means unpacking the newer tarball and
 running its `install.sh`, which keeps the data folder.
+
+**Known limit: Linux packages are not signed.** The tarball's own
+`SHA256SUMS`, which `install.sh` checks, travels inside the tarball, and
+the release's `SHA256SUMS.txt` comes from the same download page. Both prove
+only that the files arrived whole and unpacked correctly; neither proves
+who built them, because anyone who could replace the tarball could replace
+its checksums too. Windows updates are different: Syrinx verifies their
+signature against the key it ships with (`docs/update-format.md`). Until
+Linux packages carry a signature, download them only from syrinxapp.dev.
+Settings and `INSTALL.txt` say the same. A
+signed `SHA256SUMS` is proposed in #238 under #217; changing
+the release scripts is the owner's decision.
