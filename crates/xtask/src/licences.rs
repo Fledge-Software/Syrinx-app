@@ -26,8 +26,8 @@ struct Exception {
     reason: String,
 }
 
-/// Fails listing every third-party package in `metadata` whose licence the policy refuses.
-pub fn check(root: &Path, metadata: &Value) -> Result<(), String> {
+/// Fails listing every third-party package `target` compiles whose licence the policy refuses.
+pub fn check(root: &Path, target: &str, metadata: &Value) -> Result<(), String> {
     let policy = read_policy(root)?;
     let packages = third_party_packages(metadata)?;
     let mut refused = Vec::new();
@@ -38,13 +38,13 @@ pub fn check(root: &Path, metadata: &Value) -> Result<(), String> {
     }
     if !refused.is_empty() {
         return Err(format!(
-            "Licences not allowed by licences.toml:\n  {}",
+            "Licences not allowed by licences.toml for {target}:\n  {}",
             refused.join("\n  ")
         ));
     }
 
     println!(
-        "Licences passed: {} third-party packages checked.",
+        "Licences passed for {target}: {} third-party packages checked.",
         packages.len()
     );
     Ok(())

@@ -93,8 +93,10 @@ cargo run --package syrinx-app --profile local --offline --locked -- --smoke
 
 The first four lines show the standalone equivalents of the checks that
 `xtask` runs internally (`crates/xtask/src/main.rs`, `check_workspace`).
-`check-licences` holds every third-party package Windows compiles to the
-allowed licences or an exact-version approval in `licences.toml` (#28, G4).
+`check-licences` holds every third-party package that Windows
+(`x86_64-pc-windows-msvc`) or Linux (`x86_64-unknown-linux-gnu`) compiles to
+the allowed licences or an exact-version approval in `licences.toml` (#28,
+G4), whichever machine runs the gate.
 `check-plugin-contract` parses `wit/v0_1`, the `syrinx:plugin@0.1.0`
 contract, with the parser wasmtime 48 uses, so a WIT mistake fails the gate
 rather than every plugin's build.

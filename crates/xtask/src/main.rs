@@ -117,8 +117,8 @@ fn cargo_command(root: &Path) -> Command {
     command
 }
 
-/// The Windows target Syrinx ships for; the licence check reads the graph compiled for it.
-const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+/// The targets Syrinx ships for; the licence check reads the graph compiled for each.
+const SHIPPED_TARGETS: [&str; 2] = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"];
 
 /// Cargo's locked, offline, all-features metadata, with `extra` options such as a target filter.
 fn cargo_metadata(root: &Path, extra: &[&str]) -> Result<Value, String> {
@@ -161,9 +161,13 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
 }
 
 fn check_licences(root: &Path) -> Result<(), String> {
-    // Judge what Windows compiles; the lockfile also records other platforms' packages.
-    let metadata = cargo_metadata(root, &["--filter-platform", WINDOWS_TARGET])?;
-    licences::check(root, &metadata)
+    // Judge what each shipped target compiles, whichever machine runs the gate; the lockfile
+    // also records packages for platforms Syrinx does not ship.
+    for target in SHIPPED_TARGETS {
+        let metadata = cargo_metadata(root, &["--filter-platform", target])?;
+        licences::check(root, target, &metadata)?;
+    }
+    Ok(())
 }
 
 fn check_deferred_work(root: &Path) -> Result<(), String> {

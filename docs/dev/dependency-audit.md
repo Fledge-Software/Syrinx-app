@@ -668,9 +668,9 @@ proc-macro-error, proc-macro-error-attr, syn 1.0.109, system-deps,
 toml_edit 0.19.15 and 0.20.7, x11rb, x11rb-protocol. Apache-2.0: gethostname.
 MIT OR Apache-2.0 OR Zlib: xkeysym (used under MIT).
 
-**Approved narrow licence exception (owner, 2026-10-31).** Two packages are
-outside the MIT/Apache-2.0/BSD list, and both run only while compiling;
-neither is linked into Syrinx:
+**Approved narrow licence exception (owner, 2026-10-31).** Two of the 60
+added packages are outside the MIT/Apache-2.0/BSD list, and both run only
+while compiling; neither is linked into Syrinx:
 
 - `target-lexicon 0.12.16`, Apache-2.0 WITH LLVM-exception (the exception
   only adds permissions), reached through `system-deps` and `cfg-expr` in
@@ -681,6 +681,30 @@ neither is linked into Syrinx:
 
 The approval covers exactly these versions; a different version, or the
 same licence on another package, needs its own approval.
+
+**Packages already in the lockfile that Linux compiles (owner, 2026-11-03).**
+The 60 packages above are only those the port added to `Cargo.lock`. The
+lockfile already recorded every platform's packages, and the Linux build
+compiles 178 package versions that Windows does not (730 third-party
+packages in all, against Windows' 617). Earlier audits never judged the
+other 118 for Linux. Seven of them are outside the MIT/Apache-2.0/BSD list and link into
+Syrinx on Linux; the 2026-10-31 paragraph above wrongly implied there were
+only two outside it. The review of #226 found them, because
+`cargo xtask check-licences` then judged only the Windows target. The owner
+approved each at its exact version on 2026-11-03 (`docs/decisions.md`):
+
+- `ring 0.17.14` (Apache-2.0 AND ISC), the Unix signature check in
+  `syrinx-update`, and `untrusted 0.9.0` (ISC), which ring uses;
+- `inotify 0.11.5` and `inotify-sys 0.1.8` (ISC), through `notify 8.2.0`
+  and `gpui-component`;
+- `libloading 0.8.9` (ISC), through `ash` and GPUI's wgpu renderer;
+- `foldhash 0.1.5` (Zlib), through `hashbrown 0.15.5` and `wgpu-hal`;
+- `hexf-parse 0.2.1` (CC0-1.0), through `naga` and `wgpu`.
+
+All nine Linux exceptions are now in `licences.toml`, and
+`check-licences` judges `x86_64-unknown-linux-gnu` as well as
+`x86_64-pc-windows-msvc` on every machine, so a new Linux-only package with
+another licence fails the gate on either platform.
 
 **D9 network features (owner, 2026-10-31).** `cargo metadata` unifies
 features across every target, so two Linux-only crates show up asking for
