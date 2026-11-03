@@ -1,8 +1,12 @@
 """Protect benchmark accounting from process-name parsing and missing-memory mistakes."""
 
 import unittest
+import subprocess
+import sys
+import time
+from pathlib import Path
 
-from measure_metrics import cpu_delta, memory_summary, parse_stat
+from measure_metrics import cpu_delta, memory_summary, parse_stat, read_process, stat_fields, snapshot
 
 
 class MeasurementAccounting(unittest.TestCase):
@@ -26,6 +30,19 @@ class MeasurementAccounting(unittest.TestCase):
     def test_missing_pss_is_unavailable_instead_of_zero(self):
         records = [{"rss_kib": 100, "pss_kib": 50}, {"rss_kib": 200, "pss_kib": None}]
         self.assertEqual(memory_summary(records), {"rss_sum_kib": 300, "pss_sum_kib": None, "pss_unreadable_processes": 1})
+
+    def test_a_zombie_has_no_live_memory_to_read(self):
+        process = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            deadline = time.monotonic() + 5
+            while stat_fields(Path(f"/proc/{process.pid}/stat").read_text())[0] != "Z":
+                self.assertLess(time.monotonic(), deadline, "synthetic child never exited")
+                time.sleep(0.01)
+            self.assertIsNone(read_process(process.pid))
+            with self.assertRaisesRegex(RuntimeError, "root process exited"):
+                snapshot(process.pid)
+        finally:
+            process.wait(timeout=5)
 
 
 if __name__ == "__main__":

@@ -62,7 +62,11 @@ def process_ids(root):
 def read_process(process):
     """Keep denied proportional-memory reads unavailable rather than inventing a zero."""
     root = Path(f"/proc/{process}")
-    record = parse_stat((root / "stat").read_text(), os.sysconf("SC_PAGE_SIZE"))
+    text = (root / "stat").read_text()
+    # An exited, unreaped process has no address space or smaps_rollup to measure.
+    if stat_fields(text)[0] == "Z":
+        return None
+    record = parse_stat(text, os.sysconf("SC_PAGE_SIZE"))
     record["pss_kib"] = None
     try:
         rollup = (root / "smaps_rollup").read_text()
@@ -81,8 +85,15 @@ def snapshot(root):
     """Retry a disappearing child briefly, then report unstable accounting explicitly."""
     for attempt in range(3):
         try:
-            return {process: read_process(process) for process in process_ids(root)}
-        except FileNotFoundError:
+            records = {}
+            for process in process_ids(root):
+                record = read_process(process)
+                if record is not None:
+                    records[process] = record
+            if root not in records:
+                raise RuntimeError("Measured root process exited before the memory sample")
+            return records
+        except (FileNotFoundError, ProcessLookupError):
             if attempt == 2:
                 raise RuntimeError("Process tree changed repeatedly while reading memory") from None
             time.sleep(0.05)
