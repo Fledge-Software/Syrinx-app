@@ -2476,7 +2476,7 @@ mod palette_shortcut_tests {
         let sent_from_senders: usize = senders
             .iter()
             .map(|name| {
-                method_text(&source, name)
+                method_text(source, name)
                     .matches("self.focus_shown_page()")
                     .count()
             })
