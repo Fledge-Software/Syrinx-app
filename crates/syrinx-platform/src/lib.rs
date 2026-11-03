@@ -37,6 +37,9 @@ pub mod setup;
 mod storage;
 #[cfg_attr(target_os = "linux", path = "linux/window_frame.rs")]
 pub mod window_frame;
+#[cfg(target_os = "linux")]
+#[path = "linux/x11_errors.rs"]
+mod x11_errors;
 
 pub use storage::local_app_data;
 pub use storage::{

@@ -78,9 +78,9 @@ fn serve(started: mpsc::SyncSender<Result<ThreadId, GtkUnavailable>>) {
         .map_err(|_| GtkUnavailable);
     let initialised = outcome.is_ok();
     // GDK installed its X error handler during `gtk::init`; Syrinx's goes in front of it
-    // before any GDK error trap can save and restore it (`browser_gtk/x11.rs`, `ErrorTrap`).
+    // before any GDK error trap can save and restore it (`linux/x11_errors.rs`).
     if initialised {
-        crate::browser::ErrorTrap::install();
+        crate::x11_errors::ErrorTrap::install();
     }
     if started.send(outcome).is_err() || !initialised {
         return;

@@ -3,13 +3,12 @@
 use std::{
     ffi::{CStr, c_int, c_uint, c_ulong},
     ptr,
-    sync::{
-        Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, AtomicPtr, Ordering},
-    },
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use x11_dl::{xlib, xrandr};
+
+use crate::x11_errors::ErrorTrap;
 
 use super::{BrowserError, OverlayMonitor, OverlayPointer, OverlayRect};
 
@@ -24,57 +23,6 @@ struct Connection {
 unsafe impl Send for Connection {}
 
 static CONNECTION: OnceLock<Option<Mutex<Connection>>> = OnceLock::new();
-
-/// Syrinx's place in Xlib's error handling.
-///
-/// Xlib calls one process-wide handler for every connection's errors, and its default ends
-/// the process. GDK installs its own handler while `gtk::init` runs, and swaps a handler in
-/// and out around each of its error traps, saving and restoring whatever was installed before.
-/// `install` runs once, on GTK's thread, just after `gtk::init` and before any GDK trap, so
-/// GDK's traps then save and restore Syrinx's handler. That handler records errors on the
-/// private display for `Connection::trapped`, and hands every other display's errors to the
-/// handler GDK installed. Apart from GDK's own push and pop, nothing changes it again; while
-/// a GDK trap is pushed, private errors reach GDK's handler, which ignores them
-/// (`docs/dev/trapstoknow.md`, "Linux").
-pub(crate) struct ErrorTrap;
-
-/// The handler that was installed before Syrinx's (GDK's), set once by `ErrorTrap::install`.
-static PREVIOUS_HANDLER: OnceLock<Option<ErrorHandler>> = OnceLock::new();
-/// The private connection's display, whose errors are recorded rather than passed on.
-static PRIVATE_DISPLAY: AtomicPtr<xlib::Display> = AtomicPtr::new(ptr::null_mut());
-/// Whether an X error arrived on the private connection during the current trapped call.
-static TRAPPED_ERROR: AtomicBool = AtomicBool::new(false);
-
-type ErrorHandler = unsafe extern "C" fn(*mut xlib::Display, *mut xlib::XErrorEvent) -> c_int;
-
-impl ErrorTrap {
-    /// Installs Syrinx's handler once; later calls do nothing. Call it on GTK's thread just
-    /// after `gtk::init`.
-    pub(crate) fn install() {
-        PREVIOUS_HANDLER.get_or_init(|| {
-            let Ok(xlib) = xlib::Xlib::open() else {
-                return None;
-            };
-            unsafe { (xlib.XSetErrorHandler)(Some(Self::handle)) }
-        });
-    }
-
-    unsafe extern "C" fn handle(
-        display: *mut xlib::Display,
-        event: *mut xlib::XErrorEvent,
-    ) -> c_int {
-        if display == PRIVATE_DISPLAY.load(Ordering::Acquire) {
-            TRAPPED_ERROR.store(true, Ordering::Release);
-            return 0;
-        }
-        // Xlib always reports a previous handler, its own default at least. Without one there
-        // is nothing to hand the error to, and ignoring it beats ending the process.
-        let Some(previous) = PREVIOUS_HANDLER.get().copied().flatten() else {
-            return 0;
-        };
-        unsafe { previous(display, event) }
-    }
-}
 
 /// The shared connection: `NoDisplay` when no X11 display could be opened, and `DisplayLock`
 /// when a panic on another thread poisoned it.
@@ -110,7 +58,7 @@ fn open() -> Option<Connection> {
         return None;
     }
     let pid_atom = unsafe { (xlib.XInternAtom)(display, c"_NET_WM_PID".as_ptr(), xlib::False) };
-    PRIVATE_DISPLAY.store(display, Ordering::Release);
+    ErrorTrap::register_private_display(display);
     Some(Connection {
         xlib,
         display,
@@ -132,10 +80,10 @@ impl Connection {
     fn trapped<T>(&self, call: impl FnOnce() -> T) -> Option<T> {
         // Earlier requests' errors arrive first and are not this call's.
         unsafe { (self.xlib.XSync)(self.display, xlib::False) };
-        TRAPPED_ERROR.store(false, Ordering::Release);
+        ErrorTrap::clear();
         let value = call();
         unsafe { (self.xlib.XSync)(self.display, xlib::False) };
-        (!TRAPPED_ERROR.swap(false, Ordering::AcqRel)).then_some(value)
+        (!ErrorTrap::take_error()).then_some(value)
     }
 
     fn exists(&self, window: c_ulong) -> bool {
@@ -316,15 +264,22 @@ pub(super) fn validate_window(window: isize) -> Result<(), BrowserError> {
 
 /// Gives the Syrinx chrome window keyboard focus, taking it from a page's child window.
 /// Nothing moves while another application holds the keys (owner, 2026-10-12), or while the
-/// window is minimised and cannot take them.
+/// window is minimised and cannot take them. A window that is gone is `InvalidWindow`, and
+/// one that refused the keys is `Focus`.
 pub fn focus_chrome(parent: isize) -> Result<(), BrowserError> {
     let window = Connection::window(parent)?;
     let connection = connection()?;
-    if !connection.syrinx_focused() {
+    if !connection.syrinx_focused() || connection.set_focus(window) {
         return Ok(());
     }
-    connection.set_focus(window);
-    Ok(())
+    let attributes = connection
+        .trapped(|| connection.attributes(window))
+        .flatten()
+        .ok_or(BrowserError::InvalidWindow)?;
+    if attributes.map_state != xlib::IsViewable {
+        return Ok(());
+    }
+    Err(BrowserError::Focus)
 }
 
 /// Whether X11 keyboard focus is on the Syrinx chrome window itself, not a page child.
@@ -389,7 +344,9 @@ pub fn show_overlay(popup: isize, rect: OverlayRect) -> Result<(), BrowserError>
 
 /// Hides a kept popup. A popup holding the keys hands them to `owner` first, as on Windows:
 /// unmapping a focused override-redirect window reverts X focus to the root, outside Syrinx.
-/// A minimised owner cannot take them, so focus then reverts as X decides.
+/// An owner that is minimised, gone or refuses cannot take them, so focus then reverts as X
+/// decides. That is harmless here: the popup is hidden either way, which is all the caller
+/// asked for.
 pub fn hide_overlay(popup: isize, owner: isize) -> Result<(), BrowserError> {
     let window = Connection::window(popup)?;
     let owner = Connection::window(owner)?;
@@ -659,6 +616,23 @@ mod tests {
         // The trap reports the error and is then clear for the next call.
         assert_eq!(connection.trapped(|| connection.parent(container)), None);
         assert_eq!(connection.trapped(|| 7), Some(7));
+    }
+
+    #[test]
+    fn focus_chrome_ignores_a_minimised_window_and_reports_a_gone_one() {
+        let _focus = FocusGuard::take();
+        // Syrinx is in front: one of its windows has the keys.
+        let frame = test_window(true);
+        let syrinx = child_window(frame, true);
+        assert!(connection().expect("an X11 display").set_focus(syrinx));
+        let minimised = test_window(false);
+        assert_eq!(focus_chrome(minimised as isize), Ok(()));
+        destroy(minimised);
+        assert_eq!(
+            focus_chrome(minimised as isize),
+            Err(BrowserError::InvalidWindow)
+        );
+        destroy(frame);
     }
 
     #[test]
