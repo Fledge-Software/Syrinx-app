@@ -9,6 +9,8 @@ mod protocol;
 
 mod downloads;
 mod engine;
+#[cfg(test)]
+mod guardrail_tests;
 mod page;
 mod page_keys;
 mod page_text;
