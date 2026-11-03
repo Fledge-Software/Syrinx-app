@@ -3,7 +3,10 @@
 use std::{
     ffi::{CStr, c_int, c_uint, c_ulong},
     ptr,
-    sync::{Mutex, MutexGuard, OnceLock},
+    sync::{
+        Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+    },
 };
 
 use x11_dl::{xlib, xrandr};
@@ -21,6 +24,35 @@ struct Connection {
 unsafe impl Send for Connection {}
 
 static CONNECTION: OnceLock<Option<Mutex<Connection>>> = OnceLock::new();
+
+/// The private connection's display: X errors on it are recorded, not passed on.
+static PRIVATE_DISPLAY: AtomicPtr<xlib::Display> = AtomicPtr::new(ptr::null_mut());
+/// Whether an X error arrived on the private connection during the current trapped call.
+static TRAPPED_ERROR: AtomicBool = AtomicBool::new(false);
+/// The handler installed before Syrinx's, which still handles every other display's errors.
+static OUTER_HANDLER: AtomicUsize = AtomicUsize::new(0);
+
+type ErrorHandler = unsafe extern "C" fn(*mut xlib::Display, *mut xlib::XErrorEvent) -> c_int;
+
+/// Xlib's process-wide error handler: it ends the process for an error nobody traps. A window
+/// can be destroyed between two requests, so errors on the private connection are recorded
+/// for `Connection::trapped`, and every other display's go to the handler that was there.
+unsafe extern "C" fn record_private_errors(
+    display: *mut xlib::Display,
+    event: *mut xlib::XErrorEvent,
+) -> c_int {
+    if display == PRIVATE_DISPLAY.load(Ordering::Acquire) {
+        TRAPPED_ERROR.store(true, Ordering::Release);
+        return 0;
+    }
+    let outer = OUTER_HANDLER.load(Ordering::Acquire);
+    if outer == 0 {
+        return 0;
+    }
+    // SAFETY: only `Connection::trapped` stores here, and only a handler Xlib returned.
+    let outer = unsafe { std::mem::transmute::<usize, ErrorHandler>(outer) };
+    unsafe { outer(display, event) }
+}
 
 /// The shared connection: `NoDisplay` when no X11 display could be opened, and `DisplayLock`
 /// when a panic on another thread poisoned it.
@@ -53,6 +85,7 @@ fn open() -> Option<Connection> {
         return None;
     }
     let pid_atom = unsafe { (xlib.XInternAtom)(display, c"_NET_WM_PID".as_ptr(), xlib::False) };
+    PRIVATE_DISPLAY.store(display, Ordering::Release);
     Some(Connection {
         xlib,
         display,
@@ -68,38 +101,65 @@ impl Connection {
             .ok_or(BrowserError::InvalidWindow)
     }
 
+    /// Runs `call`'s requests with X errors on this connection recorded rather than fatal;
+    /// `None` when any of them failed, for example on a window destroyed meanwhile.
+    fn trapped<T>(&self, call: impl FnOnce() -> T) -> Option<T> {
+        let ours: ErrorHandler = record_private_errors;
+        let previous = unsafe { (self.xlib.XSetErrorHandler)(Some(ours)) };
+        // GDK may have installed its handler after Syrinx's; keep it for other displays.
+        if let Some(previous) = previous.filter(|previous| *previous as usize != ours as usize) {
+            OUTER_HANDLER.store(previous as usize, Ordering::Release);
+        }
+        // Earlier requests' errors arrive first and are not this call's.
+        unsafe { (self.xlib.XSync)(self.display, xlib::False) };
+        TRAPPED_ERROR.store(false, Ordering::Release);
+        let value = call();
+        unsafe { (self.xlib.XSync)(self.display, xlib::False) };
+        (!TRAPPED_ERROR.swap(false, Ordering::AcqRel)).then_some(value)
+    }
+
     fn exists(&self, window: c_ulong) -> bool {
-        let mut attributes = unsafe { std::mem::zeroed::<xlib::XWindowAttributes>() };
-        unsafe { (self.xlib.XGetWindowAttributes)(self.display, window, &mut attributes) != 0 }
+        self.trapped(|| self.attributes(window).is_some())
+            .unwrap_or(false)
     }
 
     fn flush(&self) {
         unsafe { (self.xlib.XFlush)(self.display) };
     }
 
-    /// Whether `window` and every ancestor are mapped. Focusing any other window raises a
-    /// BadMatch error, which the process-wide X error handler treats as fatal.
-    fn viewable(&self, window: c_ulong) -> bool {
+    /// The window's attributes; untrapped, so callers run it inside `trapped`.
+    fn attributes(&self, window: c_ulong) -> Option<xlib::XWindowAttributes> {
         let mut attributes = unsafe { std::mem::zeroed::<xlib::XWindowAttributes>() };
         let read =
             unsafe { (self.xlib.XGetWindowAttributes)(self.display, window, &mut attributes) };
-        read != 0 && attributes.map_state == xlib::IsViewable
+        (read != 0).then_some(attributes)
     }
 
-    /// Gives `window` the keys only when it can take them; `false` when it was not viewable.
+    /// Whether `window` and every ancestor are mapped; focusing any other window raises
+    /// BadMatch. Untrapped, so callers run it inside `trapped`.
+    fn viewable(&self, window: c_ulong) -> bool {
+        self.attributes(window)
+            .is_some_and(|attributes| attributes.map_state == xlib::IsViewable)
+    }
+
+    /// Gives `window` the keys only when it can take them; `false` when it was not viewable
+    /// or the server refused the request.
     fn set_focus(&self, window: c_ulong) -> bool {
-        if !self.viewable(window) {
-            return false;
-        }
-        unsafe {
-            (self.xlib.XSetInputFocus)(
-                self.display,
-                window,
-                xlib::RevertToParent,
-                xlib::CurrentTime,
-            )
-        };
-        true
+        self.trapped(|| {
+            if !self.viewable(window) {
+                return false;
+            }
+            unsafe {
+                (self.xlib.XSetInputFocus)(
+                    self.display,
+                    window,
+                    xlib::RevertToParent,
+                    xlib::CurrentTime,
+                )
+            };
+            true
+        })
+        .unwrap_or(false)
     }
 
     fn root(&self) -> c_ulong {
@@ -113,7 +173,8 @@ impl Connection {
         window
     }
 
-    /// `window`'s parent, or `None` at the root or for a window that no longer exists.
+    /// `window`'s parent, or `None` when the server reports none. Untrapped: a destroyed
+    /// window raises BadWindow, so callers run it inside `trapped`.
     fn parent(&self, window: c_ulong) -> Option<c_ulong> {
         let (mut found_root, mut parent) = (0, 0);
         let mut children = ptr::null_mut();
@@ -134,17 +195,19 @@ impl Connection {
         (status != 0 && parent != 0).then_some(parent)
     }
 
-    /// `window` and each ancestor below the root, nearest first. A reparenting window
-    /// manager puts its own frame between Syrinx's window and the root.
-    fn ancestry(&self, window: c_ulong) -> Vec<c_ulong> {
+    /// Whether `window`, or an ancestor below the root, carries this process's `_NET_WM_PID`.
+    /// A reparenting window manager puts its own frame between Syrinx's window and the root,
+    /// and the page container carries no PID, so the chain is searched up to the first match.
+    /// A window destroyed during the walk counts as "not ours".
+    fn inside_ours(&self, window: c_ulong) -> bool {
         let root = self.root();
-        let mut chain = Vec::new();
-        let mut current = Some(window);
-        while let Some(window) = current.filter(|window| *window != root && chain.len() < 64) {
-            chain.push(window);
-            current = self.parent(window);
-        }
-        chain
+        self.trapped(|| {
+            std::iter::successors(Some(window), |current| self.parent(*current))
+                .take_while(|current| *current != root)
+                .take(64)
+                .any(|current| self.ours(current))
+        })
+        .unwrap_or(false)
     }
 
     /// Whether `window` belongs to this process, by the `_NET_WM_PID` its toolkit set.
@@ -180,16 +243,13 @@ impl Connection {
     }
 
     /// Whether the focused window is, or lies inside, a window this process marked as its own.
-    /// The page container carries no `_NET_WM_PID`, and under a reparenting window manager the
-    /// root's child is the manager's frame, so the whole chain is searched.
     fn syrinx_focused(&self) -> bool {
         let focus = self.focused();
+        // None (0) and PointerRoot (1) are not windows.
         if focus <= 1 {
             return false;
         }
-        self.ancestry(focus)
-            .into_iter()
-            .any(|window| self.ours(window))
+        self.inside_ours(focus)
     }
 
     /// The window's outer rectangle in root coordinates.
@@ -472,7 +532,10 @@ mod tests {
         let window = test_window(false);
         {
             let connection = connection().expect("an X11 display for the test");
-            assert!(!connection.viewable(window));
+            assert_eq!(
+                connection.trapped(|| connection.viewable(window)),
+                Some(false)
+            );
             assert!(
                 !connection.set_focus(window),
                 "BadMatch would end the process"
@@ -484,6 +547,39 @@ mod tests {
 
     /// The display's keyboard focus is shared by every test in the process.
     static FOCUS: Mutex<()> = Mutex::new(());
+
+    /// Holds the focus lock and, when dropped, gives the keys back to the pointer root, so a
+    /// failing focus test neither poisons the lock nor leaves focus where the next test looks.
+    struct FocusGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl FocusGuard {
+        fn take() -> Self {
+            Self {
+                _lock: FOCUS
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            }
+        }
+    }
+
+    impl Drop for FocusGuard {
+        fn drop(&mut self) {
+            let Ok(connection) = connection() else {
+                return;
+            };
+            unsafe {
+                (connection.xlib.XSetInputFocus)(
+                    connection.display,
+                    xlib::PointerRoot as c_ulong,
+                    xlib::RevertToPointerRoot,
+                    xlib::CurrentTime,
+                );
+                (connection.xlib.XSync)(connection.display, xlib::False);
+            }
+        }
+    }
 
     /// A mapped window inside `parent`, marked as this process's when `ours` is true.
     fn child_window(parent: c_ulong, ours: bool) -> c_ulong {
@@ -515,37 +611,42 @@ mod tests {
 
     #[test]
     fn a_page_inside_a_window_managers_frame_counts_as_syrinx_in_front() {
-        let _focus = FOCUS.lock().expect("focus lock");
+        let _focus = FocusGuard::take();
         // A reparenting manager's frame (no PID) holds Syrinx's window, which holds the page's
         // container (no PID either), and the container has the keys.
         let frame = test_window(true);
         let syrinx = child_window(frame, true);
         let container = child_window(syrinx, false);
-        {
-            let connection = connection().expect("an X11 display for the test");
-            assert!(connection.set_focus(container));
-            unsafe { (connection.xlib.XSync)(connection.display, xlib::False) };
-        }
+        assert!(connection().expect("an X11 display").set_focus(container));
         assert!(syrinx_in_foreground());
-        // Give the keys back to the pointer root before other focus tests run.
-        {
-            let connection = connection().expect("an X11 display for the test");
-            unsafe {
-                (connection.xlib.XSetInputFocus)(
-                    connection.display,
-                    xlib::PointerRoot as c_ulong,
-                    xlib::RevertToPointerRoot,
-                    xlib::CurrentTime,
-                );
-                (connection.xlib.XSync)(connection.display, xlib::False);
-            }
-        }
         destroy(frame);
     }
 
     #[test]
+    fn a_window_destroyed_mid_query_is_not_ours_and_not_fatal() {
+        let _focus = FocusGuard::take();
+        // Destroying the frame destroys the whole chain, so every request below names windows
+        // that no longer exist: each raises BadWindow, which untrapped would end the process.
+        let frame = test_window(true);
+        let syrinx = child_window(frame, true);
+        let container = child_window(syrinx, false);
+        destroy(frame);
+        let connection = connection().expect("an X11 display");
+        assert!(
+            !connection.inside_ours(container),
+            "a gone window is not Syrinx's"
+        );
+        assert_eq!(connection.trapped(|| connection.viewable(syrinx)), None);
+        assert!(!connection.set_focus(container));
+        assert!(!connection.exists(frame));
+        // The trap reports the error and is then clear for the next call.
+        assert_eq!(connection.trapped(|| connection.parent(container)), None);
+        assert_eq!(connection.trapped(|| 7), Some(7));
+    }
+
+    #[test]
     fn focus_moves_nowhere_while_another_application_holds_the_keys() {
-        let _focus = FOCUS.lock().expect("focus lock");
+        let _focus = FocusGuard::take();
         // In a test process no window carries Syrinx's `_NET_WM_PID`, so Syrinx is behind.
         let window = test_window(true);
         let before = connection().expect("an X11 display").focused();
