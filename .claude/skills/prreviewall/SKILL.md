@@ -2,7 +2,7 @@
 name: prreviewall
 description: Run the full /prreviewer process on EVERY open pull request in the repository open in this session — review each, get it mergeable, post a verdict — then ask the human once which ready PRs to merge and merge them in a safe order. Use when the user runs /prreviewall or asks to review, fix up or clear out all open PRs.
 argument-hint: "[--include-drafts] [--skip #n ...]"
-user-invocable: true
+disable-model-invocation: true
 ---
 
 # /prreviewall — /prreviewer, for every open PR
@@ -28,7 +28,7 @@ Options from the user: `$ARGUMENTS`
 The per-PR steps and the merge gate live in the **prreviewer** skill, and are
 not repeated here, so the two skills cannot drift apart. Read it now:
 
-- If you are running from the `fledge-skills` source folder or the plugin,
+- If you are running from the `zans-skills` source folder or the plugin,
   look for `../../prreviewer/prreviewer/SKILL.md`, relative to this skill's
   base directory.
 - If you are running from a flat install (`install.sh`), look for
@@ -37,7 +37,7 @@ not repeated here, so the two skills cannot drift apart. Read it now:
   `.claude/skills/prreviewer/SKILL.md` and
   `~/.claude/plugins/**/prreviewer/SKILL.md`.
 
-If you cannot find it, **stop** and tell the user to install `fledge-skills`
+If you cannot find it, **stop** and tell the user to install `zans-skills`
 with `install.sh --only prreviewall`, which also installs prreviewer. Do not
 improvise the procedure.
 
