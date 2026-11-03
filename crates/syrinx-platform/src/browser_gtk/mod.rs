@@ -18,6 +18,7 @@ mod x11;
 
 pub use protocol::*;
 pub use syrinx_core::{Ineligible, PageTextPolicy};
+pub(crate) use x11::ErrorTrap;
 pub use x11::{
     activate_if_foreground, chrome_has_keyboard_focus, focus_chrome, hide_overlay,
     holds_keyboard_focus, overlay_monitor, overlay_pointer, set_overlay_owner, show_overlay,

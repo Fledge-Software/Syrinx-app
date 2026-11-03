@@ -581,6 +581,27 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   `page_keys.rs` does. Source: the #226 review; `x11.rs`'s tests cover a
   background Syrinx and an unmapped window under Xvfb (code-confirmed; the
   owner's minimise check is pending).
+- **A private-connection request can fail silently while GDK holds an error
+  trap.** Xlib has one error handler for the whole process. GDK installs its
+  own during `gtk::init`, and GTK 3's error traps swap a handler in and out:
+  push saves the one installed and puts GDK's in, pop restores the saved one.
+  Syrinx therefore installs `ErrorTrap` once, on GTK's thread right after
+  `gtk::init` (`linux/gtk_thread.rs`), so every later GDK push saves and pop
+  restores it. While a GDK trap is pushed, though, an error on Syrinx's
+  private connection reaches GDK's handler. That handler ignores errors from
+  displays it does not own: no message, the process survives, and the trap
+  reports 0. The `trapped` call then returns success for a request that
+  failed. The window was already gone, so the caller acts on a window that
+  no longer exists and the next query fails cleanly. Do not "fix" this by
+  calling `XSetErrorHandler` again from another thread: GDK warns "Don't do
+  that" when its trap is pushed, and the restore order breaks. Moving the
+  private connection to xcb or x11rb, whose errors are returned per request,
+  would remove the race, but needs a new dependency. Source:
+  an Xvfb experiment on GTK 3.24.41 (the handler changed across
+  `gtk::init`, and a private-display error under a pushed GDK trap and
+  without one both left the process running with no message), and the
+  library's "XSetErrorHandler() called with a GDK error trap pushed"
+  string (observed 2026-11-03).
 
 - **A measurement root can exit before its descendants.** Traversing only
   a still-live root misses orphaned children; waiting for the root alone

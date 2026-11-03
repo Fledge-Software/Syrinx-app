@@ -5,7 +5,7 @@ use std::{
     ptr,
     sync::{
         Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicPtr, Ordering},
     },
 };
 
@@ -25,33 +25,55 @@ unsafe impl Send for Connection {}
 
 static CONNECTION: OnceLock<Option<Mutex<Connection>>> = OnceLock::new();
 
-/// The private connection's display: X errors on it are recorded, not passed on.
+/// Syrinx's place in Xlib's error handling.
+///
+/// Xlib calls one process-wide handler for every connection's errors, and its default ends
+/// the process. GDK installs its own handler while `gtk::init` runs, and swaps a handler in
+/// and out around each of its error traps, saving and restoring whatever was installed before.
+/// `install` runs once, on GTK's thread, just after `gtk::init` and before any GDK trap, so
+/// GDK's traps then save and restore Syrinx's handler. That handler records errors on the
+/// private display for `Connection::trapped`, and hands every other display's errors to the
+/// handler GDK installed. Apart from GDK's own push and pop, nothing changes it again; while
+/// a GDK trap is pushed, private errors reach GDK's handler, which ignores them
+/// (`docs/dev/trapstoknow.md`, "Linux").
+pub(crate) struct ErrorTrap;
+
+/// The handler that was installed before Syrinx's (GDK's), set once by `ErrorTrap::install`.
+static PREVIOUS_HANDLER: OnceLock<Option<ErrorHandler>> = OnceLock::new();
+/// The private connection's display, whose errors are recorded rather than passed on.
 static PRIVATE_DISPLAY: AtomicPtr<xlib::Display> = AtomicPtr::new(ptr::null_mut());
 /// Whether an X error arrived on the private connection during the current trapped call.
 static TRAPPED_ERROR: AtomicBool = AtomicBool::new(false);
-/// The handler installed before Syrinx's, which still handles every other display's errors.
-static OUTER_HANDLER: AtomicUsize = AtomicUsize::new(0);
 
 type ErrorHandler = unsafe extern "C" fn(*mut xlib::Display, *mut xlib::XErrorEvent) -> c_int;
 
-/// Xlib's process-wide error handler: it ends the process for an error nobody traps. A window
-/// can be destroyed between two requests, so errors on the private connection are recorded
-/// for `Connection::trapped`, and every other display's go to the handler that was there.
-unsafe extern "C" fn record_private_errors(
-    display: *mut xlib::Display,
-    event: *mut xlib::XErrorEvent,
-) -> c_int {
-    if display == PRIVATE_DISPLAY.load(Ordering::Acquire) {
-        TRAPPED_ERROR.store(true, Ordering::Release);
-        return 0;
+impl ErrorTrap {
+    /// Installs Syrinx's handler once; later calls do nothing. Call it on GTK's thread just
+    /// after `gtk::init`.
+    pub(crate) fn install() {
+        PREVIOUS_HANDLER.get_or_init(|| {
+            let Ok(xlib) = xlib::Xlib::open() else {
+                return None;
+            };
+            unsafe { (xlib.XSetErrorHandler)(Some(Self::handle)) }
+        });
     }
-    let outer = OUTER_HANDLER.load(Ordering::Acquire);
-    if outer == 0 {
-        return 0;
+
+    unsafe extern "C" fn handle(
+        display: *mut xlib::Display,
+        event: *mut xlib::XErrorEvent,
+    ) -> c_int {
+        if display == PRIVATE_DISPLAY.load(Ordering::Acquire) {
+            TRAPPED_ERROR.store(true, Ordering::Release);
+            return 0;
+        }
+        // Xlib always reports a previous handler, its own default at least. Without one there
+        // is nothing to hand the error to, and ignoring it beats ending the process.
+        let Some(previous) = PREVIOUS_HANDLER.get().copied().flatten() else {
+            return 0;
+        };
+        unsafe { previous(display, event) }
     }
-    // SAFETY: only `Connection::trapped` stores here, and only a handler Xlib returned.
-    let outer = unsafe { std::mem::transmute::<usize, ErrorHandler>(outer) };
-    unsafe { outer(display, event) }
 }
 
 /// The shared connection: `NoDisplay` when no X11 display could be opened, and `DisplayLock`
@@ -77,6 +99,9 @@ fn described_connection() -> Result<MutexGuard<'static, Connection>, String> {
 }
 
 fn open() -> Option<Connection> {
+    // GTK's thread installs `ErrorTrap` as it starts; without it this connection's errors
+    // would end the process. No X11 display means GTK cannot start either.
+    crate::gtk_thread::ensure_started().ok()?;
     let xlib = xlib::Xlib::open().ok()?;
     // Xlib is shared with GTK's thread, so it must be told it is used from several threads.
     unsafe { (xlib.XInitThreads)() };
@@ -101,15 +126,10 @@ impl Connection {
             .ok_or(BrowserError::InvalidWindow)
     }
 
-    /// Runs `call`'s requests with X errors on this connection recorded rather than fatal;
-    /// `None` when any of them failed, for example on a window destroyed meanwhile.
+    /// Runs `call`'s requests with X errors on this connection recorded by `ErrorTrap`
+    /// rather than fatal; `None` when any of them failed, for example on a window destroyed
+    /// meanwhile. The connection's lock keeps trapped calls from overlapping.
     fn trapped<T>(&self, call: impl FnOnce() -> T) -> Option<T> {
-        let ours: ErrorHandler = record_private_errors;
-        let previous = unsafe { (self.xlib.XSetErrorHandler)(Some(ours)) };
-        // GDK may have installed its handler after Syrinx's; keep it for other displays.
-        if let Some(previous) = previous.filter(|previous| *previous as usize != ours as usize) {
-            OUTER_HANDLER.store(previous as usize, Ordering::Release);
-        }
         // Earlier requests' errors arrive first and are not this call's.
         unsafe { (self.xlib.XSync)(self.display, xlib::False) };
         TRAPPED_ERROR.store(false, Ordering::Release);
@@ -121,10 +141,6 @@ impl Connection {
     fn exists(&self, window: c_ulong) -> bool {
         self.trapped(|| self.attributes(window).is_some())
             .unwrap_or(false)
-    }
-
-    fn flush(&self) {
-        unsafe { (self.xlib.XFlush)(self.display) };
     }
 
     /// The window's attributes; untrapped, so callers run it inside `trapped`.
@@ -308,7 +324,6 @@ pub fn focus_chrome(parent: isize) -> Result<(), BrowserError> {
         return Ok(());
     }
     connection.set_focus(window);
-    connection.flush();
     Ok(())
 }
 
@@ -344,10 +359,11 @@ pub fn activate_if_foreground(window: isize) -> Result<bool, BrowserError> {
     if !connection.syrinx_focused() {
         return Ok(false);
     }
-    unsafe { (connection.xlib.XRaiseWindow)(connection.display, target) };
-    let focused = connection.set_focus(target);
-    connection.flush();
-    Ok(focused)
+    // A window that is gone cannot be raised; it is reported like any other bad window.
+    connection
+        .trapped(|| unsafe { (connection.xlib.XRaiseWindow)(connection.display, target) })
+        .ok_or(BrowserError::InvalidWindow)?;
+    Ok(connection.set_focus(target))
 }
 
 /// Moves a kept popup to `rect` and shows it above Syrinx without asking the window manager.
@@ -356,19 +372,19 @@ pub fn show_overlay(popup: isize, rect: OverlayRect) -> Result<(), BrowserError>
     let width = u32::try_from(rect.width).map_err(|_| BrowserError::OverlayPlacement)?;
     let height = u32::try_from(rect.height).map_err(|_| BrowserError::OverlayPlacement)?;
     let connection = connection()?;
-    unsafe {
-        (connection.xlib.XMoveResizeWindow)(
-            connection.display,
-            window,
-            rect.left,
-            rect.top,
-            width.max(1),
-            height.max(1),
-        );
-        (connection.xlib.XMapRaised)(connection.display, window);
-    }
-    connection.flush();
-    Ok(())
+    connection
+        .trapped(|| unsafe {
+            (connection.xlib.XMoveResizeWindow)(
+                connection.display,
+                window,
+                rect.left,
+                rect.top,
+                width.max(1),
+                height.max(1),
+            );
+            (connection.xlib.XMapRaised)(connection.display, window);
+        })
+        .ok_or(BrowserError::OverlayPlacement)
 }
 
 /// Hides a kept popup. A popup holding the keys hands them to `owner` first, as on Windows:
@@ -382,8 +398,9 @@ pub fn hide_overlay(popup: isize, owner: isize) -> Result<(), BrowserError> {
     if connection.focused() == window {
         connection.set_focus(owner);
     }
-    unsafe { (connection.xlib.XUnmapWindow)(connection.display, window) };
-    connection.flush();
+    connection
+        .trapped(|| unsafe { (connection.xlib.XUnmapWindow)(connection.display, window) })
+        .ok_or(BrowserError::OverlayPlacement)?;
     Ok(())
 }
 
