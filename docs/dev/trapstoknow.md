@@ -697,25 +697,29 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   installed copy. Source: the pinned SQLite Windows open path and P1-04's
   native recovery implementation.
 
-- **`GetCurrentSyncRoots` crashes the process on Windows Server instead of
-  failing.** GitHub's Windows runner returned a sync-root factory whose
-  method pointer was invalid, so the storage guard died with
-  `STATUS_ACCESS_VIOLATION` before any error could be handled; the same
-  test passes on Windows 11. `StorageProviderSyncRootManager::IsSupported()`
-  crashes the same way (run 5), so it cannot be the guard. Check
-  `IsOS(OS_ANYSERVER)` before any WinRT call and treat a server edition as
-  having no registered roots (owner decision, 2026-10-14). Source:
-  weekly-release runs 4 and 5, whose cdb stacks fault in
-  `GetCurrentSyncRoots` and then `IsSupported`, both called from
-  `registered_roots` (observed).
+- **`GetCurrentSyncRoots` crashes the process instead of failing, on Windows
+  Server and on Windows 11 build 26300.** The sync-root factory's method
+  pointer is invalid, so the storage guard died with
+  `STATUS_ACCESS_VIOLATION` before any error could be handled, and every
+  test that opens a store crashed its test binary with no message.
+  `StorageProviderSyncRootManager::IsSupported()` crashes the same way, and
+  an edition check (`IsOS(OS_ANYSERVER)`, the 2026-10-14 fix) misses client
+  builds. `registered_roots` therefore reads the registrations from
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager\<provider>\UserSyncRoots`
+  and makes no WinRT call (owner decision, 2026-10-31); do not bring the
+  WinRT lookup back. That layout is not a documented interface, so recheck
+  it after a major Windows update. Source: weekly-release runs 4 and 5
+  (cdb stacks in `GetCurrentSyncRoots` and `IsSupported`) and Windows 11 Pro
+  26300 on 2026-10-31, where the fault event's offset resolved through the
+  PDB to `GetCurrentSyncRoots` in two test binaries (observed).
 - **SQLite's write-ahead log breaks in a synced folder.** In OneDrive or a
   network folder the `-wal` file separates from the database. Keep the
   database in the local, not roaming, app-data folder. Source:
   [`docs/research/03-core-architecture.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/03-core-architecture.md), "Speed and safety settings", and
   D13 in the plan (high).
 - **A storage lease's full revalidation is not a cheap row check.** The
-  Windows guard opens ancestor handles and enumerates registered sync roots
-  on a dedicated WinRT thread. Do this when opening connections and at
+  Windows guard opens ancestor handles and enumerates every registered sync
+  root in the registry. Do this when opening connections and at
   lifecycle boundaries, not for every tab read or save. Retained handles
   preserve the checked identities; later sync registration remains the
   documented limitation. Source: P1-03 source review and

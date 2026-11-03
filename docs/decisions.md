@@ -17,6 +17,29 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-10-31
+
+- **The storage guard reads sync roots from the registry (replaces the
+  2026-10-14 Windows Server entry).** D13 keeps the database out of
+  OneDrive and similar synced folders. The guard
+  (`crates/syrinx-platform/src/storage/native.rs`, `registered_roots`) asked
+  Windows for the registered sync roots through
+  `StorageProviderSyncRootManager::GetCurrentSyncRoots`, which crashed the
+  process on Windows Server, and on 2026-10-31 crashed the same way on the
+  owner's Windows 11 Pro build 26300, a client build that the edition check
+  of 2026-10-14 does not catch. Every test that opened a store crashed, and
+  Syrinx itself would have crashed at start-up. The owner chose to read the
+  registrations Windows keeps under
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager`
+  (each provider's `UserSyncRoots` values, one per user, holding the root's
+  folder) instead, so the guard keeps refusing a synced folder everywhere,
+  Windows Server included. The rejected alternative was to treat such builds
+  as having no sync roots, as Server had been, which would switch D13's
+  check off on the owner's own machine. The cost is that this registry
+  layout is not a documented Microsoft interface and a later Windows could
+  change it. Roots registered for any user count, which can only refuse
+  more, never less.
+
 ## 2026-10-27
 
 - **Switching page text off erases it at once (#54, owner, 2026-10-27).**
@@ -1329,7 +1352,7 @@ entry names it.
   promise the build cannot keep was the rejected alternative.
 
 - **Where Windows cannot list sync roots, Syrinx treats the machine as
-  having none (narrows D13).** D13 keeps the database out of OneDrive and
+  having none (narrows D13; replaced on 2026-10-31 by a registry read).** D13 keeps the database out of OneDrive and
   similar synced folders; the storage guard
   (`crates/syrinx-platform/src/storage/native.rs`, `registered_roots`) asks
   Windows for its registered sync roots through

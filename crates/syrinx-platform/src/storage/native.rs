@@ -18,12 +18,10 @@ use std::{
         io::FromRawHandle,
     },
     path::{Path, PathBuf},
-    thread,
 };
 
 use syrinx_store::{LocationError, LocationOperation};
 use windows::{
-    Storage::Provider::StorageProviderSyncRootManager,
     Wdk::{
         Foundation::OBJECT_ATTRIBUTES,
         Storage::FileSystem::{
@@ -32,9 +30,9 @@ use windows::{
     },
     Win32::{
         Foundation::{
-            ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SHARING_VIOLATION,
-            GENERIC_READ, GENERIC_WRITE, HANDLE, OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE,
-            RtlNtStatusToDosError, STATUS_SUCCESS, UNICODE_STRING,
+            ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_PATH_NOT_FOUND,
+            ERROR_SHARING_VIOLATION, GENERIC_READ, GENERIC_WRITE, HANDLE, OBJ_CASE_INSENSITIVE,
+            OBJ_DONT_REPARSE, RtlNtStatusToDosError, STATUS_SUCCESS, UNICODE_STRING, WIN32_ERROR,
         },
         Storage::FileSystem::{
             CREATE_NEW, CreateFileW, FILE_ACCESS_RIGHTS, FILE_ATTRIBUTE_NORMAL,
@@ -50,14 +48,15 @@ use windows::{
         System::{
             Com::CoTaskMemFree,
             IO::IO_STATUS_BLOCK,
-            WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize},
+            Registry::{
+                HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_EXPAND_SZ, REG_SZ, RegCloseKey,
+                RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW,
+            },
             WindowsProgramming::FILE_CREATED,
         },
-        UI::Shell::{
-            FOLDERID_LocalAppData, IsOS, KF_FLAG_DEFAULT, OS_ANYSERVER, SHGetKnownFolderPath,
-        },
+        UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath},
     },
-    core::{HRESULT, PCWSTR, PWSTR},
+    core::{HRESULT, HSTRING, PCWSTR, PWSTR},
 };
 
 use super::{EntryInfo, FileIdentity, LocationProbe};
@@ -72,13 +71,7 @@ impl LocationProbe for WindowsProbe {
     }
 
     fn sync_roots(&self) -> Result<Vec<PathBuf>, LocationError> {
-        // A separate thread leaves the caller's COM apartment unchanged.
-        thread::Builder::new()
-            .name("syrinx-storage-roots".to_owned())
-            .spawn(registered_roots)
-            .map_err(|error| io_error(LocationOperation::StartSyncRootCheck, error))?
-            .join()
-            .map_err(|_| LocationError::SyncRootCheckPanicked)?
+        registered_roots()
     }
 }
 
@@ -455,38 +448,130 @@ fn wide_file_path(path: &Path) -> Vec<u16> {
         .collect()
 }
 
+/// Where Windows records each sync provider's registered roots, one subkey per provider.
+const SYNC_ROOT_MANAGER: &str =
+    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager";
+
 fn registered_roots() -> Result<Vec<PathBuf>, LocationError> {
-    // Windows Server is treated as having no sync roots (owner, 2026-10-14): both
-    // GetCurrentSyncRoots and IsSupported crashed there instead of failing.
-    if is_server_edition() {
+    // Read the registrations instead of calling GetCurrentSyncRoots, which crashed the
+    // process on Windows Server and on Windows 11 build 26300 (owner, 2026-10-31).
+    let Some(manager) = RegistryKey::open(HKEY_LOCAL_MACHINE, SYNC_ROOT_MANAGER)? else {
         return Ok(Vec::new());
-    }
-    // Declare the apartment first so every WinRT object is released before it.
-    let _apartment = RuntimeApartment::initialize()?;
-    let roots = StorageProviderSyncRootManager::GetCurrentSyncRoots()
-        .map_err(|error| os_error(LocationOperation::EnumerateSyncRoots, error))?;
-    let length = roots
-        .Size()
-        .map_err(|error| os_error(LocationOperation::EnumerateSyncRoots, error))?;
+    };
     let mut paths = Vec::new();
-    for index in 0..length {
-        let root = roots
-            .GetAt(index)
-            .map_err(|error| os_error(LocationOperation::EnumerateSyncRoots, error))?;
-        let folder = root
-            .Path()
-            .map_err(|error| os_error(LocationOperation::EnumerateSyncRoots, error))?;
-        let path = folder
-            .Path()
-            .map_err(|error| os_error(LocationOperation::EnumerateSyncRoots, error))?;
-        paths.push(PathBuf::from(OsString::from_wide(&path)));
+    for provider in manager.subkey_names()? {
+        let Some(user_roots) = manager.open_child(&provider, "UserSyncRoots")? else {
+            continue;
+        };
+        paths.extend(user_roots.string_values()?.into_iter().map(PathBuf::from));
     }
     Ok(paths)
 }
 
-/// Reports a Windows Server edition, such as a hosted build runner; Syrinx targets client Windows.
-fn is_server_edition() -> bool {
-    unsafe { IsOS(OS_ANYSERVER) }.as_bool()
+/// A registry key opened for reading, closed when dropped.
+struct RegistryKey(HKEY);
+
+impl RegistryKey {
+    /// Opens `parent\path`, or returns `None` when the key does not exist.
+    fn open(parent: HKEY, path: &str) -> Result<Option<Self>, LocationError> {
+        let mut opened = HKEY::default();
+        let status =
+            unsafe { RegOpenKeyExW(parent, &HSTRING::from(path), None, KEY_READ, &mut opened) };
+        if status == ERROR_FILE_NOT_FOUND {
+            return Ok(None);
+        }
+        registry_status(status)?;
+        Ok(Some(Self(opened)))
+    }
+
+    fn open_child(&self, name: &OsStr, child: &str) -> Result<Option<Self>, LocationError> {
+        let path = Path::new(name).join(child);
+        Self::open(self.0, &path.to_string_lossy())
+    }
+
+    /// The names of this key's direct subkeys.
+    fn subkey_names(&self) -> Result<Vec<OsString>, LocationError> {
+        let mut names = Vec::new();
+        for index in 0.. {
+            // Registry key names are at most 255 characters.
+            let mut buffer = [0u16; 256];
+            let mut length = buffer.len() as u32;
+            let status = unsafe {
+                RegEnumKeyExW(
+                    self.0,
+                    index,
+                    Some(PWSTR(buffer.as_mut_ptr())),
+                    &mut length,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            };
+            if status == ERROR_NO_MORE_ITEMS {
+                break;
+            }
+            registry_status(status)?;
+            names.push(OsString::from_wide(&buffer[..length as usize]));
+        }
+        Ok(names)
+    }
+
+    /// The data of every string value; Windows names each root's value by the user's SID.
+    fn string_values(&self) -> Result<Vec<OsString>, LocationError> {
+        // Every user's roots count: refusing another account's synced folder is harmless.
+        let mut values = Vec::new();
+        for index in 0.. {
+            let mut name = [0u16; 256];
+            let mut name_length = name.len() as u32;
+            let mut kind = 0u32;
+            let mut data = vec![0u8; 2 * 32_768];
+            let mut data_length = data.len() as u32;
+            let status = unsafe {
+                RegEnumValueW(
+                    self.0,
+                    index,
+                    Some(PWSTR(name.as_mut_ptr())),
+                    &mut name_length,
+                    None,
+                    Some(&mut kind),
+                    Some(data.as_mut_ptr()),
+                    Some(&mut data_length),
+                )
+            };
+            if status == ERROR_NO_MORE_ITEMS {
+                break;
+            }
+            registry_status(status)?;
+            if kind == REG_SZ.0 || kind == REG_EXPAND_SZ.0 {
+                values.push(registry_string(&data[..data_length as usize]));
+            }
+        }
+        Ok(values)
+    }
+}
+
+impl Drop for RegistryKey {
+    fn drop(&mut self) {
+        // Closing a key opened for reading cannot lose anything, so its status is not needed.
+        let _closed = unsafe { RegCloseKey(self.0) };
+    }
+}
+
+/// Decodes registry string data, which may or may not end in a terminating NUL.
+fn registry_string(bytes: &[u8]) -> OsString {
+    let wide: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .take_while(|unit| *unit != 0)
+        .collect();
+    OsString::from_wide(&wide)
+}
+
+fn registry_status(status: WIN32_ERROR) -> Result<(), LocationError> {
+    status
+        .ok()
+        .map_err(|error| os_error(LocationOperation::EnumerateSyncRoots, error))
 }
 
 fn os_error(operation: LocationOperation, error: windows::core::Error) -> LocationError {
@@ -496,27 +581,43 @@ fn os_error(operation: LocationOperation, error: windows::core::Error) -> Locati
     }
 }
 
-struct RuntimeApartment;
-
-impl RuntimeApartment {
-    fn initialize() -> Result<Self, LocationError> {
-        // The generated Result preserves both successful initialization statuses.
-        unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
-            .map_err(|error| os_error(LocationOperation::InitializeRuntime, error))?;
-        Ok(Self)
-    }
-}
-
-impl Drop for RuntimeApartment {
-    fn drop(&mut self) {
-        unsafe { RoUninitialize() };
-    }
-}
-
 struct TaskMemory(PWSTR);
 
 impl Drop for TaskMemory {
     fn drop(&mut self) {
         unsafe { CoTaskMemFree(Some(self.0.0.cast())) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn utf16_bytes(text: &str) -> Vec<u8> {
+        text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[test]
+    fn registry_strings_decode_with_or_without_a_terminating_nul() {
+        let path = r"C:\Users\example\Synced Ünïcode";
+        let mut terminated = utf16_bytes(path);
+        terminated.extend([0, 0, 0, 0]);
+
+        assert_eq!(registry_string(&utf16_bytes(path)), OsString::from(path));
+        assert_eq!(registry_string(&terminated), OsString::from(path));
+        assert_eq!(registry_string(&[]), OsString::new());
+    }
+
+    #[test]
+    fn a_missing_key_reads_as_absent_not_as_an_error() {
+        let missing = RegistryKey::open(HKEY_LOCAL_MACHINE, r"SOFTWARE\Syrinx-test-absent.invalid");
+
+        assert!(matches!(missing, Ok(None)));
+    }
+
+    #[test]
+    fn listing_this_machines_sync_roots_returns_instead_of_crashing() {
+        // The WinRT lookup this replaced faulted the whole test process on some builds.
+        assert!(registered_roots().is_ok());
     }
 }
