@@ -426,7 +426,7 @@ mod windows {
         path::{Component, Prefix},
     };
 
-    use super::{normal_absolute_path, sqlite_database_path};
+    use crate::storage::{normal_absolute_path, sqlite_database_path};
 
     #[test]
     fn accepts_dos_spelling_and_removes_only_the_extended_dos_prefix() {
