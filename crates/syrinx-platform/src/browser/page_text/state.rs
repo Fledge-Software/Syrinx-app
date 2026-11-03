@@ -94,6 +94,8 @@ impl TextState {
         }
     }
 
+    // Only the Windows reader asks for these; Linux reads no page yet (#219).
+    #[cfg(windows)]
     pub(super) fn generation(&self) -> u64 {
         self.generation
     }
@@ -303,6 +305,7 @@ impl TextState {
     }
 
     /// When the visit behind the scheduled capture happened; a deferred capture keeps it.
+    #[cfg(any(windows, test))]
     pub(super) fn visited(&self) -> Option<Instant> {
         self.visited
     }
@@ -331,11 +334,13 @@ impl TextState {
         }
     }
 
+    #[cfg(any(windows, test))]
     pub(super) fn call_started(&mut self) {
         self.in_flight = true;
     }
 
     /// Ends the call and returns the generation now, for step 8's check on arrival.
+    #[cfg(any(windows, test))]
     pub(super) fn call_finished(&mut self, now: Instant) -> u64 {
         self.in_flight = false;
         self.last_capture = Some(now);

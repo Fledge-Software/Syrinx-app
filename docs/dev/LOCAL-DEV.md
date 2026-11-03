@@ -194,11 +194,13 @@ What differs from Windows:
 - **Page text** follows the same eligibility check and taint rules as on
   Windows (`browser_gtk/page_text.rs` shares `page_text/state.rs`), but
   WebKitGTK has no host-side DOM snapshot. The only no-script method is
-  reading the page's HTML as the server sent it (`syrinx_core::sent_html_text`),
-  which misses text built by scripts and cannot see style-sheet hiding or a
-  password field added by script. The owner has not approved that method, so
-  `READS_SENT_HTML` is off: every due capture reports `Ineligible(CaptureOff)`
-  and Settings says nothing is kept on Linux.
+  reading the page's HTML as the server sent it, which misses text built by
+  scripts and cannot see style-sheet hiding or a password field added by
+  script. The owner has not approved that method (#219), so Linux has no
+  reader: `READS_PAGE_TEXT` is false, every due capture reports
+  `Ineligible(CaptureOff)`, and Settings says nothing is kept on Linux. The
+  reader that was written for it is kept for #219 at `ad1cf78`
+  (`docs/dev/linux-page-text-proposal.md`, "The reader at ad1cf78").
 - **Hidden pages** are not suspended: WebKitGTK has no `TrySuspend`. A hidden
   page's view is unmapped, so WebKit marks it hidden and throttles its timers
   and drawing itself. Syrinx never discards a hidden page to save memory,
