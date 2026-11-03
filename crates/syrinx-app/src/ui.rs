@@ -2439,6 +2439,55 @@ mod palette_shortcut_tests {
         assert!(!deferred_focus_applies(false, None));
     }
 
+    /// The text of `fn name` in this file, from its signature to its closing brace.
+    fn method_text(source: &str, name: &str) -> String {
+        let start = source
+            .find(&format!("    fn {name}("))
+            .unwrap_or_else(|| panic!("ui.rs has `fn {name}`"));
+        let length = source[start..]
+            .find("\n    }\n")
+            .expect("the method closes at four spaces");
+        source[start..start + length].to_owned()
+    }
+
+    #[test]
+    fn every_page_focus_goes_through_the_foreground_rule() {
+        // Line endings differ by checkout (`docs/dev/trapstoknow.md`), so compare with LF.
+        let whole = include_str!("ui.rs").replace("\r\n", "\n");
+        // The product code only: the tests below quote the calls they look for.
+        let source = whole
+            .split("\n#[cfg(test)]\nmod palette_shortcut_tests")
+            .next()
+            .expect("ui.rs has product code");
+        // A requested page and a newly shown page both take the one rule.
+        for name in ["focus_page", "sync_pages_and_focus"] {
+            let text = method_text(source, name);
+            assert!(
+                text.contains("self.focus_page_unless_behind()"),
+                "`{name}` must focus through `focus_page_unless_behind`"
+            );
+            assert!(
+                !text.contains("BrowserCommand::Focus") && !text.contains("focus_shown_page()"),
+                "`{name}` must not focus the page past the foreground rule"
+            );
+        }
+        // Only the rule itself and the reactivation observer then focus the shown page.
+        let senders = ["focus_page_unless_behind", "focus_page_after_activation"];
+        let sent_from_senders: usize = senders
+            .iter()
+            .map(|name| {
+                method_text(&source, name)
+                    .matches("self.focus_shown_page()")
+                    .count()
+            })
+            .sum();
+        assert_eq!(
+            source.matches("self.focus_shown_page()").count(),
+            sent_from_senders
+        );
+        assert_eq!(sent_from_senders, 2);
+    }
+
     #[test]
     fn a_page_shown_while_syrinx_is_behind_waits_for_reactivation() {
         // The foreground check is injected: `false` is another application in front.
