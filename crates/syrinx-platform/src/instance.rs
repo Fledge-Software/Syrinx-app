@@ -80,34 +80,36 @@ pub enum InstanceError {
 
 impl fmt::Display for InstanceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Self::RuntimeFolder(kind) = self {
-            return write!(
+        match self {
+            Self::Directory => formatter.write_str("Syrinx cannot resolve its profile directory."),
+            Self::Identity => {
+                formatter.write_str("Syrinx cannot identify the signed-in Windows user.")
+            }
+            Self::Security => {
+                formatter.write_str("Syrinx cannot restrict its link channel to this user.")
+            }
+            Self::Mutex => {
+                formatter.write_str("Syrinx cannot check whether it is already running.")
+            }
+            Self::PipeTaken => formatter.write_str(
+                "Another program holds Syrinx's link channel, so Syrinx cannot start. \
+                 Sign out of Windows and back in, then try again.",
+            ),
+            Self::ForeignListener => formatter.write_str(
+                "Syrinx's link channel belongs to another Windows user, so the link was not sent.",
+            ),
+            Self::Pipe => formatter.write_str("Syrinx's link channel failed."),
+            Self::Refused => formatter.write_str("The running Syrinx refused the link."),
+            Self::NoResponse => formatter.write_str(
+                "Syrinx is running but did not answer in time, so the link was not opened.",
+            ),
+            Self::ThreadStart => formatter.write_str("Syrinx cannot start its link listener."),
+            Self::Queue => formatter.write_str("Syrinx's link queue is unavailable."),
+            Self::RuntimeFolder(kind) => write!(
                 formatter,
                 "Syrinx cannot create its private runtime folder ({kind})."
-            );
+            ),
         }
-        formatter.write_str(match self {
-            Self::Directory => "Syrinx cannot resolve its profile directory.",
-            Self::Identity => "Syrinx cannot identify the signed-in Windows user.",
-            Self::Security => "Syrinx cannot restrict its link channel to this user.",
-            Self::Mutex => "Syrinx cannot check whether it is already running.",
-            Self::PipeTaken => {
-                "Another program holds Syrinx's link channel, so Syrinx cannot start. \
-                 Sign out of Windows and back in, then try again."
-            }
-            Self::ForeignListener => {
-                "Syrinx's link channel belongs to another Windows user, so the link was not sent."
-            }
-            Self::Pipe => "Syrinx's link channel failed.",
-            Self::Refused => "The running Syrinx refused the link.",
-            Self::NoResponse => {
-                "Syrinx is running but did not answer in time, so the link was not opened."
-            }
-            Self::ThreadStart => "Syrinx cannot start its link listener.",
-            Self::Queue => "Syrinx's link queue is unavailable.",
-            // Written with its cause above; this arm only completes the match.
-            Self::RuntimeFolder(_) => "Syrinx cannot create its private runtime folder.",
-        })
     }
 }
 
