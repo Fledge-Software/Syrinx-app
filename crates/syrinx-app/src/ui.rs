@@ -2451,7 +2451,9 @@ mod palette_shortcut_tests {
     }
 
     #[test]
-    fn every_page_focus_goes_through_the_foreground_rule() {
+    fn requested_and_newly_shown_pages_focus_through_the_foreground_rule() {
+        // Out of this file, `find.rs` (closing the find bar, an owner action inside Syrinx) and
+        // `process_recovery.rs` (which checks the window is active first) send Focus directly.
         // Line endings differ by checkout (`docs/dev/trapstoknow.md`), so compare with LF.
         let whole = include_str!("ui.rs").replace("\r\n", "\n");
         // The product code only: the tests below quote the calls they look for.
