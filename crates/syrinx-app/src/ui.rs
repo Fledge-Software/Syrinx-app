@@ -569,7 +569,11 @@ impl BrowserView {
             }
         }
         view.start_session(data_dir.join(session::STATE_FOLDER), window, cx);
-        view.start_browser(data_dir.join("WebView2"), window, cx);
+        view.start_browser(
+            data_dir.join(syrinx_platform::browser::PROFILE_FOLDER),
+            window,
+            cx,
+        );
         if let Some(links) = links {
             view.start_link_feed(links, window, cx);
         }

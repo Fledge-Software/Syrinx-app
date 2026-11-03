@@ -61,6 +61,9 @@ pub const ENGINE_LIMITS: &[(&str, &str)] = &[
 
 /// The page engine's name as the owner reads it.
 pub const ENGINE_NAME: &str = "WebKitGTK";
+/// The engine's profile folder in Syrinx's data folder, named for its role rather than an
+/// engine, since no Linux profile existed before this name.
+pub const PROFILE_FOLDER: &str = "PageEngine";
 
 /// Names the accountable top-level site without claiming that it owns the requesting frame.
 pub fn permission_question(origin: &str, kind: syrinx_store::PermissionKind) -> String {

@@ -17,6 +17,7 @@ const _: bool = browser::PAUSES_DOWNLOADS;
 const _: bool = browser::READS_PAGE_TEXT;
 const _: &[(&str, &str)] = browser::ENGINE_LIMITS;
 const _: &str = browser::ENGINE_NAME;
+const _: &str = browser::PROFILE_FOLDER;
 const _: i32 = browser::RENDER_PROCESS_UNRESPONSIVE;
 const _: fn(&str, PermissionKind) -> String = browser::permission_question;
 

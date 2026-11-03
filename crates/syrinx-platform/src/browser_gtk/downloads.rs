@@ -17,7 +17,7 @@ use webkit2gtk::{
     Download, DownloadError, DownloadExt, URIResponseExt, WebContext, WebContextExt, WebView, glib,
 };
 
-use super::{BrowserError, BrowserEvent, EventSink, engine::Popups};
+use super::{BrowserError, BrowserEvent, EventSink, engine::Popups, protocol::file_name};
 
 /// Progress is reported at most this often, as on Windows; state changes are always reported.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
@@ -352,12 +352,6 @@ fn safe_name(suggested: &str) -> String {
     } else {
         trimmed.to_owned()
     }
-}
-
-fn file_name(path: &std::path::Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

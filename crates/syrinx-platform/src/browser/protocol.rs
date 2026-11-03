@@ -652,6 +652,13 @@ pub(super) fn validate_url(url: &str) -> Result<(), BrowserError> {
     Ok(())
 }
 
+/// A download's file name only: its folder never leaves the platform layer.
+pub(super) fn file_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// The zoom level after a zoom action, stepping through Chrome's levels from 25% to 500%.
 pub(super) fn next_zoom(factor: f64, action: &PageAction) -> f64 {
     const LEVELS: [f64; 15] = [
