@@ -747,6 +747,15 @@ child commands checked that other source tree. Use a private target directory
 for each worktree, and check the compiler source paths before recording a
 branch's gate. An exit status alone does not identify which tree was checked.
 
+- **A zombie still has `/proc/<pid>/stat`, but no readable address space.**
+  Chromium's reference trial reached all ten authored pages, then reading an
+  unreaped child's `smaps_rollup` raised `ESRCH` (`ProcessLookupError`).
+  Exclude already-zombie children, retry a process disappearing mid-snapshot
+  within the existing bound, and refuse an exited root instead of reporting
+  zero memory. Source: the 2026-11-03 XWayland software validation and the
+  real-subprocess regression in `scripts/linux/test_measure_metrics.py`
+  (observed and tested; real machine figures still require the coordinator).
+
 ## Update downloads: WinHTTP
 
 - **A loopback test through WinHTTP's automatic proxy can leave the
