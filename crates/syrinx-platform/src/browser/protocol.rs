@@ -115,13 +115,15 @@ pub enum BrowserCommand {
     Focus {
         id: u64,
     },
-    /// Mutes or unmutes one page through WebView2's own `SetIsMuted` (#95); no script runs.
+    /// Mutes or unmutes one page through the engine's own call (WebView2's `SetIsMuted`,
+    /// WebKitGTK's `set_is_muted`; #95); no script runs.
     /// A page waiting for engine recovery ignores it; the app sends it again once restored.
     SetMuted {
         id: u64,
         muted: bool,
     },
-    /// Clears WebView2's own data for the shared profile (P1-27); `span: None` is all time.
+    /// Clears the engine's own data for the shared profile (P1-27); `span: None` is all time.
+    /// WebKitGTK clears only from a moment until now, so it refuses an earlier closed span.
     ClearData {
         request: u64,
         kinds: BrowsingDataKinds,
@@ -147,7 +149,8 @@ pub enum PageTextOutcome {
     Ineligible(Ineligible),
     /// The tab navigated before the capture fell due.
     Cancelled,
-    /// The one DevTools call was made for this address.
+    /// The one read of the page was started for this address (on Windows, its DevTools
+    /// snapshot; Linux reads no page).
     Requested {
         address: String,
     },
@@ -160,7 +163,7 @@ pub enum PageTextOutcome {
     /// The snapshot was read and then thrown away.
     Discarded(DiscardReason),
     Captured(CapturedText),
-    /// WebView2 refused or failed the call.
+    /// The engine refused or failed the read.
     Failed,
 }
 
@@ -235,7 +238,8 @@ pub enum BrowserEvent {
         state: ConnectionState,
     },
     /// A find's latest result: when its search completes, and again whenever the active
-    /// match or the count changes. `active` is WebView2's `ActiveMatchIndex`, -1 for none.
+    /// match or the count changes. `active` is the zero-based match the engine shows, -1 for
+    /// none: WebView2's `ActiveMatchIndex`, or on Linux the match Syrinx last stepped to.
     FindResult {
         id: u64,
         request: u64,
@@ -261,14 +265,16 @@ pub enum BrowserEvent {
         state: syrinx_core::DownloadState,
         received: u64,
         total: Option<u64>,
-        /// Whether WebView2 says an interrupted download can resume.
+        /// Whether the engine says an interrupted download can resume; always false on
+        /// Linux, where WebKitGTK cannot resume one.
         can_resume: bool,
     },
     ZoomChanged {
         id: u64,
         factor: f64,
     },
-    /// A page's mute or audible state changed (WebView2's `IsMuted`, `IsDocumentPlayingAudio`).
+    /// A page's mute or audible state changed (WebView2's `IsMuted` and
+    /// `IsDocumentPlayingAudio`, WebKitGTK's `is-muted` and `is-playing-audio`).
     AudioChanged {
         id: u64,
         muted: bool,
@@ -285,7 +291,8 @@ pub enum BrowserEvent {
         request: u64,
     },
     Ready,
-    /// The runtime version, sent once after `Ready`; `None` when WebView2 cannot report it.
+    /// The engine's version (the WebView2 runtime's, or WebKitGTK's), sent once after
+    /// `Ready`; `None` when the engine cannot report it.
     RuntimeVersion(Option<String>),
     Created {
         id: u64,
@@ -319,7 +326,8 @@ pub enum BrowserEvent {
         id: u64,
         success: bool,
         /// The navigation failed only because it was stopped or replaced (WebView2's
-        /// `OperationCanceled`), which is not a failure to count (AN-01).
+        /// `OperationCanceled`, WebKit's cancelled load), which is not a failure to count
+        /// (AN-01).
         cancelled: bool,
     },
     ProcessFailed {
@@ -327,7 +335,7 @@ pub enum BrowserEvent {
         kind: i32,
     },
     Shortcut(BrowserShortcut),
-    /// The page took keyboard focus (WebView2 `GotFocus`).
+    /// The page took keyboard focus (WebView2's `GotFocus`, or GTK's focus-in on the page).
     PageFocused {
         id: u64,
     },
@@ -414,7 +422,7 @@ pub enum BrowserError {
     OverlayOwner,
     /// Windows refused to move, size or show a kept overlay popup.
     OverlayPlacement,
-    /// WebView2 refused a data clear; `code` is its HRESULT.
+    /// WebView2 refused a data clear; `code` is its HRESULT (Windows only).
     ClearData {
         code: i32,
     },
@@ -431,7 +439,7 @@ pub enum BrowserError {
     NoDisplay,
     /// The X11 connection's lock was poisoned by a panic on another thread.
     DisplayLock,
-    /// Page-text observation or its DevTools call failed; the page is not read.
+    /// Page-text observation or the read of the page failed; the page is not read.
     PageText,
     StillRunning,
     WorkerPanicked,
@@ -511,10 +519,11 @@ pub enum PageAction {
     ZoomIn,
     ZoomOut,
     ZoomReset,
-    /// Restores a site's remembered level (#90); clamped to WebView2's 25% to 500%.
+    /// Restores a site's remembered level (#90); clamped to 25% to 500%, the range
+    /// `next_zoom` steps through on both engines.
     SetZoom(f64),
     /// Points the profile's downloads at a synthetic folder. Only the native fixture sends
-    /// this; Syrinx itself never changes where WebView2 saves files.
+    /// this; Syrinx itself never changes where the engine saves files.
     SetDownloadFolder(std::path::PathBuf),
 }
 
@@ -540,10 +549,12 @@ pub struct ConnectionState {
     pub status: ConnectionStatus,
 }
 
-/// The owner's choices, mapped onto WebView2's data kinds; Syrinx's own history is separate.
+/// The owner's choices, mapped onto the engine's data kinds; Syrinx's own history is
+/// separate.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BrowsingDataKinds {
-    /// WebView2's own visited-page record, beside Syrinx's history database.
+    /// The engine's own visited-page record, beside Syrinx's history database (WebKitGTK
+    /// keeps none beyond each page's back list).
     pub history: bool,
     /// Cookies plus every kind of site storage, which signs the owner out of sites.
     pub cookies_and_site_data: bool,

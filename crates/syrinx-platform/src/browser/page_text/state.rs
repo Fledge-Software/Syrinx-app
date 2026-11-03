@@ -1,4 +1,4 @@
-//! What one tab has observed about its current document, kept apart from WebView2 so the
+//! What one tab has observed about its current document, kept apart from the engine so the
 //! scheduling and exit rules can be tested without a window.
 
 use std::{
@@ -65,7 +65,8 @@ pub(super) struct Rules<'a> {
     pub(super) capture: bool,
 }
 
-/// What `NavigationStarting` reported for one hop.
+/// What the engine reported for one hop as its navigation started (WebView2's
+/// `NavigationStarting`, WebKit's load start or provisional address change).
 pub(super) struct Start {
     pub(super) address: String,
     pub(super) redirected: bool,
@@ -126,7 +127,7 @@ impl TextState {
         });
     }
 
-    /// Withdraws Syrinx's request: WebView2 refused it, or Syrinx went back, forward, reloaded
+    /// Withdraws Syrinx's request: the engine refused it, or Syrinx went back, forward, reloaded
     /// or stopped instead.
     pub(super) fn syrinx_navigation_cancelled(&mut self) {
         self.syrinx_requested = None;
