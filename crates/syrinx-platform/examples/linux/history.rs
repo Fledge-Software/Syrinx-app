@@ -13,7 +13,7 @@ pub fn run() -> Result<(), String> {
     let mut server = Server::start()?;
     let mut fixture = Fixture::new(reserve_profile()?)?;
     fixture.create(1, server.url("/p/40"))?;
-    fixture.at(&server.url("/p/40"))?;
+    fixture.at("initial host load", &server.url("/p/40"))?;
     for page in 41..=44 {
         navigate(&mut fixture, &server, &format!("/p/{page}"))?;
     }
@@ -25,7 +25,7 @@ pub fn run() -> Result<(), String> {
         id: 1,
         url: server.url("/p/45?replace"),
     })?;
-    fixture.at(&server.url("/p/45r"))?;
+    fixture.at("replaceState during document load", &server.url("/p/45r"))?;
     rows(&fixture, &server, HistoryDirection::Back, &[43, 42, 41, 40])?;
     fixture.send(BrowserCommand::Reload { id: 1 })?;
     fixture.wait("reload complete", |event, _| {
@@ -43,19 +43,22 @@ pub fn run() -> Result<(), String> {
         id: 1,
         url: server.url("/p/push"),
     })?;
-    fixture.at(&server.url("/p/pushed"))?;
+    fixture.at("pushState during document load", &server.url("/p/pushed"))?;
     navigate(&mut fixture, &server, "/p/pushed#fragment")?;
     fixture.send(BrowserCommand::Navigate {
         id: 1,
         url: server.url("/p/302"),
     })?;
-    fixture.at(&server.url("/p/redirected"))?;
+    fixture.at("HTTP 302 landing", &server.url("/p/redirected"))?;
     fixture.send(BrowserCommand::Navigate {
         id: 1,
         url: server.url("/p/script-redirect"),
     })?;
-    fixture.at(&server.url("/p/script-redirect"))?;
-    fixture.at(&server.url("/p/redirected"))?;
+    fixture.at(
+        "script redirect source commit",
+        &server.url("/p/script-redirect"),
+    )?;
+    fixture.at("script redirect landing", &server.url("/p/redirected"))?;
     fixture.stop(Duration::from_secs(5))?;
     server.finish()?;
     println!(
@@ -69,7 +72,7 @@ fn navigate(fixture: &mut Fixture, server: &Server, path: &str) -> Result<(), St
         id: 1,
         url: server.url(path),
     })?;
-    fixture.at(&server.url(path))
+    fixture.at(&format!("host Navigate to {path}"), &server.url(path))
 }
 
 fn jump(
@@ -88,7 +91,10 @@ fn jump(
         direction,
         steps: steps as u32,
     })?;
-    fixture.at(&server.url(path))
+    fixture.at(
+        &format!("{direction:?} jump of {steps} rows"),
+        &server.url(path),
+    )
 }
 
 fn rows(

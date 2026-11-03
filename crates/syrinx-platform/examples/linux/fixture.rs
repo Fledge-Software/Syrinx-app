@@ -6,6 +6,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use super::trace::Trace;
+
 use futures::channel::mpsc::{TryRecvError, UnboundedReceiver};
 use syrinx_core::{HistoryObserved, NavigationList};
 use syrinx_platform::{
@@ -20,6 +22,7 @@ pub struct Fixture {
     host: Option<BrowserHost>,
     events: UnboundedReceiver<BrowserEvent>,
     pub list: NavigationList,
+    trace: Trace,
 }
 
 impl Fixture {
@@ -32,6 +35,7 @@ impl Fixture {
             host: Some(host),
             events,
             list: NavigationList::default(),
+            trace: Trace::default(),
         };
         fixture.wait("host ready", |event, _| {
             matches!(event, BrowserEvent::Ready)
@@ -83,11 +87,12 @@ impl Fixture {
         )
     }
 
-    pub fn at(&mut self, url: &str) -> Result<(), String> {
+    pub fn at(&mut self, step: &str, url: &str) -> Result<(), String> {
+        println!("History step: {step}");
         if self.list.current_address() == Some(url) {
             return Ok(());
         }
-        self.wait("history address", |_, list| {
+        self.wait_expected(step, Some(url), |_, list| {
             list.current_address() == Some(url)
         })
     }
@@ -95,6 +100,15 @@ impl Fixture {
     pub fn wait(
         &mut self,
         reason: &str,
+        done: impl FnMut(&BrowserEvent, &NavigationList) -> bool,
+    ) -> Result<(), String> {
+        self.wait_expected(reason, None, done)
+    }
+
+    fn wait_expected(
+        &mut self,
+        reason: &str,
+        expected: Option<&str>,
         mut done: impl FnMut(&BrowserEvent, &NavigationList) -> bool,
     ) -> Result<(), String> {
         let deadline = Instant::now() + LIMIT;
@@ -112,6 +126,7 @@ impl Fixture {
             let Some(event) = event else {
                 continue;
             };
+            self.trace.record(&event);
             if let BrowserEvent::History { report, .. } = &event
                 && self.list.observe(report) == HistoryObserved::Reset
             {
@@ -139,7 +154,7 @@ impl Fixture {
                 _ => {}
             }
         }
-        Err(format!("Timed out waiting for {reason}"))
+        Err(self.trace.timeout(reason, expected, &self.list))
     }
 
     pub fn stop(&mut self, bound: Duration) -> Result<(), String> {

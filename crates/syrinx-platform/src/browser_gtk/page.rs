@@ -34,6 +34,7 @@ use super::{
     ConnectionState, ConnectionStatus, PageAction, PageBounds, RENDER_PROCESS_EXITED,
     RENDER_PROCESS_UNRESPONSIVE,
     engine::{PendingPopup, Shared},
+    history_delivery::HistoryDelivery,
     history_intent::HistoryIntent,
     history_state::Pending,
     keys::{peek_escape, shortcut_for_modifiers},
@@ -706,6 +707,7 @@ impl FindState {
 struct LoadState {
     history: Cell<Pending>,
     intent: RefCell<HistoryIntent>,
+    delivery: RefCell<HistoryDelivery>,
     navigation: Cell<u64>,
     /// Between `Started` and `Committed`, address changes belong to the load, not the page.
     provisional: Cell<bool>,
@@ -757,6 +759,7 @@ impl LoadWatch {
     fn load_changed(&self, view: &WebView, event: LoadEvent) {
         match event {
             LoadEvent::Started => {
+                self.state.delivery.borrow_mut().boundary();
                 self.state.provisional.set(true);
                 self.state.failed.set(None);
                 self.state.rejected.set(false);
@@ -771,6 +774,7 @@ impl LoadWatch {
                 }
             }
             LoadEvent::Committed => {
+                self.state.delivery.borrow_mut().boundary();
                 self.state.provisional.set(false);
                 if let Some(text) = &self.text {
                     text.committed(view);
@@ -793,6 +797,15 @@ impl LoadWatch {
         let success = failure.is_none() && !self.state.rejected.get();
         let navigation = self.state.navigation.get();
         self.update(|pending| pending.complete(navigation, success));
+        // Script-made URI changes during parsing must reach history after the load settles.
+        let deferred = self.state.delivery.borrow_mut().finished(success);
+        if deferred {
+            self.update(|pending| Pending {
+                new_document: Some(false),
+                ..pending
+            });
+            self.report(view);
+        }
         if !self.state.rejected.get() {
             let status = if success {
                 ConnectionStatus::Loaded
@@ -833,7 +846,12 @@ impl LoadWatch {
             text.same_document(view);
         }
         self.emit_url(view);
-        if view.is_loading() {
+        if !self
+            .state
+            .delivery
+            .borrow_mut()
+            .uri_changed(view.is_loading())
+        {
             return;
         }
         self.update(|pending| Pending {

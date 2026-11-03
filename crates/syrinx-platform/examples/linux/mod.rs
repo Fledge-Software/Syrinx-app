@@ -5,6 +5,7 @@ mod fixture;
 mod history;
 mod lifecycle;
 mod server;
+mod trace;
 
 pub fn main(suite: &str) -> std::process::ExitCode {
     // Match at runtime so every suite's common helpers receive the same lint coverage.

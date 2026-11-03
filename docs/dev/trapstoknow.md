@@ -663,6 +663,16 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   it. GPUI is built with its X11 backend only and GDK is limited to X11
   (`gtk_thread.rs`), so under Hyprland Syrinx runs through XWayland. Source:
   wry's `create_container_x11_window` and `create_gtk_window` (code-read).
+- **A history API change can happen before the document finishes loading.**
+  `address_changed` ignored URI notifications while `is_loading` was true,
+  including a post-commit replaceState/pushState during parsing. Nothing
+  retried the report at `Finished`, so the shared list kept the old address.
+  Defer that post-commit change until a successful finish; clear it at a new
+  start/commit or failure. This does not report a provisional page as
+  committed. Source: `browser_gtk/history_delivery.rs`, its display-free
+  regression (failed before the fix), and the authored history fixture
+  (code-read and tested, 2026-11-03; #221). The earlier native timeout lacked
+  its step, so attribution of that run still awaits the new diagnostic log.
 - **A link or script navigation's address is not the view's yet at `Started`.**
   When `load-changed` reports `Started` for a navigation the page began, the
   view's `uri` still names the document being left; the new address arrives

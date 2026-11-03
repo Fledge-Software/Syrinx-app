@@ -21,17 +21,41 @@ model is unchanged from main and correctly applies its documented rule.
 
 `browser_gtk/history_intent.rs` now remembers the address Syrinx requested
 and consumes that intent when the matching navigation starts. A later script
-move does not inherit it. Reload and Back/Forward withdraw any unconsumed request. A cancelled
-older load must not clear a newer host request that has not started yet. A server redirect preserves the navigation already in
+move does not inherit it. Reload and Back/Forward withdraw any unconsumed
+request. A cancelled older load must not clear a newer host request that has
+not started yet. A server redirect preserves the navigation already in
 flight. This classification is for history; it does not clear D35 taint or
 change page-text capture, which remains off on Linux.
 
-The display-free regression feeds five host-requested, gesture-free loads
-through the real shared list. It failed with zero Back rows before the fix;
-it now checks four literal addresses in order and an available three-row
-jump. Other regressions cover one-shot intent, an unrelated frame request,
-URL normalization and withdrawal. Native event-order validation still belongs
-to the coordinator's next run.
+The first display-free regression feeds five host-requested, gesture-free
+loads through the real shared list. It failed with zero Back rows before the
+intent correction and now checks four literal addresses plus a three-row
+jump. That corrected one adapter defect, but it did not establish a green
+native history run.
+
+On 2026-11-03 the coordinator's `b26b8c4` run passed page-close and cookie
+checks, then timed out on history in three runs. Its old error did not name
+the step, so it cannot establish which address was lost. The fixture now
+names every wait and includes expected/current URLs, Back/Forward rows and
+the last 64 History, URL, loading and completion events at a deadline.
+Unexpected external URLs and all titles are excluded from that diagnostic.
+No row-order assertion or wait condition was relaxed.
+
+A second display-free regression demonstrates another adapter defect:
+`address_changed` discarded URI changes while `is_loading` was true, even
+after commit, and `Finished` never delivered them. The fixture's authored
+HTML calls replaceState/pushState during parsing, exactly where this loss
+path applies. `history_delivery.rs` defers such changes and reports the
+latest URI once after a successful finish; a new start/commit or failure
+clears the pending delivery. The shared list remains unchanged. The
+regression failed with the pre-replacement address and now verifies the
+replacement address without an extra Back row. Native validation must still
+confirm whether this accounts for the coordinator's timeout; the next logs
+will identify any remaining failing step.
+
+WebKit's [load-changed contract](https://webkitgtk.org/reference/webkit2gtk/stable/signal.WebView.load-changed.html)
+provides a committed URI, which can subsequently change within that document.
+This fix leaves provisional URI handling in `page_text.rs` unchanged.
 
 ## What each native check proves
 
