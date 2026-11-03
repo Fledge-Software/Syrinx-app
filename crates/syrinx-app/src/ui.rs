@@ -1310,12 +1310,8 @@ impl BrowserView {
                 self.usage.page_shown(id);
             }
             self.shown = next;
-            if focus_shown
-                && self.palette.is_none()
-                && self.peek.is_none()
-                && let Some(id) = next
-            {
-                self.focus_newly_shown_page(id.get());
+            if focus_shown && self.palette.is_none() && self.peek.is_none() && next.is_some() {
+                self.focus_page_unless_behind();
             }
         }
     }
@@ -1642,19 +1638,24 @@ impl BrowserView {
         if main {
             window.focus(&self.focus, cx);
         }
+        self.focus_page_unless_behind();
+    }
+
+    /// Gives the shown page the keys at once while Syrinx is in front, or else when the owner
+    /// brings Syrinx back. The one place both a requested and a newly shown page are focused.
+    fn focus_page_unless_behind(&mut self) {
         // GPUI's `activate_window` focuses the window later, from a task, which takes the keys
         // back from a page focused now; it also forces the foreground. With Syrinx in front,
         // activate natively at once instead.
-        if self.activate_main_now() {
+        let in_front = self.activate_main_now();
+        if page_focus_now(in_front, &mut self.page_focus_on_activation) {
             self.acceptance_mark("focus_page: activated at once");
-            self.page_focus_on_activation = false;
             self.focus_shown_page();
             return;
         }
         // Syrinx never takes the foreground from another application (owner, 2026-10-12): the
         // page takes the keys when the owner returns to Syrinx.
         self.acceptance_mark("focus_page: deferred until Syrinx is activated");
-        self.page_focus_on_activation = true;
     }
 
     fn activate_main_now(&mut self) -> bool {
@@ -1677,16 +1678,6 @@ impl BrowserView {
         }
         self.acceptance_mark("activation observed");
         self.focus_shown_page();
-    }
-
-    /// Gives a page that has just been shown the keys, or, with another application in
-    /// front, waits until the owner brings Syrinx back, as `focus_page` does.
-    fn focus_newly_shown_page(&mut self, id: u64) {
-        if !syrinx_platform::browser::syrinx_in_foreground() {
-            self.page_focus_on_activation = true;
-            return;
-        }
-        self.page_command(BrowserCommand::Focus { id });
     }
 
     fn focus_shown_page(&mut self) {
@@ -2365,6 +2356,13 @@ fn deferred_focus_applies(deferred: bool, root_focused: Option<bool>) -> bool {
     deferred && root_focused != Some(false)
 }
 
+/// Decides a request to give the shown page the keys: at once when Syrinx is `in_front`,
+/// otherwise remembered in `deferred` until the owner brings Syrinx back.
+fn page_focus_now(in_front: bool, deferred: &mut bool) -> bool {
+    *deferred = !in_front;
+    in_front
+}
+
 impl BrowserView {
     /// Moving to a monitor with another scale (WM_DPICHANGED) resizes the window, so the
     /// bounds watch re-sizes the taskbar and title-bar icons for the new DPI here.
@@ -2439,6 +2437,24 @@ mod palette_shortcut_tests {
             "nothing was deferred"
         );
         assert!(!deferred_focus_applies(false, None));
+    }
+
+    #[test]
+    fn a_page_shown_while_syrinx_is_behind_waits_for_reactivation() {
+        // The foreground check is injected: `false` is another application in front.
+        let mut deferred = false;
+        assert!(!page_focus_now(false, &mut deferred), "no Focus is sent");
+        assert!(
+            deferred,
+            "the page waits for the owner to bring Syrinx back"
+        );
+        // The activation observer then focuses it, as `focus_page_after_activation` does.
+        assert!(deferred_focus_applies(std::mem::take(&mut deferred), None));
+        assert!(!deferred);
+        // In front, the page is focused at once and an earlier wait is dropped.
+        let mut stale = true;
+        assert!(page_focus_now(true, &mut stale));
+        assert!(!stale);
     }
 
     #[test]
