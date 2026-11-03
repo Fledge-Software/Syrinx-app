@@ -13,6 +13,8 @@ pub enum SignatureKind {
     Manifest,
     /// `latest.sig`, over a latest-version statement (P1-39a).
     Statement,
+    /// `package.sig`, over a plugin package's file list (#134).
+    PluginPackage,
 }
 
 impl SignatureKind {
@@ -20,6 +22,7 @@ impl SignatureKind {
         match self {
             Self::Manifest => *b"AUS1",
             Self::Statement => *b"ALS1",
+            Self::PluginPackage => *b"SPP1",
         }
     }
 }
