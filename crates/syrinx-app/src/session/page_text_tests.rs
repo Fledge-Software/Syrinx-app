@@ -371,55 +371,7 @@ fn finish_repaired_session(fixture: Fixture, store: Store, worker: Worker) {
     fixture.cleanup();
 }
 
-#[cfg(windows)]
-/// Windows' `FILE_SHARE_DELETE`: others may delete the file but not read it.
-const SHARE_DELETE_ONLY: u32 = 0x4;
-#[cfg(windows)]
-/// No sharing: others may neither read nor delete the file.
-const SHARE_NOTHING: u32 = 0;
-#[cfg(windows)]
-/// Windows' `FILE_SHARE_READ`: others may read the file but not delete it.
-const SHARE_READ_ONLY: u32 = 0x1;
-
-#[cfg(windows)]
-/// Holds the index's `meta.json` open, sharing only `share_mode`, so Tantivy cannot read it.
-fn hold_index_metadata(fixture: &Fixture, share_mode: u32) -> fs::File {
-    use std::os::windows::fs::OpenOptionsExt;
-    fs::OpenOptions::new()
-        .read(true)
-        .share_mode(share_mode)
-        .open(index_folder(fixture).join("meta.json"))
-        .expect("hold synthetic index metadata")
-}
-
 // Holding a file so it cannot be read or deleted is a Windows behaviour.
-#[cfg(windows)]
-#[test]
-fn a_repair_whose_index_cannot_open_empties_its_folder_and_starts_afresh() {
-    let fixture = Fixture::new();
-    seed_index_ahead_of_a_repair(&fixture);
-    // The index cannot open, so it cannot restart its count, but its files can be deleted.
-    // NTFS's POSIX-style deletion frees the held file's name at once, so the fresh index can
-    // write its own `meta.json` while this handle is still open.
-    let held = hold_index_metadata(&fixture, SHARE_DELETE_ONLY);
-
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
-    drop(held);
-    let index = worker.page_text.index().expect("a fresh index is open");
-    assert!(ids_in(index, Namespace::page()).is_empty());
-    // Emptying cannot spare a feed: nothing in an index that will not open can be read.
-    assert!(ids_in(index, notes()).is_empty());
-    assert_eq!(index.cleared_generation(), 1);
-    // The owner still hears that the old index could not open.
-    match worker.page_text.take_problem() {
-        Err(SessionError::During { operation, .. }) => {
-            assert_eq!(operation, "opening the search index");
-        }
-        problem => panic!("expected the open failure to be reported, got {problem:?}"),
-    }
-    finish_repaired_session(fixture, store, worker);
-}
 
 #[test]
 fn a_repair_whose_index_opens_but_cannot_restart_empties_its_folder_and_starts_afresh() {
@@ -457,43 +409,6 @@ fn a_repair_whose_index_opens_but_cannot_restart_empties_its_folder_and_starts_a
 }
 
 // Holding a file so it cannot be read or deleted is a Windows behaviour.
-#[cfg(windows)]
-#[test]
-fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can() {
-    let fixture = Fixture::new();
-    seed_index_ahead_of_a_repair(&fixture);
-    // Nothing may read or delete the metadata, so the old page text cannot be removed.
-    let held = hold_index_metadata(&fixture, SHARE_NOTHING);
-
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let refusal = match open_session(lease, true) {
-        Err(error) => error,
-        Ok(_) => panic!("a repair went ahead while the old page text could not be removed"),
-    };
-    // Both causes reach the owner: the open failure, then the refusal naming what to clear.
-    let SessionError::AfterEarlier { earlier, error } = &refusal else {
-        panic!("expected both failures to be kept, got {refusal:?}");
-    };
-    assert!(matches!(
-        **earlier,
-        SessionError::During {
-            operation: "opening the search index",
-            ..
-        }
-    ));
-    assert!(matches!(**error, SessionError::IndexNotEmptied(_)));
-    assert!(refusal.to_string().contains("\"fulltext\" folder"));
-    // Nothing was rebuilt, so a damaged journal would still offer the repair at the next start.
-    assert!(!fixture.0.join("syrinx.deletions").exists());
-    drop(held);
-
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let (store, worker) = open_session(lease, true).expect("repair once the index is free");
-    let index = worker.page_text.index().expect("the index is open");
-    assert!(ids_in(index, Namespace::page()).is_empty());
-    assert_eq!(index.cleared_generation(), 1);
-    finish_repaired_session(fixture, store, worker);
-}
 
 /// The index's segment files in name order, which is NTFS's listing order: not a `.tantivy-*`
 /// lock and not `*.json`. Linux lists in hash order, so an unsorted first file could be a
@@ -512,23 +427,6 @@ fn is_segment_file(path: &Path) -> bool {
         let name = name.to_string_lossy();
         !name.starts_with('.') && !name.ends_with(".json")
     })
-}
-
-#[cfg(windows)]
-/// Holds one of the index's segment files open so it cannot be deleted, and names it.
-fn hold_a_segment(fixture: &Fixture) -> (PathBuf, fs::File) {
-    use std::os::windows::fs::OpenOptionsExt;
-    let segment = segment_files(fixture)
-        .into_iter()
-        .next()
-        .expect("the synthetic index has a segment file");
-    let held = checked_io(
-        fs::OpenOptions::new()
-            .read(true)
-            .share_mode(SHARE_READ_ONLY)
-            .open(&segment),
-    );
-    (segment, held)
 }
 
 #[test]
@@ -560,40 +458,6 @@ fn an_ordinary_start_empties_an_index_a_failed_empty_left_without_some_segment_f
 }
 
 // Holding a file so it cannot be read or deleted is a Windows behaviour.
-#[cfg(windows)]
-#[test]
-fn a_repair_whose_index_is_only_partly_emptied_is_refused_and_retried_until_it_is_gone() {
-    let fixture = Fixture::new();
-    seed_index_ahead_of_a_repair(&fixture);
-    // The index cannot open, so the repair empties it, but one segment cannot be deleted.
-    let metadata = hold_index_metadata(&fixture, SHARE_DELETE_ONLY);
-    let (segment, held) = hold_a_segment(&fixture);
-
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let refusal = match open_session(lease, true) {
-        Err(error) => error,
-        Ok(_) => panic!("a repair went ahead while a segment of old page text was left"),
-    };
-    let SessionError::AfterEarlier { error, .. } = &refusal else {
-        panic!("expected both failures to be kept, got {refusal:?}");
-    };
-    assert!(matches!(**error, SessionError::IndexNotEmptied(_)));
-    drop(metadata);
-    drop(held);
-    // The metadata went last, so it survives: the next open finds the old index damaged,
-    // not a fresh one that would never track the leftover segment.
-    assert!(index_folder(&fixture).join("meta.json").is_file());
-    assert!(index_folder(&fixture).join(".managed.json").is_file());
-    assert_eq!(segment_files(&fixture), std::slice::from_ref(&segment));
-
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let (store, worker) = open_session(lease, true).expect("repair once the segment is free");
-    let index = worker.page_text.index().expect("the index is open");
-    assert!(ids_in(index, Namespace::page()).is_empty());
-    assert_eq!(index.cleared_generation(), 1);
-    assert!(!segment.exists(), "the leftover segment was removed");
-    finish_repaired_session(fixture, store, worker);
-}
 
 #[test]
 fn a_repair_goes_ahead_when_a_file_stands_where_the_index_folder_belongs() {
@@ -627,53 +491,6 @@ fn a_repair_goes_ahead_when_a_file_stands_where_the_index_folder_belongs() {
 }
 
 // NTFS junctions exist only on Windows.
-#[cfg(windows)]
-#[test]
-fn a_repair_goes_ahead_when_a_junction_stands_where_the_index_folder_belongs() {
-    let fixture = Fixture::new();
-    drop(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data"));
-    let target = fixture.1.join("junction-target");
-    checked_io(fs::create_dir(&target));
-    // Only fixed relative names reach the shell; its working directory is this owned fixture.
-    let output = std::process::Command::new("cmd.exe")
-        .current_dir(&fixture.0)
-        .args([
-            "/d",
-            "/c",
-            "mklink",
-            "/J",
-            page_text::INDEX_FOLDER,
-            r"..\junction-target",
-        ])
-        .output()
-        .expect("create disposable directory junction");
-    assert!(
-        output.status.success(),
-        "synthetic junction creation must succeed"
-    );
-
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
-    assert!(worker.page_text.index().is_none());
-    let Err(SessionError::AfterEarlier { error, .. }) = worker.page_text.take_problem() else {
-        panic!("expected the junction to be reported");
-    };
-    assert_eq!(
-        *error,
-        SessionError::During {
-            operation: "emptying the search index before a history repair",
-            error: Box::new(SessionError::IndexFolder(LocationError::ReparsePoint)),
-        }
-    );
-    // Nothing was written through the junction.
-    assert_eq!(checked_io(fs::read_dir(&target)).count(), 0);
-    drop(worker);
-    store.shutdown().expect("close synthetic store");
-    assert_eq!(completed_clears(&fixture), 1);
-    checked_io(fs::remove_dir(index_folder(&fixture)));
-    checked_io(fs::remove_dir(&target));
-    fixture.cleanup();
-}
 
 #[test]
 fn a_repair_is_refused_when_the_data_folder_fails_its_guard_though_the_index_folder_is_fine() {
@@ -1145,4 +962,190 @@ fn a_captured_page_never_shows_its_address_title_or_text_in_debug_output() {
     assert!(!format!("{page:?}").contains("sentinel"));
     let command = SessionCommand::StorePageText(page);
     assert!(!format!("{command:?}").contains("sentinel"));
+}
+
+// Windows file-sharing behaviour: a held file cannot be read or deleted.
+#[cfg(windows)]
+mod windows {
+    use super::*;
+
+    /// Windows' `FILE_SHARE_DELETE`: others may delete the file but not read it.
+    const SHARE_DELETE_ONLY: u32 = 0x4;
+
+    /// No sharing: others may neither read nor delete the file.
+    const SHARE_NOTHING: u32 = 0;
+
+    /// Windows' `FILE_SHARE_READ`: others may read the file but not delete it.
+    const SHARE_READ_ONLY: u32 = 0x1;
+
+    /// Holds the index's `meta.json` open, sharing only `share_mode`, so Tantivy cannot read it.
+    fn hold_index_metadata(fixture: &Fixture, share_mode: u32) -> fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(share_mode)
+            .open(index_folder(fixture).join("meta.json"))
+            .expect("hold synthetic index metadata")
+    }
+
+    #[test]
+    fn a_repair_whose_index_cannot_open_empties_its_folder_and_starts_afresh() {
+        let fixture = Fixture::new();
+        seed_index_ahead_of_a_repair(&fixture);
+        // The index cannot open, so it cannot restart its count, but its files can be deleted.
+        // NTFS's POSIX-style deletion frees the held file's name at once, so the fresh index can
+        // write its own `meta.json` while this handle is still open.
+        let held = hold_index_metadata(&fixture, SHARE_DELETE_ONLY);
+
+        let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+        let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
+        drop(held);
+        let index = worker.page_text.index().expect("a fresh index is open");
+        assert!(ids_in(index, Namespace::page()).is_empty());
+        // Emptying cannot spare a feed: nothing in an index that will not open can be read.
+        assert!(ids_in(index, notes()).is_empty());
+        assert_eq!(index.cleared_generation(), 1);
+        // The owner still hears that the old index could not open.
+        match worker.page_text.take_problem() {
+            Err(SessionError::During { operation, .. }) => {
+                assert_eq!(operation, "opening the search index");
+            }
+            problem => panic!("expected the open failure to be reported, got {problem:?}"),
+        }
+        finish_repaired_session(fixture, store, worker);
+    }
+
+    #[test]
+    fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can() {
+        let fixture = Fixture::new();
+        seed_index_ahead_of_a_repair(&fixture);
+        // Nothing may read or delete the metadata, so the old page text cannot be removed.
+        let held = hold_index_metadata(&fixture, SHARE_NOTHING);
+
+        let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+        let refusal = match open_session(lease, true) {
+            Err(error) => error,
+            Ok(_) => panic!("a repair went ahead while the old page text could not be removed"),
+        };
+        // Both causes reach the owner: the open failure, then the refusal naming what to clear.
+        let SessionError::AfterEarlier { earlier, error } = &refusal else {
+            panic!("expected both failures to be kept, got {refusal:?}");
+        };
+        assert!(matches!(
+            **earlier,
+            SessionError::During {
+                operation: "opening the search index",
+                ..
+            }
+        ));
+        assert!(matches!(**error, SessionError::IndexNotEmptied(_)));
+        assert!(refusal.to_string().contains("\"fulltext\" folder"));
+        // Nothing was rebuilt, so a damaged journal would still offer the repair at the next start.
+        assert!(!fixture.0.join("syrinx.deletions").exists());
+        drop(held);
+
+        let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+        let (store, worker) = open_session(lease, true).expect("repair once the index is free");
+        let index = worker.page_text.index().expect("the index is open");
+        assert!(ids_in(index, Namespace::page()).is_empty());
+        assert_eq!(index.cleared_generation(), 1);
+        finish_repaired_session(fixture, store, worker);
+    }
+
+    /// Holds one of the index's segment files open so it cannot be deleted, and names it.
+    fn hold_a_segment(fixture: &Fixture) -> (PathBuf, fs::File) {
+        use std::os::windows::fs::OpenOptionsExt;
+        let segment = segment_files(fixture)
+            .into_iter()
+            .next()
+            .expect("the synthetic index has a segment file");
+        let held = checked_io(
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(SHARE_READ_ONLY)
+                .open(&segment),
+        );
+        (segment, held)
+    }
+
+    #[test]
+    fn a_repair_whose_index_is_only_partly_emptied_is_refused_and_retried_until_it_is_gone() {
+        let fixture = Fixture::new();
+        seed_index_ahead_of_a_repair(&fixture);
+        // The index cannot open, so the repair empties it, but one segment cannot be deleted.
+        let metadata = hold_index_metadata(&fixture, SHARE_DELETE_ONLY);
+        let (segment, held) = hold_a_segment(&fixture);
+
+        let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+        let refusal = match open_session(lease, true) {
+            Err(error) => error,
+            Ok(_) => panic!("a repair went ahead while a segment of old page text was left"),
+        };
+        let SessionError::AfterEarlier { error, .. } = &refusal else {
+            panic!("expected both failures to be kept, got {refusal:?}");
+        };
+        assert!(matches!(**error, SessionError::IndexNotEmptied(_)));
+        drop(metadata);
+        drop(held);
+        // The metadata went last, so it survives: the next open finds the old index damaged,
+        // not a fresh one that would never track the leftover segment.
+        assert!(index_folder(&fixture).join("meta.json").is_file());
+        assert!(index_folder(&fixture).join(".managed.json").is_file());
+        assert_eq!(segment_files(&fixture), std::slice::from_ref(&segment));
+
+        let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+        let (store, worker) = open_session(lease, true).expect("repair once the segment is free");
+        let index = worker.page_text.index().expect("the index is open");
+        assert!(ids_in(index, Namespace::page()).is_empty());
+        assert_eq!(index.cleared_generation(), 1);
+        assert!(!segment.exists(), "the leftover segment was removed");
+        finish_repaired_session(fixture, store, worker);
+    }
+
+    #[test]
+    fn a_repair_goes_ahead_when_a_junction_stands_where_the_index_folder_belongs() {
+        let fixture = Fixture::new();
+        drop(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data"));
+        let target = fixture.1.join("junction-target");
+        checked_io(fs::create_dir(&target));
+        // Only fixed relative names reach the shell; its working directory is this owned fixture.
+        let output = std::process::Command::new("cmd.exe")
+            .current_dir(&fixture.0)
+            .args([
+                "/d",
+                "/c",
+                "mklink",
+                "/J",
+                page_text::INDEX_FOLDER,
+                r"..\junction-target",
+            ])
+            .output()
+            .expect("create disposable directory junction");
+        assert!(
+            output.status.success(),
+            "synthetic junction creation must succeed"
+        );
+
+        let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+        let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
+        assert!(worker.page_text.index().is_none());
+        let Err(SessionError::AfterEarlier { error, .. }) = worker.page_text.take_problem() else {
+            panic!("expected the junction to be reported");
+        };
+        assert_eq!(
+            *error,
+            SessionError::During {
+                operation: "emptying the search index before a history repair",
+                error: Box::new(SessionError::IndexFolder(LocationError::ReparsePoint)),
+            }
+        );
+        // Nothing was written through the junction.
+        assert_eq!(checked_io(fs::read_dir(&target)).count(), 0);
+        drop(worker);
+        store.shutdown().expect("close synthetic store");
+        assert_eq!(completed_clears(&fixture), 1);
+        checked_io(fs::remove_dir(index_folder(&fixture)));
+        checked_io(fs::remove_dir(&target));
+        fixture.cleanup();
+    }
 }
