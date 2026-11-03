@@ -568,6 +568,22 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Linux: WebKitGTK, X11 and POSIX
 
+- **A measurement root can exit before its descendants.** Traversing only
+  a still-live root misses orphaned children; waiting for the root alone
+  also misses a child that ignores termination. The standalone measurement
+  runner scopes itself as a child subreaper, retains process identities,
+  reaps adopted children and uses bounded cleanup even after a GUI probe
+  fails. Its prior process attribute is restored. Source: native subprocess
+  regressions in `scripts/linux/test_measure_runner.py` and Linux
+  `PR_SET_CHILD_SUBREAPER(2)` (observed, 2026-11-02).
+- **Keep scratch runtime paths short.** Syrinx's Unix instance socket adds
+  its own name to `XDG_RUNTIME_DIR`; Linux's `sockaddr_un.sun_path` is only
+  108 bytes including the terminator. Placing runtime below a long benchmark
+  results folder failed with "Syrinx's link channel failed" before the main
+  window opened. The measurement runner uses a private, short
+  `/tmp/sx-runtime-*` directory while retaining its results elsewhere. Source:
+  `instance/pipe_unix.rs`, Linux `unix(7)` and the first software-rendered
+  measurement-script trial (observed, 2026-11-02).
 - **A download observer can keep a closed host's WebKit context alive.**
   The context's signal owns the registry, tracked views own their context,
   and clearing only `Engine.pages` leaves a cycle. Shutdown must release
@@ -721,6 +737,15 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   answers `CLOSING` once the stop is raised, as the Windows pipe ends every
   step on its stop event. Source: `instance::tests::a_silent_client_does_not_delay_shutdown`
   (observed 2026-10-31).
+
+### Keep gate executables separate between worktrees
+
+**Observed, 2026-11-02:** sharing `CARGO_TARGET_DIR` between worktrees selected
+an `xtask` executable compiled in another worktree. `workspace_root` in
+`crates/xtask/src/main.rs` uses compile-time `CARGO_MANIFEST_DIR`, so the
+child commands checked that other source tree. Use a private target directory
+for each worktree, and check the compiler source paths before recording a
+branch's gate. An exit status alone does not identify which tree was checked.
 
 ## Update downloads: WinHTTP
 
