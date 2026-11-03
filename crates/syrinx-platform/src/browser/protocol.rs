@@ -418,6 +418,19 @@ pub enum BrowserError {
     ClearData {
         code: i32,
     },
+    /// WebKitGTK refused a data clear; `domain` and `code` are its GLib error's.
+    ClearDataRefused {
+        domain: &'static str,
+        code: i32,
+    },
+    /// The engine cannot clear the chosen span: WebKitGTK clears only from a moment until now.
+    ClearSpanUnsupported,
+    /// The engine has no website-data store to clear.
+    ClearDataUnavailable,
+    /// No X11 display connection is open, so Syrinx cannot place or focus its windows.
+    NoDisplay,
+    /// The X11 connection's lock was poisoned by a panic on another thread.
+    DisplayLock,
     /// Page-text observation or its DevTools call failed; the page is not read.
     PageText,
     StillRunning,

@@ -139,9 +139,17 @@ impl Downloads {
                 download.cancel();
                 return true;
             };
-            download.set_allow_overwrite(false);
-            download.set_destination(&glib::filename_to_uri(&path, None).unwrap_or_default());
             registry.announce(id, download, &path);
+            // A path GLib cannot write as a URI is refused and shown as a file error, rather
+            // than handing WebKit an empty destination.
+            let Ok(uri) = glib::filename_to_uri(&path, None) else {
+                let refused = DownloadState::Interrupted(DownloadInterruption::File);
+                registry.report(changed(id, download, refused));
+                download.cancel();
+                return true;
+            };
+            download.set_allow_overwrite(false);
+            download.set_destination(&uri);
             registry.report_progress(id, download);
             true
         });

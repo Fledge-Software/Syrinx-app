@@ -1311,7 +1311,7 @@ impl BrowserView {
                 && self.peek.is_none()
                 && let Some(id) = next
             {
-                self.page_command(BrowserCommand::Focus { id: id.get() });
+                self.focus_newly_shown_page(id.get());
             }
         }
     }
@@ -1673,6 +1673,16 @@ impl BrowserView {
         }
         self.acceptance_mark("activation observed");
         self.focus_shown_page();
+    }
+
+    /// Gives a page that has just been shown the keys, or, with another application in
+    /// front, waits until the owner brings Syrinx back, as `focus_page` does.
+    fn focus_newly_shown_page(&mut self, id: u64) {
+        if !syrinx_platform::browser::syrinx_in_foreground() {
+            self.page_focus_on_activation = true;
+            return;
+        }
+        self.page_command(BrowserCommand::Focus { id });
     }
 
     fn focus_shown_page(&mut self) {

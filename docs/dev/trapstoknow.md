@@ -568,6 +568,20 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Linux: WebKitGTK, X11 and POSIX
 
+- **A raw `XSetInputFocus` takes the keys from another application, and on
+  a minimised window it ends the process.** X11 grants focus to any client
+  that asks, so a page shown while another program is in front took that
+  program's typing, against the owner's 2026-10-12 foreground rule; and a
+  window that is not viewable (minimised, or a child of one) answers with a
+  BadMatch error, which GDK's process-wide X error handler treats as fatal.
+  Check `x11::syrinx_in_foreground()` before any focus Syrinx starts itself
+  (a click on the page is the owner's own act), focus through
+  `Connection::set_focus`, which refuses a window that is not viewable, and
+  wrap a focus on GTK's own connection in the display's error trap, as
+  `page_keys.rs` does. Source: the #226 review; `x11.rs`'s tests cover a
+  background Syrinx and an unmapped window under Xvfb (code-confirmed; the
+  owner's minimise check is pending).
+
 - **A measurement root can exit before its descendants.** Traversing only
   a still-live root misses orphaned children; waiting for the root alone
   also misses a child that ignores termination. The standalone measurement

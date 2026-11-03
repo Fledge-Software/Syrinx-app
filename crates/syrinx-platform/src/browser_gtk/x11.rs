@@ -22,12 +22,26 @@ unsafe impl Send for Connection {}
 
 static CONNECTION: OnceLock<Option<Mutex<Connection>>> = OnceLock::new();
 
-fn connection() -> Option<MutexGuard<'static, Connection>> {
+/// The shared connection: `NoDisplay` when no X11 display could be opened, and `DisplayLock`
+/// when a panic on another thread poisoned it.
+fn connection() -> Result<MutexGuard<'static, Connection>, BrowserError> {
     CONNECTION
         .get_or_init(|| open().map(Mutex::new))
-        .as_ref()?
+        .as_ref()
+        .ok_or(BrowserError::NoDisplay)?
         .lock()
-        .ok()
+        .map_err(|_| BrowserError::DisplayLock)
+}
+
+/// The same connection for callers that report in words.
+fn described_connection() -> Result<MutexGuard<'static, Connection>, String> {
+    connection().map_err(|error| {
+        match error {
+            BrowserError::DisplayLock => "Syrinx's X11 connection failed after an earlier error.",
+            _ => "Syrinx cannot reach the X11 display.",
+        }
+        .to_owned()
+    })
 }
 
 fn open() -> Option<Connection> {
@@ -61,6 +75,31 @@ impl Connection {
 
     fn flush(&self) {
         unsafe { (self.xlib.XFlush)(self.display) };
+    }
+
+    /// Whether `window` and every ancestor are mapped. Focusing any other window raises a
+    /// BadMatch error, which the process-wide X error handler treats as fatal.
+    fn viewable(&self, window: c_ulong) -> bool {
+        let mut attributes = unsafe { std::mem::zeroed::<xlib::XWindowAttributes>() };
+        let read =
+            unsafe { (self.xlib.XGetWindowAttributes)(self.display, window, &mut attributes) };
+        read != 0 && attributes.map_state == xlib::IsViewable
+    }
+
+    /// Gives `window` the keys only when it can take them; `false` when it was not viewable.
+    fn set_focus(&self, window: c_ulong) -> bool {
+        if !self.viewable(window) {
+            return false;
+        }
+        unsafe {
+            (self.xlib.XSetInputFocus)(
+                self.display,
+                window,
+                xlib::RevertToParent,
+                xlib::CurrentTime,
+            )
+        };
+        true
     }
 
     fn root(&self) -> c_ulong {
@@ -186,7 +225,7 @@ impl Connection {
 
 pub(super) fn validate_window(window: isize) -> Result<(), BrowserError> {
     let window = Connection::window(window)?;
-    let connection = connection().ok_or(BrowserError::InvalidWindow)?;
+    let connection = connection()?;
     if !connection.exists(window) {
         return Err(BrowserError::InvalidWindow);
     }
@@ -194,17 +233,15 @@ pub(super) fn validate_window(window: isize) -> Result<(), BrowserError> {
 }
 
 /// Gives the Syrinx chrome window keyboard focus, taking it from a page's child window.
+/// Nothing moves while another application holds the keys (owner, 2026-10-12), or while the
+/// window is minimised and cannot take them.
 pub fn focus_chrome(parent: isize) -> Result<(), BrowserError> {
     let window = Connection::window(parent)?;
-    let connection = connection().ok_or(BrowserError::Focus)?;
-    unsafe {
-        (connection.xlib.XSetInputFocus)(
-            connection.display,
-            window,
-            xlib::RevertToParent,
-            xlib::CurrentTime,
-        )
-    };
+    let connection = connection()?;
+    if !connection.syrinx_focused() {
+        return Ok(());
+    }
+    connection.set_focus(window);
     connection.flush();
     Ok(())
 }
@@ -219,7 +256,7 @@ pub fn holds_keyboard_focus(window: isize) -> bool {
     let Ok(window) = Connection::window(window) else {
         return false;
     };
-    connection().is_some_and(|connection| connection.focused() == window)
+    connection().is_ok_and(|connection| connection.focused() == window)
 }
 
 /// Popups are override-redirect windows, so no owner is needed to keep them above Syrinx.
@@ -230,27 +267,21 @@ pub fn set_overlay_owner(popup: isize, parent: isize) -> Result<(), BrowserError
 
 /// Whether one of this process's windows holds keyboard focus.
 pub fn syrinx_in_foreground() -> bool {
-    connection().is_some_and(|connection| connection.syrinx_focused())
+    connection().is_ok_and(|connection| connection.syrinx_focused())
 }
 
 /// Focuses `window` only while Syrinx is already in front, so it never steals the screen.
+/// `false` when Syrinx is behind another application or `window` cannot take the keys.
 pub fn activate_if_foreground(window: isize) -> Result<bool, BrowserError> {
     let target = Connection::window(window)?;
-    let connection = connection().ok_or(BrowserError::Focus)?;
+    let connection = connection()?;
     if !connection.syrinx_focused() {
         return Ok(false);
     }
-    unsafe {
-        (connection.xlib.XRaiseWindow)(connection.display, target);
-        (connection.xlib.XSetInputFocus)(
-            connection.display,
-            target,
-            xlib::RevertToParent,
-            xlib::CurrentTime,
-        );
-    }
+    unsafe { (connection.xlib.XRaiseWindow)(connection.display, target) };
+    let focused = connection.set_focus(target);
     connection.flush();
-    Ok(true)
+    Ok(focused)
 }
 
 /// Moves a kept popup to `rect` and shows it above Syrinx without asking the window manager.
@@ -258,7 +289,7 @@ pub fn show_overlay(popup: isize, rect: OverlayRect) -> Result<(), BrowserError>
     let window = Connection::window(popup)?;
     let width = u32::try_from(rect.width).map_err(|_| BrowserError::OverlayPlacement)?;
     let height = u32::try_from(rect.height).map_err(|_| BrowserError::OverlayPlacement)?;
-    let connection = connection().ok_or(BrowserError::OverlayPlacement)?;
+    let connection = connection()?;
     unsafe {
         (connection.xlib.XMoveResizeWindow)(
             connection.display,
@@ -276,19 +307,14 @@ pub fn show_overlay(popup: isize, rect: OverlayRect) -> Result<(), BrowserError>
 
 /// Hides a kept popup. A popup holding the keys hands them to `owner` first, as on Windows:
 /// unmapping a focused override-redirect window reverts X focus to the root, outside Syrinx.
+/// A minimised owner cannot take them, so focus then reverts as X decides.
 pub fn hide_overlay(popup: isize, owner: isize) -> Result<(), BrowserError> {
     let window = Connection::window(popup)?;
     let owner = Connection::window(owner)?;
-    let connection = connection().ok_or(BrowserError::OverlayPlacement)?;
+    let connection = connection()?;
+    // The popup holding the keys proves Syrinx is in front, so this takes nothing from others.
     if connection.focused() == window {
-        unsafe {
-            (connection.xlib.XSetInputFocus)(
-                connection.display,
-                owner,
-                xlib::RevertToParent,
-                xlib::CurrentTime,
-            )
-        };
+        connection.set_focus(owner);
     }
     unsafe { (connection.xlib.XUnmapWindow)(connection.display, window) };
     connection.flush();
@@ -299,7 +325,7 @@ pub fn hide_overlay(popup: isize, owner: isize) -> Result<(), BrowserError> {
 /// X11 bounds keep a stale origin after a window manager moves and resizes in one step.
 pub fn window_origin(window: isize) -> Option<(i32, i32)> {
     let window = Connection::window(window).ok()?;
-    let connection = connection()?;
+    let connection = connection().ok()?;
     connection
         .root_rect(window)
         .map(|(left, top, _, _)| (left, top))
@@ -308,7 +334,7 @@ pub fn window_origin(window: isize) -> Option<(i32, i32)> {
 /// The pointer in root coordinates, so leaving is seen over the page child and outside Syrinx.
 pub fn overlay_pointer(parent: isize, popup: Option<isize>) -> Result<OverlayPointer, String> {
     Connection::window(parent).map_err(|error| format!("Sidebar owner: {error}"))?;
-    let connection = connection().ok_or("Syrinx cannot reach the X11 display.")?;
+    let connection = described_connection()?;
     let root = connection.root();
     let (mut found_root, mut child, mut x, mut y, mut window_x, mut window_y, mut mask) =
         (0, 0, 0, 0, 0, 0, 0);
@@ -345,7 +371,7 @@ pub fn overlay_pointer(parent: isize, popup: Option<isize>) -> Result<OverlayPoi
 
 /// The monitor under a physical point, with GPUI's X11 scale (`Xft.dpi` over 96).
 pub fn overlay_monitor(x: i32, y: i32) -> Result<OverlayMonitor, String> {
-    let connection = connection().ok_or("Syrinx cannot reach the X11 display.")?;
+    let connection = described_connection()?;
     let scale = xft_scale(&connection);
     let monitors = monitors(&connection);
     let index = monitors
@@ -406,4 +432,59 @@ fn xft_scale(connection: &Connection) -> f32 {
         .and_then(|value| value.trim().parse::<f32>().ok())
         .filter(|dpi| *dpi > 0.)
         .map_or(1., |dpi| dpi / 96.)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A plain window on the test's display, mapped or not, that no Syrinx window owns.
+    fn test_window(mapped: bool) -> c_ulong {
+        let connection = connection().expect("an X11 display for the test");
+        let root = connection.root();
+        let window = unsafe {
+            (connection.xlib.XCreateSimpleWindow)(connection.display, root, 0, 0, 16, 16, 0, 0, 0)
+        };
+        if mapped {
+            unsafe { (connection.xlib.XMapWindow)(connection.display, window) };
+        }
+        unsafe { (connection.xlib.XSync)(connection.display, xlib::False) };
+        window
+    }
+
+    fn destroy(window: c_ulong) {
+        let connection = connection().expect("an X11 display for the test");
+        unsafe {
+            (connection.xlib.XDestroyWindow)(connection.display, window);
+            (connection.xlib.XSync)(connection.display, xlib::False);
+        }
+    }
+
+    #[test]
+    fn a_minimised_window_is_never_given_the_keys() {
+        // An unmapped window stands in for a minimised one: neither is viewable.
+        let window = test_window(false);
+        {
+            let connection = connection().expect("an X11 display for the test");
+            assert!(!connection.viewable(window));
+            assert!(
+                !connection.set_focus(window),
+                "BadMatch would end the process"
+            );
+            unsafe { (connection.xlib.XSync)(connection.display, xlib::False) };
+        }
+        destroy(window);
+    }
+
+    #[test]
+    fn focus_moves_nowhere_while_another_application_holds_the_keys() {
+        // In a test process no window carries Syrinx's `_NET_WM_PID`, so Syrinx is behind.
+        let window = test_window(true);
+        let before = connection().expect("an X11 display").focused();
+        assert!(!syrinx_in_foreground());
+        assert_eq!(focus_chrome(window as isize), Ok(()));
+        assert_eq!(activate_if_foreground(window as isize), Ok(false));
+        assert_eq!(connection().expect("an X11 display").focused(), before);
+        destroy(window);
+    }
 }

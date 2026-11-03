@@ -28,8 +28,9 @@ pub(super) struct KeyRouting {
 pub(super) struct ClickFocus(Rc<RouteState>);
 
 impl ClickFocus {
+    /// The owner clicked the page, so Syrinx is the application they are using.
     pub(super) fn focus(&self) {
-        self.0.focus();
+        self.0.take_focus();
     }
 }
 
@@ -91,7 +92,24 @@ impl Drop for KeyRouting {
 }
 
 impl RouteState {
+    /// Syrinx's own request: the page takes the keys only while Syrinx already holds them, so
+    /// another application's typing never lands in it (owner, 2026-10-12).
     fn focus(&self) {
+        if !super::x11::syrinx_in_foreground() {
+            self.update();
+            return;
+        }
+        self.take_focus();
+    }
+
+    /// Focuses the container inside a GDK error trap: a minimised window cannot take focus,
+    /// and the BadMatch that X then sends would otherwise end the process.
+    fn take_focus(&self) {
+        let display = self.window.display();
+        let trap = display.downcast_ref::<gdkx11::X11Display>();
+        if let Some(display) = trap {
+            display.error_trap_push();
+        }
         unsafe {
             (self.xlib.XSetInputFocus)(
                 self.display,
@@ -100,6 +118,10 @@ impl RouteState {
                 xlib::CurrentTime,
             );
             (self.xlib.XFlush)(self.display);
+        }
+        let error = trap.map_or(0, |display| display.error_trap_pop());
+        if error != 0 {
+            eprintln!("Syrinx could not give the page the keys (X error {error}).");
         }
         self.update();
     }
