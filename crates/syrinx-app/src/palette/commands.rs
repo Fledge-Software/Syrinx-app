@@ -201,10 +201,12 @@ mod tests {
     }
 
     /// The browser's commands plus synthetic plugin commands up to the registry's cap; every
-    /// other synthetic command needs a loaded page.
+    /// other synthetic command needs a loaded page. They are spread over several synthetic
+    /// plugins, because one plugin may hold only `MAX_COMMANDS_PER_PLUGIN` (#134).
     fn full_matcher() -> CommandMatcher {
         let mut registry = CommandRegistry::browser();
         for index in registry.len()..CommandRegistry::MAX_COMMANDS {
+            let plugin = format!("synthetic{}", index / CommandRegistry::MAX_COMMANDS_PER_PLUGIN);
             let enablement = if index % 2 == 0 {
                 Enablement::Always
             } else {
@@ -217,11 +219,11 @@ mod tests {
                     title: format!("Synthetic action {index:04}"),
                     keywords: String::new(),
                     scope: CommandScope::Plugin {
-                        plugin: "synthetic".to_owned(),
+                        plugin: plugin.clone(),
                     },
                     enablement,
                     action: CommandAction::Plugin {
-                        plugin: "synthetic".to_owned(),
+                        plugin,
                         action: format!("action-{index:04}"),
                     },
                     shortcut: None,
