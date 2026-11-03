@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: MPL-2.0
+//
+// The WASI 0.2 interfaces Rust's standard library imports for wasm32-wasip2,
+// which Syrinx's host implements itself (G1, 2026-10-26). Nothing else from
+// WASI is linked for a plugin: no filesystem, sockets or HTTP.
+
+package syrinx:wasi-shim;
+
+world shim {
+    import wasi:io/error@0.2.12;
+    import wasi:io/poll@0.2.12;
+    import wasi:io/streams@0.2.12;
+    import wasi:clocks/monotonic-clock@0.2.12;
+    import wasi:clocks/wall-clock@0.2.12;
+    import wasi:random/insecure-seed@0.2.12;
+    import wasi:cli/environment@0.2.12;
+    import wasi:cli/exit@0.2.12;
+    import wasi:cli/stdin@0.2.12;
+    import wasi:cli/stdout@0.2.12;
+    import wasi:cli/stderr@0.2.12;
+    import wasi:cli/terminal-input@0.2.12;
+    import wasi:cli/terminal-output@0.2.12;
+    import wasi:cli/terminal-stdin@0.2.12;
+    import wasi:cli/terminal-stdout@0.2.12;
+    import wasi:cli/terminal-stderr@0.2.12;
+}
