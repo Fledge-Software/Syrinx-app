@@ -423,11 +423,11 @@ pub enum BrowserError {
     /// Windows refused to move, size or show a kept overlay popup.
     OverlayPlacement,
     /// WebView2 refused a data clear; `code` is its HRESULT (Windows only).
-    ClearData {
+    ClearDataHresult {
         code: i32,
     },
     /// WebKitGTK refused a data clear; `domain` and `code` are its GLib error's.
-    ClearDataRefused {
+    ClearDataGlib {
         domain: &'static str,
         code: i32,
     },

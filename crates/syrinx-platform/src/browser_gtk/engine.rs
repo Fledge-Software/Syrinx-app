@@ -247,7 +247,7 @@ impl Engine {
             timespan,
             None::<&webkit2gtk::gio::Cancellable>,
             move |result| {
-                let cleared = result.map_err(|error| BrowserError::ClearDataRefused {
+                let cleared = result.map_err(|error| BrowserError::ClearDataGlib {
                     domain: error.domain().as_str(),
                     code: glib_code(&error),
                 });

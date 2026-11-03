@@ -329,10 +329,10 @@ fn summary(pending: &Pending) -> String {
 /// Names a page-engine failure in words, keeping the engine's own code for diagnosis.
 fn engine_error(error: BrowserError) -> String {
     match error {
-        BrowserError::ClearData { code } => {
+        BrowserError::ClearDataHresult { code } => {
             format!("the page engine refused (error 0x{code:08X})")
         }
-        BrowserError::ClearDataRefused { domain, code } => {
+        BrowserError::ClearDataGlib { domain, code } => {
             format!("the page engine refused ({domain} error {code})")
         }
         BrowserError::ClearSpanUnsupported => {
@@ -757,7 +757,7 @@ mod tests {
         assert_eq!(span, None);
         dialog.history_result(request, Ok(ClearedHistory::default()));
         dialog.site_zoom_result(request, Ok(0));
-        let refused = BrowserError::ClearData {
+        let refused = BrowserError::ClearDataHresult {
             code: 0x8007_0005_u32 as i32,
         };
         let summary = dialog
@@ -782,7 +782,7 @@ mod tests {
         };
         let outcome = ClearOutcome {
             cleared: Ok(()),
-            closed: Err(BrowserError::ClearData { code: 1 }),
+            closed: Err(BrowserError::ClearDataHresult { code: 1 }),
         };
         let summary = dialog.engine_result(request, outcome).expect("reported");
         assert!(summary.starts_with("Cleared cached files from the last hour."));
@@ -791,7 +791,7 @@ mod tests {
 
     #[test]
     fn engine_refusals_keep_their_code_and_name_an_unsupported_span() {
-        let refused = BrowserError::ClearDataRefused {
+        let refused = BrowserError::ClearDataGlib {
             domain: "WebKitWebsiteDataManagerError",
             code: 3,
         };
