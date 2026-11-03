@@ -721,7 +721,10 @@ mod tests {
         let mut registry = CommandRegistry::browser();
         // Spread them over several plugins, so no plugin reaches its own quota first.
         for index in registry.len()..CommandRegistry::MAX_COMMANDS {
-            let plugin = format!("synthetic{}", index / CommandRegistry::MAX_COMMANDS_PER_PLUGIN);
+            let plugin = format!(
+                "synthetic{}",
+                index / CommandRegistry::MAX_COMMANDS_PER_PLUGIN
+            );
             let id = format!("synthetic.action-{index}");
             registry
                 .register(owned_command(&plugin, &id, None))

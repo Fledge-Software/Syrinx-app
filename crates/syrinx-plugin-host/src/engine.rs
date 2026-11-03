@@ -5,6 +5,8 @@ use wasmtime::{Config, Engine, Strategy};
 
 use crate::HostError;
 use crate::checks;
+use crate::identity::{self, SignedIdentity};
+use crate::manifest::PluginManifest;
 
 /// The engine every plugin runs on: Cranelift, epoch interruption, the default
 /// (not pooling) allocator and stack, and no on-disk cache (#137 adds Syrinx's own).
@@ -35,6 +37,27 @@ impl Runtime {
         }
         let component = Component::new(&self.engine, bytes)
             .map_err(|error| HostError::Malformed(format!("{error:#}")))?;
+        checks::component_fits(&self.engine, &component)?;
+        Ok(component)
+    }
+
+    /// Compile a verified package's component after its signed lines, its manifest and its
+    /// interface names agree; the identity checks run before the contract's own, so a
+    /// disagreement is named as such. Nothing is instantiated.
+    pub fn compile_package(
+        &self,
+        signed: &SignedIdentity,
+        manifest: &PluginManifest,
+        bytes: &[u8],
+    ) -> Result<Component, HostError> {
+        identity::check_signed(signed, manifest).map_err(HostError::Identity)?;
+        if Engine::detect_precompiled(bytes).is_some() {
+            return Err(HostError::Precompiled);
+        }
+        let component = Component::new(&self.engine, bytes)
+            .map_err(|error| HostError::Malformed(format!("{error:#}")))?;
+        identity::check_component(&self.engine, &component, manifest)
+            .map_err(HostError::Identity)?;
         checks::component_fits(&self.engine, &component)?;
         Ok(component)
     }

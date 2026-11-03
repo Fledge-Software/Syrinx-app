@@ -206,7 +206,10 @@ mod tests {
     fn full_matcher() -> CommandMatcher {
         let mut registry = CommandRegistry::browser();
         for index in registry.len()..CommandRegistry::MAX_COMMANDS {
-            let plugin = format!("synthetic{}", index / CommandRegistry::MAX_COMMANDS_PER_PLUGIN);
+            let plugin = format!(
+                "synthetic{}",
+                index / CommandRegistry::MAX_COMMANDS_PER_PLUGIN
+            );
             let enablement = if index % 2 == 0 {
                 Enablement::Always
             } else {
