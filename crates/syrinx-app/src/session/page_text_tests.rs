@@ -495,12 +495,16 @@ fn a_repair_whose_index_can_neither_open_nor_be_emptied_is_refused_until_it_can(
     finish_repaired_session(fixture, store, worker);
 }
 
-/// The index's segment files in listing order: not a `.tantivy-*` lock and not `*.json`.
+/// The index's segment files in name order, which is NTFS's listing order: not a `.tantivy-*`
+/// lock and not `*.json`. Linux lists in hash order, so an unsorted first file could be a
+/// `.pos`, whose loss Tantivy reports only at search time.
 fn segment_files(fixture: &Fixture) -> Vec<PathBuf> {
-    checked_io(fs::read_dir(index_folder(fixture)))
+    let mut files: Vec<PathBuf> = checked_io(fs::read_dir(index_folder(fixture)))
         .map(|entry| checked_io(entry).path())
         .filter(|path| is_segment_file(path))
-        .collect()
+        .collect();
+    files.sort();
+    files
 }
 
 fn is_segment_file(path: &Path) -> bool {
