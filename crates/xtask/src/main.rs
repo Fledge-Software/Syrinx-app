@@ -3,16 +3,20 @@
 mod benchmark;
 mod deferred_work;
 mod dependency_policy;
+mod licences;
 mod network_sources;
 mod packaging;
 mod palette_acceptance;
+mod plugin_contract;
 
 use std::env;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
+use serde_json::Value;
+
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-licences | check-plugin-contract | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.
@@ -51,6 +55,8 @@ fn run() -> Result<(), String> {
     match command.to_str() {
         Some("check") => check_workspace(&root),
         Some("check-deps") => check_dependencies(&root),
+        Some("check-licences") => check_licences(&root),
+        Some("check-plugin-contract") => plugin_contract::check(&root),
         Some("check-deferred") => check_deferred_work(&root),
         Some("check-packaging") => packaging::check(&root),
         Some("write-registration") => packaging::write_registration(&root),
@@ -111,9 +117,11 @@ fn cargo_command(root: &Path) -> Command {
     command
 }
 
-fn check_dependencies(root: &Path) -> Result<(), String> {
-    // Read declared dependencies, including inactive optional and target-specific ones, and the
-    // resolved graph that the D9 network check follows from each headless crate.
+/// The Windows target Syrinx ships for; the licence check reads the graph compiled for it.
+const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+
+/// Cargo's locked, offline, all-features metadata, with `extra` options such as a target filter.
+fn cargo_metadata(root: &Path, extra: &[&str]) -> Result<Value, String> {
     let output = cargo_command(root)
         .args([
             "metadata",
@@ -123,6 +131,7 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
             "--offline",
             "--locked",
         ])
+        .args(extra)
         .stderr(Stdio::inherit())
         .output()
         .map_err(|error| format!("Could not run cargo metadata: {error}"))?;
@@ -130,9 +139,15 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
         return Err(format!("cargo metadata failed ({}).", output.status));
     }
 
-    // Report policy violations without dumping metadata or accepting a partial document.
-    let metadata = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("Cargo metadata could not be decoded: {error}"))?;
+    // Decode without dumping metadata or accepting a partial document.
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Cargo metadata could not be decoded: {error}"))
+}
+
+fn check_dependencies(root: &Path) -> Result<(), String> {
+    // Read declared dependencies, including inactive optional and target-specific ones, and the
+    // resolved graph that the D9 network check follows from each headless crate.
+    let metadata = cargo_metadata(root, &[])?;
     let mut violations = dependency_policy::check_metadata(&metadata)?;
     // Standard-library sockets need no dependency and features unify, so source is read too:
     // the typing path for any network name, every other crate for WinHTTP.
@@ -143,6 +158,12 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
 
     println!("Dependency boundaries passed.");
     Ok(())
+}
+
+fn check_licences(root: &Path) -> Result<(), String> {
+    // Judge what Windows compiles; the lockfile also records other platforms' packages.
+    let metadata = cargo_metadata(root, &["--filter-platform", WINDOWS_TARGET])?;
+    licences::check(root, &metadata)
 }
 
 fn check_deferred_work(root: &Path) -> Result<(), String> {
@@ -162,6 +183,8 @@ fn check_deferred_work(root: &Path) -> Result<(), String> {
 fn check_workspace(root: &Path) -> Result<(), String> {
     // Stop at the first failed check, then prove the application itself can start.
     check_dependencies(root)?;
+    check_licences(root)?;
+    plugin_contract::check(root)?;
     check_deferred_work(root)?;
     packaging::check(root)?;
     run_cargo(root, &["fmt", "--all", "--", "--check"])?;

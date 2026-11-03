@@ -1,0 +1,363 @@
+# SPDX-License-Identifier: MPL-2.0
+#
+# The licence policy `cargo xtask check-licences` enforces on every third-party
+# package Windows compiles from Cargo.lock (#28, G4 in docs/decisions.md,
+# 2026-10-26). It follows AGENTS.md, "Dependencies and licence": permissive
+# licences or whole MPL-2.0 files, and no GPL. A package that offers a choice
+# ("MIT OR Apache-2.0") passes when one choice is allowed; Syrinx elects that one.
+# Anything else is listed below by exact name and version with the owner
+# approval that covers it; a new version or a new package fails until reviewed.
+
+allowed = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "MPL-2.0"]
+
+# `encoding_rs 0.8.42`, `(Apache-2.0 OR MIT) AND BSD-3-Clause`, needs no entry:
+# both sides are on the list above (docs/dev/wasmtime-audit.md, "Licences", 4).
+
+# The wasmtime and Cranelift family, `Apache-2.0 WITH LLVM-exception`: 29
+# lockfile entries under G1's option (b). Approved 2026-10-21 (AGENTS.md,
+# "Approved narrow licence exception, 2026-10-21"); regalloc2 and
+# target-lexicon by G10. The audit is docs/dev/wasmtime-audit.md, "Licences"
+# and its per-crate table; wasmtime-internal-jit-debug is locked but not
+# compiled on Windows. Every entry is at the version that audit recorded; a
+# fresh resolution would move five cranelift crates to 0.135.8, so they are
+# held at 0.135.7 until a pin bump re-audits them.
+
+[[exceptions]]
+name = "cranelift-assembler-x64"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-assembler-x64-meta"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-bforest"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-bitset"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-codegen"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-codegen-meta"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-codegen-shared"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-control"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-entity"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-frontend"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-isle"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-native"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "cranelift-srcgen"
+version = "0.135.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "pulley-interpreter"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "pulley-macros"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "regalloc2"
+version = "0.15.2"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "target-lexicon"
+version = "0.13.5"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-environ"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-internal-component-macro"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-internal-component-util"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-internal-core"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-internal-cranelift"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-internal-fiber"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-internal-jit-debug"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-internal-jit-icache-coherence"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-internal-unwinder"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-internal-versioned-export-macros"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+[[exceptions]]
+name = "wasmtime-internal-wit-bindgen"
+version = "48.0.7"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "wasmtime/Cranelift family, LLVM exception approved 2026-10-21"
+
+# The 18 ICU-family crates under Unicode-3.0, approved at these exact versions
+# on 2026-10-10 (docs/dev/integrated-preview-dependencies.md, "Approved licence
+# scope"; rechecked in docs/dev/wasmtime-audit.md, "Licences", 4).
+
+[[exceptions]]
+name = "icu_collections"
+version = "2.3.0"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "icu_locale_core"
+version = "2.3.0"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "icu_normalizer"
+version = "2.3.0"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "icu_normalizer_data"
+version = "2.3.0"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "icu_properties"
+version = "2.3.0"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "icu_properties_data"
+version = "2.3.0"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "icu_provider"
+version = "2.3.1"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "litemap"
+version = "0.8.3"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "potential_utf"
+version = "0.1.6"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "tinystr"
+version = "0.8.4"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "writeable"
+version = "0.6.4"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "yoke"
+version = "0.8.3"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "yoke-derive"
+version = "0.8.4"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "zerofrom"
+version = "0.1.8"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "zerofrom-derive"
+version = "0.1.8"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "zerotrie"
+version = "0.2.5"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "zerovec"
+version = "0.11.8"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+[[exceptions]]
+name = "zerovec-derive"
+version = "0.11.6"
+licence = "Unicode-3.0"
+reason = "Unicode-3.0 at this version approved 2026-10-10"
+
+# The two earliest exact-version approvals, 2026-10-10 (AGENTS.md, "Dependencies
+# and licence"; docs/dev/dependency-audit.md).
+
+[[exceptions]]
+name = "unicode-ident"
+version = "1.0.26"
+licence = "(MIT OR Apache-2.0) AND Unicode-3.0"
+reason = "Unicode-3.0 terms approved for this version 2026-10-10"
+
+[[exceptions]]
+name = "foldhash"
+version = "0.2.0"
+licence = "Zlib"
+reason = "Zlib approved for this version 2026-10-10"
+
+# The integrated preview's other exact approvals, 2026-10-10
+# (docs/dev/integrated-preview-dependencies.md, "Approved licence scope").
+
+[[exceptions]]
+name = "enum-iterator"
+version = "2.3.0"
+licence = "0BSD"
+reason = "approved for the integrated preview at this version 2026-10-10"
+
+[[exceptions]]
+name = "enum-iterator-derive"
+version = "1.5.0"
+licence = "0BSD"
+reason = "approved for the integrated preview at this version 2026-10-10"
+
+[[exceptions]]
+name = "libbz2-rs-sys"
+version = "0.2.5"
+licence = "bzip2-1.0.6"
+reason = "approved for the integrated preview at this version 2026-10-10"
+
+[[exceptions]]
+name = "notify"
+version = "8.2.0"
+licence = "CC0-1.0"
+reason = "approved for the integrated preview at this version 2026-10-10"
+
+[[exceptions]]
+name = "slotmap"
+version = "1.1.1"
+licence = "Zlib"
+reason = "approved for the integrated preview at this version 2026-10-10"
+
+[[exceptions]]
+name = "zlib-rs"
+version = "0.6.8"
+licence = "Zlib"
+reason = "approved for the integrated preview at this version 2026-10-10"

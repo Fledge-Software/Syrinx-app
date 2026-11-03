@@ -79,6 +79,8 @@ do not silently download a toolchain or change a Windows security setting.
 
 ```powershell
 cargo xtask check-deps
+cargo xtask check-licences
+cargo xtask check-plugin-contract
 cargo xtask check-deferred
 cargo xtask check-packaging
 cargo fmt --all -- --check
@@ -89,8 +91,22 @@ cargo test --package syrinx-update --features release-tool --profile local --off
 cargo run --package syrinx-app --profile local --offline --locked -- --smoke
 ```
 
-The first three lines show the standalone equivalents of the checks that
+The first four lines show the standalone equivalents of the checks that
 `xtask` runs internally (`crates/xtask/src/main.rs`, `check_workspace`).
+`check-licences` holds every third-party package Windows compiles to the
+allowed licences or an exact-version approval in `licences.toml` (#28, G4).
+`check-plugin-contract` parses `wit/v0_1`, the `syrinx:plugin@0.1.0`
+contract, with the parser wasmtime 48 uses, so a WIT mistake fails the gate
+rather than every plugin's build.
+
+`rust-toolchain.toml` pins Rust 1.97.1 with the `wasm32-wasip2` target
+(G7, 2026-10-26); inside this repository it overrides the machine's default
+toolchain, and rustup installs the pin and its target on first use if they
+are missing. `syrinx-plugin-host`'s contract tests build small synthetic
+plugins from their own workspace, `crates/syrinx-plugin-host/tests/fixtures/plugins`,
+offline and locked, into Cargo's test target folder. On a fresh machine fetch
+their crates once, as CI's `setup-rust` step does:
+`cargo fetch --locked --manifest-path crates/syrinx-plugin-host/tests/fixtures/plugins/Cargo.toml`.
 The test command retains Cargo's default target selection,
 including documentation tests when library crates arrive; `--all-targets`
 would omit those tests. The final application launch verifies that the executable
