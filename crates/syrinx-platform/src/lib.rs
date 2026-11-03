@@ -38,7 +38,6 @@ mod storage;
 #[cfg_attr(target_os = "linux", path = "linux/window_frame.rs")]
 pub mod window_frame;
 
-#[cfg(unix)]
 pub use storage::local_app_data;
 pub use storage::{
     CacheFolder, DeletionJournal, JournalError, RecoveryError, RecoveryOffer, RecoveryOutcome,

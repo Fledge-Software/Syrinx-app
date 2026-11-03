@@ -50,19 +50,10 @@ const DATA_FOLDER: &[&str] = if cfg!(feature = "installed") {
     &["SyrinxProductPreview"]
 };
 
-/// `%LOCALAPPDATA%`, the per-user folder that is never roamed or synced (D13).
-#[cfg(windows)]
+/// The per-user data folder that is never roamed or synced (D13), as the storage guard
+/// resolves it: Windows' local app data, or `$XDG_DATA_HOME` (`~/.local/share`) on Linux.
 fn local_app_data() -> Result<PathBuf, &'static str> {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .ok_or("Windows local app data is unavailable.")
-}
-
-/// `$XDG_DATA_HOME`, or `~/.local/share`, as the storage guard resolves it.
-#[cfg(unix)]
-fn local_app_data() -> Result<PathBuf, &'static str> {
-    syrinx_platform::local_app_data()
-        .map_err(|_| "The local data folder ($XDG_DATA_HOME or ~/.local/share) is unavailable.")
+    syrinx_platform::local_app_data().map_err(|_| "The local data folder is unavailable.")
 }
 
 fn main() -> ExitCode {

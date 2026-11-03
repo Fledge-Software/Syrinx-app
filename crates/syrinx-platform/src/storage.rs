@@ -11,7 +11,6 @@ mod startup;
 
 pub use cache::CacheFolder;
 pub use deletions::{DeletionJournal, JournalError, read_deletion_log};
-#[cfg(unix)]
 pub use native::local_app_data;
 pub use recovery::{RecoveryError, RecoveryOffer, RecoveryOutcome, offer_recovery};
 pub use startup::{StartupStorage, prepare_startup};
