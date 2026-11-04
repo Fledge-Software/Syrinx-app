@@ -186,7 +186,7 @@ fn a_download_without_an_announced_length_is_reported_complete() {
         finished.run();
         timer.remove();
         let mut states = Vec::new();
-        while let Ok(Some(event)) = outgoing.try_next() {
+        while let Ok(event) = outgoing.try_recv() {
             if let super::BrowserEvent::DownloadChanged {
                 state, received, ..
             } = event
