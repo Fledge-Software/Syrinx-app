@@ -50,13 +50,31 @@ impl ErrorTrap {
         PRIVATE_DISPLAY.store(display, Ordering::Release);
     }
 
+    /// Runs `call`'s requests on the registered private `display` with their X errors
+    /// recorded; `None` when any of them failed.
+    ///
+    /// One flag serves the whole process, so the caller must hold the private connection's
+    /// lock for the whole call, and `call` must use only that connection. The syncs before and
+    /// after make sure earlier requests' errors are not counted and this call's have arrived.
+    pub(crate) fn run<T>(
+        xlib: &xlib::Xlib,
+        display: *mut xlib::Display,
+        call: impl FnOnce() -> T,
+    ) -> Option<T> {
+        unsafe { (xlib.XSync)(display, xlib::False) };
+        Self::clear();
+        let value = call();
+        unsafe { (xlib.XSync)(display, xlib::False) };
+        (!Self::take_error()).then_some(value)
+    }
+
     /// Forgets any recorded error, at the start of a trapped call.
-    pub(crate) fn clear() {
+    fn clear() {
         RECORDED_ERROR.store(false, Ordering::Release);
     }
 
     /// Whether an error was recorded since `clear`, forgetting it.
-    pub(crate) fn take_error() -> bool {
+    fn take_error() -> bool {
         RECORDED_ERROR.swap(false, Ordering::AcqRel)
     }
 

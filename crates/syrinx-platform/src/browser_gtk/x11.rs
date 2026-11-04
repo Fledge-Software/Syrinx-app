@@ -76,14 +76,10 @@ impl Connection {
 
     /// Runs `call`'s requests with X errors on this connection recorded by `ErrorTrap`
     /// rather than fatal; `None` when any of them failed, for example on a window destroyed
-    /// meanwhile. The connection's lock keeps trapped calls from overlapping.
+    /// meanwhile. Holding `&self` means the caller holds the connection's lock, which
+    /// `ErrorTrap::run` requires.
     fn trapped<T>(&self, call: impl FnOnce() -> T) -> Option<T> {
-        // Earlier requests' errors arrive first and are not this call's.
-        unsafe { (self.xlib.XSync)(self.display, xlib::False) };
-        ErrorTrap::clear();
-        let value = call();
-        unsafe { (self.xlib.XSync)(self.display, xlib::False) };
-        (!ErrorTrap::take_error()).then_some(value)
+        ErrorTrap::run(&self.xlib, self.display, call)
     }
 
     fn exists(&self, window: c_ulong) -> bool {
@@ -264,8 +260,9 @@ pub(super) fn validate_window(window: isize) -> Result<(), BrowserError> {
 
 /// Gives the Syrinx chrome window keyboard focus, taking it from a page's child window.
 /// Nothing moves while another application holds the keys (owner, 2026-10-12), or while the
-/// window is minimised and cannot take them. A window that is gone is `InvalidWindow`, and
-/// one that refused the keys is `Focus`.
+/// window is minimised or otherwise not shown (never mapped, or inside an unmapped ancestor)
+/// and cannot take them. A window that is gone is `InvalidWindow`, and a shown one that
+/// refused the keys is `Focus`.
 pub fn focus_chrome(parent: isize) -> Result<(), BrowserError> {
     let window = Connection::window(parent)?;
     let connection = connection()?;
@@ -279,6 +276,8 @@ pub fn focus_chrome(parent: isize) -> Result<(), BrowserError> {
     if attributes.map_state != xlib::IsViewable {
         return Ok(());
     }
+    // Covered by code reading only: X refuses `XSetInputFocus` on a viewable window only in
+    // a race (it is unmapped or destroyed in between), which no test can produce reliably.
     Err(BrowserError::Focus)
 }
 
