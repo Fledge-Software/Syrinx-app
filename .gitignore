@@ -12,3 +12,6 @@ __pycache__/
 
 # JetBrains IDE settings are per machine.
 /.idea/
+
+# The plugin host's test plugins build into the test target folder; a manual build lands here.
+/crates/syrinx-plugin-host/tests/fixtures/plugins/target/

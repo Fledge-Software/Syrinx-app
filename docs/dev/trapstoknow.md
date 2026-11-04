@@ -568,6 +568,48 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Linux: WebKitGTK, X11 and POSIX
 
+- **A raw `XSetInputFocus` takes the keys from another application, and on
+  a minimised window it ends the process.** X11 grants focus to any client
+  that asks, so a page shown while another program is in front took that
+  program's typing, against the owner's 2026-10-12 foreground rule; and a
+  window that is not viewable (minimised, or a child of one) answers with a
+  BadMatch error, which GDK's process-wide X error handler treats as fatal.
+  Check `x11::syrinx_in_foreground()` before any focus Syrinx starts itself
+  (a click on the page is the owner's own act), focus through
+  `Connection::set_focus`, which refuses a window that is not viewable, and
+  wrap a focus on GTK's own connection in the display's error trap, as
+  `page_keys.rs` does. Source: the #226 review; `x11.rs`'s tests cover a
+  background Syrinx and an unmapped window under Xvfb (code-confirmed; the
+  owner's minimise check is pending).
+- **A private-connection request can fail silently while GDK holds an error
+  trap.** `Connection::trapped` then reports success for a request that
+  failed, so the caller acts on a window that is already gone; the next
+  query fails cleanly. Xlib has one error handler for the whole process, and
+  GDK's traps save and restore whichever is installed. So `ErrorTrap`
+  (`linux/x11_errors.rs`) is installed once, on GTK's thread right after
+  `gtk::init`, and nothing may call `XSetErrorHandler` again. While a GDK
+  trap is pushed, private errors reach GDK's handler, which ignores errors
+  on displays it does not own; that race remains. Moving the private
+  connection to xcb or x11rb, whose errors come back per request, would
+  remove it, but adds a dependency and needs the owner. Source: b56f7f3's
+  Xvfb experiment on GTK 3.24.41 (observed 2026-11-03).
+
+- **A measurement root can exit before its descendants.** Traversing only
+  a still-live root misses orphaned children; waiting for the root alone
+  also misses a child that ignores termination. The standalone measurement
+  runner scopes itself as a child subreaper, retains process identities,
+  reaps adopted children and uses bounded cleanup even after a GUI probe
+  fails. Its prior process attribute is restored. Source: native subprocess
+  regressions in `scripts/linux/test_measure_runner.py` and Linux
+  `PR_SET_CHILD_SUBREAPER(2)` (observed, 2026-11-02).
+- **Keep scratch runtime paths short.** Syrinx's Unix instance socket adds
+  its own name to `XDG_RUNTIME_DIR`; Linux's `sockaddr_un.sun_path` is only
+  108 bytes including the terminator. Placing runtime below a long benchmark
+  results folder failed with "Syrinx's link channel failed" before the main
+  window opened. The measurement runner uses a private, short
+  `/tmp/sx-runtime-*` directory while retaining its results elsewhere. Source:
+  `instance/pipe_unix.rs`, Linux `unix(7)` and the first software-rendered
+  measurement-script trial (observed, 2026-11-02).
 - **A download observer can keep a closed host's WebKit context alive.**
   The context's signal owns the registry, tracked views own their context,
   and clearing only `Engine.pages` leaves a cycle. Shutdown must release
@@ -757,6 +799,15 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   step on its stop event. Source: `instance::tests::a_silent_client_does_not_delay_shutdown`
   (observed 2026-10-31).
 
+### Keep gate executables separate between worktrees
+
+**Observed, 2026-11-02:** sharing `CARGO_TARGET_DIR` between worktrees selected
+an `xtask` executable compiled in another worktree. `workspace_root` in
+`crates/xtask/src/main.rs` uses compile-time `CARGO_MANIFEST_DIR`, so the
+child commands checked that other source tree. Use a private target directory
+for each worktree, and check the compiler source paths before recording a
+branch's gate. An exit status alone does not identify which tree was checked.
+
 ## Update downloads: WinHTTP
 
 - **A loopback test through WinHTTP's automatic proxy can leave the
@@ -888,25 +939,32 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   installed copy. Source: the pinned SQLite Windows open path and P1-04's
   native recovery implementation.
 
-- **`GetCurrentSyncRoots` crashes the process on Windows Server instead of
-  failing.** GitHub's Windows runner returned a sync-root factory whose
-  method pointer was invalid, so the storage guard died with
-  `STATUS_ACCESS_VIOLATION` before any error could be handled; the same
-  test passes on Windows 11. `StorageProviderSyncRootManager::IsSupported()`
-  crashes the same way (run 5), so it cannot be the guard. Check
-  `IsOS(OS_ANYSERVER)` before any WinRT call and treat a server edition as
-  having no registered roots (owner decision, 2026-10-14). Source:
-  weekly-release runs 4 and 5, whose cdb stacks fault in
-  `GetCurrentSyncRoots` and then `IsSupported`, both called from
-  `registered_roots` (observed).
+- **`GetCurrentSyncRoots` crashes the process instead of failing, on Windows
+  Server and on Windows 11 build 26300.** The sync-root factory's method
+  pointer is invalid, so the storage guard died with
+  `STATUS_ACCESS_VIOLATION` before any error could be handled, and every
+  test that opens a store crashed its test binary with no message.
+  `StorageProviderSyncRootManager::IsSupported()` crashes the same way, and
+  an edition check (`IsOS(OS_ANYSERVER)`, the 2026-10-14 fix) misses client
+  builds. `registered_roots` therefore reads the registrations from
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager\<provider>\UserSyncRoots`
+  and makes no WinRT call (owner decision, 2026-10-31); do not bring the
+  WinRT lookup back. That layout is not a documented interface, so recheck
+  it after a major Windows update. A registered root on a network or
+  removable drive (or, on Linux, a FUSE or network mount) is skipped, not
+  compared, so the database's own drive check is what keeps it out of such
+  a folder. Source: weekly-release runs 4 and 5
+  (cdb stacks in `GetCurrentSyncRoots` and `IsSupported`) and Windows 11 Pro
+  26300 on 2026-10-31, where the fault event's offset resolved through the
+  PDB to `GetCurrentSyncRoots` in two test binaries (observed).
 - **SQLite's write-ahead log breaks in a synced folder.** In OneDrive or a
   network folder the `-wal` file separates from the database. Keep the
   database in the local, not roaming, app-data folder. Source:
   [`docs/research/03-core-architecture.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/research/03-core-architecture.md), "Speed and safety settings", and
   D13 in the plan (high).
 - **A storage lease's full revalidation is not a cheap row check.** The
-  Windows guard opens ancestor handles and enumerates registered sync roots
-  on a dedicated WinRT thread. Do this when opening connections and at
+  Windows guard opens ancestor handles and enumerates every registered sync
+  root in the registry. Do this when opening connections and at
   lifecycle boundaries, not for every tab read or save. Retained handles
   preserve the checked identities; later sync registration remains the
   documented limitation. Source: P1-03 source review and

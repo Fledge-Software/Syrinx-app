@@ -373,6 +373,7 @@ impl BrowserView {
                 self.site_permissions_view(palette, cx)
             }
             SettingsSection::Privacy => column
+                .children(engine_limit_notes(palette))
                 .child(self.site_permissions_entry(palette, cx))
                 .child(self.clear_data_entry(palette, cx))
                 .child(self.page_text_section(palette, window, cx)),
@@ -429,6 +430,29 @@ impl BrowserView {
             open,
         )
     }
+}
+
+/// Keeps platform-specific engine limits beside Privacy's existing explanations.
+fn engine_limit_notes(palette: &Palette) -> impl Iterator<Item = Stateful<Div>> + '_ {
+    syrinx_platform::browser::ENGINE_LIMITS
+        .iter()
+        .enumerate()
+        .map(move |(index, &(title, description))| {
+            div()
+                .id(gpui::SharedString::from(format!("engine-limit-{index}")))
+                .role(Role::Label)
+                .aria_label(format!("{title}. {description}"))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(div().font_weight(FontWeight::MEDIUM).child(title))
+                .child(
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(rgba(palette.text_muted))
+                        .child(description),
+                )
+        })
 }
 
 /// A heading screen readers can jump to.

@@ -221,14 +221,14 @@ impl Engine {
         let Some(manager) = self.context.website_data_manager() else {
             events.emit(BrowserEvent::DataCleared {
                 request,
-                outcome: refused(),
+                outcome: refused(BrowserError::ClearDataUnavailable),
             });
             return;
         };
         let Some(timespan) = timespan(span) else {
             events.emit(BrowserEvent::DataCleared {
                 request,
-                outcome: refused(),
+                outcome: refused(BrowserError::ClearSpanUnsupported),
             });
             return;
         };
@@ -247,7 +247,10 @@ impl Engine {
             timespan,
             None::<&webkit2gtk::gio::Cancellable>,
             move |result| {
-                let cleared = result.map_err(|_| BrowserError::ClearData { code: -1 });
+                let cleared = result.map_err(|error| BrowserError::ClearDataGlib {
+                    domain: error.domain().as_str(),
+                    code: glib_code(&error),
+                });
                 events.emit(BrowserEvent::DataCleared {
                     request,
                     outcome: ClearOutcome {
@@ -266,9 +269,17 @@ impl Drop for Engine {
     }
 }
 
-fn refused() -> ClearOutcome {
+/// The GLib error's numeric code, which the Rust binding keeps only inside the `GError`.
+fn glib_code(error: &webkit2gtk::glib::Error) -> i32 {
+    use webkit2gtk::glib::translate::ToGlibPtr;
+    let raw: *const webkit2gtk::glib::ffi::GError = error.to_glib_none().0;
+    // SAFETY: `raw` points into `error`, which outlives this read.
+    unsafe { (*raw).code }
+}
+
+fn refused(error: BrowserError) -> ClearOutcome {
     ClearOutcome {
-        cleared: Err(BrowserError::ClearData { code: -1 }),
+        cleared: Err(error),
         closed: Ok(()),
     }
 }

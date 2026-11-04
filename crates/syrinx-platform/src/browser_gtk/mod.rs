@@ -9,6 +9,8 @@ mod protocol;
 
 mod downloads;
 mod engine;
+#[cfg(test)]
+mod guardrail_tests;
 mod history_delivery;
 mod history_intent;
 mod page;
@@ -43,8 +45,27 @@ use engine::Engine;
 
 /// WebKitGTK can cancel a download but never pause or resume one, so the flyout offers neither.
 pub const PAUSES_DOWNLOADS: bool = false;
-/// Whether pages' text is read when the owner switches capture on; see `page_text.rs`.
-pub const READS_PAGE_TEXT: bool = page_text::READS_SENT_HTML;
+/// WebKitGTK has no host-side DOM snapshot, and the owner has not approved reading a page's
+/// HTML as sent (#219), so no page's text is read on Linux.
+pub const READS_PAGE_TEXT: bool = false;
+
+/// Engine limitations that the owner must see in Settings on this platform.
+pub const ENGINE_LIMITS: &[(&str, &str)] = &[
+    (
+        "Linux browsing protection",
+        "Syrinx on Linux has no SmartScreen or other phishing and malware protection.",
+    ),
+    (
+        "Protected video on Linux",
+        "WebKitGTK has no Widevine support. Disney+ and Hulu will not play in Syrinx on Linux.",
+    ),
+];
+
+/// The page engine's name as the owner reads it.
+pub const ENGINE_NAME: &str = "WebKitGTK";
+/// The engine's profile folder in Syrinx's data folder, named for its role rather than an
+/// engine, since no Linux profile existed before this name.
+pub const PROFILE_FOLDER: &str = "PageEngine";
 
 /// Names the accountable top-level site without claiming that it owns the requesting frame.
 pub fn permission_question(origin: &str, kind: syrinx_store::PermissionKind) -> String {

@@ -7,7 +7,7 @@ runs:
     - name: Install the pinned Rust toolchain
       shell: bash
       run: |
-        rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+        rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy --target wasm32-wasip2
         rustup default 1.97.1
 
     - uses: actions/cache@v4
@@ -15,9 +15,14 @@ runs:
         path: |
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
-        key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+        key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'crates/syrinx-plugin-host/tests/fixtures/plugins/Cargo.lock') }}
 
     # The xtask alias builds offline, so fetch the locked dependencies first.
     - name: Fetch locked dependencies
       shell: bash
       run: cargo fetch --locked
+
+    # The plugin host's tests build synthetic plugins offline from their own workspace (#28).
+    - name: Fetch the test plugins' locked dependencies
+      shell: bash
+      run: cargo fetch --locked --manifest-path crates/syrinx-plugin-host/tests/fixtures/plugins/Cargo.toml

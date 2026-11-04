@@ -43,7 +43,7 @@ pub(super) struct NamedMutex {
 }
 
 impl NamedMutex {
-    pub(super) fn open(name: &str, _owner: &OwnerOnly) -> Result<Self, InstanceError> {
+    pub(super) fn open(name: &str, owner: &OwnerOnly) -> Result<Self, InstanceError> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -52,6 +52,10 @@ impl NamedMutex {
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(name)
             .map_err(|_| InstanceError::Mutex)?;
+        // A lock file another user created could be held by them to stop Syrinx starting.
+        if !super::names::owned_by(std::path::Path::new(name), owner.uid()) {
+            return Err(InstanceError::Security);
+        }
         Ok(Self { file, held: false })
     }
 

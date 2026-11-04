@@ -17,7 +17,7 @@ use webkit2gtk::{
     Download, DownloadError, DownloadExt, URIResponseExt, WebContext, WebContextExt, WebView, glib,
 };
 
-use super::{BrowserError, BrowserEvent, EventSink, engine::Popups};
+use super::{BrowserError, BrowserEvent, EventSink, engine::Popups, protocol::file_name};
 
 /// Progress is reported at most this often, as on Windows; state changes are always reported.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
@@ -139,9 +139,17 @@ impl Downloads {
                 download.cancel();
                 return true;
             };
-            download.set_allow_overwrite(false);
-            download.set_destination(&glib::filename_to_uri(&path, None).unwrap_or_default());
             registry.announce(id, download, &path);
+            // A path GLib cannot write as a URI is refused and shown as a file error, rather
+            // than handing WebKit an empty destination.
+            let Ok(uri) = glib::filename_to_uri(&path, None) else {
+                let refused = DownloadState::Interrupted(DownloadInterruption::File);
+                registry.report(changed(id, download, refused));
+                download.cancel();
+                return true;
+            };
+            download.set_allow_overwrite(false);
+            download.set_destination(&uri);
             registry.report_progress(id, download);
             true
         });
@@ -193,17 +201,21 @@ impl Downloads {
             last.set(Some(now));
             progress.report(changed(id, download, DownloadState::InProgress));
         });
-        let finished = self.clone();
+        // WebKit signals `failed` before the `finished` that follows every download. Progress
+        // cannot tell success: it stays 0 when the server announced no length.
+        let has_failed = Rc::new(Cell::new(false));
+        let on_finish = self.clone();
+        let finish_saw_failure = has_failed.clone();
         download.connect_finished(move |download| {
-            finished.0.borrow_mut().running.remove(&id);
-            // A failure emits its own report first; `finished` follows every download.
-            if download.estimated_progress() >= 1.0 {
-                finished.report(changed(id, download, DownloadState::Completed));
+            on_finish.0.borrow_mut().running.remove(&id);
+            if !finish_saw_failure.get() {
+                on_finish.report(changed(id, download, DownloadState::Completed));
             }
         });
-        let failed = self.clone();
+        let on_failure = self.clone();
         download.connect_failed(move |download, error| {
-            failed.report(changed(
+            has_failed.set(true);
+            on_failure.report(changed(
                 id,
                 download,
                 DownloadState::Interrupted(interruption(error)),
@@ -344,12 +356,6 @@ fn safe_name(suggested: &str) -> String {
     } else {
         trimmed.to_owned()
     }
-}
-
-fn file_name(path: &std::path::Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

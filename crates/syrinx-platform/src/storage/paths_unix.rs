@@ -1,4 +1,4 @@
-//! Spells and checks storage paths on Linux and macOS, where there are no drives or DOS names.
+//! Spells and checks storage paths on Linux, where there are no drives or DOS names.
 
 use std::{
     ffi::OsStr,

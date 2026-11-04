@@ -2,7 +2,7 @@
 name: bughunt
 description: Hunt for real bugs in the repository that is open in this session — prove each one with a test that fails, fix the small ones on a branch and open one PR, and file the rest as GitHub issues. Use when the user runs /bughunt or asks for a bug sweep, bug hunt or regression check. Optional argument narrows the hunt to a path, feature or PR.
 argument-hint: "[path | feature | PR number | 'since <date>']"
-user-invocable: true
+disable-model-invocation: true
 ---
 
 # /bughunt — prove bugs, fix the small ones, file the rest
@@ -42,7 +42,7 @@ This skill spreads its work across subagents, and each subagent invokes the stac
 skills relevant to its job through the Skill tool. The rules and budget in this
 file always win over a stacked skill's own process.
 
-### How subagents are used (same rules in all the Fledge skills)
+### How subagents are used (same rules in all the Zan skills)
 
 - **You, the main session, are the coordinator.** You own:
   - orientation;
@@ -77,7 +77,7 @@ file always win over a stacked skill's own process.
   conversation, so each brief includes:
   - the repository, the branch and the goal;
   - the relevant stacked skills, to invoke through the Skill tool (they may
-    be namespaced, e.g. `fledge-skills:<name>`);
+    be namespaced, e.g. `zans-skills:<name>`);
   - the run-discipline rules;
   - the **rules of engagement, verbatim**;
   - "never merge, never push to the default branch, never ask the user";

@@ -354,7 +354,8 @@ fn not_installed_message() -> String {
 fn not_installed_message() -> String {
     format!(
         "Syrinx doesn't update itself on Linux yet. Download new versions from {} and run \
-         their install.sh; your data stays.",
+         their install.sh; your data stays. Linux packages are not signed yet, so download \
+         them only from there.",
         update_host()
     )
 }
