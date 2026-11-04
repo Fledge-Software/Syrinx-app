@@ -79,7 +79,7 @@ impl Connection {
     /// meanwhile. Holding `&self` means the caller holds the connection's lock, which
     /// `ErrorTrap::run` requires.
     fn trapped<T>(&self, call: impl FnOnce() -> T) -> Option<T> {
-        ErrorTrap::run(&self.xlib, self.display, call)
+        ErrorTrap::run(&self.xlib, call)
     }
 
     fn exists(&self, window: c_ulong) -> bool {
