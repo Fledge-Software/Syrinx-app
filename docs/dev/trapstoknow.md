@@ -733,6 +733,16 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   success/failure. Source: [#221, comment 6640541799](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6640541799),
   WebKitGTK 2.54.1's `PageLoadState` and `WebPageProxy` same-document path,
   and the display-free history replay (observed and code-read, 2026-11-04).
+- **A pending host URI can overwrite the document that is still finishing.**
+  In the `e7ce7a1` native trace, requesting 44 while 43 finished produced
+  SamePage 44 before NewDocument 44, so Forward later showed 42, 44, 44.
+  WebKit's active URI includes pending API requests. Record the request
+  before `load_uri`, and keep its URI out of the older document's finish;
+  wait for its own document boundary or same-document settle. The rows are
+  the shared Rust list's, not WebKit's bulk Forward getter. Source:
+  [#221, comment 6641629095](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6641629095),
+  WebKitGTK 2.54.1 `PageLoadState::activeURL`, and the exact display-free
+  replay (observed and code-read, 2026-11-04).
 - **A link or script navigation's address is not the view's yet at `Started`.**
   When `load-changed` reports `Started` for a navigation the page began, the
   view's `uri` still names the document being left; the new address arrives

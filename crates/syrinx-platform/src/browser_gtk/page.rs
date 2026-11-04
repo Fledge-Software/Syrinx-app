@@ -117,8 +117,7 @@ impl Page {
         if let Some(text) = &self.text {
             text.syrinx_navigation(url);
         }
-        self.load.intent.borrow_mut().request(url);
-        self.view.load_uri(url);
+        self.load_requested(url);
         Ok(())
     }
 
@@ -126,9 +125,15 @@ impl Page {
     /// it started with stays.
     pub(super) fn restore(&self, url: &str) -> Result<(), BrowserError> {
         validate_url(url)?;
-        self.load.intent.borrow_mut().request(url);
-        self.view.load_uri(url);
+        self.load_requested(url);
         Ok(())
+    }
+
+    /// Record the request before load_uri can synchronously notify its uncommitted address.
+    fn load_requested(&self, url: &str) {
+        self.load.intent.borrow_mut().request(url);
+        self.load.delivery.borrow_mut().request();
+        self.view.load_uri(url);
     }
 
     /// Whether a popup this page opens starts tainted; an unobserved page fails closed.

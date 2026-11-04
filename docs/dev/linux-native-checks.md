@@ -149,6 +149,39 @@ document completion. The native fixture also asserts literal Back/Forward
 rows after the fragment. The coordinator must rerun it and the full gate;
 these regressions do not establish a native pass.
 
+## An uncommitted request can duplicate a later Forward row
+
+The coordinator's `e7ce7a1` run in
+[comment 6641629095](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6641629095)
+failed before reaching the fragment: after Back three, Forward contained
+42, 44, 44 instead of 42, 43, 44. The trace already shows the corruption
+before the jump: the request for 44 produces SamePage 44 while 43 is current,
+then the real NewDocument 44 appends another entry. The first report renames
+43 rather than adding 44, so the subsequent Forward rows expose the duplicate.
+
+These rows come from the shared `NavigationList`, not a WebKit bulk list.
+`Page::go_to_offset` uses only one signed `nth_item` lookup to choose the
+jump destination: negative for Back, positive for Forward. The API forwards
+that index directly to its relative-index lookup; its bulk Forward-list
+ordering is not involved. Neither that lookup nor the shared model changes.
+
+WebKit's [PageLoadState::activeURL](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/PageLoadState.cpp#L190)
+returns a pending API request's URI before that document starts or commits.
+If 43 is still finishing when `load_uri` exposes 44, the old delivery path
+defers that URI and then publishes it as a same-page change at 43's finish.
+A display-free replay through the real delivery helper and shared list
+reproduced the exact 42, 44, 44 failure.
+
+Both normal navigation and restored tabs now record the request before
+calling `load_uri`. An older document's finish cannot consume that request's
+URI, regardless of the older load's success. A real start/commit boundary
+discards the pending URI; a same-document request still settles at Loading
+false. Regressions check the literal Forward rows, Back rows before and
+after the jumps, the two-row Forward landing, a URI notification before
+document start, and fragment delivery after an older finish. The Windows
+adapter, shared history code, native fixture assertions and timeouts stay
+unchanged. The coordinator must rerun native checks on the new commit.
+
 ## What each native check proves
 
 | Check | Linux implementation and boundary |
