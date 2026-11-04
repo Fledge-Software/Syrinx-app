@@ -201,16 +201,20 @@ impl Downloads {
             last.set(Some(now));
             progress.report(changed(id, download, DownloadState::InProgress));
         });
+        // WebKit signals `failed` before the `finished` that follows every download. Progress
+        // cannot tell success: it stays 0 when the server announced no length.
+        let failure = Rc::new(Cell::new(false));
         let finished = self.clone();
+        let failed_first = failure.clone();
         download.connect_finished(move |download| {
             finished.0.borrow_mut().running.remove(&id);
-            // A failure emits its own report first; `finished` follows every download.
-            if download.estimated_progress() >= 1.0 {
+            if !failed_first.get() {
                 finished.report(changed(id, download, DownloadState::Completed));
             }
         });
         let failed = self.clone();
         download.connect_failed(move |download, error| {
+            failure.set(true);
             failed.report(changed(
                 id,
                 download,
