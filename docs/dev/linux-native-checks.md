@@ -57,6 +57,48 @@ WebKit's [load-changed contract](https://webkitgtk.org/reference/webkit2gtk/stab
 provides a committed URI, which can subsequently change within that document.
 This fix leaves provisional URI handling in `page_text.rs` unchanged.
 
+## Row ordering and the next diagnostic checkpoint
+
+The coordinator's `7f0899b` run completed the initial loads, both jumps and
+replaceState: the URI-delivery timeout is fixed. It then failed the Back-row
+assertion after replaceState. The previous generic error omitted actual and
+expected rows, so it cannot identify whether an entry was hidden, renamed
+or duplicated. No additional adapter change is justified by that log alone.
+
+Every explicit history assertion now prints its step, actual and expected
+values: address waits, jump acceptance, row comparisons and reload completion.
+A failed row/jump assertion includes the same current address, both row lists
+and bounded event trace as a timeout. Navigation commands are recorded beside
+History/URL/loading/completion callbacks. Only synthetic loopback addresses
+and about:blank can be printed; titles and unexpected external URLs remain
+excluded. Comparison uses the original values, so redaction cannot turn two
+different addresses into a passing assertion.
+
+The expected sequence remains unchanged. After loading 40–44, Back three
+lands on 41 with Forward rows 42, 43, 44. Forward two lands on 43. Navigating
+to 45 discards Forward's 44, then replaceState renames only the current entry
+to 45r. **45r is current; Back remains 43, 42, 41, 40.** After one Back, 45r
+becomes the Forward row. A display-free replay through the real shared
+NavigationList verifies that complete sequence and its literal expected rows.
+
+The [HTML replaceState contract](https://html.spec.whatwg.org/multipage/nav-history-apis.html#dom-history-replacestate-dev)
+replaces the current entry rather than adding one. The inspected
+[WebKitGTK 2.54.1 API source](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/API/glib/WebKitBackForwardList.cpp)
+defines current as offset 0, previous as -1 and next as +1. The adapter uses
+that signed `nth_item` lookup. The fixture compares the shared list's
+nearest-first rows; it never consumes WebKit's bulk GList getters. Those
+getters should not be assumed to have the same order in both directions:
+the [underlying arrays](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/WebBackForwardList.cpp)
+are converted with g_list_prepend, making the returned Back bulk list
+nearest-first and the Forward bulk list furthest-first. Reversing the
+fixture's expectations to match a bulk getter it does not use was rejected.
+
+The shared-list replay passes. The native pre-replacement row checks also
+passed, confirming the fixture's jump/order convention through that point.
+The next native run must supply the missing actual values before choosing
+between an adapter event/classification defect and a fixture timing defect.
+No row assertion, wait predicate or engine behavior is weakened here.
+
 ## What each native check proves
 
 | Check | Linux implementation and boundary |

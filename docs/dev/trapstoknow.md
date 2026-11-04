@@ -663,6 +663,16 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   it. GPUI is built with its X11 backend only and GDK is limited to X11
   (`gtk_thread.rs`), so under Hyprland Syrinx runs through XWayland. Source:
   wry's `create_container_x11_window` and `create_gtk_window` (code-read).
+- **Native assertion failures need values, not only a generic label.**
+  The 7f0899b coordinator run got past replaceState but its row-order error
+  omitted the actual and expected rows, hiding whether an entry was renamed,
+  hidden or duplicated. History assertions now include both values, the
+  current/list snapshot and the recent synthetic event/command trace. Do not
+  reverse expected rows to match WebKit's bulk GList ordering: this fixture
+  uses signed nth_item offsets and the shared list's nearest-first API.
+  Source: #221's coordinator run, the complete display-free history replay
+  and WebKitGTK 2.54.1's WebKitBackForwardList/WebBackForwardList code
+  (observed and code-read, 2026-11-04).
 - **A history API change can happen before the document finishes loading.**
   `address_changed` ignored URI notifications while `is_loading` was true,
   including a post-commit replaceState/pushState during parsing. Nothing

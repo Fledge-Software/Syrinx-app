@@ -9,7 +9,7 @@ use std::{
 use super::trace::Trace;
 
 use futures::channel::mpsc::{TryRecvError, UnboundedReceiver};
-use syrinx_core::{HistoryObserved, NavigationList};
+use syrinx_core::{HistoryDirection, HistoryObserved, NavigationList};
 use syrinx_platform::{
     acceptance::FixtureWindow,
     browser::{BrowserCommand, BrowserError, BrowserEvent, BrowserHost, PageBounds},
@@ -49,7 +49,8 @@ impl Fixture {
         Ok(fixture)
     }
 
-    pub fn send(&self, command: BrowserCommand) -> Result<(), String> {
+    pub fn send(&mut self, command: BrowserCommand) -> Result<(), String> {
+        self.trace.command(&command);
         self.host
             .as_ref()
             .ok_or("Host already stopped")?
@@ -89,12 +90,34 @@ impl Fixture {
 
     pub fn at(&mut self, step: &str, url: &str) -> Result<(), String> {
         println!("History step: {step}");
-        if self.list.current_address() == Some(url) {
-            return Ok(());
+        if self.list.current_address() != Some(url) {
+            self.wait_expected(step, Some(url), |_, list| {
+                list.current_address() == Some(url)
+            })?;
         }
-        self.wait_expected(step, Some(url), |_, list| {
-            list.current_address() == Some(url)
-        })
+        self.trace.reached(step, url, &self.list);
+        Ok(())
+    }
+
+    pub fn expect_rows(
+        &self,
+        step: &str,
+        direction: HistoryDirection,
+        expected: &[String],
+    ) -> Result<(), String> {
+        self.trace
+            .expect_rows(step, direction, expected, &self.list)
+    }
+
+    pub fn start_jump(
+        &mut self,
+        step: &str,
+        direction: HistoryDirection,
+        steps: usize,
+    ) -> Result<(), String> {
+        let actual = self.list.start_jump(direction, steps);
+        self.trace
+            .expect_jump(step, direction, steps, actual, &self.list)
     }
 
     pub fn wait(
