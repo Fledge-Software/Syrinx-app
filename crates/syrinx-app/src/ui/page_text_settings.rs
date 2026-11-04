@@ -46,6 +46,13 @@ impl BrowserView {
             .flex_col()
             .gap(px(10.))
             .child(self.capture_switch_row(palette, cx));
+        if !syrinx_platform::browser::READS_PAGE_TEXT {
+            section = section.child(note(
+                palette,
+                "On Linux, Syrinx does not read page text yet, so nothing is kept while \
+                 this is on.",
+            ));
+        }
         if self.page_text.unreadable() {
             section = section.child(note(
                 palette,

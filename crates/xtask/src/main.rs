@@ -16,9 +16,6 @@ use std::process::{Command, ExitCode, Stdio};
 
 use serde_json::Value;
 
-#[cfg(not(target_os = "windows"))]
-compile_error!("Syrinx's development gate supports Windows 11 only.");
-
 const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-licences | check-plugin-contract | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
@@ -43,11 +40,18 @@ fn run() -> Result<(), String> {
 
     // Only `sign-update` takes options, which the release tool itself checks.
     if command == "sign-update" {
+        if !cfg!(windows) {
+            return Err(
+                "`cargo xtask sign-update` uses Windows key storage and runs only on Windows."
+                    .to_owned(),
+            );
+        }
         return packaging::sign_update(&root, &unicode_arguments(rest)?);
     }
     if !rest.is_empty() {
         return Err(USAGE.to_owned());
     }
+    refuse_windows_only_elsewhere(&command)?;
     match command.to_str() {
         Some("check") => check_workspace(&root),
         Some("check-deps") => check_dependencies(&root),
@@ -65,6 +69,21 @@ fn run() -> Result<(), String> {
         }
         _ => Err(USAGE.to_owned()),
     }
+}
+
+/// Release signing, the registration table and the Win32 palette harness exist only on Windows.
+fn refuse_windows_only_elsewhere(command: &OsString) -> Result<(), String> {
+    let windows_only = matches!(
+        command.to_str(),
+        Some("palette-acceptance" | "write-registration")
+    );
+    if windows_only && !cfg!(windows) {
+        return Err(format!(
+            "`cargo xtask {}` builds or drives the Windows app and runs only on Windows.",
+            command.to_string_lossy()
+        ));
+    }
+    Ok(())
 }
 
 fn unicode_arguments(arguments: Vec<OsString>) -> Result<Vec<String>, String> {
@@ -98,8 +117,8 @@ fn cargo_command(root: &Path) -> Command {
     command
 }
 
-/// The Windows target Syrinx ships for; the licence check reads the graph compiled for it.
-const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+/// The targets Syrinx ships for; the licence check reads the graph compiled for each.
+const SHIPPED_TARGETS: [&str; 2] = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"];
 
 /// Cargo's locked, offline, all-features metadata, with `extra` options such as a target filter.
 fn cargo_metadata(root: &Path, extra: &[&str]) -> Result<Value, String> {
@@ -142,9 +161,13 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
 }
 
 fn check_licences(root: &Path) -> Result<(), String> {
-    // Judge what Windows compiles; the lockfile also records other platforms' packages.
-    let metadata = cargo_metadata(root, &["--filter-platform", WINDOWS_TARGET])?;
-    licences::check(root, &metadata)
+    // Judge what each shipped target compiles, whichever machine runs the gate; the lockfile
+    // also records packages for platforms Syrinx does not ship.
+    for target in SHIPPED_TARGETS {
+        let metadata = cargo_metadata(root, &["--filter-platform", target])?;
+        licences::check(root, target, &metadata)?;
+    }
+    Ok(())
 }
 
 fn check_deferred_work(root: &Path) -> Result<(), String> {
@@ -176,11 +199,16 @@ fn check_workspace(root: &Path) -> Result<(), String> {
     )?;
     run_cargo(root, &workspace_step("test", &[], &[]))?;
     // The release tool is linted and tested on its own, so its feature never reaches the app.
-    run_cargo(
-        root,
-        &release_tool_step("clippy", &["--all-targets"], &["--", "-D", "warnings"]),
-    )?;
-    run_cargo(root, &release_tool_step("test", &[], &[]))?;
+    // It signs through Windows key storage, so only the Windows gate builds it.
+    if cfg!(windows) {
+        run_cargo(
+            root,
+            &release_tool_step("clippy", &["--all-targets"], &["--", "-D", "warnings"]),
+        )?;
+        run_cargo(root, &release_tool_step("test", &[], &[]))?;
+    } else {
+        println!("The release tool signs through Windows key storage; the Windows gate checks it.");
+    }
     run_cargo(
         root,
         &[

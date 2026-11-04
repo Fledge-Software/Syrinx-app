@@ -3,6 +3,7 @@
 //!
 //! The formats, key handling and install protocol are in `docs/update-format.md`.
 
+#[cfg_attr(not(windows), path = "cng_portable.rs")]
 mod cng;
 mod directory;
 mod error;
@@ -12,6 +13,11 @@ mod latest;
 mod manifest;
 #[cfg(feature = "release-tool")]
 mod ncrypt;
+// The release tool signs with Windows key storage, which has no portable equivalent yet.
+#[cfg(all(feature = "release-tool", not(windows)))]
+compile_error!(
+    "the `release-tool` feature signs with Windows key storage and builds only on Windows"
+);
 mod path;
 mod payload;
 #[cfg(any(test, feature = "release-tool"))]
@@ -110,8 +116,7 @@ pub(crate) fn check_signature(
     signed_bytes: &[u8],
     signature: &DetachedSignature,
 ) -> Result<(), UpdateError> {
-    let digest = cng::sha256(signed_bytes)?;
-    if !cng::verify_signature(key.point(), &digest, signature.value())? {
+    if !cng::verify_message(key.point(), signed_bytes, signature.value())? {
         return Err(UpdateError::BadSignature);
     }
     Ok(())

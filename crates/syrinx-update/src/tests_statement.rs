@@ -81,7 +81,7 @@ fn release(keys: &Keys) -> Result<(Vec<u8>, SignedRelease), UpdateError> {
 /// Sign arbitrary bytes as a statement, bypassing the release tool's own checks.
 fn sign_statement(signer: &TestKeyPair, bytes: &[u8]) -> Result<Vec<u8>, UpdateError> {
     let id = KeyId::of(&signer.public_point()?)?;
-    let value = signer.sign(&cng::sha256(bytes)?)?;
+    let value = signer.sign_message(bytes)?;
     Ok(DetachedSignature::new(SignatureKind::Statement, id, value)
         .to_bytes()
         .to_vec())
@@ -406,7 +406,7 @@ fn the_backup_key_is_accepted_and_an_unpinned_key_is_not() -> Result<(), UpdateE
 
     // The backup's signature relabelled as the primary's fails.
     let primary_id = KeyId::of(&keys.primary.public_point()?)?;
-    let value = keys.backup.sign(&cng::sha256(&by_backup.statement)?)?;
+    let value = keys.backup.sign_message(&by_backup.statement)?;
     let forged = DetachedSignature::new(SignatureKind::Statement, primary_id, value).to_bytes();
     let result = verify_statement(&by_backup.statement, &forged, &keys.pinned, issued(), None);
     assert_eq!(result.err(), Some(UpdateError::BadSignature));

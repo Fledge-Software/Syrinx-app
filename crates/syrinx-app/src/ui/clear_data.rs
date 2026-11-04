@@ -326,12 +326,19 @@ fn summary(pending: &Pending) -> String {
     message
 }
 
-/// Names a page-engine failure in words, keeping WebView2's code for diagnosis.
+/// Names a page-engine failure in words, keeping the engine's own code for diagnosis.
 fn engine_error(error: BrowserError) -> String {
     match error {
-        BrowserError::ClearData { code } => {
-            format!("WebView2 refused (error 0x{code:08X})")
+        BrowserError::ClearDataHresult { code } => {
+            format!("the page engine refused (error 0x{code:08X})")
         }
+        BrowserError::ClearDataGlib { domain, code } => {
+            format!("the page engine refused ({domain} error {code})")
+        }
+        BrowserError::ClearSpanUnsupported => {
+            "the page engine can clear only from a moment until now, not an earlier span".to_owned()
+        }
+        BrowserError::ClearDataUnavailable => "the page engine has no site data store".to_owned(),
         BrowserError::QueueClosed | BrowserError::Wake => {
             "the page engine is not running".to_owned()
         }
@@ -750,7 +757,7 @@ mod tests {
         assert_eq!(span, None);
         dialog.history_result(request, Ok(ClearedHistory::default()));
         dialog.site_zoom_result(request, Ok(0));
-        let refused = BrowserError::ClearData {
+        let refused = BrowserError::ClearDataHresult {
             code: 0x8007_0005_u32 as i32,
         };
         let summary = dialog
@@ -775,11 +782,31 @@ mod tests {
         };
         let outcome = ClearOutcome {
             cleared: Ok(()),
-            closed: Err(BrowserError::ClearData { code: 1 }),
+            closed: Err(BrowserError::ClearDataHresult { code: 1 }),
         };
         let summary = dialog.engine_result(request, outcome).expect("reported");
         assert!(summary.starts_with("Cleared cached files from the last hour."));
         assert!(summary.contains("temporary view did not close"));
+    }
+
+    #[test]
+    fn engine_refusals_keep_their_code_and_name_an_unsupported_span() {
+        let refused = BrowserError::ClearDataGlib {
+            domain: "WebKitWebsiteDataManagerError",
+            code: 3,
+        };
+        assert_eq!(
+            engine_error(refused),
+            "the page engine refused (WebKitWebsiteDataManagerError error 3)"
+        );
+        assert!(engine_error(BrowserError::ClearSpanUnsupported).contains("not an earlier span"));
+        for error in [refused, BrowserError::ClearSpanUnsupported] {
+            let text = engine_error(error);
+            assert!(
+                !text.contains("WebView2") && !text.contains("0xFFFFFFFF"),
+                "{text}"
+            );
+        }
     }
 
     #[test]

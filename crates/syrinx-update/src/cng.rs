@@ -194,6 +194,15 @@ pub(crate) fn verify_signature(
     })
 }
 
+/// Verify an `r || s` signature over the SHA-256 of `message`; `Ok(false)` means no match.
+pub(crate) fn verify_message(
+    point: &[u8; 64],
+    message: &[u8],
+    signature: &[u8; 64],
+) -> Result<bool, UpdateError> {
+    verify_signature(point, &sha256(message)?, signature)
+}
+
 /// In-process key pairs that exist only for the duration of a test.
 #[cfg(test)]
 pub(crate) mod test_keys {
@@ -277,6 +286,11 @@ pub(crate) mod test_keys {
                 });
             }
             Ok(signature)
+        }
+
+        /// Sign the SHA-256 of `message`, as the portable test keys do.
+        pub(crate) fn sign_message(&self, message: &[u8]) -> Result<[u8; 64], UpdateError> {
+            self.sign(&super::sha256(message)?)
         }
     }
 

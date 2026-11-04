@@ -110,7 +110,8 @@ use navigation_intents::NavigationIntents;
 use navigation_status::NavigationStatus;
 
 use crate::{
-    controls::{glyph, icon_button},
+    controls::icon_button,
+    icon::{Icon, with_icon},
     navigation,
     palette::{self, PaletteEvent, PaletteView},
     session::{self, SessionCommand, SessionEvent, SessionHandle},
@@ -521,7 +522,8 @@ impl BrowserView {
             peek_state: peek_state::PeekState::default(),
             peek_monitoring: false,
             peek_generation: 0,
-            peek_owner_geometry: peek::OwnerGeometry::of(window),
+            // The native window is not known yet; the first bounds report fills its origin in.
+            peek_owner_geometry: peek::OwnerGeometry::of(window, 0),
             _peek_bounds_watch: cx.observe_window_bounds(window, |this, window, cx| {
                 this.owner_bounds_observed(window, cx);
                 this.follow_palette(window, cx);
@@ -567,7 +569,11 @@ impl BrowserView {
             }
         }
         view.start_session(data_dir.join(session::STATE_FOLDER), window, cx);
-        view.start_browser(data_dir.join("WebView2"), window, cx);
+        view.start_browser(
+            data_dir.join(syrinx_platform::browser::PROFILE_FOLDER),
+            window,
+            cx,
+        );
         if let Some(links) = links {
             view.start_link_feed(links, window, cx);
         }
@@ -1304,12 +1310,8 @@ impl BrowserView {
                 self.usage.page_shown(id);
             }
             self.shown = next;
-            if focus_shown
-                && self.palette.is_none()
-                && self.peek.is_none()
-                && let Some(id) = next
-            {
-                self.page_command(BrowserCommand::Focus { id: id.get() });
+            if focus_shown && self.palette.is_none() && self.peek.is_none() && next.is_some() {
+                self.focus_page_unless_behind();
             }
         }
     }
@@ -1636,19 +1638,24 @@ impl BrowserView {
         if main {
             window.focus(&self.focus, cx);
         }
+        self.focus_page_unless_behind();
+    }
+
+    /// Gives the shown page the keys at once while Syrinx is in front, or else when the owner
+    /// brings Syrinx back. The one place both a requested and a newly shown page are focused.
+    fn focus_page_unless_behind(&mut self) {
         // GPUI's `activate_window` focuses the window later, from a task, which takes the keys
         // back from a page focused now; it also forces the foreground. With Syrinx in front,
         // activate natively at once instead.
-        if self.activate_main_now() {
+        let in_front = self.activate_main_now();
+        if page_focus_now(in_front, &mut self.page_focus_on_activation) {
             self.acceptance_mark("focus_page: activated at once");
-            self.page_focus_on_activation = false;
             self.focus_shown_page();
             return;
         }
         // Syrinx never takes the foreground from another application (owner, 2026-10-12): the
         // page takes the keys when the owner returns to Syrinx.
         self.acceptance_mark("focus_page: deferred until Syrinx is activated");
-        self.page_focus_on_activation = true;
     }
 
     fn activate_main_now(&mut self) -> bool {
@@ -1842,7 +1849,7 @@ impl BrowserView {
             .on_mouse_down(MouseButton::Right, page_menu_listener(cx))
             .child(self.essential_controls(cx))
             .child(
-                icon_button(div().id("page-menu"), glyph::MENU, "Page menu")
+                icon_button(div().id("page-menu"), Icon::Menu, "Page menu")
                     .occlude()
                     .on_click(cx.listener(|this, _, window, cx| this.open_page_menu(window, cx))),
             );
@@ -1865,21 +1872,21 @@ impl BrowserView {
     /// canvas's window row (sidebar toggle, then back, forward and reload at the right);
     /// otherwise those buttons followed by the address field.
     fn navigation(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        let toggle = icon_button(div().id("toggle-sidebar"), glyph::SIDEBAR, "Hide sidebar")
+        let toggle = icon_button(div().id("toggle-sidebar"), Icon::Sidebar, "Hide sidebar")
             .aria_keyshortcuts("Control+Alt+S")
             .occlude()
             .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
-        let back = icon_button(div().id("back"), glyph::BACK, "Back")
+        let back = icon_button(div().id("back"), Icon::Back, "Back")
             .aria_keyshortcuts("Alt+ArrowLeft Alt+ArrowDown")
             .occlude();
-        let forward = icon_button(div().id("forward"), glyph::FORWARD, "Forward")
+        let forward = icon_button(div().id("forward"), Icon::Forward, "Forward")
             .aria_keyshortcuts("Alt+ArrowRight Alt+ArrowDown")
             .occlude();
         let buttons = [
             self.history_button(back, HistoryDirection::Back, cx),
             self.history_button(forward, HistoryDirection::Forward, cx),
             self.navigation_button(
-                ("reload", glyph::RELOAD, "Reload", "Control+R"),
+                ("reload", Icon::Reload, "Reload", "Control+R"),
                 (Feature::NavReload, |id| BrowserCommand::Reload { id }),
                 cx,
             ),
@@ -1911,11 +1918,11 @@ impl BrowserView {
         self.as_pane(group, Pane::Address, gpui::Role::Toolbar)
     }
 
-    /// Back, Forward or Reload: its id, glyph, name and keys, and the use it counts (AN-01)
+    /// Back, Forward or Reload: its id, icon, name and keys, and the use it counts (AN-01)
     /// with the command it sends.
     fn navigation_button(
         &self,
-        (id, icon, name, keys): (&'static str, &'static str, &'static str, &'static str),
+        (id, icon, name, keys): (&'static str, Icon, &'static str, &'static str),
         (feature, command): (Feature, fn(u64) -> BrowserCommand),
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
@@ -1990,13 +1997,7 @@ impl BrowserView {
         }
         field
             .text_color(theme::rgba(palette.text_muted))
-            .child(
-                div()
-                    .flex_none()
-                    .font_family(glyph::FONT)
-                    .text_size(px(12.))
-                    .child(glyph::SEARCH),
-            )
+            .child(with_icon(div().flex_none(), Icon::Search, 12.))
             .child(
                 div()
                     .flex_1()
@@ -2355,6 +2356,13 @@ fn deferred_focus_applies(deferred: bool, root_focused: Option<bool>) -> bool {
     deferred && root_focused != Some(false)
 }
 
+/// Decides a request to give the shown page the keys: at once when Syrinx is `in_front`,
+/// otherwise remembered in `deferred` until the owner brings Syrinx back.
+fn page_focus_now(in_front: bool, deferred: &mut bool) -> bool {
+    *deferred = !in_front;
+    in_front
+}
+
 impl BrowserView {
     /// Moving to a monitor with another scale (WM_DPICHANGED) resizes the window, so the
     /// bounds watch re-sizes the taskbar and title-bar icons for the new DPI here.
@@ -2381,7 +2389,12 @@ pub(crate) fn native_handle(window: &Window) -> Result<isize, &'static str> {
         HasWindowHandle::window_handle(window).map_err(|_| "The native window is unavailable.")?;
     match handle.as_raw() {
         RawWindowHandle::Win32(handle) => Ok(handle.hwnd.get()),
-        _ => Err("Syrinx requires a Windows window."),
+        // On Linux the platform layer addresses Syrinx's windows by their X11 ids.
+        RawWindowHandle::Xlib(handle) => isize::try_from(handle.window)
+            .map_err(|_| "The X11 window id does not fit Syrinx's handle."),
+        RawWindowHandle::Xcb(handle) => isize::try_from(handle.window.get())
+            .map_err(|_| "The X11 window id does not fit Syrinx's handle."),
+        _ => Err("Syrinx needs a Windows or X11 window."),
     }
 }
 
@@ -2424,6 +2437,75 @@ mod palette_shortcut_tests {
             "nothing was deferred"
         );
         assert!(!deferred_focus_applies(false, None));
+    }
+
+    /// The text of `fn name` in this file, from its signature to its closing brace.
+    fn method_text(source: &str, name: &str) -> String {
+        let start = source
+            .find(&format!("    fn {name}("))
+            .unwrap_or_else(|| panic!("ui.rs has `fn {name}`"));
+        let length = source[start..]
+            .find("\n    }\n")
+            .expect("the method closes at four spaces");
+        source[start..start + length].to_owned()
+    }
+
+    #[test]
+    fn requested_and_newly_shown_pages_focus_through_the_foreground_rule() {
+        // Out of this file, `find.rs` (closing the find bar, an owner action inside Syrinx) and
+        // `process_recovery.rs` (which checks the window is active first) send Focus directly.
+        // Line endings differ by checkout (`docs/dev/trapstoknow.md`), so compare with LF.
+        let whole = include_str!("ui.rs").replace("\r\n", "\n");
+        // The product code only: the tests below quote the calls they look for.
+        let source = whole
+            .split("\n#[cfg(test)]\nmod palette_shortcut_tests")
+            .next()
+            .expect("ui.rs has product code");
+        // A requested page and a newly shown page both take the one rule.
+        for name in ["focus_page", "sync_pages_and_focus"] {
+            let text = method_text(source, name);
+            assert!(
+                text.contains("self.focus_page_unless_behind()"),
+                "`{name}` must focus through `focus_page_unless_behind`"
+            );
+            assert!(
+                !text.contains("BrowserCommand::Focus") && !text.contains("focus_shown_page()"),
+                "`{name}` must not focus the page past the foreground rule"
+            );
+        }
+        // Only the rule itself and the reactivation observer then focus the shown page.
+        let senders = ["focus_page_unless_behind", "focus_page_after_activation"];
+        let sent_from_senders: usize = senders
+            .iter()
+            .map(|name| {
+                method_text(source, name)
+                    .matches("self.focus_shown_page()")
+                    .count()
+            })
+            .sum();
+        assert_eq!(
+            source.matches("self.focus_shown_page()").count(),
+            sent_from_senders
+        );
+        assert_eq!(sent_from_senders, 2);
+    }
+
+    #[test]
+    fn a_page_shown_while_syrinx_is_behind_waits_for_reactivation() {
+        // The foreground check is injected: `false` is another application in front.
+        let mut deferred = false;
+        assert!(!page_focus_now(false, &mut deferred), "no Focus is sent");
+        assert!(
+            deferred,
+            "the page waits for the owner to bring Syrinx back"
+        );
+        // The activation observer then focuses it, as `focus_page_after_activation` does.
+        assert!(deferred_focus_applies(std::mem::take(&mut deferred), None));
+        assert!(!deferred);
+        // In front, the page is focused at once and an earlier wait is dropped.
+        let mut stale = true;
+        assert!(page_focus_now(true, &mut stale));
+        assert!(!stale);
     }
 
     #[test]

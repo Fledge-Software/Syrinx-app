@@ -87,10 +87,14 @@ fn compile_resources() -> Result<(), String> {
     println!("cargo:rerun-if-changed={ICON}");
     println!("cargo:rerun-if-env-changed=RC");
 
-    // Syrinx is Windows 11 only (D2); the linker must also take a compiled .res.
+    // Only a Windows executable carries a compiled .res; elsewhere the desktop entry names the icon.
     let target_os = required_env("CARGO_CFG_TARGET_OS")?;
+    if target_os != "windows" {
+        return Ok(());
+    }
+    // The Windows linker must take that .res, which only the MSVC toolchain's link.exe does here.
     let target_env = required_env("CARGO_CFG_TARGET_ENV")?;
-    if target_os != "windows" || target_env != "msvc" {
+    if target_env != "msvc" {
         return Err(format!(
             "Syrinx builds only for Windows with the MSVC toolchain, not {target_os}/{target_env}."
         ));

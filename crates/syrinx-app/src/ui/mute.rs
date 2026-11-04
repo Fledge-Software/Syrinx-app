@@ -4,7 +4,7 @@
 use super::*;
 
 /// What the status line says when the WebView2 runtime refuses to mute a page.
-const CANNOT_MUTE: &str = "This WebView2 runtime cannot mute pages.";
+const CANNOT_MUTE: &str = "This version of the page engine cannot mute pages.";
 
 impl BrowserView {
     /// A new or restored page starts audible, so a muted tab is muted again.

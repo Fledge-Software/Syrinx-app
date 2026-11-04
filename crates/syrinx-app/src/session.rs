@@ -716,22 +716,19 @@ fn start_usage(
     Ok(collector)
 }
 
-/// Today's local date; the UTC day when Windows cannot say, and `None` only without any clock.
+/// Today's local date; the UTC day when the system cannot say, and `None` only without any clock.
 fn local_today() -> Option<UsageDate> {
     match syrinx_platform::calendar::local_iso_date() {
         Ok(text) => UsageDate::parse(&text),
         Err(error) => {
-            // Only the Windows error code is logged; the UTC day is at most one day off.
-            eprintln!(
-                "Windows could not report today's local date ({:?})",
-                error.code()
-            );
+            // Only the system's error is logged; the UTC day is at most one day off.
+            eprintln!("The system could not report today's local date ({error})");
             utc_today()
         }
     }
 }
 
-/// The UTC calendar day, used only when Windows cannot report the local one.
+/// The UTC calendar day, used only when the system cannot report the local one.
 fn utc_today() -> Option<UsageDate> {
     let seconds = match utc_seconds() {
         Ok(seconds) => seconds,

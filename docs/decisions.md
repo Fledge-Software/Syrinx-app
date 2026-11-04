@@ -17,7 +17,76 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-11-03
+
+- **Linux-only licences (owner, 2026-11-03).** The owner's choice, given in
+  the review session of #226 and relayed by its chair: "Approve all", as
+  narrow exceptions at these exact versions: ISC for `ring 0.17.14`,
+  `untrusted 0.9.0`, `inotify 0.11.5`, `inotify-sys 0.1.8` and
+  `libloading 0.8.9`; Zlib for `foldhash 0.1.5`; CC0-1.0 for
+  `hexf-parse 0.2.1`; and entering the 2026-10-31 approvals of
+  `target-lexicon 0.12.16` and `tiny-keccak 2.0.2` in `licences.toml`. The
+  approval also covers making `cargo xtask check-licences` judge the Linux
+  target as well as Windows. It approves nothing else: another version, or
+  the same licence on another package, needs its own approval. The review
+  found these packages because the licence gate judged only
+  `x86_64-pc-windows-msvc`, so the Linux build linked them unchecked.
+  Details are in `docs/dev/dependency-audit.md`, "Linux platform layer".
+
+## 2026-11-02
+
+- **Linux site permissions use the top-level site's delegation (owner,
+  2026-11-02).** The owner's instruction was "test first, then decide".
+  Synthetic cross-origin frames on WebKitGTK 2.54.1 requested location,
+  notifications, camera and microphone without an `allow` attribute or a
+  Permissions-Policy header; none reached Syrinx's `permission-request`
+  handler. Delegation enforcement is verified for geolocation and
+  notifications only. Delegated location and top-level notification
+  controls reached the handler and were denied. Camera and microphone
+  controls had no usable device, so their missing handler calls do not
+  establish a policy block: **camera and microphone delegation are
+  unverified on this machine**. The owner retains the delegation prompt for
+  all four kinds and requests the device-backed follow-up in
+  `docs/owner-checklist.md` (issue #234). The outcome selects
+  the owner's Chrome/Safari delegation model: the top-level origin is the
+  accountable principal, and remembered choices stay keyed by that origin.
+  Prompts explicitly say the request comes from that site "or a site it
+  embeds". WebKit's public request API does not identify the requesting
+  frame; claiming it does was rejected, as was refusing every Linux
+  permission despite the engine's delegation checks. The native location
+  regression and the limits of the four-kind test are recorded in
+  `docs/dev/linux-permission-delegation.md`. No permission was granted.
+
 ## 2026-10-31
+
+- **Syrinx is one app for Windows, Linux and macOS (owner, 2026-10-31).**
+  The owner's words: "one standalone app that can run on windows, linux
+  and mac. Just like the docs should say". The rest of this entry is the
+  coordinator's record, and the owner may correct it. This replaces D2's
+  "Windows 11 only": the same workspace builds on each platform, and only
+  `syrinx-platform` (the page engine, windows, storage guard, single
+  instance and dialogs) is written once per platform, as the 2026-10-15
+  macOS entry already planned. The core, store, search, UI and plugin
+  crates are shared unchanged.
+  - **Windows** stays as it is: WebView2 through the pinned, patched wry.
+  - **Linux** renders pages in WebKitGTK, driven directly through
+    `webkit2gtk` rather than wry, because wry's GTK backend injects a
+    `window.ipc` script into every page whether or not an IPC handler is
+    set, which the page rules in `AGENTS.md` forbid. Each page is a GTK
+    window embedded as an X11 child of Syrinx's window, so Syrinx runs on
+    X11, or XWayland under a Wayland compositor such as Hyprland; GPUI is
+    built with its X11 backend only. WebKit's bubblewrap sandbox is on.
+    Known limits, flagged rather than hidden: WebKitGTK has no Widevine, so
+    Disney+ and Hulu do not play; Google may treat WebKitGTK as an
+    unfamiliar browser at sign-in, and the user agent is still never
+    changed (D22); page-text capture, hidden-page suspension, pausing a
+    download and the update download are Windows-only for now.
+  - **macOS** is not built yet: its platform layer (WKWebView, AppKit
+    windows) is the next platform slice, and it needs a Mac to run on.
+  - Rejected: CEF on Linux (one Chromium everywhere, but it bundles
+    Chromium and Google's sign-in block names CEF); a separate Linux fork of
+    the repository (two copies of every rule drift apart); wry's GTK
+    backend (the injected script above).
 
 - **The storage guard reads sync roots from the registry (replaces the
   2026-10-14 Windows Server entry).** D13 keeps the database out of
@@ -1767,7 +1836,8 @@ These entries depart from `docs/spec.md`. Each is argued in
 `docs/architecture-decisions.md`, decision number in brackets.
 
 - **v1 runs on Windows 11 only** (D2). No macOS or Linux work or testing in
-  v1, so the Phase 0 verdict is for Windows, not per OS.
+  v1, so the Phase 0 verdict is for Windows, not per OS. *Superseded on
+  2026-10-31: Syrinx is one app for Windows, Linux and macOS (entry above).*
 - **Pages render in WebView2, driven from Rust through wry, without Tauri**
   (D3). Servo is added later as a per-tab engine.
 - **Syrinx's interface is drawn in Rust with GPUI, not Svelte** (D4), unless
