@@ -78,6 +78,16 @@ pub fn run() -> Result<(), String> {
     })?;
     fixture.at("pushState during document load", &server.url("/p/pushed"))?;
     navigate(&mut fixture, &server, "/p/pushed#fragment")?;
+    fixture.expect_rows(
+        "after host fragment navigation",
+        HistoryDirection::Back,
+        &["/p/45r", "/p/43", "/p/42", "/p/41", "/p/40"].map(|path| server.url(path)),
+    )?;
+    fixture.expect_rows(
+        "after host fragment navigation",
+        HistoryDirection::Forward,
+        &[],
+    )?;
     fixture.send(BrowserCommand::Navigate {
         id: 1,
         url: server.url("/p/302"),

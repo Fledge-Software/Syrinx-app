@@ -723,8 +723,16 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   start/commit or failure. This does not report a provisional page as
   committed. Source: `browser_gtk/history_delivery.rs`, its display-free
   regression (failed before the fix), and the authored history fixture
-  (code-read and tested, 2026-11-03; #221). The earlier native timeout lacked
-  its step, so attribution of that run still awaits the new diagnostic log.
+  (code-read and tested, 2026-11-03; #221). The coordinator's `b5af570` run
+  confirmed the timeout was fixed; the fragment-specific gap is below.
+- **A host fragment request can finish without a document Finished signal.**
+  `load_uri` to the same document produced Loading true, the fragment URI
+  and Loading false, with no History report: delivery waited only for
+  `load-changed::Finished`. Drain a deferred URI at Loading false only when
+  no document load is active; real documents must still wait for their own
+  success/failure. Source: [#221, comment 6640541799](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6640541799),
+  WebKitGTK 2.54.1's `PageLoadState` and `WebPageProxy` same-document path,
+  and the display-free history replay (observed and code-read, 2026-11-04).
 - **A link or script navigation's address is not the view's yet at `Started`.**
   When `load-changed` reports `Started` for a navigation the page began, the
   view's `uri` still names the document being left; the new address arrives

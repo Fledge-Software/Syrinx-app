@@ -18,13 +18,8 @@ impl HistoryIntent {
         self.requested = None;
     }
 
-    /// Consume only the matching host request; unrelated page/frame requests stay page-made.
-    pub(super) fn started(
-        &mut self,
-        kind: NavigationType,
-        gesture: bool,
-        address: &str,
-    ) -> Started {
+    /// Consume only the matching request; an older callback must not withdraw a newer request.
+    pub(super) fn consume_request(&mut self, address: &str) -> bool {
         let requested = self
             .requested
             .as_deref()
@@ -32,6 +27,17 @@ impl HistoryIntent {
         if requested {
             self.clear();
         }
+        requested
+    }
+
+    /// Classify a navigation; unrelated page/frame requests stay page-made.
+    pub(super) fn started(
+        &mut self,
+        kind: NavigationType,
+        gesture: bool,
+        address: &str,
+    ) -> Started {
+        let requested = self.consume_request(address);
         match kind {
             NavigationType::BackForward => Started::BackOrForward,
             NavigationType::Reload => Started::Reload,
@@ -60,6 +66,31 @@ fn same_address(expected: &str, actual: &str) -> bool {
 mod tests {
     use super::*;
     use syrinx_core::{HistoryChange, HistoryDirection, HistoryReport, NavigationList};
+
+    #[test]
+    fn a_fragment_completion_retires_only_its_matching_host_request() {
+        let mut intent = HistoryIntent::default();
+        let fragment = "http://example.test/p/pushed#fragment";
+        let next = "http://example.test/p/next";
+        // An older fragment callback must leave a newer host navigation selectable.
+        intent.request(next);
+        assert!(!intent.consume_request(fragment));
+        assert!(matches!(
+            intent.started(NavigationType::Other, false, next),
+            Started::NewDocument {
+                user_initiated: true
+            }
+        ));
+        // Once the matching fragment settles, a later script cannot reuse its host intent.
+        intent.request(fragment);
+        assert!(intent.consume_request(fragment));
+        assert!(matches!(
+            intent.started(NavigationType::Other, false, fragment),
+            Started::NewDocument {
+                user_initiated: false
+            }
+        ));
+    }
 
     #[test]
     fn five_syrinx_loads_without_webkit_gestures_leave_four_selectable_rows() {

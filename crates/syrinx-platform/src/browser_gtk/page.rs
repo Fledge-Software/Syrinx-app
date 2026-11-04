@@ -344,13 +344,6 @@ impl Page {
             });
         });
         let (id, events) = (self.id, self.shared.events.clone());
-        self.view.connect_is_loading_notify(move |view| {
-            events.emit(BrowserEvent::Loading {
-                id,
-                loading: view.is_loading(),
-            });
-        });
-        let (id, events) = (self.id, self.shared.events.clone());
         self.view.connect_focus_in_event(move |_, _| {
             events.emit(BrowserEvent::PageFocused { id });
             glib::Propagation::Proceed
@@ -395,6 +388,9 @@ impl Page {
         self.view.connect_load_changed(move |view, event| {
             changing.load_changed(view, event);
         });
+        let loading = watch.clone();
+        self.view
+            .connect_is_loading_notify(move |view| loading.loading_changed(view));
         let failing = watch.clone();
         self.view.connect_load_failed(move |_, _, _, error| {
             failing.failed(error.matches(webkit2gtk::NetworkError::Cancelled));
@@ -800,11 +796,7 @@ impl LoadWatch {
         // Script-made URI changes during parsing must reach history after the load settles.
         let deferred = self.state.delivery.borrow_mut().finished(success);
         if deferred {
-            self.update(|pending| Pending {
-                new_document: Some(false),
-                ..pending
-            });
-            self.report(view);
+            self.report_same_document(view);
         }
         if !self.state.rejected.get() {
             let status = if success {
@@ -824,6 +816,25 @@ impl LoadWatch {
         }
     }
 
+    fn loading_changed(&self, view: &WebView) {
+        let loading = view.is_loading();
+        self.shared.events.emit(BrowserEvent::Loading {
+            id: self.id,
+            loading,
+        });
+        let deferred = self.state.delivery.borrow_mut().loading_changed(loading);
+        if !deferred || self.state.failed.get().is_some() || self.state.rejected.get() {
+            return;
+        }
+        // Retire only this fragment's intent; a newer host request must remain selectable.
+        if let Some(address) = view.uri() {
+            self.state.intent.borrow_mut().consume_request(&address);
+        }
+        let navigation = self.state.navigation.get();
+        self.update(|pending| pending.complete(navigation, true));
+        self.report_same_document(view);
+    }
+
     fn failed(&self, cancelled: bool) {
         self.state.failed.set(Some(cancelled));
     }
@@ -834,7 +845,7 @@ impl LoadWatch {
         self.connection(view, ConnectionStatus::CertificateRejected);
     }
 
-    /// An address change outside a load is the page's own: a fragment or the History API.
+    /// An address change outside a document load is a fragment or the History API.
     fn address_changed(&self, view: &WebView) {
         if self.state.provisional.get() {
             if let Some(text) = &self.text {
@@ -854,6 +865,10 @@ impl LoadWatch {
         {
             return;
         }
+        self.report_same_document(view);
+    }
+
+    fn report_same_document(&self, view: &WebView) {
         self.update(|pending| Pending {
             new_document: Some(false),
             ..pending

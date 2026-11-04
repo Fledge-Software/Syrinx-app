@@ -5,6 +5,11 @@ Windows. They use authored loopback documents, fresh profiles and the existing
 GTK thread; no page bridge, injected script, permission grant or engine
 sandbox exception is added. Issue #221 owns B4 and its remaining validation.
 
+PR #226 was squash-merged into `main` on 2026-11-04 and `linux-port` was
+deleted. Merge `5df4978` preserves current `main` plus B4's changes, adapting
+only the popup-owner function to the landed X11 connection/error API. The
+B4 PR will target `main`.
+
 ## Product defect found by the history fixture
 
 The coordinator ran the first draft outside the sandbox: `page_close` and
@@ -93,11 +98,56 @@ are converted with g_list_prepend, making the returned Back bulk list
 nearest-first and the Forward bulk list furthest-first. Reversing the
 fixture's expectations to match a bulk getter it does not use was rejected.
 
-The shared-list replay passes. The native pre-replacement row checks also
-passed, confirming the fixture's jump/order convention through that point.
-The next native run must supply the missing actual values before choosing
-between an adapter event/classification defect and a fixture timing defect.
-No row assertion, wait predicate or engine behavior is weakened here.
+The coordinator's `b5af570` run supplied those values in
+[comment 6640541799](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6640541799).
+The literal rows after replaceState and Reload pass, and pushState reaches
+its expected address. No row-order correction was needed. The next failure
+is the host's fragment navigation, described below; no row assertion or wait
+predicate was relaxed.
+
+## Same-document fragment delivery
+
+The `b5af570` trace reaches `/p/pushed`, then records the host request for
+`/p/pushed#fragment`, Loading true, the fragment URL, and Loading false.
+There is no History event for the fragment, so the shared list stays on
+`/p/pushed`. `address_changed` deferred that URI while WebKit was loading,
+but only `load-changed::Finished` could drain the deferred report.
+
+In [WebKitGTK 2.54.1's PageLoadState](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/PageLoadState.cpp),
+a pending API request makes `isLoading` true even when the document is
+already finished. [WebPageProxy's same-document path](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/WebPageProxy.cpp#L9198)
+updates the URL and clears that request. The GTK
+[NavigationClient](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/API/glib/WebKitNavigationClient.cpp)
+emits document load signals from its provisional/commit/finish callbacks,
+not from that same-document path. The native trace confirms why waiting
+only for a document finish loses this fragment.
+
+Windows already handles this separately: [WebView2's navigation contract](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/navigation-events)
+describes same-document fragments without NavigationStarting. In
+`crates/syrinx-platform/src/browser/history.rs`, SourceChanged records
+`IsNewDocument=false` and HistoryChanged publishes the report. The shared
+`browser/history_state.rs` classifies it as SamePage; the shared list
+replaces its current address without adding a document row. Both shared
+files and the Windows adapter remain unchanged.
+
+`browser_gtk/history_delivery.rs` now distinguishes an active document load
+from a same-document API request. Loading false drains a deferred URI once
+only when no document load is active. A real document still waits for its
+own Finished success/failure, even if Loading false arrives first. Reporting
+every loading URI immediately was rejected because a requested or failed
+document must not become a committed same-page report.
+
+The GTK loading handler now feeds that decision into the existing history
+reporter and retires only the matching settled request's intent. The same
+address-matching function is used at navigation start, and a regression
+ensures an older fragment cannot withdraw a newer host request. A display-free
+replay failed before the correction with current `/p/pushed` instead of the
+fragment address. It now verifies the fragment address, unchanged Back rows
+and empty Forward rows. Other regressions cover duplicate notifications,
+URI notifications on either side of Loading false, and successful/failed
+document completion. The native fixture also asserts literal Back/Forward
+rows after the fragment. The coordinator must rerun it and the full gate;
+these regressions do not establish a native pass.
 
 ## What each native check proves
 
@@ -130,7 +180,7 @@ The sandbox's MIT-SHM attach failure is environmental. It did not occur in
 the coordinator's outside run, which retained the real runtime directory,
 display, session bus and fcitx with scratch data/cache/config. Do not disable
 MIT-SHM, replace the display backend or weaken the engine sandbox. The agent
-runs non-display tests, formatting and Clippy; five named native unit tests,
+runs non-display tests, formatting and Clippy; twelve native unit tests,
 the examples, palette acceptance and the complete gate run outside it.
 
 The Linux gate now invokes all three examples and palette acceptance after
