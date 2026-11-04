@@ -269,7 +269,6 @@ fn is_timeout(error: &io::Error) -> bool {
     )
 }
 
-#[cfg(target_os = "linux")]
 fn peer_uid(stream: &UnixStream) -> Option<libc::uid_t> {
     let mut credentials = libc::ucred {
         pid: 0,
@@ -287,12 +286,4 @@ fn peer_uid(stream: &UnixStream) -> Option<libc::uid_t> {
         )
     };
     (status == 0).then_some(credentials.uid)
-}
-
-#[cfg(target_os = "macos")]
-fn peer_uid(stream: &UnixStream) -> Option<libc::uid_t> {
-    let mut uid = 0;
-    let mut gid = 0;
-    let status = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
-    (status == 0).then_some(uid)
 }

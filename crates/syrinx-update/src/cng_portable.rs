@@ -1,4 +1,4 @@
-//! SHA-256 and ECDSA P-256 through `ring` where Windows CNG is unavailable (Linux, macOS).
+//! SHA-256 and ECDSA P-256 through `ring` where Windows CNG is unavailable (Linux).
 
 use ring::agreement::{self, ECDH_P256, EphemeralPrivateKey};
 use ring::digest::{Context, SHA256};
