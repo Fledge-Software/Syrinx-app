@@ -416,8 +416,9 @@ fn sync_root_identities(probe: &dyn LocationProbe) -> Result<Vec<FileIdentity>, 
     for root in probe.sync_roots()? {
         // Resolve registered roots by identity, including aliases of a checked ancestor.
         let root = normal_absolute_path(&root)?;
-        // A root on a network or FUSE mount shares no identity with a local folder, and a
-        // database inside one fails its own drive check, so only local roots are compared.
+        // Skip a root on a network or FUSE mount: an identity includes the volume, so it
+        // matches no local folder. A database inside one is refused by its own drive check
+        // (on Windows, of the drive letter its path is spelled through), not here.
         match require_local_drive(&root, probe) {
             Ok(()) => {}
             Err(LocationError::NonLocalDrive) => continue,

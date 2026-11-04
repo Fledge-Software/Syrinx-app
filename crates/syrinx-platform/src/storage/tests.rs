@@ -83,6 +83,48 @@ fn a_similarly_named_registered_sibling_is_not_an_ancestor() {
     lease.revalidate().expect("revalidate synthetic database");
 }
 
+/// Reports one synthetic drive letter as a network drive and every other drive as it is.
+#[cfg(windows)]
+struct NetworkDriveSyncRoot {
+    drive: PathBuf,
+}
+
+#[cfg(windows)]
+impl LocationProbe for NetworkDriveSyncRoot {
+    fn drive_type(&self, root: &Path) -> Result<u32, LocationError> {
+        use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
+        if root == self.drive {
+            return Ok(DRIVE_REMOTE);
+        }
+        native::NativeProbe.drive_type(root)
+    }
+
+    fn sync_roots(&self) -> Result<Vec<PathBuf>, LocationError> {
+        Ok(vec![self.drive.join("Synthetic sync")])
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_sync_root_on_a_network_drive_does_not_stop_a_local_database() {
+    let fixture = Fixture::new();
+    let probe = Arc::new(NetworkDriveSyncRoot {
+        drive: PathBuf::from(r"Z:\"),
+    });
+    // The registered root is never opened, so the synthetic drive need not exist.
+    let lease =
+        WindowsDirectoryLease::prepare_with_probe(&fixture.root.join("data"), probe.clone())
+            .expect("a sync root on a network drive cannot hold a local database");
+    lease.revalidate().expect("revalidation keeps accepting it");
+    drop(lease);
+    // Inside the registered root the database's own drive check still refuses it.
+    assert_eq!(
+        WindowsDirectoryLease::prepare_with_probe(&probe.drive.join("Synthetic sync\\data"), probe)
+            .map(|_| ()),
+        Err(LocationError::NonLocalDrive)
+    );
+}
+
 #[test]
 fn creates_missing_children_and_keeps_existing_database_bytes() {
     let fixture = Fixture::new();

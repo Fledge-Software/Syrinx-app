@@ -915,7 +915,10 @@ branch's gate. An exit status alone does not identify which tree was checked.
   `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager\<provider>\UserSyncRoots`
   and makes no WinRT call (owner decision, 2026-10-31); do not bring the
   WinRT lookup back. That layout is not a documented interface, so recheck
-  it after a major Windows update. Source: weekly-release runs 4 and 5
+  it after a major Windows update. A registered root on a network or
+  removable drive (or, on Linux, a FUSE or network mount) is skipped, not
+  compared, so the database's own drive check is what keeps it out of such
+  a folder. Source: weekly-release runs 4 and 5
   (cdb stacks in `GetCurrentSyncRoots` and `IsSupported`) and Windows 11 Pro
   26300 on 2026-10-31, where the fault event's offset resolved through the
   PDB to `GetCurrentSyncRoots` in two test binaries (observed).
