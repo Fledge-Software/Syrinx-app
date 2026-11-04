@@ -416,7 +416,13 @@ fn sync_root_identities(probe: &dyn LocationProbe) -> Result<Vec<FileIdentity>, 
     for root in probe.sync_roots()? {
         // Resolve registered roots by identity, including aliases of a checked ancestor.
         let root = normal_absolute_path(&root)?;
-        require_local_drive(&root, probe)?;
+        // A root on a network or FUSE mount shares no identity with a local folder, and a
+        // database inside one fails its own drive check, so only local roots are compared.
+        match require_local_drive(&root, probe) {
+            Ok(()) => {}
+            Err(LocationError::NonLocalDrive) => continue,
+            Err(error) => return Err(error),
+        }
         let file = native::open_directory(&root, true)?;
         let information = native::entry_info(&file)?;
         if !information.directory || information.delete_pending {
