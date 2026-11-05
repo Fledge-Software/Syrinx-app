@@ -1252,3 +1252,49 @@ create in P1-39d (issue #55): since 2026-10-14 the weekly release workflow signs
 with a primary key held as a GitHub Actions secret and the backup is an
 encrypted file in the owner's password manager (`docs/decisions.md`,
 2026-10-14). The owner's steps are in `docs/owner-checklist.md`.
+
+## #134: plugin packages reuse this format
+
+A plugin package is a folder, not a Syrinx update, but it is checked by the
+same code (note 10, section 5; `docs/decisions.md`, 2026-10-21, decision
+11). Its signed file list is called `package` and lives at the folder's top
+level beside `package.sig`:
+
+```text
+syrinx-plugin-package 1
+id notes
+version 0.3.0
+world syrinx:plugin/plugin@0.1.0
+file <sha256> <size> plugin.wasm
+file <sha256> <size> syrinx-plugin.toml
+file <sha256> <size> ui/app.js
+```
+
+- **The first line is its own.** `PluginPackageList::parse`
+  (`crates/syrinx-update/src/plugin_package.rs`) requires
+  `syrinx-plugin-package 1`, and `Manifest::parse` still requires
+  `syrinx-update-manifest 1`, so neither file can pass for the other even
+  when the same key signs both. The `file` lines follow this document's rules
+  exactly: both parsers call the one `parse_file_lines`.
+- **The id, version and world are signed.** A validly signed package cannot
+  be moved into another plugin's slot (`check_slot`) or replayed over an
+  equal or newer installed version (`check_newer`).
+- **The signature is the 76-byte shape above with the magic `SPP1`,** checked
+  with `verify_plugin_package` before `package` is parsed. As with `ALS1`,
+  the magic only catches a misplaced file; it sits outside the signed digest.
+- **Nothing unlisted, and nothing precompiled.** `verify_payload` wraps the
+  folder so only `package` and `package.sig` may sit beside the listed files;
+  any other entry, a `.cwasm` included, is refused as unlisted, and a list
+  that names `package`, `package.sig` or a `.cwasm` file is refused as
+  `ReservedPath` even when signed. The plugin host also refuses anything
+  `Engine::detect_precompiled` recognises before compiling.
+- **The keys are the plugin's own.** Each plugin repository has its own P-256
+  key, created by the owner outside any agent session and trusted on first
+  use (#136 records it). Tests generate a fresh key in each run; no private
+  key is ever committed.
+
+The plugin host may not link `syrinx-update` (`xtask check-deps`), so the
+application hands the verified `id`, `version` and `world` lines to the host
+as a `SignedIdentity`, and the host checks them against the manifest and the
+component's interface names (`Runtime::compile_package`). Installing a
+package from a folder is #140 (2d).

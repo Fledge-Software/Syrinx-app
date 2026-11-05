@@ -7803,8 +7803,10 @@ dependencies = [
 name = "syrinx-plugin-host"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "syrinx-core",
+ "toml 1.1.8+spec-1.1.0",
  "wasmtime",
 ]
 
