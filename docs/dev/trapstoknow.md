@@ -812,6 +812,18 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   directly; exercise real focus in native fixtures already in front.
   Source: [#221, comment 6672868517](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672868517)
   and `browser_gtk/x11.rs` (observed and code-read, 2026-11-05).
+- **A per-module focus lock does not isolate the whole X11 unit suite.**
+  The `fe5ea09` gate stopped at another managed-window focus setup, after
+  1,054 tests passed. Browser tests also reset global focus on cleanup,
+  while the acceptance unit independently focused raw windows. Keep unit
+  roots unmapped and pass the observed foreground state into the private
+  focus operations. Run real focus/visible-stacking probes explicitly in
+  `page_close`, separately from parallel unit tests. Serialize intentional
+  stale-window queries on GTK's thread, since GDK error traps replace a
+  process-wide Xlib handler. Source: [#221, comment 6673181928](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673181928),
+  the workspace X11 test audit and `linux/x11_errors.rs` (managed-window
+  failure observed; cross-suite interference and error-trap overlap
+  code-read, 2026-11-05).
 - **An adopted foreign GDK window does not deliver GTK toplevel focus.**
   GTK 3.24.52's X11 focus handler, including XI2, returns early for
   `GDK_WINDOW_FOREIGN`. The `732aafd` run had X11 focus inside the main

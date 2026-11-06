@@ -277,6 +277,51 @@ denied and 1,777 display-free workspace tests, with zero failed or ignored.
 Twelve native tests remain coordinator validation. The temporary local
 filter does not alter the gate or any committed test configuration.
 
+## X11 unit-suite audit after `fe5ea09`
+
+The coordinator's next run,
+[#221, comment 6673181928](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673181928),
+passed history **five of five times** and all **25 palette behaviour checks**.
+The find ring and native document-focus handoffs now pass. The gate stopped
+after 1,054 tests at another managed-window setup:
+`focus_chrome_ignores_a_minimised_window_and_reports_a_gone_one` tried to
+give a freshly mapped window the keys. These results establish functional
+progress, not a complete gate pass.
+
+The audit covered Xlib creation, mapping and focus calls, GTK show/focus
+calls and their unit-suite callers across the workspace:
+
+| Unit suite or caller | Deterministic setup and retained coverage |
+| --- | --- |
+| `browser_gtk/x11.rs`, five native units | Every root child stays unmapped. Child mapping occurs only below an unmapped ancestor, without a window-manager request. Viewability, stale IDs and ancestry use real X11 queries. Private focus operations accept the foreground observation; public wrappers still read it from X11. Hidden/stale targets and both foreground guard branches are tested without moving keyboard focus. |
+| The same suite's cleanup and error handling | Remove the global-focus reset and `FocusGuard`. Run the native queries on GTK's thread so intentional stale-window errors cannot overlap GDK's process-wide temporary error traps; assert results on the test thread. The hidden-target unit also covers a mapped child under a hidden ancestor. |
+| `linux/acceptance_tests.rs` | Keep real ownership, hidden visibility and destruction probes on unmapped fixture windows. Move global keyboard-focus, visible stacking and monitor-refresh checks to the explicit native fixture. |
+| `browser_gtk/permission_tests.rs` | The parent stays unmapped. WebKit children are embedded below that hidden parent; delegation assertions require no keyboard focus or window-manager activation. No change needed. |
+| `browser_gtk/downloads_shutdown_tests.rs` | Ephemeral WebKit contexts/views are never placed in a mapped toplevel. Download assertions depend on engine signals, not focus. No change needed. |
+| `browser_gtk/page_tests.rs`, modal callback test | Exercises deferred callbacks and host borrows; it opens no real dialog or managed window. No change needed. |
+| `active_frame/tests.rs` | Windows-only: Linux selects `linux/active_frame.rs`, which has no window-activation tests. Windows coverage stays unchanged. |
+
+`acceptance::check_native_probes` now runs the desktop checks explicitly at
+the start of the existing `page_close` fixture. Its unmanaged
+`override_redirect` windows map directly through X11, without asking the
+window manager. The fixture retains every former native probe assertion
+and additionally checks both public focus paths, hidden and destroyed
+targets, and refusal to take keys from an unowned foreground window.
+The gate already runs `page_close`; no check is ignored, no gate stage is
+removed and no workflow changes. The success marker is `Linux X11 probes:`.
+Palette acceptance continues to prove focus inside actual WebKit pages.
+
+These changes require a fresh coordinator native run outside the sandbox,
+including the whole unit suite, the enhanced `page_close`, cookies, history,
+smoke and palette acceptance. Review and the B4 PR against `main` follow
+once only the recorded timing misses remain.
+
+Local verification passes formatting, workspace Clippy with warnings
+denied and all 1,777 display-free workspace tests, with zero failed or
+ignored. The twelve display-dependent unit tests and the enhanced native
+fixture remain coordinator validation; the local filter is not committed
+and the gate remains unfiltered.
+
 ## Hardware findings from the foreground run
 
 These are the coordinator's Intel HD 4600 results under Hyprland/XWayland,
@@ -333,11 +378,33 @@ rows in the separate burst samples. Hidden-popup own-process idle CPU was
 failures where they miss their budgets; a focus correction grants no
 performance waiver.
 
+At `fe5ea09`, all 25 behaviour checks passed. The raw report is
+`target/p1-33/palette-acceptance-1793924542.json`, SHA-256
+`75a1c65086fc01beecffbdc17495d37b1d3ad5fd46a7209415d6330c69fcede9`.
+Opening first-render p95 was **15.458 ms**; presented p50 was 21.549 ms,
+p95 **33.534 ms** and maximum 81.304 ms. Presented p95 missed the unchanged
+**16.677 ms** budget by 16.857 ms.
+
+| Synthetic rows | Worker p95, ms (D48 budget 5 ms) | Key-to-presented-rows p95, ms (budget 33.354 ms) |
+| --- | --- | --- |
+| 1,000 | 1.253, pass | 33.015, pass |
+| 10,000 | 15.707, fail | 38.349, fail |
+| 100,000 | 24.211, fail | 46.359, fail |
+
+Each size recorded 156 keystrokes and zero timeouts. The burst samples had
+no missing final rows. Hidden-popup own-process idle CPU passed at
+**0.479%** against 0.5%. Palette acceptance therefore **fails only its timing
+budgets** in this run on the i5-4460 / Intel HD 4600. These observations do
+not establish that hardware alone caused the misses. **The owner decides
+whether the opening, D48 worker and composed budgets apply to this class
+of machine.** The budgets and failed verdicts remain unchanged; this is a
+recorded finding, not a waiver or a green palette-acceptance claim.
+
 ## What each native check proves
 
 | Check | Linux implementation and boundary |
 | --- | --- |
-| `page_close` | Twelve page-requested closes leave native children alive until the host releases them, with exact child destruction, survivor preservation, stale-command rejection, unsafe creation refusal and shutdown cleanup. |
+| `page_close` | Explicit X11 focus/stacking/refresh probes and foreground guards, then twelve page-requested closes leave native children alive until the host releases them, with exact child destruction, survivor preservation, stale-command rejection, unsafe creation refusal and shutdown cleanup. |
 | `cookie_persistence` | An unused host stops promptly; a synthetic persistent cookie survives orderly reopen and the bounded shutdown path. The current draft does not claim Windows' post-Stopped engine-termination scenario. |
 | `navigation_history_spike` | Loads, three-row Back and two-row Forward jumps, literal row order, replaceState, reload, pushState, fragments and server/script redirects. WebKit signal reports replace the raw WebView2 COM event spike. |
 | `palette-acceptance` | The existing focus, popup, search and timing assertions run against X11 probes. Budgets are unchanged. Linux dispatches committed characters and keys into the GPUI popup's own window; Windows retains native Win32 messages. This does not claim physical fcitx/XIM coverage; the landing smoke test separately covers it. |

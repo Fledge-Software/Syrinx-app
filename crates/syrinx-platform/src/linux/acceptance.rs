@@ -4,6 +4,8 @@ use std::time::Duration;
 
 #[path = "acceptance/window.rs"]
 mod fixture_window;
+#[path = "acceptance/probes.rs"]
+mod probes;
 #[path = "acceptance/x11.rs"]
 mod x11;
 pub use fixture_window::FixtureWindow;
@@ -11,6 +13,11 @@ pub use fixture_window::FixtureWindow;
 #[cfg(test)]
 #[path = "acceptance_tests.rs"]
 mod tests;
+
+/// Runs the real-focus fixture separately from parallel unit tests, on GTK's thread.
+pub fn check_native_probes() -> Result<(), String> {
+    crate::gtk_thread::run(probes::run).map_err(|error| error.to_string())?
+}
 
 /// Linux dispatches committed text and key events through GPUI's own window dispatcher.
 /// X11 has no per-window Unicode message equivalent to Win32 WM_CHAR; global keymap

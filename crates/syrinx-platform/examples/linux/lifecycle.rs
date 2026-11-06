@@ -11,6 +11,7 @@ use syrinx_platform::{
 };
 
 pub fn run() -> Result<(), String> {
+    acceptance::check_native_probes()?;
     let mut server = Server::start()?;
     let mut fixture = Fixture::new(reserve_profile()?)?;
     fixture.create(1, server.url("/survivor"))?;
