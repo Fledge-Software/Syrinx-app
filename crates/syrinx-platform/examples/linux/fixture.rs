@@ -1,6 +1,7 @@
 //! Drives the ordinary page-host protocol against fresh profiles and bounded native events.
 
 use std::{
+    os::unix::fs::DirBuilderExt,
     path::PathBuf,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -293,7 +294,10 @@ pub fn reserve_profile() -> Result<PathBuf, String> {
         "syrinx-linux-fixture-{}-{stamp}",
         std::process::id()
     ));
-    std::fs::create_dir(&profile).map_err(|error| error.to_string())?;
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&profile)
+        .map_err(|error| error.to_string())?;
     Ok(profile)
 }
 

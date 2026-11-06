@@ -15,6 +15,7 @@ pub struct Server {
     base: String,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<(), String>>>,
+    transfers: Arc<super::downloads::files::Transfers>,
 }
 
 impl Server {
@@ -29,11 +30,17 @@ impl Server {
             .map_err(|error| error.to_string())?;
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
+        let transfers = Arc::new(super::downloads::files::Transfers::default());
+        let serving = transfers.clone();
         let worker = thread::spawn(move || {
             let mut workers = Vec::new();
             while !stopping.load(Ordering::Acquire) {
                 match listener.accept() {
-                    Ok((stream, _)) => workers.push(thread::spawn(move || answer(stream))),
+                    Ok((stream, _)) => {
+                        let transfers = serving.clone();
+                        let stop = stopping.clone();
+                        workers.push(thread::spawn(move || answer(stream, &transfers, &stop)));
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5))
                     }
@@ -49,11 +56,16 @@ impl Server {
             base,
             stop,
             worker: Some(worker),
+            transfers,
         })
     }
 
     pub fn url(&self, route: &str) -> String {
         format!("{}{route}", self.base)
+    }
+
+    pub fn release_download(&self, name: &str) -> Result<(), String> {
+        self.transfers.release(name)
     }
 
     pub fn finish(&mut self) -> Result<(), String> {
@@ -76,7 +88,11 @@ impl Drop for Server {
     }
 }
 
-fn answer(mut stream: TcpStream) -> Result<(), String> {
+fn answer(
+    mut stream: TcpStream,
+    transfers: &super::downloads::files::Transfers,
+    stop: &AtomicBool,
+) -> Result<(), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|error| error.to_string())?;
@@ -101,6 +117,9 @@ fn answer(mut stream: TcpStream) -> Result<(), String> {
         .split_whitespace()
         .nth(1)
         .ok_or("Malformed synthetic request")?;
+    if let Some(name) = super::downloads::files::name(route) {
+        return super::downloads::files::send(&mut stream, name, transfers, stop);
+    }
     let (status, extra, body) = page(route);
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -116,6 +135,7 @@ fn page(route: &str) -> (&'static str, &'static str, String) {
         .or_else(|| super::popups::response(route))
         .or_else(|| super::permissions::response(route))
         .or_else(|| super::media::response(route))
+        .or_else(|| super::downloads::response(route))
     {
         return ("200 OK", "Cache-Control: no-store\r\n", body.into());
     }

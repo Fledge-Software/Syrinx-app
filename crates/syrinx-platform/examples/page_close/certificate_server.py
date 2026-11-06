@@ -29,6 +29,12 @@ def pem(label, value):
 
 
 def certificate_context(directory):
+    # Linux's owning Rust process generates the short-lived key with bounded openssl cleanup.
+    if os.name == "posix":
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(directory / "synthetic-certificate.pem", directory / "synthetic-key.pem")
+        return context
     script = Path(os.environ["SYRINX_SYNTHETIC_CERT_GENERATOR"]).read_text(encoding="utf-8")
     generated = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],

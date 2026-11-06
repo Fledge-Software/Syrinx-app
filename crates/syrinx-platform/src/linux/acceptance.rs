@@ -19,6 +19,12 @@ pub fn check_native_probes() -> Result<(), String> {
     crate::gtk_thread::run(probes::run).map_err(|error| error.to_string())?
 }
 
+/// Read the engine's actual Downloads destination on the one native-library thread.
+pub fn fixture_download_directory() -> Result<Option<std::path::PathBuf>, String> {
+    crate::gtk_thread::run(|| gtk::glib::user_special_dir(gtk::glib::UserDirectory::Downloads))
+        .map_err(|error| error.to_string())
+}
+
 /// Linux dispatches committed text and key events through GPUI's own window dispatcher.
 /// X11 has no per-window Unicode message equivalent to Win32 WM_CHAR; global keymap
 /// remapping would alter the owner's keyboard. Native focus/stacking remain X11 probes.
