@@ -1,7 +1,7 @@
 //! Owns the certificate generator and TLS server, with bounded startup and reaping.
 
 use super::{Duration, no_delivery};
-use crate::linux::child_process::OwnedChild;
+use crate::linux::child_process::{ChildOutput, OwnedChild};
 use crate::linux::fixture::LIMIT;
 use std::{
     fs::{self, OpenOptions},
@@ -49,6 +49,7 @@ impl CertificateServer {
                 .arg(&key)
                 .arg("-out")
                 .arg(directory.join("synthetic-certificate.pem")),
+            ChildOutput::Quiet,
         )?;
         let status = generator.wait(LIMIT)?;
         if !status.success() {
@@ -69,6 +70,7 @@ impl CertificateServer {
             Command::new("python3")
                 .args(["-c", include_str!("../../page_close/certificate_server.py")])
                 .env("SYRINX_SYNTHETIC_CERT_DIRECTORY", directory),
+            ChildOutput::Quiet,
         )?;
         let mut server = Self {
             child,
@@ -163,11 +165,10 @@ mod tests {
             0o600
         );
         let script = "import socket,ssl,sys\ntry:\n with socket.create_connection(('127.0.0.1',int(sys.argv[1])),timeout=3) as sock:\n  ssl.create_default_context().wrap_socket(sock,server_hostname='127.0.0.1')\nexcept ssl.SSLCertVerificationError:\n sys.exit(0)\nsys.exit(1)";
-        let mut client = OwnedChild::spawn(Command::new("python3").args([
-            "-c",
-            script,
-            &server.port.to_string(),
-        ]))
+        let mut client = OwnedChild::spawn(
+            Command::new("python3").args(["-c", script, &server.port.to_string()]),
+            ChildOutput::Quiet,
+        )
         .unwrap();
         assert!(client.wait(Duration::from_secs(5)).unwrap().success());
         server.require_no_delivery().unwrap();

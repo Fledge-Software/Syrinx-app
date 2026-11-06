@@ -107,7 +107,7 @@ impl CookieChild {
 }
 
 fn fresh_processes(server: &Server) -> Result<(), String> {
-    use super::child_process::OwnedChild;
+    use super::child_process::{ChildOutput, OwnedChild};
     use std::process::Command;
     let profile = reserve_profile()?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -119,6 +119,7 @@ fn fresh_processes(server: &Server) -> Result<(), String> {
                 .arg(mode)
                 .arg(&profile)
                 .arg(server.url("")),
+            ChildOutput::Inherit,
         )?;
         let status = child.wait(Duration::from_secs(45))?;
         require(
