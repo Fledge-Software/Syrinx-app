@@ -132,8 +132,7 @@ impl Page {
     /// Record the request before load_uri can synchronously notify its uncommitted address.
     fn load_requested(&self, url: &str) {
         self.load.intent.borrow_mut().request(url);
-        self.load.delivery.borrow_mut().request();
-        self.view.load_uri(url);
+        self.load.request(|| self.view.load_uri(url));
     }
 
     /// Whether a popup this page opens starts tainted; an unobserved page fails closed.
@@ -171,7 +170,7 @@ impl Page {
             BrowserCommand::Navigate { url, .. } => self.navigate(&url)?,
             BrowserCommand::Reload { .. } => {
                 self.withdraw_syrinx_request();
-                self.view.reload();
+                self.load.request(|| self.view.reload());
             }
             BrowserCommand::GoToOffset {
                 direction, steps, ..
@@ -203,7 +202,8 @@ impl Page {
             HistoryDirection::Forward => steps,
         };
         let item = list.nth_item(offset).ok_or(BrowserError::Navigation)?;
-        self.view.go_to_back_forward_list_item(&item);
+        self.load
+            .request(|| self.view.go_to_back_forward_list_item(&item));
         Ok(())
     }
 
@@ -714,6 +714,14 @@ struct LoadState {
     provisional: Cell<bool>,
     failed: Cell<Option<bool>>,
     rejected: Cell<bool>,
+}
+
+impl LoadState {
+    /// Runs a native navigation API after preparing its history delivery.
+    fn request<T>(&self, navigate: impl FnOnce() -> T) -> T {
+        self.delivery.borrow_mut().request();
+        navigate()
+    }
 }
 
 #[derive(Clone)]

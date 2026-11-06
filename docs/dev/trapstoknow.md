@@ -743,6 +743,16 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   [#221, comment 6641629095](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6641629095),
   WebKitGTK 2.54.1 `PageLoadState::activeURL`, and the exact display-free
   replay (observed and code-read, 2026-11-04).
+- **A traversal's pending URI can complete the same jump twice.**
+  At `885701d`, Forward exposed URI 43 as SamePage before its real
+  BackOrForward 43 commit. The first landing consumed the pending jump;
+  the second reset the shared list, leaving only Back row 43 after the
+  next document's replaceState. Guard Back/Forward and Reload before their
+  native API calls, just as `load_uri` is guarded. An older finish must not
+  publish the new request's URI. Source: [#221, comment 6672868517](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672868517),
+  `/tmp/syrinx-b4-focus.GWs8EX/navigation_history_spike.log` and the exact
+  display-free replay in `browser_gtk/page_tests.rs` (observed and tested,
+  2026-11-05).
 - **A link or script navigation's address is not the view's yet at `Started`.**
   When `load-changed` reports `Started` for a navigation the page began, the
   view's `uri` still names the document being left; the new address arrives
@@ -788,6 +798,20 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   focus. Hyprland's active application and X11's exact keyboard-focus window
   are different facts. Source: [#221, comment 6672563128](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672563128)
   (observed, 2026-11-05).
+- **A focus precondition expires when an acceptance check yields.**
+  The `885701d` find check saw keys leave chrome, yielded to GPUI, then
+  injected PageFocused after native focus had returned to chrome. Keeping
+  the field focused was correct for that later ownership. Observe native
+  child focus and the document's focus report, then deliver the test event
+  in the same GPUI update; keep the ring-clearing assertion. Source: the
+  `885701d` palette report linked in #221 and
+  `ui/palette_acceptance.rs` (observed and code-read, 2026-11-05).
+- **A managed test window may not receive focus on a real desktop.**
+  Hyprland refused focus intermittently in the frame-ancestry gate unit at
+  `885701d`. Test ownership with an unmapped tree and query its ancestors
+  directly; exercise real focus in native fixtures already in front.
+  Source: [#221, comment 6672868517](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672868517)
+  and `browser_gtk/x11.rs` (observed and code-read, 2026-11-05).
 - **An adopted foreign GDK window does not deliver GTK toplevel focus.**
   GTK 3.24.52's X11 focus handler, including XI2, returns early for
   `GDK_WINDOW_FOREIGN`. The `732aafd` run had X11 focus inside the main

@@ -230,6 +230,53 @@ XI2/key-mask tests. This tests the delivery decision, not a live GTK/WebKit
 focus handoff. The coordinator must rerun the unchanged native acceptance
 check to validate that handoff.
 
+## Follow-up failures at `885701d`
+
+The coordinator's next run is recorded in
+[#221, comment 6672868517](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672868517).
+The foreign GTK focus bridge restored 24 palette checks, including baseline
+document focus, all 20 Escape returns, rapid dismissal and stale-refocus
+checks. Three failures still required corrections:
+
+- The find-field check sampled native focus in one GPUI update, yielded,
+  then injected its page-focus event in another. The report explicitly
+  says focus had left chrome at the first sample but was back on chrome
+  when the event was delivered. At that point preserving the field is the
+  intended product rule. The harness now waits for both native child focus
+  and the authored document's focus report, then plants the field's GPUI
+  ring and delivers the event in the same update. It still requires the
+  field to lose its ring; it does not retry a failed delivery. A display-free
+  guard regression rejects chrome, popup, unrelated and absent focus, and
+  a missing or blurred document. The GTK bridge and product focus rule are
+  unchanged. The native rerun must prove the actual handoff.
+- The frame-ancestry unit asked Hyprland to focus a newly mapped test
+  window. Focus prevention made that request fail intermittently. The test
+  now builds an unmapped frame with a Syrinx-owned child, a page container
+  and an unrelated sibling. It queries the production ancestry function
+  directly and checks both owned and unowned branches, without changing
+  native focus. Actual foreground ownership remains covered by acceptance
+  and the native probes.
+- History failed once in three runs after replaceState, but the corrupting
+  event preceded it: the two-row Forward request emitted SamePage 43 before
+  its BackOrForward 43 commit. The first report completed the pending jump;
+  the second had no remaining target and reset the shared list. The next
+  document therefore inherited only row 43. Back/Forward and Reload now
+  share the same request-before-native-call guard as `load_uri`. The
+  display-free replay reproduced exactly `[/43]` before the fix and checks
+  all four Back rows afterward, with the older finish both before and
+  during the traversal request. Windows and shared history logic are
+  unchanged; delaying the fixture or relaxing its rows would conceal the
+  defect.
+
+The coordinator's gate stopped at the ancestry test after 1,052 passed;
+that run is not a complete gate pass. The corrected native checks and full
+gate still require a coordinator run outside the sandbox.
+
+The follow-up patch passes formatting, workspace Clippy with warnings
+denied and 1,777 display-free workspace tests, with zero failed or ignored.
+Twelve native tests remain coordinator validation. The temporary local
+filter does not alter the gate or any committed test configuration.
+
 ## Hardware findings from the foreground run
 
 These are the coordinator's Intel HD 4600 results under Hyprland/XWayland,
@@ -266,6 +313,25 @@ The budgets and failing verdicts stay intact. These observations do not
 prove that hardware alone caused the misses. The coordinator must remeasure
 with the focus correction; persistent misses remain hardware-run findings
 for the owner, without an automatic waiver or a green gate claim.
+
+The later `885701d` report is
+`target/p1-33/palette-acceptance-1793923372.json`, SHA-256
+`c62a6aa8f5b26ed61174470d7de82eed584560f0b0b6823be54e08e505f56737`.
+Opening first-render p95 was **16.697 ms**; presented p50 was 19.873 ms,
+p95 **34.557 ms** and maximum 51.630 ms. Presented p95 missed the unchanged
+**16.677 ms** budget by 17.880 ms.
+
+| Synthetic rows | Worker p95, ms (budget 5 ms) | Key-to-presented-rows p95, ms (budget 33.354 ms) |
+| --- | --- | --- |
+| 1,000 | 1.133, pass | 37.826, fail |
+| 10,000 | 10.907, fail | 59.102, fail |
+| 100,000 | 23.536, fail | 46.240, fail |
+
+Each size again recorded 156 keystrokes, zero timeouts and no missing final
+rows in the separate burst samples. Hidden-popup own-process idle CPU was
+**0.459%** against 0.5%, a pass. These Intel HD 4600 / i5-4460 findings remain
+failures where they miss their budgets; a focus correction grants no
+performance waiver.
 
 ## What each native check proves
 

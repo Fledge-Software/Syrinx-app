@@ -274,6 +274,15 @@ impl BrowserView {
     }
 }
 
+/// Delivers a focus check only while the document and native page child both hold focus.
+fn while_page_has_keys<T>(
+    native: probe_win32::KeyboardFocus,
+    document: Option<bool>,
+    deliver: impl FnOnce() -> T,
+) -> Option<T> {
+    (native == probe_win32::KeyboardFocus::InsideMainWindow && document == Some(true)).then(deliver)
+}
+
 /// Where focus was around one in-process `PageFocused`, for the find focus checks.
 struct PageFocusOutcome {
     chrome_had_keys: bool,
@@ -284,14 +293,14 @@ struct PageFocusOutcome {
 impl PageFocusOutcome {
     fn detail(&self) -> String {
         format!(
-            "Windows focus on the chrome: {}; find field focused before: {}, after: {}",
+            "Native keyboard focus on the chrome: {}; find field focused before: {}, after: {}",
             self.chrome_had_keys, self.field_before, self.field_after
         )
     }
 }
 
-/// Delivers WebView2's `GotFocus` for `tab` through the page-host event path, as its event
-/// loop does, and notes where Windows and GPUI focus were.
+/// Delivers the page engine's focus event through the host path and records native and
+/// GPUI focus in the same update.
 fn deliver_page_focus(
     view: &mut BrowserView,
     tab: TabId,
@@ -1103,9 +1112,8 @@ impl Run {
         self.return_to(focus).await
     }
 
-    /// A page `GotFocus` while Windows focus stays on the chrome must leave the find field
-    /// focused (#57); one while the page really holds the keys must still clear it (P1-36).
-    /// Both events go in-process through `browser_event`, so neither needs the foreground.
+    /// A stray page-focus event preserves the find field (#57); real page focus clears
+    /// its ring (P1-36). Each event is delivered in the update that checks native focus.
     async fn check_find_keeps_focus(&mut self) -> Result<(), String> {
         let focus = self.focus_tab()?;
         let (field, kept) = self.page_focus_while_chrome_holds_keys(focus).await?;
@@ -1114,18 +1122,17 @@ impl Run {
             kept.chrome_had_keys && kept.field_before && kept.field_after,
             kept.detail(),
         );
-        let left_chrome = self.move_keys_into_page(focus).await?;
-        let cleared = self.with(|view, window, cx| {
-            window.focus(&field, cx);
-            deliver_page_focus(view, focus, &field, window, cx)
-        })?;
+        let cleared = self.move_keys_into_page(focus, &field).await?;
+        let detail = cleared.as_ref().map_or_else(
+            || "No simultaneous native page focus and document focus within 5s.".to_owned(),
+            PageFocusOutcome::detail,
+        );
         self.report.check(
             "find_ring_clears_on_real_page_focus",
-            left_chrome && !cleared.chrome_had_keys && cleared.field_before && !cleared.field_after,
-            format!(
-                "Windows focus left the chrome: {left_chrome}; {}",
-                cleared.detail()
-            ),
+            cleared.is_some_and(|outcome| {
+                !outcome.chrome_had_keys && outcome.field_before && !outcome.field_after
+            }),
+            detail,
         );
         self.with(|view, window, cx| {
             view.dismiss_find(window);
@@ -1165,17 +1172,27 @@ impl Run {
         .await
     }
 
-    /// Moves Windows focus into `tab`'s page as a click would, without GPUI's involvement;
-    /// false when it never left the chrome.
-    async fn move_keys_into_page(&mut self, tab: TabId) -> Result<bool, String> {
+    /// Requests page focus once, then delivers the ring check while native and document
+    /// focus agree. Yielding after the precondition would let chrome reclaim the keys.
+    async fn move_keys_into_page(
+        &mut self,
+        tab: TabId,
+        field: &FocusHandle,
+    ) -> Result<Option<PageFocusOutcome>, String> {
         self.with(|view, _, _| view.page_command(BrowserCommand::Focus { id: tab.get() }))?;
-        let left = self
-            .try_wait(Duration::from_secs(5), |view, _, _| {
-                let chrome = syrinx_platform::browser::chrome_has_keyboard_focus(view.parent_hwnd);
-                (!chrome).then_some(())
+        let outcome = self
+            .try_wait(Duration::from_secs(5), |view, window, cx| {
+                let native = match probe_win32::keyboard_focus(view.parent_hwnd, None) {
+                    Ok(native) => native,
+                    Err(error) => return Some(Err(error.to_string())),
+                };
+                while_page_has_keys(native, view.page_focus(tab), || {
+                    window.focus(field, cx);
+                    Ok(deliver_page_focus(view, tab, field, window, cx))
+                })
             })
             .await?;
-        Ok(left.is_some())
+        outcome.transpose()
     }
 
     /// Hides the sidebar so it can peek, and waits for the hover sampler that hiding starts
@@ -1592,6 +1609,28 @@ fn left_click(at: Point<Pixels>) -> [PlatformInput; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_find_focus_check_rejects_lost_keys_and_a_document_without_focus() {
+        use probe_win32::KeyboardFocus::*;
+        // An earlier page-focus sample cannot authorize delivery after focus moved away.
+        for native in [Nobody, MainWindow, Popup, Elsewhere] {
+            assert_eq!(
+                while_page_has_keys(native, Some(true), || "delivered"),
+                None
+            );
+        }
+        for document in [None, Some(false)] {
+            assert_eq!(
+                while_page_has_keys(InsideMainWindow, document, || "delivered"),
+                None
+            );
+        }
+        assert_eq!(
+            while_page_has_keys(InsideMainWindow, Some(true), || "delivered"),
+            Some("delivered")
+        );
+    }
 
     #[test]
     fn a_deferral_counts_only_when_the_run_began_behind() {

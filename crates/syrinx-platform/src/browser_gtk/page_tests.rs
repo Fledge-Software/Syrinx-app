@@ -1,4 +1,4 @@
-//! Guards media consent, GTK allocation units and modal dialogs leaving the command pump.
+//! Guards native command ordering, media consent, GTK allocation units and modal dialogs.
 
 use super::*;
 
@@ -69,4 +69,102 @@ fn a_modal_dialog_starts_after_the_host_borrow_and_skips_closed_pages() {
     })
     .expect("GTK thread");
     assert_eq!(outcome, (false, true, true, false));
+}
+
+#[test]
+fn a_forward_request_cannot_land_twice_and_erase_rows_before_replace_state() {
+    use syrinx_core::NavigationList;
+
+    for previous_finished in [false, true] {
+        let state = LoadState::default();
+        let mut list = NavigationList::default();
+        // Commit 40 through 44, then jump back to 41 as the native fixture does.
+        for page in 40..=44 {
+            observe_history(
+                &mut list,
+                HistoryChange::NewDocument {
+                    user_initiated: true,
+                },
+                page,
+                page > 40,
+                false,
+            );
+        }
+        assert!(list.start_jump(HistoryDirection::Back, 3));
+        state.delivery.borrow_mut().boundary();
+        observe_history(&mut list, HistoryChange::BackOrForward, 41, true, true);
+        if previous_finished {
+            assert!(!state.delivery.borrow_mut().finished(true));
+        }
+
+        // WebKit exposes Forward's URI before policy/start, or while 41 finishes late.
+        assert!(list.start_jump(HistoryDirection::Forward, 2));
+        state.request(|| {
+            let immediate = state.delivery.borrow_mut().uri_changed(!previous_finished);
+            let deferred = state.delivery.borrow_mut().finished(true);
+            if immediate || deferred {
+                observe_history(
+                    &mut list,
+                    HistoryChange::SamePage { navigating: false },
+                    43,
+                    true,
+                    true,
+                );
+            }
+        });
+        state.delivery.borrow_mut().boundary();
+        observe_history(&mut list, HistoryChange::BackOrForward, 43, true, true);
+        assert!(!state.delivery.borrow_mut().finished(true));
+
+        // Commit 45, then deliver its parsing-time replaceState at finish.
+        state.request(|| state.delivery.borrow_mut().boundary());
+        observe_history(
+            &mut list,
+            HistoryChange::NewDocument {
+                user_initiated: true,
+            },
+            45,
+            true,
+            false,
+        );
+        assert!(!state.delivery.borrow_mut().uri_changed(true));
+        assert!(state.delivery.borrow_mut().finished(true));
+        list.observe(&HistoryReport {
+            change: HistoryChange::SamePage { navigating: false },
+            address: "http://example.test/p/45r".into(),
+            can_go_back: true,
+            can_go_forward: false,
+        });
+        assert_eq!(list.current_address(), Some("http://example.test/p/45r"));
+        assert_eq!(
+            list.rows(HistoryDirection::Back, 15)
+                .iter()
+                .map(|row| row.address)
+                .collect::<Vec<_>>(),
+            [
+                "http://example.test/p/43",
+                "http://example.test/p/42",
+                "http://example.test/p/41",
+                "http://example.test/p/40"
+            ],
+            "previous document finished before Forward request: {previous_finished}"
+        );
+        assert!(list.rows(HistoryDirection::Forward, 15).is_empty());
+    }
+}
+
+/// Feeds synthetic document addresses through the real shared list.
+fn observe_history(
+    list: &mut syrinx_core::NavigationList,
+    change: HistoryChange,
+    page: u32,
+    can_go_back: bool,
+    can_go_forward: bool,
+) {
+    list.observe(&HistoryReport {
+        change,
+        address: format!("http://example.test/p/{page}"),
+        can_go_back,
+        can_go_forward,
+    });
 }

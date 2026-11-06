@@ -592,15 +592,18 @@ mod tests {
     }
 
     #[test]
-    fn a_page_inside_a_window_managers_frame_counts_as_syrinx_in_front() {
-        let _focus = FocusGuard::take();
-        // A reparenting manager's frame (no PID) holds Syrinx's window, which holds the page's
-        // container (no PID either), and the container has the keys.
-        let frame = test_window(true);
+    fn a_page_inside_a_window_managers_frame_is_owned_through_its_ancestor() {
+        // Keep the frame unmapped: ownership must not depend on the WM granting it focus.
+        let frame = test_window(false);
         let syrinx = child_window(frame, true);
         let container = child_window(syrinx, false);
-        assert!(connection().expect("an X11 display").set_focus(container));
-        assert!(syrinx_in_foreground());
+        let sibling = child_window(frame, false);
+        let connection = connection().expect("an X11 display");
+        assert!(connection.inside_ours(container));
+        assert!(connection.inside_ours(syrinx));
+        assert!(!connection.inside_ours(frame));
+        assert!(!connection.inside_ours(sibling));
+        drop(connection);
         destroy(frame);
     }
 
