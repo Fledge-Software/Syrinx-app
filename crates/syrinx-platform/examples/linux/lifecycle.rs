@@ -60,8 +60,9 @@ pub fn run() -> Result<(), String> {
         };
         let survivor_before = fixture.parent.geometry(survivor[0])?;
         resize(&mut fixture, closing, bounds)?;
-        require(
-            fixture.parent.geometry(survivor[0])? == survivor_before,
+        require_geometry(
+            fixture.parent.geometry(survivor[0])?,
+            survivor_before,
             "Resize moved hidden survivor",
         )?;
         fixture.send(BrowserCommand::Navigate {
@@ -81,9 +82,9 @@ pub fn run() -> Result<(), String> {
         )?;
         fixture.send(BrowserCommand::ShowActive(Some(1)))?;
         fixture.barrier()?;
-        require(
-            fixture.parent.geometry(survivor[0])?
-                == (bounds.x, bounds.y, bounds.width, bounds.height),
+        require_geometry(
+            fixture.parent.geometry(survivor[0])?,
+            (bounds.x, bounds.y, bounds.width, bounds.height),
             "Survivor activation did not take current bounds",
         )?;
         fixture.send(BrowserCommand::Navigate {
@@ -216,8 +217,9 @@ fn initial_states(fixture: &mut Fixture, server: &Server) -> Result<(), String> 
             }
         )
     })?;
-    require(
-        fixture.parent.geometry(child)? == before,
+    require_geometry(
+        fixture.parent.geometry(child)?,
+        before,
         "Rejected bounds moved native child",
     )?;
     for (id, url, error) in [
@@ -265,8 +267,9 @@ fn initial_states(fixture: &mut Fixture, server: &Server) -> Result<(), String> 
 fn resize(fixture: &mut Fixture, child: isize, bounds: PageBounds) -> Result<(), String> {
     fixture.send(BrowserCommand::Resize(bounds))?;
     fixture.barrier()?;
-    require(
-        fixture.parent.geometry(child)? == (bounds.x, bounds.y, bounds.width, bounds.height),
+    require_geometry(
+        fixture.parent.geometry(child)?,
+        (bounds.x, bounds.y, bounds.width, bounds.height),
         "Native page rectangle differs from requested physical bounds",
     )
 }
@@ -277,5 +280,17 @@ fn require_children(fixture: &Fixture, expected: &[isize]) -> Result<(), String>
     require(
         current.len() == expected.len() && expected.iter().all(|child| current.contains(child)),
         "Deferred close changed native child set",
+    )
+}
+
+/// Keep both physical rectangles in failures; a label alone cannot diagnose scaling or offsets.
+pub(super) fn require_geometry(
+    actual: (i32, i32, u32, u32),
+    expected: (i32, i32, u32, u32),
+    reason: &str,
+) -> Result<(), String> {
+    require(
+        actual == expected,
+        &format!("{reason}: expected {expected:?}, actual {actual:?}"),
     )
 }

@@ -1,5 +1,10 @@
 //! Exercises native Find, zoom, mute and cancel-only printing through the page protocol.
 
+#[path = "controls/find_observation.rs"]
+mod find_observation;
+
+use find_observation::FindObservation;
+
 use super::{
     fixture::{Fixture, LIMIT, reserve_profile},
     lifecycle::require,
@@ -11,8 +16,38 @@ use std::{
 };
 use syrinx_platform::browser::{self, BrowserCommand, BrowserEvent, PageAction};
 
+const PAGE: &str = r#"<!doctype html><title>controls-ready</title><link rel=icon href=data:,>
+<p><span data-occurrence=1>syntheticneedle</span>
+<span data-occurrence=2>syntheticneedle</span>
+<span data-occurrence=3>SYNTHETICNEEDLE</span></p><script>
+let operation=0,armed=false,baseline=null;
+function selectedOccurrence(){
+  const selection=getSelection();
+  if(!selection||selection.isCollapsed||selection.toString().toLowerCase()!=='syntheticneedle')return null;
+  const owner=node=>(node?.nodeType===Node.TEXT_NODE?node.parentElement:node)?.closest('[data-occurrence]');
+  const first=owner(selection.anchorNode),last=owner(selection.focusNode);
+  return first&&first===last?Number(first.dataset.occurrence):null;
+}
+addEventListener('keydown',event=>{
+  if(event.key!=='r'&&event.key!=='p')return;
+  event.preventDefault();
+  armed=false;
+  if(event.key==='r')getSelection().removeAllRanges();
+  baseline=selectedOccurrence();
+  if(event.key==='p'&&baseline===null){document.title='fixture-find-error:no-selection';return;}
+  operation+=1;armed=true;
+  document.title='fixture-find-armed:'+operation;
+});
+document.addEventListener('selectionchange',()=>{
+  const occurrence=selectedOccurrence();
+  if(!armed||occurrence===null||occurrence===baseline)return;
+  armed=false;
+  document.title='fixture-find-selected:'+operation+':'+occurrence;
+});
+</script>"#;
+
 pub fn response(route: &str) -> Option<&'static str> {
-    (route == "/controls").then_some("<!doctype html><title>controls-ready</title><link rel=icon href=data:,><p>syntheticneedle syntheticneedle SYNTHETICNEEDLE</p><input autofocus aria-label='Synthetic input'>")
+    (route == "/controls").then_some(PAGE)
 }
 
 pub fn run() -> Result<(), String> {
@@ -29,47 +64,7 @@ pub fn run() -> Result<(), String> {
     fixture.parent.focus()?;
     growing_find(&mut fixture)?;
     fixture.focus_page(3000)?;
-    for (request, text, sensitive, count) in [
-        (1, "syntheticneedle", false, 3),
-        (2, "syntheticneedle", true, 2),
-        (3, "absent-synthetic", false, 0),
-        (4, "", false, 0),
-    ] {
-        action(
-            &mut fixture,
-            PageAction::Find {
-                request,
-                text: text.into(),
-                case_sensitive: sensitive,
-            },
-        )?;
-        find_result(
-            &mut fixture,
-            request,
-            count,
-            if count == 0 { -1 } else { 1 },
-        )?;
-        if count > 1 {
-            for active in (2..=count).chain(std::iter::once(1)) {
-                action(&mut fixture, PageAction::FindNext)?;
-                find_result(&mut fixture, request, count, active)?;
-            }
-            for active in (1..=count).rev() {
-                action(&mut fixture, PageAction::FindPrevious)?;
-                find_result(&mut fixture, request, count, active)?;
-            }
-        }
-        action(&mut fixture, PageAction::StopFind)?;
-        fixture.barrier()?;
-        action(&mut fixture, PageAction::FindNext)?;
-        action(&mut fixture, PageAction::FindPrevious)?;
-        fixture.barrier_checked(require_stopped_find)?;
-        fixture.watch_for(
-            "StopFind retires match reports",
-            Duration::from_millis(100),
-            require_stopped_find,
-        )?;
-    }
+    find_cases(&mut fixture)?;
     for (command, expected) in [
         (PageAction::ZoomIn, 1.1),
         (PageAction::ZoomOut, 1.),
@@ -90,6 +85,89 @@ pub fn run() -> Result<(), String> {
         "Linux controls: Find counts/steps/wrap/chrome focus, zoom, shown/hidden mute and print cancellation passed."
     );
     Ok(())
+}
+
+/// Reset each initial query, then compare native selected spans with literal step sequences.
+fn find_cases(fixture: &mut Fixture) -> Result<(), String> {
+    let mut operation = 0;
+    for (request, text, sensitive, count) in [
+        (1, "syntheticneedle", false, 3),
+        (2, "syntheticneedle", true, 2),
+        (3, "absent-synthetic", false, 0),
+        (4, "", false, 0),
+    ] {
+        let observed_operation = if count > 0 {
+            Some(arm_selection(fixture, &mut operation, true)?)
+        } else {
+            None
+        };
+        action(
+            fixture,
+            PageAction::Find {
+                request,
+                text: text.into(),
+                case_sensitive: sensitive,
+            },
+        )?;
+        find_result(
+            fixture,
+            request,
+            count,
+            if count == 0 { -1 } else { 1 },
+            observed_operation,
+        )?;
+        let (next, previous): (&[i32], &[i32]) = match count {
+            3 => (&[2, 3, 1], &[3, 2, 1]),
+            2 => (&[2, 1], &[2, 1]),
+            _ => (&[], &[]),
+        };
+        for (forward, expected) in [(true, next), (false, previous)] {
+            for &occurrence in expected {
+                let operation = arm_selection(fixture, &mut operation, false)?;
+                action(
+                    fixture,
+                    if forward {
+                        PageAction::FindNext
+                    } else {
+                        PageAction::FindPrevious
+                    },
+                )?;
+                find_result(fixture, request, count, occurrence, Some(operation))?;
+            }
+        }
+        action(fixture, PageAction::StopFind)?;
+        fixture.barrier()?;
+        action(fixture, PageAction::FindNext)?;
+        action(fixture, PageAction::FindPrevious)?;
+        fixture.barrier_checked(require_stopped_find)?;
+        fixture.watch_for(
+            "StopFind retires match reports",
+            Duration::from_millis(100),
+            require_stopped_find,
+        )?;
+    }
+    Ok(())
+}
+
+/// The authored key handler only arms observation; it never chooses the next match.
+fn arm_selection(fixture: &mut Fixture, operation: &mut u64, reset: bool) -> Result<u64, String> {
+    *operation += 1;
+    let expected = format!("fixture-find-armed:{operation}");
+    fixture.parent.key(
+        fixture.only_child()?,
+        u32::from(if reset { b'r' } else { b'p' }),
+    )?;
+    fixture.wait_checked("authored Find selection observer armed", |event, _| {
+        let BrowserEvent::Title { id: 3000, title } = event else {
+            return Ok(false);
+        };
+        require(
+            !title.starts_with("fixture-find-error:"),
+            "Authored Find observer has no native selection to step from",
+        )?;
+        Ok(title == &expected)
+    })?;
+    Ok(*operation)
 }
 
 fn growing_find(fixture: &mut Fixture) -> Result<(), String> {
@@ -122,26 +200,15 @@ fn growing_find(fixture: &mut Fixture) -> Result<(), String> {
     action(fixture, PageAction::StopFind)
 }
 
-fn find_result(fixture: &mut Fixture, request: u64, count: i32, active: i32) -> Result<(), String> {
-    fixture.wait_checked("native Find result", |event, _| {
-        let BrowserEvent::FindResult {
-            id: 3000,
-            request: actual,
-            count: found,
-            active: selected,
-        } = event
-        else {
-            return Ok(false);
-        };
-        if *actual != request {
-            return Ok(false);
-        }
-        require(
-            (*found, *selected) == (count, active),
-            &format!("Find expected {active} of {count}, received {selected} of {found}"),
-        )?;
-        Ok(true)
-    })
+fn find_result(
+    fixture: &mut Fixture,
+    request: u64,
+    count: i32,
+    active: i32,
+    operation: Option<u64>,
+) -> Result<(), String> {
+    let mut observed = FindObservation::new(request, count, active, operation);
+    fixture.wait_checked("native Find result", |event, _| observed.observe(event))
 }
 
 fn mute_states(fixture: &mut Fixture) -> Result<(), String> {

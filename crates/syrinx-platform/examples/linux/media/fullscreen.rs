@@ -2,7 +2,7 @@
 
 use super::super::{
     fixture::{Fixture, reserve_profile},
-    lifecycle::require,
+    lifecycle::{require, require_geometry},
     server::Server,
 };
 use std::{thread, time::Duration};
@@ -38,8 +38,9 @@ pub fn run() -> Result<(), String> {
     fixture.focus_page(1500)?;
     let child = fixture.only_child()?;
     let original = fixture.parent.geometry(child)?;
-    require(
-        original == (12, 24, 480, 320),
+    require_geometry(
+        original,
+        (12, 24, 480, 320),
         "Initial video rectangle is wrong",
     )?;
     for exit in 0..4 {
@@ -55,8 +56,9 @@ pub fn run() -> Result<(), String> {
             height: 480,
         }))?;
         fixture.barrier()?;
-        require(
-            fixture.parent.geometry(child)? == (0, 0, 640, 480),
+        require_geometry(
+            fixture.parent.geometry(child)?,
+            (0, 0, 640, 480),
             "Fullscreen page did not fill the requested viewport",
         )?;
         match exit {
@@ -86,8 +88,9 @@ pub fn run() -> Result<(), String> {
         wait_fullscreen(&mut fixture, false)?;
         fixture.send(BrowserCommand::Resize(card))?;
         fixture.barrier()?;
-        require(
-            fixture.parent.geometry(child)? == original,
+        require_geometry(
+            fixture.parent.geometry(child)?,
+            original,
             "Fullscreen exit did not restore exact card bounds",
         )?;
     }
