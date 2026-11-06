@@ -241,15 +241,13 @@ impl Page {
     }
 
     fn find(&self, request: u64, text: &str, case_sensitive: bool) {
-        if text.is_empty() {
+        if !self.find.begin(request, text, self.id, &self.shared) {
             self.stop_find();
             return;
         }
         let Some(controller) = self.view.find_controller() else {
             return;
         };
-        self.find.request.set(Some(request));
-        self.find.active.set(0);
         let mut options = FindOptions::WRAP_AROUND;
         if !case_sensitive {
             options |= FindOptions::CASE_INSENSITIVE;
@@ -262,17 +260,9 @@ impl Page {
         let Some(controller) = self.view.find_controller() else {
             return;
         };
-        let count = self.find.count.get();
-        if count == 0 || self.find.request.get().is_none() {
+        if !self.find.step(forward) {
             return;
         }
-        let active = self.find.active.get();
-        let next = if forward {
-            (active + 1) % count
-        } else {
-            (active + count - 1) % count
-        };
-        self.find.active.set(next);
         if forward {
             controller.search_next();
         } else {
@@ -684,6 +674,33 @@ struct FindState {
 }
 
 impl FindState {
+    fn begin(&self, request: u64, text: &str, id: u64, shared: &Shared) -> bool {
+        self.request.set(Some(request));
+        self.active.set(0);
+        if text.is_empty() {
+            self.count.set(0);
+            self.report(id, shared);
+            self.request.set(None);
+            return false;
+        }
+        true
+    }
+
+    fn step(&self, forward: bool) -> bool {
+        let count = self.count.get();
+        if count == 0 || self.request.get().is_none() {
+            return false;
+        }
+        let active = self.active.get();
+        let next = if forward {
+            (active + 1) % count
+        } else {
+            (active + count - 1) % count
+        };
+        self.active.set(next);
+        true
+    }
+
     fn report(&self, id: u64, shared: &Shared) {
         let Some(request) = self.request.get() else {
             return;
@@ -692,7 +709,7 @@ impl FindState {
         let active = if count == 0 {
             -1
         } else {
-            i32::try_from(self.active.get()).unwrap_or(-1)
+            i32::try_from(self.active.get().saturating_add(1)).unwrap_or(i32::MAX)
         };
         shared.events.emit(BrowserEvent::FindResult {
             id,

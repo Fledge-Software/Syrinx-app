@@ -44,27 +44,20 @@ pub fn run() -> Result<(), String> {
         HistoryDirection::Back,
         &[43, 42, 41, 40],
     )?;
+    // Drain the replaceState load's completion before observing the new Reload.
+    fixture.barrier()?;
     fixture.send(BrowserCommand::Reload { id: 1 })?;
-    let mut completion = None;
+    let mut reload = ReloadWatch::default();
     let completed = fixture.wait(
-        "Reload completion: expected tab=1 success=true",
-        |event, _| {
-            let BrowserEvent::NavigationCompleted {
-                id,
-                success,
-                cancelled,
-            } = event
-            else {
-                return false;
-            };
-            completion = Some((*id, *success, *cancelled));
-            *id == 1 && *success
-        },
+        "Reload completion after Loading: expected tab=1 success=true cancelled=false",
+        |event, _| reload.observe(event),
     );
     println!(
-        "History Reload completion assertion: actual={completion:?}; expected=(tab=1, success=true, cancelled=any)"
+        "History Reload completion assertion: actual={:?}; expected=(tab=1, success=true, cancelled=false)",
+        reload.completion
     );
     completed?;
+    reload.finish()?;
     rows(
         &fixture,
         "after Reload",
@@ -108,6 +101,47 @@ pub fn run() -> Result<(), String> {
         "Linux navigation_history_spike: real loads, 3/2-row jumps, replaceState, reload, pushState, fragment and redirects passed."
     );
     Ok(())
+}
+
+/// Requires this tab's Reload to start before accepting its completion.
+#[derive(Default)]
+struct ReloadWatch {
+    loading: bool,
+    completion: Option<(u64, bool, bool)>,
+}
+
+impl ReloadWatch {
+    fn observe(&mut self, event: &BrowserEvent) -> bool {
+        if matches!(
+            event,
+            BrowserEvent::Loading {
+                id: 1,
+                loading: true
+            }
+        ) {
+            self.loading = true;
+        }
+        let BrowserEvent::NavigationCompleted {
+            id: 1,
+            success,
+            cancelled,
+        } = event
+        else {
+            return false;
+        };
+        if !self.loading {
+            return false;
+        }
+        self.completion = Some((1, *success, *cancelled));
+        true
+    }
+
+    fn finish(&self) -> Result<(), String> {
+        match self.completion {
+            Some((1, true, false)) => Ok(()),
+            actual => Err(format!("Reload failed: actual={actual:?}")),
+        }
+    }
 }
 
 fn navigate(fixture: &mut Fixture, server: &Server, path: &str) -> Result<(), String> {
@@ -158,7 +192,89 @@ fn rows(
 #[cfg(test)]
 mod tests {
     use super::super::trace::Trace;
+    use super::*;
     use syrinx_core::{HistoryChange, HistoryDirection, HistoryReport, NavigationList};
+
+    #[test]
+    fn reload_ignores_prior_completion_until_its_own_loading() {
+        let mut reload = ReloadWatch::default();
+        let stale = BrowserEvent::NavigationCompleted {
+            id: 1,
+            success: true,
+            cancelled: false,
+        };
+        assert!(
+            !reload.observe(&stale),
+            "the previous load has not been drained yet"
+        );
+        assert!(!reload.observe(&BrowserEvent::Loading {
+            id: 1,
+            loading: false
+        }));
+        assert!(!reload.observe(&stale));
+        assert!(!reload.observe(&BrowserEvent::Loading {
+            id: 2,
+            loading: true
+        }));
+        assert!(
+            !reload.observe(&stale),
+            "another tab cannot start this Reload"
+        );
+        assert!(!reload.observe(&BrowserEvent::Loading {
+            id: 1,
+            loading: true
+        }));
+        assert!(!reload.observe(&BrowserEvent::NavigationCompleted {
+            id: 2,
+            success: true,
+            cancelled: false,
+        }));
+        assert!(!reload.observe(&BrowserEvent::NavigationCompleted {
+            id: 2,
+            success: false,
+            cancelled: true,
+        }));
+        assert!(reload.observe(&stale));
+        reload.finish().expect("this Reload succeeded");
+    }
+
+    #[test]
+    fn reload_failure_ends_the_wait_immediately() {
+        let mut reload = ReloadWatch::default();
+        assert!(!reload.observe(&BrowserEvent::Loading {
+            id: 1,
+            loading: true
+        }));
+        assert!(
+            reload.observe(&BrowserEvent::NavigationCompleted {
+                id: 1,
+                success: false,
+                cancelled: false,
+            }),
+            "a failed Reload must not wait for the deadline"
+        );
+        assert!(reload.finish().is_err());
+    }
+
+    #[test]
+    fn reload_cancellation_cannot_pass_as_success() {
+        for success in [false, true] {
+            let mut reload = ReloadWatch::default();
+            assert!(!reload.observe(&BrowserEvent::Loading {
+                id: 1,
+                loading: true
+            }));
+            assert!(reload.observe(&BrowserEvent::NavigationCompleted {
+                id: 1,
+                success,
+                cancelled: true,
+            }));
+            assert!(
+                reload.finish().is_err(),
+                "cancelled completion is not Reload success"
+            );
+        }
+    }
 
     #[test]
     fn replace_state_preserves_the_authored_jump_and_row_sequence() {

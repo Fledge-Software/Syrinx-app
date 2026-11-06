@@ -1,6 +1,91 @@
-//! Guards native command ordering, media consent, GTK allocation units and modal dialogs.
+//! Guards Find reports, native command ordering, media consent, GTK units and modal dialogs.
 
 use super::*;
+
+#[test]
+fn find_events_number_matches_from_one_and_wrap_in_both_directions() {
+    let (shared, mut events) = find_events();
+    let find = FindState::default();
+    assert!(find.begin(41, "synthetic", 7, &shared));
+    find.count.set(3);
+    find.report(7, &shared);
+    expect_find(&mut events, 41, 3, 1);
+    for (forward, expected) in [
+        (true, 2),
+        (true, 3),
+        (true, 1),
+        (false, 3),
+        (false, 2),
+        (false, 1),
+    ] {
+        assert!(find.step(forward));
+        find.report(7, &shared);
+        expect_find(&mut events, 41, 3, expected);
+    }
+    find.count.set(0);
+    find.report(7, &shared);
+    expect_find(&mut events, 41, 0, -1);
+    assert!(!find.step(true));
+    assert!(!find.step(false));
+}
+
+#[test]
+fn an_empty_find_completes_its_request_and_retires_the_previous_search() {
+    let (shared, mut events) = find_events();
+    let find = FindState::default();
+    assert!(find.begin(41, "synthetic", 7, &shared));
+    find.count.set(3);
+    assert!(!find.begin(42, "", 7, &shared));
+    expect_find(&mut events, 42, 0, -1);
+    assert!(!find.step(true));
+    // A late native callback from the ended search cannot resurrect its request.
+    find.count.set(3);
+    find.report(7, &shared);
+    assert!(matches!(
+        events.try_recv(),
+        Err(futures::channel::mpsc::TryRecvError::Empty)
+    ));
+}
+
+/// Creates only the Rust event boundary, without a GTK thread or native page.
+fn find_events() -> (
+    Shared,
+    futures::channel::mpsc::UnboundedReceiver<BrowserEvent>,
+) {
+    let (events, outgoing) = futures::channel::mpsc::unbounded();
+    (
+        Shared {
+            parent: 0,
+            events: super::super::EventSink(events, None),
+            popups: Rc::default(),
+            peek_generation: std::sync::Arc::default(),
+            requests: Rc::default(),
+        },
+        outgoing,
+    )
+}
+
+fn expect_find(
+    events: &mut futures::channel::mpsc::UnboundedReceiver<BrowserEvent>,
+    request: u64,
+    count: i32,
+    active: i32,
+) {
+    let event = events.try_recv().expect("Find must emit a result");
+    let BrowserEvent::FindResult {
+        id,
+        request: actual_request,
+        count: actual_count,
+        active: actual_active,
+    } = event
+    else {
+        panic!("expected FindResult, got {event:?}");
+    };
+    assert_eq!(
+        (id, actual_request, actual_count, actual_active),
+        (7, request, count, active)
+    );
+}
 
 #[test]
 fn combined_media_cannot_use_a_camera_only_choice() {
