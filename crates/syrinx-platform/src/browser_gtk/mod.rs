@@ -4,6 +4,8 @@
 mod history_state;
 #[path = "../browser/keys.rs"]
 mod keys;
+#[path = "../browser/placement.rs"]
+mod placement;
 #[path = "../browser/protocol.rs"]
 mod protocol;
 
@@ -15,6 +17,7 @@ mod history_delivery;
 mod history_intent;
 mod page;
 mod page_keys;
+mod page_placement;
 mod page_text;
 mod x11;
 

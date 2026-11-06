@@ -43,6 +43,7 @@ use super::{
     keys::{peek_escape, shortcut_for_modifiers},
     next_zoom,
     page_keys::KeyRouting,
+    page_placement::PagePlacement,
     page_text::{PageText, TextContext},
     validate_url,
 };
@@ -56,6 +57,7 @@ pub(super) struct Page {
     window: gtk::Window,
     keys: KeyRouting,
     embed: Embed,
+    placement: PagePlacement,
     shared: Shared,
     /// Retired when the page closes, so its late events never reach the UI.
     life: CallbackLife,
@@ -97,6 +99,7 @@ impl Page {
             window,
             keys,
             embed,
+            placement: PagePlacement::new(bounds),
             shared,
             life,
             prompts: Rc::default(),
@@ -104,8 +107,8 @@ impl Page {
             load: Rc::default(),
             text,
         };
-        page.resize(bounds);
-        page.show(false);
+        page.set_bounds(bounds);
+        page.show(false, bounds);
         page.watch();
         Ok(page)
     }
@@ -152,6 +155,12 @@ impl Page {
     }
 
     pub(super) fn resize(&self, bounds: PageBounds) {
+        self.placement
+            .resize(bounds, |bounds| self.set_bounds(bounds));
+    }
+
+    /// Keep the physical X11 rectangle and GTK's logical allocation in step.
+    fn set_bounds(&self, bounds: PageBounds) {
         self.embed.place(bounds);
         let width = logical_extent(bounds.width, self.window.scale_factor());
         let height = logical_extent(bounds.height, self.window.scale_factor());
@@ -160,13 +169,20 @@ impl Page {
             .size_allocate(&gtk::Allocation::new(0, 0, width, height));
     }
 
-    pub(super) fn show(&self, visible: bool) {
-        if visible {
-            self.window.show_all();
-        } else {
-            self.window.hide();
-        }
-        self.embed.map(visible);
+    pub(super) fn show(&self, visible: bool, card: PageBounds) {
+        self.placement.show(
+            visible,
+            card,
+            |bounds| self.set_bounds(bounds),
+            |visible| {
+                if visible {
+                    self.window.show_all();
+                } else {
+                    self.window.hide();
+                }
+                self.embed.map(visible);
+            },
+        );
     }
 
     pub(super) fn apply(&self, command: BrowserCommand) -> Result<(), BrowserError> {

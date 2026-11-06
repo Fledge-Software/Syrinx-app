@@ -568,6 +568,16 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Linux: WebKitGTK, X11 and POSIX
 
+- **A hidden-survivor resize failure can mean it moved, not that it stayed
+  stale.** At `812b19f`, expected `(19, 29, 480, 300)` was the old survivor
+  rectangle; actual `(7, 11, 320, 240)` was the active page's new rectangle.
+  GTK resized every page unconditionally. Reuse Windows' shared `Placement`
+  policy: leave hidden geometry alone and apply the current card before
+  mapping on activation. Source: `browser_gtk/page_placement.rs`, Windows
+  `browser/page.rs` and both native lifecycle fixtures; the coordinator's
+  [3/3 reproduction](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6675466572)
+  and the failing-then-passing display-free operation-order regression
+  (observed and code-read, 2026-11-05; corrected native run pending).
 - **A private Downloads variable set after GLib starts can still leave the
   owner's Downloads selected.** Prepare a mode-0700 config root containing
   an explicit `user-dirs.dirs` before any GLib/GTK initialization or threads,

@@ -10,7 +10,15 @@ deleted. Merge `5df4978` preserves current `main` plus B4's changes, adapting
 only the popup-owner function to the landed X11 connection/error API. The
 B4 PR will target `main`.
 
-The latest native receipt is the coordinator's **`dec469e`** run in
+The latest native run is **`812b19f`**, recorded in
+[#221, comment 6675466572](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6675466572).
+Its X11 probes passed, but `page_close` failed the hidden-survivor geometry
+assertion in **3/3** runs. The driver correctly stopped there; cookies,
+history, palette and the complete gate did not run. The correction below
+still needs a native rerun. Find mutation and visible-label checks remain
+pending until a green functional run.
+
+The last broad native baseline is the coordinator's **`dec469e`** run in
 [#221, comment 6673543416](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673543416),
 not the later review-progress comments. Source commit
 `dec469ea203d6883f0f6cb1d8cff140ff597d533` passed `page_close` **3/3 with the
@@ -23,9 +31,40 @@ The subsequent review corrections add Reload completion correlation, Find
 numbering/empty-result/native-completion checks, permission cancellation,
 and the expanded native suites listed below. **These changes and all new
 native scenarios are NATIVE PENDING.** Display-free tests establish their
-parsers and observers, not a WebKit pass. The fresh independent whole-branch
-review, B4 PR against `main`, and Windows CI are also pending. No current
-native pass is claimed beyond the named receipt.
+parsers and observers, not a WebKit pass. A
+[fresh independent whole-branch source review approved `main..812b19f`](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6675422981).
+The subsequent geometry correction has independent scoped source approval
+but still needs native validation; the B4 PR against `main` and Windows CI
+remain pending. No current native
+pass is claimed beyond the named receipts.
+
+## Hidden-survivor geometry after `812b19f`
+
+The failure's expected rectangle `(19, 29, 480, 300)` is the survivor's
+previous rectangle. Actual `(7, 11, 320, 240)` is the new card rectangle
+requested for the active, closing page. The hidden survivor moved when it
+should have stayed still; the failure does not show X11 deferring its resize.
+
+GTK's `Engine::apply(Resize)` visited every page, and `Page::resize` always
+called `Embed::place` (`XMoveResizeWindow`) and GTK allocation. It had no
+visibility check. Windows deliberately skips those hidden-page changes:
+`browser/page.rs` uses `browser/placement.rs::Placement::on_resize`, then
+`on_show` catches up to the current card before the page becomes visible.
+The Windows native lifecycle fixture explicitly asserts both halves.
+
+Linux now reuses that unchanged shared policy. `page_placement.rs` decides
+when to invoke the native bounds and mapping operations; the engine passes
+the latest card to `Page::show`. Creation still initializes the X11 and GTK
+geometry, hidden resizes preserve it, and activation applies current bounds
+before mapping. Repeated unchanged rectangles also skip redundant geometry
+calls. Windows code and both native fixture expectations are unchanged.
+
+Two display-free tests at that operation boundary failed against the
+extracted eager-resize path, including a bounds call with the actual native
+failure's `(7, 11, 320, 240)` tuple. Both pass with the shared policy and check
+the bounds-before-map ordering on activation. These tests prove the Rust
+decision and call order, not native X11 completion; the coordinator must
+rerun the existing unmodified lifecycle assertion.
 
 The following diagnostic sections retain the historical state at their named
 commits (2026-11-02 through 2026-11-05). Their then-pending requests and old
