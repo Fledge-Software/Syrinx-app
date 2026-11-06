@@ -10,13 +10,22 @@ deleted. Merge `5df4978` preserves current `main` plus B4's changes, adapting
 only the popup-owner function to the landed X11 connection/error API. The
 B4 PR will target `main`.
 
-The latest native run is **`812b19f`**, recorded in
-[#221, comment 6675466572](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6675466572).
-Its X11 probes passed, but `page_close` failed the hidden-survivor geometry
-assertion in **3/3** runs. The driver correctly stopped there; cookies,
-history, palette and the complete gate did not run. The correction below
-still needs a native rerun. Find mutation and visible-label checks remain
-pending until a green functional run.
+The latest native receipt is **`a01b28d`**, recorded in
+[#221, comment 6683986953](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6683986953).
+X11 probes, lifecycle (including hidden-survivor geometry), popups, controls
+and permissions passed. Media reached `GStreamer element autoaudiosink not
+found` and WebKitWebProcess aborted; only GStreamer and base plugins were
+installed. The owner is installing the good, bad and libav runtime plugins.
+The full script must rerun after that prerequisite is repaired; media and
+the remaining fixtures, palette and complete gate are not yet validated.
+
+The separate Find checks **passed** at `a01b28d`. Swapping only native Next
+and Previous in a disposable worktree with its own target failed with
+expected occurrence 2, actual occurrence 3; the real branch was unchanged.
+The visible Find field showed `1 of 3`, then `2 of 3` after F3, then cleared
+its label and highlights. Screenshots remain in `/tmp/sx-findlabel/shots/`.
+Runtime package guidance is in [installing.md](../installing.md#linux-2026-10-31);
+an actionable in-app prerequisite message is proposed in #246.
 
 The last broad native baseline is the coordinator's **`dec469e`** run in
 [#221, comment 6673543416](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673543416),
@@ -29,14 +38,14 @@ That is functional evidence for that commit, not a green gate.
 
 The subsequent review corrections add Reload completion correlation, Find
 numbering/empty-result/native-completion checks, permission cancellation,
-and the expanded native suites listed below. **These changes and all new
-native scenarios are NATIVE PENDING.** Display-free tests establish their
+and the expanded native suites listed below. **Coverage beyond the explicit
+`a01b28d` passes above remains native-pending.** Display-free tests establish
 parsers and observers, not a WebKit pass. A
 [fresh independent whole-branch source review approved `main..812b19f`](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6675422981).
 The subsequent geometry correction has independent scoped source approval
-but still needs native validation; the B4 PR against `main` and Windows CI
-remain pending. No current native
-pass is claimed beyond the named receipts.
+and passed native lifecycle validation at `a01b28d`; the B4 PR against `main`
+and Windows CI remain pending. No native pass is claimed beyond the named
+receipts, and the missing media prerequisite is not a waived assertion.
 
 ## Hidden-survivor geometry after `812b19f`
 
@@ -63,8 +72,8 @@ Two display-free tests at that operation boundary failed against the
 extracted eager-resize path, including a bounds call with the actual native
 failure's `(7, 11, 320, 240)` tuple. Both pass with the shared policy and check
 the bounds-before-map ordering on activation. These tests prove the Rust
-decision and call order, not native X11 completion; the coordinator must
-rerun the existing unmodified lifecycle assertion.
+decision and call order, not native X11 completion. The coordinator's
+`a01b28d` run subsequently passed the unmodified native lifecycle assertion.
 
 The following diagnostic sections retain the historical state at their named
 commits (2026-11-02 through 2026-11-05). Their then-pending requests and old

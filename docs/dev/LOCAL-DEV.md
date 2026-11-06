@@ -168,6 +168,24 @@ GNOME, KDE) Syrinx runs through XWayland: GTK can embed a page only inside an
 X11 window, so GPUI is built with its X11 backend alone and GDK is limited to
 X11 (`syrinx-platform/src/linux/gtk_thread.rs`).
 
+WebKitGTK's audio and video pipeline also requires GStreamer media plugins,
+which may be optional dependencies of the system WebKitGTK package:
+
+| Distribution | Media runtime packages |
+| --- | --- |
+| Arch / Omarchy | `gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav` |
+| Debian / Ubuntu | `gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav` |
+| Fedora | `gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav` |
+
+Check `gst-inspect-1.0 autoaudiosink` when the tool is available
+(`gstreamer1.0-tools` on Debian/Ubuntu). The element comes from the good set;
+its presence alone does not prove all codecs or audio devices work. See
+[the runtime requirements and package references](../installing.md#linux-2026-10-31).
+The coordinator's `a01b28d` media run aborted WebKitWebProcess because this
+element was missing, even for synthetic video. Treat that as a missing
+runtime prerequisite; preserve the fixture and let the owner install the
+packages. Never install system packages or disable the sandbox to pass it.
+
 What differs from Windows:
 
 - **Pages** render in WebKitGTK, driven directly through `webkit2gtk`

@@ -568,6 +568,21 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Linux: WebKitGTK, X11 and POSIX
 
+- **WebKitGTK's library dependencies do not guarantee a usable media pipeline.**
+  At `a01b28d`, X11, lifecycle, popups, controls and permissions passed, but
+  synthetic video reached `GStreamer element autoaudiosink not found` and
+  WebKitWebProcess aborted. The machine had only GStreamer and base plugins.
+  `autoaudiosink` belongs to the good set; require the good, bad and libav
+  runtime packages in the installation guidance. Probe with
+  `gst-inspect-1.0 autoaudiosink` when available; that is an element check,
+  not proof of every decoder or audio device. Keep native media assertions
+  intact and let the owner install missing system packages. Source:
+  [coordinator receipt](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6683986953)
+  and [GStreamer element documentation](https://gstreamer.freedesktop.org/documentation/autodetect/autoaudiosink.html)
+  (native observation and upstream documentation, 2026-11-06; full rerun
+  after plugin installation pending). Product detection and an actionable
+  prerequisite message are proposed in #246; the installer warning alone
+  cannot prevent a portable launch from reaching this engine failure.
 - **A hidden-survivor resize failure can mean it moved, not that it stayed
   stale.** At `812b19f`, expected `(19, 29, 480, 300)` was the old survivor
   rectangle; actual `(7, 11, 320, 240)` was the active page's new rectangle.

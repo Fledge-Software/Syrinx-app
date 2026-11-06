@@ -592,8 +592,35 @@ or XWayland** under a Wayland compositor (GNOME, KDE, Hyprland): GTK can
 embed a page only inside an X11 window (`docs/dev/LOCAL-DEV.md`, "On Linux").
 On Arch-based systems that is `webkit2gtk-4.1 gtk3 libsoup3 bubblewrap`;
 Debian and Ubuntu call the library `libwebkit2gtk-4.1-0`, Fedora
-`webkit2gtk4.1`. Protected video (Disney+, Hulu) does not play, because
-WebKitGTK has no Widevine.
+`webkit2gtk4.1`.
+
+**Media runtime requirement.** WebKitGTK plays audio and video through
+GStreamer. Install its base, good, bad and libav plugin sets as well as the
+libraries above; some distributions treat these as optional WebKitGTK
+dependencies. Missing `autoaudiosink` from the good set caused WebKit's page
+process to abort on this machine, including on a synthetic video page.
+
+| Distribution | Media runtime packages |
+| --- | --- |
+| Arch / Omarchy | `gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav` |
+| Debian / Ubuntu | `gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav` |
+| Fedora | `gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav` |
+
+If available, `gst-inspect-1.0 autoaudiosink` checks that this element can be
+loaded; Debian/Ubuntu provide the command in `gstreamer1.0-tools`. It does
+not verify every decoder or a working audio device. Codec support varies
+with the distribution's plugin builds. Protected video (Disney+, Hulu)
+still does not play, because WebKitGTK has no Widevine.
+
+Package references: [Arch WebKitGTK dependencies](https://archlinux.org/packages/extra/x86_64/webkit2gtk-4.1/),
+[Debian good plugins](https://packages.debian.org/trixie/gstreamer1.0-plugins-good),
+[Debian libav](https://packages.debian.org/trixie/gstreamer1.0-libav),
+[Fedora good plugins](https://packages.fedoraproject.org/pkgs/gstreamer1-plugins-good/gstreamer1-plugins-good/),
+[Fedora bad plugins](https://packages.fedoraproject.org/pkgs/gstreamer1-plugins-bad-free/gstreamer1-plugins-bad-free/)
+and [Fedora libav](https://packages.fedoraproject.org/pkgs/gstreamer1-plugin-libav/gstreamer1-plugin-libav/).
+GStreamer documents [autoaudiosink](https://gstreamer.freedesktop.org/documentation/autodetect/autoaudiosink.html)
+as part of its Good Plug-ins; the observed abort is recorded in
+[#221](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6683986953).
 
 **What `cargo xtask package` writes on Linux.** It runs `cargo xtask
 check-packaging`, builds the `syrinx` binary with the `local` profile and the
@@ -620,7 +647,8 @@ root with numeric ids and sorted by name, so the archive does not record who
 built it. The gate checks that every source exists and parses both scripts
 with `sh -n`, which runs nothing; tests in
 `crates/xtask/src/packaging/linux.rs` pin the layout, the desktop entry and
-the scripts' rules.
+the scripts' rules. An installer regression also checks dependency warnings
+and successful copies in a private scratch home.
 
 **`install.sh`** installs for the current user only, never with root (it
 refuses to run as root, because a per-user install would land in root's
@@ -628,7 +656,10 @@ home):
 
 1. It checks every file against `SHA256SUMS` and stops on a mismatch
    (`sha256sum` missing gives a warning instead).
-2. It warns, without stopping, if `ldconfig` does not list WebKitGTK 4.1.
+2. It warns, without stopping, if `ldconfig` does not list WebKitGTK 4.1,
+   or if an available `gst-inspect-1.0` cannot load `autoaudiosink`. If the
+   inspection tool is absent, it skips the media probe. This single-element
+   check does not certify the entire media runtime.
 3. It copies `syrinx` to `~/.local/bin/syrinx` and the icon to
    `~/.local/share/icons/hicolor/256x256/apps/syrinx.png`, each through a
    temporary name and a rename, so a running Syrinx keeps its file.

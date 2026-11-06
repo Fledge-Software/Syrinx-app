@@ -42,6 +42,12 @@ if command -v ldconfig >/dev/null 2>&1 &&
     warn "WebKitGTK 4.1 (webkit2gtk-4.1) was not found; Syrinx needs it, with GTK 3, to start."
 fi
 
+# WebKit's media pipeline needs this element even for some muted video pages.
+if command -v gst-inspect-1.0 >/dev/null 2>&1 &&
+    ! gst-inspect-1.0 autoaudiosink >/dev/null 2>&1; then
+    warn "GStreamer autoaudiosink was not found or could not load; audio/video pages may crash. Install the media runtime packages listed in INSTALL.txt."
+fi
+
 mkdir -p "$bin_dir" "$applications" "$icons"
 
 # Copy beside the old program, then rename over it, so a running Syrinx keeps its file.
