@@ -268,10 +268,22 @@ impl Fixture {
     }
 
     pub fn stop(&mut self, bound: Duration) -> Result<(), String> {
+        self.stop_checked(bound, |_| Ok(()))
+    }
+
+    /// Retain suite invariants through the final Stopped event while draining shutdown callbacks.
+    pub fn stop_checked(
+        &mut self,
+        bound: Duration,
+        mut inspect: impl FnMut(&BrowserEvent) -> Result<(), String>,
+    ) -> Result<(), String> {
         let host = self.host.take().ok_or("Host already stopped")?;
         host.shutdown_within(bound)
             .map_err(|error| error.to_string())?;
-        self.wait("Stopped", |event, _| matches!(event, BrowserEvent::Stopped))
+        self.wait_checked("Stopped", |event, _| {
+            inspect(event)?;
+            Ok(matches!(event, BrowserEvent::Stopped))
+        })
     }
 }
 
