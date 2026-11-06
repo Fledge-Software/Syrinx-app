@@ -29,7 +29,21 @@ for fixture in page_close cookie_persistence navigation_history_spike; do
         2>&1 | tee "$run_dir/$fixture.log"
 done
 
-# Leave each visible Syrinx acceptance window in front without typing or clicking into it.
-cargo xtask palette-acceptance 2>&1 | tee "$run_dir/palette-acceptance.log"
-cargo xtask check 2>&1 | tee "$run_dir/gate.log"
+# Collect both results even when palette timing fails; preserve either failure in the exit status.
+failed=0
+for check in palette-acceptance check; do
+    log_name=$check
+    if [[ $check == check ]]; then log_name=gate; fi
+    if cargo xtask "$check" 2>&1 | tee "$run_dir/$log_name.log"; then
+        printf '%s passed.\n' "$check"
+    else
+        status=$?
+        printf '%s failed with status %s.\n' "$check" "$status" >&2
+        failed=1
+    fi
+done
+if (( failed )); then
+    printf 'Native fixtures passed; palette acceptance or full gate failed. Logs: %s\n' "$run_dir" >&2
+    exit 1
+fi
 printf 'Native fixtures, palette acceptance and full gate passed. Logs: %s\n' "$run_dir"

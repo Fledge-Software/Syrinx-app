@@ -1,7 +1,7 @@
 //! Serves only authored loopback fixture pages and retains errors from its worker threads.
 
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::Write,
     net::{TcpListener, TcpStream},
     sync::{
         Arc,
@@ -11,9 +11,12 @@ use std::{
     time::Duration,
 };
 
+mod request;
+
 pub struct Server {
     base: String,
     stop: Arc<AtomicBool>,
+    cookie: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<(), String>>>,
     transfers: Arc<super::downloads::files::Transfers>,
 }
@@ -32,6 +35,8 @@ impl Server {
         let stopping = stop.clone();
         let transfers = Arc::new(super::downloads::files::Transfers::default());
         let serving = transfers.clone();
+        let cookie = Arc::new(AtomicBool::new(false));
+        let evidence = cookie.clone();
         let worker = thread::spawn(move || {
             let mut workers = Vec::new();
             while !stopping.load(Ordering::Acquire) {
@@ -39,7 +44,10 @@ impl Server {
                     Ok((stream, _)) => {
                         let transfers = serving.clone();
                         let stop = stopping.clone();
-                        workers.push(thread::spawn(move || answer(stream, &transfers, &stop)));
+                        let cookie = evidence.clone();
+                        workers.push(thread::spawn(move || {
+                            answer(stream, &transfers, &stop, &cookie)
+                        }));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5))
@@ -57,11 +65,16 @@ impl Server {
             stop,
             worker: Some(worker),
             transfers,
+            cookie,
         })
     }
 
     pub fn url(&self, route: &str) -> String {
         format!("{}{route}", self.base)
+    }
+
+    pub fn cookie_received(&self) -> bool {
+        self.cookie.load(Ordering::Acquire)
     }
 
     pub fn release_download(&self, name: &str) -> Result<(), String> {
@@ -92,6 +105,7 @@ fn answer(
     mut stream: TcpStream,
     transfers: &super::downloads::files::Transfers,
     stop: &AtomicBool,
+    cookie: &AtomicBool,
 ) -> Result<(), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -99,10 +113,9 @@ fn answer(
     stream
         .set_write_timeout(Some(Duration::from_secs(2)))
         .map_err(|error| error.to_string())?;
-    let mut line = String::new();
-    match BufReader::new(&mut stream).read_line(&mut line) {
-        Ok(0) => return Ok(()),
-        Ok(_) => {}
+    let request = match request::read(&mut stream) {
+        Ok(Some(request)) => request,
+        Ok(None) => return Ok(()),
         Err(error)
             if matches!(
                 error.kind(),
@@ -110,13 +123,13 @@ fn answer(
             ) =>
         {
             return Ok(());
-        } // Idle speculative preconnect.
+        }
         Err(error) => return Err(error.to_string()),
+    };
+    let route = request.route.as_str();
+    if route == "/cookie/process/read" && request.cookie {
+        cookie.store(true, Ordering::Release);
     }
-    let route = line
-        .split_whitespace()
-        .nth(1)
-        .ok_or("Malformed synthetic request")?;
     if let Some(name) = super::downloads::files::name(route) {
         return super::downloads::files::send(&mut stream, name, transfers, stop);
     }
@@ -131,6 +144,14 @@ fn answer(
 }
 
 fn page(route: &str) -> (&'static str, &'static str, String) {
+    if let Some(body) = super::history::response(route) {
+        let headers = if route.starts_with("/c/") {
+            "Cache-Control: public, max-age=3600\r\n"
+        } else {
+            "Cache-Control: no-store\r\n"
+        };
+        return ("200 OK", headers, body);
+    }
     if let Some(body) = super::controls::response(route)
         .or_else(|| super::popups::response(route))
         .or_else(|| super::permissions::response(route))
@@ -138,6 +159,13 @@ fn page(route: &str) -> (&'static str, &'static str, String) {
         .or_else(|| super::downloads::response(route))
     {
         return ("200 OK", "Cache-Control: no-store\r\n", body.into());
+    }
+    if route == "/cookie/process/set" {
+        return (
+            "200 OK",
+            "Cache-Control: no-store\r\nSet-Cookie: syrinx_process=synthetic; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax\r\n",
+            "<!doctype html><title>synthetic-cookie-set</title><link rel=icon href=data:,>".into(),
+        );
     }
     let script = match route {
         "/close" => "addEventListener('load',()=>setTimeout(()=>window.close(),150))",
@@ -163,4 +191,30 @@ fn page(route: &str) -> (&'static str, &'static str, String) {
             "<!doctype html><meta charset=utf-8><title>Synthetic {title}</title><link rel=icon href=data:,><p>Synthetic Linux fixture {title}</p><script>{script}</script>"
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn cookie_evidence_requires_the_received_request_header() {
+        let mut server = Server::start().unwrap();
+        assert!(!server.cookie_received());
+        let address = server.base.strip_prefix("http://").unwrap();
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        client.write_all(b"GET /cookie/process/read HTTP/1.1\r\nHost: localhost\r\ncOoKiE: unrelated=synthetic; syrinx_process=synthetic\r\n\r\n").unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(
+            server.cookie_received(),
+            "The server must inspect the received Cookie header"
+        );
+        server.finish().unwrap();
+    }
 }

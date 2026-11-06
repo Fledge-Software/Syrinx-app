@@ -568,6 +568,60 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Linux: WebKitGTK, X11 and POSIX
 
+- **A private Downloads variable set after GLib starts can still leave the
+  owner's Downloads selected.** Prepare a mode-0700 config root containing
+  an explicit `user-dirs.dirs` before any GLib/GTK initialization or threads,
+  then read GLib's actual Downloads directory on `syrinx-gtk` before every
+  fixture download. Refuse missing or different destinations; never accept
+  HOME fallback. Source: `examples/linux/environment.rs` and its preparation
+  and mismatch regressions (source-confirmed and display-free tested,
+  2026-11-05; new download scenarios remain native pending).
+- **A scratch runtime disconnects native audio from the desktop.** Keep the
+  coordinator's real `XDG_RUNTIME_DIR` for native WebKit/audio tests while
+  isolating data/cache/config. Only sandbox display-free Cargo commands use
+  a fresh private runtime to avoid the sandbox's read-only desktop runtime.
+  Do not move native audio into that scratch runtime to make tests look
+  isolated. Source: Task 3 startup contract and the desktop socket paths
+  (source-confirmed, 2026-11-05; new muted-audio scenario native pending).
+- **An unresolved permission can outlive the navigation that requested it.**
+  Take the pending map before denying native requests, so synchronous denial
+  callbacks cannot reborrow it. Navigation emits completion while the page
+  is live; close must retire the page before denial so stale callbacks remain
+  invalid. Source: `browser_gtk/page_permissions.rs` and its ownership/event
+  regressions (source-confirmed and display-free tested, 2026-11-05; expanded
+  native Navigate/close cases pending).
+- **A popup download may report before its Created acknowledgement.** The
+  engine releases held download reports inside adoption, then the dispatcher
+  emits Created. Accept either ordering but require both attribution and
+  Created before declaring adoption complete. Source: `browser_gtk/engine.rs`,
+  `browser/protocol.rs`, and `examples/linux/downloads/observation.rs`'s
+  failing-then-passing ordering regression (source-confirmed, 2026-11-05;
+  new popup download cases native pending).
+- **The previous load's completion can falsely pass a Reload check.** Reaching
+  an address through History does not drain its NavigationCompleted. Drain
+  earlier FIFO callbacks before Reload and require that tab's new Loading
+  followed by successful, noncancelled completion. Source:
+  `examples/linux/history.rs`'s stale/other-tab/failure replays
+  (source-confirmed and display-free tested, 2026-11-05; corrected native
+  Reload assertion pending).
+- **A calculated Find index alone does not prove the native selection moved.**
+  The shared label is one-based and empty Find must complete with `0/-1`.
+  Require native found/failed completion plus independent authored selected-span
+  evidence for sequential direction and wrap checks. GTK drops the returned
+  query and native index, so this does not prove overlapping-operation
+  correlation; that pre-existing gap is #245. Source: `browser_gtk/page.rs`,
+  `examples/linux/controls/find_observation.rs` and their RED/GREEN regressions
+  (source-confirmed, 2026-11-05; native baseline, reversed-direction mutation
+  and real Find-label inspection pending).
+- **A coordinator focus helper can break an otherwise valid native probe.**
+  Run it only during palette acceptance, including the palette stage inside
+  the full gate. Keep it off during every native fixture/probe: those use
+  owned unmanaged parents and test refusal to take focus. The coordinator's
+  `dec469e` rerun passed page-close 3/3 with the helper off; helper interference
+  must not be mistaken for a product focus failure. Source:
+  [#221, comment 6673543416](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673543416)
+  (native observation, 2026-11-05). New native cases still require their rerun.
+
 - **A raw `XSetInputFocus` takes the keys from another application, and on
   a minimised window it ends the process.** X11 grants focus to any client
   that asks, so a page shown while another program is in front took that

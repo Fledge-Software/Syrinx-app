@@ -1,5 +1,6 @@
 //! Shares bounded native fixtures across the three Linux example entry points.
 
+mod child_process;
 mod controls;
 mod cookies;
 mod downloads;
@@ -24,6 +25,15 @@ pub fn main(suite: &str) -> std::process::ExitCode {
     };
     // SAFETY: this entry point has not started any thread or initialized any native library.
     unsafe { environment.install() };
+    // Internal cookie workers still prepare fresh process-local directories before any threads.
+    match cookies::child_arguments(std::env::args_os().skip(1).collect()) {
+        Ok(Some(child)) => return fixture::run(|| child.run()),
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("Invalid cookie child invocation: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    }
     // Match at runtime so every suite's common helpers receive the same lint coverage.
     fixture::run(|| match suite {
         "page_close" => {

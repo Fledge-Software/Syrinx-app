@@ -10,13 +10,28 @@ deleted. Merge `5df4978` preserves current `main` plus B4's changes, adapting
 only the popup-owner function to the landed X11 connection/error API. The
 B4 PR will target `main`.
 
-At `732aafd`, all three native examples pass, including the complete history
-sequence. The coordinator's full gate test portion passed **1,785 tests,
-zero failed or ignored**. The gate remains red because palette acceptance
-fails page focus and performance checks; the evidence and next focus fix
-are recorded below. This is not a full-gate pass.
+The latest native receipt is the coordinator's **`dec469e`** run in
+[#221, comment 6673543416](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673543416),
+not the later review-progress comments. Source commit
+`dec469ea203d6883f0f6cb1d8cff140ff597d533` passed `page_close` **3/3 with the
+focus helper off**, cookies, history **5/5**, **1,789 workspace tests** and
+all **25 palette behaviour checks**. Palette acceptance and the complete
+gate exited **1 only for timing misses** on the i5-4460 / Intel HD 4600.
+That is functional evidence for that commit, not a green gate.
 
-## Product defect found by the history fixture
+The subsequent review corrections add Reload completion correlation, Find
+numbering/empty-result/native-completion checks, permission cancellation,
+and the expanded native suites listed below. **These changes and all new
+native scenarios are NATIVE PENDING.** Display-free tests establish their
+parsers and observers, not a WebKit pass. The fresh independent whole-branch
+review, B4 PR against `main`, and Windows CI are also pending. No current
+native pass is claimed beyond the named receipt.
+
+The following diagnostic sections retain the historical state at their named
+commits (2026-11-02 through 2026-11-05). Their then-pending requests and old
+failures do not supersede the receipt above or validate the later changes.
+
+## Historical history diagnostics, 2026-11-02 through 2026-11-05
 
 The coordinator ran the first draft outside the sandbox: `page_close` and
 `cookie_persistence` passed, while `navigation_history_spike` refused an
@@ -189,7 +204,7 @@ adapter, shared history code, native fixture assertions and timeouts stay
 unchanged. At `732aafd` the coordinator confirmed the entire native history
 sequence passes; palette acceptance is the remaining gate failure.
 
-## GTK focus for the adopted foreign page window
+## Historical GTK focus diagnostics at `732aafd`, 2026-11-05
 
 The foreground native run at `732aafd`, recorded in
 [#221, comment 6672563128](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672563128),
@@ -230,7 +245,7 @@ XI2/key-mask tests. This tests the delivery decision, not a live GTK/WebKit
 focus handoff. The coordinator must rerun the unchanged native acceptance
 check to validate that handoff.
 
-## Follow-up failures at `885701d`
+## Historical follow-up failures at `885701d`, 2026-11-05
 
 The coordinator's next run is recorded in
 [#221, comment 6672868517](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672868517).
@@ -277,7 +292,7 @@ denied and 1,777 display-free workspace tests, with zero failed or ignored.
 Twelve native tests remain coordinator validation. The temporary local
 filter does not alter the gate or any committed test configuration.
 
-## X11 unit-suite audit after `fe5ea09`
+## Historical X11 unit-suite audit after `fe5ea09`, 2026-11-05
 
 The coordinator's next run,
 [#221, comment 6673181928](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673181928),
@@ -322,7 +337,30 @@ ignored. The twelve display-dependent unit tests and the enhanced native
 fixture remain coordinator validation; the local filter is not committed
 and the gate remains unfiltered.
 
-## Hardware findings from the foreground run
+## Current recorded timing findings at `dec469e`
+
+The receipt's raw report is
+`target/p1-33/palette-acceptance-1793925880.json`, SHA-256
+`f42d878af09ea181b1cf0a9a01551439cf1a5f95f2fc618557aa10081dc20840`.
+It records the coordinator's ordinary desktop run, with the real runtime,
+under Hyprland/XWayland on an i5-4460 / Intel HD 4600. Opening presented p95
+is **27.925 ms**, failing the unchanged **16.677 ms** budget.
+
+| Synthetic rows | D48 worker p95, ms (5 ms budget) | Key-to-presented-rows p95, ms (33.354 ms budget) |
+| --- | --- | --- |
+| 1,000 | 1.988, pass | 35.102, fail |
+| 10,000 | 10.842, fail | 37.953, fail |
+| 100,000 | 22.585, fail | 40.614, fail |
+
+Hidden-popup idle CPU is **0.479% of one core**, within its 0.5% budget.
+This measures Syrinx's own process, **not the WebKit process tree** and not
+B1's CPU/memory/startup comparison. B1's real coordinator measurements remain
+pending in [#218](https://github.com/Fledge-Software/Syrinx-app/issues/218)
+after B4; no substitute figures are supplied here. Timing failures remain
+failures. The owner decides whether the opening, D48 worker and composed
+budgets apply to this hardware; neither the budgets nor their verdicts changed.
+
+## Historical hardware findings, earlier 2026-11-05 commits
 
 These are the coordinator's Intel HD 4600 results under Hyprland/XWayland,
 not measurements from the agent sandbox. Hyprland's activation policy kept
@@ -400,30 +438,51 @@ whether the opening, D48 worker and composed budgets apply to this class
 of machine.** The budgets and failed verdicts remain unchanged; this is a
 recorded finding, not a waiver or a green palette-acceptance claim.
 
-## What each native check proves
+## Windows scenario applicability and implemented Linux coverage
 
-| Check | Linux implementation and boundary |
-| --- | --- |
-| `page_close` | Explicit X11 focus/stacking/refresh probes and foreground guards, then twelve page-requested closes leave native children alive until the host releases them, with exact child destruction, survivor preservation, stale-command rejection, unsafe creation refusal and shutdown cleanup. |
-| `cookie_persistence` | An unused host stops promptly; a synthetic persistent cookie survives orderly reopen and the bounded shutdown path. The current draft does not claim Windows' post-Stopped engine-termination scenario. |
-| `navigation_history_spike` | Loads, three-row Back and two-row Forward jumps, literal row order, replaceState, reload, pushState, fragments and server/script redirects. WebKit signal reports replace the raw WebView2 COM event spike. |
-| `palette-acceptance` | The existing focus, popup, search and timing assertions run against X11 probes. Budgets are unchanged. Linux dispatches committed characters and keys into the GPUI popup's own window; Windows retains native Win32 messages. This does not claim physical fcitx/XIM coverage; the landing smoke test separately covers it. |
+Every added native case below is **pending coordinator execution**. The
+`dec469e` receipt covers the earlier, smaller suites only. The inventory
+comes from `examples/page_close/{lifecycle,popups,essentials,permissions,
+suspension,audio,security,downloads}.rs`, `cookie_persistence/windows.rs`
+and `navigation_history_spike/windows.rs` (including its authored scripts).
+Paths in this table are relative to `crates/syrinx-platform/examples/linux/`.
 
-X11 has no per-window Unicode message corresponding to Win32 `WM_CHAR`.
-Changing the owner's keyboard map or sending Unicode as global key events
-was rejected. The Linux harness uses GPUI's existing input dispatcher, outside
-the BrowserView borrow, while focus, transient parent, stacking, visibility,
-refresh rate and window destruction are read from the actual X server.
-The transient-parent property is now set on the owned popup rather than
-being fabricated by a probe.
+| Windows scenario | Linux fixture and actual assertion | Boundary |
+| --- | --- | --- |
+| Native focus, stacking, foreground and refresh probes | `lifecycle.rs` runs actual X11 probes with owned unmanaged parents. | Focus helper must be off. |
+| Hidden/show/no-active lifecycle and resize | Exact mapped state and physical rectangles, invalid bounds preserve prior rectangle. | Real native children; no source-text substitute. |
+| Duplicate/rejected/reused tab ID | Duplicate refusal; invalid creation leaks no child; retry and reuse succeed. | Shared protocol errors, not HRESULT identity. |
+| Page close deferral and survivor | Twelve close requests leave children alive until host release; closing page remains usable; survivor takes current bounds; multi-child shutdown destroys all children. | Real owned child IDs. |
+| Popup adoption and focus | `popups.rs` retains opener marker and reply, checks both child visibilities and the adopted document's authored `hasFocus()` title. | No new navigation replacing the adopted document. |
+| Find count, direction, wrap, clearing | `controls.rs` requires native completions, one-based labels, absent/empty `0/-1`, literal independent selected-span sequences, StopFind and growing queries retaining chrome keys. | Sequential operations only; overlapping completion/index correlation remains [#245](https://github.com/Fledge-Software/Syrinx-app/issues/245). |
+| Zoom and shown/hidden mute | Native readbacks after increase/decrease/reset and mute/unmute across hide/show. | No UI-only mirror. |
+| Print | Actual owned GTK dialog appears, host commands remain usable during its modal loop, Cancel closes it. | No print job is submitted. |
+| Permission deny/re-prompt/cancel | `permissions.rs` denies notification requests, re-prompts in a new view, cancels pending requests on navigation/close and refuses stale denied replies. | No automatic Allow. |
+| Positive permission Allow, notification delivery, remembered positive consent, physical camera/microphone | Not automated by these fixtures. | Owner-only; these are not claimed to be absent engine APIs. Device/delegation limits remain #234. |
+| Video fullscreen | `media/fullscreen.rs` enters an authored synthetic video, checks exact viewport, exits through Escape, F11 shortcut, page script and chrome-focused host command, and restores exact bounds. | Supported despite originating in Windows' suspension suite. |
+| Muted audio activity | `media/audio.rs` joins authored start/stop with native AudioChanged, holds hidden playback and rejects unmute. | Audio reporting is supported; native backend must be exercised. |
+| Hidden-page suspension and audio grace | No fabricated IsSuspended/resume assertions. | WebKitGTK has no TrySuspend or matching grace API. |
+| Repeated invalid TLS and safe recovery | `security.rs` requires both failed completion and CertificateRejected, rejects successful/Loaded/sentinel outcomes through barriers and shutdown, checks exact HTTP recovery and server-observed absence of application bytes. | Fresh untrusted key; no trust-store or validation bypass. |
+| Same-tab, adopted-popup and self-closing-popup downloads | `downloads.rs` checks real attribution, totals and saved bytes; held popup close uses the shared DownloadList deferral until completion. | Held reports may precede Created; both reports and acknowledgement are required. |
+| Cancel held transfer | Actual incomplete progress becomes Interrupted(Cancelled), with no late completion and no remaining partial/destination artifacts. | Pause/resume and engine-owned download UI have no WebKit counterpart. |
+| Immediate close diagnostic and executable protection | Required ordinary download deferral is checked; Windows' diagnostic does not impose a fixed immediate-close outcome. | Linux has no SmartScreen (B3); no executable launch is performed. |
+| Idle/orderly/bounded cookie shutdown | `cookies.rs` retains the previous within-process checks and host shutdown bounds. | No Win32 WM_ENDSESSION or engine-process-enumeration claim. |
+| Cookie disk persistence across application processes | Parent creates one private synthetic profile; a writer exits successfully before a fresh reader starts with that profile. Actual HTTP Cookie header at the parent server is required after the reader exits successfully. | HttpOnly persistent cookie; a page title or same-process cookie cache cannot pass this case. Owned children have bounded cleanup. |
+| History host loads, 3/2 jumps, replaceState, Reload, pushState, fragments and redirects | `history.rs` preserves literal projected rows and redacted traces; Reload requires its own Loading before successful noncancelled completion after a FIFO drain. | Windows COM recorder identities are unavailable; shared semantics remain required. |
+| Authored anchor, location.assign/replace, script Back, beforeunload without gesture | `history/scenarios.rs` requires exact addresses/report kinds and projected rows on shown parents. Authored timers receive no gesture; no host injection occurs. | Beforeunload must not trap a gesture-free navigation in a dialog. |
+| Cacheable Back three/Forward one | Four `/c/` documents carry explicit cache headers; actual traversal and literal projected rows are checked. | Cache eligibility is tested; neither HTTP nor back-forward cache hits are promised. |
+| Traversal after pushState/replaceState and same-document fragment Back/Forward | Follow the renamed projected row, then check replacement traversal or reset when WebKit lands on an untracked original same-document entry; assert empty reset rows and subsequent engine Forward. | The shared model intentionally collapses same-document states; it is not expanded to match WebKit's entries. |
+| Palette behavior and timing | Existing acceptance checks run with real X11 focus, visibility, transient parent, stacking and refresh measurements. | All budgets unchanged; current receipt exits 1 for timing. |
+| Physical input, Unicode and IME | Palette drives GPUI's existing input dispatcher; native authored controls use owned simple GDK keys. | No global keyboard map change; these do not prove physical fcitx/XIM/IME delivery, which remains the landing smoke/manual boundary. |
 
-Windows-only boundaries remain explicit: COM event identities and HRESULTs
-are WebView2 API details; Win32 end-session messages do not exist on Linux;
-WebKitGTK does not offer Windows' hidden-page suspension API or download
-pause/resume. Linux uses bounded host shutdown and download Cancel. The
-existing Linux unit tests cover denied delegation, compound media refusal,
-modal-loop deferral and download teardown. This table describes actual
-coverage; it is not a claim of every ancillary Windows suite's native parity.
+The startup path prepares private data/cache/config and an explicit Downloads
+folder before GLib or any threads initialize. Each actual download checks
+GLib's destination against that prepared path and fails closed on mismatch.
+Native runs retain the real `XDG_RUNTIME_DIR` for desktop/audio sockets;
+sandbox display-free Cargo commands use a fresh private runtime instead.
+Cookie workers enter the same startup path, then dispatch their explicit
+internal mode without recursively running the suite. Their fresh XDG paths
+are separate from the one explicitly shared cookie profile.
 
 ## Coordinator validation
 
@@ -434,10 +493,15 @@ MIT-SHM, replace the display backend or weaken the engine sandbox. The agent
 runs non-display tests, formatting and Clippy; twelve native unit tests,
 the examples, palette acceptance and the complete gate run outside it.
 
-The Linux gate now invokes all three examples and palette acceptance after
-the existing smoke run. A standalone fixture result is not a complete gate.
-A B4 PR waits for the coordinator's green native logs, real-window inspection,
-then fresh independent review. Windows CI must pass for the shared changes.
+The Linux gate now executes the shared example unit harness once with
+`cargo test -p syrinx-platform --example page_close --profile local --offline --locked`,
+then invokes all three native examples and palette acceptance after the
+existing smoke run. All three examples compile the same unit module; Windows
+test scope remains unchanged. A standalone fixture result is not a complete gate.
+A B4 PR waits for the affected native rerun, real-window inspection and fresh
+independent whole-branch review. Timing misses must remain visible, with an
+owner decision on applicability. Windows CI must actually pass for the shared
+changes; none of those pending steps is implied by display-free verification.
 
 From this worktree, the coordinator runs:
 
@@ -458,10 +522,32 @@ cargo xtask palette-acceptance
 cargo xtask check
 ```
 
-Leave each visible acceptance window in front without typing or clicking
-into it. Return the script's commit identifier, logs and the generated
+The script stops immediately on a native fixture failure. Once those pass,
+it collects palette and full-gate results independently, retains both logs
+(`palette-acceptance.log` and `gate.log`), and exits nonzero if either fails.
+A palette timing failure must not prevent the full gate from being collected.
+
+Keep any coordinator Hyprland focus helper **off during every native fixture
+and native probe**, including those inside `cargo xtask check`. Enable it
+only while palette acceptance itself runs, standalone or within the full
+gate. A helper refocusing the managed main window can invalidate probes of
+owned unmanaged windows. Do not run one indiscriminately around this script.
+Leave each visible palette acceptance window in front without typing or
+clicking into it. Return the script's commit identifier, logs and the generated
 `target/p1-33/*-summary.md`/JSON reports, including the failing step if any.
 Inspect palette placement and focus return in the real window; capture only
 the synthetic Syrinx window if screenshots are supplied. The full gate
 repeats the examples and palette run deliberately, proving that they are
 part of the gate rather than only separate manual commands.
+
+
+The corrected Find baseline needs a native positive run and an independent
+mutation demonstration: in a disposable source copy with a separate target,
+swap only `controller.search_next()` and `controller.search_previous()` in
+`Page::step_find`, leaving the Rust index and fixture expectations intact.
+The first three-match Next must reject occurrence 3 when it expects 2.
+Retain source identity, command and failing output; never apply that mutation
+to this branch. The fixture uses authored selected-span evidence rather than
+its Rust-reported index as the direction oracle. Also inspect the real Find
+bar on a synthetic three-match page: **1 of 3 → Next → 2 of 3 → clear**.
+Those native/mutation/visible-label checks are still pending.

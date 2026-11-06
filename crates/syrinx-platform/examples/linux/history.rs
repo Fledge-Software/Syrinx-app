@@ -1,5 +1,7 @@
 //! Compares WebKitGTK history reports with the shared NavigationList after real loads and jumps.
 
+mod scenarios;
+
 use super::{
     fixture::{Fixture, reserve_profile},
     server::Server,
@@ -96,9 +98,10 @@ pub fn run() -> Result<(), String> {
     )?;
     fixture.at("script redirect landing", &server.url("/p/redirected"))?;
     fixture.stop(Duration::from_secs(5))?;
+    scenarios::run(&server)?;
     server.finish()?;
     println!(
-        "Linux navigation_history_spike: real loads, 3/2-row jumps, replaceState, reload, pushState, fragment and redirects passed."
+        "Linux navigation_history_spike: real loads, 3/2-row jumps, replaceState, reload, pushState, fragment redirects and authored traversal scenarios passed."
     );
     Ok(())
 }
@@ -187,6 +190,11 @@ fn rows(
         .map(|page| server.url(&format!("/p/{page}")))
         .collect();
     fixture.expect_rows(step, direction, &expected)
+}
+
+/// Supplies only the additional authored history routes to the loopback server.
+pub(super) fn response(route: &str) -> Option<String> {
+    scenarios::response(route)
 }
 
 #[cfg(test)]
