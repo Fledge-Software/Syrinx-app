@@ -112,6 +112,13 @@ fn answer(mut stream: TcpStream) -> Result<(), String> {
 }
 
 fn page(route: &str) -> (&'static str, &'static str, String) {
+    if let Some(body) = super::controls::response(route)
+        .or_else(|| super::popups::response(route))
+        .or_else(|| super::permissions::response(route))
+        .or_else(|| super::media::response(route))
+    {
+        return ("200 OK", "Cache-Control: no-store\r\n", body.into());
+    }
     let script = match route {
         "/close" => "addEventListener('load',()=>setTimeout(()=>window.close(),150))",
         "/cookie/set" => {

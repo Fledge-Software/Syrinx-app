@@ -3,6 +3,9 @@
 use gtk::{gdk, prelude::*};
 use x11_dl::xlib;
 
+#[path = "window_input.rs"]
+mod input;
+
 /// A synthetic parent; drop it only after its BrowserHost has stopped.
 pub struct FixtureWindow(isize);
 
@@ -17,7 +20,17 @@ impl FixtureWindow {
                     return Err("Cannot create fixture parent".into());
                 }
                 let pid = std::ffi::c_ulong::from(std::process::id());
+                let mut attributes = xlib::XSetWindowAttributes {
+                    override_redirect: xlib::True,
+                    ..unsafe { std::mem::zeroed() }
+                };
                 unsafe {
+                    (xlib.XChangeWindowAttributes)(
+                        display,
+                        window,
+                        xlib::CWOverrideRedirect,
+                        &mut attributes,
+                    );
                     let atom = (xlib.XInternAtom)(display, c"_NET_WM_PID".as_ptr(), xlib::False);
                     (xlib.XChangeProperty)(
                         display,
@@ -39,6 +52,97 @@ impl FixtureWindow {
             })
         })
         .map_err(|error| error.to_string())?
+    }
+
+    /// Explicitly map the unmanaged fixture parent for document-focus and media probes.
+    pub fn show(&self) -> Result<(), String> {
+        let window = self.0;
+        crate::gtk_thread::run(move || {
+            with_display(|xlib, display| {
+                unsafe {
+                    (xlib.XMapRaised)(display, window as _);
+                    (xlib.XSetInputFocus)(
+                        display,
+                        window as _,
+                        xlib::RevertToParent,
+                        xlib::CurrentTime,
+                    );
+                    (xlib.XSync)(display, xlib::False);
+                }
+                Ok(())
+            })
+        })
+        .map_err(|error| error.to_string())?
+    }
+
+    /// Focus only this owned chrome window, never another application.
+    pub fn focus(&self) -> Result<(), String> {
+        let window = self.0;
+        crate::gtk_thread::run(move || {
+            crate::browser::focus_chrome(window).map_err(|error| error.to_string())
+        })
+        .map_err(|error| error.to_string())?
+    }
+
+    /// Read physical child coordinates relative to this fixture parent.
+    pub fn geometry(&self, child: isize) -> Result<(i32, i32, u32, u32), String> {
+        self.require_child(child)?;
+        crate::gtk_thread::run(move || {
+            with_display(|xlib, display| {
+                let mut attributes = unsafe { std::mem::zeroed::<xlib::XWindowAttributes>() };
+                if unsafe { (xlib.XGetWindowAttributes)(display, child as _, &mut attributes) } == 0
+                {
+                    return Err("Cannot inspect fixture child geometry".into());
+                }
+                Ok((
+                    attributes.x,
+                    attributes.y,
+                    attributes.width as u32,
+                    attributes.height as u32,
+                ))
+            })
+        })
+        .map_err(|error| error.to_string())?
+    }
+
+    /// Inspect the child's own mapped state, including when its parent is hidden.
+    pub fn visible(&self, child: isize) -> Result<bool, String> {
+        self.require_child(child)?;
+        crate::gtk_thread::run(move || {
+            with_display(|xlib, display| {
+                let mut attributes = unsafe { std::mem::zeroed::<xlib::XWindowAttributes>() };
+                if unsafe { (xlib.XGetWindowAttributes)(display, child as _, &mut attributes) } == 0
+                {
+                    return Err("Cannot inspect fixture child visibility".into());
+                }
+                Ok(attributes.map_state != xlib::IsUnmapped)
+            })
+        })
+        .map_err(|error| error.to_string())?
+    }
+
+    /// Dispatch a simple GDK key to the focused widget of this fixture's page child.
+    pub fn key(&self, child: isize, keyval: u32) -> Result<(), String> {
+        self.require_child(child)?;
+        crate::gtk_thread::run(move || input::key(child, keyval))
+            .map_err(|error| error.to_string())?
+    }
+
+    /// Inspect process-owned GTK print dialogs without dismissing an existing dialog.
+    pub fn print_dialog_open(&self) -> Result<bool, String> {
+        crate::gtk_thread::run(input::print_dialog_open).map_err(|error| error.to_string())?
+    }
+
+    /// Cancel the sole process-owned GTK print dialog; never submit a print job.
+    pub fn cancel_print_dialog(&self) -> Result<bool, String> {
+        crate::gtk_thread::run(input::cancel_print_dialog).map_err(|error| error.to_string())?
+    }
+
+    fn require_child(&self, child: isize) -> Result<(), String> {
+        if !self.children()?.contains(&child) {
+            return Err("Native probe target is outside its fixture parent".into());
+        }
+        Ok(())
     }
 
     pub fn handle(&self) -> isize {
@@ -111,5 +215,13 @@ fn with_display<T>(
         .downcast::<gdkx11::X11Display>()
         .map_err(|_| "Not an X11 display")?;
     let raw = unsafe { gdkx11::ffi::gdk_x11_display_get_xdisplay(display.as_ptr()) }.cast();
-    job(&xlib, raw)
+    display.error_trap_push();
+    let result = job(&xlib, raw);
+    let error = display.error_trap_pop();
+    if error != 0 {
+        return Err(format!(
+            "Fixture X11 operation failed with server error {error}"
+        ));
+    }
+    result
 }

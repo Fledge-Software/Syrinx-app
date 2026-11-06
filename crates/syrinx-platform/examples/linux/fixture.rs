@@ -69,15 +69,24 @@ impl Fixture {
 
     /// Apply FIFO commands before inspecting native children; this invalid tab is a barrier.
     pub fn barrier(&mut self) -> Result<(), String> {
+        self.barrier_checked(|_| Ok(()))
+    }
+
+    /// Retain suite invariants while draining a FIFO command acknowledgement.
+    pub fn barrier_checked(
+        &mut self,
+        mut inspect: impl FnMut(&BrowserEvent) -> Result<(), String>,
+    ) -> Result<(), String> {
         self.send(BrowserCommand::Reload { id: u64::MAX })?;
-        self.wait("command barrier", |event, _| {
-            matches!(
+        self.wait_checked("command barrier", |event, _| {
+            inspect(event)?;
+            Ok(matches!(
                 event,
                 BrowserEvent::Error {
                     tab: Some(u64::MAX),
                     error: BrowserError::UnknownTab
                 }
-            )
+            ))
         })
     }
 
@@ -125,7 +134,8 @@ impl Fixture {
         reason: &str,
         done: impl FnMut(&BrowserEvent, &NavigationList) -> bool,
     ) -> Result<(), String> {
-        self.wait_expected(reason, None, done)
+        let mut done = done;
+        self.wait_checked(reason, |event, list| Ok(done(event, list)))
     }
 
     fn wait_expected(
@@ -134,7 +144,50 @@ impl Fixture {
         expected: Option<&str>,
         mut done: impl FnMut(&BrowserEvent, &NavigationList) -> bool,
     ) -> Result<(), String> {
-        let deadline = Instant::now() + LIMIT;
+        self.observe(reason, expected, |event, list| Ok(done(event, list)))
+    }
+
+    pub fn wait_checked(
+        &mut self,
+        reason: &str,
+        done: impl FnMut(&BrowserEvent, &NavigationList) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        self.observe(reason, None, done)
+    }
+
+    fn observe(
+        &mut self,
+        reason: &str,
+        expected: Option<&str>,
+        done: impl FnMut(&BrowserEvent, &NavigationList) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        if self.observe_for(reason, LIMIT, done)? {
+            return Ok(());
+        }
+        Err(self.trace.timeout(reason, expected, &self.list))
+    }
+
+    /// Observe a bounded quiet interval while retaining every ordinary host error check.
+    pub fn watch_for(
+        &mut self,
+        reason: &str,
+        duration: Duration,
+        mut inspect: impl FnMut(&BrowserEvent) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.observe_for(reason, duration, |event, _| {
+            inspect(event)?;
+            Ok(false)
+        })?;
+        Ok(())
+    }
+
+    fn observe_for(
+        &mut self,
+        reason: &str,
+        duration: Duration,
+        mut done: impl FnMut(&BrowserEvent, &NavigationList) -> Result<bool, String>,
+    ) -> Result<bool, String> {
+        let deadline = Instant::now() + duration;
         while Instant::now() < deadline {
             let event = match self.events.try_recv() {
                 Ok(event) => event.into_current(),
@@ -158,8 +211,8 @@ impl Fixture {
             if let BrowserEvent::Title { title, .. } = &event {
                 self.list.retitle(title);
             }
-            if done(&event, &self.list) {
-                return Ok(());
+            if done(&event, &self.list)? {
+                return Ok(true);
             }
             match event {
                 BrowserEvent::Error { error, .. } | BrowserEvent::CreationFailed { error, .. } => {
@@ -177,7 +230,40 @@ impl Fixture {
                 _ => {}
             }
         }
-        Err(self.trace.timeout(reason, expected, &self.list))
+        Ok(false)
+    }
+
+    /// Wait for the actual document load before issuing focus-sensitive commands.
+    pub fn loaded(&mut self, id: u64) -> Result<(), String> {
+        self.wait_checked("successful document load", |event, _| {
+            let BrowserEvent::NavigationCompleted {
+                id: actual,
+                success,
+                cancelled,
+            } = event
+            else {
+                return Ok(false);
+            };
+            if *actual != id {
+                return Ok(false);
+            }
+            if !success && !cancelled {
+                return Err("Synthetic navigation failed".into());
+            }
+            Ok(*success && !cancelled)
+        })
+    }
+
+    pub fn focus_page(&mut self, id: u64) -> Result<(), String> {
+        self.send(BrowserCommand::Focus { id })?;
+        self.barrier()
+    }
+
+    pub fn only_child(&self) -> Result<isize, String> {
+        match self.parent.children()?.as_slice() {
+            [child] => Ok(*child),
+            _ => Err("Expected exactly one native fixture child".into()),
+        }
     }
 
     pub fn stop(&mut self, bound: Duration) -> Result<(), String> {

@@ -22,6 +22,9 @@ use webkit2gtk::{
 };
 use x11_dl::xlib;
 
+#[path = "page_permissions.rs"]
+mod page_permissions;
+
 #[cfg(test)]
 #[path = "permission_tests.rs"]
 mod permission_tests;
@@ -131,6 +134,7 @@ impl Page {
 
     /// Record the request before load_uri can synchronously notify its uncommitted address.
     fn load_requested(&self, url: &str) {
+        self.cancel_permissions();
         self.load.intent.borrow_mut().request(url);
         self.load.request(|| self.view.load_uri(url));
     }
@@ -169,6 +173,7 @@ impl Page {
         match command {
             BrowserCommand::Navigate { url, .. } => self.navigate(&url)?,
             BrowserCommand::Reload { .. } => {
+                self.cancel_permissions();
                 self.withdraw_syrinx_request();
                 self.load.request(|| self.view.reload());
             }
@@ -202,6 +207,7 @@ impl Page {
             HistoryDirection::Forward => steps,
         };
         let item = list.nth_item(offset).ok_or(BrowserError::Navigation)?;
+        self.cancel_permissions();
         self.load
             .request(|| self.view.go_to_back_forward_list_item(&item));
         Ok(())
@@ -252,7 +258,6 @@ impl Page {
         if !case_sensitive {
             options |= FindOptions::CASE_INSENSITIVE;
         }
-        controller.count_matches(text, options.bits(), u32::MAX);
         controller.search(text, options.bits(), u32::MAX);
     }
 
@@ -268,7 +273,7 @@ impl Page {
         } else {
             controller.search_previous();
         }
-        self.find.report(self.id, &self.shared);
+        // The native found/failed signal acknowledges this step before its result is sent.
     }
 
     fn stop_find(&self) {
@@ -276,6 +281,13 @@ impl Page {
         if let Some(controller) = self.view.find_controller() {
             controller.search_finish();
         }
+    }
+
+    /// A navigation command retires consent before a queued UI reply can reach the old page.
+    fn cancel_permissions(&self) {
+        page_permissions::cancel_pending(&self.prompts, self.id, &self.shared.events, |prompt| {
+            prompt.deny()
+        });
     }
 
     fn resolve(&self, request: u64, allowed: bool) -> Result<(), BrowserError> {
@@ -380,7 +392,11 @@ impl Page {
                 false
             });
         let changing = watch.clone();
+        let (id, events, prompts) = (self.id, self.shared.events.clone(), self.prompts.clone());
         self.view.connect_load_changed(move |view, event| {
+            if event == LoadEvent::Started {
+                page_permissions::cancel_pending(&prompts, id, &events, |prompt| prompt.deny());
+            }
             changing.load_changed(view, event);
         });
         let loading = watch.clone();
@@ -438,7 +454,8 @@ impl Page {
             return;
         };
         let (id, shared, find) = (self.id, self.shared.clone(), self.find.clone());
-        controller.connect_counted_matches(move |_, count| {
+        // Found-text carries the total count after search, next and previous complete.
+        controller.connect_found_text(move |_, count| {
             find.count.set(count);
             find.report(id, &shared);
         });
@@ -541,10 +558,8 @@ impl Page {
 impl Drop for Page {
     fn drop(&mut self) {
         self.life.retire();
-        // Refuse prompts still open, so the page's requests do not wait forever.
-        for (_, prompt) in self.prompts.borrow_mut().drain() {
-            prompt.deny();
-        }
+        // Refuse prompts still open; the retired page cannot send new completion callbacks.
+        self.cancel_permissions();
         self.view.stop_loading();
         // SAFETY: the window is ours alone; destroying it releases the view inside it.
         unsafe { self.window.destroy() };
