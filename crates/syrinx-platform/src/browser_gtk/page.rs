@@ -985,7 +985,13 @@ impl Embed {
         window.realize();
         // The container selects nothing by default; its focus events drive the key routing.
         foreign.set_events(foreign.events() | gdk::EventMask::FOCUS_CHANGE_MASK);
-        let routing = KeyRouting::install(self.xlib.clone(), self.display, self.container, foreign);
+        let routing = KeyRouting::install(
+            self.xlib.clone(),
+            self.display,
+            self.container,
+            foreign,
+            &window,
+        );
         (window, routing)
     }
 

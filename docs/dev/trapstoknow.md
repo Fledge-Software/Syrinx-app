@@ -779,6 +779,25 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   The control file and instance lock do use `flock`, which only Syrinx's
   own processes need to respect. Source: the storage and instance tests
   run on Linux (observed 2026-10-31).
+- **Hyprland may keep a newly launched acceptance window in the background.**
+  Focus-steal prevention did so in the foreground acceptance run at
+  `732aafd`. The coordinator used `hyprctl focuswindow` only when no
+  Syrinx-class window was active. Continuously forcing the main window
+  would take keys from its popup and invalidate the check. Record this
+  preparation; do not change the compositor's policy or make Syrinx steal
+  focus. Hyprland's active application and X11's exact keyboard-focus window
+  are different facts. Source: [#221, comment 6672563128](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672563128)
+  (observed, 2026-11-05).
+- **An adopted foreign GDK window does not deliver GTK toplevel focus.**
+  GTK 3.24.52's X11 focus handler, including XI2, returns early for
+  `GDK_WINDOW_FOREIGN`. The `732aafd` run had X11 focus inside the main
+  window but document focus failed, including 0/20 Esc returns. Reconcile
+  the foreign GTK host's focus/blur from the actual X11 ownership query;
+  `grab_focus` alone cannot replace the missing toplevel event. Keep the
+  document's own focus report as the acceptance check. Source: the same
+  coordinator report, `gdkdevicemanager-core-x11.c` and
+  `_gdk_x11_window_get_toplevel` at GTK 3.24.52 (observed and code-read,
+  2026-11-05).
 - **X11 gives a key to the window under the pointer when it lies inside the
   focused window.** With the chrome focused and the pointer over the page,
   the page's WebKit window took the find bar's typing; with the page focused

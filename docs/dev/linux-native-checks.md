@@ -10,6 +10,12 @@ deleted. Merge `5df4978` preserves current `main` plus B4's changes, adapting
 only the popup-owner function to the landed X11 connection/error API. The
 B4 PR will target `main`.
 
+At `732aafd`, all three native examples pass, including the complete history
+sequence. The coordinator's full gate test portion passed **1,785 tests,
+zero failed or ignored**. The gate remains red because palette acceptance
+fails page focus and performance checks; the evidence and next focus fix
+are recorded below. This is not a full-gate pass.
+
 ## Product defect found by the history fixture
 
 The coordinator ran the first draft outside the sandbox: `page_close` and
@@ -146,8 +152,8 @@ fragment address. It now verifies the fragment address, unchanged Back rows
 and empty Forward rows. Other regressions cover duplicate notifications,
 URI notifications on either side of Loading false, and successful/failed
 document completion. The native fixture also asserts literal Back/Forward
-rows after the fragment. The coordinator must rerun it and the full gate;
-these regressions do not establish a native pass.
+rows after the fragment. At `732aafd` the coordinator confirmed the full
+history fixture passes, including this fragment and both row assertions.
 
 ## An uncommitted request can duplicate a later Forward row
 
@@ -180,7 +186,86 @@ false. Regressions check the literal Forward rows, Back rows before and
 after the jumps, the two-row Forward landing, a URI notification before
 document start, and fragment delivery after an older finish. The Windows
 adapter, shared history code, native fixture assertions and timeouts stay
-unchanged. The coordinator must rerun native checks on the new commit.
+unchanged. At `732aafd` the coordinator confirmed the entire native history
+sequence passes; palette acceptance is the remaining gate failure.
+
+## GTK focus for the adopted foreign page window
+
+The foreground native run at `732aafd`, recorded in
+[#221, comment 6672563128](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672563128),
+passed the native fixtures and 1,785 tests, but no Esc dismissal returned
+document focus in 20 samples. Baseline focus, rapid dismissal, both Enter
+selections and the associated stale-refocus checks also failed. Popup
+keyboard ownership, stacking and placement passed.
+
+The native probe's “inside main window” label includes both the page's X11
+container and WebKit descendants; it does not identify the WebKit widget.
+That broad diagnostic is not the acceptance verdict. The page check reads
+the authored loopback document's `document.hasFocus()` result in its title,
+through the same path on both platforms. “Page focus none” in the summary
+means neither focused nor legitimately deferred, rather than proof that
+the title or focus script was missing. These checks remain unchanged.
+
+`Embed::gtk_window` adopts a `GDK_WINDOW_FOREIGN` wrapper for its container.
+In GTK 3.24.52, [the X11 focus handler](https://github.com/GNOME/gtk/blob/3.24.52/gdk/x11/gdkdevicemanager-core-x11.c#L815)
+returns without delivering focus when
+[`_gdk_x11_window_get_toplevel`](https://github.com/GNOME/gtk/blob/3.24.52/gdk/x11/gdkwindow-x11.c#L166)
+sees a foreign window. The XI2 handler delegates to that same function.
+X11 can therefore give the container the keys while GTK's toplevel focus
+and WebKit's document focus remain false. A GTK widget's `grab_focus`
+alone does not repair the missing toplevel event.
+
+`page_keys.rs` now uses its existing real X11 ownership query to reconcile
+GTK focus/blur for that foreign wrapper. It delivers the missing GTK window
+notification only when native and toolkit focus disagree; ordinary GDK
+windows keep their own native delivery. The same routing runs after a
+programmatic request or click and on core/XI2 focus changes. The existing
+foreground guard and key-routing rules remain in force. The GTK host is
+held weakly so its signal callbacks cannot create an ownership cycle.
+
+The display-free regression first failed when native focus entered the page
+but toolkit focus stayed false. It now verifies focus/blur convergence and
+no repeated notification, alongside the ordinary-window guard and existing
+XI2/key-mask tests. This tests the delivery decision, not a live GTK/WebKit
+focus handoff. The coordinator must rerun the unchanged native acceptance
+check to validate that handoff.
+
+## Hardware findings from the foreground run
+
+These are the coordinator's Intel HD 4600 results under Hyprland/XWayland,
+not measurements from the agent sandbox. Hyprland's activation policy kept
+a new Syrinx window behind other applications; the coordinator maintained
+foreground only when no Syrinx-class window was active. It did not keep
+refocusing the main window while Syrinx's popup was active. That preparation
+is part of this run's evidence and must be recorded for the next run too.
+
+The raw report is `target/p1-33/palette-acceptance-1793922176.json`, generated
+2026-11-05 at 23:46:27 UTC. Its SHA-256 is
+`361fc091c66101c1ca4663e5976971454b5dfb52a3aa8cc072f991bfae97af52`.
+
+Across 20 openings, first-render p95 was **13.890 ms**. Presented p50 was
+15.503 ms, p95 **22.991 ms** and maximum 23.685 ms. The measured refresh
+interval and unchanged opening budget were **16.677 ms**, so opening
+**failed**, missing the budget by 6.314 ms at p95.
+
+The report also contains ranking misses, which must not disappear from the
+owner's findings when the focus defect is fixed:
+
+| Synthetic rows | Worker p95, ms (budget 5 ms) | Key-to-presented-rows p95, ms (budget 33.354 ms) |
+| --- | --- | --- |
+| 1,000 | 1.177, pass | 34.926, fail |
+| 10,000 | 10.910, fail | 37.976, fail |
+| 100,000 | 20.871, fail | 44.199, fail |
+
+Each size recorded 156 keystrokes and zero timeouts. The separate burst
+samples had no missing final rows. Hidden-popup idle CPU passed at 0.456%
+of one core against 0.5%; that measurement covers Syrinx's own process,
+not the WebKit process tree.
+
+The budgets and failing verdicts stay intact. These observations do not
+prove that hardware alone caused the misses. The coordinator must remeasure
+with the focus correction; persistent misses remain hardware-run findings
+for the owner, without an automatic waiver or a green gate claim.
 
 ## What each native check proves
 
