@@ -569,7 +569,9 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 ## Linux: WebKitGTK, X11 and POSIX
 
 The [final B4 native receipt at `b5fce81`](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6706547440)
-passes all native fixtures, 1,875 gate tests and 25 palette behaviour checks.
+passes all native fixtures and 1,875 gate tests. Its JSON contains 24 named
+palette behaviour checks, all passing; the coordinator's 25 pass markers
+also include the passing 1,000-row D48 timing measure.
 The complete gate still exits 1 solely for palette timing budgets on this
 i5-4460 / HD 4600; no budget changed.
 

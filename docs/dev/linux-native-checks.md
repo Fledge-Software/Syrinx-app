@@ -17,8 +17,9 @@ page lifecycle, popups, controls, deny-only permissions, fullscreen, muted
 audio, repeated untrusted TLS rejection/recovery, all five download cases,
 fresh-process HTTP cookies and the complete history sequence. The gate's
 **1,875 tests pass, with zero failures, ignored or filtered tests**. All
-**25 palette behaviour checks pass**. These are functional passes, not a
-green complete gate.
+**24 named palette behaviour checks pass**. The coordinator reports 25 pass
+markers; the summary includes the passing 1,000-row D48 timing measure in
+that total. These are functional passes, not a green complete gate.
 
 **Palette acceptance and `cargo xtask check` exit 1 on this i5-4460 / Intel
 HD 4600 only because of the palette timing budgets.** The values below come
