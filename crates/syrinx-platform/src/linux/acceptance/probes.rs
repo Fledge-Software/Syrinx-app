@@ -106,10 +106,27 @@ impl Drop for Windows {
     }
 }
 
-/// Runs on the GTK thread, outside parallel unit suites that share keyboard focus.
+/// Establish managed WM activation outside GTK, then check native transfers on GTK.
 pub(super) fn run() -> Result<(), String> {
+    let parent = FixtureWindow::new()?;
+    parent.show()?;
+    let main = parent.handle();
+    crate::gtk_thread::run(move || positive_focus(main)).map_err(|error| error.to_string())??;
+
+    // This owned synthetic window deliberately lacks Syrinx's PID marker.
+    let foreign = FixtureWindow::unmarked()?;
+    foreign.show()?;
+    let foreign_id = foreign.handle();
+    crate::gtk_thread::run(move || foreign_focus(main, foreign_id))
+        .map_err(|error| error.to_string())??;
+    println!(
+        "Linux X11 probes: real focus guards, hidden/stale targets, ownership, stacking, refresh and destruction passed."
+    );
+    Ok(())
+}
+
+fn positive_focus(main: isize) -> Result<(), String> {
     let mut windows = Windows::new()?;
-    let main = windows.create(true, true)?;
     let popup = windows.create(true, true)?;
     browser::set_overlay_owner(popup, main).map_err(|error| error.to_string())?;
     windows.focus(main);
@@ -158,29 +175,27 @@ pub(super) fn run() -> Result<(), String> {
     )?;
     refresh_interval(main).map_err(|error| error.to_string())?;
 
-    // Both focus paths must leave an unrelated application's key ownership alone.
-    let foreign = windows.create(true, false)?;
-    windows.focus(foreign);
+    windows.destroy(popup);
+    require(!window_exists(popup), "A destroyed popup was reported live")?;
+    Ok(())
+}
+
+fn foreign_focus(main: isize, foreign: isize) -> Result<(), String> {
+    let windows = Windows::new()?;
+    // Both focus paths must leave the WM-activated unmarked fixture's keys alone.
     require(
         !browser::syrinx_in_foreground(),
         "An unowned window counts as Syrinx",
     )?;
     browser::focus_chrome(main).map_err(|error| error.to_string())?;
     require(
-        !browser::activate_if_foreground(popup).map_err(|error| error.to_string())?,
+        !browser::activate_if_foreground(main).map_err(|error| error.to_string())?,
         "Syrinx activated over an unrelated foreground window",
     )?;
     require(
-        windows.has_keys(foreign)
-            && keyboard_focus(main, Some(popup)) == Ok(KeyboardFocus::Elsewhere),
+        windows.has_keys(foreign) && keyboard_focus(main, None) == Ok(KeyboardFocus::Elsewhere),
         "A focus request took keys from an unrelated window",
     )?;
-    windows.destroy(foreign);
-    windows.destroy(popup);
-    require(!window_exists(popup), "A destroyed popup was reported live")?;
-    println!(
-        "Linux X11 probes: real focus guards, hidden/stale targets, ownership, stacking, refresh and destruction passed."
-    );
     Ok(())
 }
 

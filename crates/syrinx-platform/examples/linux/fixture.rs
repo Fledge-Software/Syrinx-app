@@ -256,8 +256,11 @@ impl Fixture {
     }
 
     pub fn focus_page(&mut self, id: u64) -> Result<(), String> {
+        // These callers have one page; popup adoption collects its focus report separately.
+        self.parent.activate()?;
         self.send(BrowserCommand::Focus { id })?;
-        self.barrier()
+        self.barrier()?;
+        self.parent.wait_page_focus(self.only_child()?)
     }
 
     pub fn only_child(&self) -> Result<isize, String> {

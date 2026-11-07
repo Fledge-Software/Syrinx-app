@@ -10,14 +10,20 @@ deleted. Merge `5df4978` preserves current `main` plus B4's changes, adapting
 only the popup-owner function to the landed X11 connection/error API. The
 B4 PR will target `main`.
 
-The latest native receipt is **`a01b28d`**, recorded in
-[#221, comment 6683986953](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6683986953).
-X11 probes, lifecycle (including hidden-survivor geometry), popups, controls
-and permissions passed. Media reached `GStreamer element autoaudiosink not
-found` and WebKitWebProcess aborted; only GStreamer and base plugins were
-installed. The owner is installing the good, bad and libav runtime plugins.
-The full script must rerun after that prerequisite is repaired; media and
-the remaining fixtures, palette and complete gate are not yet validated.
+The latest native receipt is **`cb44257`**, recorded in
+[#221, comment 6705935149](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6705935149).
+The owner installed GStreamer's good, bad and libav plugins, and
+`autoaudiosink` resolves. Three runs passed X11 probes, lifecycle, popups
+and controls, then failed the permissions suite's native keyboard-focus
+guard before delivering Enter. An earlier run failed the X11 probe's
+popup-to-chrome transfer. No fixture focus helper was running. Media and
+the remaining fixtures, palette and complete gate have not run at this head.
+
+The earlier **`a01b28d`** receipt in
+[comment 6683986953](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6683986953)
+passed X11 probes, lifecycle (including hidden-survivor geometry), popups,
+controls and permissions. It reached `GStreamer element autoaudiosink not
+found` and WebKitWebProcess aborted before the plugins were installed.
 
 The separate Find checks **passed** at `a01b28d`. Swapping only native Next
 and Previous in a disposable worktree with its own target failed with
@@ -45,7 +51,50 @@ parsers and observers, not a WebKit pass. A
 The subsequent geometry correction has independent scoped source approval
 and passed native lifecycle validation at `a01b28d`; the B4 PR against `main`
 and Windows CI remain pending. No native pass is claimed beyond the named
-receipts, and the missing media prerequisite is not a waived assertion.
+receipts. The repaired media prerequisite and the focus correction below
+still require a complete native rerun.
+
+## Fixture activation after `cb44257`
+
+`permissions.rs::request_consent` creates and loads its authored document,
+calls `Fixture::focus_page`, then delivers Enter. Only that key handler
+calls `Notification.requestPermission()`. The failing guard precedes the
+key, so these receipts do not show a changed media or capture permission
+flow. Previously, `FixtureWindow::show` mapped an unmanaged
+`override_redirect` window and called `XSetInputFocus`; `focus_page` waited
+only for a command barrier. Neither operation established that Hyprland
+had activated the fixture. Production page focus intentionally refuses to
+take keys while another application is in front.
+
+Visible fixture parents now use managed X11 toplevels with an input hint.
+`acceptance/window_focus.rs` waits for the WM's `_NET_CLIENT_LIST`, sends
+the [EWMH `_NET_ACTIVE_WINDOW` request](https://specifications.freedesktop.org/wm/latest-single/),
+and requires both the WM's active-window acknowledgement and X11 keyboard
+focus inside that toplevel. After the ordinary host Focus command,
+`focus_page` waits for actual focus inside its sole page child. Keys still
+run the unchanged `require_native_focus` check immediately before delivery.
+There is no permission grant, product focus-policy bypass or focus retry
+that hides a failed input operation.
+
+Polling runs on the fixture caller, with each native operation dispatched
+to `syrinx-gtk`, so GTK can process focus events between observations.
+Each polling deadline is 15 seconds and native query failures propagate;
+the fixture's outer watchdog still covers a blocked native call.
+The visible X11 probes use the same managed setup; their negative case
+activates an owned synthetic window without Syrinx's PID marker and checks
+that product focus requests leave its keys alone. Hidden unit-test parents
+remain unmapped and require no window-manager cooperation. Native fixtures
+now require an EWMH window manager, such as this desktop's Hyprland or the
+Openbox session in the proposed #222 CI job.
+
+The display-free regression rejects transient native focus without WM
+acknowledgement, checks the actual activation message's target and direct
+test-action source, and preserves native query errors. It cannot establish
+desktop activation: the coordinator must rerun the unchanged native
+assertions, with the fixture focus helper off. No Hyprland settings or
+timing budgets were changed. A fresh independent scoped source review
+approved this correction; desktop activation and the full gate remain
+unvalidated until that rerun.
 
 ## Hidden-survivor geometry after `812b19f`
 
@@ -488,8 +537,9 @@ recorded finding, not a waiver or a green palette-acceptance claim.
 
 ## Windows scenario applicability and implemented Linux coverage
 
-Every added native case below is **pending coordinator execution**. The
-`dec469e` receipt covers the earlier, smaller suites only. The inventory
+The inventory below records intended coverage, not a pass for every case.
+Only the explicit scenarios named in the receipts above have current
+native evidence; `dec469e` covers the earlier, smaller suites. The inventory
 comes from `examples/page_close/{lifecycle,popups,essentials,permissions,
 suspension,audio,security,downloads}.rs`, `cookie_persistence/windows.rs`
 and `navigation_history_spike/windows.rs` (including its authored scripts).
@@ -497,7 +547,7 @@ Paths in this table are relative to `crates/syrinx-platform/examples/linux/`.
 
 | Windows scenario | Linux fixture and actual assertion | Boundary |
 | --- | --- | --- |
-| Native focus, stacking, foreground and refresh probes | `lifecycle.rs` runs actual X11 probes with owned unmanaged parents. | Focus helper must be off. |
+| Native focus, stacking, foreground and refresh probes | `lifecycle.rs` runs actual X11 probes with managed fixture parents and an owned unmanaged popup. | Focus helper must be off; WM activation and native focus are both required. |
 | Hidden/show/no-active lifecycle and resize | Exact mapped state and physical rectangles, invalid bounds preserve prior rectangle. | Real native children; no source-text substitute. |
 | Duplicate/rejected/reused tab ID | Duplicate refusal; invalid creation leaks no child; retry and reuse succeed. | Shared protocol errors, not HRESULT identity. |
 | Page close deferral and survivor | Twelve close requests leave children alive until host release; closing page remains usable; survivor takes current bounds; multi-child shutdown destroys all children. | Real owned child IDs. |
@@ -520,7 +570,7 @@ Paths in this table are relative to `crates/syrinx-platform/examples/linux/`.
 | Authored anchor, location.assign/replace, script Back, beforeunload without gesture | `history/scenarios.rs` requires exact addresses/report kinds and projected rows on shown parents. Authored timers receive no gesture; no host injection occurs. | Beforeunload must not trap a gesture-free navigation in a dialog. |
 | Cacheable Back three/Forward one | Four `/c/` documents carry explicit cache headers; actual traversal and literal projected rows are checked. | Cache eligibility is tested; neither HTTP nor back-forward cache hits are promised. |
 | Traversal after pushState/replaceState and same-document fragment Back/Forward | Follow the renamed projected row, then check replacement traversal or reset when WebKit lands on an untracked original same-document entry; assert empty reset rows and subsequent engine Forward. | The shared model intentionally collapses same-document states; it is not expanded to match WebKit's entries. |
-| Palette behavior and timing | Existing acceptance checks run with real X11 focus, visibility, transient parent, stacking and refresh measurements. | All budgets unchanged; current receipt exits 1 for timing. |
+| Palette behavior and timing | Existing acceptance checks run with real X11 focus, visibility, transient parent, stacking and refresh measurements. | All budgets unchanged; the last broad baseline exits 1 for timing. Current-head receipt is incomplete. |
 | Physical input, Unicode and IME | Palette drives GPUI's existing input dispatcher; native authored controls use owned simple GDK keys. | No global keyboard map change; these do not prove physical fcitx/XIM/IME delivery, which remains the landing smoke/manual boundary. |
 
 The startup path prepares private data/cache/config and an explicit Downloads

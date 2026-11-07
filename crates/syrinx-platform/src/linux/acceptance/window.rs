@@ -3,6 +3,8 @@
 use gtk::{gdk, prelude::*};
 use x11_dl::xlib;
 
+#[path = "window_focus.rs"]
+mod focus;
 #[path = "window_input.rs"]
 mod input;
 
@@ -11,7 +13,15 @@ pub struct FixtureWindow(isize);
 
 impl FixtureWindow {
     pub fn new() -> Result<Self, String> {
-        crate::gtk_thread::run(|| {
+        Self::create(true)
+    }
+
+    pub(super) fn unmarked() -> Result<Self, String> {
+        Self::create(false)
+    }
+
+    fn create(mark_owned: bool) -> Result<Self, String> {
+        crate::gtk_thread::run(move || {
             with_display(|xlib, display| {
                 let root = unsafe { (xlib.XDefaultRootWindow)(display) };
                 let window =
@@ -31,17 +41,20 @@ impl FixtureWindow {
                         xlib::CWOverrideRedirect,
                         &mut attributes,
                     );
-                    let atom = (xlib.XInternAtom)(display, c"_NET_WM_PID".as_ptr(), xlib::False);
-                    (xlib.XChangeProperty)(
-                        display,
-                        window,
-                        atom,
-                        xlib::XA_CARDINAL,
-                        32,
-                        xlib::PropModeReplace,
-                        (&raw const pid).cast(),
-                        1,
-                    );
+                    if mark_owned {
+                        let atom =
+                            (xlib.XInternAtom)(display, c"_NET_WM_PID".as_ptr(), xlib::False);
+                        (xlib.XChangeProperty)(
+                            display,
+                            window,
+                            atom,
+                            xlib::XA_CARDINAL,
+                            32,
+                            xlib::PropModeReplace,
+                            (&raw const pid).cast(),
+                            1,
+                        );
+                    }
                     (xlib.XStoreName)(display, window, c"Syrinx synthetic Linux fixture".as_ptr());
                     // Like the Windows fixture, keep the parent hidden and inspect child state.
                     (xlib.XSync)(display, xlib::False);
@@ -54,34 +67,75 @@ impl FixtureWindow {
         .map_err(|error| error.to_string())?
     }
 
-    /// Explicitly map the unmanaged fixture parent for document-focus and media probes.
+    /// Map a managed fixture toplevel and wait for the WM to acknowledge activation.
     pub fn show(&self) -> Result<(), String> {
         let window = self.0;
         crate::gtk_thread::run(move || {
             with_display(|xlib, display| {
                 unsafe {
-                    (xlib.XMapRaised)(display, window as _);
-                    (xlib.XSetInputFocus)(
+                    let mut attributes: xlib::XSetWindowAttributes = std::mem::zeroed();
+                    attributes.override_redirect = xlib::False;
+                    (xlib.XChangeWindowAttributes)(
                         display,
                         window as _,
-                        xlib::RevertToParent,
-                        xlib::CurrentTime,
+                        xlib::CWOverrideRedirect,
+                        &mut attributes,
                     );
+                    let mut hints: xlib::XWMHints = std::mem::zeroed();
+                    hints.flags = xlib::InputHint;
+                    hints.input = xlib::True;
+                    (xlib.XSetWMHints)(display, window as _, &mut hints);
+                    let atom =
+                        (xlib.XInternAtom)(display, c"_NET_WM_WINDOW_TYPE".as_ptr(), xlib::False);
+                    let normal = (xlib.XInternAtom)(
+                        display,
+                        c"_NET_WM_WINDOW_TYPE_NORMAL".as_ptr(),
+                        xlib::False,
+                    );
+                    (xlib.XChangeProperty)(
+                        display,
+                        window as _,
+                        atom,
+                        xlib::XA_ATOM,
+                        32,
+                        xlib::PropModeReplace,
+                        (&raw const normal).cast(),
+                        1,
+                    );
+                    let mut class = xlib::XClassHint {
+                        res_name: c"syrinx-fixture".as_ptr().cast_mut(),
+                        res_class: c"SyrinxFixture".as_ptr().cast_mut(),
+                    };
+                    (xlib.XSetClassHint)(display, window as _, &mut class);
+                    (xlib.XMapWindow)(display, window as _);
                     (xlib.XSync)(display, xlib::False);
                 }
                 Ok(())
             })
         })
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())??;
+        self.activate()
+    }
+
+    /// Explicit test setup may activate this fixture; product foreground guards stay unchanged.
+    pub fn activate(&self) -> Result<(), String> {
+        focus::activate(self.0)
+    }
+
+    pub fn wait_page_focus(&self, child: isize) -> Result<(), String> {
+        self.require_child(child)?;
+        focus::wait_page(child)
     }
 
     /// Focus only this owned chrome window, never another application.
     pub fn focus(&self) -> Result<(), String> {
+        self.activate()?;
         let window = self.0;
         crate::gtk_thread::run(move || {
             crate::browser::focus_chrome(window).map_err(|error| error.to_string())
         })
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())??;
+        focus::wait_chrome(window)
     }
 
     /// Read physical child coordinates relative to this fixture parent.

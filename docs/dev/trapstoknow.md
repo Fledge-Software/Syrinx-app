@@ -638,10 +638,23 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   `examples/linux/controls/find_observation.rs` and their RED/GREEN regressions
   (source-confirmed, 2026-11-05; native baseline, reversed-direction mutation
   and real Find-label inspection pending).
+- **Native X11 focus alone does not establish window-manager activation.**
+  At `cb44257`, three permissions runs failed the native-focus guard before
+  Enter, and one earlier X11 probe failed popup-to-chrome transfer. Fixtures
+  mapped unmanaged parents and used `XSetInputFocus`; their command barrier
+  did not prove that Hyprland had activated them. Show a managed fixture,
+  request `_NET_ACTIVE_WINDOW`, wait for WM acknowledgement and actual native
+  focus, then send host Focus and await the page child. Keep the immediate
+  pre-key guard and the product's foreground rule. Poll outside GTK's thread
+  so its event loop can make progress. Do not change `follow_mouse` or add a
+  global focus helper. Source: [the coordinator receipt](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6705935149),
+  `examples/linux/permissions.rs`, `acceptance/window_focus.rs` and the
+  [EWMH activation protocol](https://specifications.freedesktop.org/wm/latest-single/)
+  (observed and source-confirmed, 2026-11-07; corrected native run pending).
 - **A coordinator focus helper can break an otherwise valid native probe.**
   Run it only during palette acceptance, including the palette stage inside
   the full gate. Keep it off during every native fixture/probe: those use
-  owned unmanaged parents and test refusal to take focus. The coordinator's
+  an owned unmanaged popup and test refusal to take focus. The coordinator's
   `dec469e` rerun passed page-close 3/3 with the helper off; helper interference
   must not be mistaken for a product focus failure. Source:
   [#221, comment 6673543416](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673543416)

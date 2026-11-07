@@ -85,6 +85,13 @@ fn print_dialog() -> Result<Option<gtk::Dialog>, String> {
 
 /// A GTK focus widget alone can be stale after chrome or another page takes X11 focus.
 fn require_native_focus(child: isize) -> Result<(), String> {
+    if native_focus_within(child)? {
+        return Ok(());
+    }
+    Err("Native keyboard focus is outside the requested fixture page".into())
+}
+
+pub(super) fn native_focus_within(child: isize) -> Result<bool, String> {
     super::with_display(|xlib, display| {
         let (mut focused, mut revert) = (0, 0);
         unsafe {
@@ -92,7 +99,7 @@ fn require_native_focus(child: isize) -> Result<(), String> {
         }
         for _ in 0..32 {
             if focused == child as x11_dl::xlib::Window {
-                return Ok(());
+                return Ok(true);
             }
             if focused <= 1 {
                 break;
@@ -122,6 +129,6 @@ fn require_native_focus(child: isize) -> Result<(), String> {
             }
             focused = parent;
         }
-        Err("Native keyboard focus is outside the requested fixture page".into())
+        Ok(false)
     })
 }

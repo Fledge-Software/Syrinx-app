@@ -14,9 +14,9 @@ pub use fixture_window::FixtureWindow;
 #[path = "acceptance_tests.rs"]
 mod tests;
 
-/// Runs the real-focus fixture separately from parallel unit tests, on GTK's thread.
+/// Runs real-focus setup outside parallel unit tests; native queries use GTK's thread.
 pub fn check_native_probes() -> Result<(), String> {
-    crate::gtk_thread::run(probes::run).map_err(|error| error.to_string())?
+    probes::run()
 }
 
 /// Read the engine's actual Downloads destination on the one native-library thread.
