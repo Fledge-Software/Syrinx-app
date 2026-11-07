@@ -10,14 +10,13 @@ deleted. Merge `5df4978` preserves current `main` plus B4's changes, adapting
 only the popup-owner function to the landed X11 connection/error API. The
 B4 PR will target `main`.
 
-The latest native receipt is **`cb44257`**, recorded in
-[#221, comment 6705935149](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6705935149).
-The owner installed GStreamer's good, bad and libav plugins, and
-`autoaudiosink` resolves. Three runs passed X11 probes, lifecycle, popups
-and controls, then failed the permissions suite's native keyboard-focus
-guard before delivering Enter. An earlier run failed the X11 probe's
-popup-to-chrome transfer. No fixture focus helper was running. Media and
-the remaining fixtures, palette and complete gate have not run at this head.
+The latest native receipt is **`b8db1a5`**, recorded in
+[#221, comment 6706143225](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6706143225).
+With GStreamer's good, bad and libav plugins installed, X11 probes,
+lifecycle, popups, controls, permissions, fullscreen and muted audio passed.
+The managed-fixture activation correction below works on this desktop.
+Security then failed with `Rejected TLS attempt lost its HTTPS scheme`.
+Downloads, cookies, history, palette and the complete gate did not run.
 
 The earlier **`a01b28d`** receipt in
 [comment 6683986953](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6683986953)
@@ -45,14 +44,45 @@ That is functional evidence for that commit, not a green gate.
 The subsequent review corrections add Reload completion correlation, Find
 numbering/empty-result/native-completion checks, permission cancellation,
 and the expanded native suites listed below. **Coverage beyond the explicit
-`a01b28d` passes above remains native-pending.** Display-free tests establish
+partial receipts above remains native-pending.** Display-free tests establish
 parsers and observers, not a WebKit pass. A
 [fresh independent whole-branch source review approved `main..812b19f`](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6675422981).
 The subsequent geometry correction has independent scoped source approval
 and passed native lifecycle validation at `a01b28d`; the B4 PR against `main`
 and Windows CI remain pending. No native pass is claimed beyond the named
-receipts. The repaired media prerequisite and the focus correction below
-still require a complete native rerun.
+receipts. A complete native rerun remains necessary after the TLS correction
+below.
+
+## TLS failure URI after `b8db1a5`
+
+The fixture checks `BrowserEvent::Connection`, not a page address string.
+`watch_loading` discarded `load-failed-with-tls-errors`'s `failing_uri`
+argument and classified `WebView::uri()` instead. WebKitGTK 2.54.1's
+[`didFailProvisionalLoadForFrameShared`](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/WebPageProxy.cpp#L8448)
+commits the failed provisional state before calling the navigation client.
+[`PageLoadState`](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/PageLoadState.cpp#L300)
+then exposes the previous committed URI, while the TLS signal receives the
+failing request's URI separately. This is an adapter field-selection bug,
+not evidence that WebKit stripped HTTPS from its failure argument. The
+receipt identifies neither the offending Connection status nor a raw URI,
+so the exact callback values in that run remain unobserved.
+
+`page.rs` now classifies the signal's failing URI. The same helper serves
+ordinary active-URI connection reports; rejection still sets the failed
+and rejected flags before emitting its event, and the signal remains
+handled without any certificate exception. Windows already retains the
+navigation target's scheme in `browser/security.rs`; it is unchanged.
+Neither the native security assertion nor TLS policy changed.
+
+The existing native failure is the regression's failing evidence. Two
+additional display-free tests exercise the actual Rust rejection event and
+failure flags after an HTTP connection, and ensure an absent or non-HTTPS
+failure URI is never relabelled HTTPS. They cannot reproduce WebKit's
+native rollback or verify signal delivery without a display. The complete
+security suite still requires two failed completions, two certificate
+rejections, safe HTTP recovery, no late success or untrusted content, and
+no server-observed application bytes. Fresh independent scoped source
+review approved the correction; its next native run remains pending.
 
 ## Fixture activation after `cb44257`
 
@@ -93,8 +123,9 @@ test-action source, and preserves native query errors. It cannot establish
 desktop activation: the coordinator must rerun the unchanged native
 assertions, with the fixture focus helper off. No Hyprland settings or
 timing budgets were changed. A fresh independent scoped source review
-approved this correction; desktop activation and the full gate remain
-unvalidated until that rerun.
+approved this correction. The coordinator's `b8db1a5` receipt subsequently
+passed the native probes and permission/media focus paths; the full gate
+still awaits the security correction and later fixture stages.
 
 ## Hidden-survivor geometry after `812b19f`
 

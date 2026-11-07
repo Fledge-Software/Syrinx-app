@@ -425,8 +425,8 @@ impl Page {
         });
         let rejecting = watch.clone();
         self.view
-            .connect_load_failed_with_tls_errors(move |view, _, _, _| {
-                rejecting.certificate_rejected(view);
+            .connect_load_failed_with_tls_errors(move |_, failing_uri, _, _| {
+                rejecting.certificate_rejected(failing_uri);
                 // Handled: the page is refused and WebKit offers no way past the error.
                 true
             });
@@ -900,10 +900,11 @@ impl LoadWatch {
         self.state.failed.set(Some(cancelled));
     }
 
-    fn certificate_rejected(&self, view: &WebView) {
+    fn certificate_rejected(&self, failing_uri: &str) {
         self.state.rejected.set(true);
         self.state.failed.set(Some(false));
-        self.connection(view, ConnectionStatus::CertificateRejected);
+        // WebKit has already rolled its active URI back to the previous document.
+        self.connection_for_uri(failing_uri, ConnectionStatus::CertificateRejected);
     }
 
     /// An address change outside a document load is a fragment or the History API.
@@ -967,6 +968,10 @@ impl LoadWatch {
 
     fn connection(&self, view: &WebView, status: ConnectionStatus) {
         let uri = view.uri().map(String::from).unwrap_or_default();
+        self.connection_for_uri(&uri, status);
+    }
+
+    fn connection_for_uri(&self, uri: &str, status: ConnectionStatus) {
         let scheme = if uri.starts_with("https://") {
             ConnectionScheme::Https
         } else if uri.starts_with("http://") {

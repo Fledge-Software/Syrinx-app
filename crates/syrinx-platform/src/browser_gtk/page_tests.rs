@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn find_events_number_matches_from_one_and_wrap_in_both_directions() {
-    let (shared, mut events) = find_events();
+    let (shared, mut events) = page_events();
     let find = FindState::default();
     assert!(find.begin(41, "synthetic", 7, &shared));
     find.count.set(3);
@@ -31,7 +31,7 @@ fn find_events_number_matches_from_one_and_wrap_in_both_directions() {
 
 #[test]
 fn an_empty_find_completes_its_request_and_retires_the_previous_search() {
-    let (shared, mut events) = find_events();
+    let (shared, mut events) = page_events();
     let find = FindState::default();
     assert!(find.begin(41, "synthetic", 7, &shared));
     find.count.set(3);
@@ -48,7 +48,7 @@ fn an_empty_find_completes_its_request_and_retires_the_previous_search() {
 }
 
 /// Creates only the Rust event boundary, without a GTK thread or native page.
-fn find_events() -> (
+fn page_events() -> (
     Shared,
     futures::channel::mpsc::UnboundedReceiver<BrowserEvent>,
 ) {
@@ -63,6 +63,54 @@ fn find_events() -> (
         },
         outgoing,
     )
+}
+
+#[test]
+fn a_rejected_tls_report_uses_the_failed_address_after_an_http_document() {
+    let (shared, mut events) = page_events();
+    let state = Rc::new(LoadState::default());
+    let watch = LoadWatch {
+        id: 7,
+        shared,
+        state: state.clone(),
+        text: None,
+    };
+    // The previous document can remain active when the provisional HTTPS load fails.
+    watch.connection_for_uri("http://127.0.0.1:1234/previous", ConnectionStatus::Loaded);
+    let previous = events.try_recv().expect("previous document connection");
+    assert!(matches!(previous, BrowserEvent::Connection { id: 7, state }
+        if state.scheme == ConnectionScheme::Http && state.status == ConnectionStatus::Loaded));
+
+    watch.certificate_rejected("https://127.0.0.1:4321/rejected");
+    let rejected = events.try_recv().expect("TLS failure connection");
+    assert!(matches!(rejected, BrowserEvent::Connection { id: 7, state }
+        if state.scheme == ConnectionScheme::Https && state.status == ConnectionStatus::CertificateRejected));
+    assert!(state.rejected.get());
+    assert_eq!(state.failed.get(), Some(false));
+    assert!(matches!(
+        events.try_recv(),
+        Err(futures::channel::mpsc::TryRecvError::Empty)
+    ));
+}
+
+#[test]
+fn a_tls_callback_does_not_invent_https_for_a_missing_or_different_failing_uri() {
+    for (uri, expected) in [
+        ("", ConnectionScheme::Other),
+        ("http://127.0.0.1:1234/synthetic", ConnectionScheme::Http),
+    ] {
+        let (shared, mut events) = page_events();
+        let watch = LoadWatch {
+            id: 7,
+            shared,
+            state: Rc::default(),
+            text: None,
+        };
+        watch.certificate_rejected(uri);
+        let rejected = events.try_recv().expect("TLS failure connection");
+        assert!(matches!(rejected, BrowserEvent::Connection { id: 7, state }
+            if state.scheme == expected && state.status == ConnectionStatus::CertificateRejected));
+    }
 }
 
 fn expect_find(

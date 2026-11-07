@@ -568,6 +568,19 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Linux: WebKitGTK, X11 and POSIX
 
+- **A TLS failure's active URI can already be the previous HTTP document.**
+  WebKitGTK 2.54.1 commits provisional-load rollback before delivering the
+  TLS failure signal. Its `failing_uri` still names the rejected request;
+  `WebView::uri()` can name the previous document or be empty. Do not discard
+  the signal URI and classify a rejected HTTPS request from the active page.
+  The `b8db1a5` security fixture caught that adapter mistake with its unchanged
+  HTTPS assertion. Source: [the coordinator receipt](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6706143225),
+  `browser_gtk/page.rs`, and WebKitGTK 2.54.1's
+  [failure dispatch](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/WebPageProxy.cpp#L8448)
+  and [TLS signal](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/API/glib/WebKitWebView.cpp#L2783)
+  (native failure and source-confirmed cause, 2026-11-07; corrected native
+  run pending). Returning handled still rejects the load; it never grants
+  a certificate exception.
 - **WebKitGTK's library dependencies do not guarantee a usable media pipeline.**
   At `a01b28d`, X11, lifecycle, popups, controls and permissions passed, but
   synthetic video reached `GStreamer element autoaudiosink not found` and
