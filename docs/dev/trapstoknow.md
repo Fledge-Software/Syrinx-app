@@ -568,6 +568,11 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Linux: WebKitGTK, X11 and POSIX
 
+The [final B4 native receipt at `b5fce81`](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6706547440)
+passes all native fixtures, 1,875 gate tests and 25 palette behaviour checks.
+The complete gate still exits 1 solely for palette timing budgets on this
+i5-4460 / HD 4600; no budget changed.
+
 - **A navigation policy decision is not a document load start.** WebKitGTK
   asks for navigation policy even for an authored fragment link, then changes
   the current document without `load-changed::Started`. At `8c70acb`, the
@@ -580,7 +585,7 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   [Windows spike evidence](https://github.com/Fledge-Software/Syrinx-app/issues/126#issuecomment-6468977926),
   `browser/history_state.rs`, and [WebKitGTK 2.54.1's fragment policy path](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebCore/loader/FrameLoader.cpp#L1737)
   (observed report kind, source-confirmed and display-free replayed,
-  2026-11-07; corrected native run pending).
+  2026-11-07; corrected native check passed at `b5fce81`).
 - **A TLS failure's active URI can already be the previous HTTP document.**
   WebKitGTK 2.54.1 commits provisional-load rollback before delivering the
   TLS failure signal. Its `failing_uri` still names the rejected request;
@@ -592,7 +597,7 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   [failure dispatch](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/WebPageProxy.cpp#L8448)
   and [TLS signal](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/API/glib/WebKitWebView.cpp#L2783)
   (native failure and source-confirmed cause, 2026-11-07; corrected native
-  run pending). Returning handled still rejects the load; it never grants
+  security suite passed at `b5fce81`). Returning handled still rejects the load; it never grants
   a certificate exception.
 - **WebKitGTK's library dependencies do not guarantee a usable media pipeline.**
   At `a01b28d`, X11, lifecycle, popups, controls and permissions passed, but
@@ -605,8 +610,8 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   intact and let the owner install missing system packages. Source:
   [coordinator receipt](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6683986953)
   and [GStreamer element documentation](https://gstreamer.freedesktop.org/documentation/autodetect/autoaudiosink.html)
-  (native observation and upstream documentation, 2026-11-06; full rerun
-  after plugin installation pending). Product detection and an actionable
+  (native observation and upstream documentation, 2026-11-06; owner installed
+  the plugins and native media passed at `b5fce81`). Product detection and an actionable
   prerequisite message are proposed in #246; the installer warning alone
   cannot prevent a portable launch from reaching this engine failure.
 - **A hidden-survivor resize failure can mean it moved, not that it stayed
@@ -618,7 +623,7 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   `browser/page.rs` and both native lifecycle fixtures; the coordinator's
   [3/3 reproduction](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6675466572)
   and the failing-then-passing display-free operation-order regression
-  (observed and code-read, 2026-11-05; corrected native run pending).
+  (observed and code-read, 2026-11-05; corrected native check passed at `b5fce81`).
 - **A private Downloads variable set after GLib starts can still leave the
   owner's Downloads selected.** Prepare a mode-0700 config root containing
   an explicit `user-dirs.dirs` before any GLib/GTK initialization or threads,
@@ -626,35 +631,35 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   fixture download. Refuse missing or different destinations; never accept
   HOME fallback. Source: `examples/linux/environment.rs` and its preparation
   and mismatch regressions (source-confirmed and display-free tested,
-  2026-11-05; new download scenarios remain native pending).
+  2026-11-05; all five native download scenarios passed at `b5fce81`).
 - **A scratch runtime disconnects native audio from the desktop.** Keep the
   coordinator's real `XDG_RUNTIME_DIR` for native WebKit/audio tests while
   isolating data/cache/config. Only sandbox display-free Cargo commands use
   a fresh private runtime to avoid the sandbox's read-only desktop runtime.
   Do not move native audio into that scratch runtime to make tests look
   isolated. Source: Task 3 startup contract and the desktop socket paths
-  (source-confirmed, 2026-11-05; new muted-audio scenario native pending).
+  (source-confirmed, 2026-11-05; native muted audio passed at `b5fce81`).
 - **An unresolved permission can outlive the navigation that requested it.**
   Take the pending map before denying native requests, so synchronous denial
   callbacks cannot reborrow it. Navigation emits completion while the page
   is live; close must retire the page before denial so stale callbacks remain
   invalid. Source: `browser_gtk/page_permissions.rs` and its ownership/event
   regressions (source-confirmed and display-free tested, 2026-11-05; expanded
-  native Navigate/close cases pending).
+  native Navigate/close cases passed at `b5fce81`).
 - **A popup download may report before its Created acknowledgement.** The
   engine releases held download reports inside adoption, then the dispatcher
   emits Created. Accept either ordering but require both attribution and
   Created before declaring adoption complete. Source: `browser_gtk/engine.rs`,
   `browser/protocol.rs`, and `examples/linux/downloads/observation.rs`'s
   failing-then-passing ordering regression (source-confirmed, 2026-11-05;
-  new popup download cases native pending).
+  native popup download cases passed at `b5fce81`).
 - **The previous load's completion can falsely pass a Reload check.** Reaching
   an address through History does not drain its NavigationCompleted. Drain
   earlier FIFO callbacks before Reload and require that tab's new Loading
   followed by successful, noncancelled completion. Source:
   `examples/linux/history.rs`'s stale/other-tab/failure replays
   (source-confirmed and display-free tested, 2026-11-05; corrected native
-  Reload assertion pending).
+  Reload assertion passed at `b5fce81`).
 - **A calculated Find index alone does not prove the native selection moved.**
   The shared label is one-based and empty Find must complete with `0/-1`.
   Require native found/failed completion plus independent authored selected-span
@@ -663,7 +668,7 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   correlation; that pre-existing gap is #245. Source: `browser_gtk/page.rs`,
   `examples/linux/controls/find_observation.rs` and their RED/GREEN regressions
   (source-confirmed, 2026-11-05; native baseline, reversed-direction mutation
-  and real Find-label inspection pending).
+  and real Find-label inspection passed in the `a01b28d` receipt).
 - **Native X11 focus alone does not establish window-manager activation.**
   At `cb44257`, three permissions runs failed the native-focus guard before
   Enter, and one earlier X11 probe failed popup-to-chrome transfer. Fixtures
@@ -676,7 +681,7 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   global focus helper. Source: [the coordinator receipt](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6705935149),
   `examples/linux/permissions.rs`, `acceptance/window_focus.rs` and the
   [EWMH activation protocol](https://specifications.freedesktop.org/wm/latest-single/)
-  (observed and source-confirmed, 2026-11-07; corrected native run pending).
+  (observed and source-confirmed, 2026-11-07; corrected native check passed at `b5fce81`).
 - **A coordinator focus helper can break an otherwise valid native probe.**
   Run it only during palette acceptance, including the palette stage inside
   the full gate. Keep it off during every native fixture/probe: those use
@@ -684,7 +689,8 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   `dec469e` rerun passed page-close 3/3 with the helper off; helper interference
   must not be mistaken for a product focus failure. Source:
   [#221, comment 6673543416](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673543416)
-  (native observation, 2026-11-05). New native cases still require their rerun.
+  (native observation, 2026-11-05). The complete native suites also passed
+  at `b5fce81` with the helper restricted to palette acceptance.
 
 - **A raw `XSetInputFocus` takes the keys from another application, and on
   a minimised window it ends the process.** X11 grants focus to any client
