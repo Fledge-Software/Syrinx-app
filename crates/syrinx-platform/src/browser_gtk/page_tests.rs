@@ -3,6 +3,82 @@
 use super::*;
 
 #[test]
+fn a_fragment_policy_without_a_document_start_is_not_a_navigation_in_flight() {
+    let state = LoadState::default();
+    state.policy_decided(Started::NewDocument {
+        user_initiated: true,
+    });
+    state.document_started();
+    assert_eq!(
+        source_changes(&state, true),
+        [HistoryChange::NewDocument {
+            user_initiated: true
+        }]
+    );
+    state
+        .history
+        .set(state.history.get().complete(state.navigation.get(), true));
+    assert!(!state.delivery.borrow_mut().finished(true));
+
+    // The authored anchor gets a policy callback and URI change, but no document Started.
+    state.policy_decided(Started::NewDocument {
+        user_initiated: false,
+    });
+    assert!(state.delivery.borrow_mut().uri_changed(false));
+    assert_eq!(
+        source_changes(&state, false),
+        [HistoryChange::SamePage { navigating: false }]
+    );
+}
+
+#[test]
+fn a_fragment_policy_preserves_a_real_back_navigation_and_its_landing_kind() {
+    let state = LoadState::default();
+    state.policy_decided(Started::BackOrForward);
+    state.document_started();
+    state.policy_decided(Started::NewDocument {
+        user_initiated: false,
+    });
+    assert_eq!(
+        source_changes(&state, false),
+        [HistoryChange::SamePage { navigating: true }]
+    );
+    assert_eq!(source_changes(&state, true), [HistoryChange::BackOrForward]);
+}
+
+#[test]
+fn actual_document_starts_keep_their_policy_kind_and_user_intent() {
+    for (started, expected) in [
+        (
+            Started::NewDocument {
+                user_initiated: false,
+            },
+            HistoryChange::NewDocument {
+                user_initiated: false,
+            },
+        ),
+        (Started::BackOrForward, HistoryChange::BackOrForward),
+        (Started::Reload, HistoryChange::Unchanged),
+    ] {
+        let state = LoadState::default();
+        state.policy_decided(started);
+        state.document_started();
+        assert_eq!(source_changes(&state, true), [expected]);
+    }
+}
+
+/// Supplies the source fact and consumes reports as the native source/report callbacks do.
+fn source_changes(state: &LoadState, new_document: bool) -> Vec<HistoryChange> {
+    let (changes, next) = Pending {
+        new_document: Some(new_document),
+        ..state.history.get()
+    }
+    .reports();
+    state.history.set(next);
+    changes
+}
+
+#[test]
 fn find_events_number_matches_from_one_and_wrap_in_both_directions() {
     let (shared, mut events) = page_events();
     let find = FindState::default();

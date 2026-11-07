@@ -10,13 +10,15 @@ deleted. Merge `5df4978` preserves current `main` plus B4's changes, adapting
 only the popup-owner function to the landed X11 connection/error API. The
 B4 PR will target `main`.
 
-The latest native receipt is **`b8db1a5`**, recorded in
-[#221, comment 6706143225](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6706143225).
-With GStreamer's good, bad and libav plugins installed, X11 probes,
-lifecycle, popups, controls, permissions, fullscreen and muted audio passed.
-The managed-fixture activation correction below works on this desktop.
-Security then failed with `Rejected TLS attempt lost its HTTPS scheme`.
-Downloads, cookies, history, palette and the complete gate did not run.
+The latest native receipt is **`8c70acb`**, recorded in
+[#221, comment 6706258774](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6706258774).
+`page_close` passed completely: X11 probes, lifecycle, popups, controls,
+permissions, fullscreen, muted audio, repeated TLS rejection/recovery with
+no application bytes, and all five download cases including exact bytes,
+close deferral and Cancel cleanup. `cookie_persistence` also passed,
+including fresh-process HTTP cookies. History failed **3/3** at the authored
+`/h/fragment#section` report: `SamePage { navigating: true }` instead of
+`SamePage { navigating: false }`. Palette and the complete gate did not run.
 
 The earlier **`a01b28d`** receipt in
 [comment 6683986953](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6683986953)
@@ -50,8 +52,45 @@ parsers and observers, not a WebKit pass. A
 The subsequent geometry correction has independent scoped source approval
 and passed native lifecycle validation at `a01b28d`; the B4 PR against `main`
 and Windows CI remain pending. No native pass is claimed beyond the named
-receipts. A complete native rerun remains necessary after the TLS correction
+receipts. A complete native rerun remains necessary after the history correction
 below.
+
+## Fragment policy and actual document starts after `8c70acb`
+
+The expectation is unchanged. The [recorded Windows spike](https://github.com/Fledge-Software/Syrinx-app/issues/126#issuecomment-6468977926)
+reports a fragment as SourceChanged with IsNewDocument false, then
+HistoryChanged; it has no NavigationStarting. The
+[WebView2 contract](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/navigation-events)
+also describes that distinction. `browser/history.rs` feeds those facts
+into shared `history_state.rs::Pending`, which produces
+`SamePage { navigating: false }` after the previous navigation completed.
+`syrinx-core/src/tabs/navigation_list.rs` reserves true for a load or step
+to another document still in flight: a same-page change then cannot be
+that jump's landing. Accepting true here would hide a real difference in
+jump completion, not merely rename an engine-specific event.
+
+WebKitGTK 2.54.1's
+[`FrameLoader::loadURL`](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebCore/loader/FrameLoader.cpp#L1737)
+checks navigation policy for a fragment and continues through
+`loadInSameDocument`, without starting a provisional document load. The
+Linux adapter previously allocated a navigation ID and set shared
+`Pending::started` directly from that policy callback. An immediate settled
+URI report then saw a nonexistent document navigation. Deferred URI flags
+were not the root cause; their delivery rules remain unchanged.
+
+`page.rs` now stages the policy classification and promotes it to pending
+history, with a new internal navigation ID, only at the actual document
+`LoadEvent::Started`. A fragment policy alone leaves settled history clear
+and cannot overwrite a real Back already in flight. Real document loads
+retain their user/script, Back/Forward and Reload classifications. Windows,
+shared rules, all history assertions and timing budgets are unchanged.
+
+Two display-free regressions failed against the old operations: the exact
+true/false mismatch, and loss of a real Back landing's kind after a later
+policy decision. Both now pass; a third checks policy classification on
+actual document starts. They exercise the Rust operations called by native
+signals and shared report classification, not a live WebKit event trace.
+The full native history sequence and later gate stages remain pending.
 
 ## TLS failure URI after `b8db1a5`
 
@@ -82,7 +121,8 @@ native rollback or verify signal delivery without a display. The complete
 security suite still requires two failed completions, two certificate
 rejections, safe HTTP recovery, no late success or untrusted content, and
 no server-observed application bytes. Fresh independent scoped source
-review approved the correction; its next native run remains pending.
+review approved the correction; the coordinator's `8c70acb` receipt passed
+the complete security suite without changing its assertions.
 
 ## Fixture activation after `cb44257`
 

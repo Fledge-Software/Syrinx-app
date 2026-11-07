@@ -39,7 +39,7 @@ use super::{
     engine::{PendingPopup, Shared},
     history_delivery::HistoryDelivery,
     history_intent::HistoryIntent,
-    history_state::Pending,
+    history_state::{Pending, Started},
     keys::{peek_escape, shortcut_for_modifiers},
     next_zoom,
     page_keys::KeyRouting,
@@ -399,7 +399,7 @@ impl Page {
         self.view
             .connect_decide_policy(move |view, decision, kind| {
                 if kind == PolicyDecisionType::NavigationAction {
-                    starting.started(decision);
+                    starting.policy_decided(decision);
                 }
                 if kind == PolicyDecisionType::Response {
                     return download_unshowable(view, decision);
@@ -755,6 +755,7 @@ impl FindState {
 #[derive(Default)]
 struct LoadState {
     history: Cell<Pending>,
+    policy: Cell<Option<Started>>,
     intent: RefCell<HistoryIntent>,
     delivery: RefCell<HistoryDelivery>,
     navigation: Cell<u64>,
@@ -765,6 +766,27 @@ struct LoadState {
 }
 
 impl LoadState {
+    /// Records the classification supplied by a native navigation policy decision.
+    fn policy_decided(&self, started: Started) {
+        self.policy.set(Some(started));
+    }
+
+    /// Opens a provisional document load and resets its completion facts.
+    fn document_started(&self) {
+        // A fragment gets a policy decision too; only a document Started means a load is in flight.
+        let started = self.policy.take().unwrap_or(Started::NewDocument {
+            user_initiated: true,
+        });
+        let navigation = self.navigation.get() + 1;
+        self.navigation.set(navigation);
+        self.history
+            .set(self.history.get().start(navigation, started));
+        self.delivery.borrow_mut().boundary();
+        self.provisional.set(true);
+        self.failed.set(None);
+        self.rejected.set(false);
+    }
+
     /// Runs a native navigation API after preparing its history delivery.
     fn request<T>(&self, navigate: impl FnOnce() -> T) -> T {
         self.delivery.borrow_mut().request();
@@ -781,7 +803,7 @@ struct LoadWatch {
 }
 
 impl LoadWatch {
-    fn started(&self, decision: &webkit2gtk::PolicyDecision) {
+    fn policy_decided(&self, decision: &webkit2gtk::PolicyDecision) {
         let Some(decision) = decision.downcast_ref::<NavigationPolicyDecision>() else {
             return;
         };
@@ -808,18 +830,13 @@ impl LoadWatch {
             action.is_user_gesture(),
             &address,
         );
-        let navigation = self.state.navigation.get() + 1;
-        self.state.navigation.set(navigation);
-        self.update(|pending| pending.start(navigation, started));
+        self.state.policy_decided(started);
     }
 
     fn load_changed(&self, view: &WebView, event: LoadEvent) {
         match event {
             LoadEvent::Started => {
-                self.state.delivery.borrow_mut().boundary();
-                self.state.provisional.set(true);
-                self.state.failed.set(None);
-                self.state.rejected.set(false);
+                self.state.document_started();
                 self.connection(view, ConnectionStatus::Loading);
                 if let Some(text) = &self.text {
                     text.started(view);

@@ -568,6 +568,19 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
 
 ## Linux: WebKitGTK, X11 and POSIX
 
+- **A navigation policy decision is not a document load start.** WebKitGTK
+  asks for navigation policy even for an authored fragment link, then changes
+  the current document without `load-changed::Started`. At `8c70acb`, the
+  adapter marked the policy callback as an in-flight document navigation,
+  producing `SamePage { navigating: true }` after an already-finished page.
+  Stage the policy kind until a real document Started; do not overwrite an
+  existing Back navigation or force every same-page change to false. Windows'
+  fragment reports have no NavigationStarting, and the shared `navigating`
+  flag means another document is still in flight. Source: [the 3/3 receipt](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6706258774),
+  [Windows spike evidence](https://github.com/Fledge-Software/Syrinx-app/issues/126#issuecomment-6468977926),
+  `browser/history_state.rs`, and [WebKitGTK 2.54.1's fragment policy path](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebCore/loader/FrameLoader.cpp#L1737)
+  (observed report kind, source-confirmed and display-free replayed,
+  2026-11-07; corrected native run pending).
 - **A TLS failure's active URI can already be the previous HTTP document.**
   WebKitGTK 2.54.1 commits provisional-load rollback before delivering the
   TLS failure signal. Its `failing_uri` still names the rejected request;
