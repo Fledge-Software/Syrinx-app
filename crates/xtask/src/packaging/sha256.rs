@@ -1,4 +1,5 @@
-//! SHA-256 for the package manifest, so the install script can detect a damaged copy.
+//! SHA-256 for the package manifest, so the install script can detect a damaged copy, and for
+//! the editor bundle's recorded hash (`javascript_packages`).
 //!
 //! This is an integrity listing, not a signature; P1-38 adds signed-package verification.
 

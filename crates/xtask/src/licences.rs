@@ -50,6 +50,11 @@ pub fn check(root: &Path, target: &str, metadata: &Value) -> Result<(), String> 
     Ok(())
 }
 
+/// The licences allowed for any package; the editor's npm packages are held to the same list.
+pub fn allowed_licences(root: &Path) -> Result<Vec<String>, String> {
+    Ok(read_policy(root)?.allowed)
+}
+
 fn read_policy(root: &Path) -> Result<Policy, String> {
     // Refuse an approval without a reason rather than letting it count silently.
     let path = root.join("licences.toml");
@@ -122,7 +127,7 @@ fn required_str<'a>(package: &'a Value, field: &str) -> Result<&'a str, String> 
 
 /// Whether an SPDX expression can be met using only allowed licences.
 /// `OR` needs one side allowed, `AND` needs both; `A WITH B` is one licence.
-fn satisfies(expression: &str, allowed: &[String]) -> bool {
+pub fn satisfies(expression: &str, allowed: &[String]) -> bool {
     let normalised = expression
         .replace('/', " OR ")
         .replace('(', " ( ")
