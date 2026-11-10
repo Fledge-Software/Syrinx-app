@@ -6,7 +6,8 @@ use syrinx_core::{CommandError, CommandRegistry};
 use syrinx_plugin_host::manifest::{DiscoveryOptions, ManifestError, PluginManifest};
 use syrinx_plugin_host::test_host::{Declarations, TestHost};
 use syrinx_plugin_host::{
-    HostError, IdentityMismatch, PluginRegistry, RegistrationError, Runtime, SignedIdentity,
+    HostError, IdentityMismatch, PluginRegistry, RegisteredPlugin, RegistrationError, Runtime,
+    SignedIdentity,
 };
 
 const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
@@ -79,15 +80,44 @@ fn signed(id: &str, version: &str) -> SignedIdentity {
     }
 }
 
+/// Register `manifest` with signed lines that match it, as a verified package's would.
+fn register<'a>(
+    plugins: &'a mut PluginRegistry,
+    manifest: PluginManifest,
+    commands: &mut CommandRegistry,
+) -> Result<&'a RegisteredPlugin, RegistrationError> {
+    let lines = signed(manifest.id(), manifest.version());
+    plugins.register(&lines, manifest, commands)
+}
+
+#[test]
+fn a_package_signed_for_another_plugin_registers_nothing() {
+    // A package signed for slot `evil` whose manifest claims to be `test`.
+    let mut commands = CommandRegistry::browser();
+    let before = commands.len();
+    let mut plugins = PluginRegistry::new();
+    assert_eq!(
+        plugins
+            .register(&signed("evil", "0.1.0"), manifest("test"), &mut commands)
+            .err(),
+        Some(RegistrationError::Identity(IdentityMismatch::Id {
+            signed: "evil".into(),
+            manifest: "test".into(),
+        }))
+    );
+    assert_eq!(commands.len(), before);
+    assert!(commands.find("test.echo").is_none());
+    assert!(plugins.is_empty());
+}
+
 #[test]
 fn the_test_component_registers_from_its_manifest_and_loads_from_it() {
     let manifest = manifest("test");
     let mut commands = CommandRegistry::browser();
     let before = commands.len();
     let mut plugins = PluginRegistry::new();
-    let registered = plugins
-        .register(manifest.clone(), &mut commands)
-        .expect("the fixture registers");
+    let registered =
+        register(&mut plugins, manifest.clone(), &mut commands).expect("the fixture registers");
     assert_eq!(registered.command_keys().len(), manifest.commands().len());
     assert_eq!(commands.len(), before + manifest.commands().len());
     assert!(
@@ -111,8 +141,7 @@ fn discovery_and_registration_never_compile_or_start_the_component() {
     // No component exists at all: registration reads only the manifest, so it still succeeds.
     let mut commands = CommandRegistry::browser();
     let mut plugins = PluginRegistry::new();
-    let registered = plugins
-        .register(manifest("idle"), &mut commands)
+    let registered = register(&mut plugins, manifest("idle"), &mut commands)
         .expect("registers without a component");
     assert!(!registered.command_keys().is_empty());
     assert_eq!(registered.tab_types()[0].id, "idle.page");
@@ -123,16 +152,14 @@ fn discovery_and_registration_never_compile_or_start_the_component() {
 fn a_duplicate_or_reserved_plugin_id_is_refused_and_registers_nothing() {
     let mut commands = CommandRegistry::browser();
     let mut plugins = PluginRegistry::new();
-    plugins
-        .register(manifest("test"), &mut commands)
-        .expect("first copy");
+    register(&mut plugins, manifest("test"), &mut commands).expect("first copy");
     let after_first = commands.len();
     assert_eq!(
-        plugins.register(manifest("test"), &mut commands).err(),
+        register(&mut plugins, manifest("test"), &mut commands).err(),
         Some(RegistrationError::DuplicatePlugin("test".into()))
     );
     assert_eq!(
-        plugins.register(manifest("browser"), &mut commands).err(),
+        register(&mut plugins, manifest("browser"), &mut commands).err(),
         Some(RegistrationError::ReservedId("browser".into()))
     );
     assert_eq!(commands.len(), after_first);
@@ -170,15 +197,17 @@ fn a_full_palette_refuses_the_whole_plugin_and_names_the_command() {
     while commands.len() < CommandRegistry::MAX_COMMANDS {
         let room = CommandRegistry::MAX_COMMANDS - commands.len();
         let count = room.min(CommandRegistry::MAX_COMMANDS_PER_PLUGIN);
-        plugins
-            .register(filler(&format!("filler{index}"), count), &mut commands)
-            .expect("each filler fits");
+        register(
+            &mut plugins,
+            filler(&format!("filler{index}"), count),
+            &mut commands,
+        )
+        .expect("each filler fits");
         index += 1;
     }
     let before = plugins.len();
-    let error = plugins
-        .register(manifest("late"), &mut commands)
-        .expect_err("the registry is full");
+    let error =
+        register(&mut plugins, manifest("late"), &mut commands).expect_err("the registry is full");
     assert!(
         matches!(
             &error,
@@ -198,9 +227,7 @@ fn a_full_palette_refuses_the_whole_plugin_and_names_the_command() {
 fn a_view_request_for_an_undeclared_tab_type_is_refused() {
     let mut commands = CommandRegistry::browser();
     let mut plugins = PluginRegistry::new();
-    plugins
-        .register(manifest("test"), &mut commands)
-        .expect("registers");
+    register(&mut plugins, manifest("test"), &mut commands).expect("registers");
     assert!(plugins.tab_type("test", "test.page").is_ok());
     assert_eq!(
         plugins.tab_type("test", "test.missing").err(),

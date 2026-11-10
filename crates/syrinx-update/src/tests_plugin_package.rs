@@ -70,7 +70,7 @@ fn entries_for(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<FileEntry>, Upda
 
 fn sign(signer: &TestKeyPair, kind: SignatureKind, bytes: &[u8]) -> Result<Vec<u8>, UpdateError> {
     let point = signer.public_point()?;
-    let value = signer.sign(&cng::sha256(bytes)?)?;
+    let value = signer.sign_message(bytes)?;
     Ok(DetachedSignature::new(kind, KeyId::of(&point)?, value)
         .to_bytes()
         .to_vec())

@@ -1,7 +1,6 @@
 //! A plugin package's signed file list (`package`, #134): the update manifest's file rules
 //! under its own header, with the plugin's id, version and world inside the signed bytes.
 
-use crate::check_signature;
 use crate::error::{ManifestProblem, UpdateError, manifest_error};
 use crate::keys::{KeyId, KeySet};
 use crate::manifest::{
@@ -10,7 +9,8 @@ use crate::manifest::{
 };
 use crate::path::PackagePath;
 use crate::payload::{self, Payload, VerifiedPayload};
-use crate::signature::{DetachedSignature, SignatureKind};
+use crate::signature::SignatureKind;
+use crate::verify_signed;
 use crate::version::Version;
 
 /// The signed file list's name in a plugin package folder.
@@ -231,24 +231,17 @@ pub fn verify_plugin_package(
     signature_bytes: &[u8],
     keys: &KeySet,
 ) -> Result<VerifiedPluginPackage, UpdateError> {
-    if package_bytes.len() > MAX_MANIFEST_BYTES {
-        return Err(UpdateError::TooLarge {
-            what: "plugin package list",
-            limit: MAX_MANIFEST_BYTES as u64,
-        });
-    }
-    let signature = DetachedSignature::parse(signature_bytes, SignatureKind::PluginPackage)?;
-    let key = keys
-        .find(signature.key_id())
-        .ok_or(UpdateError::UnknownKey)?;
-    check_signature(key, package_bytes, &signature)?;
+    let key_id = verify_signed(
+        package_bytes,
+        signature_bytes,
+        keys,
+        SignatureKind::PluginPackage,
+        ("plugin package list", MAX_MANIFEST_BYTES),
+    )?;
 
     // Only signed bytes reach the parser.
     let list = PluginPackageList::parse(package_bytes)?;
-    Ok(VerifiedPluginPackage {
-        list,
-        key_id: signature.key_id(),
-    })
+    Ok(VerifiedPluginPackage { list, key_id })
 }
 
 /// A plugin package folder, whose top level also holds the two signed files.

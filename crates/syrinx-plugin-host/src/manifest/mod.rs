@@ -670,18 +670,19 @@ fn folder_scope(raw: &RawCapability) -> Result<Scope, ManifestError> {
             ));
         }
     };
+    let count_error = || {
+        scope_error(
+            kind,
+            format!("count must be 1 to {MAX_FOLDER_COUNT}, or \"many\""),
+        )
+    };
     let count = match &raw.count {
         None => Some(1),
         Some(toml::Value::String(many)) if many == "many" => None,
         Some(toml::Value::Integer(count)) if (1..=MAX_FOLDER_COUNT).contains(count) => {
-            u32::try_from(*count).ok()
+            Some(u32::try_from(*count).map_err(|_| count_error())?)
         }
-        Some(_) => {
-            return Err(scope_error(
-                kind,
-                format!("count must be 1 to {MAX_FOLDER_COUNT}, or \"many\""),
-            ));
-        }
+        Some(_) => return Err(count_error()),
     };
     Ok(Scope::Folder {
         writable,

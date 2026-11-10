@@ -32,11 +32,7 @@ impl Runtime {
     /// Compile a component, refusing precompiled code and anything that does
     /// not fit `syrinx:plugin@0.1.x` before any of its code runs.
     pub fn compile(&self, bytes: &[u8]) -> Result<Component, HostError> {
-        if Engine::detect_precompiled(bytes).is_some() {
-            return Err(HostError::Precompiled);
-        }
-        let component = Component::new(&self.engine, bytes)
-            .map_err(|error| HostError::Malformed(format!("{error:#}")))?;
+        let component = self.build_component(bytes)?;
         checks::component_fits(&self.engine, &component)?;
         Ok(component)
     }
@@ -51,14 +47,19 @@ impl Runtime {
         bytes: &[u8],
     ) -> Result<Component, HostError> {
         identity::check_signed(signed, manifest).map_err(HostError::Identity)?;
-        if Engine::detect_precompiled(bytes).is_some() {
-            return Err(HostError::Precompiled);
-        }
-        let component = Component::new(&self.engine, bytes)
-            .map_err(|error| HostError::Malformed(format!("{error:#}")))?;
+        let component = self.build_component(bytes)?;
         identity::check_component(&self.engine, &component, manifest)
             .map_err(HostError::Identity)?;
         checks::component_fits(&self.engine, &component)?;
         Ok(component)
+    }
+
+    /// Build a component from its bytes, refusing precompiled code first.
+    fn build_component(&self, bytes: &[u8]) -> Result<Component, HostError> {
+        if Engine::detect_precompiled(bytes).is_some() {
+            return Err(HostError::Precompiled);
+        }
+        Component::new(&self.engine, bytes)
+            .map_err(|error| HostError::Malformed(format!("{error:#}")))
     }
 }

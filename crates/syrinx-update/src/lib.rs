@@ -96,25 +96,41 @@ pub fn verify_manifest(
     keys: &KeySet,
     installed: Version,
 ) -> Result<VerifiedManifest, UpdateError> {
-    if manifest_bytes.len() > MAX_MANIFEST_BYTES {
-        return Err(UpdateError::TooLarge {
-            what: "manifest",
-            limit: MAX_MANIFEST_BYTES as u64,
-        });
-    }
-    let signature = DetachedSignature::parse(signature_bytes, SignatureKind::Manifest)?;
-    let key = keys
-        .find(signature.key_id())
-        .ok_or(UpdateError::UnknownKey)?;
-    check_signature(key, manifest_bytes, &signature)?;
+    let key_id = verify_signed(
+        manifest_bytes,
+        signature_bytes,
+        keys,
+        SignatureKind::Manifest,
+        ("manifest", MAX_MANIFEST_BYTES),
+    )?;
 
     // Only signed bytes reach the parser.
     let manifest = Manifest::parse(manifest_bytes)?;
     check_rollback(&manifest, installed)?;
-    Ok(VerifiedManifest {
-        manifest,
-        key_id: signature.key_id(),
-    })
+    Ok(VerifiedManifest { manifest, key_id })
+}
+
+/// Bound `signed_bytes` to `limit`, then check their detached signature of `kind` against
+/// a pinned key, before anything parses them. Returns the key that signed them.
+pub(crate) fn verify_signed(
+    signed_bytes: &[u8],
+    signature_bytes: &[u8],
+    keys: &KeySet,
+    kind: SignatureKind,
+    (what, limit): (&'static str, usize),
+) -> Result<KeyId, UpdateError> {
+    if signed_bytes.len() > limit {
+        return Err(UpdateError::TooLarge {
+            what,
+            limit: limit as u64,
+        });
+    }
+    let signature = DetachedSignature::parse(signature_bytes, kind)?;
+    let key = keys
+        .find(signature.key_id())
+        .ok_or(UpdateError::UnknownKey)?;
+    check_signature(key, signed_bytes, &signature)?;
+    Ok(signature.key_id())
 }
 
 /// Hash the raw signed bytes and verify them against the named pinned key.

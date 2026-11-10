@@ -1286,8 +1286,9 @@ file <sha256> <size> ui/app.js
   folder so only `package` and `package.sig` may sit beside the listed files;
   any other entry, a `.cwasm` included, is refused as unlisted, and a list
   that names `package`, `package.sig` or a `.cwasm` file is refused as
-  `ReservedPath` even when signed. The plugin host also refuses anything
-  `Engine::detect_precompiled` recognises before compiling.
+  `ReservedPath` even when signed. The plugin host also refuses an entry
+  module that `Engine::detect_precompiled` recognises, before compiling it.
+  It compiles no other listed file, so the check covers only that module.
 - **The keys are the plugin's own.** Each plugin repository has its own P-256
   key, created by the owner outside any agent session and trusted on first
   use (#136 records it). Tests generate a fresh key in each run; no private

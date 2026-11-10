@@ -9,6 +9,7 @@ use syrinx_core::{
     Command, CommandAction, CommandError, CommandId, CommandRegistry, CommandScope, Enablement,
 };
 
+use crate::identity::{self, IdentityMismatch, SignedIdentity};
 use crate::manifest::{ContributedCommand, PluginManifest, SearchFeed, TabType};
 
 /// Ids no plugin may take, because Syrinx's own commands and names use them.
@@ -17,6 +18,8 @@ const RESERVED_IDS: [&str; 2] = ["browser", "syrinx"];
 /// Why a plugin was not registered. Nothing it declared becomes visible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistrationError {
+    /// The package's signed lines name another plugin, version or world than its manifest.
+    Identity(IdentityMismatch),
     /// Another registered plugin already has this id.
     DuplicatePlugin(String),
     /// The id belongs to Syrinx itself.
@@ -37,6 +40,7 @@ pub enum RegistrationError {
 impl fmt::Display for RegistrationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Identity(mismatch) => write!(formatter, "{mismatch}"),
             Self::DuplicatePlugin(id) => {
                 write!(formatter, "a plugin named {id} is already installed")
             }
@@ -99,12 +103,16 @@ impl PluginRegistry {
     }
 
     /// Register every command the manifest declares, or none, and record its tab types and
-    /// feeds. Reads only the manifest: nothing is compiled or instantiated.
+    /// feeds. The package's signed lines must name the same plugin first, so a package signed
+    /// for one slot cannot list commands under another plugin's id. Reads only the manifest:
+    /// nothing is compiled or instantiated.
     pub fn register(
         &mut self,
+        signed: &SignedIdentity,
         manifest: PluginManifest,
         commands: &mut CommandRegistry,
     ) -> Result<&RegisteredPlugin, RegistrationError> {
+        identity::check_signed(signed, &manifest).map_err(RegistrationError::Identity)?;
         let id = manifest.id().to_owned();
         self.check_id(&id)?;
         let declared = manifest
