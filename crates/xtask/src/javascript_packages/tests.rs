@@ -48,10 +48,25 @@ fn a_case_variant_npm_file_is_refused() {
         "editor/NPM-Shrinkwrap.json",
         "editor/Yarn.lock",
         "editor/Dist/extra.js",
+        "editor/Package-Lock.json",
     ]
     .map(str::to_owned);
     let found = tracked_file_problems(&files);
-    assert_eq!(found.len(), 3, "{found:?}");
+    let refused: Vec<&str> = found
+        .iter()
+        .map(|problem| problem.split(": ").next().unwrap_or_default())
+        .collect();
+    assert_eq!(refused, files, "{found:?}");
+}
+
+#[test]
+fn a_non_ascii_path_in_the_editor_folder_is_refused() {
+    // U+017F, a long s, folds to `s` under Unicode case folding.
+    let files = ["editor/npm-\u{17f}hrinkwrap.json", "docs/caf\u{e9}.md"].map(str::to_owned);
+    assert_eq!(
+        tracked_file_problems(&files),
+        ["editor/npm-\u{17f}hrinkwrap.json: paths in editor/ must be ASCII"]
+    );
 }
 
 #[test]

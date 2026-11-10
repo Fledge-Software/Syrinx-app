@@ -16,8 +16,8 @@ the bundle's hash. Building the bundle from npm inside the gate was rejected,
 because every gate run would then download code.
 
 **Status, 2026-11-10.** This file audits the proposed package set in
-`editor/package.json` and `editor/package-lock.json`. ⚠️ The owner has not yet
-signed off on that set. No bundle is built or committed, and nothing in Syrinx
+`editor/package.json` and `editor/package-lock.json`. The owner signed off on
+that set on 2026-11-10. No bundle is built or committed, and nothing in Syrinx
 loads the editor: building the bundle, serving it and wiring the editor view
 are #37's (P3-04).
 
@@ -35,7 +35,11 @@ git fails the check. It fails when:
   `bun.lock` or `bun.lockb` anywhere, `editor/` included (npm prefers a
   shrinkwrap over the lockfile, and the others belong to other package
   managers), or any file in `editor/dist/` but `syrinx-editor.js` and
-  `THIRD-PARTY-NOTICES.txt`;
+  `THIRD-PARTY-NOTICES.txt`. Names are compared ignoring case, because Windows
+  and macOS open `NPM-Shrinkwrap.json` when npm asks for
+  `npm-shrinkwrap.json`, and any tracked path in `editor/` with a non-ASCII
+  character is refused, so no Unicode case folding (such as `ſ`, U+017F,
+  folding to `s`) can turn a stray name into one npm reads;
 - `editor/.npmrc` is not exactly the audited settings, `save-exact=true`,
   `ignore-scripts=true`, `audit=false` and `fund=false`, one per line in that
   order (compared after line-ending normalisation). The file is pinned whole

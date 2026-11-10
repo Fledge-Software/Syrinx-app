@@ -17,6 +17,7 @@ use crate::packaging::{git_output, sha256};
 const MANIFEST: &str = "editor/package.json";
 const LOCKFILE: &str = "editor/package-lock.json";
 const NPM_SETTINGS: &str = "editor/.npmrc";
+const EDITOR_FOLDER: &str = "editor/";
 const BUNDLE_FOLDER: &str = "editor/dist/";
 const BUNDLE: &str = "editor/dist/syrinx-editor.js";
 const NOTICES: &str = "editor/dist/THIRD-PARTY-NOTICES.txt";
@@ -102,13 +103,17 @@ fn tracked_files(root: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// Tracked npm files other than the editor's manifest and lockfile, and any file in the bundle
-/// folder but the bundle and its licence notices. Names are compared ignoring case, because
-/// Windows and macOS open `NPM-Shrinkwrap.json` when npm asks for `npm-shrinkwrap.json`.
+/// Tracked npm files other than the editor's manifest and lockfile, any file in the bundle
+/// folder but the bundle and its licence notices, and any non-ASCII path in `editor/`. Names
+/// are compared ignoring case, because Windows and macOS open `NPM-Shrinkwrap.json` when npm
+/// asks for `npm-shrinkwrap.json`; refusing non-ASCII leaves no Unicode folding to reason about.
 fn tracked_file_problems(files: &[String]) -> Vec<String> {
     let mut problems = Vec::new();
     for path in files {
         let lowercase = path.to_ascii_lowercase();
+        if lowercase.starts_with(EDITOR_FOLDER) && !path.is_ascii() {
+            problems.push(format!("{path}: paths in {EDITOR_FOLDER} must be ASCII"));
+        }
         let name = lowercase.rsplit('/').next().unwrap_or(&lowercase);
         if NPM_FILES.contains(&name) && path != MANIFEST && path != LOCKFILE {
             problems.push(format!(
