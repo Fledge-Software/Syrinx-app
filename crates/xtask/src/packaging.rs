@@ -3,7 +3,7 @@
 mod linux;
 mod manifest;
 mod registration;
-mod sha256;
+pub mod sha256;
 mod update;
 
 pub use update::{RELEASE_TOOL_FEATURE, UPDATE_PACKAGE};
