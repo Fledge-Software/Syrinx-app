@@ -158,26 +158,28 @@ fn a_folder_git_cannot_read_fails_the_check() {
 }
 
 /// Set only in the child run below, naming the scratch repository it reads.
-const GIT_DIR_CHILD: &str = "SYRINX_XTASK_GIT_DIR_CHILD";
+const GIT_VARIABLES_CHILD: &str = "SYRINX_XTASK_GIT_VARIABLES_CHILD";
 
 #[test]
-fn a_bogus_inherited_git_dir_is_ignored() {
-    // The child runs this test again with GIT_DIR set on its process alone, since tests share
-    // the parent's environment and run in parallel.
-    if let Some(scratch_root) = std::env::var_os(GIT_DIR_CHILD) {
+fn bogus_inherited_git_variables_are_ignored() {
+    // The child runs this test again with bogus GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE set
+    // on its process alone, since tests share the parent's environment and run in parallel.
+    if let Some(scratch_root) = std::env::var_os(GIT_VARIABLES_CHILD) {
         let tracked = git_output(Path::new(&scratch_root), &["ls-files", "-z"])
-            .expect("git reads the scratch repository despite GIT_DIR");
+            .expect("git reads the scratch repository despite the git variables");
         assert!(tracked.contains(MANIFEST), "{tracked:?}");
         return;
     }
     let root = scratch_repository("git-dir", false);
     let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
         .args([
-            "javascript_packages::tests::a_bogus_inherited_git_dir_is_ignored",
+            "javascript_packages::tests::bogus_inherited_git_variables_are_ignored",
             "--exact",
         ])
         .env("GIT_DIR", "/nonexistent/syrinx-xtask-git-dir")
-        .env(GIT_DIR_CHILD, &root)
+        .env("GIT_WORK_TREE", "/nonexistent/syrinx-xtask-work-tree")
+        .env("GIT_INDEX_FILE", "/nonexistent/syrinx-xtask-index")
+        .env(GIT_VARIABLES_CHILD, &root)
         .output()
         .expect("the child test runs");
     // A filter that matched nothing would also succeed, so require the one test to have run.
