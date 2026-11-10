@@ -14,6 +14,20 @@ What you need
     Arch, Omarchy:   webkit2gtk-4.1 gtk3 libsoup3 bubblewrap
     Debian, Ubuntu:  libwebkit2gtk-4.1-0 libgtk-3-0 libsoup-3.0-0 bubblewrap
     Fedora:          webkit2gtk4.1 gtk3 libsoup3 bubblewrap
+- GStreamer and its media plugins. WebKitGTK uses these for audio and video;
+  missing autoaudiosink (in the good set) can abort a page's web process,
+  even on a muted video page. Install these runtime packages too:
+    Arch, Omarchy:   gstreamer gst-plugins-base gst-plugins-good
+                     gst-plugins-bad gst-libav
+    Debian, Ubuntu:  gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+                     gstreamer1.0-plugins-bad gstreamer1.0-libav
+    Fedora:          gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good
+                     gstreamer1-plugins-bad-free gstreamer1-plugin-libav
+  If available, check the audio-sink element with:
+    gst-inspect-1.0 autoaudiosink
+  Debian/Ubuntu provide this command in gstreamer1.0-tools. The check does
+  not verify every decoder or a working audio device. Codec availability
+  depends on the distribution's plugin builds.
 - Protected video (Disney+, Hulu) does not play: WebKitGTK has no Widevine.
 
 Install
@@ -22,6 +36,9 @@ Install
 Run, as yourself and not with sudo:
 
     ./install.sh
+
+It warns without stopping if its WebKitGTK or autoaudiosink probe fails.
+The media probe runs only when gst-inspect-1.0 is available.
 
 It checks every file against SHA256SUMS, then copies:
 

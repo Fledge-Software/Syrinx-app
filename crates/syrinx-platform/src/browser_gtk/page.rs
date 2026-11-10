@@ -15,12 +15,15 @@ use syrinx_core::{HistoryChange, HistoryDirection, HistoryReport};
 use syrinx_store::PermissionKind;
 use webkit2gtk::{
     BackForwardListExt, FindControllerExt, FindOptions, GeolocationPermissionRequest, LoadEvent,
-    NavigationPolicyDecision, NavigationType, NotificationPermissionRequest, PermissionRequest,
+    NavigationPolicyDecision, NotificationPermissionRequest, PermissionRequest,
     PermissionRequestExt, PolicyDecisionExt, PolicyDecisionType, ResponsePolicyDecision,
     ResponsePolicyDecisionExt, SettingsExt, URIRequestExt, UserMediaPermissionRequest,
     UserMediaPermissionRequestExt, WebProcessTerminationReason, WebView, WebViewExt,
 };
 use x11_dl::xlib;
+
+#[path = "page_permissions.rs"]
+mod page_permissions;
 
 #[cfg(test)]
 #[path = "permission_tests.rs"]
@@ -34,10 +37,13 @@ use super::{
     ConnectionState, ConnectionStatus, PageAction, PageBounds, RENDER_PROCESS_EXITED,
     RENDER_PROCESS_UNRESPONSIVE,
     engine::{PendingPopup, Shared},
+    history_delivery::HistoryDelivery,
+    history_intent::HistoryIntent,
     history_state::{Pending, Started},
     keys::{peek_escape, shortcut_for_modifiers},
     next_zoom,
     page_keys::KeyRouting,
+    page_placement::PagePlacement,
     page_text::{PageText, TextContext},
     validate_url,
 };
@@ -51,11 +57,13 @@ pub(super) struct Page {
     window: gtk::Window,
     keys: KeyRouting,
     embed: Embed,
+    placement: PagePlacement,
     shared: Shared,
     /// Retired when the page closes, so its late events never reach the UI.
     life: CallbackLife,
     prompts: Prompts,
     find: Rc<FindState>,
+    load: Rc<LoadState>,
     /// P1-25's observation of this page; `None` when capture was off as it was created.
     text: Option<PageText>,
 }
@@ -91,14 +99,16 @@ impl Page {
             window,
             keys,
             embed,
+            placement: PagePlacement::new(bounds),
             shared,
             life,
             prompts: Rc::default(),
             find: Rc::default(),
+            load: Rc::default(),
             text,
         };
-        page.resize(bounds);
-        page.show(false);
+        page.set_bounds(bounds);
+        page.show(false, bounds);
         page.watch();
         Ok(page)
     }
@@ -113,7 +123,7 @@ impl Page {
         if let Some(text) = &self.text {
             text.syrinx_navigation(url);
         }
-        self.view.load_uri(url);
+        self.load_requested(url);
         Ok(())
     }
 
@@ -121,8 +131,15 @@ impl Page {
     /// it started with stays.
     pub(super) fn restore(&self, url: &str) -> Result<(), BrowserError> {
         validate_url(url)?;
-        self.view.load_uri(url);
+        self.load_requested(url);
         Ok(())
+    }
+
+    /// Record the request before load_uri can synchronously notify its uncommitted address.
+    fn load_requested(&self, url: &str) {
+        self.cancel_permissions();
+        self.load.intent.borrow_mut().request(url);
+        self.load.request(|| self.view.load_uri(url));
     }
 
     /// Whether a popup this page opens starts tainted; an unobserved page fails closed.
@@ -131,12 +148,19 @@ impl Page {
     }
 
     fn withdraw_syrinx_request(&self) {
+        self.load.intent.borrow_mut().clear();
         if let Some(text) = &self.text {
             text.syrinx_navigation_cancelled();
         }
     }
 
     pub(super) fn resize(&self, bounds: PageBounds) {
+        self.placement
+            .resize(bounds, |bounds| self.set_bounds(bounds));
+    }
+
+    /// Keep the physical X11 rectangle and GTK's logical allocation in step.
+    fn set_bounds(&self, bounds: PageBounds) {
         self.embed.place(bounds);
         let width = logical_extent(bounds.width, self.window.scale_factor());
         let height = logical_extent(bounds.height, self.window.scale_factor());
@@ -145,21 +169,29 @@ impl Page {
             .size_allocate(&gtk::Allocation::new(0, 0, width, height));
     }
 
-    pub(super) fn show(&self, visible: bool) {
-        if visible {
-            self.window.show_all();
-        } else {
-            self.window.hide();
-        }
-        self.embed.map(visible);
+    pub(super) fn show(&self, visible: bool, card: PageBounds) {
+        self.placement.show(
+            visible,
+            card,
+            |bounds| self.set_bounds(bounds),
+            |visible| {
+                if visible {
+                    self.window.show_all();
+                } else {
+                    self.window.hide();
+                }
+                self.embed.map(visible);
+            },
+        );
     }
 
     pub(super) fn apply(&self, command: BrowserCommand) -> Result<(), BrowserError> {
         match command {
             BrowserCommand::Navigate { url, .. } => self.navigate(&url)?,
             BrowserCommand::Reload { .. } => {
+                self.cancel_permissions();
                 self.withdraw_syrinx_request();
-                self.view.reload();
+                self.load.request(|| self.view.reload());
             }
             BrowserCommand::GoToOffset {
                 direction, steps, ..
@@ -191,7 +223,9 @@ impl Page {
             HistoryDirection::Forward => steps,
         };
         let item = list.nth_item(offset).ok_or(BrowserError::Navigation)?;
-        self.view.go_to_back_forward_list_item(&item);
+        self.cancel_permissions();
+        self.load
+            .request(|| self.view.go_to_back_forward_list_item(&item));
         Ok(())
     }
 
@@ -229,20 +263,17 @@ impl Page {
     }
 
     fn find(&self, request: u64, text: &str, case_sensitive: bool) {
-        if text.is_empty() {
+        if !self.find.begin(request, text, self.id, &self.shared) {
             self.stop_find();
             return;
         }
         let Some(controller) = self.view.find_controller() else {
             return;
         };
-        self.find.request.set(Some(request));
-        self.find.active.set(0);
         let mut options = FindOptions::WRAP_AROUND;
         if !case_sensitive {
             options |= FindOptions::CASE_INSENSITIVE;
         }
-        controller.count_matches(text, options.bits(), u32::MAX);
         controller.search(text, options.bits(), u32::MAX);
     }
 
@@ -250,23 +281,15 @@ impl Page {
         let Some(controller) = self.view.find_controller() else {
             return;
         };
-        let count = self.find.count.get();
-        if count == 0 || self.find.request.get().is_none() {
+        if !self.find.step(forward) {
             return;
         }
-        let active = self.find.active.get();
-        let next = if forward {
-            (active + 1) % count
-        } else {
-            (active + count - 1) % count
-        };
-        self.find.active.set(next);
         if forward {
             controller.search_next();
         } else {
             controller.search_previous();
         }
-        self.find.report(self.id, &self.shared);
+        // The native found/failed signal acknowledges this step before its result is sent.
     }
 
     fn stop_find(&self) {
@@ -274,6 +297,13 @@ impl Page {
         if let Some(controller) = self.view.find_controller() {
             controller.search_finish();
         }
+    }
+
+    /// A navigation command retires consent before a queued UI reply can reach the old page.
+    fn cancel_permissions(&self) {
+        page_permissions::cancel_pending(&self.prompts, self.id, &self.shared.events, |prompt| {
+            prompt.deny()
+        });
     }
 
     fn resolve(&self, request: u64, allowed: bool) -> Result<(), BrowserError> {
@@ -337,13 +367,6 @@ impl Page {
             });
         });
         let (id, events) = (self.id, self.shared.events.clone());
-        self.view.connect_is_loading_notify(move |view| {
-            events.emit(BrowserEvent::Loading {
-                id,
-                loading: view.is_loading(),
-            });
-        });
-        let (id, events) = (self.id, self.shared.events.clone());
         self.view.connect_focus_in_event(move |_, _| {
             events.emit(BrowserEvent::PageFocused { id });
             glib::Propagation::Proceed
@@ -369,14 +392,14 @@ impl Page {
         let watch = LoadWatch {
             id: self.id,
             shared: self.shared.clone(),
-            state: Rc::default(),
+            state: self.load.clone(),
             text: self.text.clone(),
         };
         let starting = watch.clone();
         self.view
             .connect_decide_policy(move |view, decision, kind| {
                 if kind == PolicyDecisionType::NavigationAction {
-                    starting.started(decision);
+                    starting.policy_decided(decision);
                 }
                 if kind == PolicyDecisionType::Response {
                     return download_unshowable(view, decision);
@@ -385,9 +408,16 @@ impl Page {
                 false
             });
         let changing = watch.clone();
+        let (id, events, prompts) = (self.id, self.shared.events.clone(), self.prompts.clone());
         self.view.connect_load_changed(move |view, event| {
+            if event == LoadEvent::Started {
+                page_permissions::cancel_pending(&prompts, id, &events, |prompt| prompt.deny());
+            }
             changing.load_changed(view, event);
         });
+        let loading = watch.clone();
+        self.view
+            .connect_is_loading_notify(move |view| loading.loading_changed(view));
         let failing = watch.clone();
         self.view.connect_load_failed(move |_, _, _, error| {
             failing.failed(error.matches(webkit2gtk::NetworkError::Cancelled));
@@ -395,8 +425,8 @@ impl Page {
         });
         let rejecting = watch.clone();
         self.view
-            .connect_load_failed_with_tls_errors(move |view, _, _, _| {
-                rejecting.certificate_rejected(view);
+            .connect_load_failed_with_tls_errors(move |_, failing_uri, _, _| {
+                rejecting.certificate_rejected(failing_uri);
                 // Handled: the page is refused and WebKit offers no way past the error.
                 true
             });
@@ -440,7 +470,8 @@ impl Page {
             return;
         };
         let (id, shared, find) = (self.id, self.shared.clone(), self.find.clone());
-        controller.connect_counted_matches(move |_, count| {
+        // Found-text carries the total count after search, next and previous complete.
+        controller.connect_found_text(move |_, count| {
             find.count.set(count);
             find.report(id, &shared);
         });
@@ -543,10 +574,8 @@ impl Page {
 impl Drop for Page {
     fn drop(&mut self) {
         self.life.retire();
-        // Refuse prompts still open, so the page's requests do not wait forever.
-        for (_, prompt) in self.prompts.borrow_mut().drain() {
-            prompt.deny();
-        }
+        // Refuse prompts still open; the retired page cannot send new completion callbacks.
+        self.cancel_permissions();
         self.view.stop_loading();
         // SAFETY: the window is ours alone; destroying it releases the view inside it.
         unsafe { self.window.destroy() };
@@ -676,6 +705,33 @@ struct FindState {
 }
 
 impl FindState {
+    fn begin(&self, request: u64, text: &str, id: u64, shared: &Shared) -> bool {
+        self.request.set(Some(request));
+        self.active.set(0);
+        if text.is_empty() {
+            self.count.set(0);
+            self.report(id, shared);
+            self.request.set(None);
+            return false;
+        }
+        true
+    }
+
+    fn step(&self, forward: bool) -> bool {
+        let count = self.count.get();
+        if count == 0 || self.request.get().is_none() {
+            return false;
+        }
+        let active = self.active.get();
+        let next = if forward {
+            (active + 1) % count
+        } else {
+            (active + count - 1) % count
+        };
+        self.active.set(next);
+        true
+    }
+
     fn report(&self, id: u64, shared: &Shared) {
         let Some(request) = self.request.get() else {
             return;
@@ -684,7 +740,7 @@ impl FindState {
         let active = if count == 0 {
             -1
         } else {
-            i32::try_from(self.active.get()).unwrap_or(-1)
+            i32::try_from(self.active.get().saturating_add(1)).unwrap_or(i32::MAX)
         };
         shared.events.emit(BrowserEvent::FindResult {
             id,
@@ -699,11 +755,43 @@ impl FindState {
 #[derive(Default)]
 struct LoadState {
     history: Cell<Pending>,
+    policy: Cell<Option<Started>>,
+    intent: RefCell<HistoryIntent>,
+    delivery: RefCell<HistoryDelivery>,
     navigation: Cell<u64>,
     /// Between `Started` and `Committed`, address changes belong to the load, not the page.
     provisional: Cell<bool>,
     failed: Cell<Option<bool>>,
     rejected: Cell<bool>,
+}
+
+impl LoadState {
+    /// Records the classification supplied by a native navigation policy decision.
+    fn policy_decided(&self, started: Started) {
+        self.policy.set(Some(started));
+    }
+
+    /// Opens a provisional document load and resets its completion facts.
+    fn document_started(&self) {
+        // A fragment gets a policy decision too; only a document Started means a load is in flight.
+        let started = self.policy.take().unwrap_or(Started::NewDocument {
+            user_initiated: true,
+        });
+        let navigation = self.navigation.get() + 1;
+        self.navigation.set(navigation);
+        self.history
+            .set(self.history.get().start(navigation, started));
+        self.delivery.borrow_mut().boundary();
+        self.provisional.set(true);
+        self.failed.set(None);
+        self.rejected.set(false);
+    }
+
+    /// Runs a native navigation API after preparing its history delivery.
+    fn request<T>(&self, navigate: impl FnOnce() -> T) -> T {
+        self.delivery.borrow_mut().request();
+        navigate()
+    }
 }
 
 #[derive(Clone)]
@@ -715,11 +803,11 @@ struct LoadWatch {
 }
 
 impl LoadWatch {
-    fn started(&self, decision: &webkit2gtk::PolicyDecision) {
+    fn policy_decided(&self, decision: &webkit2gtk::PolicyDecision) {
         let Some(decision) = decision.downcast_ref::<NavigationPolicyDecision>() else {
             return;
         };
-        let Some(action) = webkit2gtk::NavigationPolicyDecisionExt::navigation_action(decision)
+        let Some(mut action) = webkit2gtk::NavigationPolicyDecisionExt::navigation_action(decision)
         else {
             return;
         };
@@ -728,24 +816,27 @@ impl LoadWatch {
             let method = request.http_method().map(String::from).unwrap_or_default();
             text.asked(address, method);
         }
-        let started = match action.navigation_type() {
-            NavigationType::BackForward => Started::BackOrForward,
-            NavigationType::Reload => Started::Reload,
-            _ => Started::NewDocument {
-                user_initiated: action.is_user_gesture(),
-            },
-        };
-        let navigation = self.state.navigation.get() + 1;
-        self.state.navigation.set(navigation);
-        self.update(|pending| pending.start(navigation, started));
+        // A server redirect belongs to the same navigation, with the same host/user intent.
+        if action.is_redirect() && self.state.history.get().started.is_some() {
+            return;
+        }
+        let address = action
+            .request()
+            .and_then(|request| request.uri())
+            .map(String::from)
+            .unwrap_or_default();
+        let started = self.state.intent.borrow_mut().started(
+            action.navigation_type(),
+            action.is_user_gesture(),
+            &address,
+        );
+        self.state.policy_decided(started);
     }
 
     fn load_changed(&self, view: &WebView, event: LoadEvent) {
         match event {
             LoadEvent::Started => {
-                self.state.provisional.set(true);
-                self.state.failed.set(None);
-                self.state.rejected.set(false);
+                self.state.document_started();
                 self.connection(view, ConnectionStatus::Loading);
                 if let Some(text) = &self.text {
                     text.started(view);
@@ -757,6 +848,7 @@ impl LoadWatch {
                 }
             }
             LoadEvent::Committed => {
+                self.state.delivery.borrow_mut().boundary();
                 self.state.provisional.set(false);
                 if let Some(text) = &self.text {
                     text.committed(view);
@@ -779,6 +871,11 @@ impl LoadWatch {
         let success = failure.is_none() && !self.state.rejected.get();
         let navigation = self.state.navigation.get();
         self.update(|pending| pending.complete(navigation, success));
+        // Script-made URI changes during parsing must reach history after the load settles.
+        let deferred = self.state.delivery.borrow_mut().finished(success);
+        if deferred {
+            self.report_same_document(view);
+        }
         if !self.state.rejected.get() {
             let status = if success {
                 ConnectionStatus::Loaded
@@ -797,17 +894,37 @@ impl LoadWatch {
         }
     }
 
+    fn loading_changed(&self, view: &WebView) {
+        let loading = view.is_loading();
+        self.shared.events.emit(BrowserEvent::Loading {
+            id: self.id,
+            loading,
+        });
+        let deferred = self.state.delivery.borrow_mut().loading_changed(loading);
+        if !deferred || self.state.failed.get().is_some() || self.state.rejected.get() {
+            return;
+        }
+        // Retire only this fragment's intent; a newer host request must remain selectable.
+        if let Some(address) = view.uri() {
+            self.state.intent.borrow_mut().consume_request(&address);
+        }
+        let navigation = self.state.navigation.get();
+        self.update(|pending| pending.complete(navigation, true));
+        self.report_same_document(view);
+    }
+
     fn failed(&self, cancelled: bool) {
         self.state.failed.set(Some(cancelled));
     }
 
-    fn certificate_rejected(&self, view: &WebView) {
+    fn certificate_rejected(&self, failing_uri: &str) {
         self.state.rejected.set(true);
         self.state.failed.set(Some(false));
-        self.connection(view, ConnectionStatus::CertificateRejected);
+        // WebKit has already rolled its active URI back to the previous document.
+        self.connection_for_uri(failing_uri, ConnectionStatus::CertificateRejected);
     }
 
-    /// An address change outside a load is the page's own: a fragment or the History API.
+    /// An address change outside a document load is a fragment or the History API.
     fn address_changed(&self, view: &WebView) {
         if self.state.provisional.get() {
             if let Some(text) = &self.text {
@@ -819,9 +936,18 @@ impl LoadWatch {
             text.same_document(view);
         }
         self.emit_url(view);
-        if view.is_loading() {
+        if !self
+            .state
+            .delivery
+            .borrow_mut()
+            .uri_changed(view.is_loading())
+        {
             return;
         }
+        self.report_same_document(view);
+    }
+
+    fn report_same_document(&self, view: &WebView) {
         self.update(|pending| Pending {
             new_document: Some(false),
             ..pending
@@ -859,6 +985,10 @@ impl LoadWatch {
 
     fn connection(&self, view: &WebView, status: ConnectionStatus) {
         let uri = view.uri().map(String::from).unwrap_or_default();
+        self.connection_for_uri(&uri, status);
+    }
+
+    fn connection_for_uri(&self, uri: &str, status: ConnectionStatus) {
         let scheme = if uri.starts_with("https://") {
             ConnectionScheme::Https
         } else if uri.starts_with("http://") {
@@ -933,7 +1063,13 @@ impl Embed {
         window.realize();
         // The container selects nothing by default; its focus events drive the key routing.
         foreign.set_events(foreign.events() | gdk::EventMask::FOCUS_CHANGE_MASK);
-        let routing = KeyRouting::install(self.xlib.clone(), self.display, self.container, foreign);
+        let routing = KeyRouting::install(
+            self.xlib.clone(),
+            self.display,
+            self.container,
+            foreign,
+            &window,
+        );
         (window, routing)
     }
 

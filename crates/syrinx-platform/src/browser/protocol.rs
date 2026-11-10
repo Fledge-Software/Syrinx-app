@@ -238,7 +238,7 @@ pub enum BrowserEvent {
         state: ConnectionState,
     },
     /// A find's latest result: when its search completes, and again whenever the active
-    /// match or the count changes. `active` is the zero-based match the engine shows, -1 for
+    /// match or the count changes. `active` is the one-based match the engine shows, -1 for
     /// none: WebView2's `ActiveMatchIndex`, or on Linux the match Syrinx last stepped to.
     FindResult {
         id: u64,

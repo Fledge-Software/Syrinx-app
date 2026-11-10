@@ -206,9 +206,10 @@ impl Engine {
         }
         let ids: Vec<u64> = self.pages.keys().copied().collect();
         let pages = &self.pages;
+        let bounds = self.bounds;
         show_active(ids.into_iter(), active, &mut self.active, |id, visible| {
             pages.get(&id).map_or(Ok(()), |page| {
-                page.show(visible);
+                page.show(visible, bounds);
                 Ok(())
             })
         })

@@ -71,12 +71,9 @@ fn run() -> Result<(), String> {
     }
 }
 
-/// Release signing, the registration table and the Win32 palette harness exist only on Windows.
+/// The registration table describes Windows registry keys; Linux packages use per-user scripts.
 fn refuse_windows_only_elsewhere(command: &OsString) -> Result<(), String> {
-    let windows_only = matches!(
-        command.to_str(),
-        Some("palette-acceptance" | "write-registration")
-    );
+    let windows_only = matches!(command.to_str(), Some("write-registration"));
     if windows_only && !cfg!(windows) {
         return Err(format!(
             "`cargo xtask {}` builds or drives the Windows app and runs only on Windows.",
@@ -224,6 +221,20 @@ fn check_workspace(root: &Path) -> Result<(), String> {
         ],
     )?;
 
+    // Linux proves native page lifecycles and palette behavior on the real X11 display.
+    if cfg!(target_os = "linux") {
+        // Every Linux entry point compiles this shared module; execute its unit tests once.
+        run_cargo(root, &fixture_step("test", "page_close"))?;
+        for fixture in [
+            "page_close",
+            "cookie_persistence",
+            "navigation_history_spike",
+        ] {
+            run_cargo(root, &fixture_step("run", fixture))?;
+        }
+        palette_acceptance::run(root)?;
+    }
+
     println!("Local gate passed.");
     Ok(())
 }
@@ -237,6 +248,19 @@ fn workspace_step<'a>(command: &'a str, extra: &[&'a str], tail: &[&'a str]) -> 
     arguments.extend(extra);
     arguments.extend(GATE_OPTIONS);
     arguments.extend(tail);
+    arguments
+}
+
+/// A Linux fixture build or unit run with the same offline graph as the workspace gate.
+fn fixture_step<'a>(command: &'a str, fixture: &'a str) -> Vec<&'a str> {
+    let mut arguments = vec![
+        command,
+        "--package",
+        "syrinx-platform",
+        "--example",
+        fixture,
+    ];
+    arguments.extend(GATE_OPTIONS);
     arguments
 }
 
@@ -284,6 +308,36 @@ fn run_cargo_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixture_units_select_the_example_test_harness_with_gate_options() {
+        assert_eq!(
+            fixture_step("test", "page_close"),
+            [
+                "test",
+                "--package",
+                "syrinx-platform",
+                "--example",
+                "page_close",
+                "--profile",
+                "local",
+                "--offline",
+                "--locked",
+            ]
+        );
+        for fixture in [
+            "page_close",
+            "cookie_persistence",
+            "navigation_history_spike",
+        ] {
+            let arguments = fixture_step("run", fixture);
+            assert_eq!(
+                &arguments[..5],
+                ["run", "--package", "syrinx-platform", "--example", fixture]
+            );
+            assert!(arguments.ends_with(&GATE_OPTIONS));
+        }
+    }
 
     #[test]
     fn the_workspace_steps_build_without_the_release_tool() {

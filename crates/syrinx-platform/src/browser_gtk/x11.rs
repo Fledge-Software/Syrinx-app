@@ -212,6 +212,32 @@ impl Connection {
         self.inside_ours(focus)
     }
 
+    /// Applies the caller's foreground observation before requesting chrome focus.
+    fn focus_chrome(&self, window: c_ulong, in_front: bool) -> Result<(), BrowserError> {
+        if !in_front || self.set_focus(window) {
+            return Ok(());
+        }
+        let attributes = self
+            .trapped(|| self.attributes(window))
+            .flatten()
+            .ok_or(BrowserError::InvalidWindow)?;
+        if attributes.map_state != xlib::IsViewable {
+            return Ok(());
+        }
+        // A viewable window can refuse only if it is unmapped/destroyed during the request.
+        Err(BrowserError::Focus)
+    }
+
+    /// Raises and focuses the target only while the caller observed Syrinx in front.
+    fn activate(&self, target: c_ulong, in_front: bool) -> Result<bool, BrowserError> {
+        if !in_front {
+            return Ok(false);
+        }
+        self.trapped(|| unsafe { (self.xlib.XRaiseWindow)(self.display, target) })
+            .ok_or(BrowserError::InvalidWindow)?;
+        Ok(self.set_focus(target))
+    }
+
     /// The window's outer rectangle in root coordinates.
     fn root_rect(&self, window: c_ulong) -> Option<(i32, i32, u32, u32)> {
         let (mut root, mut x, mut y, mut width, mut height, mut border, mut depth) =
@@ -266,19 +292,7 @@ pub(super) fn validate_window(window: isize) -> Result<(), BrowserError> {
 pub fn focus_chrome(parent: isize) -> Result<(), BrowserError> {
     let window = Connection::window(parent)?;
     let connection = connection()?;
-    if !connection.syrinx_focused() || connection.set_focus(window) {
-        return Ok(());
-    }
-    let attributes = connection
-        .trapped(|| connection.attributes(window))
-        .flatten()
-        .ok_or(BrowserError::InvalidWindow)?;
-    if attributes.map_state != xlib::IsViewable {
-        return Ok(());
-    }
-    // Covered by code reading only: X refuses `XSetInputFocus` on a viewable window only in
-    // a race (it is unmapped or destroyed in between), which no test can produce reliably.
-    Err(BrowserError::Focus)
+    connection.focus_chrome(window, connection.syrinx_focused())
 }
 
 /// Whether X11 keyboard focus is on the Syrinx chrome window itself, not a page child.
@@ -294,10 +308,19 @@ pub fn holds_keyboard_focus(window: isize) -> bool {
     connection().is_ok_and(|connection| connection.focused() == window)
 }
 
-/// Popups are override-redirect windows, so no owner is needed to keep them above Syrinx.
+/// Records the real transient parent; override-redirect popups still place themselves.
 pub fn set_overlay_owner(popup: isize, parent: isize) -> Result<(), BrowserError> {
     validate_window(popup)?;
-    validate_window(parent)
+    validate_window(parent)?;
+    let popup = Connection::window(popup)?;
+    let parent = Connection::window(parent)?;
+    let connection = connection()?;
+    connection
+        .trapped(|| unsafe {
+            (connection.xlib.XSetTransientForHint)(connection.display, popup, parent)
+        })
+        .ok_or(BrowserError::InvalidWindow)?;
+    Ok(())
 }
 
 /// Whether one of this process's windows holds keyboard focus.
@@ -310,14 +333,7 @@ pub fn syrinx_in_foreground() -> bool {
 pub fn activate_if_foreground(window: isize) -> Result<bool, BrowserError> {
     let target = Connection::window(window)?;
     let connection = connection()?;
-    if !connection.syrinx_focused() {
-        return Ok(false);
-    }
-    // A window that is gone cannot be raised; it is reported like any other bad window.
-    connection
-        .trapped(|| unsafe { (connection.xlib.XRaiseWindow)(connection.display, target) })
-        .ok_or(BrowserError::InvalidWindow)?;
-    Ok(connection.set_focus(target))
+    connection.activate(target, connection.syrinx_focused())
 }
 
 /// Moves a kept popup to `rect` and shows it above Syrinx without asking the window manager.
@@ -477,16 +493,13 @@ fn xft_scale(connection: &Connection) -> f32 {
 mod tests {
     use super::*;
 
-    /// A plain window on the test's display, mapped or not, that no Syrinx window owns.
-    fn test_window(mapped: bool) -> c_ulong {
+    /// An unmapped root child: unit tests never ask the window manager to show it.
+    fn test_window() -> c_ulong {
         let connection = connection().expect("an X11 display for the test");
         let root = connection.root();
         let window = unsafe {
             (connection.xlib.XCreateSimpleWindow)(connection.display, root, 0, 0, 16, 16, 0, 0, 0)
         };
-        if mapped {
-            unsafe { (connection.xlib.XMapWindow)(connection.display, window) };
-        }
         unsafe { (connection.xlib.XSync)(connection.display, xlib::False) };
         window
     }
@@ -499,59 +512,34 @@ mod tests {
         }
     }
 
+    /// Serializes intentional X errors with GTK's process-wide GDK error traps.
+    fn on_display<T: Send + 'static>(probe: impl FnOnce() -> T + Send + 'static) -> T {
+        crate::gtk_thread::run(probe).expect("GTK thread")
+    }
+
     #[test]
     fn a_minimised_window_is_never_given_the_keys() {
-        // An unmapped window stands in for a minimised one: neither is viewable.
-        let window = test_window(false);
-        {
-            let connection = connection().expect("an X11 display for the test");
-            assert_eq!(
-                connection.trapped(|| connection.viewable(window)),
-                Some(false)
-            );
-            assert!(
-                !connection.set_focus(window),
-                "BadMatch would end the process"
-            );
-            unsafe { (connection.xlib.XSync)(connection.display, xlib::False) };
-        }
-        destroy(window);
-    }
-
-    /// The display's keyboard focus is shared by every test in the process.
-    static FOCUS: Mutex<()> = Mutex::new(());
-
-    /// Holds the focus lock and, when dropped, gives the keys back to the pointer root, so a
-    /// failing focus test neither poisons the lock nor leaves focus where the next test looks.
-    struct FocusGuard {
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl FocusGuard {
-        fn take() -> Self {
-            Self {
-                _lock: FOCUS
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            }
-        }
-    }
-
-    impl Drop for FocusGuard {
-        fn drop(&mut self) {
-            let Ok(connection) = connection() else {
-                return;
+        let observed = on_display(|| {
+            let ancestor = test_window();
+            let child = child_window(ancestor, false);
+            let observed = {
+                let connection = connection().expect("an X11 display");
+                // A mapped child remains unviewable beneath an unmapped ancestor.
+                [ancestor, child].map(|window| {
+                    (
+                        connection.trapped(|| connection.viewable(window)),
+                        connection.set_focus(window),
+                    )
+                })
             };
-            unsafe {
-                (connection.xlib.XSetInputFocus)(
-                    connection.display,
-                    xlib::PointerRoot as c_ulong,
-                    xlib::RevertToPointerRoot,
-                    xlib::CurrentTime,
-                );
-                (connection.xlib.XSync)(connection.display, xlib::False);
-            }
-        }
+            destroy(ancestor);
+            observed
+        });
+        assert_eq!(
+            observed,
+            [(Some(false), false); 2],
+            "neither hidden target may take keys or raise an unhandled BadMatch"
+        );
     }
 
     /// A mapped window inside `parent`, marked as this process's when `ours` is true.
@@ -583,67 +571,83 @@ mod tests {
     }
 
     #[test]
-    fn a_page_inside_a_window_managers_frame_counts_as_syrinx_in_front() {
-        let _focus = FocusGuard::take();
-        // A reparenting manager's frame (no PID) holds Syrinx's window, which holds the page's
-        // container (no PID either), and the container has the keys.
-        let frame = test_window(true);
-        let syrinx = child_window(frame, true);
-        let container = child_window(syrinx, false);
-        assert!(connection().expect("an X11 display").set_focus(container));
-        assert!(syrinx_in_foreground());
-        destroy(frame);
+    fn a_page_inside_a_window_managers_frame_is_owned_through_its_ancestor() {
+        let owned = on_display(|| {
+            // Keep the frame unmapped: ownership does not require the WM to grant focus.
+            let frame = test_window();
+            let syrinx = child_window(frame, true);
+            let container = child_window(syrinx, false);
+            let sibling = child_window(frame, false);
+            let owned = {
+                let connection = connection().expect("an X11 display");
+                [container, syrinx, frame, sibling].map(|window| connection.inside_ours(window))
+            };
+            destroy(frame);
+            owned
+        });
+        assert_eq!(owned, [true, true, false, false]);
     }
 
     #[test]
     fn a_window_destroyed_mid_query_is_not_ours_and_not_fatal() {
-        let _focus = FocusGuard::take();
-        // Destroying the frame destroys the whole chain, so every request below names windows
-        // that no longer exist: each raises BadWindow, which untrapped would end the process.
-        let frame = test_window(true);
-        let syrinx = child_window(frame, true);
-        let container = child_window(syrinx, false);
-        destroy(frame);
-        let connection = connection().expect("an X11 display");
-        assert!(
-            !connection.inside_ours(container),
-            "a gone window is not Syrinx's"
-        );
-        assert_eq!(connection.trapped(|| connection.viewable(syrinx)), None);
-        assert!(!connection.set_focus(container));
-        assert!(!connection.exists(frame));
-        // The trap reports the error and is then clear for the next call.
-        assert_eq!(connection.trapped(|| connection.parent(container)), None);
-        assert_eq!(connection.trapped(|| 7), Some(7));
+        let observed = on_display(|| {
+            // Destroy the whole chain: every following query names a stale ID.
+            let frame = test_window();
+            let syrinx = child_window(frame, true);
+            let container = child_window(syrinx, false);
+            destroy(frame);
+            let connection = connection().expect("an X11 display");
+            (
+                connection.inside_ours(container),
+                connection.trapped(|| connection.viewable(syrinx)),
+                connection.set_focus(container),
+                connection.exists(frame),
+                connection.trapped(|| connection.parent(container)),
+                connection.trapped(|| 7),
+            )
+        });
+        // Each BadWindow is contained, and the last trap is clear for a successful call.
+        assert_eq!(observed, (false, None, false, false, None, Some(7)));
     }
 
     #[test]
     fn focus_chrome_ignores_a_minimised_window_and_reports_a_gone_one() {
-        let _focus = FocusGuard::take();
-        // Syrinx is in front: one of its windows has the keys.
-        let frame = test_window(true);
-        let syrinx = child_window(frame, true);
-        assert!(connection().expect("an X11 display").set_focus(syrinx));
-        let minimised = test_window(false);
-        assert_eq!(focus_chrome(minimised as isize), Ok(()));
-        destroy(minimised);
+        let observed = on_display(|| {
+            let minimised = test_window();
+            // Supply foreground ownership; the target's real X11 state stays unmapped.
+            let hidden = connection()
+                .expect("an X11 display")
+                .focus_chrome(minimised, true);
+            destroy(minimised);
+            let connection = connection().expect("an X11 display");
+            (
+                hidden,
+                connection.focus_chrome(minimised, true),
+                connection.activate(minimised, true),
+            )
+        });
         assert_eq!(
-            focus_chrome(minimised as isize),
-            Err(BrowserError::InvalidWindow)
+            observed,
+            (
+                Ok(()),
+                Err(BrowserError::InvalidWindow),
+                Err(BrowserError::InvalidWindow)
+            )
         );
-        destroy(frame);
     }
 
     #[test]
     fn focus_moves_nowhere_while_another_application_holds_the_keys() {
-        let _focus = FocusGuard::take();
-        // In a test process no window carries Syrinx's `_NET_WM_PID`, so Syrinx is behind.
-        let window = test_window(true);
-        let before = connection().expect("an X11 display").focused();
-        assert!(!syrinx_in_foreground());
-        assert_eq!(focus_chrome(window as isize), Ok(()));
-        assert_eq!(activate_if_foreground(window as isize), Ok(false));
-        assert_eq!(connection().expect("an X11 display").focused(), before);
-        destroy(window);
+        let observed = on_display(|| {
+            let stale = test_window();
+            destroy(stale);
+            let connection = connection().expect("an X11 display");
+            // A foreign foreground must decline before inspecting even a stale target.
+            (
+                connection.focus_chrome(stale, false),
+                connection.activate(stale, false),
+            )
+        });
+        assert_eq!(observed, (Ok(()), Ok(false)));
     }
 }

@@ -21,8 +21,12 @@ const EXECUTABLE: &str = "syrinx";
 /// The checksum list `install.sh` verifies; its presence marks a folder as our package.
 pub const SUMS: &str = "SHA256SUMS";
 
-/// The shell scripts, which the gate parses with `sh -n` and never runs.
+/// The shell scripts syntax-checked by the gate and exercised only in synthetic-home tests.
 pub const SCRIPTS: [&str; 2] = ["install.sh", "uninstall.sh"];
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "linux_script_tests.rs"]
+mod script_tests;
 
 /// Where one packaged file comes from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -235,7 +239,7 @@ fn tar_package(output: &Path, name: &str) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
 
-    fn repository() -> PathBuf {
+    pub(super) fn repository() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
     }
 
