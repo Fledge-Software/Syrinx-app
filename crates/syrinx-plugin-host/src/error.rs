@@ -12,7 +12,7 @@ pub enum HostError {
     Malformed(String),
     /// Native code compiled elsewhere; Syrinx only ever runs code it compiled itself.
     Precompiled,
-    /// A package's signed lines, manifest and component disagree (#134).
+    /// The component's interface names disagree with its registered manifest (#134).
     Identity(IdentityMismatch),
     /// The component targets a contract this host does not offer. Every reason is listed.
     Incompatible(Vec<String>),

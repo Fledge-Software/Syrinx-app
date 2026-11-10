@@ -39,8 +39,8 @@ impl Runtime {
 
     /// Compile a registered plugin's component when it loads or activates: its interface names
     /// must carry the manifest's world and import only the capabilities the manifest requests,
-    /// and it must fit the contract. Every package load goes through here; registration never
-    /// does, so discovery compiles nothing. Nothing is instantiated.
+    /// and it must fit the contract. Loading or activating a package compiles it through here;
+    /// registration never does, so discovery compiles nothing. Nothing is instantiated.
     pub fn compile_package(
         &self,
         plugin: &RegisteredPlugin,

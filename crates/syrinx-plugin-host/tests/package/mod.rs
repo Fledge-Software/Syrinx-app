@@ -152,8 +152,6 @@ fn a_package_signed_for_another_plugin_registers_nothing() {
         })
     );
     // Without a `SignedManifest` there is nothing `register` accepts, so the palette is as it was.
-    let commands = CommandRegistry::browser();
-    assert!(commands.find("test.echo").is_none());
 }
 
 #[test]

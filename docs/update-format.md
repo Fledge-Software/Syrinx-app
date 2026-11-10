@@ -1297,7 +1297,18 @@ file <sha256> <size> ui/app.js
   key is ever committed.
 
 The plugin host may not link `syrinx-update` (`xtask check-deps`), so the
-application hands the verified `id`, `version` and `world` lines to the host
-as a `SignedIdentity`, and the host checks them against the manifest and the
-component's interface names (`Runtime::compile_package`). Installing a
-package from a folder is #140 (2d).
+application hands the verified `id`, `version` and `world` lines across, and
+the host takes them in this order:
+
+1. `SignedIdentity::from_signed_lines` holds the three lines.
+2. `check_signed` compares them with the manifest. This is the one place
+   the signed lines meet the manifest. On success it returns a
+   `SignedManifest`, which nothing else can construct.
+3. `PluginRegistry::register` takes that `SignedManifest` and reads only the
+   manifest, so the palette lists the plugin's commands without compiling
+   anything.
+4. `Runtime::compile_package`, at load or activation, checks only the
+   component's interface names against the registered manifest: its world,
+   and the capability interfaces it imports.
+
+Installing a package from a folder is #140 (2d).

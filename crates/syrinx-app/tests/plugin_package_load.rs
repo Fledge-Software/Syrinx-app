@@ -27,6 +27,7 @@ fn fixture_workspace() -> PathBuf {
 }
 
 /// The full fixture's component, built once per run, offline and locked.
+/// Its twin is `build` in crates/syrinx-plugin-host/tests/support/mod.rs; change both.
 fn full_component() -> &'static [u8] {
     static BUILT: OnceLock<Vec<u8>> = OnceLock::new();
     BUILT.get_or_init(|| {

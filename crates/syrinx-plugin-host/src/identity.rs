@@ -1,5 +1,6 @@
 //! Cross-checks a package's three sources of identity before its component is instantiated:
-//! the signed `package` list, the manifest, and the component's own interface names.
+//! `check_signed` compares the signed `package` lines with the manifest, and
+//! `check_component` compares the component's own interface names with the manifest.
 
 use std::fmt;
 
@@ -50,6 +51,7 @@ impl SignedIdentity {
 /// Where the three sources disagree, or what the component imports without asking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityMismatch {
+    // The signed lines against the manifest, from `check_signed`.
     Id {
         signed: String,
         manifest: String,
@@ -62,6 +64,7 @@ pub enum IdentityMismatch {
         signed: String,
         manifest: String,
     },
+    // The component against the manifest, from `Runtime::compile_package`.
     /// The component's interface names carry another version than the manifest's world.
     ComponentWorld {
         manifest: String,
