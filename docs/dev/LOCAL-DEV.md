@@ -1,4 +1,4 @@
-# Local development on Windows 11
+# Local development on Windows and Linux
 
 This is how to build, run and check Syrinx on this machine. Work one
 approved slice at a time, each on its own branch, usually in its own git
@@ -63,7 +63,7 @@ are committed; building never runs Edge or Python (`design/brand/README.md`).
 
 ## Run and check
 
-Run these from the repository in PowerShell:
+Run these from the repository in PowerShell (on Linux, any shell; see "On Linux" below):
 
 ```powershell
 cargo syrinx
@@ -93,8 +93,10 @@ cargo run --package syrinx-app --profile local --offline --locked -- --smoke
 
 The first four lines show the standalone equivalents of the checks that
 `xtask` runs internally (`crates/xtask/src/main.rs`, `check_workspace`).
-`check-licences` holds every third-party package Windows compiles to the
-allowed licences or an exact-version approval in `licences.toml` (#28, G4).
+`check-licences` holds every third-party package that Windows
+(`x86_64-pc-windows-msvc`) or Linux (`x86_64-unknown-linux-gnu`) compiles to
+the allowed licences or an exact-version approval in `licences.toml` (#28,
+G4), whichever machine runs the gate.
 `check-plugin-contract` parses `wit/v0_1`, the `syrinx:plugin@0.1.0`
 contract, with the parser wasmtime 48 uses, so a WIT mistake fails the gate
 rather than every plugin's build.
@@ -148,6 +150,100 @@ the gate fails, puts its end in the run summary. A separate Linux job checks
 only formatting, so a formatting slip is reported within a minute or two.
 The weekly release runs the gate the same way before it builds anything
 (`docs/releasing.md`).
+
+## On Linux (owner, 2026-10-31)
+
+The same commands run from a Linux checkout:
+
+```sh
+cargo syrinx
+cargo xtask check
+```
+
+You need Rust 1.97 (`rustup toolchain install 1.97.1`), WebKitGTK 4.1
+(2.38 or newer), GTK 3, libsoup 3, bubblewrap (WebKit's page sandbox) and an
+X11 display. On Arch-based systems such as Omarchy that is `webkit2gtk-4.1`,
+`gtk3`, `libsoup3` and `bubblewrap`. Under a Wayland compositor (Hyprland,
+GNOME, KDE) Syrinx runs through XWayland: GTK can embed a page only inside an
+X11 window, so GPUI is built with its X11 backend alone and GDK is limited to
+X11 (`syrinx-platform/src/linux/gtk_thread.rs`).
+
+WebKitGTK's audio and video pipeline also requires GStreamer media plugins,
+which may be optional dependencies of the system WebKitGTK package:
+
+| Distribution | Media runtime packages |
+| --- | --- |
+| Arch / Omarchy | `gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav` |
+| Debian / Ubuntu | `gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav` |
+| Fedora | `gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav` |
+
+Check `gst-inspect-1.0 autoaudiosink` when the tool is available
+(`gstreamer1.0-tools` on Debian/Ubuntu). The element comes from the good set;
+its presence alone does not prove all codecs or audio devices work. See
+[the runtime requirements and package references](../installing.md#linux-2026-10-31).
+The coordinator's `a01b28d` media run aborted WebKitWebProcess because this
+element was missing, even for synthetic video. Treat that as a missing
+runtime prerequisite; preserve the fixture and let the owner install the
+packages. Never install system packages or disable the sandbox to pass it.
+
+What differs from Windows:
+
+- **Pages** render in WebKitGTK, driven directly through `webkit2gtk`
+  (`syrinx-platform/src/browser_gtk/`), each embedded as an X11 child of
+  Syrinx's window. The commands and events are the same protocol as the
+  WebView2 host (`browser/protocol.rs`). WebKit's bubblewrap sandbox is on,
+  and the engine refuses to start if `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS`
+  or an inspector-server variable is set.
+- **NVIDIA's proprietary driver** draws WebKit's DMA-BUF renderer black, so
+  Syrinx sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at start-up when
+  `/proc/driver/nvidia/version` exists and the owner has not set it
+  (`syrinx_platform::prepare_process`).
+- **Data** lives in `$XDG_DATA_HOME/SyrinxProductPreview` (normally
+  `~/.local/share`), or `Syrinx/data` for the installed feature. The storage
+  guard refuses network and FUSE filesystems and the folders of common sync
+  clients (Dropbox, OneDrive, Nextcloud and others) in place of Windows'
+  registered sync roots.
+- **One running Syrinx per profile** is kept with an `flock`ed lock file and
+  a mode-0600 Unix socket in `$XDG_RUNTIME_DIR`, which checks the peer's user
+  id as the Windows pipe checks its server's.
+- **Packaging**: `cargo xtask package` writes the portable Linux tarball
+  (`target/package/Syrinx-<version>-<commit>-linux-x64.tar.gz`) instead of
+  the setup program and zip; see `docs/installing.md`, "Linux".
+- **Page text** follows the same eligibility check and taint rules as on
+  Windows (`browser_gtk/page_text.rs` shares `page_text/state.rs`), but
+  WebKitGTK has no host-side DOM snapshot. The only no-script method is
+  reading the page's HTML as the server sent it, which misses text built by
+  scripts and cannot see style-sheet hiding or a password field added by
+  script. The owner has not approved that method (#219), so Linux has no
+  reader: `READS_PAGE_TEXT` is false, every due capture reports
+  `Ineligible(CaptureOff)`, and Settings says nothing is kept on Linux. The
+  reader that was written for it is kept for #219 at `ad1cf78`
+  (`docs/dev/linux-page-text-proposal.md`, "The reader at ad1cf78").
+- **Hidden pages** are not suspended: WebKitGTK has no `TrySuspend`. A hidden
+  page's view is unmapped, so WebKit marks it hidden and throttles its timers
+  and drawing itself. Syrinx never discards a hidden page to save memory,
+  because that would lose its form contents, scroll position and back list,
+  which Windows' suspension keeps.
+- **Downloads** cannot be paused or resumed in WebKitGTK, so the flyout
+  offers only Cancel (`PAUSES_DOWNLOADS`). WebKit ignores a page's own
+  document it cannot show unless it is sent as an attachment, so Syrinx
+  downloads such a document, as WebView2 does; a popup gets the same rule from
+  the moment it is created. A download that starts in a popup before Syrinx
+  has made it a tab is reported once the popup becomes one (#143).
+- **Windows-only for now**: the setup program, release signing, update
+  downloads, the palette acceptance run, and the WebView2 example fixtures (they print that they need Windows). Tests
+  that assert Windows file-sharing rules are `#[cfg(windows)]`; on Unix the
+  guard revalidates identities instead (`docs/dev/trapstoknow.md`, "Linux").
+- **Known limits**: no Widevine in WebKitGTK, so Disney+ and Hulu do not
+  play; Google may treat WebKitGTK as an unfamiliar browser at sign-in, and
+  the user agent is still never changed (D22).
+- **Icons**: Windows draws them from its Segoe MDL2 Assets font; Linux has no
+  such font, so Syrinx draws its own stroke SVGs from
+  `crates/syrinx-app/assets/icons`, embedded in the executable
+  (`crates/syrinx-app/src/icon.rs`).
+
+The Linux gate skips the release tool's two steps (it signs through Windows
+key storage) and parses no PowerShell; the Windows gate still runs both.
 
 ## Why the profile is explicit
 

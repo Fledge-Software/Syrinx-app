@@ -51,9 +51,19 @@ pub fn layout() -> Vec<&'static str> {
 
 /// Folder and zip name, such as `Syrinx-0.1.0-1a2b3c4d5e6f-x64`; uncommitted builds say so.
 pub fn package_name(identity: &BuildIdentity) -> String {
+    named_for(identity, "x64")
+}
+
+/// The Linux folder and tarball name, such as `Syrinx-0.1.0-1a2b3c4d5e6f-linux-x64`.
+pub fn linux_package_name(identity: &BuildIdentity) -> Result<String, String> {
+    check_identity(identity)?;
+    Ok(named_for(identity, "linux-x64"))
+}
+
+fn named_for(identity: &BuildIdentity, platform: &str) -> String {
     let dirty = if identity.dirty { "-dirty" } else { "" };
     format!(
-        "{PRODUCT}-{}-{}{dirty}-x64",
+        "{PRODUCT}-{}-{}{dirty}-{platform}",
         identity.version, identity.commit
     )
 }
@@ -165,6 +175,27 @@ mod tests {
             ..identity()
         };
         assert_eq!(package_name(&dirty), "Syrinx-0.1.0-0123456789ab-dirty-x64");
+    }
+
+    #[test]
+    fn linux_name_follows_the_windows_name_with_its_platform() {
+        assert_eq!(
+            linux_package_name(&identity()).unwrap(),
+            "Syrinx-0.1.0-0123456789ab-linux-x64"
+        );
+        let dirty = BuildIdentity {
+            dirty: true,
+            ..identity()
+        };
+        assert_eq!(
+            linux_package_name(&dirty).unwrap(),
+            "Syrinx-0.1.0-0123456789ab-dirty-linux-x64"
+        );
+        let unsafe_commit = BuildIdentity {
+            commit: "../abc".to_owned(),
+            ..identity()
+        };
+        assert!(linux_package_name(&unsafe_commit).is_err());
     }
 
     #[test]

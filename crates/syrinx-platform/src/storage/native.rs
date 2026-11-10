@@ -61,9 +61,9 @@ use windows::{
 
 use super::{EntryInfo, FileIdentity, LocationProbe};
 
-pub(super) struct WindowsProbe;
+pub(super) struct NativeProbe;
 
-impl LocationProbe for WindowsProbe {
+impl LocationProbe for NativeProbe {
     fn drive_type(&self, root: &Path) -> Result<u32, LocationError> {
         // The caller supplies an absolute root, including its trailing separator.
         let wide = wide_path(root);
@@ -76,6 +76,11 @@ impl LocationProbe for WindowsProbe {
 }
 
 pub(super) fn local_data_directory() -> Result<PathBuf, LocationError> {
+    Ok(local_app_data()?.join("Syrinx").join("data"))
+}
+
+/// The per-user local app-data folder, which Windows never roams or syncs (D13).
+pub fn local_app_data() -> Result<PathBuf, LocationError> {
     // Own the returned allocation before converting its UTF-16 contents.
     let allocation = TaskMemory(unsafe {
         SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None)
@@ -85,7 +90,7 @@ pub(super) fn local_data_directory() -> Result<PathBuf, LocationError> {
         return Err(LocationError::InvalidPath);
     }
     let local = unsafe { OsString::from_wide(allocation.0.as_wide()) };
-    Ok(PathBuf::from(local).join("Syrinx").join("data"))
+    Ok(PathBuf::from(local))
 }
 
 pub(super) fn open_directory(path: &Path, follow_link: bool) -> Result<File, LocationError> {

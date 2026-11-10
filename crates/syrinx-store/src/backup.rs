@@ -48,7 +48,7 @@ fn validate_checked_file(
     let mut connection = Connection::open_with_flags_and_vfs(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        "win32-longpath",
+        crate::SQLITE_VFS,
     )
     .map_err(|error| database_error(StoreOperation::Open, error))?;
     let result = schema::validate_backup(&mut connection).and_then(|snapshot| {

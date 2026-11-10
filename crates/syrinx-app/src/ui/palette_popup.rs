@@ -11,7 +11,8 @@ use syrinx_platform::browser::{
 
 use super::{
     owned_popup::{
-        OwnedPopupError, PopupSpec, open_owned_popup, round_popup_corners, show_and_activate,
+        OwnedPopupError, PopupSpec, main_window_bounds, open_owned_popup, round_popup_corners,
+        show_and_activate,
     },
     *,
 };
@@ -112,7 +113,10 @@ impl BrowserView {
         if let Some(probe) = self.acceptance_probe() {
             probe.show_requested(Instant::now());
         }
-        let rect = palette_rect(window.bounds(), window.scale_factor());
+        let rect = palette_rect(
+            main_window_bounds(window, self.parent_hwnd),
+            window.scale_factor(),
+        );
         self.show_palette(entry, rect, cx);
     }
 
@@ -290,7 +294,10 @@ impl BrowserView {
         if !self.palette_entry_live(cx) {
             return;
         }
-        let rect = palette_rect(window.bounds(), window.scale_factor());
+        let rect = palette_rect(
+            main_window_bounds(window, self.parent_hwnd),
+            window.scale_factor(),
+        );
         // Moved from a task for the same reason as `show_palette`.
         cx.spawn(async move |view, cx| {
             let Ok(Some(hwnd)) = view.update(cx, |view, cx| view.entry_to_show(entry, cx)) else {

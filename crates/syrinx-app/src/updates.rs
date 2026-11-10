@@ -269,7 +269,8 @@ fn read_records_unreadable(layout: &UpdateLayout) -> bool {
 
 /// The installed copy's folders: only an `installed` build running from `Programs\Syrinx`.
 fn installed_layout(data: &Path) -> Result<UpdateLayout, InstallError> {
-    if !cfg!(feature = "installed") {
+    // Installing updates is Windows-only; a Linux copy is replaced by its package's install.sh.
+    if !cfg!(feature = "installed") || !cfg!(windows) {
         return Err(InstallError::NotInstalled);
     }
     let executable = std::env::current_exe().map_err(|error| InstallError::Io {
@@ -329,9 +330,7 @@ pub fn refusal_message(error: &InstallError) -> String {
              nothing was downloaded or installed."
                 .into()
         }
-        InstallError::NotInstalled | InstallError::Layout => {
-            "Updates install only into a copy installed with install-syrinx.ps1.".into()
-        }
+        InstallError::NotInstalled | InstallError::Layout => not_installed_message(),
         InstallError::NotAPackage => "That folder is not a signed Syrinx update package.".into(),
         InstallError::Busy => "Another update step is still running. Try again shortly.".into(),
         InstallError::NotEnoughSpace { .. } => {
@@ -342,6 +341,23 @@ pub fn refusal_message(error: &InstallError) -> String {
         }
         other => format!("Syrinx couldn't stage the update ({other}), so nothing was installed."),
     }
+}
+
+/// Why this copy cannot update itself.
+#[cfg(windows)]
+fn not_installed_message() -> String {
+    "Updates install only into a copy installed with install-syrinx.ps1.".into()
+}
+
+/// Why this copy cannot update itself: Linux has no in-app updates yet, so say where to go.
+#[cfg(not(windows))]
+fn not_installed_message() -> String {
+    format!(
+        "Syrinx doesn't update itself on Linux yet. Download new versions from {} and run \
+         their install.sh; your data stays. Linux packages are not signed yet, so download \
+         them only from there.",
+        update_host()
+    )
 }
 
 /// Settings' line while `Updates\state` cannot be read (DW-66).
@@ -482,6 +498,19 @@ mod tests {
     const CURRENT: Version = Version::new(1, 3, 0);
 
     #[test]
+    fn a_copy_that_cannot_update_says_where_new_versions_come_from() {
+        let message = refusal_message(&InstallError::NotInstalled);
+        assert_eq!(message, refusal_message(&InstallError::Layout));
+        if cfg!(windows) {
+            assert!(message.contains("install-syrinx.ps1"), "{message}");
+        } else {
+            assert!(message.contains("on Linux yet"), "{message}");
+            assert!(message.contains("syrinxapp.dev"), "{message}");
+            assert!(!message.contains(".ps1"), "{message}");
+        }
+    }
+
+    #[test]
     fn a_development_build_never_installs_updates() {
         // `cargo syrinx` and the gate build without `installed`, so nothing beside them moves.
         let context = UpdateContext::new(Path::new(r"C:\Synthetic\data"), None, false);
@@ -579,7 +608,7 @@ mod tests {
             .join(r"..\..\target\syrinx-app-update-tests")
             .join(format!("reset-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(root.join("Programs")).expect("synthetic programs");
-        std::fs::create_dir_all(root.join(r"data\Updates")).expect("synthetic data");
+        std::fs::create_dir_all(root.join("data").join("Updates")).expect("synthetic data");
         let layout = UpdateLayout::new(root.join("Programs"), root.join("data")).expect("layout");
         let context = UpdateContext {
             layout: Ok(layout.clone()),
@@ -664,6 +693,8 @@ mod tests {
         }
     }
 
+    // The apply helper and its drive-letter layout are the Windows installer's.
+    #[cfg(windows)]
     #[test]
     fn the_helper_never_works_from_a_folder_it_renames() {
         let layout = UpdateLayout::new(

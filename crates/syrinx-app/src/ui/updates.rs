@@ -504,13 +504,29 @@ fn section_text(palette: &Palette, running: &str) -> Div {
             div()
                 .text_size(px(text::SMALL))
                 .text_color(rgba(palette.text_muted))
-                .child(format!(
-                    "{running}. Check for updates contacts {} only when you press it, or \
-                     install a signed package you built or copied. Nothing changes until you \
-                     restart or quit.",
-                    update_host()
-                )),
+                .child(section_summary(running)),
         )
+}
+
+/// What the Updates section offers on Windows: a check and installing a package.
+#[cfg(windows)]
+fn section_summary(running: &str) -> String {
+    format!(
+        "{running}. Check for updates contacts {} only when you press it, or install a signed \
+         package you built or copied. Nothing changes until you restart or quit.",
+        update_host()
+    )
+}
+
+/// Linux has no in-app updates yet, so the section says where new versions come from.
+#[cfg(not(windows))]
+fn section_summary(running: &str) -> String {
+    format!(
+        "{running}. Syrinx doesn't update itself on Linux yet: download new versions from {} \
+         and run their install.sh. Linux packages are not signed yet, so their checksums show \
+         only that a download is complete, not who made it.",
+        update_host()
+    )
 }
 
 /// The small outlined button Settings and Customize use for its section actions.

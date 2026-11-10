@@ -252,6 +252,9 @@ fn a_launch_during_shutdown_becomes_the_next_running_syrinx() {
     closing.join().expect("closing instance");
 }
 
+// A thread that ends holding a Windows mutex abandons it; a Unix lock lasts until its
+// process exits, when the kernel releases it, so there is no in-process crash to stage.
+#[cfg(windows)]
 #[test]
 fn a_syrinx_that_died_holding_the_profile_is_replaced() {
     let directory = synthetic_profile("abandoned");
@@ -349,6 +352,21 @@ fn a_squatted_name_fails_after_the_handover_wait() {
     );
 }
 
+/// Opens the link channel as a client that will never write.
+#[cfg(windows)]
+fn connect_silently(pipe: &str) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(pipe)
+}
+
+/// Opens the link channel as a client that will never write.
+#[cfg(unix)]
+fn connect_silently(socket: &str) -> std::io::Result<std::os::unix::net::UnixStream> {
+    std::os::unix::net::UnixStream::connect(socket)
+}
+
 #[test]
 fn a_silent_client_does_not_delay_shutdown() {
     let directory = synthetic_profile("stall");
@@ -359,11 +377,7 @@ fn a_silent_client_does_not_delay_shutdown() {
     // Connect and send nothing, as a stuck same-user client would.
     let deadline = Instant::now() + Duration::from_secs(5);
     let _stalled = loop {
-        match std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&names.pipe)
-        {
+        match connect_silently(&names.pipe) {
             Ok(client) => break client,
             Err(error) if Instant::now() < deadline => {
                 assert_ne!(error.kind(), std::io::ErrorKind::PermissionDenied);

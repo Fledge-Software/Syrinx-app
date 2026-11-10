@@ -36,6 +36,10 @@ futures.workspace = true
 raw-window-handle.workspace = true
 url.workspace = true
 
+# GPUI draws through X11 on Linux, since wry can embed its child web views only there.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_platform = { workspace = true, features = ["x11"] }
+
 # #9's survival tests hold SQLite's write lock from a second connection.
 [dev-dependencies]
 rusqlite.workspace = true

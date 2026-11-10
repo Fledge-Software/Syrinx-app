@@ -2,6 +2,7 @@
 
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
+#[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -12,15 +13,36 @@ use super::error::io_error;
 use super::layout::PACKAGE_RECORD;
 use crate::path::PackagePath;
 
+#[cfg(windows)]
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+#[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 /// Windows' "used by another process" error, which a closing program clears shortly.
 const ERROR_SHARING_VIOLATION: i32 = 32;
 /// How often a refused rename is retried.
 const RENAME_RETRY: Duration = Duration::from_millis(100);
 
+#[cfg(windows)]
 pub(crate) fn is_reparse_point(metadata: &Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+/// A link is the one entry Unix uses where Windows has a reparse point.
+#[cfg(unix)]
+pub(crate) fn is_reparse_point(metadata: &Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+/// Whether an entry's own metadata is a folder; a Windows folder link counts, as its link.
+#[cfg(windows)]
+fn is_directory_entry(metadata: &Metadata) -> bool {
+    metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0
+}
+
+/// Whether an entry's own metadata is a folder; a Unix link to one is not.
+#[cfg(unix)]
+fn is_directory_entry(metadata: &Metadata) -> bool {
+    metadata.is_dir()
 }
 
 /// The entry's own metadata, or `None` when nothing is there.
@@ -92,7 +114,7 @@ fn remove_all_but_record(folder: &Path) -> Result<(), InstallError> {
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path).map_err(io_error(STEP))?;
         // `remove_dir_all` removes a linked folder's link, never what it points to.
-        let removed = if metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        let removed = if is_directory_entry(&metadata) {
             fs::remove_dir_all(&path)
         } else {
             fs::remove_file(&path)

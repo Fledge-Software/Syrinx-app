@@ -14,15 +14,7 @@ use windows::Win32::{
     },
 };
 
-use super::{BrowserError, validate_window};
-
-pub struct OverlayPointer {
-    pub x: i32,
-    pub y: i32,
-    pub in_popup: bool,
-    pub active: bool,
-    pub pressed: bool,
-}
+use super::{BrowserError, OverlayMonitor, OverlayPointer, OverlayRect, validate_window};
 
 /// Native coordinates keep leave detection working over the page child and outside Syrinx.
 pub fn overlay_pointer(parent: isize, popup: Option<isize>) -> Result<OverlayPointer, String> {
@@ -62,16 +54,6 @@ pub fn overlay_pointer(parent: isize, popup: Option<isize>) -> Result<OverlayPoi
     }
 }
 
-/// The monitor under an overlay's physical anchor, with its own DPI and physical extent.
-pub struct OverlayMonitor {
-    pub id: u64,
-    pub scale: f32,
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
-
 pub fn overlay_monitor(x: i32, y: i32) -> Result<OverlayMonitor, String> {
     unsafe {
         let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
@@ -97,15 +79,6 @@ pub fn overlay_monitor(x: i32, y: i32) -> Result<OverlayMonitor, String> {
     }
 }
 
-/// An overlay popup's place on screen, in physical pixels.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct OverlayRect {
-    pub left: i32,
-    pub top: i32,
-    pub width: i32,
-    pub height: i32,
-}
-
 /// Moves a kept popup to `rect` and shows it above its owner without activating it.
 ///
 /// Call this outside any GPUI update: the popup's resize and first frame are delivered from
@@ -123,6 +96,11 @@ pub fn show_overlay(popup: isize, rect: OverlayRect) -> Result<(), BrowserError>
         let _previous_visibility = ShowWindow(handle, SW_SHOWNA);
     }
     Ok(())
+}
+
+/// A correction for GPUI's window origin; `None` here because GPUI's Windows bounds are current.
+pub fn window_origin(_window: isize) -> Option<(i32, i32)> {
+    None
 }
 
 /// Hides a kept popup; when it is active, its owner is activated first, synchronously.

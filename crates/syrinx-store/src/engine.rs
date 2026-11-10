@@ -713,7 +713,7 @@ impl LeasedConnection {
         let connection = Connection::open_with_flags_and_vfs(
             lease.database_path(),
             access | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            "win32-longpath",
+            crate::SQLITE_VFS,
         )
         .map_err(|error| database_error(StoreOperation::Open, error))?;
         let mut leased = Self { connection, lease };

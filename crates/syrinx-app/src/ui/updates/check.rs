@@ -339,154 +339,27 @@ impl BrowserView {
 
 #[cfg(test)]
 mod tests {
-    use syrinx_update::install::TransferProblem;
 
     use super::*;
     use crate::updates::{StartupUpdates, UpdateContext};
 
     const OFFERED: Version = Version::new(1, 4, 0);
-    const BYTES: u64 = 38 * 1024 * 1024;
 
     fn panel() -> UpdatePanel {
         UpdatePanel::new(UpdateContext::disabled(), StartupUpdates::default())
     }
 
-    /// The production host, opened but never asked anything: no test here makes a request.
-    fn unused_host() -> RemotePackage {
-        RemotePackage::production().expect("WinHTTP session")
-    }
+    // Only Windows builds a download host; elsewhere the panel never gets one.
 
-    #[test]
-    fn an_offer_waits_for_the_owner_with_its_host_kept() {
-        let mut panel = panel();
-        panel.begin_check(&unused_host());
-        assert_eq!(panel.stage, Stage::Checking);
-        let available = Checked::Available {
-            version: OFFERED,
-            bytes: BYTES,
-        };
-        let status = panel.finish_check(Some(Ok(available)), Some(unused_host()));
-        assert_eq!(
-            status,
-            "Syrinx 1.4.0 is available (38 MB). Download and verify it?"
-        );
-        assert_eq!(
-            panel.stage,
-            Stage::Available {
-                version: OFFERED,
-                bytes: BYTES
-            }
-        );
-        assert!(panel.remote.is_some() && panel.cancel.is_none());
+    // Only Windows builds a download host; elsewhere the panel never gets one.
 
-        let (version, _remote) = panel.accept_download().expect("download");
-        assert_eq!(version, OFFERED);
-        assert_eq!(panel.stage, Stage::Downloading(OFFERED));
-        assert!(panel.remote.is_none(), "the host moved to the download");
-        assert!(panel.cancel_transfer(), "the download can be cancelled");
-    }
+    // Only Windows builds a download host; elsewhere the panel never gets one.
 
-    #[test]
-    fn a_cancel_after_the_last_read_offers_nothing_and_keeps_the_staged_copy() {
-        let staged = Version::new(1, 3, 5);
-        let mut panel = panel();
-        panel.stage = Stage::Ready(staged);
-        let remote = unused_host();
-        panel.begin_check(&remote);
-        assert!(panel.cancel_transfer());
-        let available = Checked::Available {
-            version: OFFERED,
-            bytes: BYTES,
-        };
-        let status = panel.finish_check(Some(Ok(available)), Some(remote));
-        assert_eq!(status, "Update check cancelled; nothing was downloaded.");
-        assert_eq!(panel.stage, Stage::Ready(staged));
-        assert!(panel.remote.is_none() && panel.cancel.is_none());
-        assert!(panel.accept_download().is_none(), "no download can start");
-    }
+    // Only Windows builds a download host; elsewhere the panel never gets one.
 
-    #[test]
-    fn a_download_starts_with_a_fresh_cancel() {
-        let mut panel = panel();
-        let remote = unused_host();
-        let earlier = remote.canceller();
-        panel.begin_check(&remote);
-        let available = Checked::Available {
-            version: OFFERED,
-            bytes: BYTES,
-        };
-        panel.finish_check(Some(Ok(available)), Some(remote));
-        // A stale handle from the check cannot reach the download.
-        earlier.cancel();
-        let (_, remote) = panel.accept_download().expect("download");
-        assert!(!remote.canceller().is_cancelled());
-        assert!(
-            panel
-                .cancel
-                .as_ref()
-                .is_some_and(|cancel| !cancel.is_cancelled())
-        );
-    }
+    // Only Windows builds a download host; elsewhere the panel never gets one.
 
-    #[test]
-    fn declining_forgets_the_offer_and_downloads_nothing() {
-        let mut panel = panel();
-        panel.stage = Stage::Ready(Version::new(1, 3, 5));
-        panel.begin_check(&unused_host());
-        let available = Checked::Available {
-            version: OFFERED,
-            bytes: BYTES,
-        };
-        panel.finish_check(Some(Ok(available)), Some(unused_host()));
-        assert_eq!(panel.decline_download(), Some(OFFERED));
-        assert_eq!(panel.stage, Stage::Ready(Version::new(1, 3, 5)));
-        assert!(panel.remote.is_none());
-        assert!(
-            panel.accept_download().is_none(),
-            "nothing left to download"
-        );
-    }
-
-    #[test]
-    fn a_check_that_finds_nothing_returns_to_where_it_started() {
-        let cases = [
-            (
-                Some(Ok(Checked::UpToDate(Version::new(1, 3, 0)))),
-                "Syrinx 1.3.0 is up to date.",
-            ),
-            (
-                Some(Err(InstallError::Transfer(TransferProblem::Unreachable))),
-                "Syrinx couldn't reach syrinxapp.dev. Check your connection and try again.",
-            ),
-            (
-                Some(Err(InstallError::Transfer(TransferProblem::Cancelled))),
-                "Update cancelled; nothing was installed.",
-            ),
-            (None, "The update check stopped unexpectedly."),
-        ];
-        for (checked, expected) in cases {
-            let mut panel = panel();
-            panel.begin_check(&unused_host());
-            assert_eq!(panel.finish_check(checked, None), expected);
-            assert_eq!(panel.stage, Stage::Idle);
-            assert!(panel.remote.is_none() && panel.cancel.is_none());
-        }
-    }
-
-    #[test]
-    fn an_offer_of_the_staged_version_is_not_downloaded_again() {
-        let mut panel = panel();
-        panel.stage = Stage::Ready(OFFERED);
-        panel.begin_check(&unused_host());
-        let available = Checked::Available {
-            version: OFFERED,
-            bytes: BYTES,
-        };
-        let status = panel.finish_check(Some(Ok(available)), Some(unused_host()));
-        assert_eq!(status, "Syrinx 1.4.0 is already downloaded and ready.");
-        assert_eq!(panel.stage, Stage::Ready(OFFERED));
-        assert!(panel.remote.is_none());
-    }
+    // Only Windows builds a download host; elsewhere the panel never gets one.
 
     #[test]
     fn checks_wait_for_other_update_steps() {
@@ -502,5 +375,152 @@ mod tests {
             assert!(!panel.can_check(), "{stage:?}");
         }
         assert!(panel().can_check());
+    }
+
+    // The update check over WinHTTP, which only Windows builds.
+    #[cfg(windows)]
+    mod windows {
+        use super::*;
+
+        use syrinx_update::install::TransferProblem;
+
+        const BYTES: u64 = 38 * 1024 * 1024;
+
+        /// The production host, opened but never asked anything: no test here makes a request.
+        fn unused_host() -> RemotePackage {
+            RemotePackage::production().expect("WinHTTP session")
+        }
+
+        #[test]
+        fn an_offer_waits_for_the_owner_with_its_host_kept() {
+            let mut panel = panel();
+            panel.begin_check(&unused_host());
+            assert_eq!(panel.stage, Stage::Checking);
+            let available = Checked::Available {
+                version: OFFERED,
+                bytes: BYTES,
+            };
+            let status = panel.finish_check(Some(Ok(available)), Some(unused_host()));
+            assert_eq!(
+                status,
+                "Syrinx 1.4.0 is available (38 MB). Download and verify it?"
+            );
+            assert_eq!(
+                panel.stage,
+                Stage::Available {
+                    version: OFFERED,
+                    bytes: BYTES
+                }
+            );
+            assert!(panel.remote.is_some() && panel.cancel.is_none());
+
+            let (version, _remote) = panel.accept_download().expect("download");
+            assert_eq!(version, OFFERED);
+            assert_eq!(panel.stage, Stage::Downloading(OFFERED));
+            assert!(panel.remote.is_none(), "the host moved to the download");
+            assert!(panel.cancel_transfer(), "the download can be cancelled");
+        }
+
+        #[test]
+        fn a_cancel_after_the_last_read_offers_nothing_and_keeps_the_staged_copy() {
+            let staged = Version::new(1, 3, 5);
+            let mut panel = panel();
+            panel.stage = Stage::Ready(staged);
+            let remote = unused_host();
+            panel.begin_check(&remote);
+            assert!(panel.cancel_transfer());
+            let available = Checked::Available {
+                version: OFFERED,
+                bytes: BYTES,
+            };
+            let status = panel.finish_check(Some(Ok(available)), Some(remote));
+            assert_eq!(status, "Update check cancelled; nothing was downloaded.");
+            assert_eq!(panel.stage, Stage::Ready(staged));
+            assert!(panel.remote.is_none() && panel.cancel.is_none());
+            assert!(panel.accept_download().is_none(), "no download can start");
+        }
+
+        #[test]
+        fn a_download_starts_with_a_fresh_cancel() {
+            let mut panel = panel();
+            let remote = unused_host();
+            let earlier = remote.canceller();
+            panel.begin_check(&remote);
+            let available = Checked::Available {
+                version: OFFERED,
+                bytes: BYTES,
+            };
+            panel.finish_check(Some(Ok(available)), Some(remote));
+            // A stale handle from the check cannot reach the download.
+            earlier.cancel();
+            let (_, remote) = panel.accept_download().expect("download");
+            assert!(!remote.canceller().is_cancelled());
+            assert!(
+                panel
+                    .cancel
+                    .as_ref()
+                    .is_some_and(|cancel| !cancel.is_cancelled())
+            );
+        }
+
+        #[test]
+        fn declining_forgets_the_offer_and_downloads_nothing() {
+            let mut panel = panel();
+            panel.stage = Stage::Ready(Version::new(1, 3, 5));
+            panel.begin_check(&unused_host());
+            let available = Checked::Available {
+                version: OFFERED,
+                bytes: BYTES,
+            };
+            panel.finish_check(Some(Ok(available)), Some(unused_host()));
+            assert_eq!(panel.decline_download(), Some(OFFERED));
+            assert_eq!(panel.stage, Stage::Ready(Version::new(1, 3, 5)));
+            assert!(panel.remote.is_none());
+            assert!(
+                panel.accept_download().is_none(),
+                "nothing left to download"
+            );
+        }
+
+        #[test]
+        fn a_check_that_finds_nothing_returns_to_where_it_started() {
+            let cases = [
+                (
+                    Some(Ok(Checked::UpToDate(Version::new(1, 3, 0)))),
+                    "Syrinx 1.3.0 is up to date.",
+                ),
+                (
+                    Some(Err(InstallError::Transfer(TransferProblem::Unreachable))),
+                    "Syrinx couldn't reach syrinxapp.dev. Check your connection and try again.",
+                ),
+                (
+                    Some(Err(InstallError::Transfer(TransferProblem::Cancelled))),
+                    "Update cancelled; nothing was installed.",
+                ),
+                (None, "The update check stopped unexpectedly."),
+            ];
+            for (checked, expected) in cases {
+                let mut panel = panel();
+                panel.begin_check(&unused_host());
+                assert_eq!(panel.finish_check(checked, None), expected);
+                assert_eq!(panel.stage, Stage::Idle);
+                assert!(panel.remote.is_none() && panel.cancel.is_none());
+            }
+        }
+
+        #[test]
+        fn an_offer_of_the_staged_version_is_not_downloaded_again() {
+            let mut panel = panel();
+            panel.stage = Stage::Ready(OFFERED);
+            panel.begin_check(&unused_host());
+            let available = Checked::Available {
+                version: OFFERED,
+                bytes: BYTES,
+            };
+            let status = panel.finish_check(Some(Ok(available)), Some(unused_host()));
+            assert_eq!(status, "Syrinx 1.4.0 is already downloaded and ready.");
+            assert_eq!(panel.stage, Stage::Ready(OFFERED));
+            assert!(panel.remote.is_none());
+        }
     }
 }

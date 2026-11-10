@@ -252,3 +252,44 @@ a closed issue is enough).
   changed since; anything in it that still matters to you, such as the
   third-party skills under `.claude/skills/` or what the history shows, is
   yours to decide.
+
+### 10. Linux camera and microphone iframe delegation
+
+The 2026-11-02 loopback matrix verified geolocation and notification
+delegation enforcement. **Camera and microphone delegation are unverified
+on this machine:** the positive controls had no usable device. The honest
+"or a site it embeds" prompt remains for all four kinds.
+
+With a webcam and microphone attached, repeat the synthetic loopback iframe
+tests for camera and microphone separately. A virtual v4l2loopback device
+is fine if you choose it; agents must not install anything to create devices.
+Use a fresh scratch profile and retain the normal display, bus and input
+method. For each kind:
+
+1. Check that a top-level request reaches Syrinx's permission handler with
+   the device present. Deny it; no capture or grant is needed.
+2. Request it from a cross-origin iframe (127.0.0.1 parent, localhost child)
+   with no `allow` attribute and no Permissions-Policy header. Record whether
+   WebKit blocks it before the handler.
+3. Repeat with explicit delegation (`allow="camera"` or `allow="microphone"`,
+   and a compatible policy if supplied). Record whether the handler runs,
+   then deny it.
+4. Record only pass/fail, error categories and static handler counts in
+   [#234](https://github.com/Fledge-Software/Syrinx-app/issues/234). Keep the
+   kind unverified if its positive control cannot reach the handler. Never
+   include device labels, identifiers, pictures or audio. Report any
+   undelegated request reaching the handler before choosing another policy.
+
+The authored-page method and engine-source limitation are in
+`docs/dev/linux-permission-delegation.md`. No account or real page is needed.
+
+### 11. Landing checks for the Linux port (#226)
+
+Before approving #226, work through
+[#241](https://github.com/Fledge-Software/Syrinx-app/issues/241):
+
+- Windows tab switches (sidebar, Ctrl Tab, a menu, the download flyout): the
+  page gets the keys and nothing flickers;
+- a link from another program while Syrinx is behind;
+- the reparenting X11 check, if a GNOME or KDE X11 session is available;
+- confirmation of the coordinator-recorded part of the 2026-10-31 decision.

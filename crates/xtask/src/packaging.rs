@@ -1,5 +1,6 @@
 //! Builds Syrinx's portable package and checks the owner-run scripts; it never installs or registers.
 
+mod linux;
 mod manifest;
 mod registration;
 mod sha256;
@@ -31,6 +32,10 @@ const SETUP_PAYLOAD_VARIABLE: &str = "SYRINX_SETUP_PAYLOAD";
 /// Build the `local` executable and assemble a versioned folder and zip under `target\package`.
 pub fn package(root: &Path) -> Result<(), String> {
     check(root)?;
+    // Linux ships a tarball with shell scripts; the rest of this function is the Windows package.
+    if !cfg!(windows) {
+        return linux::package(root);
+    }
     crate::run_cargo(
         root,
         &[
@@ -68,7 +73,7 @@ pub fn package(root: &Path) -> Result<(), String> {
     let identity = build_identity(root)?;
     let output = root.join(OUTPUT_FOLDER);
     let name = manifest::package_name(&identity);
-    let folder = fresh_package_folder(&output.join(&name))?;
+    let folder = fresh_package_folder(&output.join(&name), MANIFEST)?;
     let files = copy_package_files(root, &folder)?;
     for program in [EXECUTABLE, APPLY_HELPER] {
         require_static_runtime(&folder.join(program))?;
@@ -191,7 +196,7 @@ fn run_tool(root: &Path, command: &[String]) -> Result<(), String> {
 }
 
 /// Design doc whose registry table is rendered from the same Rust table.
-const DESIGN_DOC: &str = r"docs\installing.md";
+const DESIGN_DOC: &str = "docs/installing.md";
 const TABLE_START: &str = "<!-- BEGIN GENERATED REGISTRY TABLE -->";
 const TABLE_END: &str = "<!-- END GENERATED REGISTRY TABLE -->";
 
@@ -208,12 +213,18 @@ const FORBIDDEN_SCRIPT_TEXT: [(&str, &str); 3] = [
 
 /// Refuse drift from the Rust registration table, forbidden script text and PowerShell syntax errors.
 pub fn check(root: &Path) -> Result<(), String> {
+    linux::check(root)?;
     check_generated_script(root)?;
     check_design_doc_table(root)?;
     let scripts = script_paths(root);
     check_script_rules(&scripts)?;
-    parse_powershell(&scripts)?;
-    println!("Packaging scripts match the registration table and parse.");
+    // Windows PowerShell's parser is the reference; other platforms check the text rules only.
+    if cfg!(windows) {
+        parse_powershell(&scripts)?;
+        println!("Packaging scripts match the registration table and parse.");
+    } else {
+        println!("Packaging scripts match the registration table; the Windows gate parses them.");
+    }
     Ok(())
 }
 
@@ -360,10 +371,10 @@ fn git(root: &Path, arguments: &[&str]) -> Result<String, String> {
         .map_err(|_| format!("git {} printed non-UTF-8 output.", arguments.join(" ")))
 }
 
-fn fresh_package_folder(folder: &Path) -> Result<PathBuf, String> {
-    // Replace only an earlier package of ours, recognised by its manifest.
+fn fresh_package_folder(folder: &Path, marker: &str) -> Result<PathBuf, String> {
+    // Replace only an earlier package of ours, recognised by its manifest or checksum list.
     if folder.exists() {
-        if !folder.join(MANIFEST).is_file() {
+        if !folder.join(marker).is_file() {
             return Err(format!(
                 "{} exists but is not a Syrinx package; move it aside first.",
                 folder.display()
@@ -440,7 +451,8 @@ mod tests {
 
     fn repository() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(r"..\..")
+            .join("..")
+            .join("..")
             .to_path_buf()
     }
 
@@ -499,6 +511,8 @@ mod tests {
         }
     }
 
+    // Runs the script under Windows PowerShell, as setup does.
+    #[cfg(windows)]
     #[test]
     fn register_script_finds_its_own_folder_when_run_as_setup_runs_it() -> Result<(), String> {
         // A synthetic folder without syrinx.exe: the script must stop before writing anything.
@@ -528,6 +542,7 @@ mod tests {
     }
 
     /// Copy the registration scripts into `folder` and run them with setup's arguments.
+    #[cfg(windows)]
     fn run_register_probe(folder: &Path) -> Result<(bool, String), String> {
         for script in ["register-syrinx.ps1", GENERATED_SCRIPT, "syrinx-common.ps1"] {
             let source = repository().join(SCRIPT_FOLDER).join(script);
@@ -588,6 +603,8 @@ mod tests {
         );
     }
 
+    // The packaged paths are Windows paths, spelled with drive letters and backslashes.
+    #[cfg(windows)]
     #[test]
     fn executable_comes_from_the_separate_package_build() {
         // Development builds' executable folder (`cargo syrinx`, the gate and launch checks).

@@ -5,6 +5,7 @@ use std::fs;
 
 use super::fault::{Step, hook};
 use super::stage::{DISCARD_MARK, UNREADABLE_STATE_DISCARD_MARK};
+#[cfg(windows)]
 use super::startup::open_unchangeable;
 use super::tests::{
     NEW, OLD, Sandbox, assert_untouched, now, packaged, plenty, program_files, read_tree, stage,
@@ -168,6 +169,8 @@ fn an_over_long_mark_without_pending_is_cleared_rather_than_stopping_every_start
     assert_discard_finished(&sandbox);
 }
 
+// Needs Windows refusing to delete a file another handle holds.
+#[cfg(windows)]
 #[test]
 fn a_discard_stopped_by_a_locked_file_keeps_the_copy_recognisable_until_it_finishes() {
     let (sandbox, keys) = packaged();

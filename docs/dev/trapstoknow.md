@@ -566,6 +566,447 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   and test a release zip on a machine other than the one that built it.
   Source: `vendor/gpui-pre-windows-0.3.8.provenance.md` (observed; high).
 
+## Linux: WebKitGTK, X11 and POSIX
+
+The [final B4 native receipt at `b5fce81`](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6706547440)
+passes all native fixtures and 1,875 gate tests. Its JSON contains 24 named
+palette behaviour checks, all passing; the coordinator's 25 pass markers
+also include the passing 1,000-row D48 timing measure.
+The complete gate still exits 1 solely for palette timing budgets on this
+i5-4460 / HD 4600; no budget changed.
+
+- **A navigation policy decision is not a document load start.** WebKitGTK
+  asks for navigation policy even for an authored fragment link, then changes
+  the current document without `load-changed::Started`. At `8c70acb`, the
+  adapter marked the policy callback as an in-flight document navigation,
+  producing `SamePage { navigating: true }` after an already-finished page.
+  Stage the policy kind until a real document Started; do not overwrite an
+  existing Back navigation or force every same-page change to false. Windows'
+  fragment reports have no NavigationStarting, and the shared `navigating`
+  flag means another document is still in flight. Source: [the 3/3 receipt](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6706258774),
+  [Windows spike evidence](https://github.com/Fledge-Software/Syrinx-app/issues/126#issuecomment-6468977926),
+  `browser/history_state.rs`, and [WebKitGTK 2.54.1's fragment policy path](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebCore/loader/FrameLoader.cpp#L1737)
+  (observed report kind, source-confirmed and display-free replayed,
+  2026-11-07; corrected native check passed at `b5fce81`).
+- **A TLS failure's active URI can already be the previous HTTP document.**
+  WebKitGTK 2.54.1 commits provisional-load rollback before delivering the
+  TLS failure signal. Its `failing_uri` still names the rejected request;
+  `WebView::uri()` can name the previous document or be empty. Do not discard
+  the signal URI and classify a rejected HTTPS request from the active page.
+  The `b8db1a5` security fixture caught that adapter mistake with its unchanged
+  HTTPS assertion. Source: [the coordinator receipt](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6706143225),
+  `browser_gtk/page.rs`, and WebKitGTK 2.54.1's
+  [failure dispatch](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/WebPageProxy.cpp#L8448)
+  and [TLS signal](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/API/glib/WebKitWebView.cpp#L2783)
+  (native failure and source-confirmed cause, 2026-11-07; corrected native
+  security suite passed at `b5fce81`). Returning handled still rejects the load; it never grants
+  a certificate exception.
+- **WebKitGTK's library dependencies do not guarantee a usable media pipeline.**
+  At `a01b28d`, X11, lifecycle, popups, controls and permissions passed, but
+  synthetic video reached `GStreamer element autoaudiosink not found` and
+  WebKitWebProcess aborted. The machine had only GStreamer and base plugins.
+  `autoaudiosink` belongs to the good set; require the good, bad and libav
+  runtime packages in the installation guidance. Probe with
+  `gst-inspect-1.0 autoaudiosink` when available; that is an element check,
+  not proof of every decoder or audio device. Keep native media assertions
+  intact and let the owner install missing system packages. Source:
+  [coordinator receipt](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6683986953)
+  and [GStreamer element documentation](https://gstreamer.freedesktop.org/documentation/autodetect/autoaudiosink.html)
+  (native observation and upstream documentation, 2026-11-06; owner installed
+  the plugins and native media passed at `b5fce81`). Product detection and an actionable
+  prerequisite message are proposed in #246; the installer warning alone
+  cannot prevent a portable launch from reaching this engine failure.
+- **A hidden-survivor resize failure can mean it moved, not that it stayed
+  stale.** At `812b19f`, expected `(19, 29, 480, 300)` was the old survivor
+  rectangle; actual `(7, 11, 320, 240)` was the active page's new rectangle.
+  GTK resized every page unconditionally. Reuse Windows' shared `Placement`
+  policy: leave hidden geometry alone and apply the current card before
+  mapping on activation. Source: `browser_gtk/page_placement.rs`, Windows
+  `browser/page.rs` and both native lifecycle fixtures; the coordinator's
+  [3/3 reproduction](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6675466572)
+  and the failing-then-passing display-free operation-order regression
+  (observed and code-read, 2026-11-05; corrected native check passed at `b5fce81`).
+- **A private Downloads variable set after GLib starts can still leave the
+  owner's Downloads selected.** Prepare a mode-0700 config root containing
+  an explicit `user-dirs.dirs` before any GLib/GTK initialization or threads,
+  then read GLib's actual Downloads directory on `syrinx-gtk` before every
+  fixture download. Refuse missing or different destinations; never accept
+  HOME fallback. Source: `examples/linux/environment.rs` and its preparation
+  and mismatch regressions (source-confirmed and display-free tested,
+  2026-11-05; all five native download scenarios passed at `b5fce81`).
+- **A scratch runtime disconnects native audio from the desktop.** Keep the
+  coordinator's real `XDG_RUNTIME_DIR` for native WebKit/audio tests while
+  isolating data/cache/config. Only sandbox display-free Cargo commands use
+  a fresh private runtime to avoid the sandbox's read-only desktop runtime.
+  Do not move native audio into that scratch runtime to make tests look
+  isolated. Source: Task 3 startup contract and the desktop socket paths
+  (source-confirmed, 2026-11-05; native muted audio passed at `b5fce81`).
+- **An unresolved permission can outlive the navigation that requested it.**
+  Take the pending map before denying native requests, so synchronous denial
+  callbacks cannot reborrow it. Navigation emits completion while the page
+  is live; close must retire the page before denial so stale callbacks remain
+  invalid. Source: `browser_gtk/page_permissions.rs` and its ownership/event
+  regressions (source-confirmed and display-free tested, 2026-11-05; expanded
+  native Navigate/close cases passed at `b5fce81`).
+- **A popup download may report before its Created acknowledgement.** The
+  engine releases held download reports inside adoption, then the dispatcher
+  emits Created. Accept either ordering but require both attribution and
+  Created before declaring adoption complete. Source: `browser_gtk/engine.rs`,
+  `browser/protocol.rs`, and `examples/linux/downloads/observation.rs`'s
+  failing-then-passing ordering regression (source-confirmed, 2026-11-05;
+  native popup download cases passed at `b5fce81`).
+- **The previous load's completion can falsely pass a Reload check.** Reaching
+  an address through History does not drain its NavigationCompleted. Drain
+  earlier FIFO callbacks before Reload and require that tab's new Loading
+  followed by successful, noncancelled completion. Source:
+  `examples/linux/history.rs`'s stale/other-tab/failure replays
+  (source-confirmed and display-free tested, 2026-11-05; corrected native
+  Reload assertion passed at `b5fce81`).
+- **A calculated Find index alone does not prove the native selection moved.**
+  The shared label is one-based and empty Find must complete with `0/-1`.
+  Require native found/failed completion plus independent authored selected-span
+  evidence for sequential direction and wrap checks. GTK drops the returned
+  query and native index, so this does not prove overlapping-operation
+  correlation; that pre-existing gap is #245. Source: `browser_gtk/page.rs`,
+  `examples/linux/controls/find_observation.rs` and their RED/GREEN regressions
+  (source-confirmed, 2026-11-05; native baseline, reversed-direction mutation
+  and real Find-label inspection passed in the `a01b28d` receipt).
+- **Native X11 focus alone does not establish window-manager activation.**
+  At `cb44257`, three permissions runs failed the native-focus guard before
+  Enter, and one earlier X11 probe failed popup-to-chrome transfer. Fixtures
+  mapped unmanaged parents and used `XSetInputFocus`; their command barrier
+  did not prove that Hyprland had activated them. Show a managed fixture,
+  request `_NET_ACTIVE_WINDOW`, wait for WM acknowledgement and actual native
+  focus, then send host Focus and await the page child. Keep the immediate
+  pre-key guard and the product's foreground rule. Poll outside GTK's thread
+  so its event loop can make progress. Do not change `follow_mouse` or add a
+  global focus helper. Source: [the coordinator receipt](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6705935149),
+  `examples/linux/permissions.rs`, `acceptance/window_focus.rs` and the
+  [EWMH activation protocol](https://specifications.freedesktop.org/wm/latest-single/)
+  (observed and source-confirmed, 2026-11-07; corrected native check passed at `b5fce81`).
+- **A coordinator focus helper can break an otherwise valid native probe.**
+  Run it only during palette acceptance, including the palette stage inside
+  the full gate. Keep it off during every native fixture/probe: those use
+  an owned unmanaged popup and test refusal to take focus. The coordinator's
+  `dec469e` rerun passed page-close 3/3 with the helper off; helper interference
+  must not be mistaken for a product focus failure. Source:
+  [#221, comment 6673543416](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673543416)
+  (native observation, 2026-11-05). The complete native suites also passed
+  at `b5fce81` with the helper restricted to palette acceptance.
+
+- **A raw `XSetInputFocus` takes the keys from another application, and on
+  a minimised window it ends the process.** X11 grants focus to any client
+  that asks, so a page shown while another program is in front took that
+  program's typing, against the owner's 2026-10-12 foreground rule; and a
+  window that is not viewable (minimised, or a child of one) answers with a
+  BadMatch error, which GDK's process-wide X error handler treats as fatal.
+  Check `x11::syrinx_in_foreground()` before any focus Syrinx starts itself
+  (a click on the page is the owner's own act), focus through
+  `Connection::set_focus`, which refuses a window that is not viewable, and
+  wrap a focus on GTK's own connection in the display's error trap, as
+  `page_keys.rs` does. Source: the #226 review; `x11.rs`'s tests cover a
+  background Syrinx and an unmapped window under Xvfb (code-confirmed; the
+  owner's minimise check is pending).
+- **A private-connection request can fail silently while GDK holds an error
+  trap.** `Connection::trapped` then reports success for a request that
+  failed, so the caller acts on a window that is already gone; the next
+  query fails cleanly. Xlib has one error handler for the whole process, and
+  GDK's traps save and restore whichever is installed. So `ErrorTrap`
+  (`linux/x11_errors.rs`) is installed once, on GTK's thread right after
+  `gtk::init`, and nothing may call `XSetErrorHandler` again. While a GDK
+  trap is pushed, private errors reach GDK's handler, which ignores errors
+  on displays it does not own; that race remains. Moving the private
+  connection to xcb or x11rb, whose errors come back per request, would
+  remove it, but adds a dependency and needs the owner. Source: b56f7f3's
+  Xvfb experiment on GTK 3.24.41 (observed 2026-11-03).
+
+- **A measurement root can exit before its descendants.** Traversing only
+  a still-live root misses orphaned children; waiting for the root alone
+  also misses a child that ignores termination. The standalone measurement
+  runner scopes itself as a child subreaper, retains process identities,
+  reaps adopted children and uses bounded cleanup even after a GUI probe
+  fails. Its prior process attribute is restored. Source: native subprocess
+  regressions in `scripts/linux/test_measure_runner.py` and Linux
+  `PR_SET_CHILD_SUBREAPER(2)` (observed, 2026-11-02).
+- **Keep scratch runtime paths short.** Syrinx's Unix instance socket adds
+  its own name to `XDG_RUNTIME_DIR`; Linux's `sockaddr_un.sun_path` is only
+  108 bytes including the terminator. Placing runtime below a long benchmark
+  results folder failed with "Syrinx's link channel failed" before the main
+  window opened. The measurement runner uses a private, short
+  `/tmp/sx-runtime-*` directory while retaining its results elsewhere. Source:
+  `instance/pipe_unix.rs`, Linux `unix(7)` and the first software-rendered
+  measurement-script trial (observed, 2026-11-02).
+- **A download observer can keep a closed host's WebKit context alive.**
+  The context's signal owns the registry, tracked views own their context,
+  and clearing only `Engine.pages` leaves a cycle. Shutdown must release
+  tracked views and held reports, take active downloads out of the registry,
+  and cancel them outside its borrow; late starts are refused. Source:
+  independent native context/registry weak-reference reproduction and
+  `downloads_shutdown_tests.rs` (observed and regression tested, 2026-11-02).
+- **A native test must use the same foreign-window host as a page.**
+  A conventional GTK toplevel with WebKit hit an X11 MIT-SHM `BadAccess` in
+  this restricted session; an unrealized view did not deliver location
+  prompts. `permission_tests.rs` uses the production `Embed` host and proves
+  both positive controls before accepting a missing handler call as policy
+  enforcement. Source: the fixture's native trial runs (observed,
+  2026-11-02). This does not claim that ordinary app windows fail to open.
+  A subsequent `page_close` example using the ordinary `BrowserHost` also
+  exited on MIT-SHM attach (`BadAccess`, request 130, minor 1). The coordinator
+  then ran the draft outside the sandbox: page-close and cookie fixtures
+  passed without MIT-SHM errors; history failed independently. This confirms
+  the attach failure was environmental. Source: [#221, comment 6585434681](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6585434681)
+  (observed, 2026-11-02). Run native acceptance outside this sandbox; do not
+  disable MIT-SHM or alter the display, input method or engine sandbox.
+- **A host load is not a WebKit user gesture.** `Page::navigate` uses
+  `load_uri`, whose navigation action can report no gesture. Mapping that
+  directly into `HistoryChange::NewDocument` hid all earlier rows in the
+  shared back/forward list. Preserve one matching Syrinx request separately
+  and consume it once; a later script move must stay page-initiated. Source:
+  `browser_gtk/history_intent.rs`, the display-free five-load regression and
+  the coordinator's failed native history run (code-read and observed,
+  2026-11-02; #221). Do not change the shared list's hiding rule to mask it.
+- **WebKit's public permission request omits the requesting frame's origin.**
+  `WebKitUIClient.cpp` discards frame information for geolocation and exposes
+  no requesting-origin getter through `WebKitUserMediaPermissionRequest`.
+  Delegation enforcement is verified for geolocation and notifications
+  only. Camera and microphone delegation are unverified on this machine:
+  their positive controls had no usable device, so zero handler calls do
+  not establish a policy block. The owner retains the delegation prompt for
+  all four kinds and tracks device-backed iframe checks in #234.
+  Prompts must say "or a site it embeds" and keep the top-level
+  origin as the remembered-choice key. Never present that origin as a proven
+  requesting frame. Source: [WebKitUIClient.cpp, WebKitGTK 2.54.1](https://github.com/WebKit/WebKit/blob/webkitgtk-2.54.1/Source/WebKit/UIProcess/API/glib/WebKitUIClient.cpp#L259),
+  native loopback matrix in `linux-permission-delegation.md` (observed,
+  2026-11-02), and `browser_gtk/permission_tests.rs`.
+- **A camera-and-microphone request grants both when `allow()` is called.**
+  Mapping it to the first matching device can reuse camera consent to grant
+  a microphone too. Syrinx refuses the compound request because its prompt
+  represents one permission only. Separate requests still have separate
+  choices. Source: `browser_gtk/page.rs` and WebKit's
+  `UserMediaPermissionRequest::allow` contract (code-read, 2026-11-02).
+- **The print dialog runs a nested GTK loop.** Opening it while the command
+  pump borrows `HOST` lets resize or close reenter that borrow. Defer it with
+  a real idle source and a page-lifetime ticket. `MainContext::invoke`, used
+  by `gtk_thread::post`, may execute immediately on the GTK thread and does
+  not provide that deferral. Source: `PrintOperation::run_dialog`, GLib's
+  `MainContext::invoke` contract and `page_tests.rs` (code-read and regression
+  tested, 2026-11-02).
+- **GTK allocations use logical units; X11 page bounds use physical pixels.**
+  With inherited `GDK_SCALE=2`, using physical dimensions directly doubled
+  the WebKit child inside its container. Convert through the widget's scale
+  factor, rounding up partial pixels. Do not reset the owner's scale to hide
+  it. Source: the native X11 window tree, 1236×1916 inside a 618×958 container
+  before correction, and `page_tests.rs` (observed, 2026-11-02).
+- **Unix profile names must retain their original bytes and case.** Windows'
+  lowercase/backslash normalization aliases different Unix profiles, and
+  lossy UTF-8 conversion aliases invalid byte sequences. Hash normalized
+  absolute Unix path components as bytes. Source: `instance/names.rs` and
+  its case, backslash and non-UTF-8 regression tests (code-read and tested,
+  2026-11-02).
+- **A restricted runtime directory can look like an instance-test failure.**
+  The agent sandbox makes `/run/user/1000` read-only; ten instance tests
+  failed there but all passed with a fresh mode-0700 `XDG_RUNTIME_DIR`.
+  Keep `DISPLAY`, `DBUS_SESSION_BUS_ADDRESS` and the input-method environment
+  unchanged alongside scratch data/cache/config. This is an environmental
+  test setup, not a reason to change product code or assertions. Source:
+  the baseline gate and coordinator's outside-sandbox check (observed,
+  2026-11-02).
+- **This sandbox has no GPU device.** Without `/dev/dri`, Mesa reports
+  "Failed to query drm device" and uses software rendering. Its CPU, memory,
+  startup and frame timings cannot represent the development machine.
+  GDK frame-clock freeze/thaw critical messages appeared in both the gate's
+  smoke run and an ordinary `cargo syrinx` run on the untouched branch;
+  they are not confined to the smoke mode. Source: baseline native and gate
+  logs and the coordinator's environment report (observed, 2026-11-02).
+- **wry's GTK backend injects `window.ipc` into every page.** Its
+  `InnerWebView::new_gtk` runs an initialization script defining
+  `window.ipc` whether or not an IPC handler is set, which is exactly what
+  the page rules forbid on Windows. Linux pages are therefore built with
+  `webkit2gtk` directly (`browser_gtk/page.rs`), never through wry. Source:
+  `vendor/wry-0.57.0/src/webkitgtk/mod.rs`, the `w.init("Object.defineProperty(window, 'ipc'…")`
+  call after the handlers (code-confirmed, 2026-10-31).
+- **A GTK page can sit inside Syrinx's window only through X11.** GTK 3 can
+  wrap a foreign X11 window but not a Wayland surface, so each page is a
+  GTK window whose GDK window is an X11 child of GPUI's window, as wry does
+  it. GPUI is built with its X11 backend only and GDK is limited to X11
+  (`gtk_thread.rs`), so under Hyprland Syrinx runs through XWayland. Source:
+  wry's `create_container_x11_window` and `create_gtk_window` (code-read).
+- **Native assertion failures need values, not only a generic label.**
+  The 7f0899b coordinator run got past replaceState but its row-order error
+  omitted the actual and expected rows, hiding whether an entry was renamed,
+  hidden or duplicated. History assertions now include both values, the
+  current/list snapshot and the recent synthetic event/command trace. Do not
+  reverse expected rows to match WebKit's bulk GList ordering: this fixture
+  uses signed nth_item offsets and the shared list's nearest-first API.
+  Source: #221's coordinator run, the complete display-free history replay
+  and WebKitGTK 2.54.1's WebKitBackForwardList/WebBackForwardList code
+  (observed and code-read, 2026-11-04).
+- **A history API change can happen before the document finishes loading.**
+  `address_changed` ignored URI notifications while `is_loading` was true,
+  including a post-commit replaceState/pushState during parsing. Nothing
+  retried the report at `Finished`, so the shared list kept the old address.
+  Defer that post-commit change until a successful finish; clear it at a new
+  start/commit or failure. This does not report a provisional page as
+  committed. Source: `browser_gtk/history_delivery.rs`, its display-free
+  regression (failed before the fix), and the authored history fixture
+  (code-read and tested, 2026-11-03; #221). The coordinator's `b5af570` run
+  confirmed the timeout was fixed; the fragment-specific gap is below.
+- **A host fragment request can finish without a document Finished signal.**
+  `load_uri` to the same document produced Loading true, the fragment URI
+  and Loading false, with no History report: delivery waited only for
+  `load-changed::Finished`. Drain a deferred URI at Loading false only when
+  no document load is active; real documents must still wait for their own
+  success/failure. Source: [#221, comment 6640541799](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6640541799),
+  WebKitGTK 2.54.1's `PageLoadState` and `WebPageProxy` same-document path,
+  and the display-free history replay (observed and code-read, 2026-11-04).
+- **A pending host URI can overwrite the document that is still finishing.**
+  In the `e7ce7a1` native trace, requesting 44 while 43 finished produced
+  SamePage 44 before NewDocument 44, so Forward later showed 42, 44, 44.
+  WebKit's active URI includes pending API requests. Record the request
+  before `load_uri`, and keep its URI out of the older document's finish;
+  wait for its own document boundary or same-document settle. The rows are
+  the shared Rust list's, not WebKit's bulk Forward getter. Source:
+  [#221, comment 6641629095](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6641629095),
+  WebKitGTK 2.54.1 `PageLoadState::activeURL`, and the exact display-free
+  replay (observed and code-read, 2026-11-04).
+- **A traversal's pending URI can complete the same jump twice.**
+  At `885701d`, Forward exposed URI 43 as SamePage before its real
+  BackOrForward 43 commit. The first landing consumed the pending jump;
+  the second reset the shared list, leaving only Back row 43 after the
+  next document's replaceState. Guard Back/Forward and Reload before their
+  native API calls, just as `load_uri` is guarded. An older finish must not
+  publish the new request's URI. Source: [#221, comment 6672868517](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672868517),
+  `/tmp/syrinx-b4-focus.GWs8EX/navigation_history_spike.log` and the exact
+  display-free replay in `browser_gtk/page_tests.rs` (observed and tested,
+  2026-11-05).
+- **A link or script navigation's address is not the view's yet at `Started`.**
+  When `load-changed` reports `Started` for a navigation the page began, the
+  view's `uri` still names the document being left; the new address arrives
+  in a `notify::uri` while the load is provisional. Taking the address at
+  `Started` judged the old page's response missing (`NoResponse`) and its
+  method unseen. `browser_gtk/page_text.rs` starts the chain at the first
+  provisional address that differs from the committed one, and a reload's at
+  commit. Syrinx's own `load_uri` sets the address at once. Source: a
+  synthetic sign-in page that moved on by script (observed, WebKitGTK 2.54.1).
+- **WebKitGTK ignores a page's document it cannot show.** Its default
+  response policy downloads only an attachment and drops any other type it
+  cannot display, so a link to a `.zip` served as `application/octet-stream`
+  did nothing and no download started. Syrinx calls `download()` for such a
+  main-frame response (`page.rs`, `download_unshowable`), on popups from their
+  creation too, since a popup loads before the UI adopts it and its `uri` is
+  still unset then. Source: WebKit's `webkitWebViewDecidePolicy` and a
+  synthetic loopback download (observed, WebKitGTK 2.54.1).
+- **GTK may be used from one thread only.** gtk-rs records the thread that
+  initialised GTK and panics on use from any other, so every GTK call (pages,
+  file dialogs, the start-up warning) goes through `gtk_thread::run` or
+  `post` onto the one `syrinx-gtk` thread. Never call GTK from the GPUI
+  thread. Source: gtk-rs's `assert_initialized_main_thread!` (code-read).
+- **Linux reports a link where a folder was asked for as `ENOTDIR`, not
+  `ELOOP`.** `open` with `O_DIRECTORY | O_NOFOLLOW` on a symbolic link fails
+  with `ENOTDIR`, so a linked data folder looked like a wrong entry kind
+  instead of a link. `native_unix::open_with` checks the name with `lstat`
+  and reports a link as `ReparsePoint`. Source: `storage::tests_unix`'s
+  `a_linked_data_folder_is_refused` (observed 2026-10-31).
+- **Unix cannot hold a file against rename, write or delete.** Windows'
+  no-sharing opens are what many storage tests assert; on Unix the guard
+  instead revalidates retained identities (device and inode) and refuses a
+  moved or replaced entry, and those tests are Windows-only. Do not try to
+  emulate deny-sharing with advisory locks: only Syrinx would honour them.
+  The control file and instance lock do use `flock`, which only Syrinx's
+  own processes need to respect. Source: the storage and instance tests
+  run on Linux (observed 2026-10-31).
+- **Hyprland may keep a newly launched acceptance window in the background.**
+  Focus-steal prevention did so in the foreground acceptance run at
+  `732aafd`. The coordinator used `hyprctl focuswindow` only when no
+  Syrinx-class window was active. Continuously forcing the main window
+  would take keys from its popup and invalidate the check. Record this
+  preparation; do not change the compositor's policy or make Syrinx steal
+  focus. Hyprland's active application and X11's exact keyboard-focus window
+  are different facts. Source: [#221, comment 6672563128](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672563128)
+  (observed, 2026-11-05).
+- **A focus precondition expires when an acceptance check yields.**
+  The `885701d` find check saw keys leave chrome, yielded to GPUI, then
+  injected PageFocused after native focus had returned to chrome. Keeping
+  the field focused was correct for that later ownership. Observe native
+  child focus and the document's focus report, then deliver the test event
+  in the same GPUI update; keep the ring-clearing assertion. Source: the
+  `885701d` palette report linked in #221 and
+  `ui/palette_acceptance.rs` (observed and code-read, 2026-11-05).
+- **A managed test window may not receive focus on a real desktop.**
+  Hyprland refused focus intermittently in the frame-ancestry gate unit at
+  `885701d`. Test ownership with an unmapped tree and query its ancestors
+  directly; exercise real focus in native fixtures already in front.
+  Source: [#221, comment 6672868517](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6672868517)
+  and `browser_gtk/x11.rs` (observed and code-read, 2026-11-05).
+- **A per-module focus lock does not isolate the whole X11 unit suite.**
+  The `fe5ea09` gate stopped at another managed-window focus setup, after
+  1,054 tests passed. Browser tests also reset global focus on cleanup,
+  while the acceptance unit independently focused raw windows. Keep unit
+  roots unmapped and pass the observed foreground state into the private
+  focus operations. Run real focus/visible-stacking probes explicitly in
+  `page_close`, separately from parallel unit tests. Serialize intentional
+  stale-window queries on GTK's thread, since GDK error traps replace a
+  process-wide Xlib handler. Source: [#221, comment 6673181928](https://github.com/Fledge-Software/Syrinx-app/issues/221#issuecomment-6673181928),
+  the workspace X11 test audit and `linux/x11_errors.rs` (managed-window
+  failure observed; cross-suite interference and error-trap overlap
+  code-read, 2026-11-05).
+- **An adopted foreign GDK window does not deliver GTK toplevel focus.**
+  GTK 3.24.52's X11 focus handler, including XI2, returns early for
+  `GDK_WINDOW_FOREIGN`. The `732aafd` run had X11 focus inside the main
+  window but document focus failed, including 0/20 Esc returns. Reconcile
+  the foreign GTK host's focus/blur from the actual X11 ownership query;
+  `grab_focus` alone cannot replace the missing toplevel event. Keep the
+  document's own focus report as the acceptance check. Source: the same
+  coordinator report, `gdkdevicemanager-core-x11.c` and
+  `_gdk_x11_window_get_toplevel` at GTK 3.24.52 (observed and code-read,
+  2026-11-05).
+- **X11 gives a key to the window under the pointer when it lies inside the
+  focused window.** With the chrome focused and the pointer over the page,
+  the page's WebKit window took the find bar's typing; with the page focused
+  and the pointer over the sidebar, its keys climbed past the container
+  (which selected none) to GPUI. `browser_gtk/page_keys.rs` lets the page's
+  windows select keys only while X11 focus is inside its container, and a
+  click in the page focuses it, as WebView2 does. Do not forward keys with
+  `XSendEvent` instead: fcitx's XIM drops synthetic key events, so forwarded
+  typing vanished (it worked only with `XMODIFIERS` unset). GDK selects focus
+  and key events through XInput2, so the core masks `XGetWindowAttributes`
+  reports never show them, and a filter must match XI2 `GenericEvent`s too.
+  Source: the 2026-10-31 Linux QA under XWayland with fcitx5 (observed).
+- **GPUI's X11 backend ignores `show: false` and keeps a stale window
+  origin.** `Window::new` maps every window it opens, so the kept palette sat
+  visible at the screen's corner from start-up; `open_owned_popup` hides such
+  popups. And `set_bounds` ignores the origin of a ConfigureNotify that also
+  resizes, so after Hyprland moved and resized Syrinx in one step,
+  `window.bounds()` kept the old origin and the palette opened beside the
+  window. Popups place themselves from `owned_popup::main_window_bounds`,
+  which reads the origin from the X server. Source:
+  `gpui-pre-0.3.8/src/window.rs` (`map_window` in `Window::new`) and
+  `gpui-pre-linux-0.3.8/src/linux/x11/window.rs`, `set_bounds`
+  (code-confirmed and observed 2026-10-31).
+- **A child process being started holds a copy of every open `flock`.** Until it
+  execs, the child shares the parent's open file descriptions, so a lock just
+  dropped by one thread still looked held to the next: the updater's
+  `a_helper_stopped_after_the_swap_leaves_the_new_version_working` failed once
+  in a full gate run, while another test of that program started a process.
+  `ApplyLock::try_acquire` on Unix retries a refusal for about 100 ms; a real
+  holder keeps the lock far longer. Source: the 2026-10-31 Linux gate (observed
+  once; mechanism from `fork`/`flock` semantics, not traced).
+- **A Unix socket read must also watch the stop signal.** A connected but
+  silent same-user client held the link listener in a 2 s read, so closing
+  Syrinx waited for it. `pipe_unix::read_message` reads in 100 ms slices and
+  answers `CLOSING` once the stop is raised, as the Windows pipe ends every
+  step on its stop event. Source: `instance::tests::a_silent_client_does_not_delay_shutdown`
+  (observed 2026-10-31).
+
+### Keep gate executables separate between worktrees
+
+**Observed, 2026-11-02:** sharing `CARGO_TARGET_DIR` between worktrees selected
+an `xtask` executable compiled in another worktree. `workspace_root` in
+`crates/xtask/src/main.rs` uses compile-time `CARGO_MANIFEST_DIR`, so the
+child commands checked that other source tree. Use a private target directory
+for each worktree, and check the compiler source paths before recording a
+branch's gate. An exit status alone does not identify which tree was checked.
+
 ## Update downloads: WinHTTP
 
 - **A loopback test through WinHTTP's automatic proxy can leave the
@@ -708,7 +1149,10 @@ deferred work now has a GitHub issue (`docs/dev/deferred-work.md`).
   `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager\<provider>\UserSyncRoots`
   and makes no WinRT call (owner decision, 2026-10-31); do not bring the
   WinRT lookup back. That layout is not a documented interface, so recheck
-  it after a major Windows update. Source: weekly-release runs 4 and 5
+  it after a major Windows update. A registered root on a network or
+  removable drive (or, on Linux, a FUSE or network mount) is skipped, not
+  compared, so the database's own drive check is what keeps it out of such
+  a folder. Source: weekly-release runs 4 and 5
   (cdb stacks in `GetCurrentSyncRoots` and `IsSupported`) and Windows 11 Pro
   26300 on 2026-10-31, where the fault event's offset resolved through the
   PDB to `GetCurrentSyncRoots` in two test binaries (observed).

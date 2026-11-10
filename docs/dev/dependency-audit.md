@@ -634,3 +634,83 @@ With `wasmtime-wasi` the pin fails this workspace's D9 network gate
 networking (D9, DW-68)" section and
 `docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md`, "Owner decides",
 have the evidence and the options.
+
+## Linux platform layer, 2026-10-31
+
+The owner made Syrinx one app for Windows, Linux and macOS on 2026-10-31
+(`docs/decisions.md`). Building `syrinx-platform` on Linux adds the GTK 3 and
+WebKitGTK bindings and GPUI's X11 backend, all as Linux-only target
+dependencies: nothing below is compiled for Windows. `Cargo.lock` gains 60
+packages and loses none.
+
+**Direct dependencies of `syrinx-platform` on Linux**, each pinned exactly:
+`gtk =0.18.2`, `gdkx11 =0.18.2`, `webkit2gtk =2.0.2` (feature `v2_38`),
+`x11-dl =2.21.0`, and `libc =0.2.190` on every Unix. All are MIT. The
+gtk-rs 0.18 family is the release wry 0.57 itself builds against, so the
+versions match what the pinned wry would have chosen. wry is now a
+Windows-only dependency: its GTK backend injects a `window.ipc` script into
+every page, which the page rules forbid (`docs/dev/trapstoknow.md`, "Linux").
+
+**`syrinx-update` on Unix** verifies signatures with `ring =0.17.14`
+(Apache-2.0 AND ISC), already in the lockfile before this change, in place
+of Windows CNG.
+
+**Licences of the 60 added packages.** MIT: atk, atk-sys, cairo-rs,
+cairo-sys-rs, filedescriptor, gdk, gdk-pixbuf, gdk-pixbuf-sys, gdk-sys,
+gdkx11, gdkx11-sys, gio, gio-sys, glib, glib-macros, glib-sys, gobject-sys,
+gtk, gtk-sys, gtk3-macros, is-docker, is-wsl, javascriptcore-rs,
+javascriptcore-rs-sys, open, pango, pango-sys, soup3, soup3-sys,
+version-compare, webkit2gtk, webkit2gtk-sys, winnow 0.5.40, x11-dl, xcursor,
+xim-ctext, xim-parser, xkbcommon, zed-xim. MIT OR Apache-2.0: ahash 0.8.12,
+as-raw-xcb-connection, cfg-expr, const-random, const-random-macro,
+field-offset, hashbrown 0.14.5, proc-macro-crate 1.3.1 and 2.0.0,
+proc-macro-error, proc-macro-error-attr, syn 1.0.109, system-deps,
+toml_edit 0.19.15 and 0.20.7, x11rb, x11rb-protocol. Apache-2.0: gethostname.
+MIT OR Apache-2.0 OR Zlib: xkeysym (used under MIT).
+
+**Approved narrow licence exception (owner, 2026-10-31).** Two of the 60
+added packages are outside the MIT/Apache-2.0/BSD list, and both run only
+while compiling; neither is linked into Syrinx:
+
+- `target-lexicon 0.12.16`, Apache-2.0 WITH LLVM-exception (the exception
+  only adds permissions), reached through `system-deps` and `cfg-expr` in
+  the build scripts of every GTK `-sys` crate.
+- `tiny-keccak 2.0.2`, CC0-1.0 (a public-domain dedication), reached through
+  `const-random-macro`, a proc-macro behind `ahash`'s `compile-time-rng`
+  feature, which GPUI's X11 input-method crate `zed-xim` enables.
+
+The approval covers exactly these versions; a different version, or the
+same licence on another package, needs its own approval.
+
+**Packages already in the lockfile that Linux compiles (owner, 2026-11-03).**
+The 60 packages above are only those the port added to `Cargo.lock`. The
+lockfile already recorded every platform's packages, and the Linux build
+compiles 178 package versions that Windows does not (730 third-party
+packages in all, against Windows' 617). Earlier audits never judged the
+other 118 for Linux. Seven of them are outside the MIT/Apache-2.0/BSD list and link into
+Syrinx on Linux; the 2026-10-31 paragraph above wrongly implied there were
+only two outside it. The review of #226 found them, because
+`cargo xtask check-licences` then judged only the Windows target. The owner
+approved each at its exact version on 2026-11-03 (`docs/decisions.md`):
+
+- `ring 0.17.14` (Apache-2.0 AND ISC), the Unix signature check in
+  `syrinx-update`, and `untrusted 0.9.0` (ISC), which ring uses;
+- `inotify 0.11.5` and `inotify-sys 0.1.8` (ISC), through `notify 8.2.0`
+  and `gpui-component`;
+- `libloading 0.8.9` (ISC), through `ash` and GPUI's wgpu renderer;
+- `foldhash 0.1.5` (Zlib), through `hashbrown 0.15.5` and `wgpu-hal`;
+- `hexf-parse 0.2.1` (CC0-1.0), through `naga` and `wgpu`.
+
+All nine Linux exceptions are now in `licences.toml`, and
+`check-licences` judges `x86_64-unknown-linux-gnu` as well as
+`x86_64-pc-windows-msvc` on every machine, so a new Linux-only package with
+another licence fails the gate on either platform.
+
+**D9 network features (owner, 2026-10-31).** `cargo metadata` unifies
+features across every target, so two Linux-only crates show up asking for
+winapi's socket modules for their own Windows builds, which Syrinx never
+compiles: `gio-sys 0.18.1` (`winsock2`, `ws2def`) and `filedescriptor
+0.8.3` (`winsock2`). Both are added to `THIRD_PARTY_NETWORK_FEATURES` in
+`crates/xtask/src/dependency_policy/resolved_windows.rs`, pinned to those
+versions, on the same reasoning as `zbus` (DW-68).
+

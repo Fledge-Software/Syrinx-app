@@ -67,7 +67,7 @@ pub fn replay_deletions(
     let mut connection = Connection::open_with_flags_and_vfs(
         lease.database_path(),
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        "win32-longpath",
+        crate::SQLITE_VFS,
     )
     .map_err(|error| database_error(StoreOperation::Open, error))?;
     let result = replay_open(&mut connection, log, recorded_generation).and_then(|()| {

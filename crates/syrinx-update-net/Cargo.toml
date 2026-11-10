@@ -12,7 +12,9 @@ license.workspace = true
 # feature list here and nowhere else, and no `[features]` table, so no build can redirect it.
 [dependencies]
 syrinx-update = { path = "../syrinx-update" }
-windows = { workspace = true, features = ["Win32_Networking_WinHttp"] }
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Networking_WinHttp"] }
