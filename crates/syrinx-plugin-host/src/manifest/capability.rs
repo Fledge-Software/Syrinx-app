@@ -100,6 +100,34 @@ impl fmt::Display for CapabilityKind {
 mod tests {
     use super::*;
 
+    /// Each kind's successor in one cycle through every kind. The match has no wildcard, so a
+    /// new variant does not compile until it is placed in the cycle.
+    fn next(kind: CapabilityKind) -> CapabilityKind {
+        match kind {
+            CapabilityKind::Storage => CapabilityKind::Folder,
+            CapabilityKind::Folder => CapabilityKind::Drafts,
+            CapabilityKind::Drafts => CapabilityKind::Index,
+            CapabilityKind::Index => CapabilityKind::OpenExternal,
+            CapabilityKind::OpenExternal => CapabilityKind::Parse,
+            CapabilityKind::Parse => CapabilityKind::Terminal,
+            CapabilityKind::Terminal => CapabilityKind::Git,
+            CapabilityKind::Git => CapabilityKind::LanguageServers,
+            CapabilityKind::LanguageServers => CapabilityKind::Storage,
+        }
+    }
+
+    #[test]
+    fn every_kind_is_listed_in_all() {
+        let mut cycle = vec![CapabilityKind::Storage];
+        let mut kind = next(CapabilityKind::Storage);
+        // Bounded, so a cycle that never returns to Storage fails instead of looping.
+        while kind != CapabilityKind::Storage && cycle.len() <= CapabilityKind::ALL.len() {
+            cycle.push(kind);
+            kind = next(kind);
+        }
+        assert_eq!(cycle, CapabilityKind::ALL);
+    }
+
     #[test]
     fn every_kind_round_trips_through_its_name() {
         for kind in CapabilityKind::ALL {

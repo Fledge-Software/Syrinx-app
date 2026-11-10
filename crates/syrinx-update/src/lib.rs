@@ -37,6 +37,8 @@ mod tests_statement;
 
 /// SHA-256 through Windows CNG, for the release tool's file listing.
 pub use cng::sha256;
+#[cfg(feature = "test-keys")]
+pub use cng::test_keys::TestKeyPair;
 pub use directory::DirectoryPayload;
 pub use error::{ManifestProblem, PathProblem, StatementProblem, UpdateError};
 pub use keys::{KeyId, KeySet, PRODUCTION_KEYS, PinnedKey};

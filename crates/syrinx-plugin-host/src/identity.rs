@@ -11,7 +11,7 @@ use crate::manifest::{CapabilityKind, PluginManifest};
 
 /// The `id`, `version` and `world` lines of a verified `package` list. `syrinx-update` verifies
 /// the signature; the application hands these lines across, since the host never links it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SignedIdentity {
     id: String,
     version: String,
@@ -19,11 +19,11 @@ pub struct SignedIdentity {
 }
 
 impl SignedIdentity {
-    /// The one constructor, and the one glue point between the verifier and the host. The
-    /// application calls it only with the `id`, `version` and `world` of a
-    /// `syrinx_update::VerifiedPluginPackage`, after `verify_plugin_package` accepted its
-    /// signature, slot and version (#140 wires it); the host cannot check that itself.
-    pub fn from_verified_package(id: &str, version: &str, world: &str) -> Self {
+    /// The one constructor, and the one glue point between the verifier and the host. Call it
+    /// only with the `id`, `version` and `world` lines of a `syrinx_update::VerifiedPluginPackage`,
+    /// after `verify_plugin_package` accepted its signature, slot and version (#140 wires it).
+    /// The host cannot check where the lines came from.
+    pub fn from_signed_lines(id: &str, version: &str, world: &str) -> Self {
         Self {
             id: id.to_owned(),
             version: version.to_owned(),
@@ -115,8 +115,37 @@ impl fmt::Display for IdentityMismatch {
     }
 }
 
-/// The signed lines and the manifest must name the same id, version and world.
-pub(crate) fn check_signed(
+/// A manifest whose package's signed lines name the same id, version and world. Only
+/// `check_signed` makes one, and only one can be registered.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SignedManifest {
+    manifest: PluginManifest,
+}
+
+impl SignedManifest {
+    /// The manifest the signed lines vouch for.
+    pub fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    /// Give up the proof, keeping the manifest.
+    pub(crate) fn into_manifest(self) -> PluginManifest {
+        self.manifest
+    }
+}
+
+/// The signed lines and the manifest must name the same id, version and world. This is the
+/// one place they are compared.
+pub fn check_signed(
+    signed: &SignedIdentity,
+    manifest: PluginManifest,
+) -> Result<SignedManifest, IdentityMismatch> {
+    compare_signed(signed, &manifest)?;
+    Ok(SignedManifest { manifest })
+}
+
+/// Name the first line on which the signed lines and the manifest disagree.
+fn compare_signed(
     signed: &SignedIdentity,
     manifest: &PluginManifest,
 ) -> Result<(), IdentityMismatch> {
@@ -245,7 +274,7 @@ module = "plugin.wasm"
     }
 
     fn signed(id: &str, version: &str, world: &str) -> SignedIdentity {
-        SignedIdentity::from_verified_package(id, version, world)
+        SignedIdentity::from_signed_lines(id, version, world)
     }
 
     #[test]
@@ -253,19 +282,19 @@ module = "plugin.wasm"
         let manifest = manifest("");
         let world = "syrinx:plugin/plugin@0.1.0";
         assert_eq!(
-            check_signed(&signed("sample", "1.2.3", world), &manifest),
+            compare_signed(&signed("sample", "1.2.3", world), &manifest),
             Ok(())
         );
         assert!(matches!(
-            check_signed(&signed("other", "1.2.3", world), &manifest),
+            compare_signed(&signed("other", "1.2.3", world), &manifest),
             Err(IdentityMismatch::Id { .. })
         ));
         assert!(matches!(
-            check_signed(&signed("sample", "1.2.4", world), &manifest),
+            compare_signed(&signed("sample", "1.2.4", world), &manifest),
             Err(IdentityMismatch::Version { .. })
         ));
         assert!(matches!(
-            check_signed(
+            compare_signed(
                 &signed("sample", "1.2.3", "syrinx:plugin/plugin@0.2.0"),
                 &manifest
             ),

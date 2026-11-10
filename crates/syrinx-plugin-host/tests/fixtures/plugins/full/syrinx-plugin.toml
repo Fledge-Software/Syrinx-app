@@ -1,0 +1,103 @@
+# The full fixture's manifest, signed with its component by syrinx-app's package test (#134).
+# Synthetic values only; it declares exactly what full/src/lib.rs implements.
+schema = 1
+
+[plugin]
+id = "test"
+name = "Synthetic test plugin"
+version = "0.1.0"
+description = "The synthetic fixture every contract test loads."
+authors = ["Example Author <author@example.invalid>"]
+repository = "https://example.invalid/test-plugin"
+licence = "MPL-2.0"
+min-syrinx = "0.1.0"
+
+[interface]
+world = "syrinx:plugin/plugin@0.1.0"
+
+[entry]
+module = "plugin.wasm"
+activation = ["on-command", "on-view", "on-search"]
+
+[[contributes.commands]]
+id = "test.echo"
+title = "Synthetic test.echo"
+
+[[contributes.commands]]
+id = "test.fail"
+title = "Synthetic test.fail"
+
+[[contributes.commands]]
+id = "test.spin"
+title = "Synthetic test.spin"
+
+[[contributes.commands]]
+id = "test.grow"
+title = "Synthetic test.grow"
+
+[[contributes.commands]]
+id = "test.alloc"
+title = "Synthetic test.alloc"
+
+[[contributes.commands]]
+id = "test.open"
+title = "Synthetic test.open"
+
+[[contributes.commands]]
+id = "test.print"
+title = "Synthetic test.print"
+
+[[contributes.commands]]
+id = "test.panic"
+title = "Synthetic test.panic"
+
+[[contributes.commands]]
+id = "test.exit"
+title = "Synthetic test.exit"
+
+[[contributes.commands]]
+id = "test.sleep"
+title = "Synthetic test.sleep"
+
+[[contributes.commands]]
+id = "test.clock"
+title = "Synthetic test.clock"
+
+[[contributes.commands]]
+id = "test.cancel"
+title = "Synthetic test.cancel"
+
+[[contributes.commands]]
+id = "test.views"
+title = "Synthetic test.views"
+
+[[contributes.commands]]
+id = "test.events"
+title = "Synthetic test.events"
+
+[[contributes.commands]]
+id = "test.chain"
+title = "Synthetic test.chain"
+
+[[contributes.commands]]
+id = "test.long-error"
+title = "Synthetic test.long-error"
+
+[[contributes.commands]]
+id = "test.new-item"
+title = "Synthetic test.new-item"
+form = true
+
+[[contributes.commands]]
+id = "test.too-big"
+title = "Synthetic test.too-big"
+form = true
+
+[[contributes.tab-types]]
+id = "test.page"
+title = "Synthetic page"
+
+[[contributes.search-feeds]]
+id = "test.items"
+title = "Items"
+tiers = ["catalogue"]

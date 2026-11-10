@@ -5,8 +5,8 @@ use wasmtime::{Config, Engine, Strategy};
 
 use crate::HostError;
 use crate::checks;
-use crate::identity::{self, SignedIdentity};
-use crate::manifest::PluginManifest;
+use crate::identity;
+use crate::registry::RegisteredPlugin;
 
 /// The engine every plugin runs on: Cranelift, epoch interruption, the default
 /// (not pooling) allocator and stack, and no on-disk cache (#137 adds Syrinx's own).
@@ -37,26 +37,20 @@ impl Runtime {
         Ok(component)
     }
 
-    /// Load a verified package: its signed lines, its manifest and its component's interface
-    /// names must agree, and the component must fit the contract. Every package load goes
-    /// through here, and only its result can be registered, so a plugin's commands appear
-    /// only after these checks pass. The identity checks run before the contract's own, so a
-    /// disagreement is named as such. Nothing is instantiated.
+    /// Compile a registered plugin's component when it loads or activates: its interface names
+    /// must carry the manifest's world and import only the capabilities the manifest requests,
+    /// and it must fit the contract. Every package load goes through here; registration never
+    /// does, so discovery compiles nothing. Nothing is instantiated.
     pub fn compile_package(
         &self,
-        signed: &SignedIdentity,
-        manifest: PluginManifest,
+        plugin: &RegisteredPlugin,
         bytes: &[u8],
-    ) -> Result<CheckedPackage, HostError> {
-        identity::check_signed(signed, &manifest).map_err(HostError::Identity)?;
+    ) -> Result<Component, HostError> {
         let component = self.build_component(bytes)?;
-        identity::check_component(&self.engine, &component, &manifest)
+        identity::check_component(&self.engine, &component, plugin.manifest())
             .map_err(HostError::Identity)?;
         checks::component_fits(&self.engine, &component)?;
-        Ok(CheckedPackage {
-            manifest,
-            component,
-        })
+        Ok(component)
     }
 
     /// Build a component from its bytes, refusing precompiled code first.
@@ -66,39 +60,5 @@ impl Runtime {
         }
         Component::new(&self.engine, bytes)
             .map_err(|error| HostError::Malformed(format!("{error:#}")))
-    }
-}
-
-/// A package that passed every load check: compiled, never instantiated. Only
-/// `Runtime::compile_package` makes one, and only one can be registered.
-#[derive(Clone)]
-pub struct CheckedPackage {
-    manifest: PluginManifest,
-    component: Component,
-}
-
-impl std::fmt::Debug for CheckedPackage {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("CheckedPackage")
-            .field("manifest", &self.manifest)
-            .finish_non_exhaustive()
-    }
-}
-
-impl CheckedPackage {
-    /// The checked manifest.
-    pub fn manifest(&self) -> &PluginManifest {
-        &self.manifest
-    }
-
-    /// The compiled component, which activation (2a) instantiates.
-    pub fn component(&self) -> &Component {
-        &self.component
-    }
-
-    /// Split into the manifest and the component.
-    pub(crate) fn into_parts(self) -> (PluginManifest, Component) {
-        (self.manifest, self.component)
     }
 }

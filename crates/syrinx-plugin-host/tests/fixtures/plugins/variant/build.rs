@@ -60,7 +60,8 @@ fn change(wit: &str) -> String {
         );
     }
     if enabled("imports-documents") {
-        // A capability interface, as a later contract adds it, that the manifest may not ask for.
+        // A capability interface that the test's manifest does not request. It is named
+        // `documents@0.1.0` only to exercise the refusal rule: the real contract never carries it.
         let wit = replace(
             wit,
             "interface lifecycle {",

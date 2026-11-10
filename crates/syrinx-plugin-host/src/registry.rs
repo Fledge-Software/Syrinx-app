@@ -1,5 +1,5 @@
-//! Registers a checked package's commands, tab types and feeds without starting the plugin,
-//! so the palette lists a plugin's commands before any of its code has run (P2-02).
+//! Registers a signed manifest's commands, tab types and feeds without compiling or starting the
+//! plugin, so the palette lists a plugin's commands before any of its code has run (P2-02).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -8,9 +8,8 @@ use std::num::NonZeroU64;
 use syrinx_core::{
     Command, CommandAction, CommandError, CommandRegistry, CommandScope, Enablement,
 };
-use wasmtime::component::Component;
 
-use crate::engine::CheckedPackage;
+use crate::identity::SignedManifest;
 use crate::manifest::{ContributedCommand, PluginManifest, SearchFeed, TabType};
 
 /// Ids no plugin may take, because Syrinx's own commands and names use them.
@@ -54,34 +53,18 @@ impl fmt::Display for RegistrationError {
 
 impl std::error::Error for RegistrationError {}
 
-/// A registered plugin: its manifest, its compiled component and its commands' palette keys.
-/// It has not been started.
-#[derive(Clone)]
+/// A registered plugin: its manifest and its commands' palette keys. Nothing of it has been
+/// compiled or started.
+#[derive(Debug)]
 pub struct RegisteredPlugin {
     manifest: PluginManifest,
-    component: Component,
     command_keys: Vec<NonZeroU64>,
-}
-
-impl fmt::Debug for RegisteredPlugin {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RegisteredPlugin")
-            .field("manifest", &self.manifest)
-            .field("command_keys", &self.command_keys)
-            .finish_non_exhaustive()
-    }
 }
 
 impl RegisteredPlugin {
     /// The checked manifest.
     pub fn manifest(&self) -> &PluginManifest {
         &self.manifest
-    }
-
-    /// The compiled component, which activation (2a) instantiates on first use.
-    pub fn component(&self) -> &Component {
-        &self.component
     }
 
     /// The keys of this plugin's commands in the palette's registry.
@@ -101,7 +84,7 @@ impl RegisteredPlugin {
 }
 
 /// Every registered plugin, by id.
-#[derive(Clone, Default)]
+#[derive(Debug, Default)]
 pub struct PluginRegistry {
     plugins: BTreeMap<String, RegisteredPlugin>,
 }
@@ -112,15 +95,15 @@ impl PluginRegistry {
         Self::default()
     }
 
-    /// Register every command a checked package declares, or none, and record its tab types
-    /// and feeds. Only `Runtime::compile_package` makes a `CheckedPackage`, so the signed
-    /// lines, the manifest and the component already agree. Nothing is instantiated.
+    /// Register every command a signed manifest declares, or none, and record its tab types
+    /// and feeds. Only `check_signed` makes a `SignedManifest`, so the package's signed lines
+    /// already name this plugin. Reads only the manifest: nothing is compiled or instantiated.
     pub fn register(
         &mut self,
-        package: CheckedPackage,
+        signed: SignedManifest,
         commands: &mut CommandRegistry,
     ) -> Result<&RegisteredPlugin, RegistrationError> {
-        let (manifest, component) = package.into_parts();
+        let manifest = signed.into_manifest();
         let id = manifest.id().to_owned();
         self.check_id(&id)?;
         let declared = manifest
@@ -136,7 +119,6 @@ impl PluginRegistry {
         })?;
         let registered = RegisteredPlugin {
             manifest,
-            component,
             command_keys,
         };
         Ok(self.plugins.entry(id).or_insert(registered))

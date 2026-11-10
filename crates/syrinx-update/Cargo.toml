@@ -13,6 +13,9 @@ license.workspace = true
 [features]
 # Opens Windows key storage to sign releases; only the release tool enables it, never Syrinx itself.
 release-tool = []
+# Exposes in-memory test key pairs to other crates' tests. Only `[dev-dependencies]` enable it,
+# so no shipped build signs anything (owner, 2026-11-10).
+test-keys = []
 
 # Swaps a staged update into place after Syrinx exits (P1-39b); ships in every package.
 [[bin]]

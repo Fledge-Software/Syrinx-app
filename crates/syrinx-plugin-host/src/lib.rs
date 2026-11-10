@@ -14,9 +14,9 @@ mod validate;
 mod wasi;
 
 pub use checks::{CONTRACT_TRACK, CONTRACT_VERSION};
-pub use engine::{CheckedPackage, Runtime};
+pub use engine::Runtime;
 pub use error::HostError;
-pub use identity::{IdentityMismatch, SignedIdentity};
+pub use identity::{IdentityMismatch, SignedIdentity, SignedManifest, check_signed};
 pub use instance::{LoadedPlugin, PluginHost, StoreData};
 pub use registry::{PluginRegistry, RegisteredPlugin, RegistrationError};
 pub use wasi::{OUTPUT_LIMIT_BYTES, OutputBuffer, PROVIDED_INTERFACES, WasiState};

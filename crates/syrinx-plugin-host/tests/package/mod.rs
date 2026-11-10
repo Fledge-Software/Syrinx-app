@@ -1,7 +1,7 @@
-//! The test component as a package (#134): its signed lines, manifest and interface names are
-//! cross-checked when it loads, and only then do its commands register, without starting it.
+//! The test component as a package (#134): a manifest whose signed lines match it registers
+//! without any component, and the component's interface names are checked when it loads.
 
-use crate::support::{self, FULL, variant};
+use crate::support::{self, FULL, Fixture, variant};
 use syrinx_core::{CommandError, CommandRegistry};
 use syrinx_plugin_host::manifest::{
     CapabilityKind, DiscoveryOptions, ManifestError, PluginManifest,
@@ -9,7 +9,7 @@ use syrinx_plugin_host::manifest::{
 use syrinx_plugin_host::test_host::{Declarations, TestHost};
 use syrinx_plugin_host::{
     HostError, IdentityMismatch, PluginRegistry, RegisteredPlugin, RegistrationError, Runtime,
-    SignedIdentity,
+    SignedIdentity, check_signed,
 };
 
 const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
@@ -75,32 +75,39 @@ fn filler(plugin: &str, count: usize) -> PluginManifest {
 }
 
 fn signed(id: &str, version: &str) -> SignedIdentity {
-    SignedIdentity::from_verified_package(id, version, WORLD)
+    SignedIdentity::from_signed_lines(id, version, WORLD)
 }
 
-/// Load `manifest` over the full fixture with signed lines that match it, then register it,
-/// in the order every package load follows.
-fn load<'a>(
+/// Register `manifest` with signed lines that match it, reading no component at all.
+fn register<'a>(
     plugins: &'a mut PluginRegistry,
     manifest: PluginManifest,
     commands: &mut CommandRegistry,
 ) -> Result<&'a RegisteredPlugin, RegistrationError> {
     let lines = signed(manifest.id(), manifest.version());
-    let package = Runtime::new()
+    let signed_manifest = check_signed(&lines, manifest).expect("the lines match the manifest");
+    plugins.register(signed_manifest, commands)
+}
+
+/// Compile `fixture` as the registered `test` plugin's component.
+fn compile(fixture: Fixture) -> Result<(), HostError> {
+    let mut commands = CommandRegistry::browser();
+    let mut plugins = PluginRegistry::new();
+    let registered = register(&mut plugins, manifest("test"), &mut commands).expect("registers");
+    Runtime::new()
         .expect("engine")
-        .compile_package(&lines, manifest, &support::bytes(FULL))
-        .expect("the fixture passes the load checks");
-    plugins.register(package, commands)
+        .compile_package(registered, &support::bytes(fixture))
+        .map(drop)
 }
 
 #[test]
-fn the_test_component_loads_registers_and_runs_from_its_manifest() {
+fn the_test_component_registers_then_loads_and_runs_from_its_manifest() {
     let manifest = manifest("test");
     let mut commands = CommandRegistry::browser();
     let before = commands.len();
     let mut plugins = PluginRegistry::new();
     let registered =
-        load(&mut plugins, manifest.clone(), &mut commands).expect("the fixture registers");
+        register(&mut plugins, manifest.clone(), &mut commands).expect("the fixture registers");
     assert_eq!(registered.command_keys().len(), manifest.commands().len());
     assert_eq!(commands.len(), before + manifest.commands().len());
     assert!(
@@ -109,54 +116,58 @@ fn the_test_component_loads_registers_and_runs_from_its_manifest() {
             .is_some_and(|(_, command)| command.is_plugin_action())
     );
 
-    // The same manifest drives the test host, which instantiates and runs the component.
+    // Loading compiles the component against the registered manifest.
     let bytes = support::bytes(FULL);
+    Runtime::new()
+        .expect("engine")
+        .compile_package(registered, &bytes)
+        .expect("the component agrees with its manifest");
     let mut host = TestHost::load(&bytes, Declarations::from(&manifest)).expect("loads");
     assert_eq!(host.run_command("test.echo").expect("call"), Ok(()));
 }
 
 #[test]
-fn discovery_reads_only_the_manifest() {
-    // No component exists at all: everything the palette lists comes from the manifest.
-    let manifest = manifest("idle");
-    assert!(!manifest.commands().is_empty());
-    assert_eq!(manifest.tab_types()[0].id, "idle.page");
-    assert_eq!(manifest.search_feeds()[0].id, "idle.items");
+fn registration_reads_only_the_signed_manifest_and_needs_no_component() {
+    // No component bytes exist anywhere in this test: the palette fills from the manifest.
+    let mut commands = CommandRegistry::browser();
+    let before = commands.len();
+    let mut plugins = PluginRegistry::new();
+    let registered =
+        register(&mut plugins, manifest("idle"), &mut commands).expect("registers alone");
+    assert!(!registered.command_keys().is_empty());
+    assert_eq!(commands.len(), before + registered.command_keys().len());
+    assert_eq!(registered.tab_types()[0].id, "idle.page");
+    assert_eq!(registered.search_feeds()[0].id, "idle.items");
 }
 
 #[test]
-fn a_refused_load_leaves_nothing_in_the_palette() {
-    let runtime = Runtime::new().expect("engine");
-    let commands = CommandRegistry::browser();
-    let before = commands.len();
-    let plugins = PluginRegistry::new();
-    let refused = runtime.compile_package(
-        &signed("test", "0.1.0"),
-        manifest("test"),
-        &support::bytes(variant("version-0-2-0")),
+fn a_package_signed_for_another_plugin_registers_nothing() {
+    // A package signed for slot `evil` whose manifest claims to be `test`.
+    let mismatch = check_signed(&signed("evil", "0.1.0"), manifest("test"));
+    assert_eq!(
+        mismatch.err(),
+        Some(IdentityMismatch::Id {
+            signed: "evil".into(),
+            manifest: "test".into(),
+        })
     );
-    assert!(matches!(
-        refused,
-        Err(HostError::Identity(IdentityMismatch::ComponentWorld { .. }))
-    ));
-    // Without a checked package there is nothing to register.
-    assert_eq!(commands.len(), before);
+    // Without a `SignedManifest` there is nothing `register` accepts, so the palette is as it was.
+    let commands = CommandRegistry::browser();
     assert!(commands.find("test.echo").is_none());
-    assert!(plugins.is_empty());
 }
 
 #[test]
 fn a_duplicate_or_reserved_plugin_id_is_refused_and_registers_nothing() {
     let mut commands = CommandRegistry::browser();
     let mut plugins = PluginRegistry::new();
-    load(&mut plugins, manifest("test"), &mut commands).expect("first copy");
+    register(&mut plugins, manifest("test"), &mut commands).expect("first copy");
     let after_first = commands.len();
     assert_eq!(
-        load(&mut plugins, manifest("test"), &mut commands).err(),
+        register(&mut plugins, manifest("test"), &mut commands).err(),
         Some(RegistrationError::DuplicatePlugin("test".into()))
     );
     assert_eq!(
-        load(&mut plugins, manifest("browser"), &mut commands).err(),
+        register(&mut plugins, manifest("browser"), &mut commands).err(),
         Some(RegistrationError::ReservedId("browser".into()))
     );
     assert_eq!(commands.len(), after_first);
@@ -194,7 +205,7 @@ fn a_full_palette_refuses_the_whole_plugin_and_names_the_command() {
     while commands.len() < CommandRegistry::MAX_COMMANDS {
         let room = CommandRegistry::MAX_COMMANDS - commands.len();
         let count = room.min(CommandRegistry::MAX_COMMANDS_PER_PLUGIN);
-        load(
+        register(
             &mut plugins,
             filler(&format!("filler{index}"), count),
             &mut commands,
@@ -204,7 +215,7 @@ fn a_full_palette_refuses_the_whole_plugin_and_names_the_command() {
     }
     let before = plugins.len();
     let error =
-        load(&mut plugins, manifest("late"), &mut commands).expect_err("the registry is full");
+        register(&mut plugins, manifest("late"), &mut commands).expect_err("the registry is full");
     assert!(
         matches!(
             &error,
@@ -224,7 +235,7 @@ fn a_full_palette_refuses_the_whole_plugin_and_names_the_command() {
 fn a_view_request_for_an_undeclared_tab_type_is_refused() {
     let mut commands = CommandRegistry::browser();
     let mut plugins = PluginRegistry::new();
-    load(&mut plugins, manifest("test"), &mut commands).expect("registers");
+    register(&mut plugins, manifest("test"), &mut commands).expect("registers");
     assert!(plugins.tab_type("test", "test.page").is_ok());
     assert_eq!(
         plugins.tab_type("test", "test.missing").err(),
@@ -241,11 +252,7 @@ fn a_view_request_for_an_undeclared_tab_type_is_refused() {
 
 #[test]
 fn a_manifest_whose_world_disagrees_with_the_component_is_refused_by_name() {
-    let runtime = Runtime::new().expect("engine");
-    let bytes = support::bytes(variant("version-0-2-0"));
-    let error = runtime
-        .compile_package(&signed("test", "0.1.0"), manifest("test"), &bytes)
-        .expect_err("a 0.2.0 component under a 0.1.0 manifest");
+    let error = compile(variant("version-0-2-0")).expect_err("a 0.2.0 component under 0.1.0");
     let HostError::Identity(IdentityMismatch::ComponentWorld {
         manifest,
         component,
@@ -262,11 +269,7 @@ fn a_manifest_whose_world_disagrees_with_the_component_is_refused_by_name() {
 
 #[test]
 fn a_component_importing_an_unrequested_capability_is_refused_at_load() {
-    let runtime = Runtime::new().expect("engine");
-    let bytes = support::bytes(variant("imports-documents"));
-    let error = runtime
-        .compile_package(&signed("test", "0.1.0"), manifest("test"), &bytes)
-        .expect_err("the manifest requests no folder");
+    let error = compile(variant("imports-documents")).expect_err("the manifest requests no folder");
     let HostError::Identity(IdentityMismatch::UnrequestedCapability { interface, kind }) = error
     else {
         panic!("not an unrequested capability: {error}");
@@ -276,33 +279,28 @@ fn a_component_importing_an_unrequested_capability_is_refused_at_load() {
 }
 
 #[test]
-fn signed_lines_that_disagree_with_the_manifest_are_refused_before_compiling() {
-    let runtime = Runtime::new().expect("engine");
-    // Not even a component: the identity check runs first, so nothing is compiled.
-    let not_wasm = b"not a component";
+fn signed_lines_that_disagree_with_the_manifest_are_named() {
     for (identity, expected) in [
         (signed("notes", "0.1.0"), "signed as notes"),
         (signed("test", "0.0.9"), "version 0.0.9"),
     ] {
-        let error = runtime
-            .compile_package(&identity, manifest("test"), not_wasm)
-            .expect_err("mismatch");
-        assert!(matches!(error, HostError::Identity(_)), "{error}");
+        let error = check_signed(&identity, manifest("test")).expect_err("mismatch");
         assert!(error.to_string().contains(expected), "{error}");
     }
 }
 
 #[test]
-fn a_precompiled_module_is_refused_even_with_matching_identity() {
+fn a_precompiled_module_is_refused_at_load() {
+    let mut commands = CommandRegistry::browser();
+    let mut plugins = PluginRegistry::new();
+    let registered = register(&mut plugins, manifest("test"), &mut commands).expect("registers");
     let runtime = Runtime::new().expect("engine");
     let precompiled = runtime
         .engine()
         .precompile_component(&support::bytes(FULL))
         .expect("precompiles");
     assert_eq!(
-        runtime
-            .compile_package(&signed("test", "0.1.0"), manifest("test"), &precompiled)
-            .err(),
+        runtime.compile_package(registered, &precompiled).err(),
         Some(HostError::Precompiled)
     );
 }
