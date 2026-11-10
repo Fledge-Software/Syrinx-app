@@ -262,7 +262,8 @@ plugin view, checks it.
 4. The bundle and `editor/dist/THIRD-PARTY-NOTICES.txt`, which holds the MIT
    notices of the 23 shipped packages, are committed together. They are the
    only two files the gate allows in `editor/dist/`. The bundle's SHA-256
-   replaces `none` in the line below, in the same commit.
+   replaces `none` in the line below, in the same commit, and #37 records the
+   notices file's SHA-256 beside it (the gate does not hash it yet).
 5. Syrinx serves the committed file to the editor view from its own custom
    protocol; nothing is fetched at run time.
 

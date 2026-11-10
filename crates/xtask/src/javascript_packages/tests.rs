@@ -157,6 +157,39 @@ fn a_folder_git_cannot_read_fails_the_check() {
     fs::remove_dir_all(root).expect("scratch removed");
 }
 
+/// Set only in the child run below, naming the scratch repository it reads.
+const GIT_DIR_CHILD: &str = "SYRINX_XTASK_GIT_DIR_CHILD";
+
+#[test]
+fn a_bogus_inherited_git_dir_is_ignored() {
+    // The child runs this test again with GIT_DIR set on its process alone, since tests share
+    // the parent's environment and run in parallel.
+    if let Some(scratch_root) = std::env::var_os(GIT_DIR_CHILD) {
+        let tracked = git_output(Path::new(&scratch_root), &["ls-files", "-z"])
+            .expect("git reads the scratch repository despite GIT_DIR");
+        assert!(tracked.contains(MANIFEST), "{tracked:?}");
+        return;
+    }
+    let root = scratch_repository("git-dir", false);
+    let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args([
+            "javascript_packages::tests::a_bogus_inherited_git_dir_is_ignored",
+            "--exact",
+        ])
+        .env("GIT_DIR", "/nonexistent/syrinx-xtask-git-dir")
+        .env(GIT_DIR_CHILD, &root)
+        .output()
+        .expect("the child test runs");
+    // A filter that matched nothing would also succeed, so require the one test to have run.
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && report.contains("1 passed"),
+        "the child run failed ({}):\n{report}",
+        output.status
+    );
+    fs::remove_dir_all(root).expect("scratch removed");
+}
+
 #[test]
 fn a_clean_scratch_repository_passes_end_to_end() {
     let root = scratch_repository("clean", false);

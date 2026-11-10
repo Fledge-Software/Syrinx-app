@@ -20,12 +20,12 @@ const NPM_SETTINGS: &str = "editor/.npmrc";
 const BUNDLE_FOLDER: &str = "editor/dist/";
 const BUNDLE: &str = "editor/dist/syrinx-editor.js";
 const NOTICES: &str = "editor/dist/THIRD-PARTY-NOTICES.txt";
+const AUDIT: &str = "docs/dev/codemirror-audit.md";
 
 /// `editor/.npmrc` exactly as audited: exact saves, no install scripts, no npm network side calls.
 /// Pinned whole, because ini sections and quoted keys make any partial reading unreliable.
 const AUDITED_NPM_SETTINGS: &str =
     "save-exact=true\nignore-scripts=true\naudit=false\nfund=false\n";
-const AUDIT: &str = "docs/dev/codemirror-audit.md";
 
 /// npm manifests and lockfiles. npm prefers `npm-shrinkwrap.json` over `package-lock.json`,
 /// and the others belong to other package managers, so each would bypass the audited lockfile.
