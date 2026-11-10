@@ -144,6 +144,7 @@ fn registration_reads_only_the_signed_manifest_and_needs_no_component() {
 fn a_package_signed_for_another_plugin_registers_nothing() {
     // A package signed for slot `evil` whose manifest claims to be `test`.
     let mismatch = check_signed(&signed("evil", "0.1.0"), manifest("test"));
+    // Nothing is registered: `register` accepts only a `SignedManifest`, which a mismatch never yields.
     assert_eq!(
         mismatch.err(),
         Some(IdentityMismatch::Id {
@@ -151,7 +152,6 @@ fn a_package_signed_for_another_plugin_registers_nothing() {
             manifest: "test".into(),
         })
     );
-    // Without a `SignedManifest` there is nothing `register` accepts, so the palette is as it was.
 }
 
 #[test]
