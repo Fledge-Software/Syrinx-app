@@ -103,17 +103,19 @@ fn tracked_files(root: &Path) -> Result<Vec<String>, String> {
 }
 
 /// Tracked npm files other than the editor's manifest and lockfile, and any file in the bundle
-/// folder but the bundle and its licence notices.
+/// folder but the bundle and its licence notices. Names are compared ignoring case, because
+/// Windows and macOS open `NPM-Shrinkwrap.json` when npm asks for `npm-shrinkwrap.json`.
 fn tracked_file_problems(files: &[String]) -> Vec<String> {
     let mut problems = Vec::new();
     for path in files {
-        let name = path.rsplit('/').next().unwrap_or(path);
+        let lowercase = path.to_ascii_lowercase();
+        let name = lowercase.rsplit('/').next().unwrap_or(&lowercase);
         if NPM_FILES.contains(&name) && path != MANIFEST && path != LOCKFILE {
             problems.push(format!(
                 "{path}: only {MANIFEST} and {LOCKFILE} may hold npm packages"
             ));
         }
-        if path.starts_with(BUNDLE_FOLDER) && path != BUNDLE && path != NOTICES {
+        if lowercase.starts_with(BUNDLE_FOLDER) && path != BUNDLE && path != NOTICES {
             problems.push(format!(
                 "{path}: {BUNDLE_FOLDER} holds only {BUNDLE} and {NOTICES}"
             ));

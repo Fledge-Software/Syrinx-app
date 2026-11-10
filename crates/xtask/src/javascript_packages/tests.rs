@@ -42,6 +42,19 @@ fn only_the_editor_manifest_and_lockfile_may_be_tracked() {
 }
 
 #[test]
+fn a_case_variant_npm_file_is_refused() {
+    // Windows and macOS open `NPM-Shrinkwrap.json` when npm asks for `npm-shrinkwrap.json`.
+    let files = [
+        "editor/NPM-Shrinkwrap.json",
+        "editor/Yarn.lock",
+        "editor/Dist/extra.js",
+    ]
+    .map(str::to_owned);
+    let found = tracked_file_problems(&files);
+    assert_eq!(found.len(), 3, "{found:?}");
+}
+
+#[test]
 fn the_bundle_folder_holds_only_the_bundle_and_its_notices() {
     let files = [BUNDLE, NOTICES, "editor/dist/extra.js"].map(str::to_owned);
     assert_eq!(
