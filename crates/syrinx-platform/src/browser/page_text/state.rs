@@ -1,4 +1,4 @@
-//! What one tab has observed about its current document, kept apart from WebView2 so the
+//! What one tab has observed about its current document, kept apart from the engine so the
 //! scheduling and exit rules can be tested without a window.
 
 use std::{
@@ -48,6 +48,9 @@ pub(super) struct TextState {
     loaded: bool,
     /// When a capture falls due, and the generation it was scheduled for.
     due: Option<(Instant, u64)>,
+    /// When the visit that scheduled the capture happened: the load completing, or the
+    /// History API change. The text is dated by it, so a clear of that time removes it.
+    visited: Option<Instant>,
     /// A capture that fell due while the page was suspending waits for it to be shown.
     deferred: bool,
     last_capture: Option<Instant>,
@@ -62,7 +65,8 @@ pub(super) struct Rules<'a> {
     pub(super) capture: bool,
 }
 
-/// What `NavigationStarting` reported for one hop.
+/// What the engine reported for one hop as its navigation started (WebView2's
+/// `NavigationStarting`, WebKit's load start or provisional address change).
 pub(super) struct Start {
     pub(super) address: String,
     pub(super) redirected: bool,
@@ -91,6 +95,8 @@ impl TextState {
         }
     }
 
+    // Only the Windows reader asks for these; Linux reads no page yet (#219).
+    #[cfg(windows)]
     pub(super) fn generation(&self) -> u64 {
         self.generation
     }
@@ -121,7 +127,7 @@ impl TextState {
         });
     }
 
-    /// Withdraws Syrinx's request: WebView2 refused it, or Syrinx went back, forward, reloaded
+    /// Withdraws Syrinx's request: the engine refused it, or Syrinx went back, forward, reloaded
     /// or stopped instead.
     pub(super) fn syrinx_navigation_cancelled(&mut self) {
         self.syrinx_requested = None;
@@ -225,6 +231,7 @@ impl TextState {
         if rules.capture && self.loaded && self.document.is_some() {
             let due = same_document_due(self.last_capture, now, rules.policy.settle_delay());
             self.due = Some((due, self.generation));
+            self.visited = Some(now);
         }
         cancelled
     }
@@ -276,6 +283,7 @@ impl TextState {
         self.loaded = success && self.document.is_some();
         if rules.capture && self.loaded {
             self.due = Some((now + rules.policy.settle_delay(), self.generation));
+            self.visited = Some(now);
         }
     }
 
@@ -295,6 +303,12 @@ impl TextState {
     pub(super) fn process_failed(&mut self) {
         self.advance();
         self.loaded = false;
+    }
+
+    /// When the visit behind the scheduled capture happened; a deferred capture keeps it.
+    #[cfg(any(windows, test))]
+    pub(super) fn visited(&self) -> Option<Instant> {
+        self.visited
     }
 
     /// Takes a capture that has fallen due, returning the generation it was scheduled for.
@@ -321,11 +335,13 @@ impl TextState {
         }
     }
 
+    #[cfg(any(windows, test))]
     pub(super) fn call_started(&mut self) {
         self.in_flight = true;
     }
 
     /// Ends the call and returns the generation now, for step 8's check on arrival.
+    #[cfg(any(windows, test))]
     pub(super) fn call_finished(&mut self, now: Instant) -> u64 {
         self.in_flight = false;
         self.last_capture = Some(now);
@@ -452,6 +468,27 @@ mod tests {
         state.source_changed(PAGE.into(), true, on(&policy()), now);
         state.navigation_completed(7, true, on(&policy()), now);
         state
+    }
+
+    #[test]
+    fn a_capture_is_dated_by_the_visit_that_scheduled_it() {
+        let loaded_at = Instant::now();
+        let mut state = loaded(loaded_at);
+        assert_eq!(state.visited(), Some(loaded_at));
+        // A History API change much later is its own visit, even though no load completes.
+        let moved_at = loaded_at + Duration::from_secs(600);
+        state
+            .take_due(loaded_at + Duration::from_secs(3))
+            .expect("due");
+        state.source_changed(format!("{PAGE}/2"), false, on(&policy()), moved_at);
+        assert_eq!(state.visited(), Some(moved_at));
+        // A capture deferred while the page was suspended keeps its visit's time.
+        state
+            .take_due(moved_at + Duration::from_secs(3))
+            .expect("due");
+        state.defer();
+        state.resumed(moved_at + Duration::from_secs(3_600));
+        assert_eq!(state.visited(), Some(moved_at));
     }
 
     #[test]

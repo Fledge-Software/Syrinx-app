@@ -434,6 +434,129 @@ fn a_pending_zoom_clear_finished_while_idle_replaces_the_windows_levels() {
     fixture.cleanup();
 }
 
+/// Whether the window was told a failure, which the worker reports without stopping.
+fn heard_failure(events: &mut UnboundedReceiver<SessionEvent>) -> bool {
+    let mut heard = false;
+    while let Ok(event) = events.try_recv() {
+        heard |= matches!(event, SessionEvent::Failure { fatal: false, .. });
+    }
+    heard
+}
+
+#[test]
+fn a_levels_read_that_fails_after_the_apply_is_retried_on_a_later_idle_tick() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    worker.zoom_levels.refuse_reads(1);
+    worker
+        .idle(&store, &sender)
+        .expect("the worker survives a refused read");
+    // The clear is applied and complete, but the window has heard nothing yet.
+    assert_eq!(worker.deletions.log().pending(), None);
+    assert!(worker.zoom_levels.is_stale());
+    assert!(heard_failure(&mut events));
+    worker
+        .idle(&store, &sender)
+        .expect("resend the synthetic levels");
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    assert!(!worker.zoom_levels.is_stale());
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}
+
+#[test]
+fn a_levels_read_that_fails_after_a_requested_zoom_clear_is_retried_on_an_idle_tick() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    // Finish the fixture's pending clear first, so the requested clear is the only one left.
+    worker
+        .idle(&store, &sender)
+        .expect("finish the synthetic clear");
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    let now = utc_seconds().expect("synthetic clock");
+    // A level inside the requested range, so stale levels would differ from the right ones.
+    store
+        .save_site_zoom("fresh.example.test".to_owned(), Some(1.5), now)
+        .expect("save synthetic in-range level");
+    worker.zoom_levels.refuse_reads(1);
+    worker
+        .handle(
+            &store,
+            SessionCommand::ClearSiteZooms {
+                request_id: 21,
+                start: now - 3_600,
+                end: now + 1,
+            },
+            &sender,
+        )
+        .expect("the worker reports a failed read instead of stopping");
+    assert!(worker.zoom_levels.is_stale());
+    assert_eq!(worker.deletions.log().pending(), None);
+    worker
+        .idle(&store, &sender)
+        .expect("resend the synthetic levels");
+    // The resend holds the levels left after the clear: the in-range level is gone.
+    assert_eq!(replaced_levels(&mut events), kept_level());
+    assert!(!worker.zoom_levels.is_stale());
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}
+
+#[test]
+fn a_resend_to_a_window_that_has_gone_is_retried_a_bounded_number_of_times() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, events) = worker_with_pending_zoom_clear(&fixture);
+    worker.zoom_levels.refuse_reads(1);
+    worker
+        .idle(&store, &sender)
+        .expect("the worker survives a refused read");
+    assert!(worker.zoom_levels.is_stale());
+    // The window's event stream closes; the worker keeps serving, but cannot resend.
+    drop(events);
+    for _ in 1..zoom_levels::MAX_ATTEMPTS {
+        worker
+            .idle(&store, &sender)
+            .expect("the worker survives a closed window");
+    }
+    assert!(!worker.zoom_levels.is_stale(), "the retry stopped");
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}
+
+#[test]
+fn a_levels_read_that_keeps_failing_is_retried_a_bounded_number_of_times() {
+    let fixture = Fixture::new();
+    let (mut worker, store, sender, mut events) = worker_with_pending_zoom_clear(&fixture);
+    worker.zoom_levels.refuse_reads(u32::MAX);
+    // The first send fails inside the clear, and each idle tick after it is one retry.
+    worker
+        .idle(&store, &sender)
+        .expect("the worker survives a refused read");
+    for retry in 1..zoom_levels::MAX_ATTEMPTS {
+        assert!(worker.zoom_levels.is_stale());
+        if retry == zoom_levels::MAX_ATTEMPTS - 1 {
+            // Drop the earlier failures, so only the give-up can satisfy the check below.
+            heard_failure(&mut events);
+        }
+        worker
+            .idle(&store, &sender)
+            .expect("the worker survives a refused retry");
+    }
+    // The last retry gave up and told the window; later ticks read nothing more.
+    assert!(!worker.zoom_levels.is_stale());
+    assert!(heard_failure(&mut events), "the give-up reached the window");
+    worker
+        .idle(&store, &sender)
+        .expect("an idle tick with nothing stale");
+    assert_eq!(replaced_levels(&mut events), None);
+    drop(worker);
+    store.shutdown().expect("close synthetic store");
+    fixture.cleanup();
+}
+
 #[test]
 fn a_history_clear_that_finishes_a_pending_zoom_clear_replaces_the_windows_levels() {
     let fixture = Fixture::new();

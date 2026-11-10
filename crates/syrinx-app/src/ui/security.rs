@@ -21,19 +21,16 @@ impl BrowserView {
     /// certificate or an unencrypted page. HTTPS gets no mark, so nothing reads as "safe".
     pub(super) fn connection_mark(&self) -> Option<Div> {
         let state = self.shown_connection()?;
-        let (glyph, color) = match (state.status, state.scheme) {
-            (ConnectionStatus::CertificateRejected, _) => ("\u{E7BA}", 0xffb4ab),
-            (_, ConnectionScheme::Http) => ("\u{E946}", 0xb4b7bf),
+        let (icon, color) = match (state.status, state.scheme) {
+            (ConnectionStatus::CertificateRejected, _) => (Icon::Warning, 0xffb4ab),
+            (_, ConnectionScheme::Http) => (Icon::Info, 0xb4b7bf),
             _ => return None,
         };
-        Some(
-            div()
-                .flex_none()
-                .font_family(crate::controls::glyph::FONT)
-                .text_size(px(11.))
-                .text_color(rgb(color))
-                .child(glyph),
-        )
+        Some(with_icon(
+            div().flex_none().text_color(rgb(color)),
+            icon,
+            11.,
+        ))
     }
 
     fn shown_connection(&self) -> Option<ConnectionState> {

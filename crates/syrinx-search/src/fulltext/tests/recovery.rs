@@ -1,5 +1,7 @@
 //! Checks what survives a stop before a commit, or between a commit and its cleanup.
 
+use std::fs;
+
 use tantivy::{Index, Term};
 
 use super::super::*;
@@ -95,6 +97,67 @@ fn opening_finishes_a_cleanup_a_crash_interrupted() {
     assert_eq!(rows.len(), 1);
     assert!(rows[0].body.contains("keptsigil"));
     assert_eq!(reopened.cleared_generation(), 0);
+}
+
+#[test]
+fn an_index_whose_metadata_names_a_missing_segment_file_is_damaged() {
+    // A failed empty can leave `meta.json` naming segment files it already deleted (#195);
+    // calling that damage, not an I/O fault, lets the caller empty the folder again.
+    for extension in segment_extensions() {
+        let fixture = Fixture::new();
+        commit_one_page(&fixture);
+        let missing = segment_files(&fixture)
+            .into_iter()
+            .find(|file| {
+                file.extension()
+                    .is_some_and(|found| found == extension.as_str())
+            })
+            .expect("the synthetic segment has this file");
+        fs::remove_file(&missing).expect("delete one synthetic segment file");
+        let opened = FullText::open(&fixture.path).err();
+        // Tantivy reads a missing positions file as empty, so the index opens and still
+        // tracks the segment. A failed empty never leaves only it missing: it stops at the
+        // first failure, and the segment's `.fast` file lists before it.
+        let expected = (extension != "pos").then_some(FullTextError::Damaged);
+        assert_eq!(opened, expected, "a missing .{extension} file");
+    }
+}
+
+/// Commits one synthetic page, so the index holds exactly one segment.
+fn commit_one_page(fixture: &Fixture) {
+    let mut index = fixture.open();
+    index
+        .stage(&[upsert(page_document("kept", 1, NOW, "keptsigil"))], NOW)
+        .expect("stage a page");
+    index.commit().expect("commit a page");
+}
+
+/// The extensions of one committed segment's files.
+fn segment_extensions() -> Vec<String> {
+    let fixture = Fixture::new();
+    commit_one_page(&fixture);
+    segment_files(&fixture)
+        .iter()
+        .filter_map(|file| file.extension())
+        .map(|extension| extension.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// The index's segment files: everything but its metadata and lock files.
+fn segment_files(fixture: &Fixture) -> Vec<std::path::PathBuf> {
+    fs::read_dir(&fixture.path)
+        .expect("list synthetic index")
+        .map(|entry| entry.expect("read synthetic entry").path())
+        .filter(|file| is_segment_file(file))
+        .collect()
+}
+
+/// Neither `meta.json`, `.managed.json` nor a `.tantivy-*` lock file.
+fn is_segment_file(file: &std::path::Path) -> bool {
+    file.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+        !name.starts_with('.') && !name.ends_with(".json")
+    })
 }
 
 /// Stands in for a crash between `commit` and its cleanup, using Tantivy directly.

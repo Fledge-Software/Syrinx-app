@@ -6,7 +6,11 @@ mod reader;
 mod snapshot;
 mod state;
 
-use std::{cell::RefCell, rc::Rc, time::Instant};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{Instant, SystemTime},
+};
 
 use syrinx_core::{EligibleDocument, Ineligible, PageTextPolicy};
 use webview2_com::{
@@ -152,12 +156,13 @@ impl PageText {
         }
         let policy = self.context.policy();
         let verdict = self.state.borrow().judge(policy.as_deref(), scheduled);
+        let visited_at = self.state.borrow().visited().and_then(wall_clock);
         match verdict {
             Err(reason) => {
                 self.emit(PageTextOutcome::Ineligible(reason));
                 Ok(())
             }
-            Ok(document) => self.capture(&core, document),
+            Ok(document) => self.capture(&core, document, visited_at),
         }
     }
 
@@ -167,6 +172,7 @@ impl PageText {
         &self,
         core: &ICoreWebView2,
         document: EligibleDocument,
+        visited_at: Option<SystemTime>,
     ) -> Result<(), BrowserError> {
         // Step 8 again, at the moment of the call.
         if !document.is_current(self.state.borrow().generation()) {
@@ -183,7 +189,7 @@ impl PageText {
             address: document.address().to_owned(),
         });
         self.state.borrow_mut().call_started();
-        let handler = reader::handler(self.arrival(document));
+        let handler = reader::handler(self.arrival(document, visited_at));
         let parameters = HSTRING::from(snapshot::CAPTURE_PARAMETERS);
         let call = unsafe {
             core.CallDevToolsProtocolMethod(
@@ -201,7 +207,11 @@ impl PageText {
 
     /// Drops the response unread if the tab changed or capture was switched off; otherwise
     /// queues it for the parse worker.
-    fn arrival(&self, document: EligibleDocument) -> impl FnOnce(Arrival) + 'static {
+    fn arrival(
+        &self,
+        document: EligibleDocument,
+        visited_at: Option<SystemTime>,
+    ) -> impl FnOnce(Arrival) + 'static {
         let (id, state, events, native) = self.channels();
         let context = self.context.clone();
         let started = Instant::now();
@@ -218,6 +228,7 @@ impl PageText {
                         json,
                         document,
                         call_time: started.elapsed(),
+                        visited_at,
                         events: events.clone(),
                         native,
                     };
@@ -450,4 +461,9 @@ fn report(events: &EventSink, id: u64) {
         tab: Some(id),
         error: BrowserError::PageText,
     });
+}
+
+/// The wall-clock time of a monotonic instant; `None` if the clock cannot express it.
+fn wall_clock(instant: Instant) -> Option<SystemTime> {
+    SystemTime::now().checked_sub(instant.elapsed())
 }

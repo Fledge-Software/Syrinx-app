@@ -1,0 +1,2 @@
+# Keep generated Python bytecode out of measurement-source reviews.
+__pycache__/

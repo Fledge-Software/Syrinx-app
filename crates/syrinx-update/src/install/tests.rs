@@ -575,6 +575,8 @@ fn staging_refuses_while_the_helper_holds_the_lock() {
     assert!(stage(&sandbox, &keys.pinned).is_ok());
 }
 
+// Uses Windows drive paths and Windows' case-insensitive folder names.
+#[cfg(windows)]
 #[test]
 fn layouts_keep_program_and_data_folders_apart() {
     let programs = PathBuf::from(r"C:\Synthetic\Programs");
@@ -598,6 +600,8 @@ fn layouts_keep_program_and_data_folders_apart() {
     );
 }
 
+// Uses Windows drive paths and Windows' case-insensitive folder names.
+#[cfg(windows)]
 #[test]
 fn only_an_installed_program_folder_has_an_update_layout() {
     let data = PathBuf::from(r"C:\Synthetic\data");

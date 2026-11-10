@@ -1,8 +1,14 @@
 //! Keeps page text in the full-text index level with D47's clears and D40's seven days (#53).
 
+use std::{fmt, fs};
+
+use syrinx_core::address_within_site;
 use syrinx_platform::{CacheFolder, WindowsDirectoryLease};
-use syrinx_search::fulltext::{ClearRequest, ClearScope, FullText, FullTextError};
+use syrinx_search::fulltext::{
+    Change, ClearRequest, ClearScope, FullText, FullTextDocument, FullTextError, Namespace,
+};
 use syrinx_store::deletion::{DeletionCategory, DeletionLog, DeletionRequest};
+use syrinx_store::{DirectoryLease, LocationError};
 
 use super::{SessionError, deletions, retention, stop};
 
@@ -23,47 +29,134 @@ pub(super) struct PageText {
     folder: Option<CacheFolder>,
     /// Unix seconds when D40's expiry next runs; zero, so start-up always runs it.
     expiry_due: i64,
-    /// A failure the owner has not been shown yet, named with what the index was doing.
+    /// The failures the owner has not been shown yet, each named with what the index was
+    /// doing; a later one is kept after an earlier one, never in its place.
     problem: Option<SessionError>,
-    /// The owner confirmed a history repair, so the next follow restarts the index's count.
-    journal_rebuilt: bool,
+    /// The clears and erases made this session, which a capture still in flight must not
+    /// outlive (#54). One is added per clear, erase or excluded site, so it stays short; a
+    /// capture can arrive long after its visit (a suspended page waits to be shown).
+    fences: Vec<Fence>,
+    /// The revision the last stored capture took, so a later one always replaces it.
+    last_revision: u64,
 }
 
 impl PageText {
     /// Opens the index in its guarded folder; a failure leaves the session running without it.
     pub(super) fn open(lease: &WindowsDirectoryLease) -> Self {
-        let (index, folder, problem) = match open_index(lease) {
+        let (index, folder, problem) = match open_index(lease, Emptying::WhenUnreadable) {
             Ok((folder, index)) => (Some(index), Some(folder), None),
-            Err(error) => (None, None, Some(stop::during(OPENING)(error))),
+            Err(failure) => (
+                None,
+                None,
+                Some(stop::during(OPENING)(failure.into_error())),
+            ),
         };
         Self {
             index,
             folder,
             expiry_due: 0,
             problem,
-            journal_rebuilt: false,
+            fences: Vec::new(),
+            last_revision: 0,
         }
     }
 
-    /// Marks the journal as rebuilt by an owner-confirmed repair. Its generations restart at
-    /// the database's, which the index may already have counted past, so they cannot say what
-    /// the index has cleared; the next follow starts the index's count afresh.
-    pub(super) fn after_journal_repair(&mut self) {
-        self.journal_rebuilt = true;
+    /// Removes all page text and restarts the index's count before a confirmed repair rebuilds
+    /// the journal, whose new generations cannot say what the index cleared.
+    ///
+    /// The restart keeps plugin feeds. An index that is closed or fails to restart is emptied
+    /// instead, feeds and all, because nothing in it can be read to remove page text alone;
+    /// failing to empty it refuses the repair, so the next start offers it again.
+    pub(super) fn restart_before_repair(
+        &mut self,
+        lease: &WindowsDirectoryLease,
+    ) -> Result<(), SessionError> {
+        if self.restart_open_index() {
+            return Ok(());
+        }
+        self.start_afresh(lease)
     }
 
     /// Applies every journal clear the index has not, before the journal marks one complete.
     ///
-    /// An index ahead of the journal, or one whose journal was just rebuilt, cannot tell what
-    /// the journal's generations cleared, so its page text goes and it counts again from the
-    /// journal's start.
+    /// An index ahead of the journal cannot tell what the journal's generations cleared, so
+    /// its page text goes and it counts again from the journal's start.
     pub(super) fn follow(&mut self, log: &DeletionLog) {
-        let restart = std::mem::take(&mut self.journal_rebuilt);
         let Some(index) = self.index.as_mut() else {
             return;
         };
-        let followed = follow_journal(index, log, restart);
+        let followed = follow_journal(index, log);
         self.settle(followed, "applying a clear to the search index");
+    }
+
+    /// Keeps one page's text for D40's seven days, replacing an earlier capture of its address.
+    /// A page visited before a clear or erase that covers it is not kept, however late its
+    /// capture arrives.
+    pub(super) fn store(&mut self, page: CapturedPage, now: i64) {
+        if self.fences.iter().any(|fence| fence.covers(&page)) {
+            return;
+        }
+        let Some(index) = self.index.as_mut() else {
+            return;
+        };
+        let Some(revision) = next_revision(self.last_revision, now) else {
+            self.report(stop::during(KEEPING)(SessionError::ClockUnavailable));
+            return;
+        };
+        self.last_revision = revision;
+        match store_page(index, page, revision, now) {
+            // An address too long to key the index is left unread; the index itself is sound.
+            Err(error @ SessionError::FullText(FullTextError::InvalidDocument)) => {
+                self.report(stop::during(KEEPING)(error));
+            }
+            stored => self.settle(stored, KEEPING),
+        }
+    }
+
+    /// Keeps a capture of a page visited inside a history clear's `[start, end)` from landing
+    /// after the clear (D47). Only visits up to `now` can be in flight, so a clear that runs
+    /// to the end of time does not refuse pages visited after it.
+    pub(super) fn fence_clear(&mut self, start: i64, end: i64, now: i64) {
+        self.fences.push(Fence {
+            start,
+            end: end.min(now.saturating_add(1)),
+            site: None,
+        });
+    }
+
+    /// Erases all page text at once, as switching capture off does (owner, 2026-10-27).
+    /// An index closed by an earlier failure cannot be erased now, so that is reported too;
+    /// the next start, or the next save of the setting, tries again.
+    pub(super) fn erase(&mut self, now: i64) {
+        self.fences.push(Fence::visited_by(now, None));
+        let Some(index) = self.index.as_mut() else {
+            self.report_closed(ERASING);
+            return;
+        };
+        let erased = index.reset(&Namespace::page()).or_else(cleanup_later);
+        self.settle(erased, ERASING);
+    }
+
+    /// Erases the text of every page on `sites` or their subdomains at once, as excluding a
+    /// site does (owner, 2026-10-27). The rows go without tombstones, whose ids would keep
+    /// the excluded addresses. A failure is reported, and the next start tries again.
+    pub(super) fn erase_sites(&mut self, sites: &[String], now: i64) {
+        if sites.is_empty() {
+            return;
+        }
+        for site in sites {
+            self.fences.push(Fence::visited_by(now, Some(site.clone())));
+        }
+        let Some(index) = self.index.as_mut() else {
+            self.report_closed(ERASING_SITES);
+            return;
+        };
+        let on_a_site = |id: &str| sites.iter().any(|site| address_within_site(id, site));
+        let erased = index
+            .remove_pages(on_a_site)
+            .map(drop)
+            .or_else(cleanup_later);
+        self.settle(erased, ERASING_SITES);
     }
 
     /// Removes page text past D40's seven days at start-up and then once a day.
@@ -91,7 +184,7 @@ impl PageText {
         self.settle(retried, "removing deleted text from the search index");
     }
 
-    /// The failure to show the owner once, if any.
+    /// The failures to show the owner once, if any.
     pub(super) fn take_problem(&mut self) -> Result<(), SessionError> {
         self.problem.take().map_or(Ok(()), Err)
     }
@@ -102,6 +195,74 @@ impl PageText {
         self.index.as_ref()
     }
 
+    /// Closes the index as a failed operation would, for tests of what follows.
+    #[cfg(test)]
+    pub(super) fn close_for_test(&mut self) {
+        self.index = None;
+        self.folder = None;
+    }
+
+    /// The open index, for tests that stage work in it.
+    #[cfg(test)]
+    pub(super) fn index_mut(&mut self) -> Option<&mut FullText> {
+        self.index.as_mut()
+    }
+
+    /// Restarts the open index's count; false when it is closed or the restart failed.
+    fn restart_open_index(&mut self) -> bool {
+        let Some(index) = self.index.as_mut() else {
+            return false;
+        };
+        let restarted = index.restart_clears().or_else(cleanup_later);
+        let succeeded = restarted.is_ok();
+        self.settle(
+            restarted,
+            "restarting the search index for a history repair",
+        );
+        succeeded
+    }
+
+    /// Empties the index's folder and opens a fresh index in it. The repair is refused only
+    /// when old page text could be left behind.
+    fn start_afresh(&mut self, lease: &WindowsDirectoryLease) -> Result<(), SessionError> {
+        // Release the old index's files and folder before deleting them.
+        self.index = None;
+        self.folder = None;
+        let failure = match open_index(lease, Emptying::First) {
+            Ok((folder, index)) => {
+                self.index = Some(index);
+                self.folder = Some(folder);
+                return Ok(());
+            }
+            Err(failure) => failure,
+        };
+        match failure {
+            // The folder is empty, so no page text is left: a fresh index that will not open
+            // is only reported.
+            OpenFailure::Opening(error) => {
+                self.report(stop::during(OPENING)(SessionError::FullText(error)));
+                Ok(())
+            }
+            // Syrinx never opens an index through a file or link, so none can strand page text.
+            OpenFailure::Folder(error) if wrong_entry_where_the_folder_belongs(lease, &error) => {
+                self.report(stop::during(REPAIRING)(SessionError::IndexFolder(error)));
+                Ok(())
+            }
+            OpenFailure::Folder(error) => {
+                Err(self.after_problem(stop::during(REPAIRING)(SessionError::IndexFolder(error))))
+            }
+            OpenFailure::Emptying(error) => {
+                Err(self.after_problem(SessionError::IndexNotEmptied(error)))
+            }
+        }
+    }
+
+    /// Reports that an erase could not run because an earlier failure closed the index.
+    fn report_closed(&mut self, operation: &'static str) {
+        let closed = SessionError::FullText(FullTextError::NeedsReopen);
+        self.report(stop::during(operation)(closed));
+    }
+
     /// Closes the index after a failure and keeps the failure, named with `operation`.
     fn settle(&mut self, result: Result<(), SessionError>, operation: &'static str) {
         let Err(error) = result else {
@@ -109,40 +270,199 @@ impl PageText {
         };
         self.index = None;
         self.folder = None;
-        self.problem = Some(stop::during(operation)(error));
+        self.report(stop::during(operation)(error));
+    }
+
+    /// Keeps `error` to show the owner, after any failure not yet shown.
+    fn report(&mut self, error: SessionError) {
+        let error = self.after_problem(error);
+        self.problem = Some(error);
+    }
+
+    /// `error`, carrying any failure not yet shown as its earlier cause.
+    fn after_problem(&mut self, error: SessionError) -> SessionError {
+        match self.problem.take() {
+            None => error,
+            Some(earlier) => SessionError::AfterEarlier {
+                earlier: Box::new(earlier),
+                error: Box::new(error),
+            },
+        }
     }
 }
+
+/// One page's captured text, as the window hands it over (#54). Its address, without a
+/// fragment, keys the document, so a later capture of the same page replaces it.
+pub struct CapturedPage {
+    pub address: String,
+    pub title: String,
+    pub text: String,
+    /// Unix seconds of the visit the capture belongs to: the page finishing loading, or its
+    /// address changing through the History API. The text is dated by it, so a clear of that
+    /// time removes it wherever its capture is.
+    pub visited_at: i64,
+}
+
+impl fmt::Debug for CapturedPage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Addresses, titles and page text are the owner's browsing; they never reach a log.
+        formatter.write_str("CapturedPage { contents: [redacted] }")
+    }
+}
+
+/// A clear or erase that a capture still in flight must not outlive: the text of a page
+/// visited inside its range, and on its site when it names one, is not kept.
+struct Fence {
+    start: i64,
+    end: i64,
+    site: Option<String>,
+}
+
+impl Fence {
+    /// Covers every page visited up to `now`, on `site` or anywhere.
+    fn visited_by(now: i64, site: Option<String>) -> Self {
+        Self {
+            start: i64::MIN,
+            end: now.saturating_add(1),
+            site,
+        }
+    }
+
+    fn covers(&self, page: &CapturedPage) -> bool {
+        (self.start..self.end).contains(&page.visited_at)
+            && self
+                .site
+                .as_ref()
+                .is_none_or(|site| address_within_site(&page.address, site))
+    }
+}
+
+/// The revision for the next capture: the clock's seconds, but always past the last one, so
+/// two captures of a page within one second still replace each other in order.
+fn next_revision(last: u64, now: i64) -> Option<u64> {
+    let seconds = u64::try_from(now).ok()?;
+    Some(seconds.max(last.saturating_add(1)))
+}
+
+/// Stages and commits one page, dated by its visit.
+fn store_page(
+    index: &mut FullText,
+    page: CapturedPage,
+    revision: u64,
+    now: i64,
+) -> Result<(), SessionError> {
+    let document = FullTextDocument {
+        namespace: Namespace::page(),
+        id: page.address,
+        revision,
+        captured_at: page.visited_at,
+        title: page.title,
+        body: page.text,
+    };
+    index
+        .stage(&[Change::Upsert(document)], now)
+        .map_err(SessionError::FullText)?;
+    index.commit().or_else(cleanup_later)
+}
+
+/// What a failure to keep a page is reported as.
+const KEEPING: &str = "keeping a page's text";
+
+/// What a failed erase is reported as.
+const ERASING: &str = "erasing page text after capture was switched off";
+
+/// What a failed erase of excluded sites is reported as.
+const ERASING_SITES: &str = "erasing the page text of a site you excluded";
 
 /// What a failure to open the index is reported as.
 const OPENING: &str = "opening the search index";
 
-/// Guards the index's folder beside the database, then opens the index inside it.
+/// What a guard failure that refuses a repair is reported as.
+const REPAIRING: &str = "emptying the search index before a history repair";
+
+/// When the index's folder is emptied before the index opens.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Emptying {
+    /// Only when the index is damaged or from another version.
+    WhenUnreadable,
+    /// Always, so the fresh index holds nothing from before.
+    First,
+}
+
+/// Which step of opening the index failed, since a repair treats each differently.
+enum OpenFailure {
+    /// The storage guard refused the index's folder.
+    Folder(LocationError),
+    /// A file inside the folder could not be deleted.
+    Emptying(LocationError),
+    /// Tantivy could not open an index in the folder.
+    Opening(FullTextError),
+}
+
+impl OpenFailure {
+    fn into_error(self) -> SessionError {
+        match self {
+            Self::Folder(error) | Self::Emptying(error) => SessionError::IndexFolder(error),
+            Self::Opening(error) => SessionError::FullText(error),
+        }
+    }
+}
+
+/// Guards the index's folder beside the database, empties it when `emptying` says so, then
+/// opens the index inside it.
 ///
 /// The index is a cache, so one that is damaged or from another version starts afresh:
 /// left alone, its unreadable page text would never expire (D40).
-fn open_index(lease: &WindowsDirectoryLease) -> Result<(CacheFolder, FullText), SessionError> {
+fn open_index(
+    lease: &WindowsDirectoryLease,
+    emptying: Emptying,
+) -> Result<(CacheFolder, FullText), OpenFailure> {
     let folder = lease
         .cache_folder(INDEX_FOLDER)
-        .map_err(SessionError::IndexFolder)?;
+        .map_err(OpenFailure::Folder)?;
+    if emptying == Emptying::First {
+        folder.empty().map_err(OpenFailure::Emptying)?;
+    }
     let opened = match FullText::open(folder.path()) {
         Err(FullTextError::Damaged | FullTextError::IncompatibleIndex) => {
-            folder.empty().map_err(SessionError::IndexFolder)?;
+            folder.empty().map_err(OpenFailure::Emptying)?;
             FullText::open(folder.path())
         }
         opened => opened,
     };
-    let index = opened.map_err(SessionError::FullText)?;
+    let index = opened.map_err(OpenFailure::Opening)?;
     Ok((folder, index))
 }
 
+/// Whether the guard refused the index's folder because a file or a link stands where it
+/// belongs, rather than for a fault in the data folder, the database or a sync root.
+fn wrong_entry_where_the_folder_belongs(
+    lease: &WindowsDirectoryLease,
+    error: &LocationError,
+) -> bool {
+    if !matches!(
+        error,
+        LocationError::UnexpectedEntryKind | LocationError::ReparsePoint
+    ) {
+        return false;
+    }
+    let Some(data_folder) = lease.database_path().parent() else {
+        return false;
+    };
+    // The entry's own metadata, never a link's target: a symbolic link or junction is not a
+    // folder here, while a real folder with another reparse tag (a cloud placeholder, say)
+    // still is, so its refusal is not waved through. An entry that cannot be read is not
+    // known to be wrong, so the guard's error refuses the repair instead.
+    let Ok(entry) = fs::symlink_metadata(data_folder.join(INDEX_FOLDER)) else {
+        return false;
+    };
+    !entry.is_dir()
+}
+
 /// Brings the index level with the journal, first restarting its count when the journal is
-/// behind it or was rebuilt.
-fn follow_journal(
-    index: &mut FullText,
-    log: &DeletionLog,
-    journal_rebuilt: bool,
-) -> Result<(), SessionError> {
-    if journal_rebuilt || index.cleared_generation() > log.last_generation() {
+/// behind it.
+fn follow_journal(index: &mut FullText, log: &DeletionLog) -> Result<(), SessionError> {
+    if index.cleared_generation() > log.last_generation() {
         index.restart_clears().or_else(cleanup_later)?;
     }
     let unapplied = log

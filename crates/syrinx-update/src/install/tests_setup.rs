@@ -199,6 +199,8 @@ fn a_foreign_previous_folder_is_refused_before_anything_is_written() {
     assert_eq!(read_tree(&layout.program()), program_files(OLD));
 }
 
+// Needs Windows sharing rules: an open handle there blocks renaming or removing the file.
+#[cfg(windows)]
 #[test]
 fn a_program_folder_in_use_is_left_in_place() {
     use std::os::windows::fs::OpenOptionsExt;

@@ -14,6 +14,12 @@ mod replay;
 mod schema;
 mod site_zoom;
 
+/// SQLite's file layer: Windows needs the long-path VFS (see the storage traps); Unix uses the default.
+#[cfg(windows)]
+const SQLITE_VFS: &str = "win32-longpath";
+#[cfg(unix)]
+const SQLITE_VFS: &str = "unix";
+
 pub use backup::{BackupOutcome, validate_backup, validate_database};
 pub use backup_location::{BackupArchive, BackupEntry, BackupFile, BackupId, BackupMetadata};
 pub use engine::{Store, StoredSnapshot};

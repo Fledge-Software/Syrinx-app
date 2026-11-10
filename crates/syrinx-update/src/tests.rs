@@ -1,9 +1,14 @@
 //! Tampering tests on synthetic packages signed by keys generated in-process.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::{Cursor, Read};
+use std::fs;
+#[cfg(windows)]
+use std::fs::OpenOptions;
+use std::io::Cursor;
+#[cfg(windows)]
+use std::io::Read;
 use std::path::PathBuf;
+#[cfg(windows)]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -87,7 +92,7 @@ fn entries_for(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<FileEntry>, Upda
 
 fn sign(signer: &TestKeyPair, manifest: &[u8]) -> Result<Vec<u8>, UpdateError> {
     let point = signer.public_point()?;
-    let value = signer.sign(&cng::sha256(manifest)?)?;
+    let value = signer.sign_message(manifest)?;
     Ok(
         DetachedSignature::new(SignatureKind::Manifest, KeyId::of(&point)?, value)
             .to_bytes()
@@ -225,7 +230,7 @@ fn a_key_that_is_not_pinned_is_refused() -> Result<(), UpdateError> {
     let forged = DetachedSignature::new(
         SignatureKind::Manifest,
         KeyId::of(&other_point)?,
-        package.signer.sign(&cng::sha256(&package.manifest)?)?,
+        package.signer.sign_message(&package.manifest)?,
     );
     let result = verify_manifest(
         &package.manifest,
@@ -654,7 +659,7 @@ fn a_signature_by_one_pinned_key_cannot_claim_another() -> Result<(), UpdateErro
     let forged = DetachedSignature::new(
         SignatureKind::Manifest,
         KeyId::of(&other_point)?,
-        package.signer.sign(&cng::sha256(&package.manifest)?)?,
+        package.signer.sign_message(&package.manifest)?,
     );
     let result = verify_manifest(&package.manifest, &forged.to_bytes(), &both, INSTALLED);
     assert_eq!(result.err(), Some(UpdateError::BadSignature));
@@ -736,7 +741,9 @@ impl Scratch {
         let staging = self.root.join("staging");
         fs::create_dir(&staging)?;
         for (name, bytes) in files {
-            let path = staging.join(name.replace('/', "\\"));
+            let path = name
+                .split('/')
+                .fold(staging.clone(), |path, part| path.join(part));
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -762,6 +769,8 @@ fn io_error(error: std::io::Error) -> UpdateError {
     }
 }
 
+// Needs Windows deny-write sharing, which Unix has no equivalent for.
+#[cfg(windows)]
 #[test]
 fn a_staging_directory_installs_from_held_deny_write_handles() -> Result<(), UpdateError> {
     let package = valid_package()?;
@@ -825,6 +834,8 @@ fn a_staging_directory_must_use_the_manifest_case_and_hold_nothing_else() -> Res
     Ok(())
 }
 
+// Makes an NTFS junction; `a_symlink_in_a_staging_directory_is_refused` covers Unix.
+#[cfg(windows)]
 #[test]
 fn a_junction_in_a_staging_directory_is_refused() -> Result<(), UpdateError> {
     let package = valid_package()?;
@@ -855,6 +866,38 @@ fn a_junction_in_a_staging_directory_is_refused() -> Result<(), UpdateError> {
         .status()
         .map_err(io_error)?;
     assert!(status.success(), "mklink /J failed");
+
+    assert_eq!(
+        check_payload(&verified, DirectoryPayload::open(&staging)?),
+        Err(UpdateError::UnsafeEntry {
+            name: "resources".to_owned()
+        })
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_in_a_staging_directory_is_refused() -> Result<(), UpdateError> {
+    let package = valid_package()?;
+    let verified = package.verify()?;
+    let scratch = Scratch::new().map_err(io_error)?;
+
+    // Put the real resources outside the staging directory and link them in.
+    let mut files = synthetic_files();
+    let outside = scratch.root.join("outside");
+    fs::create_dir(&outside).map_err(io_error)?;
+    for (name, leaf) in [
+        ("resources/notes.txt", "notes.txt"),
+        ("resources/empty.bin", "empty.bin"),
+    ] {
+        let bytes = files.remove(name).ok_or_else(|| UpdateError::MissingFile {
+            path: name.to_owned(),
+        })?;
+        fs::write(outside.join(leaf), bytes).map_err(io_error)?;
+    }
+    let staging = scratch.stage(&files).map_err(io_error)?;
+    std::os::unix::fs::symlink(&outside, staging.join("resources")).map_err(io_error)?;
 
     assert_eq!(
         check_payload(&verified, DirectoryPayload::open(&staging)?),

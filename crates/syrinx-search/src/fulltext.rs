@@ -12,8 +12,8 @@ mod tests;
 use std::{collections::HashMap, ops::Bound, path::Path};
 
 use tantivy::{
-    Index, IndexReader, IndexWriter, ReloadPolicy, Searcher,
-    collector::{Count, TopDocs},
+    Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, TantivyDocument,
+    collector::{Count, DocSetCollector, TopDocs},
     indexer::NoMergePolicy,
     query::{BooleanQuery, Occur, Query, RangeQuery, TermQuery},
     schema::IndexRecordOption,
@@ -219,6 +219,27 @@ impl FullText {
         self.commit_with(0)
     }
 
+    /// Removes every page row, document or tombstone, whose id `matches` accepts, and leaves
+    /// no tombstone in its place: a tombstone's id would itself keep the address. Returns how
+    /// many rows went. Excluding a site erases its text this way (#54).
+    pub fn remove_pages(&mut self, matches: impl Fn(&str) -> bool) -> Result<usize, FullTextError> {
+        self.require_nothing_staged()?;
+        let doomed: Vec<String> = self
+            .page_ids()?
+            .into_iter()
+            .filter(|id| matches(id))
+            .collect();
+        if doomed.is_empty() {
+            return Ok(0);
+        }
+        let page = Namespace::page();
+        for id in &doomed {
+            self.writer.delete_term(self.fields.key_term(&page, id));
+        }
+        self.commit_with(self.cleared)?;
+        Ok(doomed.len())
+    }
+
     /// Ranks committed documents against the owner's words.
     pub fn search(&self, request: &SearchRequest) -> Result<Vec<FullTextHit>, FullTextError> {
         self.require_usable()?;
@@ -318,6 +339,22 @@ impl FullText {
             (Occur::Must, Box::new(page) as Box<dyn Query>),
             (Occur::Must, Box::new(range)),
         ])
+    }
+
+    /// The id of every committed page row, documents and tombstones alike.
+    fn page_ids(&self) -> Result<Vec<String>, FullTextError> {
+        let searcher = self.searcher()?;
+        let page = TermQuery::new(
+            self.fields.namespace_term(&Namespace::page()),
+            IndexRecordOption::Basic,
+        );
+        let rows = searcher.search(&page, &DocSetCollector)?;
+        rows.into_iter()
+            .map(|address| {
+                let row: TantivyDocument = searcher.doc(address)?;
+                Ok(self.fields.text(&row, self.fields.id)?.to_owned())
+            })
+            .collect()
     }
 
     fn count_documents(&self, rows: &BooleanQuery) -> Result<usize, FullTextError> {

@@ -13,6 +13,10 @@
 /vendor/gpui-pre-windows-0.3.8/** -text
 /vendor/gpui-pre-windows-0.3.8.idle.patch -text
 /vendor/gpui-pre-windows-0.3.8.embedded-shaders.patch -text
+# Preserve the vendored WASI 0.2.12 WIT byte for byte, so its recorded hashes hold.
+/vendor/wasi-0.2.12-wit/** -text
 # Brand rasters and icons are binary; never convert their line endings.
 *.png binary
 *.ico binary
+# The Linux package's shell scripts and desktop entry must keep LF line endings.
+/packaging/linux/** text eol=lf

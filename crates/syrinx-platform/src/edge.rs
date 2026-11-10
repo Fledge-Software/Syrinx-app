@@ -8,6 +8,12 @@ use windows::{
     core::{HSTRING, PCWSTR, w},
 };
 
+/// The other browser as the owner reads it in a sentence, and on the button that opens it.
+pub const OTHER_BROWSER: &str = "Edge";
+pub const OPEN_BUTTON: &str = "Open in Edge";
+/// What the status line says once the page has been handed over.
+pub const OPENED_MESSAGE: &str = "Opened this page in Microsoft Edge.";
+
 /// Why a page could not be handed to Edge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EdgeError {

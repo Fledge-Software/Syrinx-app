@@ -47,11 +47,8 @@ impl SessionCommand {
             Self::CloseActive => "closing the active tab",
             Self::CycleActive { .. } => "moving to the next tab",
             Self::FocusTab(_) => "switching tabs",
-            #[cfg(test)]
             Self::Duplicate(_) => "duplicating a tab",
-            #[cfg(test)]
             Self::CloseOthers(_) => "closing other tabs",
-            #[cfg(test)]
             Self::CloseBelow(_) => "closing tabs below",
             Self::SaveTab(_) => "saving a page",
             Self::OpenSaved(_) => "opening a saved page",
@@ -68,6 +65,9 @@ impl SessionCommand {
             Self::EditDestinations { .. } => "editing tiles",
             Self::Query { .. } => "searching",
             Self::ObserveNavigation { .. } => "recording a finished navigation",
+            Self::ObserveHistory { .. } => "following a tab's back and forward list",
+            Self::StartHistoryJump { .. } => "planning a back or forward step",
+            Self::HistoryRows { .. } => "listing a tab's back or forward pages",
             Self::OpenHistory(_) => "opening a history entry",
             Self::RecentHistory { .. } => "listing history",
             Self::ClearHistory { .. } => "clearing history",
@@ -75,6 +75,10 @@ impl SessionCommand {
             Self::SnapshotBeforeUpdate => "taking the pre-update snapshot",
             Self::Usage(_) => CHANGING_USAGE,
             Self::UsageReport { .. } => BUILDING_USAGE_REPORT,
+            Self::StorePageText(_) => "keeping a page's text",
+            Self::SavePageTextSetting(_) => {
+                "saving the page text setting (Syrinx tries again until it is saved)"
+            }
             Self::Shutdown => "shutting down",
         }
     }
@@ -101,6 +105,7 @@ pub(super) fn during(operation: &'static str) -> impl FnOnce(SessionError) -> Se
 pub(super) fn survivable(error: &SessionError) -> bool {
     match error {
         SessionError::During { error, .. } => survivable(error),
+        SessionError::AfterEarlier { earlier, error } => survivable(earlier) && survivable(error),
         SessionError::Store(error) => store_survivable(error),
         SessionError::Search(_)
         | SessionError::FullText(_)
@@ -120,7 +125,9 @@ pub(super) fn survivable(error: &SessionError) -> bool {
 /// Whether the window can no longer hear the worker, so a report has nowhere to go.
 pub(super) fn window_lost(error: &SessionError) -> bool {
     match error {
-        SessionError::During { error, .. } => window_lost(error),
+        SessionError::During { error, .. } | SessionError::AfterEarlier { error, .. } => {
+            window_lost(error)
+        }
         error => *error == SessionError::EventReceiverClosed,
     }
 }
@@ -284,10 +291,11 @@ impl Survival {
         self.log.record(survived_line(error));
     }
 
-    /// Names the operation the loop is running, unless the failure already names one.
+    /// Names the operation the loop is running, unless the failure already names one. A
+    /// chain of the index's failures names each of its own.
     pub(super) fn tagged(&self, error: SessionError) -> SessionError {
         match error {
-            SessionError::During { .. } => error,
+            SessionError::During { .. } | SessionError::AfterEarlier { .. } => error,
             error => during(self.operation)(error),
         }
     }

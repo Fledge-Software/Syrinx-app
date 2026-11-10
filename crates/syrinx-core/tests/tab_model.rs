@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use syrinx_core::{
-    Activation, SavedFolderId, SavedPageId, SidebarRow, Tab, TabError, TabId, TabKind, TabMetadata,
-    TabModel,
+    Activation, BulkScope, SavedFolderId, SavedPageId, SidebarRow, Tab, TabError, TabId, TabKind,
+    TabMetadata, TabModel,
 };
 
 fn metadata(number: usize) -> TabMetadata {
@@ -657,6 +657,40 @@ fn close_below_closes_only_later_ordinary_tabs() -> Result<(), TabError> {
     assert_eq!(open_ids(&model), vec![saved_first, saved_second]);
     assert_eq!(model.active_id(), Some(saved_first));
     assert_open_invariants(&model);
+    Ok(())
+}
+
+#[test]
+fn a_snapshot_names_exactly_the_tabs_a_bulk_close_closes() -> Result<(), TabError> {
+    let mut model = TabModel::new();
+    let saved_live = open_web(&mut model, 1)?;
+    model.save_page(saved_live)?;
+    let above = open_web(&mut model, 2)?;
+    let keep = open_web(&mut model, 3)?;
+    let below = open_web(&mut model, 4)?;
+    let snapshot = model.snapshot();
+    assert_eq!(
+        snapshot.bulk_close_targets(BulkScope::Others, keep),
+        vec![above, below]
+    );
+    assert_eq!(
+        snapshot.bulk_close_targets(BulkScope::Below, keep),
+        vec![below]
+    );
+    assert_eq!(
+        snapshot.bulk_close_targets(BulkScope::Below, saved_live),
+        vec![above, keep, below]
+    );
+    // A tab gone from the snapshot names nothing to close.
+    let stale = TabId::new(999)?;
+    assert!(
+        snapshot
+            .bulk_close_targets(BulkScope::Others, stale)
+            .is_empty()
+    );
+
+    let closed: Vec<_> = model.close_others(keep)?.iter().map(Tab::id).collect();
+    assert_eq!(closed, snapshot.bulk_close_targets(BulkScope::Others, keep));
     Ok(())
 }
 

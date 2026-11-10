@@ -20,8 +20,8 @@ pub use web_address::{WebAddressError, web_address};
 
 pub use page_text::{
     DocumentFacts, EligibleDocument, Ineligible, LeftDocument, ObservedResponse, PageTextPolicy,
-    PolicyError, SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, TEXT_LIMIT_BYTES, judge,
-    same_document_address, same_document_due,
+    PolicyError, SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, TEXT_LIMIT_BYTES, address_within_site,
+    excluded_site, judge, same_document_address, same_document_due,
 };
 
 pub use bookmark_import::{
@@ -46,7 +46,9 @@ pub use downloads::{
 };
 
 pub use tabs::{
-    Activation, AppendedSavedTree, BLANK_ADDRESS, FolderContents, FolderRemoval, NewSavedItem,
+    Activation, AppendedSavedTree, BLANK_ADDRESS, BulkScope, FolderContents, FolderRemoval,
+    HISTORY_ENTRY_LIMIT, HISTORY_ROW_LIMIT, HistoryChange, HistoryDirection, HistoryObserved,
+    HistoryReach, HistoryReport, HistoryRow, NavigationList, NavigationLists, NewSavedItem,
     PageOrigin, RemovedSavedEntries, SETTINGS_ADDRESS, SavedEntryId, SavedFolder, SavedFolderId,
     SavedFolderSnapshot, SavedPage, SavedPageId, SavedPageSnapshot, SavedPlacement, SidebarRow,
     SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot,

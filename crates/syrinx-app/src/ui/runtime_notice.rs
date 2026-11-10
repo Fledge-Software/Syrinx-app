@@ -1,5 +1,5 @@
-//! Shows D36's notice when the WebView2 runtime changes, with an explicit open-in-Edge action (P1-35),
-//! in development and test builds only; installed builds stay silent.
+//! Shows D36's notice when the page engine's runtime changes, with an explicit action that opens
+//! the page in the other browser (P1-35), in development and test builds only.
 
 use std::collections::BTreeMap;
 
@@ -7,7 +7,8 @@ use gpui::{
     Context, Div, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled, div, px,
 };
 use syrinx_core::web_address;
-use syrinx_platform::edge::open_in_edge;
+use syrinx_platform::browser::ENGINE_NAME;
+use syrinx_platform::edge::{OPEN_BUTTON, OPENED_MESSAGE, OTHER_BROWSER, open_in_edge};
 
 use super::{BrowserView, button};
 use crate::{session::SessionCommand, theme};
@@ -106,9 +107,10 @@ impl BrowserView {
 
     pub(super) fn runtime_version_observed(&mut self, version: Option<String>) {
         if !self.runtime.observed(version) && SHOWS_NOTICE {
-            self.message = "Syrinx could not read the WebView2 version, so it cannot tell you \
-                            when an update might affect sign-in."
-                .to_owned();
+            self.message = format!(
+                "Syrinx could not read the {ENGINE_NAME} version, so it cannot tell you when an \
+                 update might affect sign-in."
+            );
             return;
         }
         self.save_runtime_version();
@@ -156,9 +158,9 @@ impl BrowserView {
                     .whitespace_nowrap()
                     .child(text),
             );
-        // Edge is offered only for a web page, and opens only when the owner clicks.
+        // The other browser is offered only for a web page, and opens only when the owner clicks.
         if self.active_web_address().is_some() {
-            banner = banner.child(button("open-in-edge", "Open in Edge").on_click(cx.listener(
+            banner = banner.child(button("open-in-edge", OPEN_BUTTON).on_click(cx.listener(
                 |this, _, _, cx| {
                     this.open_active_in_edge();
                     cx.notify();
@@ -185,11 +187,11 @@ impl BrowserView {
 
     fn open_active_in_edge(&mut self) {
         let Some(address) = self.active_web_address() else {
-            self.message = "Open a web page first, then send it to Edge.".to_owned();
+            self.message = format!("Open a web page first, then send it to {OTHER_BROWSER}.");
             return;
         };
         self.message = match open_in_edge(&address) {
-            Ok(()) => "Opened this page in Microsoft Edge.".to_owned(),
+            Ok(()) => OPENED_MESSAGE.to_owned(),
             Err(error) => error.to_string(),
         };
     }
@@ -197,8 +199,8 @@ impl BrowserView {
 
 fn notice_text(change: &VersionChange) -> String {
     format!(
-        "WebView2 updated from {} to {}. Google sign-in can change after a runtime update; \
-         if it stops working, open the page in Edge.",
+        "{ENGINE_NAME} updated from {} to {}. Google sign-in can change after a runtime update; \
+         if it stops working, open the page in {OTHER_BROWSER}.",
         change.previous, change.current
     )
 }
@@ -253,7 +255,7 @@ mod tests {
             let change = notice.change().expect("notice shown").clone();
             assert_eq!(change.previous, "140.0.1.2");
             assert_eq!(change.current, "141.0.3.4");
-            assert!(notice_text(&change).contains("open the page in Edge"));
+            assert!(notice_text(&change).contains(&format!("open the page in {OTHER_BROWSER}")));
             assert_eq!(notice.take_save(), saved("141.0.3.4"));
             notice.dismiss();
             assert_eq!(notice.change(), None);
@@ -279,5 +281,31 @@ mod tests {
         assert!(!notice.observed(Some("9".repeat(syrinx_store::MAX_SETTING_VALUE_BYTES + 1))));
         assert_eq!(notice.change(), None);
         assert_eq!(notice.take_save(), None);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_linux_notice_names_webkitgtk_and_the_default_browser() {
+        let change = VersionChange {
+            previous: "2.54.0".to_owned(),
+            current: "2.54.1".to_owned(),
+        };
+        let text = notice_text(&change);
+        assert!(
+            text.starts_with("WebKitGTK updated from 2.54.0 to 2.54.1."),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("open the page in your default browser."),
+            "{text}"
+        );
+        assert_eq!(OPEN_BUTTON, "Open in default browser");
+        assert_eq!(OPENED_MESSAGE, "Opened this page in your default browser.");
+        for shown in [text.as_str(), OPEN_BUTTON, OPENED_MESSAGE] {
+            assert!(
+                !shown.contains("Edge") && !shown.contains("WebView2"),
+                "{shown}"
+            );
+        }
     }
 }

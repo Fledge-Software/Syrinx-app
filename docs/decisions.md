@@ -17,6 +17,221 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-11-03
+
+- **Linux-only licences (owner, 2026-11-03).** The owner's choice, given in
+  the review session of #226 and relayed by its chair: "Approve all", as
+  narrow exceptions at these exact versions: ISC for `ring 0.17.14`,
+  `untrusted 0.9.0`, `inotify 0.11.5`, `inotify-sys 0.1.8` and
+  `libloading 0.8.9`; Zlib for `foldhash 0.1.5`; CC0-1.0 for
+  `hexf-parse 0.2.1`; and entering the 2026-10-31 approvals of
+  `target-lexicon 0.12.16` and `tiny-keccak 2.0.2` in `licences.toml`. The
+  approval also covers making `cargo xtask check-licences` judge the Linux
+  target as well as Windows. It approves nothing else: another version, or
+  the same licence on another package, needs its own approval. The review
+  found these packages because the licence gate judged only
+  `x86_64-pc-windows-msvc`, so the Linux build linked them unchecked.
+  Details are in `docs/dev/dependency-audit.md`, "Linux platform layer".
+
+## 2026-11-02
+
+- **Linux site permissions use the top-level site's delegation (owner,
+  2026-11-02).** The owner's instruction was "test first, then decide".
+  Synthetic cross-origin frames on WebKitGTK 2.54.1 requested location,
+  notifications, camera and microphone without an `allow` attribute or a
+  Permissions-Policy header; none reached Syrinx's `permission-request`
+  handler. Delegation enforcement is verified for geolocation and
+  notifications only. Delegated location and top-level notification
+  controls reached the handler and were denied. Camera and microphone
+  controls had no usable device, so their missing handler calls do not
+  establish a policy block: **camera and microphone delegation are
+  unverified on this machine**. The owner retains the delegation prompt for
+  all four kinds and requests the device-backed follow-up in
+  `docs/owner-checklist.md` (issue #234). The outcome selects
+  the owner's Chrome/Safari delegation model: the top-level origin is the
+  accountable principal, and remembered choices stay keyed by that origin.
+  Prompts explicitly say the request comes from that site "or a site it
+  embeds". WebKit's public request API does not identify the requesting
+  frame; claiming it does was rejected, as was refusing every Linux
+  permission despite the engine's delegation checks. The native location
+  regression and the limits of the four-kind test are recorded in
+  `docs/dev/linux-permission-delegation.md`. No permission was granted.
+
+## 2026-10-31
+
+- **Syrinx is one app for Windows, Linux and macOS (owner, 2026-10-31).**
+  The owner's words: "one standalone app that can run on windows, linux
+  and mac. Just like the docs should say". The rest of this entry is the
+  coordinator's record, and the owner may correct it. This replaces D2's
+  "Windows 11 only": the same workspace builds on each platform, and only
+  `syrinx-platform` (the page engine, windows, storage guard, single
+  instance and dialogs) is written once per platform, as the 2026-10-15
+  macOS entry already planned. The core, store, search, UI and plugin
+  crates are shared unchanged.
+  - **Windows** stays as it is: WebView2 through the pinned, patched wry.
+  - **Linux** renders pages in WebKitGTK, driven directly through
+    `webkit2gtk` rather than wry, because wry's GTK backend injects a
+    `window.ipc` script into every page whether or not an IPC handler is
+    set, which the page rules in `AGENTS.md` forbid. Each page is a GTK
+    window embedded as an X11 child of Syrinx's window, so Syrinx runs on
+    X11, or XWayland under a Wayland compositor such as Hyprland; GPUI is
+    built with its X11 backend only. WebKit's bubblewrap sandbox is on.
+    Known limits, flagged rather than hidden: WebKitGTK has no Widevine, so
+    Disney+ and Hulu do not play; Google may treat WebKitGTK as an
+    unfamiliar browser at sign-in, and the user agent is still never
+    changed (D22); page-text capture, hidden-page suspension, pausing a
+    download and the update download are Windows-only for now.
+  - **macOS** is not built yet: its platform layer (WKWebView, AppKit
+    windows) is the next platform slice, and it needs a Mac to run on.
+  - Rejected: CEF on Linux (one Chromium everywhere, but it bundles
+    Chromium and Google's sign-in block names CEF); a separate Linux fork of
+    the repository (two copies of every rule drift apart); wry's GTK
+    backend (the injected script above).
+
+- **The storage guard reads sync roots from the registry (replaces the
+  2026-10-14 Windows Server entry).** D13 keeps the database out of
+  OneDrive and similar synced folders. The guard
+  (`crates/syrinx-platform/src/storage/native.rs`, `registered_roots`) asked
+  Windows for the registered sync roots through
+  `StorageProviderSyncRootManager::GetCurrentSyncRoots`, which crashed the
+  process on Windows Server, and on 2026-10-31 crashed the same way on the
+  owner's Windows 11 Pro build 26300, a client build that the edition check
+  of 2026-10-14 does not catch. Every test that opened a store crashed, and
+  Syrinx itself would have crashed at start-up. The owner chose to read the
+  registrations Windows keeps under
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager`
+  (each provider's `UserSyncRoots` values, one per user, holding the root's
+  folder) instead, so the guard keeps refusing a synced folder everywhere,
+  Windows Server included. The rejected alternative was to treat such builds
+  as having no sync roots, as Server had been, which would switch D13's
+  check off on the owner's own machine. The cost is that this registry
+  layout is not a documented Microsoft interface and a later Windows could
+  change it. Roots registered for any user count, which can only refuse
+  more, never less.
+
+## 2026-10-27
+
+- **Switching page text off erases it at once (#54, owner, 2026-10-27).**
+  The owner's words: "Erase them right away". The rest of this entry is the
+  coordinator's record, and the owner may correct it. Turning "Remember page
+  text" off in Settings > Privacy removes every stored page from the
+  full-text index in one reset of its page namespace, run by the session
+  worker with the switch-off (even if saving it fails, since erasing is the
+  safe direction), as switching usage counting off
+  deletes the counts (AN-01). Notes and other feeds in the index are kept.
+  A failed erase is reported, never swallowed, and tried again the next
+  time the setting is saved or Syrinx starts while capture is off. Letting
+  the text expire within seven days was rejected: an owner switching off a
+  privacy feature expects its data to go with it.
+- **Restored, reopened and duplicated tabs are not read until the owner
+  navigates them (#54, owner, 2026-10-27).** The owner's words: "Keep it".
+  The rest of this entry is the coordinator's record, and the owner may
+  correct it. Page-text taint (P1-25's "skip all exits") is not saved, so
+  a restored tab cannot tell whether its page was reached from a bank's or
+  Google's sign-in. Such tabs, and tabs reopened with Ctrl Shift T or
+  duplicated, therefore open tainted, as crash recovery already does, and
+  are read again once the owner navigates the tab from the address bar,
+  the palette, a tile or Home; resubmitting the same address counts, but
+  reload, back and forward do not. A saved page that is restored at
+  start-up and then opened, as the tab itself or from a bookmark, is not
+  read while that restored tab stays open. The code fails closed there,
+  meaning it skips the page rather than risk reading one reached from a
+  sign-in, and the owner chose to keep it so. Once that tab is closed,
+  opening the bookmark makes a fresh tab, and that tab is read. Saving
+  taint with each tab was rejected: it needs a schema change for the small
+  gain of reading a restored ordinary page before the owner next navigates
+  it. *(Corrected on 2026-10-27 by the owner on #54: the earlier text
+  listed "a bookmark" among the navigations that clear the mark; opening
+  a restored saved page, from its row or from a bookmark, does not.)*
+- **Excluding a site erases its stored page text at once; the switch stays
+  in Settings > Privacy (#54, owner, 2026-10-27).** Recorded on #54 after
+  the independent review of #198; the owner may correct this record.
+  Excluding a site removes every stored page on that site or its
+  subdomains, matched by the same label-boundary rule (`within_domain`) the
+  exclusion itself uses, so `owner.test` takes `www.owner.test` but not
+  `notowner.test` or `owner.test.example`. The rows are deleted outright,
+  with no tombstones, because a tombstone's id is the page's address and
+  would keep the very addresses the owner excluded. This matches switching
+  capture off, which already erases everything. The review that raised the
+  question recommended this because, once the palette searches page text,
+  the owner would otherwise find a site they had just excluded. The capture
+  switch and the excluded sites stay in Settings > Privacy with the other
+  privacy controls, not in Customize as #54 first said. Restoring a backup
+  can bring back an older exclusion list, a D35 risk tracked in #199.
+- **The sidebar row's menu lists its tab actions in Firefox's order; a muted
+  tab shows only a mute icon; bulk closes always ask (owner, 2026-10-27).**
+  #95 slice 4 needed the owner's choice of how a sidebar row offers the tab
+  actions slices 1 to 3 built (Duplicate, Close other tabs, Close tabs
+  below, Mute), and #58 asked for a right-click menu on every row. The
+  coordinator showed the owner design directions, and the owner chose
+  Direction 1 with "1: Firefox order", the playing indicator with "Mute
+  icon only", and bulk-close confirmation with "Always ask but give an
+  option to not ask again". The owner also accepted the coordinator's other
+  recommendations, listed below. Only the quoted words are the owner's; the
+  rest is recorded by the coordinator and the owner may correct it.
+  - **Why.** Every row action was reachable only through small buttons that
+    DW-61 took out of the Tab order, or through keys nothing on screen named.
+    A menu that lists each row's actions with the key that does the same
+    teaches the keys, gives the favicon-only sidebar a way to reach actions
+    it has no room to draw, and is where Firefox, Chrome and Edge put these
+    actions, so the owner's hands already know it.
+  - **What each row offers, as built.** Groups are split by a separator, and
+    a key is named only where pressing it acts on that row: Ctrl R and
+    Ctrl D act on the active tab, so they label only the active row's
+    items; Ctrl W acts on the active tab, or on the focused row when Shift
+    F10 or the Menu key opened the menu there; Delete and F2 act only on
+    the focused row, so a right-click menu does not name them. The keys
+    below are those of a menu opened from the keyboard. Every key label is
+    read from the binding that runs it, so the menu and the keys cannot
+    drift apart.
+    - An open tab: Reload tab, Mute tab (Unmute tab once muted), Duplicate
+      tab, Copy link | Save page | Close tab (Ctrl W, Delete), Close
+      other tabs, Close tabs below | Reopen closed tab (Ctrl Shift T). Home
+      and Settings rows have only the closing and reopening groups. A bulk
+      close that would close nothing is left out of the menu, as Firefox
+      greys it out.
+    - A saved page whose page is open: Unload page (Ctrl W), Remove saved
+      page (Delete) | Reload tab, Mute tab, Duplicate tab, Copy link |
+      Reopen closed tab.
+    - A saved page that is not open: Copy link | Remove saved page (Delete),
+      the second only in the wide sidebar.
+    - A folder: Rename folder (F2), Remove folder (Delete), in the wide
+      sidebar only. A folder in the favicon-only sidebar opens the ⋯ menu
+      instead.
+    - The ⋯ menu gains a separator and Close tab (Ctrl W), acting on the
+      active tab.
+  - **What the owner accepted with it.**
+    - The favicon-only sidebar offers no rename and no removal that needs
+      the wide sidebar's confirmation card (an unopened saved page, a
+      folder), because the card has no room there.
+    - Saved-page rows offer no Close other tabs or Close tabs below; both
+      already spare open saved pages, as Firefox spares pinned tabs.
+    - The peek, the sidebar's popup copy, gets no menu yet.
+    - Shift F10 and the Menu key open a focused row's menu, as in Windows'
+      own lists; Escape gives the keys back to the row.
+  - **Mute icon only.** No speaker icon appears while a page plays sound. A
+    muted tab shows a clickable mute glyph before its × in the wide sidebar,
+    which unmutes it, and a small badge on its icon's bottom-right corner in
+    the favicon-only sidebar. The badge follows only what the page reports
+    through WebView2, so a page that plays sound while muted keeps it, and a
+    runtime that cannot mute shows none: the status line says so instead.
+    Mute is still not saved across a restart (#117) and is never counted in
+    the usage report (D39).
+  - **Bulk closes always ask.** Close other tabs and Close tabs below first
+    ask "Close 3 other tabs?" (with the real count) in the menu's place,
+    offering Close 3 tabs, Close and don't ask again, and Cancel. "Don't ask
+    again" is stored as Syrinx's own setting `tabs.ask_before_bulk_close`
+    and is turned back on under Settings, Tabs, "Ask before closing several
+    tabs". If tabs open or close while it asks, choosing Close asks again
+    with the new count rather than close tabs the question never named.
+    Rejected: asking only above 20 tabs, which #95's plan had recommended,
+    because the owner chose to be asked every time.
+  - **What it does not change.** No palette command was added, so D39's
+    usage schema is unchanged; that choice stays open on #95. #58's item
+    list named Shift Delete for removing a saved page or folder; the binding
+    has always been Delete (Shift Delete deletes a folder with its
+    contents), and the menu shows Delete.
+
 ## 2026-10-26
 
 - **The plugin runtime starts now, before Plan 1's exit, with wasmtime
@@ -1206,7 +1421,7 @@ entry names it.
   promise the build cannot keep was the rejected alternative.
 
 - **Where Windows cannot list sync roots, Syrinx treats the machine as
-  having none (narrows D13).** D13 keeps the database out of OneDrive and
+  having none (narrows D13; replaced on 2026-10-31 by a registry read).** D13 keeps the database out of OneDrive and
   similar synced folders; the storage guard
   (`crates/syrinx-platform/src/storage/native.rs`, `registered_roots`) asks
   Windows for its registered sync roots through
@@ -1375,9 +1590,8 @@ entry names it.
   (P1-25, "skip all exits").** A page reached by leaving an excluded document
   (Google, a bank or payment site, or a site the owner excluded) is never
   read, unless Syrinx itself started that navigation from the address bar,
-  the palette, a bookmark, a saved page, a tile or Home. Links, page
-  scripts, auto-submitting forms, popups, back, forward and reload all count
-  as leaving. The taint carries on: a page reached that way passes it to the
+  the palette, a tile or Home. Links, page scripts, auto-submitting forms,
+  popups, back, forward and reload all count as leaving. The taint carries on: a page reached that way passes it to the
   next page it leads to, until Syrinx navigates the tab, so a sign-in
   callback that moves on by script is not read either. A popup opened from
   an excluded or tainted page starts tainted. This replaces the
@@ -1385,7 +1599,13 @@ entry names it.
   follows Chromium's short-lived user activation, so a "Continue" click on a
   bank page counted as the owner's own navigation and its next page was
   read. Keeping the user-initiated test was rejected for that reason. The
-  form-`POST` rule below stands.
+  form-`POST` rule below stands. *(Corrected on 2026-10-27, owner, on #54: the
+  list of navigations that clear the taint first named "a bookmark" and "a
+  saved page". Opening either focuses that saved page's tab if it is
+  already open, and that tab stays unread; once it is closed, opening the
+  bookmark makes a fresh tab, and that tab is read. Resubmitting the same
+  address from the address bar also clears the taint, while reload, back
+  and forward do not. See the 2026-10-27 entry on restored tabs.)*
 
 - **Page text skips sign-in hops (P1-25).** *(Its user-initiated test was
   replaced the same day by "skip all exits" above; the `POST` rule stands.)* A page reached by a navigation
@@ -1616,7 +1836,8 @@ These entries depart from `docs/spec.md`. Each is argued in
 `docs/architecture-decisions.md`, decision number in brackets.
 
 - **v1 runs on Windows 11 only** (D2). No macOS or Linux work or testing in
-  v1, so the Phase 0 verdict is for Windows, not per OS.
+  v1, so the Phase 0 verdict is for Windows, not per OS. *Superseded on
+  2026-10-31: Syrinx is one app for Windows, Linux and macOS (entry above).*
 - **Pages render in WebView2, driven from Rust through wry, without Tauri**
   (D3). Servo is added later as a per-tab engine.
 - **Syrinx's interface is drawn in Rust with GPUI, not Svelte** (D4), unless

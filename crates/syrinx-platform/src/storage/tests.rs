@@ -2,8 +2,7 @@
 
 use std::{
     fs,
-    os::windows::ffi::OsStrExt,
-    path::{Component, Path, PathBuf, Prefix},
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -13,88 +12,9 @@ use std::{
 
 use super::{
     EntryInfo, FileIdentity, LocationProbe, SIDECAR_NAMES, WindowsDirectoryLease, check_entry,
-    native, normal_absolute_path, sqlite_database_path,
+    native,
 };
 use syrinx_store::{DirectoryLease, LocationError, LocationOperation};
-
-#[test]
-fn accepts_dos_spelling_and_removes_only_the_extended_dos_prefix() {
-    let expected = PathBuf::from(r"C:\synthetic\database");
-    assert_eq!(
-        normal_absolute_path(Path::new(r"c:\synthetic\database")),
-        Ok(expected.clone())
-    );
-    assert_eq!(
-        normal_absolute_path(Path::new(r"\\?\C:\synthetic\database")),
-        Ok(expected)
-    );
-}
-
-#[test]
-fn sqlite_path_reserves_space_for_the_longest_sidecar_and_terminator() {
-    for length in [251, 252, 259, 260, 261] {
-        let path = PathBuf::from(format!(r"C:\{}\syrinx.db", "a".repeat(length - 13)));
-        assert_eq!(path.as_os_str().encode_wide().count(), length);
-        let sqlite_path = sqlite_database_path(&path);
-        let uses_extended = matches!(
-            sqlite_path.components().next(),
-            Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_))
-        );
-        assert_eq!(uses_extended, length > 251);
-        assert_eq!(normal_absolute_path(&sqlite_path), Ok(path));
-    }
-}
-
-#[test]
-fn sqlite_path_limit_counts_utf16_units_instead_of_utf8_bytes() {
-    let component = "😀".repeat(119);
-    let path = PathBuf::from(format!(r"C:\{component}\syrinx.db"));
-    assert_eq!(path.as_os_str().encode_wide().count(), 251);
-    assert_eq!(sqlite_database_path(&path), path);
-
-    let longer_path = PathBuf::from(format!(r"C:\{component}a\syrinx.db"));
-    assert_eq!(longer_path.as_os_str().encode_wide().count(), 252);
-    let sqlite_path = sqlite_database_path(&longer_path);
-    assert_ne!(sqlite_path, longer_path);
-    assert_eq!(normal_absolute_path(&sqlite_path), Ok(longer_path));
-}
-
-#[test]
-fn rejects_relative_network_device_stream_and_ambiguous_names() {
-    for value in [
-        "",
-        r"data",
-        r"C:data",
-        r"\data",
-        r"\\example.invalid\share\data",
-        r"\\?\UNC\example.invalid\share\data",
-        r"\\.\C:\data",
-        r"C:\parent\..\data",
-        r"C:\data:stream",
-        r"C:\data.",
-        "C:\\data ",
-        r"C:\CON.txt",
-        r"C:\lpt1",
-        r"C:\COM¹",
-        r"C:\COM²",
-        r"C:\COM³",
-        r"C:\LPT¹",
-        r"C:\LPT²",
-        r"C:\LPT³",
-        r"C:\com¹.txt",
-        r"C:\com².tar.gz",
-        r"C:\com³.txt",
-        r"C:\lpt¹.txt",
-        r"C:\lpt².tar.gz",
-        r"C:\lpt³.txt",
-        "C:\\invalid\0name",
-    ] {
-        assert_eq!(
-            normal_absolute_path(Path::new(value)),
-            Err(LocationError::InvalidPath)
-        );
-    }
-}
 
 #[test]
 fn refuses_every_nonfixed_drive_before_creating_the_destination() {
@@ -191,33 +111,6 @@ fn creates_missing_children_and_keeps_existing_database_bytes() {
 }
 
 #[test]
-fn native_checks_support_a_disposable_path_beyond_the_legacy_length() {
-    let fixture = Fixture::new();
-    let mut destination = fixture.root.clone();
-    for index in 0..8 {
-        destination.push(format!(
-            "synthetic-component-{index}-with-enough-characters"
-        ));
-    }
-    let lease = prepare(&destination);
-    assert!(lease.database_path().as_os_str().encode_wide().count() > 260);
-    assert!(matches!(
-        lease.database_path().components().next(),
-        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_))
-    ));
-    assert_eq!(
-        normal_absolute_path(lease.database_path()),
-        Ok(lease.database.path.clone())
-    );
-    fs::write(lease.database_path(), b"synthetic long-path bytes").expect("write synthetic bytes");
-    lease.revalidate().expect("revalidate long-path identity");
-    assert_eq!(
-        fs::read(lease.database_path()).expect("read synthetic bytes"),
-        b"synthetic long-path bytes"
-    );
-}
-
-#[test]
 fn new_sync_registration_is_detected_on_revalidation() {
     let fixture = Fixture::new();
     let probe = Arc::new(StubProbe::with_roots(Vec::new()));
@@ -226,24 +119,6 @@ fn new_sync_registration_is_detected_on_revalidation() {
             .expect("prepare a synthetic database");
     *probe.roots.lock().expect("lock synthetic root list") = Ok(vec![fixture.root.clone()]);
     assert_eq!(lease.revalidate(), Err(LocationError::SyncedDirectory));
-}
-
-#[test]
-fn directory_and_database_names_remain_locked_until_the_lease_drops() {
-    let fixture = Fixture::new();
-    let destination = fixture.root.join("data");
-    let lease = prepare(&destination);
-    assert!(fs::rename(&destination, fixture.root.join("renamed")).is_err());
-    assert!(fs::rename(lease.database_path(), destination.join("moved.db")).is_err());
-    drop(lease);
-
-    fs::rename(&destination, fixture.root.join("renamed"))
-        .expect("release directory name after lease");
-    fs::rename(
-        fixture.root.join("renamed").join("syrinx.db"),
-        fixture.root.join("moved.db"),
-    )
-    .expect("release database name after lease");
 }
 
 #[test]
@@ -419,7 +294,7 @@ impl LocationProbe for StubProbe {
     fn drive_type(&self, root: &Path) -> Result<u32, LocationError> {
         match self.drive {
             Some(value) => Ok(value),
-            None => native::WindowsProbe.drive_type(root),
+            None => native::NativeProbe.drive_type(root),
         }
     }
 
@@ -461,43 +336,6 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn a_cache_folder_is_created_beside_the_database_and_held_in_place() {
-    let fixture = Fixture::new();
-    let destination = fixture.root.join("data");
-    let lease = prepare(&destination);
-    let folder = lease
-        .cache_folder("synthetic-cache")
-        .expect("create a synthetic cache folder");
-    // Compare resolved paths: the CI runner's temp folder is spelled as an 8.3 short name.
-    let resolve = |path: &Path| fs::canonicalize(path).expect("resolve the synthetic path");
-    assert_eq!(
-        resolve(folder.path()),
-        resolve(&destination.join("synthetic-cache"))
-    );
-    assert!(folder.path().is_dir());
-
-    // Files inside stay the cache's own to create and delete; the folder itself cannot move.
-    let inside = folder.path().join("segment.bin");
-    fs::write(&inside, b"synthetic cache bytes").expect("write inside the cache folder");
-    fs::remove_file(&inside).expect("delete inside the cache folder");
-    assert!(fs::rename(folder.path(), destination.join("moved")).is_err());
-    let path = folder.path().to_owned();
-    drop(folder);
-    fs::rename(&path, destination.join("moved")).expect("release the cache folder's name");
-
-    // An existing folder is opened again rather than replaced.
-    fs::rename(destination.join("moved"), &path).expect("restore the synthetic folder");
-    fs::write(path.join("kept.bin"), b"kept").expect("write a synthetic kept file");
-    let reopened = lease
-        .cache_folder("synthetic-cache")
-        .expect("reopen the synthetic cache folder");
-    assert_eq!(
-        fs::read(reopened.path().join("kept.bin")).expect("read the kept file"),
-        b"kept"
-    );
-}
-
-#[test]
 fn a_cache_folder_in_a_synced_location_is_refused_before_it_is_created() {
     let fixture = Fixture::new();
     let probe = Arc::new(StubProbe::with_roots(Vec::new()));
@@ -522,7 +360,13 @@ fn a_cache_folder_must_be_a_plain_folder_with_a_plain_name() {
         lease.cache_folder("not-a-folder").err(),
         Some(LocationError::UnexpectedEntryKind)
     );
-    for name in ["", "..", "nested\name", "CON", "trailing."] {
+    // Device names and trailing dots are ordinary names outside Windows.
+    let windows_only: &[&str] = if cfg!(windows) {
+        &["CON", "trailing."]
+    } else {
+        &[]
+    };
+    for name in ["", "..", "nested\name"].iter().chain(windows_only) {
         assert_eq!(
             lease.cache_folder(name).err(),
             Some(LocationError::InvalidPath),
@@ -570,4 +414,276 @@ fn emptying_a_cache_folder_removes_its_files_and_refuses_anything_else() {
     );
     assert!(folder.path().join("nested").is_dir());
     assert!(folder.path().join("kept.bin").is_file());
+}
+
+// The Windows storage guard: handles, sharing modes and sync roots.
+#[cfg(windows)]
+mod windows {
+    use super::*;
+
+    use std::{
+        os::windows::ffi::OsStrExt,
+        path::{Component, Prefix},
+    };
+
+    use crate::storage::{normal_absolute_path, sqlite_database_path};
+
+    #[test]
+    fn accepts_dos_spelling_and_removes_only_the_extended_dos_prefix() {
+        let expected = PathBuf::from(r"C:\synthetic\database");
+        assert_eq!(
+            normal_absolute_path(Path::new(r"c:\synthetic\database")),
+            Ok(expected.clone())
+        );
+        assert_eq!(
+            normal_absolute_path(Path::new(r"\\?\C:\synthetic\database")),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn sqlite_path_reserves_space_for_the_longest_sidecar_and_terminator() {
+        for length in [251, 252, 259, 260, 261] {
+            let path = PathBuf::from(format!(r"C:\{}\syrinx.db", "a".repeat(length - 13)));
+            assert_eq!(path.as_os_str().encode_wide().count(), length);
+            let sqlite_path = sqlite_database_path(&path);
+            let uses_extended = matches!(
+                sqlite_path.components().next(),
+                Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_))
+            );
+            assert_eq!(uses_extended, length > 251);
+            assert_eq!(normal_absolute_path(&sqlite_path), Ok(path));
+        }
+    }
+
+    #[test]
+    fn sqlite_path_limit_counts_utf16_units_instead_of_utf8_bytes() {
+        let component = "😀".repeat(119);
+        let path = PathBuf::from(format!(r"C:\{component}\syrinx.db"));
+        assert_eq!(path.as_os_str().encode_wide().count(), 251);
+        assert_eq!(sqlite_database_path(&path), path);
+
+        let longer_path = PathBuf::from(format!(r"C:\{component}a\syrinx.db"));
+        assert_eq!(longer_path.as_os_str().encode_wide().count(), 252);
+        let sqlite_path = sqlite_database_path(&longer_path);
+        assert_ne!(sqlite_path, longer_path);
+        assert_eq!(normal_absolute_path(&sqlite_path), Ok(longer_path));
+    }
+
+    #[test]
+    fn rejects_relative_network_device_stream_and_ambiguous_names() {
+        for value in [
+            "",
+            r"data",
+            r"C:data",
+            r"\data",
+            r"\\example.invalid\share\data",
+            r"\\?\UNC\example.invalid\share\data",
+            r"\\.\C:\data",
+            r"C:\parent\..\data",
+            r"C:\data:stream",
+            r"C:\data.",
+            "C:\\data ",
+            r"C:\CON.txt",
+            r"C:\lpt1",
+            r"C:\COM¹",
+            r"C:\COM²",
+            r"C:\COM³",
+            r"C:\LPT¹",
+            r"C:\LPT²",
+            r"C:\LPT³",
+            r"C:\com¹.txt",
+            r"C:\com².tar.gz",
+            r"C:\com³.txt",
+            r"C:\lpt¹.txt",
+            r"C:\lpt².tar.gz",
+            r"C:\lpt³.txt",
+            "C:\\invalid\0name",
+        ] {
+            assert_eq!(
+                normal_absolute_path(Path::new(value)),
+                Err(LocationError::InvalidPath)
+            );
+        }
+    }
+
+    #[test]
+    fn native_checks_support_a_disposable_path_beyond_the_legacy_length() {
+        let fixture = Fixture::new();
+        let mut destination = fixture.root.clone();
+        for index in 0..8 {
+            destination.push(format!(
+                "synthetic-component-{index}-with-enough-characters"
+            ));
+        }
+        let lease = prepare(&destination);
+        assert!(lease.database_path().as_os_str().encode_wide().count() > 260);
+        assert!(matches!(
+            lease.database_path().components().next(),
+            Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_))
+        ));
+        assert_eq!(
+            normal_absolute_path(lease.database_path()),
+            Ok(lease.database.path.clone())
+        );
+        fs::write(lease.database_path(), b"synthetic long-path bytes")
+            .expect("write synthetic bytes");
+        lease.revalidate().expect("revalidate long-path identity");
+        assert_eq!(
+            fs::read(lease.database_path()).expect("read synthetic bytes"),
+            b"synthetic long-path bytes"
+        );
+    }
+
+    #[test]
+    fn directory_and_database_names_remain_locked_until_the_lease_drops() {
+        let fixture = Fixture::new();
+        let destination = fixture.root.join("data");
+        let lease = prepare(&destination);
+        assert!(fs::rename(&destination, fixture.root.join("renamed")).is_err());
+        assert!(fs::rename(lease.database_path(), destination.join("moved.db")).is_err());
+        drop(lease);
+
+        fs::rename(&destination, fixture.root.join("renamed"))
+            .expect("release directory name after lease");
+        fs::rename(
+            fixture.root.join("renamed").join("syrinx.db"),
+            fixture.root.join("moved.db"),
+        )
+        .expect("release database name after lease");
+    }
+
+    #[test]
+    fn a_cache_folder_is_created_beside_the_database_and_held_in_place() {
+        let fixture = Fixture::new();
+        let destination = fixture.root.join("data");
+        let lease = prepare(&destination);
+        let folder = lease
+            .cache_folder("synthetic-cache")
+            .expect("create a synthetic cache folder");
+        // Compare resolved paths: the CI runner's temp folder is spelled as an 8.3 short name.
+        let resolve = |path: &Path| fs::canonicalize(path).expect("resolve the synthetic path");
+        assert_eq!(
+            resolve(folder.path()),
+            resolve(&destination.join("synthetic-cache"))
+        );
+        assert!(folder.path().is_dir());
+
+        // Files inside stay the cache's own to create and delete; the folder itself cannot move.
+        let inside = folder.path().join("segment.bin");
+        fs::write(&inside, b"synthetic cache bytes").expect("write inside the cache folder");
+        fs::remove_file(&inside).expect("delete inside the cache folder");
+        assert!(fs::rename(folder.path(), destination.join("moved")).is_err());
+        let path = folder.path().to_owned();
+        drop(folder);
+        fs::rename(&path, destination.join("moved")).expect("release the cache folder's name");
+
+        // An existing folder is opened again rather than replaced.
+        fs::rename(destination.join("moved"), &path).expect("restore the synthetic folder");
+        fs::write(path.join("kept.bin"), b"kept").expect("write a synthetic kept file");
+        let reopened = lease
+            .cache_folder("synthetic-cache")
+            .expect("reopen the synthetic cache folder");
+        assert_eq!(
+            fs::read(reopened.path().join("kept.bin")).expect("read the kept file"),
+            b"kept"
+        );
+    }
+
+    #[test]
+    fn a_failed_empty_keeps_the_index_metadata_so_the_next_open_retries() {
+        use std::os::windows::fs::OpenOptionsExt;
+        /// Windows' `FILE_SHARE_READ`: others may read the file but not delete it.
+        const SHARE_READ_ONLY: u32 = 0x1;
+
+        let fixture = Fixture::new();
+        let lease = prepare(&fixture.root.join("data"));
+        let folder = lease
+            .cache_folder("synthetic-cache")
+            .expect("create a synthetic cache folder");
+        // The held segment lists after the metadata, so listing order cannot save the metadata,
+        // and another file lists after it. `META.JSON` checks names are matched without case.
+        for name in [
+            "0a1b2c.idx",
+            ".managed.json",
+            "META.JSON",
+            "x-synthetic.store",
+            "zz-synthetic.term",
+        ] {
+            fs::write(folder.path().join(name), b"synthetic").expect("write synthetic file");
+        }
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(SHARE_READ_ONLY)
+            .open(folder.path().join("x-synthetic.store"))
+            .expect("hold a synthetic segment");
+
+        /// Windows' `ERROR_SHARING_VIOLATION`.
+        const SHARING_VIOLATION: i32 = 32;
+        assert_eq!(
+            folder.empty().err(),
+            Some(LocationError::Os {
+                operation: LocationOperation::EmptyCacheFolder,
+                code: Some(SHARING_VIOLATION),
+            }),
+            "a held segment cannot be deleted"
+        );
+        // The metadata survives, so the next open finds the old index damaged and empties it.
+        assert!(folder.path().join("META.JSON").is_file());
+        assert!(folder.path().join(".managed.json").is_file());
+        // Every other file was still tried, before and after the held one.
+        assert!(!folder.path().join("0a1b2c.idx").exists());
+        assert!(!folder.path().join("zz-synthetic.term").exists());
+
+        drop(held);
+        folder.empty().expect("empty once the segment is free");
+        assert!(
+            fs::read_dir(folder.path())
+                .expect("list the synthetic cache folder")
+                .next()
+                .is_none()
+        );
+    }
+
+    /// Reports one synthetic drive letter as a network drive and every other drive as it is.
+    struct NetworkDriveSyncRoot {
+        drive: PathBuf,
+    }
+
+    impl LocationProbe for NetworkDriveSyncRoot {
+        fn drive_type(&self, root: &Path) -> Result<u32, LocationError> {
+            use ::windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
+            if root == self.drive {
+                return Ok(DRIVE_REMOTE);
+            }
+            native::NativeProbe.drive_type(root)
+        }
+
+        fn sync_roots(&self) -> Result<Vec<PathBuf>, LocationError> {
+            Ok(vec![self.drive.join("Synthetic sync")])
+        }
+    }
+
+    #[test]
+    fn a_sync_root_on_a_network_drive_does_not_stop_a_local_database() {
+        let fixture = Fixture::new();
+        let probe = Arc::new(NetworkDriveSyncRoot {
+            drive: PathBuf::from(r"Z:\"),
+        });
+        // The registered root is never opened, so the synthetic drive need not exist.
+        let lease =
+            WindowsDirectoryLease::prepare_with_probe(&fixture.root.join("data"), probe.clone())
+                .expect("a sync root on a network drive cannot hold a local database");
+        lease.revalidate().expect("revalidation keeps accepting it");
+        drop(lease);
+        // Inside the registered root the database's own drive check still refuses it.
+        assert_eq!(
+            WindowsDirectoryLease::prepare_with_probe(
+                &probe.drive.join("Synthetic sync\\data"),
+                probe
+            )
+            .map(|_| ()),
+            Err(LocationError::NonLocalDrive)
+        );
+    }
 }

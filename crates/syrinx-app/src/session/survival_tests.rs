@@ -101,6 +101,12 @@ fn stop_classification_keeps_damaged_storage_fatal_and_one_refused_write_surviva
         SessionError::Search(syrinx_search::SearchError::TooManyEntries),
         SessionError::EventReceiverClosed,
         SessionError::ClockUnavailable,
+        SessionError::AfterEarlier {
+            earlier: Box::new(busy()),
+            error: Box::new(SessionError::IndexFolder(
+                LocationError::UnexpectedEntryKind,
+            )),
+        },
     ] {
         let tagged = stop::during("switching tabs")(error.clone());
         assert!(stop::survivable(&error), "{error:?}");
@@ -138,9 +144,19 @@ fn stop_classification_keeps_damaged_storage_fatal_and_one_refused_write_surviva
         },
         SessionError::WorkerPanicked,
         SessionError::RecoveryUnavailable,
+        // A chain stops the loop when either of its failures would.
+        SessionError::AfterEarlier {
+            earlier: Box::new(SessionError::WorkerPanicked),
+            error: Box::new(busy()),
+        },
     ] {
         assert!(!stop::survivable(&error), "{error:?}");
     }
+    // A window that stopped listening is recognised at the end of a chain.
+    assert!(stop::window_lost(&SessionError::AfterEarlier {
+        earlier: Box::new(busy()),
+        error: Box::new(SessionError::EventReceiverClosed),
+    }));
 }
 
 #[test]
@@ -476,4 +492,67 @@ fn a_fatal_stop_is_still_kept_in_the_log_beside_the_database() {
     ));
     assert_eq!(read_stop_log(&fixture), [stop::stop_line(&error)]);
     fixture.cleanup();
+}
+
+/// Whether the database holds page-text capture as on.
+fn stored_capture_on(store: &Store) -> bool {
+    let stored = preferences::restore(store).expect("read synthetic settings");
+    PageTextSetting::restored(&stored.settings).setting.on
+}
+
+#[test]
+fn a_page_text_switch_off_a_busy_database_refused_is_saved_later_and_stays_off() {
+    let fixture = Fixture::new();
+    let (store, mut worker) = direct_worker(&fixture);
+    let (sender, _events) = unbounded();
+    let on = PageTextSetting {
+        on: true,
+        excluded: Vec::new(),
+    };
+    worker
+        .handle(&store, SessionCommand::SavePageTextSetting(on), &sender)
+        .expect("switching capture on is saved");
+    assert!(stored_capture_on(&store));
+
+    // The switch-off is refused, and reported rather than swallowed.
+    let lock = hold_write_lock(&fixture);
+    let off = PageTextSetting::default();
+    let refused = worker
+        .handle(&store, SessionCommand::SavePageTextSetting(off), &sender)
+        .expect_err("a busy database refuses the switch-off");
+    assert!(is_busy(&refused), "{refused:?}");
+    assert!(worker.page_text_setting.unsaved());
+    release_write_lock(lock);
+
+    // The idle step saves it, so a restart reads capture as off.
+    worker.idle(&store, &sender).expect("idle retry succeeds");
+    assert!(!worker.page_text_setting.unsaved());
+    assert!(!stored_capture_on(&store));
+    close_direct(fixture, store, worker);
+}
+
+#[test]
+fn a_page_text_switch_off_still_refused_at_shutdown_is_tried_once_more() {
+    let fixture = Fixture::new();
+    let (store, mut worker) = direct_worker(&fixture);
+    let (sender, _events) = unbounded();
+    let on = PageTextSetting {
+        on: true,
+        excluded: Vec::new(),
+    };
+    worker
+        .handle(&store, SessionCommand::SavePageTextSetting(on), &sender)
+        .expect("switching capture on is saved");
+    let lock = hold_write_lock(&fixture);
+    let off = PageTextSetting::default();
+    worker
+        .handle(&store, SessionCommand::SavePageTextSetting(off), &sender)
+        .expect_err("a busy database refuses the switch-off");
+    release_write_lock(lock);
+
+    worker
+        .finish_serving(&store, &sender)
+        .expect("shutdown saves the held switch-off");
+    assert!(!stored_capture_on(&store));
+    close_direct(fixture, store, worker);
 }

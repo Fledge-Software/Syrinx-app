@@ -140,6 +140,27 @@ fn is_icon_surface(name: &str) -> bool {
     matches!(name, "ground" | "card" | "panel")
 }
 
+/// The colour of an icon whose control cannot act now but still responds, such as Back on a
+/// tab's first page: the palette's icon, faded until it is as faint as WCAG's 3:1 for
+/// non-text allows on every colour the window ground presents (owner, 2026-10-28, #126).
+/// Computed rather than a fixed token, so the owner's own themes get one too.
+pub fn unavailable_icon(palette: &Palette) -> Color {
+    let grounds = palette.ground.presented_colors();
+    // The faintest alpha that still measures 3:1 on the worst ground.
+    (0..=palette.icon.alpha)
+        .map(|alpha| palette.icon.with_alpha_byte(alpha))
+        .find(|faded| worst_on(*faded, &grounds) >= NON_TEXT_MINIMUM)
+        .unwrap_or(palette.icon)
+}
+
+/// The lowest contrast `foreground` has on any of `backgrounds`, blended onto each.
+fn worst_on(foreground: Color, backgrounds: &[Color]) -> f64 {
+    backgrounds
+        .iter()
+        .map(|background| contrast_ratio(foreground.over(*background), *background))
+        .fold(f64::INFINITY, f64::min)
+}
+
 fn tile_checks(palette: &Palette) -> Vec<ContrastCheck> {
     // Monogram letters are text on their tile, which may itself be translucent (Glass).
     let grounds = palette.ground.presented_colors();
@@ -248,10 +269,7 @@ fn measure(
     minimum: f64,
 ) -> ContrastCheck {
     // Translucent text is blended onto each background before measuring.
-    let ratio = backgrounds
-        .iter()
-        .map(|background| contrast_ratio(foreground.over(*background), *background))
-        .fold(f64::INFINITY, f64::min);
+    let ratio = worst_on(foreground, backgrounds);
     ContrastCheck {
         palette: palette.id,
         accent: palette.accent.fill,
@@ -417,5 +435,22 @@ mod tests {
         let graphite = palette(PaletteId::Graphite, Accent::default());
         let ground = graphite.ground.representative();
         assert!(contrast_ratio(graphite.text, ground) >= TEXT_MINIMUM);
+    }
+
+    #[test]
+    fn an_unavailable_icon_measures_about_three_to_one_in_every_palette() {
+        // The owner, 2026-10-28 (#126): dimmed Back and Forward still respond, so they stay
+        // at WCAG's non-text minimum rather than the 2:1 `disabled` colour.
+        for id in PaletteId::ALL {
+            let palette = palette(id, Accent::default());
+            let grounds = palette.ground.presented_colors();
+            let dimmed = worst_on(unavailable_icon(&palette), &grounds);
+            let full = worst_on(palette.icon, &grounds);
+            assert!(
+                (NON_TEXT_MINIMUM..3.2).contains(&dimmed),
+                "{id:?}: {dimmed:.2}"
+            );
+            assert!(dimmed < full, "{id:?} must look dimmer than its icon");
+        }
     }
 }

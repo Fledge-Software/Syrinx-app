@@ -310,11 +310,14 @@ impl std::error::Error for FullTextError {}
 
 impl From<tantivy::TantivyError> for FullTextError {
     fn from(error: tantivy::TantivyError) -> Self {
-        use tantivy::TantivyError as Tantivy;
+        use tantivy::{TantivyError as Tantivy, directory::error::OpenReadError};
         // Tantivy's messages can hold paths, so only the category crosses this boundary.
         match error {
             Tantivy::LockFailure(..) => Self::Busy,
             Tantivy::DataCorruption(_) | Tantivy::DeserializeError(_) => Self::Damaged,
+            // A file the metadata names is gone, as a failed empty can leave it (#195): only
+            // emptying again recovers. Any other I/O fault may pass, so it never wipes the index.
+            Tantivy::OpenReadError(OpenReadError::FileDoesNotExist(_)) => Self::Damaged,
             Tantivy::SchemaError(_)
             | Tantivy::FieldNotFound(_)
             | Tantivy::IncompatibleIndex(_)
