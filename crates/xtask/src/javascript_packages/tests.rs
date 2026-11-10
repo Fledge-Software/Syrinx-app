@@ -42,29 +42,33 @@ fn only_the_editor_manifest_and_lockfile_may_be_tracked() {
 }
 
 #[test]
-fn the_bundle_folder_holds_only_the_bundle() {
-    let files = [BUNDLE, "editor/dist/extra.js"].map(str::to_owned);
+fn the_bundle_folder_holds_only_the_bundle_and_its_notices() {
+    let files = [BUNDLE, NOTICES, "editor/dist/extra.js"].map(str::to_owned);
     assert_eq!(
         tracked_file_problems(&files),
-        ["editor/dist/extra.js: editor/dist/ holds only editor/dist/syrinx-editor.js"]
+        [
+            "editor/dist/extra.js: editor/dist/ holds only editor/dist/syrinx-editor.js and editor/dist/THIRD-PARTY-NOTICES.txt"
+        ]
     );
+    assert!(tracked_file_problems(&[NOTICES.to_owned()]).is_empty());
 }
 
 #[test]
-fn install_scripts_stay_off() {
+fn the_npm_settings_must_be_exactly_the_audited_ones() {
+    assert_eq!(npm_settings_problem(AUDITED_NPM_SETTINGS), None);
     assert_eq!(
-        npm_settings_problem("save-exact=true\nignore-scripts=true\n"),
+        npm_settings_problem(&AUDITED_NPM_SETTINGS.replace('\n', "\r\n")),
         None
     );
-    assert_eq!(npm_settings_problem("ignore-scripts = true\r\n"), None);
     for refused in [
-        "",
-        "save-exact=true\n",
-        "ignore-scripts=false\n",
-        "# ignore-scripts=true\n",
-        "ignore-scripts=true\nignore-scripts=false\n",
+        String::new(),
+        "save-exact=true\n".to_owned(),
+        AUDITED_NPM_SETTINGS.replace("ignore-scripts=true", "ignore-scripts=false"),
+        format!("ignore-scripts=false\n[x]\n{AUDITED_NPM_SETTINGS}"),
+        format!("{AUDITED_NPM_SETTINGS}\"ignore-scripts\"=false\n"),
+        format!("{AUDITED_NPM_SETTINGS}# a comment\n"),
     ] {
-        assert!(npm_settings_problem(refused).is_some(), "{refused:?}");
+        assert!(npm_settings_problem(&refused).is_some(), "{refused:?}");
     }
 }
 
@@ -140,10 +144,16 @@ fn a_committed_bundle_is_hashed_from_its_bytes() {
 }
 
 #[test]
-fn outside_a_git_repository_the_check_fails() {
+fn a_folder_git_cannot_read_fails_the_check() {
+    // A `.git` file naming a missing directory fails wherever the temporary folder lives.
     let root = scratch("no-git");
-    let error = tracked_files(&root).expect_err("git refuses a folder outside any repository");
-    assert!(error.contains("git ls-files failed"), "{error}");
+    write(
+        &root,
+        ".git",
+        "gitdir: /nonexistent/syrinx-xtask-repository\n",
+    );
+    let error = tracked_files(&root).expect_err("git refuses the folder");
+    assert!(error.contains("git ls-files -z failed"), "{error}");
     fs::remove_dir_all(root).expect("scratch removed");
 }
 
@@ -160,7 +170,8 @@ fn every_kind_of_defect_is_reported_end_to_end() {
     let error = check(&root).expect_err("refused");
     for expected in [
         "crates/app/package.json: only editor/package.json",
-        "editor/.npmrc must set ignore-scripts=true",
+        "editor/.npmrc must be exactly the audited settings",
+        "copyleft 1.0.0 (node_modules/copyleft): licence `GPL-3.0` is not allowed",
         "dependencies.crelt is `^1.0.7`, not an exact version",
         "style-mod 4.1.4 is locked but not in the audit's package table",
         "w3c-keyname 2.2.8 is in the audit but not locked",
@@ -199,12 +210,16 @@ fn scratch_repository(name: &str, defective: bool) -> PathBuf {
     });
     let mut rows = vec!["| crelt | 1.0.7 | MIT | none | sha512-AAAA |"];
     let mut requirement = "1.0.7";
-    let mut settings = "save-exact=true\nignore-scripts=true\n";
+    let mut settings = AUDITED_NPM_SETTINGS;
     if defective {
         let mut evil = tarball("crelt", "1.0.7");
         evil["integrity"] = json!("sha512-EVIL");
         packages["node_modules/a/node_modules/crelt"] = evil;
         packages["node_modules/style-mod"] = tarball("style-mod", "4.1.4");
+        let mut copyleft = tarball("copyleft", "1.0.0");
+        copyleft["license"] = json!("GPL-3.0");
+        packages["node_modules/copyleft"] = copyleft;
+        rows.push("| copyleft | 1.0.0 | GPL-3.0 | none | sha512-AAAA |");
         rows.push("| w3c-keyname | 2.2.8 | MIT | none | sha512-AAAA |");
         requirement = "^1.0.7";
         settings = "save-exact=true\n";
@@ -230,15 +245,9 @@ fn scratch_repository(name: &str, defective: bool) -> PathBuf {
 }
 
 fn git(root: &Path, arguments: &[&str]) {
-    let status = Command::new("git")
-        .args(arguments)
-        .current_dir(root)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .status()
-        .expect("git runs");
-    assert!(status.success(), "git {arguments:?} failed");
+    if let Err(error) = git_output(root, arguments) {
+        panic!("{error}");
+    }
 }
 
 fn write(root: &Path, relative: &str, text: &str) {

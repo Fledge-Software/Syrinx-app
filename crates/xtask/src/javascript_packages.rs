@@ -6,19 +6,25 @@ mod lockfile;
 
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use serde_json::Value;
 
 use crate::licences;
-use crate::packaging::sha256;
+use crate::packaging::{git_output, sha256};
 
-/// The only two npm files the repository may track, the bundle, and the files the check reads.
+/// The only two npm files the repository may track, the bundle folder's two files, and the
+/// files the check reads.
 const MANIFEST: &str = "editor/package.json";
 const LOCKFILE: &str = "editor/package-lock.json";
 const NPM_SETTINGS: &str = "editor/.npmrc";
 const BUNDLE_FOLDER: &str = "editor/dist/";
 const BUNDLE: &str = "editor/dist/syrinx-editor.js";
+const NOTICES: &str = "editor/dist/THIRD-PARTY-NOTICES.txt";
+
+/// `editor/.npmrc` exactly as audited: exact saves, no install scripts, no npm network side calls.
+/// Pinned whole, because ini sections and quoted keys make any partial reading unreliable.
+const AUDITED_NPM_SETTINGS: &str =
+    "save-exact=true\nignore-scripts=true\naudit=false\nfund=false\n";
 const AUDIT: &str = "docs/dev/codemirror-audit.md";
 
 /// npm manifests and lockfiles. npm prefers `npm-shrinkwrap.json` over `package-lock.json`,
@@ -51,11 +57,13 @@ pub fn check(root: &Path) -> Result<(), String> {
     }
     problems.extend(audit::stale_rows(&entries, &rows));
     let recorded = audit::recorded_bundle_hash(&audit_text)?;
-    let summary =
-        judge_bundle(&recorded, bundle_hash(root)?.as_deref()).unwrap_or_else(|problem| {
+    let summary = match judge_bundle(&recorded, bundle_hash(root)?.as_deref()) {
+        Ok(summary) => summary,
+        Err(problem) => {
             problems.push(problem);
             ""
-        });
+        }
+    };
     // Two paths to one package report the same row problem once.
     problems.sort();
     problems.dedup();
@@ -73,11 +81,13 @@ pub fn check(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// A repository file as text, naming the file when it cannot be read.
 fn read_text(root: &Path, relative: &str) -> Result<String, String> {
     fs::read_to_string(root.join(relative))
         .map_err(|error| format!("Could not read {relative}: {error}"))
 }
 
+/// A repository file parsed as JSON, naming the file when it is not valid.
 fn read_json(root: &Path, relative: &str) -> Result<Value, String> {
     serde_json::from_str(&read_text(root, relative)?)
         .map_err(|error| format!("{relative} is not valid JSON: {error}"))
@@ -85,30 +95,15 @@ fn read_json(root: &Path, relative: &str) -> Result<Value, String> {
 
 /// The paths git tracks, with forward slashes; untracked scratch files never count.
 fn tracked_files(root: &Path) -> Result<Vec<String>, String> {
-    // A hook's GIT_DIR or GIT_INDEX_FILE would point git at another repository's index.
-    let output = Command::new("git")
-        .args(["ls-files", "-z"])
-        .current_dir(root)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .map_err(|error| format!("Could not run git ls-files: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git ls-files failed ({}): {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
+    Ok(git_output(root, &["ls-files", "-z"])?
         .split('\0')
         .filter(|path| !path.is_empty())
         .map(str::to_owned)
         .collect())
 }
 
-/// Tracked npm files other than the editor's manifest and lockfile, and stray bundle files.
+/// Tracked npm files other than the editor's manifest and lockfile, and any file in the bundle
+/// folder but the bundle and its licence notices.
 fn tracked_file_problems(files: &[String]) -> Vec<String> {
     let mut problems = Vec::new();
     for path in files {
@@ -118,29 +113,24 @@ fn tracked_file_problems(files: &[String]) -> Vec<String> {
                 "{path}: only {MANIFEST} and {LOCKFILE} may hold npm packages"
             ));
         }
-        if path.starts_with(BUNDLE_FOLDER) && path != BUNDLE {
-            problems.push(format!("{path}: {BUNDLE_FOLDER} holds only {BUNDLE}"));
+        if path.starts_with(BUNDLE_FOLDER) && path != BUNDLE && path != NOTICES {
+            problems.push(format!(
+                "{path}: {BUNDLE_FOLDER} holds only {BUNDLE} and {NOTICES}"
+            ));
         }
     }
     problems
 }
 
-/// `editor/.npmrc` must end up with `ignore-scripts=true`, so installing runs no package's script.
+/// `editor/.npmrc` must hold exactly the audited settings, whatever its line endings.
 fn npm_settings_problem(settings: &str) -> Option<String> {
-    // npm reads the file top to bottom, so the last setting wins.
-    let ignore_scripts = settings
-        .lines()
-        .rev()
-        .map(str::trim)
-        .filter(|line| !line.starts_with('#') && !line.starts_with(';'))
-        .filter_map(|line| line.split_once('='))
-        .filter(|(key, _)| key.trim() == "ignore-scripts")
-        .map(|(_, value)| value.trim())
-        .next();
-    if ignore_scripts == Some("true") {
+    if settings.replace("\r\n", "\n") == AUDITED_NPM_SETTINGS {
         return None;
     }
-    Some(format!("{NPM_SETTINGS} must set ignore-scripts=true"))
+    Some(format!(
+        "{NPM_SETTINGS} must be exactly the audited settings: {}",
+        AUDITED_NPM_SETTINGS.trim_end().replace('\n', ", ")
+    ))
 }
 
 /// Direct dependencies that are not exact versions, or that disagree with the lockfile.
@@ -164,6 +154,7 @@ fn dependency_problems(manifest: &Value, lockfile: &Value) -> Vec<String> {
     problems
 }
 
+/// Why one direct dependency is refused: not an exact version, or not the version locked.
 fn dependency_problem(
     section: &str,
     name: &str,

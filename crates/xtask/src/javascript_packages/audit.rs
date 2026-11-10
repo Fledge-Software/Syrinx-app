@@ -92,6 +92,7 @@ fn table_cells(line: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether a row is the table's `|---|---|` line under the header.
 fn is_separator(cells: &[String]) -> bool {
     cells.iter().all(|cell| {
         !cell.is_empty() && cell.chars().all(|character| matches!(character, '-' | ':'))

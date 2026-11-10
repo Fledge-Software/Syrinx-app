@@ -34,8 +34,13 @@ git fails the check. It fails when:
   elsewhere, or an `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`,
   `bun.lock` or `bun.lockb` anywhere, `editor/` included (npm prefers a
   shrinkwrap over the lockfile, and the others belong to other package
-  managers), or any file in `editor/dist/` but `syrinx-editor.js`;
-- `editor/.npmrc` does not end up setting `ignore-scripts=true`;
+  managers), or any file in `editor/dist/` but `syrinx-editor.js` and
+  `THIRD-PARTY-NOTICES.txt`;
+- `editor/.npmrc` is not exactly the audited settings, `save-exact=true`,
+  `ignore-scripts=true`, `audit=false` and `fund=false`, one per line in that
+  order (compared after line-ending normalisation). The file is pinned whole
+  because a partial reading can be defeated: an ini `[section]` line or a
+  quoted `"ignore-scripts"` key can change what npm reads;
 - a dependency in `editor/package.json` is not an exact `x.y.z` version, or
   differs from the version the lockfile holds;
 - the lockfile is not npm's version 3 format, or any of its paths holds a
@@ -145,7 +150,8 @@ links the Go runtime (BSD-3-Clause); it runs on the build machine and never
 ships. No package is GPL, and no new licence is needed.
 
 When #37 commits the bundle, the MIT notices of the 23 shipped packages go
-beside it in `editor/dist/`, because MIT requires the notice in copies.
+beside it in `editor/dist/THIRD-PARTY-NOTICES.txt`, because MIT requires the
+notice in copies.
 
 ## Maintenance
 
@@ -244,13 +250,20 @@ plugin view, checks it.
 
 ## How the bundle will be vendored (#37)
 
-1. `npm ci` in `editor/` installs exactly the lockfile, checking every
-   integrity hash, with scripts off.
-2. esbuild bundles one entry point into `editor/dist/syrinx-editor.js`.
-3. The bundle and the MIT notices of the shipped packages are committed in
-   `editor/dist/`, and the bundle's SHA-256 replaces `none` in the line below,
-   in the same commit.
-4. Syrinx serves the committed file to the editor view from its own custom
+1. Start from a clean checkout: `git status --ignored editor/` prints nothing,
+   so no untracked `npm-shrinkwrap.json`, other lockfile or old
+   `node_modules/` can change what npm installs. The gate sees only tracked
+   files, so it cannot catch an untracked file here.
+2. Run `npm ci --ignore-scripts` in `editor/`. It installs exactly the
+   lockfile and checks every integrity hash. The flag is given explicitly
+   because a command-line flag or the `npm_config_ignore_scripts` environment
+   variable outranks `editor/.npmrc`.
+3. esbuild bundles one entry point into `editor/dist/syrinx-editor.js`.
+4. The bundle and `editor/dist/THIRD-PARTY-NOTICES.txt`, which holds the MIT
+   notices of the 23 shipped packages, are committed together. They are the
+   only two files the gate allows in `editor/dist/`. The bundle's SHA-256
+   replaces `none` in the line below, in the same commit.
+5. Syrinx serves the committed file to the editor view from its own custom
    protocol; nothing is fetched at run time.
 
 `editor/node_modules/` is never committed (`.gitignore`), and `editor/dist/` is

@@ -354,20 +354,29 @@ fn build_identity(root: &Path) -> Result<BuildIdentity, String> {
 }
 
 fn git(root: &Path, arguments: &[&str]) -> Result<String, String> {
+    git_output(root, arguments).map(|text| text.trim().to_owned())
+}
+
+/// A git command's standard output, untrimmed; a failure to run or a failing status is an error.
+pub fn git_output(root: &Path, arguments: &[&str]) -> Result<String, String> {
+    // A hook's GIT_DIR or GIT_INDEX_FILE would point git at another repository.
     let output = Command::new("git")
         .current_dir(root)
         .args(arguments)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .output()
         .map_err(|error| format!("Could not run git {}: {error}", arguments.join(" ")))?;
     if !output.status.success() {
         return Err(format!(
-            "git {} failed ({}).",
+            "git {} failed ({}): {}",
             arguments.join(" "),
-            output.status
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
     String::from_utf8(output.stdout)
-        .map(|text| text.trim().to_owned())
         .map_err(|_| format!("git {} printed non-UTF-8 output.", arguments.join(" ")))
 }
 

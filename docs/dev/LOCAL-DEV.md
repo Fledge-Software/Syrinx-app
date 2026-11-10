@@ -106,8 +106,10 @@ rather than every plugin's build.
 must be listed, with the same licence and integrity hash, in
 `docs/dev/codemirror-audit.md`, and a committed `editor/dist/syrinx-editor.js`
 must match the bundle hash recorded there. It also refuses any other tracked
-npm manifest or lockfile, an `editor/.npmrc` without `ignore-scripts=true`,
-and an install script the audit has not accepted. It reads the repository and
+npm manifest or lockfile, any `editor/dist/` file but the bundle and its
+`THIRD-PARTY-NOTICES.txt`, an `editor/.npmrc` other than the audited settings
+(which keep `ignore-scripts=true`), and an install script the audit has not
+accepted. It reads the repository and
 `git ls-files` only, and needs no network or Node.js.
 
 `rust-toolchain.toml` pins Rust 1.97.1 with the `wasm32-wasip2` target
