@@ -91,7 +91,7 @@ fn the_draft_manifest_parses_with_every_contribution() {
     assert_eq!(manifest.version(), "0.3.0");
     assert_eq!(manifest.world(), "syrinx:plugin/plugin@0.1.0");
     assert_eq!(manifest.entry().module, "plugin.wasm");
-    assert_eq!(manifest.commands()[0].id, "notes.new-note");
+    assert_eq!(manifest.commands()[0].id.as_str(), "notes.new-note");
     assert!(manifest.commands()[0].form);
     assert_eq!(manifest.tab_types()[0].ui_methods, ["open-note", "rename"]);
     assert_eq!(manifest.search_feeds()[0].tiers, ["catalogue", "full-text"]);
@@ -101,7 +101,7 @@ fn the_draft_manifest_parses_with_every_contribution() {
         manifest.capabilities()[1].scope,
         Scope::Folder {
             writable: true,
-            count: Some(1),
+            count: FolderCount::Limited(1),
             watch: true
         }
     );
@@ -279,6 +279,9 @@ fn scope_fields_follow_their_kind() {
     for (from, to) in [
         ("access = \"read-write\"", "access = \"everything\""),
         ("count = 1", "count = 0"),
+        ("count = 1", "count = 65"),
+        ("count = 1", "count = -1"),
+        ("count = 1", "count = 4294967297"),
         ("feeds = [\"notes.notes\"]", "feeds = [\"notes.other\"]"),
         ("kind = \"storage\"", "kind = \"storage\"\nwatch = true"),
     ] {
@@ -292,8 +295,23 @@ fn scope_fields_follow_their_kind() {
     let manifest = parse(&many).expect("count = \"many\" is allowed");
     assert!(matches!(
         manifest.capabilities()[1].scope,
-        Scope::Folder { count: None, .. }
+        Scope::Folder {
+            count: FolderCount::Many,
+            ..
+        }
     ));
+}
+
+#[test]
+fn an_over_long_capability_reason_is_an_invalid_field() {
+    let long = "x".repeat(limits::MAX_MESSAGE_CHARS + 1);
+    let text = with(&format!(
+        "[[capabilities]]\nkind = \"drafts\"\nreason = \"{long}\""
+    ));
+    let Err(ManifestError::InvalidField { field, .. }) = parse(&text) else {
+        panic!("an over-long reason was not refused as a field");
+    };
+    assert_eq!(field, "capabilities.reason");
 }
 
 #[test]

@@ -30,7 +30,7 @@ const MAX_DESCRIPTION_CHARS: usize = 1_024;
 const MAX_AUTHORS: usize = 16;
 const MAX_UI_METHODS: usize = 64;
 /// Folders one `folder` request may ask for when it gives a number rather than `"many"`.
-const MAX_FOLDER_COUNT: i64 = 64;
+const MAX_FOLDER_COUNT: u32 = 64;
 const ACTIVATIONS: [&str; 3] = ["on-command", "on-view", "on-search"];
 const TIERS: [&str; 2] = ["catalogue", "full-text"];
 const FOLDER_ACCESS: [&str; 2] = ["read", "read-write"];
@@ -70,15 +70,17 @@ pub struct Entry {
     pub activation: Vec<String>,
 }
 
+/// A `[[contributes.commands]]` entry; its id carries the plugin's prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContributedCommand {
-    pub id: String,
+    pub id: CommandId,
     pub title: String,
     pub keywords: Vec<String>,
     /// Choosing it shows a declarative form instead of running it.
     pub form: bool,
 }
 
+/// A `[[contributes.tab-types]]` entry: a kind of tab the plugin draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabType {
     pub id: String,
@@ -87,6 +89,7 @@ pub struct TabType {
     pub ui_methods: Vec<String>,
 }
 
+/// A `[[contributes.search-feeds]]` entry the search slice (2e) pulls from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchFeed {
     pub id: String,
@@ -94,6 +97,7 @@ pub struct SearchFeed {
     pub tiers: Vec<String>,
 }
 
+/// A `[[contributes.widgets]]` entry, allowed only behind `home-widgets` (#31).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Widget {
     pub id: String,
@@ -115,13 +119,21 @@ pub enum Scope {
     None,
     Folder {
         writable: bool,
-        /// `None` for `count = "many"`.
-        count: Option<u32>,
+        count: FolderCount,
         watch: bool,
     },
     Index {
         feeds: Vec<String>,
     },
+}
+
+/// How many folders one `folder` request asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderCount {
+    /// At most this many, 1 to 64; a request without `count` asks for one.
+    Limited(u32),
+    /// `count = "many"`.
+    Many,
 }
 
 /// A manifest that passed every rule. Only `PluginManifest::parse` makes one.
@@ -178,46 +190,57 @@ impl PluginManifest {
         })
     }
 
+    /// The plugin id, one segment such as `notes`.
     pub fn id(&self) -> &str {
         &self.plugin.id
     }
 
+    /// The plugin version, `major.minor.patch`.
     pub fn version(&self) -> &str {
         &self.plugin.version
     }
 
+    /// The `syrinx:plugin` world the plugin targets.
     pub fn world(&self) -> &str {
         &self.world
     }
 
+    /// The whole `[plugin]` table.
     pub fn plugin(&self) -> &PluginInfo {
         &self.plugin
     }
 
+    /// The unstable contract features named, only for a developer-mode plugin.
     pub fn unstable_features(&self) -> &[String] {
         &self.unstable
     }
 
+    /// The `[entry]` table.
     pub fn entry(&self) -> &Entry {
         &self.entry
     }
 
+    /// The commands the palette lists before the plugin runs.
     pub fn commands(&self) -> &[ContributedCommand] {
         &self.commands
     }
 
+    /// The tab types the plugin may open views of.
     pub fn tab_types(&self) -> &[TabType] {
         &self.tab_types
     }
 
+    /// The search feeds the plugin declares.
     pub fn search_feeds(&self) -> &[SearchFeed] {
         &self.search_feeds
     }
 
+    /// The Home widgets, empty unless `home-widgets` is named.
     pub fn widgets(&self) -> &[Widget] {
         &self.widgets
     }
 
+    /// Every capability the manifest requests, granted or not.
     pub fn capabilities(&self) -> &[CapabilityRequest] {
         &self.capabilities
     }
@@ -226,12 +249,21 @@ impl PluginManifest {
     pub fn requests(&self, kind: CapabilityKind) -> bool {
         self.capabilities.iter().any(|request| request.kind == kind)
     }
+
+    /// Whether the manifest's `folder` request asks for change events (`watch = true`).
+    pub fn watches_folders(&self) -> bool {
+        self.capabilities
+            .iter()
+            .any(|request| matches!(request.scope, Scope::Folder { watch: true, .. }))
+    }
 }
 
+/// A TOML syntax or shape error, as the owner reads it.
 fn syntax(error: toml::de::Error) -> ManifestError {
     ManifestError::Syntax(error.message().to_owned())
 }
 
+/// A field that broke one of its rules.
 fn invalid(field: impl Into<String>, reason: impl Into<String>) -> ManifestError {
     ManifestError::InvalidField {
         field: field.into(),
@@ -271,6 +303,7 @@ fn check_world(table: &toml::Table) -> Result<(), ManifestError> {
     Err(ManifestError::UnsupportedWorld(world.to_owned()))
 }
 
+/// Check the `[plugin]` table's fields.
 fn plugin_info(raw: RawPlugin) -> Result<PluginInfo, ManifestError> {
     check_plugin_id(&raw.id)?;
     text("plugin.name", &raw.name, limits::MAX_TITLE_CHARS)?;
@@ -328,6 +361,7 @@ fn text(field: &str, value: &str, max: usize) -> Result<(), ManifestError> {
     Ok(())
 }
 
+/// At most `max` entries.
 fn bounded_list<T>(field: &str, values: &[T], max: usize) -> Result<(), ManifestError> {
     if values.len() > max {
         return Err(invalid(field, format!("lists more than {max} entries")));
@@ -373,6 +407,7 @@ fn unstable_features(
     Ok(raw.unstable)
 }
 
+/// Check the `[entry]` table: a top-level module, an optional ui folder, known activations.
 fn entry(raw: RawEntry) -> Result<Entry, ManifestError> {
     if !is_module_name(&raw.module) {
         return Err(invalid(
@@ -418,6 +453,7 @@ fn is_ui_folder(ui: &str) -> bool {
         })
 }
 
+/// A byte allowed in a package file or folder name.
 fn is_name_byte(byte: u8) -> bool {
     byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
 }
@@ -446,6 +482,7 @@ struct Contributions {
 }
 
 impl Contributions {
+    /// Start checking contributions for `plugin`.
     fn new(plugin: &str) -> Self {
         Self {
             prefix: format!("{plugin}."),
@@ -453,22 +490,27 @@ impl Contributions {
         }
     }
 
-    fn id(&mut self, field: &str, id: &str) -> Result<(), ManifestError> {
-        if CommandId::new(id).is_err() {
+    /// Check one contributed id, returning it as a command id.
+    fn id(&mut self, field: &str, id: &str) -> Result<CommandId, ManifestError> {
+        let Ok(checked) = CommandId::new(id) else {
             return Err(invalid(
                 field,
-                format!("{id:?} is not dotted lowercase ASCII of at most 64 bytes"),
+                format!(
+                    "{id:?} is not dotted lowercase ASCII of at most {} bytes",
+                    CommandId::MAX_BYTES
+                ),
             ));
-        }
+        };
         if !id.starts_with(&self.prefix) {
             return Err(ManifestError::MissingPrefix { id: id.to_owned() });
         }
         if !self.seen.insert(id.to_owned()) {
             return Err(ManifestError::DuplicateContribution { id: id.to_owned() });
         }
-        Ok(())
+        Ok(checked)
     }
 
+    /// Check the declared commands, at most one plugin's quota of them.
     fn commands(
         &mut self,
         raw: Vec<raw::RawCommand>,
@@ -482,11 +524,11 @@ impl Contributions {
         }
         raw.into_iter()
             .map(|command| {
-                self.id("contributes.commands.id", &command.id)?;
+                let id = self.id("contributes.commands.id", &command.id)?;
                 text(&command.id, &command.title, limits::MAX_TITLE_CHARS)?;
                 keywords(&command.id, &command.keywords)?;
                 Ok(ContributedCommand {
-                    id: command.id,
+                    id,
                     title: command.title,
                     keywords: command.keywords,
                     form: command.form,
@@ -495,6 +537,7 @@ impl Contributions {
             .collect()
     }
 
+    /// Check the declared tab types and their view-message methods.
     fn tab_types(&mut self, raw: Vec<raw::RawTabType>) -> Result<Vec<TabType>, ManifestError> {
         raw.into_iter()
             .map(|tab_type| {
@@ -510,6 +553,7 @@ impl Contributions {
             .collect()
     }
 
+    /// Check the declared search feeds and their tiers.
     fn search_feeds(
         &mut self,
         raw: Vec<raw::RawSearchFeed>,
@@ -532,6 +576,7 @@ impl Contributions {
     }
 }
 
+/// At most the palette's keyword count, each a short non-blank text.
 fn keywords(field: &str, keywords: &[String]) -> Result<(), ManifestError> {
     bounded_list(field, keywords, limits::MAX_KEYWORDS)?;
     for keyword in keywords {
@@ -579,6 +624,7 @@ fn widgets(
         .collect()
 }
 
+/// Check each `[[capabilities]]` request; a kind may be requested once.
 fn capabilities(
     raw: Vec<RawCapability>,
     feeds: &[SearchFeed],
@@ -607,15 +653,7 @@ fn capability(
         .clone()
         .filter(|reason| !reason.trim().is_empty())
         .ok_or(ManifestError::MissingReason(kind))?;
-    if reason.chars().count() > limits::MAX_MESSAGE_CHARS {
-        return Err(ManifestError::InvalidScope {
-            kind,
-            reason: format!(
-                "its reason is longer than {} characters",
-                limits::MAX_MESSAGE_CHARS
-            ),
-        });
-    }
+    text("capabilities.reason", &reason, limits::MAX_MESSAGE_CHARS)?;
     check_trust(kind, raw.trust.as_deref())?;
     let scope = scope(kind, &raw, feeds)?;
     Ok(CapabilityRequest {
@@ -635,6 +673,7 @@ fn check_trust(kind: CapabilityKind, trust: Option<&str>) -> Result<(), Manifest
     }
 }
 
+/// The scope fields `kind` takes, checked.
 fn scope(
     kind: CapabilityKind,
     raw: &RawCapability,
@@ -647,6 +686,7 @@ fn scope(
     }
 }
 
+/// A scope field that does not fit its kind.
 fn scope_error(kind: CapabilityKind, reason: impl Into<String>) -> ManifestError {
     ManifestError::InvalidScope {
         kind,
@@ -670,25 +710,35 @@ fn folder_scope(raw: &RawCapability) -> Result<Scope, ManifestError> {
             ));
         }
     };
-    let count_error = || {
-        scope_error(
-            kind,
-            format!("count must be 1 to {MAX_FOLDER_COUNT}, or \"many\""),
-        )
-    };
-    let count = match &raw.count {
-        None => Some(1),
-        Some(toml::Value::String(many)) if many == "many" => None,
-        Some(toml::Value::Integer(count)) if (1..=MAX_FOLDER_COUNT).contains(count) => {
-            Some(u32::try_from(*count).map_err(|_| count_error())?)
-        }
-        Some(_) => return Err(count_error()),
-    };
+    let count = folder_count(raw.count.as_ref())?;
     Ok(Scope::Folder {
         writable,
         count,
         watch: raw.watch.unwrap_or(false),
     })
+}
+
+/// `count` is 1 to 64 or `"many"`; a request without it asks for one folder.
+fn folder_count(raw: Option<&toml::Value>) -> Result<FolderCount, ManifestError> {
+    let refused = || {
+        scope_error(
+            CapabilityKind::Folder,
+            format!("count must be 1 to {MAX_FOLDER_COUNT}, or \"many\""),
+        )
+    };
+    match raw {
+        None => Ok(FolderCount::Limited(1)),
+        Some(toml::Value::String(many)) if many == "many" => Ok(FolderCount::Many),
+        Some(toml::Value::Integer(count)) => {
+            // A negative or huge number fails the conversion and is refused like zero.
+            let count = u32::try_from(*count).map_err(|_| refused())?;
+            if !(1..=MAX_FOLDER_COUNT).contains(&count) {
+                return Err(refused());
+            }
+            Ok(FolderCount::Limited(count))
+        }
+        Some(_) => Err(refused()),
+    }
 }
 
 /// `feeds` names this plugin's own declared search feeds.
@@ -711,6 +761,7 @@ fn index_scope(raw: &RawCapability, feeds: &[SearchFeed]) -> Result<Scope, Manif
     Ok(Scope::Index { feeds: requested })
 }
 
+/// Every other kind takes no scope fields at all.
 fn no_scope(kind: CapabilityKind, raw: &RawCapability) -> Result<Scope, ManifestError> {
     let any =
         raw.access.is_some() || raw.count.is_some() || raw.watch.is_some() || raw.feeds.is_some();

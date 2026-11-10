@@ -17,73 +17,76 @@ pub enum CapabilityKind {
     LanguageServers,
 }
 
-/// Every kind, with its manifest name, whether it is full trust, and the interfaces it unlocks.
-const KINDS: &[(CapabilityKind, &str, bool, &[&str])] = &[
-    // Storage is `host.settings-get` and `host.settings-set`, which every plugin imports.
-    (CapabilityKind::Storage, "storage", false, &[]),
-    (
-        CapabilityKind::Folder,
-        "folder",
-        false,
-        &["documents", "watch"],
-    ),
-    (CapabilityKind::Drafts, "drafts", false, &["drafts"]),
-    // An index is pulled through the exported `search-feed`; it imports nothing.
-    (CapabilityKind::Index, "index", false, &[]),
-    (
-        CapabilityKind::OpenExternal,
-        "open-external",
-        false,
-        &["open-external"],
-    ),
-    (CapabilityKind::Parse, "parse", false, &["parse"]),
-    (CapabilityKind::Terminal, "terminal", true, &["terminal"]),
-    (CapabilityKind::Git, "git", true, &["git"]),
-    (
-        CapabilityKind::LanguageServers,
-        "language-servers",
-        true,
-        &["lsp"],
-    ),
-];
-
 impl CapabilityKind {
+    /// Every kind, in the order the manifest documentation lists them.
+    pub const ALL: [Self; 9] = [
+        Self::Storage,
+        Self::Folder,
+        Self::Drafts,
+        Self::Index,
+        Self::OpenExternal,
+        Self::Parse,
+        Self::Terminal,
+        Self::Git,
+        Self::LanguageServers,
+    ];
+
     /// The kind a manifest names, or `None` for a kind this host does not know.
     pub fn from_name(name: &str) -> Option<Self> {
-        KINDS
-            .iter()
-            .find(|(_, known, _, _)| *known == name)
-            .map(|(kind, ..)| *kind)
+        Self::ALL.into_iter().find(|kind| kind.name() == name)
     }
 
+    /// The kind's name in a manifest's `kind` field.
     pub fn name(self) -> &'static str {
-        self.row().1
+        match self {
+            Self::Storage => "storage",
+            Self::Folder => "folder",
+            Self::Drafts => "drafts",
+            Self::Index => "index",
+            Self::OpenExternal => "open-external",
+            Self::Parse => "parse",
+            Self::Terminal => "terminal",
+            Self::Git => "git",
+            Self::LanguageServers => "language-servers",
+        }
     }
 
     /// Whether the kind runs programs or reaches outside the sandbox, so the owner sees
     /// "Can run programs on your computer with your permissions".
     pub fn is_full_trust(self) -> bool {
-        self.row().2
+        match self {
+            Self::Terminal | Self::Git | Self::LanguageServers => true,
+            Self::Storage
+            | Self::Folder
+            | Self::Drafts
+            | Self::Index
+            | Self::OpenExternal
+            | Self::Parse => false,
+        }
     }
 
     /// The `syrinx:plugin` interfaces a component may import once this kind is requested.
     pub fn interfaces(self) -> &'static [&'static str] {
-        self.row().3
+        match self {
+            // Storage is `host.settings-get` and `host.settings-set`, which every plugin imports.
+            Self::Storage => &[],
+            Self::Folder => &["documents", "watch"],
+            Self::Drafts => &["drafts"],
+            // An index is pulled through the exported `search-feed`; it imports nothing.
+            Self::Index => &[],
+            Self::OpenExternal => &["open-external"],
+            Self::Parse => &["parse"],
+            Self::Terminal => &["terminal"],
+            Self::Git => &["git"],
+            Self::LanguageServers => &["lsp"],
+        }
     }
 
     /// The kind that unlocks a `syrinx:plugin` interface, if any kind does.
     pub fn unlocking(interface: &str) -> Option<Self> {
-        KINDS
-            .iter()
-            .find(|(.., interfaces)| interfaces.contains(&interface))
-            .map(|(kind, ..)| *kind)
-    }
-
-    fn row(self) -> &'static (CapabilityKind, &'static str, bool, &'static [&'static str]) {
-        KINDS
-            .iter()
-            .find(|(kind, ..)| *kind == self)
-            .expect("every kind has a row in KINDS")
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.interfaces().contains(&interface))
     }
 }
 
@@ -99,19 +102,18 @@ mod tests {
 
     #[test]
     fn every_kind_round_trips_through_its_name() {
-        for (kind, name, ..) in KINDS {
-            assert_eq!(CapabilityKind::from_name(name), Some(*kind));
-            assert_eq!(kind.name(), *name);
+        for kind in CapabilityKind::ALL {
+            assert_eq!(CapabilityKind::from_name(kind.name()), Some(kind));
         }
         assert_eq!(CapabilityKind::from_name("network"), None);
     }
 
     #[test]
     fn only_programs_git_and_language_servers_are_full_trust() {
-        let full: Vec<&str> = KINDS
-            .iter()
-            .filter(|(kind, ..)| kind.is_full_trust())
-            .map(|(_, name, ..)| *name)
+        let full: Vec<&str> = CapabilityKind::ALL
+            .into_iter()
+            .filter(|kind| kind.is_full_trust())
+            .map(CapabilityKind::name)
             .collect();
         assert_eq!(full, ["terminal", "git", "language-servers"]);
     }

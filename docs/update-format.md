@@ -1277,8 +1277,10 @@ file <sha256> <size> ui/app.js
   when the same key signs both. The `file` lines follow this document's rules
   exactly: both parsers call the one `parse_file_lines`.
 - **The id, version and world are signed.** A validly signed package cannot
-  be moved into another plugin's slot (`check_slot`) or replayed over an
-  equal or newer installed version (`check_newer`).
+  be moved into another plugin's slot or replayed over an
+  equal or newer installed version: `verify_plugin_package` takes the slot's
+  id and the installed version and refuses either inside, as
+  `verify_manifest` refuses a rollback.
 - **The signature is the 76-byte shape above with the magic `SPP1`,** checked
   with `verify_plugin_package` before `package` is parsed. As with `ALS1`,
   the magic only catches a misplaced file; it sits outside the signed digest.

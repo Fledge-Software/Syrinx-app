@@ -14,7 +14,7 @@ mod validate;
 mod wasi;
 
 pub use checks::{CONTRACT_TRACK, CONTRACT_VERSION};
-pub use engine::Runtime;
+pub use engine::{CheckedPackage, Runtime};
 pub use error::HostError;
 pub use identity::{IdentityMismatch, SignedIdentity};
 pub use instance::{LoadedPlugin, PluginHost, StoreData};

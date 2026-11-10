@@ -78,6 +78,7 @@ fn sign(signer: &TestKeyPair, kind: SignatureKind, bytes: &[u8]) -> Result<Vec<u
 
 /// A signed package: its `package` list, `package.sig`, files and the keys that trust it.
 struct Package {
+    id: String,
     signer: TestKeyPair,
     keys: KeySet,
     list: Vec<u8>,
@@ -93,6 +94,7 @@ impl Package {
         let list = PluginPackageList::new(id, version, WORLD, entries_for(&files)?)?.to_bytes();
         let signature = sign(&signer, SignatureKind::PluginPackage, &list)?;
         Ok(Self {
+            id: id.to_owned(),
             signer,
             keys,
             list,
@@ -101,8 +103,17 @@ impl Package {
         })
     }
 
+    /// Verify as a first install into the package's own slot.
     fn verify(&self) -> Result<VerifiedPluginPackage, UpdateError> {
-        verify_plugin_package(&self.list, &self.signature, &self.keys)
+        self.verify_into(&self.id, None)
+    }
+
+    fn verify_into(
+        &self,
+        slot: &str,
+        installed: Option<Version>,
+    ) -> Result<VerifiedPluginPackage, UpdateError> {
+        verify_plugin_package(&self.list, &self.signature, &self.keys, slot, installed)
     }
 
     /// Replace the list with arbitrary bytes, correctly signed by the same key.
@@ -166,7 +177,7 @@ fn a_tampered_package_list_fails_its_signature_before_parsing() -> Result<(), Up
         let mut list = package.list.clone();
         list[index] ^= 0x01;
         assert_eq!(
-            verify_plugin_package(&list, &package.signature, &package.keys).err(),
+            verify_plugin_package(&list, &package.signature, &package.keys, "notes", None).err(),
             Some(UpdateError::BadSignature),
             "byte {index}"
         );
@@ -207,11 +218,11 @@ fn an_unlisted_file_is_refused_but_the_signed_files_are_not() -> Result<(), Upda
 
 #[test]
 fn a_package_renamed_into_another_ids_slot_is_refused() -> Result<(), UpdateError> {
-    let verified = Package::new("notes", VERSION)?.verify()?;
-    verified.check_slot("notes")?;
+    let package = Package::new("notes", VERSION)?;
+    package.verify_into("notes", None)?;
     assert_eq!(
-        verified.check_slot("forge"),
-        Err(UpdateError::WrongPlugin {
+        package.verify_into("forge", None).err(),
+        Some(UpdateError::WrongPlugin {
             expected: "forge".to_owned(),
             signed: "notes".to_owned()
         })
@@ -221,12 +232,12 @@ fn a_package_renamed_into_another_ids_slot_is_refused() -> Result<(), UpdateErro
 
 #[test]
 fn an_older_or_equal_version_is_refused() -> Result<(), UpdateError> {
-    let verified = Package::new("notes", VERSION)?.verify()?;
-    verified.check_newer(Version::new(0, 2, 9))?;
+    let package = Package::new("notes", VERSION)?;
+    package.verify_into("notes", Some(Version::new(0, 2, 9)))?;
     for installed in [VERSION, Version::new(0, 3, 1), Version::new(1, 0, 0)] {
         assert_eq!(
-            verified.check_newer(installed),
-            Err(UpdateError::NotNewer {
+            package.verify_into("notes", Some(installed)).err(),
+            Some(UpdateError::NotNewer {
                 installed,
                 offered: VERSION
             }),
@@ -299,7 +310,13 @@ fn update_manifests_and_plugin_lists_never_pass_for_each_other() -> Result<(), U
     .to_bytes();
     let as_plugin = sign(&package.signer, SignatureKind::PluginPackage, &manifest)?;
     assert_eq!(
-        problem(verify_plugin_package(&manifest, &as_plugin, &package.keys)),
+        problem(verify_plugin_package(
+            &manifest,
+            &as_plugin,
+            &package.keys,
+            "notes",
+            None
+        )),
         Some(ManifestProblem::Header)
     );
     let as_update = sign(&package.signer, SignatureKind::Manifest, &package.list)?;
@@ -316,7 +333,7 @@ fn update_manifests_and_plugin_lists_never_pass_for_each_other() -> Result<(), U
     // An update signature's magic is refused before any key is looked up.
     let update_magic = sign(&package.signer, SignatureKind::Manifest, &package.list)?;
     assert_eq!(
-        verify_plugin_package(&package.list, &update_magic, &package.keys).err(),
+        verify_plugin_package(&package.list, &update_magic, &package.keys, "notes", None).err(),
         Some(UpdateError::SignatureFormat)
     );
     Ok(())
@@ -327,7 +344,14 @@ fn a_package_signed_by_an_unpinned_key_is_refused() -> Result<(), UpdateError> {
     let package = Package::new("notes", VERSION)?;
     let stranger = Package::new("notes", VERSION)?;
     assert_eq!(
-        verify_plugin_package(&package.list, &package.signature, &stranger.keys).err(),
+        verify_plugin_package(
+            &package.list,
+            &package.signature,
+            &stranger.keys,
+            "notes",
+            None
+        )
+        .err(),
         Some(UpdateError::UnknownKey)
     );
     Ok(())

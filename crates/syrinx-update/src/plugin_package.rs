@@ -25,8 +25,12 @@ const HEADER: &str = "syrinx-plugin-package 1";
 const ID_FIELD: &str = "id ";
 const VERSION_FIELD: &str = "version ";
 const WORLD_FIELD: &str = "world ";
+/// Where each identity line sits, named when the list ends before it.
+const ID_LINE: usize = 2;
+const VERSION_LINE: usize = 3;
+const WORLD_LINE: usize = 4;
 /// Lines before the first `file` line.
-const HEADER_LINES: usize = 4;
+const HEADER_LINES: usize = WORLD_LINE;
 const WORLD_PREFIX: &str = "syrinx:plugin/";
 const MAX_WORLD_BYTES: usize = 128;
 /// Precompiled native code; a package never carries it (note 10, section 5).
@@ -79,7 +83,7 @@ impl PluginPackageList {
             return Err(manifest_error(1, ManifestProblem::Header));
         }
         let id = parse_id(lines.next())?;
-        let version = parse_version_field(lines.next(), 3, VERSION_FIELD, "version")?;
+        let version = parse_version_field(lines.next(), VERSION_LINE, VERSION_FIELD, "version")?;
         let world = parse_world(lines.next())?;
 
         let files = parse_file_lines(lines, HEADER_LINES)?;
@@ -106,43 +110,50 @@ impl PluginPackageList {
         text.into_bytes()
     }
 
+    /// The signed plugin id.
     pub fn id(&self) -> &str {
         &self.id
     }
 
+    /// The signed plugin version.
     pub fn version(&self) -> Version {
         self.version
     }
 
+    /// The signed `syrinx:plugin` world.
     pub fn world(&self) -> &str {
         &self.world
     }
 
+    /// Every listed file, sorted by path.
     pub fn files(&self) -> &[FileEntry] {
         &self.files
     }
 }
 
+/// The `id` line: a plugin id, as the plugin host's manifest rule spells it.
 fn parse_id(line: Option<(usize, &str)>) -> Result<String, UpdateError> {
+    let number = line.map_or(ID_LINE, |(number, _)| number);
     let id = line
         .and_then(|(_, text)| text.strip_prefix(ID_FIELD))
-        .ok_or(manifest_error(2, ManifestProblem::Field("id")))?;
+        .ok_or(manifest_error(number, ManifestProblem::Field("id")))?;
     let valid = !id.is_empty()
         && id.len() <= MAX_PLUGIN_ID_BYTES
         && id
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
     if !valid {
-        return Err(manifest_error(2, ManifestProblem::PluginId));
+        return Err(manifest_error(number, ManifestProblem::PluginId));
     }
     Ok(id.to_owned())
 }
 
 /// A `syrinx:plugin/<world>@<version>` name in lowercase ASCII.
 fn parse_world(line: Option<(usize, &str)>) -> Result<String, UpdateError> {
+    let number = line.map_or(WORLD_LINE, |(number, _)| number);
     let world = line
         .and_then(|(_, text)| text.strip_prefix(WORLD_FIELD))
-        .ok_or(manifest_error(4, ManifestProblem::Field("world")))?;
+        .ok_or(manifest_error(number, ManifestProblem::Field("world")))?;
     let allowed = |byte: u8| {
         byte.is_ascii_lowercase()
             || byte.is_ascii_digit()
@@ -153,7 +164,7 @@ fn parse_world(line: Option<(usize, &str)>) -> Result<String, UpdateError> {
         && world.contains('@')
         && world.bytes().all(allowed);
     if !valid {
-        return Err(manifest_error(4, ManifestProblem::World));
+        return Err(manifest_error(number, ManifestProblem::World));
     }
     Ok(world.to_owned())
 }
@@ -184,6 +195,7 @@ pub struct VerifiedPluginPackage {
 }
 
 impl VerifiedPluginPackage {
+    /// The verified list: id, version, world and files.
     pub fn list(&self) -> &PluginPackageList {
         &self.list
     }
@@ -191,28 +203,6 @@ impl VerifiedPluginPackage {
     /// Which pinned key signed the list; trust on first use records it (#136).
     pub fn key_id(&self) -> KeyId {
         self.key_id
-    }
-
-    /// Refuse a package signed for another id than the slot it was found in.
-    pub fn check_slot(&self, expected_id: &str) -> Result<(), UpdateError> {
-        if self.list.id == expected_id {
-            return Ok(());
-        }
-        Err(UpdateError::WrongPlugin {
-            expected: expected_id.to_owned(),
-            signed: self.list.id.clone(),
-        })
-    }
-
-    /// Refuse a version lower than or equal to the installed one (a replay or rollback).
-    pub fn check_newer(&self, installed: Version) -> Result<(), UpdateError> {
-        if self.list.version > installed {
-            return Ok(());
-        }
-        Err(UpdateError::NotNewer {
-            installed,
-            offered: self.list.version,
-        })
     }
 
     /// Check that the folder holds exactly the listed files, besides `package` and
@@ -225,11 +215,15 @@ impl VerifiedPluginPackage {
     }
 }
 
-/// Verify `package.sig` before `package` is parsed, against the plugin's pinned keys.
+/// Verify `package.sig` before `package` is parsed, against the plugin's pinned keys, then
+/// refuse a package signed for another slot than `expected_id`, and one no newer than the
+/// `installed` version (`None` for a first install).
 pub fn verify_plugin_package(
     package_bytes: &[u8],
     signature_bytes: &[u8],
     keys: &KeySet,
+    expected_id: &str,
+    installed: Option<Version>,
 ) -> Result<VerifiedPluginPackage, UpdateError> {
     let key_id = verify_signed(
         package_bytes,
@@ -241,7 +235,33 @@ pub fn verify_plugin_package(
 
     // Only signed bytes reach the parser.
     let list = PluginPackageList::parse(package_bytes)?;
+    check_slot(&list, expected_id)?;
+    if let Some(installed) = installed {
+        check_newer(&list, installed)?;
+    }
     Ok(VerifiedPluginPackage { list, key_id })
+}
+
+/// Refuse a package signed for another id than the slot it was found in.
+fn check_slot(list: &PluginPackageList, expected_id: &str) -> Result<(), UpdateError> {
+    if list.id == expected_id {
+        return Ok(());
+    }
+    Err(UpdateError::WrongPlugin {
+        expected: expected_id.to_owned(),
+        signed: list.id.clone(),
+    })
+}
+
+/// Refuse a version lower than or equal to the installed one (a replay or rollback).
+fn check_newer(list: &PluginPackageList, installed: Version) -> Result<(), UpdateError> {
+    if list.version > installed {
+        return Ok(());
+    }
+    Err(UpdateError::NotNewer {
+        installed,
+        offered: list.version,
+    })
 }
 
 /// A plugin package folder, whose top level also holds the two signed files.

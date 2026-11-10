@@ -59,6 +59,15 @@ fn change(wit: &str) -> String {
             "uncertain(string),\n        retried(string),",
         );
     }
+    if enabled("imports-documents") {
+        // A capability interface, as a later contract adds it, that the manifest may not ask for.
+        let wit = replace(
+            wit,
+            "interface lifecycle {",
+            "interface documents { read: func() -> string; }\n\ninterface lifecycle {",
+        );
+        return replace(&wit, "    import host;", "    import host;\n    import documents;");
+    }
     if enabled("renamed-export") {
         return replace(
             wit,

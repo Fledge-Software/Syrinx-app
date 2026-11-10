@@ -37,21 +37,26 @@ impl Runtime {
         Ok(component)
     }
 
-    /// Compile a verified package's component after its signed lines, its manifest and its
-    /// interface names agree; the identity checks run before the contract's own, so a
+    /// Load a verified package: its signed lines, its manifest and its component's interface
+    /// names must agree, and the component must fit the contract. Every package load goes
+    /// through here, and only its result can be registered, so a plugin's commands appear
+    /// only after these checks pass. The identity checks run before the contract's own, so a
     /// disagreement is named as such. Nothing is instantiated.
     pub fn compile_package(
         &self,
         signed: &SignedIdentity,
-        manifest: &PluginManifest,
+        manifest: PluginManifest,
         bytes: &[u8],
-    ) -> Result<Component, HostError> {
-        identity::check_signed(signed, manifest).map_err(HostError::Identity)?;
+    ) -> Result<CheckedPackage, HostError> {
+        identity::check_signed(signed, &manifest).map_err(HostError::Identity)?;
         let component = self.build_component(bytes)?;
-        identity::check_component(&self.engine, &component, manifest)
+        identity::check_component(&self.engine, &component, &manifest)
             .map_err(HostError::Identity)?;
         checks::component_fits(&self.engine, &component)?;
-        Ok(component)
+        Ok(CheckedPackage {
+            manifest,
+            component,
+        })
     }
 
     /// Build a component from its bytes, refusing precompiled code first.
@@ -61,5 +66,39 @@ impl Runtime {
         }
         Component::new(&self.engine, bytes)
             .map_err(|error| HostError::Malformed(format!("{error:#}")))
+    }
+}
+
+/// A package that passed every load check: compiled, never instantiated. Only
+/// `Runtime::compile_package` makes one, and only one can be registered.
+#[derive(Clone)]
+pub struct CheckedPackage {
+    manifest: PluginManifest,
+    component: Component,
+}
+
+impl std::fmt::Debug for CheckedPackage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CheckedPackage")
+            .field("manifest", &self.manifest)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CheckedPackage {
+    /// The checked manifest.
+    pub fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    /// The compiled component, which activation (2a) instantiates.
+    pub fn component(&self) -> &Component {
+        &self.component
+    }
+
+    /// Split into the manifest and the component.
+    pub(crate) fn into_parts(self) -> (PluginManifest, Component) {
+        (self.manifest, self.component)
     }
 }

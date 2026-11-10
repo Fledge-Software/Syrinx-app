@@ -49,7 +49,7 @@ impl From<&PluginManifest> for Declarations {
             .commands()
             .iter()
             .map(|command| DeclaredCommand {
-                id: command.id.clone(),
+                id: command.id.as_str().to_owned(),
                 form: command.form,
             })
             .collect();

@@ -13,9 +13,38 @@ use crate::manifest::{CapabilityKind, PluginManifest};
 /// the signature; the application hands these lines across, since the host never links it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedIdentity {
-    pub id: String,
-    pub version: String,
-    pub world: String,
+    id: String,
+    version: String,
+    world: String,
+}
+
+impl SignedIdentity {
+    /// The one constructor, and the one glue point between the verifier and the host. The
+    /// application calls it only with the `id`, `version` and `world` of a
+    /// `syrinx_update::VerifiedPluginPackage`, after `verify_plugin_package` accepted its
+    /// signature, slot and version (#140 wires it); the host cannot check that itself.
+    pub fn from_verified_package(id: &str, version: &str, world: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            version: version.to_owned(),
+            world: world.to_owned(),
+        }
+    }
+
+    /// The signed plugin id.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The signed version, `major.minor.patch`.
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// The signed world, such as `syrinx:plugin/plugin@0.1.0`.
+    pub fn world(&self) -> &str {
+        &self.world
+    }
 }
 
 /// Where the three sources disagree, or what the component imports without asking.
@@ -42,6 +71,10 @@ pub enum IdentityMismatch {
     UnrequestedCapability {
         interface: String,
         kind: CapabilityKind,
+    },
+    /// The component imports `watch`, but its `folder` request does not set `watch = true`.
+    UnrequestedWatch {
+        interface: String,
     },
 }
 
@@ -74,12 +107,16 @@ impl fmt::Display for IdentityMismatch {
                 formatter,
                 "the component imports {interface}, but its manifest does not request {kind}"
             ),
+            Self::UnrequestedWatch { interface } => write!(
+                formatter,
+                "the component imports {interface}, but its folder request does not set watch = true"
+            ),
         }
     }
 }
 
 /// The signed lines and the manifest must name the same id, version and world.
-pub fn check_signed(
+pub(crate) fn check_signed(
     signed: &SignedIdentity,
     manifest: &PluginManifest,
 ) -> Result<(), IdentityMismatch> {
@@ -106,7 +143,7 @@ pub fn check_signed(
 
 /// The component, read with `component_type()` before instantiating, must export the
 /// manifest's world version and import no capability interface the manifest left out.
-pub fn check_component(
+pub(crate) fn check_component(
     engine: &Engine,
     component: &Component,
     manifest: &PluginManifest,
@@ -151,7 +188,11 @@ fn check_exported_world(
     })
 }
 
-/// A capability interface may be imported only when its kind is requested.
+/// The interface a folder request unlocks only with `watch = true`.
+const WATCH_INTERFACE: &str = "watch";
+
+/// A capability interface may be imported only when its kind is requested, and `watch` only
+/// when the folder request asks for change events.
 fn check_import(name: &str, manifest: &PluginManifest) -> Result<(), IdentityMismatch> {
     let Some(rest) = name.strip_prefix(&format!("{CONTRACT_PACKAGE}/")) else {
         return Ok(());
@@ -162,13 +203,18 @@ fn check_import(name: &str, manifest: &PluginManifest) -> Result<(), IdentityMis
     let Some(kind) = CapabilityKind::unlocking(interface) else {
         return Ok(());
     };
-    if manifest.requests(kind) {
-        return Ok(());
+    if !manifest.requests(kind) {
+        return Err(IdentityMismatch::UnrequestedCapability {
+            interface: name.to_owned(),
+            kind,
+        });
     }
-    Err(IdentityMismatch::UnrequestedCapability {
-        interface: name.to_owned(),
-        kind,
-    })
+    if interface == WATCH_INTERFACE && !manifest.watches_folders() {
+        return Err(IdentityMismatch::UnrequestedWatch {
+            interface: name.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -199,11 +245,7 @@ module = "plugin.wasm"
     }
 
     fn signed(id: &str, version: &str, world: &str) -> SignedIdentity {
-        SignedIdentity {
-            id: id.into(),
-            version: version.into(),
-            world: world.into(),
-        }
+        SignedIdentity::from_verified_package(id, version, world)
     }
 
     #[test]
@@ -246,6 +288,18 @@ module = "plugin.wasm"
             "[[capabilities]]\nkind = \"folder\"\naccess = \"read\"\nreason = \"Read synthetic notes.\"\n",
         );
         assert_eq!(check_import(import, &with), Ok(()));
+        // `watch` needs the folder request's `watch = true` as well.
+        let watch = "syrinx:plugin/watch@0.1.0";
+        assert_eq!(
+            check_import(watch, &with),
+            Err(IdentityMismatch::UnrequestedWatch {
+                interface: watch.into()
+            })
+        );
+        let watching = manifest(
+            "[[capabilities]]\nkind = \"folder\"\naccess = \"read\"\nwatch = true\nreason = \"Follow synthetic notes.\"\n",
+        );
+        assert_eq!(check_import(watch, &watching), Ok(()));
         // The plain host interfaces and WASI need no capability.
         assert_eq!(check_import("syrinx:plugin/host@0.1.0", &without), Ok(()));
         assert_eq!(check_import("wasi:cli/stdout@0.2.9", &without), Ok(()));

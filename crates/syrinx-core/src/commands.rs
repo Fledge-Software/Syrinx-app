@@ -10,6 +10,9 @@ const MAX_TITLE_LENGTH: usize = 120;
 pub struct CommandId(String);
 
 impl CommandId {
+    /// Longest command id, in bytes.
+    pub const MAX_BYTES: usize = MAX_ID_LENGTH;
+
     pub fn new(value: impl Into<String>) -> Result<Self, CommandError> {
         let value = value.into();
         if !is_valid_id(&value) {

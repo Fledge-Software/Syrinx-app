@@ -43,6 +43,8 @@ gpui_platform = { workspace = true, features = ["x11"] }
 # #9's survival tests hold SQLite's write lock from a second connection.
 [dev-dependencies]
 rusqlite.workspace = true
+# The plugin id table test reads both the package list's and the manifest's rule (#134).
+syrinx-plugin-host = { path = "../syrinx-plugin-host" }
 
 [features]
 # Set only by `cargo xtask package`, so the installed app keeps its data apart from preview runs.
