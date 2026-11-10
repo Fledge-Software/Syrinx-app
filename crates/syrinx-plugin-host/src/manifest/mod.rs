@@ -460,14 +460,26 @@ fn is_name_byte(byte: u8) -> bool {
 
 /// Each value one of `allowed`, none repeated.
 fn unique_choices(field: &str, values: &[String], allowed: &[&str]) -> Result<(), ManifestError> {
+    each_once(field, values, |value| {
+        if allowed.contains(&value) {
+            return Ok(());
+        }
+        Err(invalid(
+            field,
+            format!("{value:?} is not one of {}", allowed.join(", ")),
+        ))
+    })
+}
+
+/// Each value passes `check`, and none is listed twice.
+fn each_once(
+    field: &str,
+    values: &[String],
+    check: impl Fn(&str) -> Result<(), ManifestError>,
+) -> Result<(), ManifestError> {
     let mut seen = BTreeSet::new();
     for value in values {
-        if !allowed.contains(&value.as_str()) {
-            return Err(invalid(
-                field,
-                format!("{value:?} is not one of {}", allowed.join(", ")),
-            ));
-        }
+        check(value)?;
         if !seen.insert(value) {
             return Err(invalid(field, format!("{value:?} is listed twice")));
         }
@@ -588,16 +600,12 @@ fn keywords(field: &str, keywords: &[String]) -> Result<(), ManifestError> {
 /// Each method is one id segment, such as `open-note`, listed once.
 fn ui_methods(field: &str, methods: &[String]) -> Result<(), ManifestError> {
     bounded_list(field, methods, MAX_UI_METHODS)?;
-    let mut seen = BTreeSet::new();
-    for method in methods {
-        if method.contains('.') || CommandId::new(method.as_str()).is_err() {
+    each_once(field, methods, |method| {
+        if method.contains('.') || CommandId::new(method).is_err() {
             return Err(invalid(field, format!("{method:?} is not a method name")));
         }
-        if !seen.insert(method) {
-            return Err(invalid(field, format!("{method:?} is listed twice")));
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Widgets stay behind `@unstable(feature = home-widgets)` until #31.
