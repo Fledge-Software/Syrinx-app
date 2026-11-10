@@ -10,11 +10,21 @@ that audit as paper work that can start now.
 
 Neither crate is added to any `Cargo.toml` in this repository: they compile
 into the Notes plugin, which lives in `Fledge-Software/Syrinx-Notes-Plugin` and
-keeps its own audit (`docs/dependency-audit.md`, "Notes 1 additions", written
-2026-10-24) and `THIRD-PARTY-LICENSES`. This file is the host side's
-independent check at the versions current on 2026-11-10, so #36's review of
-the plugin has something to compare against. It found one problem in the
-plugin's current pin; see "pulldown-cmark".
+keeps its own audit and `THIRD-PARTY-LICENSES`.
+
+**The Notes repository's audit is the binding one**:
+[`docs/dependency-audit.md`, "Notes 1 additions"](https://github.com/Fledge-Software/Syrinx-Notes-Plugin/blob/1e894c95ee414a8b4828dc76322ab0931976e87c/docs/dependency-audit.md#notes-1-additions-audited-2026-10-24),
+written 2026-10-24. It decides what the plugin compiles, and #36 asks for the
+audit there. This file is the host side's independent check at the versions
+current on 2026-11-10, so #36's review of the plugin has something to compare
+against. It pins nothing, and it differs from the binding audit in two places:
+
+- **pulldown-cmark:** this check recommends `=0.13.6`; the plugin pins
+  `=0.13.5`, which RUSTSEC-2026-0433 affects (below). The bump belongs to #36's
+  plugin half, in the Notes repository's `Cargo.toml` and its audit.
+- **YAML:** this check audits `serde-saphyr`, the candidate #36 names, and
+  records a pin for the case where it is used; the plugin uses
+  `saphyr-parser =0.2.2` instead, and this check agrees with that choice.
 
 ## Method
 
@@ -75,9 +85,9 @@ version `rust-toolchain.toml` pins, and its installed `wasm32-wasip2` target.
   ⚠️ **The Notes plugin pins `=0.13.5`** (its `Cargo.toml`, audited
   2026-10-24, before RUSTSEC-2026-0433 was published), so it is affected by
   the second advisory. A vault note is untrusted input to the plugin, and a
-  quadratic parse would spend the per-call budget #135 sets. Moving the
-  plugin's pin to 0.13.6 is a change in the Notes repository, not here; it is
-  recorded for #36's review.
+  quadratic parse would spend the per-call budget #135 sets. The move to
+  `=0.13.6` lands in #36's plugin half, in the Notes repository's `Cargo.toml`
+  and its audit, not here.
 
 ## serde-saphyr
 

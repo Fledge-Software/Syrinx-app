@@ -4,8 +4,9 @@
 recorded before anything is optimised, so that every measurement of Notes (the
 plugin's scan and memory, the host's file service and watcher, #41's warm
 reopen, D48's search timing) uses the same vaults and can be compared. #98
-lists the choice as paper work that can start now. This file records it for
-Syrinx-app's host tests.
+lists the choice as paper work that can start now. This file records the
+choice of scales and the rules Syrinx-app's host tests follow; it holds no
+measurements.
 
 **Every vault is generated. None is ever a real vault**, and no agent opens the
 owner's vault or its `.obsidian` folder (`AGENTS.md`, "Test data"; #98,
@@ -14,9 +15,8 @@ owner's vault or its `.obsidian` folder (`AGENTS.md`, "Test data"; #98,
 ## The three workloads
 
 The scales are the ones the Notes plugin's generator already produces
-(`synthetic-vault` in `Fledge-Software/Syrinx-Notes-Plugin`, measured in that
-repository's `docs/workloads.md` on 2026-10-24), so the plugin's native figures
-and the host's figures describe the same vaults.
+(`synthetic-vault` in `Fledge-Software/Syrinx-Notes-Plugin`), so the plugin's
+figures and the host's describe the same vaults.
 
 | Workload | Notes | Folders | Paragraphs per note | Wikilinks per note | What it is for |
 |---|---:|---:|---:|---:|---|
@@ -24,18 +24,16 @@ and the host's figures describe the same vaults.
 | medium | 2,000 | 40 | 4 | 4 | An everyday vault: scan progress, watch bursts, reindexing (P3-03) |
 | large | 20,000 | 200 | 4 | 6 | Upper bound: memory, #41's warm reopen, D48's search timing |
 
-Each generated note has four frontmatter properties (a word, a number, a
-two-item list and a date), three headings, the paragraphs above, the
-workload's number of wikilinks and one web link. The plugin measured the medium vault at about 1.3 MiB of files and a
-4.6 MiB catalogue, and the large at about 14.2 MiB and 51.8 MiB (about 2.7 KB
-of catalogue per note), which is the figure #135's per-plugin memory limit
-needs (#98, comment on Notes 1, gap 4).
-
 One further case stands beside the three: **a one-mebibyte note**, built by
-joining generated bodies, for the editor's language data (decorations and
-outline per pause, #37) and for the 1 MiB body cap of the search feed.
+joining generated bodies, for the editor's language data (#37) and the search
+feed's 1 MiB body cap.
 
-## Generation rules
+The measured figures for these vaults (scan time, catalogue memory per note,
+the note shape the generator writes) are the Notes repository's, in
+[`docs/workloads.md` at `82ccf81`](https://github.com/Fledge-Software/Syrinx-Notes-Plugin/blob/82ccf81081386e9d2ddd115654b8e4a00b45ea6a/docs/workloads.md).
+They are not copied here, so they cannot drift apart.
+
+## Host-side rules
 
 - **A fresh seed on every run, printed with the result**, so a failure can be
   reproduced and no fixed file set becomes a stand-in for real data.
@@ -65,11 +63,22 @@ outline per pause, #37) and for the 1 MiB body cap of the search feed.
   benchmark, with the criterion unchanged (95% of complete searches within
   5 ms, worst sample reported).
 
-## Open
+## Open: where Syrinx-app gets the generator
 
-Syrinx-app's host tests need a path to the generator, which lives in the Notes
-repository. A Git dependency would make the offline gate fetch code, so the
-choices are a vendored copy at a pinned commit (as `vendor/` holds other
-reviewed code) or a published crate; #98 or the owner decides (#98, comment
-on Notes 1, gap 10). Until then this file is the specification both sides
-follow.
+Syrinx-app's host tests need the generator, which lives in the Notes
+repository. **Recommendation: vendor a copy of the `synthetic-vault` crate at
+a pinned commit under `vendor/`**, with a provenance note recording the commit
+and its hash, as `vendor/` already does for reviewed outside code, when #36's
+host half first needs it. Reasons:
+
+- the gate stays offline: a Git dependency would make `cargo xtask check`
+  fetch code, which decision 12 of 2026-10-24 rejected for npm for the same
+  reason;
+- publishing a crate would make a test helper a public, versioned interface
+  with its own release process;
+- a second generator written in Syrinx-app would duplicate the rule and drift
+  from the plugin's.
+
+The cost is that a change to the generator needs a re-vendor in Syrinx-app.
+The owner answers on #98 (the Notes 1 host-gap list, gap 10); until then this
+file is the specification both repositories follow.

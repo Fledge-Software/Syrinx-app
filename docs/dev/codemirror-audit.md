@@ -24,23 +24,36 @@ are #37's (P3-04).
 ## What the gate checks
 
 `cargo xtask check-javascript`, which `cargo xtask check` runs after the plugin
-contract, reads only files in the repository and makes no network call
-(`crates/xtask/src/javascript_packages.rs`). It fails when:
+contract, reads only the repository and makes no network call
+(`crates/xtask/src/javascript_packages.rs` and its `lockfile` and `audit`
+modules). It lists the files git tracks (`git ls-files`), and a failure to run
+git fails the check. It fails when:
 
-- an npm manifest or lockfile (`package.json`, `package-lock.json`,
-  `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`) exists
-  anywhere but `editor/`, outside build output, installed packages and agent
-  tooling;
+- git tracks any npm manifest or lockfile other than `editor/package.json`
+  and `editor/package-lock.json`: a `package.json` or `package-lock.json`
+  elsewhere, or an `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`,
+  `bun.lock` or `bun.lockb` anywhere, `editor/` included (npm prefers a
+  shrinkwrap over the lockfile, and the others belong to other package
+  managers), or any file in `editor/dist/` but `syrinx-editor.js`;
+- `editor/.npmrc` does not end up setting `ignore-scripts=true`;
 - a dependency in `editor/package.json` is not an exact `x.y.z` version, or
   differs from the version the lockfile holds;
-- the lockfile is not npm's version 3 format, or one of its packages is a
-  linked folder, comes from anywhere but `https://registry.npmjs.org/`, has no
-  SHA-512 integrity hash, or carries a licence that `licences.toml`'s `allowed`
-  list does not satisfy (the same list and SPDX reading as the Cargo check;
-  that file's exact-version exceptions are for Cargo packages only);
-- a lockfile package is missing from the package table below, or the table
-  records a different licence or integrity hash for it, or the table lists a
-  package the lockfile no longer holds;
+- the lockfile is not npm's version 3 format, or any of its paths holds a
+  linked folder, an alias (an entry whose `name` differs from its path), a
+  package resolved from anywhere but its own registry tarball
+  (`https://registry.npmjs.org/<name>/-/<basename>-<version>.tgz`), one with no
+  SHA-512 integrity hash, or a licence that `licences.toml`'s `allowed` list
+  does not satisfy (the same list and SPDX reading as the Cargo check; that
+  file's exact-version exceptions are for Cargo packages only);
+- one name and version is locked at two paths with a different source, hash
+  or licence;
+- any lockfile path's package is missing from the package table below, or the
+  table records a different licence or integrity hash for it, or the table
+  lists a package the lockfile no longer holds;
+- a package has an install script (`hasInstallScript`) and its row's Install
+  script column does not say `not run`, which records that the script was
+  reviewed and is accepted only because npm never runs it here; a package
+  without one must say `none`;
 - `editor/dist/syrinx-editor.js` exists and its SHA-256 differs from the hash
   recorded below, exists while the audit records none, or is missing while the
   audit records a hash.
@@ -83,14 +96,21 @@ only the one whose `os` and `cpu` match the machine. All 26 are locked, because
 a lockfile records every platform, and all are audited below. Rejected:
 Rollup, which needs separate plugins to resolve npm packages and also ships
 native code per platform, so its tree is larger for the same output; and Vite,
-which wraps Rollup and a development server Syrinx does not want.
+whose current release (8.3.7 on 2026-11-10) depends on Rolldown, LightningCSS,
+PostCSS, picomatch and tinyglobby, each with native or transitive packages of
+its own, and brings a development server Syrinx does not want, all to produce
+the same single file.
 
 `editor/.npmrc` sets `save-exact`, so a future `npm install <package>` writes an
 exact version, and `ignore-scripts`, so installing runs no package's install
-script. Only `esbuild` declares one (`postinstall: node install.js`), which
-checks and, on some platforms, copies its platform binary; esbuild's
-JavaScript entry point finds the binary through its optional package without
-it. ⚠️ #37 confirms that the bundle builds with scripts off.
+script; `audit=false` and `fund=false` only stop npm from contacting its
+advisory and funding services on every install, since the audit is run
+deliberately (see "Advisories"). Only `esbuild` declares an install script
+(`postinstall: node install.js`), which checks and, on some platforms, copies
+its platform binary; esbuild's JavaScript entry point finds the binary through
+its optional package without it. Its row below is marked `not run`, and the
+gate refuses any other package with a script until its row is reviewed and
+marked the same way. ⚠️ #37 confirms that the bundle builds with scripts off.
 
 ## Method
 
@@ -141,8 +161,9 @@ rarely change because they are finished: `w3c-keyname 2.2.8` dates from
 deprecated, and each is the latest release of its package.
 
 `@codemirror/streamparser 6.0.0` is a new package (first published
-2026-10-07) that `@codemirror/language 6.13.1` depends on. Two pinned versions are recent: `@lezer/common 1.5.5` and
-`@lezer/lr 1.4.12` were published on 2026-10-30, eleven days before this audit.
+2026-10-07) that `@codemirror/language 6.13.1` depends on. Two pinned versions
+are recent: `@lezer/common 1.5.5` and `@lezer/lr 1.4.12` were published on
+2026-10-30, eleven days before this audit.
 The exact pin absorbs that; moving any version is a reviewed change that
 updates the table below.
 
@@ -161,6 +182,31 @@ interface, which only matters when the pin moves.
   server on Windows, fixed in 0.28.1) and GHSA-gv7w-rqvm-qjhr (the Deno
   module's binary download, withdrawn, fixed in 0.28.1). Syrinx never runs
   esbuild's development server.
+
+- **Open security reports in the issue trackers**, searched on 2026-11-10 for
+  open issues whose title or text mentions security, a vulnerability, XSS,
+  injection, a CVE or GHSA identifier, an exploit, sanitising, CSP, ReDoS or
+  denial of service:
+  - on `code.haverbeke.berlin`, every repository with issues enabled under the
+    `codemirror` (44 repositories) and `lezer` (23) organisations and the
+    `marijn` user's `crelt`, `style-mod`, `w3c-keyname` and
+    `find-cluster-break`. Per-package repositories hold no open issues;
+    reports go to `codemirror/dev` (20 open). Nothing open affects a pinned
+    package. The matches were `codemirror/dev#1698` (open since 2026-04-21: a
+    request to use constructed stylesheets instead of `<style>` elements so
+    that a strict CSP needs no extra style directives; see
+    "Content-Security-Policy") and four in `codemirror/codemirror5`, which is
+    CodeMirror 5 and not part of this set;
+  - on GitHub, `codemirror/lang-css`, `codemirror/lang-javascript`,
+    `lezer-parser/html`, `marijnh/w3c-keyname` and `codemirror/dev`, all now
+    archived after the move, with no open issue matching "security" and no
+    published repository advisory;
+  - `evanw/esbuild`: its three published advisories are those above. The
+    eight open issues matching "security" are feature requests, among them
+    signing `esbuild.exe` (#4525) and staged publishing (#4486), which notes
+    that the package's releases depend on one npm account. That is a
+    supply-chain risk the exact pin and the integrity hash limit, not a
+    vulnerability.
 
 This is a scoped check on the review date, not a guarantee that no
 vulnerability exists. Repeat it whenever a version moves.
@@ -184,12 +230,17 @@ Plugin and editor views run under a strict Content-Security-Policy that Syrinx
 sets (decisions 6 and 7 of 2026-10-21). ⚠️ **Unconfirmed: whether CodeMirror
 runs under a policy with no `'unsafe-eval'`.** The static evidence is
 favourable: the search above found no `eval` or `new Function` in the shipped
-code; `@codemirror/view` reads an `EditorView.cspNonce` facet and gives that
-nonce to the style element it creates; and `style-mod`, which injects the
-editor's styles, uses constructed stylesheets (`adoptedStyleSheets`) where the
-engine supports them. Static reading does not prove the runtime behaviour on
-WebView2 and WebKitGTK, nor whether a `style-src` nonce is enough without
-`'unsafe-inline'`. #138's native fixture, the first plugin view, checks it.
+code, and `@codemirror/view` reads an `EditorView.cspNonce` facet and hands
+that nonce to `style-mod`, which injects the editor's styles. In an ordinary
+document `style-mod 4.1.4` inserts a `<style>` element carrying the nonce; it
+uses constructed stylesheets (`adoptedStyleSheets`) only inside a shadow root
+(`src/style-mod.js`, the `StyleSet` constructor). The editor view's policy
+therefore needs a per-load `style-src` nonce that Syrinx also passes to
+`EditorView.cspNonce`, or the editor must be mounted in a shadow root;
+`codemirror/dev#1698` asks upstream to use constructed stylesheets everywhere.
+Static reading does not prove the runtime behaviour on WebView2 and WebKitGTK,
+nor that no other inline style is needed. #138's native fixture, the first
+plugin view, checks it.
 
 ## How the bundle will be vendored (#37)
 
@@ -220,59 +271,60 @@ Bundle SHA-256: `none`
 
 ## Package table
 
-The gate reads the Package, Version, Licence and Integrity columns.
+The gate reads the Package, Version, Licence, Install script and Integrity
+columns.
 "Bundled" packages end up in the editor bundle; "build tool" packages run on
 the build machine only.
 
-| Package | Version | Licence | Role | Licence file | Integrity |
-|---|---|---|---|---|---|
-| `@codemirror/autocomplete` | 6.20.4 | MIT | bundled, direct | LICENSE | `sha512-yF8RhOf2SXlg00+qtupzLhrglcas61boqaONiNcbPIebHCpJocpqTBA6dyrtUrQO47hqyTdeob/3XnYilT7TaQ==` |
-| `@codemirror/commands` | 6.11.1 | MIT | bundled, direct | LICENSE | `sha512-O/4hG3SC1YwcmQ0d2UVNDs+AsaNWd1iHVxbTeEBuqH+6bExAiPK3iS/BvpY6rZGURALv4ZD3sIgcCmRvw3ehBg==` |
-| `@codemirror/lang-css` | 6.3.1 | MIT | bundled, transitive | LICENSE | `sha512-kr5fwBGiGtmz6l0LSJIbno9QrifNMUusivHbnA1H6Dmqy4HZFte3UAICix1VuKo0lMPKQr2rqB+0BkKi/S3Ejg==` |
-| `@codemirror/lang-html` | 6.4.12 | MIT | bundled, transitive | LICENSE | `sha512-pw2ReWKUqSkbvh76RAT4NYxiogRu+PWkR2ukAwO9uOgrm8uipkzjtKKtNpyeAQwHOqxEeSvAXZ6vr3AfyB9y/w==` |
-| `@codemirror/lang-javascript` | 6.2.5 | MIT | bundled, transitive | LICENSE | `sha512-zD4e5mS+50htS7F+TYjBPsiIFGanfVqg4HyUz6WNFikgOPf2BgKlx+TQedI1w6n/IqRBVBbBWmGFdLB/7uxO4A==` |
-| `@codemirror/lang-markdown` | 6.5.2 | MIT | bundled, direct | LICENSE | `sha512-AwBOdkWYuA//WcM0xO5PfHPUcmz/O2i5o0Nsg1U69SII/loCJlFI1Romd9xp2HYb1kYJRGZotyqRghuHH5n8Kw==` |
-| `@codemirror/language` | 6.13.1 | MIT | bundled, direct | LICENSE | `sha512-zfvU2r3TyylQLMj/te+5CnQ0rSqZi8B1oTCBbQkagcLW4Xc6imab6qN+pEJhsuNOLaJqiRyBXp9UhWA1DhVvDw==` |
-| `@codemirror/lint` | 6.9.7 | MIT | bundled, direct | LICENSE | `sha512-28/+iWLYxKxsvGYhSYL7zaCZqLz5+FFFDq9tVsvGv9kv8RY4fFAchJ5WX9M3YrrRlTIsECjsXPqeNgnSmNP2dg==` |
-| `@codemirror/search` | 6.7.2 | MIT | bundled, direct | LICENSE | `sha512-gUYkYhT2+n/+VGZ+8EzE5WFkYZUZYm1VOKDudIsNqh42uRVQJ0a6Yss9sdKT3MeOYfuL1N6AZA57oza0Oyr0LA==` |
-| `@codemirror/state` | 6.7.6 | MIT | bundled, direct | LICENSE | `sha512-kAz+AncRtKuIknedxT1bq4XwXv4UowhbkHU1myPrtVb/jZtImWuV5BXzv5vK6i3kYACsdiZiQKFQQ5Mq7elW8w==` |
-| `@codemirror/streamparser` | 6.0.0 | MIT | bundled, transitive | LICENSE | `sha512-JTFPF6xrfjt0mnfGPgzcLiMwYmvIyNaoizp8BYzv8FE8KrT6GBGDZ190rtt+O7Wke3gG/MFHyiY9YGNeimof4w==` |
-| `@codemirror/view` | 6.43.15 | MIT | bundled, direct | LICENSE | `sha512-HHsfpqFeHyXLs983pSRe38Xajs0vFWZQ2BuX0m7Ki8w3jZ5iD8cuR3lBz2/5/X53Dhf32SBHKh6rtSTB6tKeGw==` |
-| `@esbuild/aix-ppc64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==` |
-| `@esbuild/android-arm` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-kXXoiPVVGQcnIYGOeaovwOURpniDBpSq4A03qkQ+BMQqtGG6HYap3xne9C1O1yo4TR3qxlCX5IqqmX6fFo2Lqg==` |
-| `@esbuild/android-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-5YfKeeI8qWfBZIX+u2xZC3Zlb3Os/gLS2sbEKM+I4ZOcsWmHS2WLysCcQZDAFRslDUU5Oiq44gf6PYN1vGwG5A==` |
-| `@esbuild/android-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-O387ite7SzUyCcy3JQX4P4bLtEA7bLLkx+esve5JHnyYfNTxcVpXZo9jhdB0lTKN44gztELTdU7nS8Nr16Fs1Q==` |
-| `@esbuild/darwin-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-n4KqkOQrraxHJcgjM1RvwbigfQKIKJVpM7xp+KsxiyUSrRdIXnt73VhrPAx0fV44hgfmIVKjxMN9J1t5jySVkw==` |
-| `@esbuild/darwin-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-uq6suIWYP37qzGddBKPw5QEQPi6HiLGsO7UmkpfyaYNQ3D+rN6w6WfwH+nuqcGXWvawGwxOEroO4YGnFh95azw==` |
-| `@esbuild/freebsd-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-n+I0BTSRIoy+d6RPKnEVwql5UwBJolytvY4mAOIEJorKlqgPII8ix6slVVrfZ5Tnj7glIZvloylbB/EJPMWEXw==` |
-| `@esbuild/freebsd-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-78XJTJkvPs0kz2w61301PJjXl4g7q3JqiYMZ/M/yVI73EHBrCRTgkhu9oqG7vPqq+a/yadEW8aD+agKlk5xrmg==` |
-| `@esbuild/linux-arm` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-XlDnu2q5yoqems+xay6wSAcg9DDD7K9RLKZEBOMZm3ckNpJBvOX20tSfby8KfrrhINDyv9V2YVZKY/SpoGJI8w==` |
-| `@esbuild/linux-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-pW4AC0P3it8c7do9MVM4p51FzHzdM/TZrerurgRcHJ2WTa1VQ1CIq18xncfpBJw4ojkiZZrKW2yIBWBP92j6Ug==` |
-| `@esbuild/linux-ia32` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-CYbnj78HsIeA+DhgUKgFCfvNsTHFhMMrinUrMZpDXJXKN8T3XViTZ/+wtHeVxEWY8ewSzTFN+nRmSwO2tZaLUQ==` |
-| `@esbuild/linux-loong64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-buwkd8nsph4R+ajRvw0qM5Hja/TXQow3ptzWO2EbG/cqcIkHloRrdlBtQlshyYGTNFvfkfJ5tpPLVkY4DtsPfQ==` |
-| `@esbuild/linux-mips64el` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-ZVykbDyk7519VwiNb9Lcj9m8XM6v5V9uKPvrEMkkEedVewf+0itkhahp4HDpgERXhwLRpWFypsGbG/J8s0QjJA==` |
-| `@esbuild/linux-ppc64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-CAXl+Dtd9UUuJd8pKKdwh6MLm3MUMiqMPmhZ3tTSXPqfyQ3vDl6R5hZdZ/kYojK4ofXtdfSv1tFq8XzWx3heNQ==` |
-| `@esbuild/linux-riscv64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-GeXCej4IQtU1B+QlDV8W/RRvbzI3O/Stss+/bCXv4lZls5WGRtu2a+3JkA3i4qIUlMXpcHebWpF8AkJhATowuA==` |
-| `@esbuild/linux-s390x` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-3H1weTYZPxt/WOhByszQZybS9w5lKzUn1FDMsgEChbHWQwHYQQRfBxgCcZvPhjHfKyJjIievvMmEUawJrdY9Dg==` |
-| `@esbuild/linux-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-4xTZr1FUmSoQW4XIWmit3tzQrUTZM+N3P0XV8xROKYF50XfI7xeO90+1bZvNwxIufQ9hDQVRJH5YhgPVF8A/HQ==` |
-| `@esbuild/netbsd-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-sSATRjPeDBg3pdgHoQfoYBob11Kk1FGa9lui5RIHZCoCkJa9QKlvl3/vKz2usCmYYjs7ymJR/2Nnsqe+Hjt5nw==` |
-| `@esbuild/netbsd-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-lqnzCV+mM0gIADaKihiCg6ifgfU2L3h5E33rNQBN1Y4MaVGnzryzmvvf7UHxprpQdE8hpqLolJ9Rl+SkIRDpyw==` |
-| `@esbuild/openbsd-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-AL2qJILH7lNjrDmCQDvdxMfAUIv8KMNZOvrwAQ8i8//ntL9FflhOyMJ8OZSMBb8/AWXe3/5v5S20y3zCoZWKoQ==` |
-| `@esbuild/openbsd-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-QtiuPytchRyC4rwUKhexJdQKvDuZ6hWloi3igqPQNUJCS1/v9EiO3UTOXR6A3FoMo4fnAKbWJdqaIwhOzh8qEw==` |
-| `@esbuild/openharmony-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-WkhYDmpTjLvGlScA1rwjRUmhl4k8oXR3cIbtqWmELgU/dFeHHlEllxDvdWcNJV9rbzCexB5vz8gtNewWLgCT7Q==` |
-| `@esbuild/sunos-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-GPMSkTOtMnv2U2F8gxe4Io6qmVs+YKyp832Etqqxr0hFngmXQ3rzwytelm3GIn7T4VviRUlf3sOgBOiTdvaf7g==` |
-| `@esbuild/win32-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-PIhhEkE9uPBleRBrQEJpUn7MBnibZzbGzYWPmY3x+YoVg/95zbjB4CxPPOQ8l5tYYM4mMaCthF8/1DIfBQQyWQ==` |
-| `@esbuild/win32-ia32` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-YmJbfTlvU7Sdn9BB+4PRES4oB6pxgS37MAONj+hBr/cpXS1aBPKXxNnDbu+QCWPj0o9dgyxeq79g6c5P8KeuYA==` |
-| `@esbuild/win32-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | `sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g==` |
-| `@lezer/common` | 1.5.5 | MIT | bundled, transitive | LICENSE | `sha512-Pw7PVCndruF1pb3ebCxpSVpkMHSDjwRCLcTRw+RizUKco5QbWylwq2g4lnG/RYN7yTTQDXE9F77MwtkAyphrjg==` |
-| `@lezer/css` | 1.3.9 | MIT | bundled, transitive | LICENSE | `sha512-ZmzgvTOBdJWGIsY/ItAfN7UW8DV802oZG+jeG6E508SwEzz5YhuAajptpWPICvIyqYAD2+VjMdOS40GgGkyEOQ==` |
-| `@lezer/highlight` | 1.2.5 | MIT | bundled, transitive | LICENSE | `sha512-O1GMVKgtf5YspFaRzpmqkVgMtIk2HG9uMAbH6wdAIdNh3TVzCsch/+cRi+6l2//UGDKe6NB9BW3cvuR5ezMQ0w==` |
-| `@lezer/html` | 1.3.13 | MIT | bundled, transitive | LICENSE | `sha512-oI7n6NJml729m7pjm9lvLvmXbdoMoi2f+1pwSDJkl9d68zGr7a9Btz8NdHTGQZtW2DA25ybeuv/SyDb9D5tseg==` |
-| `@lezer/javascript` | 1.5.6 | MIT | bundled, transitive | LICENSE | `sha512-sEvOqpl4vJQca0NugSQK02vQPbc5KrvoojnYGoqqFgFO0MtcYhwGiHKVEB+LuXYJnfyXo4QPA8ztbrEa4Fw5NA==` |
-| `@lezer/lr` | 1.4.12 | MIT | bundled, transitive | LICENSE | `sha512-On9HU4oMMiHPMkQDgoTnGahjgG5n/MkN38CgG77sMraKLL+3JBbeQNi1FcCXV9QRqwF9/BUXP3caHyJC1fBOTQ==` |
-| `@lezer/markdown` | 1.8.1 | MIT | bundled, transitive | LICENSE | `sha512-M5YmEcKWO4mJ45Y1hECwqyu8cLv25EiXOK554PVOvDOWOP0olwelHHQUWr9sjF+d1bENVhy0nfJ8E57XZUTiXg==` |
-| `@marijn/find-cluster-break` | 1.0.4 | MIT | bundled, transitive | LICENSE | `sha512-Wy0V7+SGUjnF9/TkiM1hKVDPj7jKXduPNboMVtHTA8dySMURWqfg/JZ9E2Sq8JgSJmkl7k7Qe9FLeMSrSraWmQ==` |
-| `crelt` | 1.0.7 | MIT | bundled, transitive | LICENSE | `sha512-aK6BbWfhf4U/wCcLHKPJl/xa6VkVstRaPywWtMKGwuOLc/wZTyQYuoxgvZnNsBvv7Kg3YTBQYYBCggcviQczuA==` |
-| `esbuild` | 0.28.2 | MIT | build tool, direct | LICENSE.md | `sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==` |
-| `style-mod` | 4.1.4 | MIT | bundled, transitive | LICENSE | `sha512-XXWIQt633/EpAFx8aZDOTjBzrCaGmhvEQlQo6MVPfa2OzO2cWo+4hV9h+6UkHYlXGfy+ODXKUdP7Pthmcu5ATw==` |
-| `w3c-keyname` | 2.2.8 | MIT | bundled, transitive | LICENSE | `sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==` |
+| Package | Version | Licence | Role | Licence file | Install script | Integrity |
+|---|---|---|---|---|---|---|
+| `@codemirror/autocomplete` | 6.20.4 | MIT | bundled, direct | LICENSE | none | `sha512-yF8RhOf2SXlg00+qtupzLhrglcas61boqaONiNcbPIebHCpJocpqTBA6dyrtUrQO47hqyTdeob/3XnYilT7TaQ==` |
+| `@codemirror/commands` | 6.11.1 | MIT | bundled, direct | LICENSE | none | `sha512-O/4hG3SC1YwcmQ0d2UVNDs+AsaNWd1iHVxbTeEBuqH+6bExAiPK3iS/BvpY6rZGURALv4ZD3sIgcCmRvw3ehBg==` |
+| `@codemirror/lang-css` | 6.3.1 | MIT | bundled, transitive | LICENSE | none | `sha512-kr5fwBGiGtmz6l0LSJIbno9QrifNMUusivHbnA1H6Dmqy4HZFte3UAICix1VuKo0lMPKQr2rqB+0BkKi/S3Ejg==` |
+| `@codemirror/lang-html` | 6.4.12 | MIT | bundled, transitive | LICENSE | none | `sha512-pw2ReWKUqSkbvh76RAT4NYxiogRu+PWkR2ukAwO9uOgrm8uipkzjtKKtNpyeAQwHOqxEeSvAXZ6vr3AfyB9y/w==` |
+| `@codemirror/lang-javascript` | 6.2.5 | MIT | bundled, transitive | LICENSE | none | `sha512-zD4e5mS+50htS7F+TYjBPsiIFGanfVqg4HyUz6WNFikgOPf2BgKlx+TQedI1w6n/IqRBVBbBWmGFdLB/7uxO4A==` |
+| `@codemirror/lang-markdown` | 6.5.2 | MIT | bundled, direct | LICENSE | none | `sha512-AwBOdkWYuA//WcM0xO5PfHPUcmz/O2i5o0Nsg1U69SII/loCJlFI1Romd9xp2HYb1kYJRGZotyqRghuHH5n8Kw==` |
+| `@codemirror/language` | 6.13.1 | MIT | bundled, direct | LICENSE | none | `sha512-zfvU2r3TyylQLMj/te+5CnQ0rSqZi8B1oTCBbQkagcLW4Xc6imab6qN+pEJhsuNOLaJqiRyBXp9UhWA1DhVvDw==` |
+| `@codemirror/lint` | 6.9.7 | MIT | bundled, direct | LICENSE | none | `sha512-28/+iWLYxKxsvGYhSYL7zaCZqLz5+FFFDq9tVsvGv9kv8RY4fFAchJ5WX9M3YrrRlTIsECjsXPqeNgnSmNP2dg==` |
+| `@codemirror/search` | 6.7.2 | MIT | bundled, direct | LICENSE | none | `sha512-gUYkYhT2+n/+VGZ+8EzE5WFkYZUZYm1VOKDudIsNqh42uRVQJ0a6Yss9sdKT3MeOYfuL1N6AZA57oza0Oyr0LA==` |
+| `@codemirror/state` | 6.7.6 | MIT | bundled, direct | LICENSE | none | `sha512-kAz+AncRtKuIknedxT1bq4XwXv4UowhbkHU1myPrtVb/jZtImWuV5BXzv5vK6i3kYACsdiZiQKFQQ5Mq7elW8w==` |
+| `@codemirror/streamparser` | 6.0.0 | MIT | bundled, transitive | LICENSE | none | `sha512-JTFPF6xrfjt0mnfGPgzcLiMwYmvIyNaoizp8BYzv8FE8KrT6GBGDZ190rtt+O7Wke3gG/MFHyiY9YGNeimof4w==` |
+| `@codemirror/view` | 6.43.15 | MIT | bundled, direct | LICENSE | none | `sha512-HHsfpqFeHyXLs983pSRe38Xajs0vFWZQ2BuX0m7Ki8w3jZ5iD8cuR3lBz2/5/X53Dhf32SBHKh6rtSTB6tKeGw==` |
+| `@esbuild/aix-ppc64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==` |
+| `@esbuild/android-arm` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-kXXoiPVVGQcnIYGOeaovwOURpniDBpSq4A03qkQ+BMQqtGG6HYap3xne9C1O1yo4TR3qxlCX5IqqmX6fFo2Lqg==` |
+| `@esbuild/android-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-5YfKeeI8qWfBZIX+u2xZC3Zlb3Os/gLS2sbEKM+I4ZOcsWmHS2WLysCcQZDAFRslDUU5Oiq44gf6PYN1vGwG5A==` |
+| `@esbuild/android-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-O387ite7SzUyCcy3JQX4P4bLtEA7bLLkx+esve5JHnyYfNTxcVpXZo9jhdB0lTKN44gztELTdU7nS8Nr16Fs1Q==` |
+| `@esbuild/darwin-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-n4KqkOQrraxHJcgjM1RvwbigfQKIKJVpM7xp+KsxiyUSrRdIXnt73VhrPAx0fV44hgfmIVKjxMN9J1t5jySVkw==` |
+| `@esbuild/darwin-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-uq6suIWYP37qzGddBKPw5QEQPi6HiLGsO7UmkpfyaYNQ3D+rN6w6WfwH+nuqcGXWvawGwxOEroO4YGnFh95azw==` |
+| `@esbuild/freebsd-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-n+I0BTSRIoy+d6RPKnEVwql5UwBJolytvY4mAOIEJorKlqgPII8ix6slVVrfZ5Tnj7glIZvloylbB/EJPMWEXw==` |
+| `@esbuild/freebsd-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-78XJTJkvPs0kz2w61301PJjXl4g7q3JqiYMZ/M/yVI73EHBrCRTgkhu9oqG7vPqq+a/yadEW8aD+agKlk5xrmg==` |
+| `@esbuild/linux-arm` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-XlDnu2q5yoqems+xay6wSAcg9DDD7K9RLKZEBOMZm3ckNpJBvOX20tSfby8KfrrhINDyv9V2YVZKY/SpoGJI8w==` |
+| `@esbuild/linux-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-pW4AC0P3it8c7do9MVM4p51FzHzdM/TZrerurgRcHJ2WTa1VQ1CIq18xncfpBJw4ojkiZZrKW2yIBWBP92j6Ug==` |
+| `@esbuild/linux-ia32` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-CYbnj78HsIeA+DhgUKgFCfvNsTHFhMMrinUrMZpDXJXKN8T3XViTZ/+wtHeVxEWY8ewSzTFN+nRmSwO2tZaLUQ==` |
+| `@esbuild/linux-loong64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-buwkd8nsph4R+ajRvw0qM5Hja/TXQow3ptzWO2EbG/cqcIkHloRrdlBtQlshyYGTNFvfkfJ5tpPLVkY4DtsPfQ==` |
+| `@esbuild/linux-mips64el` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-ZVykbDyk7519VwiNb9Lcj9m8XM6v5V9uKPvrEMkkEedVewf+0itkhahp4HDpgERXhwLRpWFypsGbG/J8s0QjJA==` |
+| `@esbuild/linux-ppc64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-CAXl+Dtd9UUuJd8pKKdwh6MLm3MUMiqMPmhZ3tTSXPqfyQ3vDl6R5hZdZ/kYojK4ofXtdfSv1tFq8XzWx3heNQ==` |
+| `@esbuild/linux-riscv64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-GeXCej4IQtU1B+QlDV8W/RRvbzI3O/Stss+/bCXv4lZls5WGRtu2a+3JkA3i4qIUlMXpcHebWpF8AkJhATowuA==` |
+| `@esbuild/linux-s390x` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-3H1weTYZPxt/WOhByszQZybS9w5lKzUn1FDMsgEChbHWQwHYQQRfBxgCcZvPhjHfKyJjIievvMmEUawJrdY9Dg==` |
+| `@esbuild/linux-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-4xTZr1FUmSoQW4XIWmit3tzQrUTZM+N3P0XV8xROKYF50XfI7xeO90+1bZvNwxIufQ9hDQVRJH5YhgPVF8A/HQ==` |
+| `@esbuild/netbsd-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-sSATRjPeDBg3pdgHoQfoYBob11Kk1FGa9lui5RIHZCoCkJa9QKlvl3/vKz2usCmYYjs7ymJR/2Nnsqe+Hjt5nw==` |
+| `@esbuild/netbsd-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-lqnzCV+mM0gIADaKihiCg6ifgfU2L3h5E33rNQBN1Y4MaVGnzryzmvvf7UHxprpQdE8hpqLolJ9Rl+SkIRDpyw==` |
+| `@esbuild/openbsd-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-AL2qJILH7lNjrDmCQDvdxMfAUIv8KMNZOvrwAQ8i8//ntL9FflhOyMJ8OZSMBb8/AWXe3/5v5S20y3zCoZWKoQ==` |
+| `@esbuild/openbsd-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-QtiuPytchRyC4rwUKhexJdQKvDuZ6hWloi3igqPQNUJCS1/v9EiO3UTOXR6A3FoMo4fnAKbWJdqaIwhOzh8qEw==` |
+| `@esbuild/openharmony-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-WkhYDmpTjLvGlScA1rwjRUmhl4k8oXR3cIbtqWmELgU/dFeHHlEllxDvdWcNJV9rbzCexB5vz8gtNewWLgCT7Q==` |
+| `@esbuild/sunos-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-GPMSkTOtMnv2U2F8gxe4Io6qmVs+YKyp832Etqqxr0hFngmXQ3rzwytelm3GIn7T4VviRUlf3sOgBOiTdvaf7g==` |
+| `@esbuild/win32-arm64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-PIhhEkE9uPBleRBrQEJpUn7MBnibZzbGzYWPmY3x+YoVg/95zbjB4CxPPOQ8l5tYYM4mMaCthF8/1DIfBQQyWQ==` |
+| `@esbuild/win32-ia32` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-YmJbfTlvU7Sdn9BB+4PRES4oB6pxgS37MAONj+hBr/cpXS1aBPKXxNnDbu+QCWPj0o9dgyxeq79g6c5P8KeuYA==` |
+| `@esbuild/win32-x64` | 0.28.2 | MIT | build tool, one platform binary | none (manifest only) | none | `sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g==` |
+| `@lezer/common` | 1.5.5 | MIT | bundled, transitive | LICENSE | none | `sha512-Pw7PVCndruF1pb3ebCxpSVpkMHSDjwRCLcTRw+RizUKco5QbWylwq2g4lnG/RYN7yTTQDXE9F77MwtkAyphrjg==` |
+| `@lezer/css` | 1.3.9 | MIT | bundled, transitive | LICENSE | none | `sha512-ZmzgvTOBdJWGIsY/ItAfN7UW8DV802oZG+jeG6E508SwEzz5YhuAajptpWPICvIyqYAD2+VjMdOS40GgGkyEOQ==` |
+| `@lezer/highlight` | 1.2.5 | MIT | bundled, transitive | LICENSE | none | `sha512-O1GMVKgtf5YspFaRzpmqkVgMtIk2HG9uMAbH6wdAIdNh3TVzCsch/+cRi+6l2//UGDKe6NB9BW3cvuR5ezMQ0w==` |
+| `@lezer/html` | 1.3.13 | MIT | bundled, transitive | LICENSE | none | `sha512-oI7n6NJml729m7pjm9lvLvmXbdoMoi2f+1pwSDJkl9d68zGr7a9Btz8NdHTGQZtW2DA25ybeuv/SyDb9D5tseg==` |
+| `@lezer/javascript` | 1.5.6 | MIT | bundled, transitive | LICENSE | none | `sha512-sEvOqpl4vJQca0NugSQK02vQPbc5KrvoojnYGoqqFgFO0MtcYhwGiHKVEB+LuXYJnfyXo4QPA8ztbrEa4Fw5NA==` |
+| `@lezer/lr` | 1.4.12 | MIT | bundled, transitive | LICENSE | none | `sha512-On9HU4oMMiHPMkQDgoTnGahjgG5n/MkN38CgG77sMraKLL+3JBbeQNi1FcCXV9QRqwF9/BUXP3caHyJC1fBOTQ==` |
+| `@lezer/markdown` | 1.8.1 | MIT | bundled, transitive | LICENSE | none | `sha512-M5YmEcKWO4mJ45Y1hECwqyu8cLv25EiXOK554PVOvDOWOP0olwelHHQUWr9sjF+d1bENVhy0nfJ8E57XZUTiXg==` |
+| `@marijn/find-cluster-break` | 1.0.4 | MIT | bundled, transitive | LICENSE | none | `sha512-Wy0V7+SGUjnF9/TkiM1hKVDPj7jKXduPNboMVtHTA8dySMURWqfg/JZ9E2Sq8JgSJmkl7k7Qe9FLeMSrSraWmQ==` |
+| `crelt` | 1.0.7 | MIT | bundled, transitive | LICENSE | none | `sha512-aK6BbWfhf4U/wCcLHKPJl/xa6VkVstRaPywWtMKGwuOLc/wZTyQYuoxgvZnNsBvv7Kg3YTBQYYBCggcviQczuA==` |
+| `esbuild` | 0.28.2 | MIT | build tool, direct | LICENSE.md | not run | `sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==` |
+| `style-mod` | 4.1.4 | MIT | bundled, transitive | LICENSE | none | `sha512-XXWIQt633/EpAFx8aZDOTjBzrCaGmhvEQlQo6MVPfa2OzO2cWo+4hV9h+6UkHYlXGfy+ODXKUdP7Pthmcu5ATw==` |
+| `w3c-keyname` | 2.2.8 | MIT | bundled, transitive | LICENSE | none | `sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==` |
