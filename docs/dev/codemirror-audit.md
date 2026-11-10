@@ -17,7 +17,10 @@ because every gate run would then download code.
 
 **Status, 2026-11-10.** This file audits the proposed package set in
 `editor/package.json` and `editor/package-lock.json`. The owner signed off on
-that set on 2026-11-10. No bundle is built or committed, and nothing in Syrinx
+that set, with its install-script, `.npmrc` and `editor/dist/` rules, on
+2026-11-10; the sign-off is recorded on
+[pull request #248](https://github.com/Fledge-Software/Syrinx-app/pull/248#issuecomment-6767765346).
+No bundle is built or committed, and nothing in Syrinx
 loads the editor: building the bundle, serving it and wiring the editor view
 are #37's (P3-04).
 

@@ -203,7 +203,7 @@ mod tests {
             name: name.to_owned(),
             version: version.to_owned(),
             licence: "MIT".to_owned(),
-            integrity: "sha512-AAAA".to_owned(),
+            integrity: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==".to_owned(),
             resolved: String::new(),
             has_install_script,
             declared_name: None,
@@ -221,14 +221,16 @@ mod tests {
         assert!(
             problems(
                 &crelt,
-                &["| `crelt` | 1.0.7 | MIT | none | `sha512-AAAA` |"]
+                &["| `crelt` | 1.0.7 | MIT | none | `sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==` |"]
             )
             .is_empty()
         );
         assert_eq!(
             problems(
                 &entry("style-mod", "4.1.4", false),
-                &["| crelt | 1.0.7 | MIT | none | sha512-AAAA |"]
+                &[
+                    "| crelt | 1.0.7 | MIT | none | sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA== |"
+                ]
             ),
             ["style-mod 4.1.4 is locked but not in the audit's package table"]
         );
@@ -238,7 +240,9 @@ mod tests {
     fn a_licence_and_a_hash_mismatch_are_both_reported() {
         let found = problems(
             &entry("crelt", "1.0.7", false),
-            &["| crelt | 1.0.7 | ISC | none | sha512-BBBB |"],
+            &[
+                "| crelt | 1.0.7 | ISC | none | sha512-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA== |",
+            ],
         );
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(
@@ -254,13 +258,15 @@ mod tests {
         assert!(
             problems(
                 &esbuild,
-                &["| esbuild | 0.28.2 | MIT | not run | sha512-AAAA |"]
+                &["| esbuild | 0.28.2 | MIT | not run | sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA== |"]
             )
             .is_empty()
         );
         let unaccepted = problems(
             &esbuild,
-            &["| esbuild | 0.28.2 | MIT | none | sha512-AAAA |"],
+            &[
+                "| esbuild | 0.28.2 | MIT | none | sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA== |",
+            ],
         );
         assert!(
             unaccepted[0].contains("has an install script the audit has not accepted"),
@@ -268,7 +274,9 @@ mod tests {
         );
         let stale = problems(
             &entry("crelt", "1.0.7", false),
-            &["| crelt | 1.0.7 | MIT | not run | sha512-AAAA |"],
+            &[
+                "| crelt | 1.0.7 | MIT | not run | sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA== |",
+            ],
         );
         assert!(stale[0].contains("the lockfile records none"), "{stale:?}");
     }

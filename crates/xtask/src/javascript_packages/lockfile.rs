@@ -12,6 +12,20 @@ use crate::licences;
 const REGISTRY: &str = "https://registry.npmjs.org/";
 const INTEGRITY_PREFIX: &str = "sha512-";
 
+/// `sha512-` and a 64-byte digest in standard base64: 86 alphabet characters and `==`.
+fn is_sha512_integrity(integrity: &str) -> bool {
+    let Some(digest) = integrity.strip_prefix(INTEGRITY_PREFIX) else {
+        return false;
+    };
+    let Some(characters) = digest.strip_suffix("==") else {
+        return false;
+    };
+    characters.len() == 86
+        && characters
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'+' || byte == b'/')
+}
+
 /// One lockfile path's entry; two paths can hold the same name and version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockedEntry {
@@ -95,8 +109,8 @@ pub fn entry_problems(entry: &LockedEntry, allowed: &[String]) -> Vec<String> {
             entry.resolved
         ));
     }
-    if !entry.integrity.starts_with(INTEGRITY_PREFIX) {
-        refuse("no SHA-512 integrity hash".to_owned());
+    if !is_sha512_integrity(&entry.integrity) {
+        refuse("no well-formed SHA-512 integrity hash".to_owned());
     }
     if !licences::satisfies(&entry.licence, allowed) {
         refuse(format!(
@@ -142,7 +156,7 @@ mod tests {
 
     use super::*;
 
-    const HASH: &str = "sha512-AAAA";
+    const HASH: &str = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
 
     fn allowed() -> Vec<String> {
         vec!["MIT".to_owned(), "Apache-2.0".to_owned()]
@@ -199,7 +213,9 @@ mod tests {
     fn a_second_path_with_another_source_and_hash_is_refused() {
         let mut evil = registry_entry("crelt", "1.0.7");
         evil["resolved"] = json!("https://registry.npmjs.org/evil/-/evil-1.0.7.tgz");
-        evil["integrity"] = json!("sha512-EVIL");
+        evil["integrity"] = json!(
+            "sha512-EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEA=="
+        );
         let found = entries(json!({
             "node_modules/crelt": registry_entry("crelt", "1.0.7"),
             "node_modules/@codemirror/view/node_modules/crelt": evil,
@@ -270,8 +286,32 @@ mod tests {
         assert!(
             found
                 .iter()
-                .any(|problem| problem.contains("(node_modules/bare): no SHA-512"))
+                .any(|problem| problem.contains("(node_modules/bare): no well-formed SHA-512"))
         );
+    }
+
+    #[test]
+    fn a_short_or_malformed_integrity_hash_is_refused() {
+        let hashed = |integrity: &str| {
+            let mut entry = registry_entry("crelt", "1.0.7");
+            entry["integrity"] = json!(integrity);
+            problems_of(json!({"node_modules/crelt": entry}))
+        };
+        assert!(hashed(HASH).is_empty());
+        let body = &HASH["sha512-".len()..];
+        for refused in [
+            "sha512-".to_owned(),
+            "sha512-AAAA".to_owned(),
+            format!("sha1-{body}"),
+            format!("sha512-{}", &body[1..]),
+            format!("sha512-A{body}"),
+            format!("sha512-{}", body.replace("==", "A=")),
+            format!("sha512-{}", body.replacen('A', "-", 1)),
+        ] {
+            let found = hashed(&refused);
+            assert_eq!(found.len(), 1, "{refused}: {found:?}");
+            assert!(found[0].contains("no well-formed SHA-512"), "{found:?}");
+        }
     }
 
     #[test]

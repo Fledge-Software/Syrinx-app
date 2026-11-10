@@ -263,7 +263,7 @@ fn scratch_repository(name: &str, defective: bool) -> PathBuf {
         json!({
             "version": version,
             "resolved": format!("https://registry.npmjs.org/{package}/-/{package}-{version}.tgz"),
-            "integrity": "sha512-AAAA",
+            "integrity": "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
             "license": "MIT",
         })
     };
@@ -271,19 +271,23 @@ fn scratch_repository(name: &str, defective: bool) -> PathBuf {
         "": {"name": "syrinx-editor"},
         "node_modules/crelt": tarball("crelt", "1.0.7"),
     });
-    let mut rows = vec!["| crelt | 1.0.7 | MIT | none | sha512-AAAA |"];
+    let mut rows = vec![
+        "| crelt | 1.0.7 | MIT | none | sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA== |",
+    ];
     let mut requirement = "1.0.7";
     let mut settings = AUDITED_NPM_SETTINGS;
     if defective {
         let mut evil = tarball("crelt", "1.0.7");
-        evil["integrity"] = json!("sha512-EVIL");
+        evil["integrity"] = json!(
+            "sha512-EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEA=="
+        );
         packages["node_modules/a/node_modules/crelt"] = evil;
         packages["node_modules/style-mod"] = tarball("style-mod", "4.1.4");
         let mut copyleft = tarball("copyleft", "1.0.0");
         copyleft["license"] = json!("GPL-3.0");
         packages["node_modules/copyleft"] = copyleft;
-        rows.push("| copyleft | 1.0.0 | GPL-3.0 | none | sha512-AAAA |");
-        rows.push("| w3c-keyname | 2.2.8 | MIT | none | sha512-AAAA |");
+        rows.push("| copyleft | 1.0.0 | GPL-3.0 | none | sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA== |");
+        rows.push("| w3c-keyname | 2.2.8 | MIT | none | sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA== |");
         requirement = "^1.0.7";
         settings = "save-exact=true\n";
         write(&root, "crates/app/package.json", "{}");

@@ -63,13 +63,14 @@ They are not copied here, so they cannot drift apart.
   benchmark, with the criterion unchanged (95% of complete searches within
   5 ms, worst sample reported).
 
-## Open: where Syrinx-app gets the generator
+## Where Syrinx-app gets the generator
 
 Syrinx-app's host tests need the generator, which lives in the Notes
-repository. **Recommendation: vendor a copy of the `synthetic-vault` crate at
-a pinned commit under `vendor/`**, with a provenance note recording the commit
-and its hash, as `vendor/` already does for reviewed outside code, when #36's
-host half first needs it. Reasons:
+repository. **On 2026-11-10 the owner decided to vendor `synthetic-vault`,
+pinned to a fixed commit, and rejected a published crate**
+([#98, comment](https://github.com/Fledge-Software/Syrinx-app/issues/98#issuecomment-6767766166)).
+The copy goes under `vendor/` with a provenance note recording the commit and
+its hash, as `vendor/` already does for reviewed outside code. Reasons:
 
 - the gate stays offline: a Git dependency would make `cargo xtask check`
   fetch code, which decision 12 of 2026-10-24 rejected for npm for the same
@@ -80,5 +81,5 @@ host half first needs it. Reasons:
   from the plugin's.
 
 The cost is that a change to the generator needs a re-vendor in Syrinx-app.
-The owner answers on #98 (the Notes 1 host-gap list, gap 10); until then this
-file is the specification both repositories follow.
+The vendored copy arrives with the first host slice that needs generated
+vaults.
