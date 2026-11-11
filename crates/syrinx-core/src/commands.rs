@@ -291,6 +291,8 @@ impl CommandRegistry {
     pub const MAX_COMMANDS: usize = 1_024;
     /// The most commands one plugin may hold, so no plugin can take every free slot.
     pub const MAX_COMMANDS_PER_PLUGIN: usize = 128;
+    /// Longest command title, in characters.
+    pub const MAX_TITLE_CHARS: usize = MAX_TITLE_LENGTH;
 
     pub fn new() -> Self {
         Self::default()

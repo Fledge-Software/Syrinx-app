@@ -538,7 +538,12 @@ impl Contributions {
         raw.into_iter()
             .map(|command| {
                 let id = self.id("contributes.commands.id", &command.id)?;
-                text(&command.id, &command.title, limits::MAX_TITLE_CHARS)?;
+                // The palette's registry, not the WIT limit, bounds a command title.
+                text(
+                    &command.id,
+                    &command.title,
+                    CommandRegistry::MAX_TITLE_CHARS,
+                )?;
                 keywords(&command.id, &command.keywords)?;
                 Ok(ContributedCommand {
                     id,

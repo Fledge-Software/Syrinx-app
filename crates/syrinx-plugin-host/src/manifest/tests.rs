@@ -390,3 +390,23 @@ fn a_version_part_a_package_cannot_sign_is_refused() {
         );
     }
 }
+
+#[test]
+fn a_command_title_the_palette_would_refuse_is_refused_here() {
+    // The palette's registry refuses a longer title, so the manifest must not accept one.
+    let limit = CommandRegistry::MAX_TITLE_CHARS;
+    let longest = changed(
+        "title = \"New note\"",
+        &format!("title = {:?}", "n".repeat(limit)),
+    );
+    assert!(parse(&longest).is_ok());
+    let over = changed(
+        "title = \"New note\"",
+        &format!("title = {:?}", "n".repeat(limit + 1)),
+    );
+    let error = parse(&over).expect_err("an over-long command title");
+    assert!(
+        matches!(&error, ManifestError::InvalidField { field, .. } if field == "notes.new-note"),
+        "{error}"
+    );
+}
