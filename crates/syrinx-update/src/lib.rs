@@ -20,6 +20,7 @@ compile_error!(
 );
 mod path;
 mod payload;
+mod plugin_package;
 #[cfg(any(test, feature = "release-tool"))]
 mod sign;
 mod signature;
@@ -30,10 +31,14 @@ mod version;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_plugin_package;
+#[cfg(test)]
 mod tests_statement;
 
 /// SHA-256 through Windows CNG, for the release tool's file listing.
 pub use cng::sha256;
+#[cfg(feature = "test-keys")]
+pub use cng::test_keys::TestKeyPair;
 pub use directory::DirectoryPayload;
 pub use error::{ManifestProblem, PathProblem, StatementProblem, UpdateError};
 pub use keys::{KeyId, KeySet, PRODUCTION_KEYS, PinnedKey};
@@ -47,6 +52,10 @@ pub use manifest::{
 pub use ncrypt::{KeyStorage, StoredKey};
 pub use path::{MAX_COMPONENT_BYTES, MAX_COMPONENTS, MAX_PATH_BYTES, PackagePath};
 pub use payload::{Payload, VerifiedFile, VerifiedPayload, read_bounded};
+pub use plugin_package::{
+    MAX_PLUGIN_ID_BYTES, PACKAGE_FILE, PACKAGE_SIGNATURE_FILE, PluginPackageList, PluginPayload,
+    VerifiedPluginPackage, verify_plugin_package,
+};
 #[cfg(any(test, feature = "release-tool"))]
 pub use sign::{SignedRelease, Signer, StatementTerms, sign_release};
 pub use signature::{DetachedSignature, SIGNATURE_BYTES, SignatureKind};
@@ -89,25 +98,41 @@ pub fn verify_manifest(
     keys: &KeySet,
     installed: Version,
 ) -> Result<VerifiedManifest, UpdateError> {
-    if manifest_bytes.len() > MAX_MANIFEST_BYTES {
-        return Err(UpdateError::TooLarge {
-            what: "manifest",
-            limit: MAX_MANIFEST_BYTES as u64,
-        });
-    }
-    let signature = DetachedSignature::parse(signature_bytes, SignatureKind::Manifest)?;
-    let key = keys
-        .find(signature.key_id())
-        .ok_or(UpdateError::UnknownKey)?;
-    check_signature(key, manifest_bytes, &signature)?;
+    let key_id = verify_signed(
+        manifest_bytes,
+        signature_bytes,
+        keys,
+        SignatureKind::Manifest,
+        ("manifest", MAX_MANIFEST_BYTES),
+    )?;
 
     // Only signed bytes reach the parser.
     let manifest = Manifest::parse(manifest_bytes)?;
     check_rollback(&manifest, installed)?;
-    Ok(VerifiedManifest {
-        manifest,
-        key_id: signature.key_id(),
-    })
+    Ok(VerifiedManifest { manifest, key_id })
+}
+
+/// Bound `signed_bytes` to `limit`, then check their detached signature of `kind` against
+/// a pinned key, before anything parses them. Returns the key that signed them.
+pub(crate) fn verify_signed(
+    signed_bytes: &[u8],
+    signature_bytes: &[u8],
+    keys: &KeySet,
+    kind: SignatureKind,
+    (what, limit): (&'static str, usize),
+) -> Result<KeyId, UpdateError> {
+    if signed_bytes.len() > limit {
+        return Err(UpdateError::TooLarge {
+            what,
+            limit: limit as u64,
+        });
+    }
+    let signature = DetachedSignature::parse(signature_bytes, kind)?;
+    let key = keys
+        .find(signature.key_id())
+        .ok_or(UpdateError::UnknownKey)?;
+    check_signature(key, signed_bytes, &signature)?;
+    Ok(signature.key_id())
 }
 
 /// Hash the raw signed bytes and verify them against the named pinned key.
