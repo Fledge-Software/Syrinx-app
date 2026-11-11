@@ -369,14 +369,15 @@ fn bounded_list<T>(field: &str, values: &[T], max: usize) -> Result<(), Manifest
     Ok(())
 }
 
-/// `major.minor.patch` in canonical decimals, the form `docs/update-format.md` signs.
+/// `major.minor.patch` in canonical decimals, the form `docs/update-format.md` signs: each part
+/// at most `u32::MAX`, as a `package` list's version holds.
 fn canonical_version(field: &str, value: &str) -> Result<(), ManifestError> {
     let parts: Vec<&str> = value.split('.').collect();
     let canonical = |part: &&str| {
         !part.is_empty()
             && part.bytes().all(|byte| byte.is_ascii_digit())
             && (*part == "0" || !part.starts_with('0'))
-            && part.parse::<u64>().is_ok()
+            && part.parse::<u32>().is_ok()
     };
     if parts.len() == 3 && parts.iter().all(canonical) {
         return Ok(());

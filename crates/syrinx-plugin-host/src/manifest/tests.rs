@@ -371,3 +371,22 @@ fn an_oversized_or_non_utf8_manifest_is_refused() {
         Err(ManifestError::Syntax(_))
     ));
 }
+
+#[test]
+fn a_version_part_a_package_cannot_sign_is_refused() {
+    // `docs/update-format.md` allows each part 0 to 4,294,967,295, the most a `package` holds.
+    let largest = changed("version = \"0.3.0\"", "version = \"0.3.4294967295\"");
+    assert!(parse(&largest).is_ok());
+    for (field, from) in [("version", "0.3.0"), ("min-syrinx", "0.9.0")] {
+        let text = changed(
+            &format!("{field} = {from:?}"),
+            &format!("{field} = \"0.3.4294967296\""),
+        );
+        let error = parse(&text).expect_err(field);
+        let expected = format!("plugin.{field}");
+        assert!(
+            matches!(&error, ManifestError::InvalidField { field, .. } if *field == expected),
+            "{field}: {error}"
+        );
+    }
+}
