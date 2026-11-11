@@ -385,7 +385,7 @@ fn a_version_part_a_package_cannot_sign_is_refused() {
         let error = parse(&text).expect_err(field);
         let expected = format!("plugin.{field}");
         assert!(
-            matches!(&error, ManifestError::InvalidField { field, .. } if *field == expected),
+            matches!(&error, ManifestError::InvalidField { field: refused, .. } if *refused == expected),
             "{field}: {error}"
         );
     }
@@ -407,6 +407,54 @@ fn a_command_title_the_palette_would_refuse_is_refused_here() {
     let error = parse(&over).expect_err("an over-long command title");
     assert!(
         matches!(&error, ManifestError::InvalidField { field, .. } if field == "notes.new-note"),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_unstable_feature_listed_twice_is_refused() {
+    let twice = changed(
+        "world = \"syrinx:plugin/plugin@0.1.0\"",
+        "world = \"syrinx:plugin/plugin@0.1.0\"\nunstable = [\"home-widgets\", \"home-widgets\"]",
+    );
+    let error = developer(&twice).expect_err("a repeated unstable feature");
+    assert!(
+        matches!(&error, ManifestError::InvalidField { field, reason }
+            if field == "interface.unstable" && reason.contains("twice")),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_index_feed_listed_twice_is_a_scope_error() {
+    let twice = changed(
+        "feeds = [\"notes.notes\"]",
+        "feeds = [\"notes.notes\", \"notes.notes\"]",
+    );
+    let error = parse(&twice).expect_err("a repeated feed");
+    assert!(
+        matches!(&error, ManifestError::InvalidScope { kind: CapabilityKind::Index, reason }
+            if reason.contains("twice")),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_repository_address_is_bounded_in_bytes() {
+    // The host bounds every address in bytes; two-byte characters reach that bound sooner.
+    let limit = limits::MAX_ADDRESS_BYTES;
+    let fits = changed(
+        "repository = \"https://example.invalid/notes-plugin\"",
+        &format!("repository = {:?}", "r".repeat(limit)),
+    );
+    assert!(parse(&fits).is_ok());
+    let over = changed(
+        "repository = \"https://example.invalid/notes-plugin\"",
+        &format!("repository = {:?}", "\u{e9}".repeat(limit / 2 + 1)),
+    );
+    let error = parse(&over).expect_err("an address over the byte bound");
+    assert!(
+        matches!(&error, ManifestError::InvalidField { field, .. } if field == "plugin.repository"),
         "{error}"
     );
 }

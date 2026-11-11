@@ -317,11 +317,7 @@ fn plugin_info(raw: RawPlugin) -> Result<PluginInfo, ManifestError> {
     for author in &raw.authors {
         text("plugin.authors", author, limits::MAX_LABEL_CHARS)?;
     }
-    text(
-        "plugin.repository",
-        &raw.repository,
-        limits::MAX_ADDRESS_BYTES,
-    )?;
+    address("plugin.repository", &raw.repository)?;
     text("plugin.licence", &raw.licence, limits::MAX_LABEL_CHARS)?;
     canonical_version("plugin.min-syrinx", &raw.min_syrinx)?;
     Ok(PluginInfo {
@@ -361,6 +357,18 @@ fn text(field: &str, value: &str, max: usize) -> Result<(), ManifestError> {
     Ok(())
 }
 
+/// A non-blank address within the host's bound on every address, which counts bytes.
+fn address(field: &str, value: &str) -> Result<(), ManifestError> {
+    text(field, value, limits::MAX_ADDRESS_BYTES)?;
+    if value.len() > limits::MAX_ADDRESS_BYTES {
+        return Err(invalid(
+            field,
+            format!("is larger than {} bytes", limits::MAX_ADDRESS_BYTES),
+        ));
+    }
+    Ok(())
+}
+
 /// At most `max` entries.
 fn bounded_list<T>(field: &str, values: &[T], max: usize) -> Result<(), ManifestError> {
     if values.len() > max {
@@ -393,12 +401,7 @@ fn unstable_features(
     raw: RawInterface,
     options: DiscoveryOptions,
 ) -> Result<Vec<String>, ManifestError> {
-    if let Some(unknown) = raw.unstable.iter().find(|name| *name != HOME_WIDGETS) {
-        return Err(invalid(
-            "interface.unstable",
-            format!("{unknown:?} is not an unstable feature of the contract"),
-        ));
-    }
+    unique_choices("interface.unstable", &raw.unstable, &[HOME_WIDGETS])?;
     if !raw.unstable.is_empty() && !options.developer_mode {
         return Err(invalid(
             "interface.unstable",
@@ -478,14 +481,19 @@ fn each_once(
     values: &[String],
     check: impl Fn(&str) -> Result<(), ManifestError>,
 ) -> Result<(), ManifestError> {
-    let mut seen = BTreeSet::new();
     for value in values {
         check(value)?;
-        if !seen.insert(value) {
-            return Err(invalid(field, format!("{value:?} is listed twice")));
-        }
     }
-    Ok(())
+    match first_repeat(values) {
+        Some(repeat) => Err(invalid(field, format!("{repeat:?} is listed twice"))),
+        None => Ok(()),
+    }
+}
+
+/// The first value listed a second time, if any.
+fn first_repeat(values: &[String]) -> Option<&String> {
+    let mut seen = BTreeSet::new();
+    values.iter().find(|value| !seen.insert(*value))
 }
 
 /// Checks contributed ids: each starts with the plugin's prefix and none repeats across kinds.
@@ -771,6 +779,9 @@ fn index_scope(raw: &RawCapability, feeds: &[SearchFeed]) -> Result<Scope, Manif
             kind,
             format!("{unknown} is not one of this plugin's search feeds"),
         ));
+    }
+    if let Some(repeat) = first_repeat(&requested) {
+        return Err(scope_error(kind, format!("{repeat} is listed twice")));
     }
     Ok(Scope::Index { feeds: requested })
 }
