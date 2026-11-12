@@ -104,7 +104,7 @@ pub struct Plugins<S: PluginHost> {
     host_version: String,
     events: Sender<PluginEvent>,
     slots: BTreeMap<String, Slot<S>>,
-    /// Workers of uninstalled plugins, still stopping; joined at shutdown.
+    /// Worker threads no slot owns any more, still stopping; joined at shutdown.
     stopping: Vec<JoinHandle<()>>,
 }
 
@@ -119,14 +119,14 @@ struct Slot<S: 'static> {
     worker: Option<WorkerHandle<S>>,
 }
 
-/// What `new_worker` builds: the worker, its queue's sending end, its shared state, and the
-/// sending end that hands it the previous worker's handle.
-type NewWorker<S> = (
-    Worker<S>,
-    SyncSender<Job<S>>,
-    Arc<Shared>,
-    SyncSender<Option<JoinHandle<()>>>,
-);
+/// A worker built for a slot, with the ends the slot keeps once its thread runs.
+struct NewWorker<S: 'static> {
+    worker: Worker<S>,
+    jobs: SyncSender<Job<S>>,
+    shared: Arc<Shared>,
+    /// Hands the new worker its predecessor's handle.
+    handover: SyncSender<Option<JoinHandle<()>>>,
+}
 
 struct WorkerHandle<S: 'static> {
     jobs: SyncSender<Job<S>>,
@@ -253,7 +253,12 @@ impl<S: PluginHost> Plugins<S> {
         if self.is_running(plugin) {
             return Ok(());
         }
-        let (worker, jobs, shared, handover) = self.new_worker(plugin)?;
+        let NewWorker {
+            worker,
+            jobs,
+            shared,
+            handover,
+        } = self.new_worker(plugin)?;
         let thread = std::thread::Builder::new()
             .name(format!("syrinx-plugin-{plugin}"))
             .spawn(move || worker.run())
@@ -270,12 +275,11 @@ impl<S: PluginHost> Plugins<S> {
         Ok(())
     }
 
-    /// A worker for `plugin`, its queue, its shared state, and the channel that will hand
-    /// it the previous worker's handle. Nothing in the slot changes yet.
+    /// Build a worker for `plugin`; nothing in the slot changes yet.
     fn new_worker(&mut self, plugin: &str) -> CallResult<NewWorker<S>> {
         let slot = self.slot_mut(plugin)?;
         let (jobs, queued) = mpsc::sync_channel(limits::PLUGIN_QUEUE_CAPACITY);
-        let (handover, predecessor) = mpsc::sync_channel(1);
+        let (handover, handed_over) = mpsc::sync_channel(1);
         let shared = Arc::new(Shared::new());
         shared.set_status(PluginStatus::Active);
         let worker = Worker {
@@ -289,9 +293,14 @@ impl<S: PluginHost> Plugins<S> {
             shared: Arc::clone(&shared),
             events: self.events.clone(),
             jobs: queued,
-            predecessor,
+            handover: handed_over,
         };
-        Ok((worker, jobs, shared, handover))
+        Ok(NewWorker {
+            worker,
+            jobs,
+            shared,
+            handover,
+        })
     }
 
     /// Hand one call to the running worker without waiting.

@@ -808,6 +808,8 @@ fn an_outcome_completed_after_the_job_budget_is_not_delivered() {
 
 #[test]
 fn a_deactivate_that_never_returns_is_stopped_at_its_deadline() {
+    // The shutdown bound in docs/dev/plugin-runtime-bounds.md assumes this deadline.
+    assert!(Export::Deactivate.deadline() <= Duration::from_millis(250));
     let (mut plugins, events) = synthetic("0.1.0-spin-on-deactivate");
     add(&mut plugins, "test", "");
     let request = submit_pending(&mut plugins);
