@@ -33,7 +33,9 @@ pub enum HostError {
     /// The plugin cannot take the call now: its queue is full, or it stopped before answering.
     Unavailable(String),
     /// The plugin stopped while `forms.submit` ran for `request`, so the write's outcome is
-    /// unknown; the worker reports it `uncertain` under the same id.
+    /// unknown; the worker reports it `uncertain` under the same id. `cause` is the trap
+    /// (`Trap`) or the refusal of a discarded instance (`Discarded`), never another
+    /// `SubmitStopped`.
     SubmitStopped { request: u64, cause: Box<HostError> },
 }
 
@@ -88,8 +90,6 @@ pub enum Failure {
     Flooded,
     /// One call and the calls it deferred ran past the job budget (`limits::JOB_BUDGET`).
     OverBudget,
-    /// The host stopped it between deferred calls because it was being deactivated.
-    Interrupted,
     /// The component could not be compiled, linked or instantiated.
     Load(HostError),
     /// `lifecycle.activate` answered with an error.
@@ -134,7 +134,6 @@ impl fmt::Display for Failure {
             }
             Self::Flooded => write!(formatter, "the plugin kept queueing deferred calls"),
             Self::OverBudget => write!(formatter, "one call and its deferred calls took too long"),
-            Self::Interrupted => write!(formatter, "the plugin was stopped between calls"),
             Self::Load(error) => write!(formatter, "the plugin could not start: {error}"),
             Self::ActivationRefused(_) => write!(formatter, "the plugin refused to activate"),
         }

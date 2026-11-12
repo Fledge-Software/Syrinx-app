@@ -130,18 +130,26 @@ would wait for ever.
 ## One job's total budget
 
 A job is one call the worker takes from the queue: its export and every
-call that export deferred (`views.opened`, `views.message`,
-`events.deliver`), which the host delivers after it returns. Each of those
-has its own deadline, but a plugin may chain them: each `views.opened` can
-open another view, up to 1,024 deferred calls (`MAX_DEFERRED_PER_EXPORT`).
-So a job also has a total budget, `JOB_BUDGET`, 2 s: twice the longest
-export deadline, so it never cuts short one well-behaved call. Between
-deferred calls the session checks the budget and the worker's stop flag.
-When the budget is spent the plugin is stopped as `Failure::OverBudget`. When
-the host is deactivating it, the plugin is stopped and reported as
-deactivated. Shutdown therefore waits, for each worker side by side, at
-most one job budget plus `lifecycle.deactivate`'s 250 ms, provided its host
-services honour their deadlines.
+call deferred from it (`views.opened`, `views.message`, `events.deliver`),
+which the host delivers after the export returns. Each of those has its own
+deadline, but a plugin may chain them: each `views.opened` can open another
+view, up to 1,024 deferred calls (`MAX_DEFERRED_PER_EXPORT`). So a job also
+has a total budget, `JOB_BUDGET`, 2 s. The budget bounds the whole job, and
+does not grow with the number of deferred calls, because a budget that grew
+would let one job hold shutdown without limit again. A plugin whose single
+job spends more than 2 s across its calls is treated as stuck
+(`Failure::OverBudget`), even if each call kept to its own deadline. At
+twice the longest export deadline, no single call reaches the budget alone.
+
+The session checks the budget, and the worker's stop signal, between
+deferred calls, not during one. A job can therefore end up to one deferred
+call's deadline (at most 500 ms, `views.opened` or `views.message`) after
+its budget runs out. A stop request is not a failure: the deferred calls
+still queued are dropped, the instance is kept, and the worker then runs
+`lifecycle.deactivate` under its own 250 ms deadline as usual. Shutdown
+therefore waits, for each worker side by side, at most the job budget plus
+one deferred call's deadline plus `lifecycle.deactivate`'s deadline (about
+2.75 s), provided its host services honour their deadlines.
 
 ## The queue
 

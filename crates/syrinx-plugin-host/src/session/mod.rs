@@ -118,10 +118,23 @@ pub struct Session<S: 'static> {
     requests: Arc<RequestIds>,
     replies: BTreeMap<u64, Result<String, PluginError>>,
     refused_views: Vec<(u64, PluginError)>,
-    /// When the worker's current job must be done by, deferred calls included.
-    job_until: Option<Instant>,
-    /// Raised by the worker's supervisor to stop this instance.
-    stop: Option<Arc<AtomicBool>>,
+    /// The worker's limits on its current job; the test host runs without them.
+    job: Option<JobLimits>,
+}
+
+/// What bounds one worker job: its export and every call that export deferred.
+pub(crate) struct JobLimits {
+    /// Raised when the worker is told to stop; deferred calls still queued are then dropped.
+    pub(crate) stop: Arc<AtomicBool>,
+    /// The job's budget (`limits::JOB_BUDGET`), checked between deferred calls.
+    pub(crate) until: Instant,
+}
+
+/// How deferred delivery ended without stopping the instance.
+enum Delivered {
+    All,
+    /// The worker was told to stop, so the rest was dropped; it deactivates the plugin next.
+    CutShortByStop,
 }
 
 impl<S: PluginHost> Session<S> {
@@ -136,19 +149,13 @@ impl<S: PluginHost> Session<S> {
             requests,
             replies: BTreeMap::new(),
             refused_views: Vec::new(),
-            job_until: None,
-            stop: None,
+            job: None,
         }
     }
 
-    /// Stop delivering deferred calls once `stop` is raised.
-    pub(crate) fn watch_stop(&mut self, stop: Arc<AtomicBool>) {
-        self.stop = Some(stop);
-    }
-
-    /// A worker job starts: it and every call it defers must be done by `until`.
-    pub(crate) fn begin_job(&mut self, until: Instant) {
-        self.job_until = Some(until);
+    /// A worker job starts under `limits`.
+    pub(crate) fn begin_job(&mut self, limits: JobLimits) {
+        self.job = Some(limits);
     }
 
     /// Call `lifecycle.activate` with the host's version and the granted capabilities.
@@ -164,7 +171,7 @@ impl<S: PluginHost> Session<S> {
                 .collect(),
         };
         let activated = self
-            .run_call(Export::Activate, |plugin, store| {
+            .call(Export::Activate, |plugin, store| {
                 plugin.syrinx_plugin_lifecycle().call_activate(store, &info)
             })
             .map_err(|stop| stop.failure)?;
@@ -173,7 +180,7 @@ impl<S: PluginHost> Session<S> {
 
     /// Call `lifecycle.deactivate`; an error says why the instance stopped.
     pub fn deactivate(&mut self) -> Result<(), Failure> {
-        self.run_call(Export::Deactivate, |plugin, store| {
+        self.call(Export::Deactivate, |plugin, store| {
             plugin.syrinx_plugin_lifecycle().call_deactivate(store)
         })
         .map_err(|stop| stop.failure)
@@ -237,9 +244,9 @@ impl<S: PluginHost> Session<S> {
                     .syrinx_plugin_forms()
                     .call_submit(store, &id, request, &values)
             })
-            .map_err(|cause| HostError::SubmitStopped {
+            .map_err(|stop| HostError::SubmitStopped {
                 request,
-                cause: Box::new(cause),
+                cause: Box::new(stop.error),
             })?;
         let result = self.check_submit(request, result);
         self.deliver_after_answer();
@@ -301,7 +308,8 @@ impl<S: PluginHost> Session<S> {
         self.mediator_mut().view_closed(view);
         self.call(Export::Closed, |plugin, store| {
             plugin.syrinx_plugin_views().call_closed(store, view)
-        })
+        })?;
+        Ok(())
     }
 
     /// Pull a bounded batch from a declared feed; over-limit keywords are dropped and logged.
@@ -351,7 +359,8 @@ impl<S: PluginHost> Session<S> {
     /// Deliver every deferred call, first in, first out. A plugin that keeps
     /// queueing more is stopped, as a trap would stop it.
     pub fn run_deferred(&mut self) -> CallResult<()> {
-        self.deliver_all().map_err(|stop| stop.error)
+        self.deliver_all()?;
+        Ok(())
     }
 
     /// Writes whose outcome is not known yet: a submit that never returned, or one that
@@ -408,17 +417,8 @@ impl<S: PluginHost> Session<S> {
         &mut self,
         export: Export,
         call: impl FnOnce(&Plugin, &mut wasmtime::Store<StoreData<Mediator<S>>>) -> wasmtime::Result<R>,
-    ) -> CallResult<R> {
-        self.run_call(export, call).map_err(|stop| stop.error)
-    }
-
-    /// `call`, keeping why the instance stopped as well as what the caller is told.
-    fn run_call<R>(
-        &mut self,
-        export: Export,
-        call: impl FnOnce(&Plugin, &mut wasmtime::Store<StoreData<Mediator<S>>>) -> wasmtime::Result<R>,
     ) -> Result<R, Stop> {
-        let result = self.plugin.run(export, call)?;
+        let result = self.plugin.call(export, call)?;
         self.deliver_all()?;
         Ok(result)
     }
@@ -431,34 +431,35 @@ impl<S: PluginHost> Session<S> {
         }
     }
 
-    /// Deliver every deferred call in order. The instance is stopped if it keeps queueing
-    /// more, if the job's time is spent, or if the worker was told to stop.
-    fn deliver_all(&mut self) -> Result<(), Stop> {
+    /// Deliver every deferred call in order. A stop request drops the rest and keeps the
+    /// instance; the instance is stopped if it keeps queueing more or the job's budget is spent.
+    fn deliver_all(&mut self) -> Result<Delivered, Stop> {
         for _ in 0..limits::MAX_DEFERRED_PER_EXPORT {
             let Some(deferred) = self.mediator_mut().pop_deferred() else {
-                return Ok(());
+                return Ok(Delivered::All);
             };
-            if let Some(failure) = self.interruption() {
-                return Err(self.stop_delivering(failure));
+            if self.stop_requested() {
+                self.mediator_mut().clear_deferred();
+                return Ok(Delivered::CutShortByStop);
+            }
+            if self.budget_spent() {
+                return Err(self.stop_delivering(Failure::OverBudget));
             }
             self.deliver(deferred)?;
         }
         Err(self.stop_delivering(Failure::Flooded))
     }
 
-    /// Why deferred delivery must stop now, if it must.
-    fn interruption(&self) -> Option<Failure> {
-        if self
-            .stop
+    fn stop_requested(&self) -> bool {
+        self.job
             .as_ref()
-            .is_some_and(|stop| stop.load(Ordering::Relaxed))
-        {
-            return Some(Failure::Interrupted);
-        }
-        if self.job_until.is_some_and(|until| Instant::now() >= until) {
-            return Some(Failure::OverBudget);
-        }
-        None
+            .is_some_and(|job| job.stop.load(Ordering::Relaxed))
+    }
+
+    fn budget_spent(&self) -> bool {
+        self.job
+            .as_ref()
+            .is_some_and(|job| Instant::now() >= job.until)
     }
 
     /// Drop what is still deferred and discard the instance.
@@ -474,7 +475,7 @@ impl<S: PluginHost> Session<S> {
             Deferred::Opened(view) => self.deliver_opened(view),
             Deferred::Message(request) => self.deliver_message(request),
             Deferred::Deliver(request, outcome) => {
-                self.plugin.run(Export::Deliver, |plugin, store| {
+                self.plugin.call(Export::Deliver, |plugin, store| {
                     plugin
                         .syrinx_plugin_events()
                         .call_deliver(store, request, &outcome)
@@ -488,7 +489,7 @@ impl<S: PluginHost> Session<S> {
         let Some((kind, address)) = self.mediator().view_target(view) else {
             return Ok(());
         };
-        let opened = self.plugin.run(Export::Opened, |plugin, store| {
+        let opened = self.plugin.call(Export::Opened, |plugin, store| {
             plugin
                 .syrinx_plugin_views()
                 .call_opened(store, view, &kind, &address)
@@ -508,7 +509,7 @@ impl<S: PluginHost> Session<S> {
             self.replies.insert(request_id, Err(closed));
             return Ok(());
         }
-        let reply = self.plugin.run(Export::Message, |plugin, store| {
+        let reply = self.plugin.call(Export::Message, |plugin, store| {
             plugin.syrinx_plugin_views().call_message(store, &request)
         })?;
         let reply = reply

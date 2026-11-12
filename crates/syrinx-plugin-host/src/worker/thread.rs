@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::bindings::syrinx::plugin::types::Outcome;
 use crate::manifest::PluginManifest;
-use crate::session::{Mediator, RequestIds, Session};
+use crate::session::{JobLimits, Mediator, RequestIds, Session};
 use crate::{Failure, LoadedPlugin, PluginHost, PreparedPlugin, Runtime, limits};
 
 use super::{PluginEvent, PluginStatus, ServiceFactory, StopReason};
@@ -32,18 +32,19 @@ pub(super) type Prepared<S> = Arc<Mutex<Option<PreparedPlugin<Mediator<S>>>>>;
 /// What one worker shares with the supervisor that started it.
 pub(super) struct Shared {
     status: Mutex<PluginStatus>,
-    /// Set by the supervisor; the worker stops before its next call.
-    stop: Mutex<Option<StopReason>>,
-    /// Raised with `stop`, and read by the session between deferred calls.
-    stopping: Arc<AtomicBool>,
+    /// The one stop signal: the worker stops before its next call, and the session drops
+    /// deferred calls still queued.
+    stop: Arc<AtomicBool>,
+    /// Why the stop was asked for; set before `stop` is raised.
+    stop_reason: Mutex<Option<StopReason>>,
 }
 
 impl Shared {
     pub(super) fn new() -> Self {
         Self {
             status: Mutex::new(PluginStatus::Inactive),
-            stop: Mutex::new(None),
-            stopping: Arc::new(AtomicBool::new(false)),
+            stop: Arc::new(AtomicBool::new(false)),
+            stop_reason: Mutex::new(None),
         }
     }
 
@@ -59,15 +60,19 @@ impl Shared {
     }
 
     pub(super) fn request_stop(&self, reason: StopReason) {
-        self.stop
+        self.stop_reason
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get_or_insert(reason);
-        self.stopping.store(true, Ordering::Relaxed);
+        self.stop.store(true, Ordering::Release);
     }
 
+    /// Why a stop was asked for, once it was.
     pub(super) fn stop_requested(&self) -> Option<StopReason> {
-        self.stop
+        if !self.stop.load(Ordering::Acquire) {
+            return None;
+        }
+        self.stop_reason
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -94,18 +99,30 @@ impl<S: PluginHost> Worker<S> {
     /// Activate, serve calls until stopped or failed, then drop the store.
     pub(super) fn run(mut self) {
         self.wait_for_predecessor();
+        if let Some(reason) = self.shared.stop_requested() {
+            // Stopped before it ever ran: nothing was instantiated, so nothing is reported.
+            return self.shared.set_status(PluginStatus::Deactivated(reason));
+        }
         let mut session = match self.activate() {
             Ok(session) => session,
-            Err(failure) => return self.stopped(&[], failure),
+            Err(failure) => return self.fail(&[], failure),
         };
         while let Some(call) = self.next_job() {
-            session.begin_job(Instant::now() + limits::JOB_BUDGET);
+            session.begin_job(self.job_limits());
             call(&mut session);
             if let Some(failure) = session.failure().cloned() {
-                return self.stopped(&session.writes_in_flight(), failure);
+                return self.fail(&session.writes_in_flight(), failure);
             }
         }
         self.deactivate(session);
+    }
+
+    /// One job's limits: the stop signal and the job budget from now.
+    fn job_limits(&self) -> JobLimits {
+        JobLimits {
+            stop: Arc::clone(&self.shared.stop),
+            until: Instant::now() + limits::JOB_BUDGET,
+        }
     }
 
     fn wait_for_predecessor(&mut self) {
@@ -143,8 +160,7 @@ impl<S: PluginHost> Worker<S> {
             self.host_version.clone(),
             Arc::clone(&self.requests),
         );
-        session.watch_stop(Arc::clone(&self.shared.stopping));
-        session.begin_job(Instant::now() + limits::JOB_BUDGET);
+        session.begin_job(self.job_limits());
         match session.activate()? {
             Ok(()) => Ok(session),
             Err(refused) => Err(Failure::ActivationRefused(refused)),
@@ -169,17 +185,14 @@ impl<S: PluginHost> Worker<S> {
     /// Best effort `lifecycle.deactivate` under its own deadline, then exit.
     fn deactivate(&self, mut session: Session<S>) {
         if let Err(failure) = session.deactivate() {
-            return self.stopped(&session.writes_in_flight(), failure);
+            return self.fail(&session.writes_in_flight(), failure);
         }
         self.finish(&session.writes_in_flight());
     }
 
-    /// The instance stopped. One stopped between deferred calls because the host was
-    /// deactivating it ends as deactivated; any other failure shows the plugin as failed.
-    fn stopped(&self, writes_in_flight: &[u64], failure: Failure) {
-        if failure == Failure::Interrupted && self.shared.stop_requested().is_some() {
-            return self.finish(writes_in_flight);
-        }
+    /// Settle the writes in flight as `uncertain`, show the plugin as failed, and exit; the
+    /// store is dropped with the session. Nothing is resubmitted.
+    fn fail(&self, writes_in_flight: &[u64], failure: Failure) {
         self.settle_uncertain(writes_in_flight);
         self.shared
             .set_status(PluginStatus::Failed(failure.clone()));

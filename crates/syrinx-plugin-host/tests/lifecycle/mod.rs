@@ -1,7 +1,7 @@
 //! Synthetic lifecycle tests for the per-plugin workers (#135, P2-03): lazy activation,
 //! deadlines, traps, request identity, the bounded queue and deactivation.
 
-mod stalling;
+mod services;
 mod workload;
 
 use std::sync::Arc;
@@ -21,6 +21,7 @@ use wasmtime::Trap;
 
 use crate::package::{manifest_text, register};
 use crate::support::{self, FULL};
+use services::{Journal, TestServices};
 
 /// Long enough for the first activation to compile the fixture in a debug build.
 const WAIT: Duration = Duration::from_secs(60);
@@ -179,7 +180,8 @@ fn a_closed_view_drops_its_messages_and_a_reopened_one_gets_new_request_ids() {
 
 #[test]
 fn an_unavailable_host_service_answers_by_the_deadline_and_the_plugin_keeps_running() {
-    let (mut plugins, _events) = plugins_with("0.1.0-worker", stalling::StallingHost::new);
+    let journal = Journal::default();
+    let (mut plugins, _events) = plugins_with("0.1.0-worker", TestServices::stalling(&journal));
     add(&mut plugins, "test", "");
     let activated = answer(plugins.call("test", |session| session.run_command("test.fail")));
     assert!(activated.is_ok());
@@ -313,7 +315,9 @@ fn a_spinning_plugin_never_delays_the_caller_or_another_plugin() {
     );
 
     let mut slowest = Duration::ZERO;
+    let mut calls_while_spinning = 0;
     while spinning.try_answer().is_none() {
+        calls_while_spinning += 1;
         let started = Instant::now();
         let other = answer(plugins.call("other", |session| session.run_command("other.fail")));
         assert!(
@@ -322,6 +326,10 @@ fn a_spinning_plugin_never_delays_the_caller_or_another_plugin() {
         );
         slowest = slowest.max(started.elapsed());
     }
+    assert!(
+        calls_while_spinning >= 1,
+        "the other plugin was called during the spin"
+    );
     assert!(
         slowest < Duration::from_millis(250),
         "another plugin's call took {slowest:?}"
@@ -526,14 +534,20 @@ fn a_job_that_keeps_deferring_slow_calls_is_stopped_at_its_budget() {
 
 #[test]
 fn a_stop_request_interrupts_a_chain_of_deferred_calls() {
-    let (mut plugins, events) = synthetic("0.1.0-worker");
+    let journal = Journal::default();
+    let (mut plugins, events) = plugins_with("0.1.0-worker", TestServices::recording(&journal));
     add(&mut plugins, "test", "");
-    assert!(run(&mut plugins, "test.fail").is_ok());
-    let started = Instant::now();
+    assert!(answer(plugins.call("test", |session| session.run_command("test.fail"))).is_ok());
+    let (sender, chain_started) = mpsc::channel();
     let chain = plugins
-        .call("test", |session| session.run_command("test.slow-chain"))
+        .call("test", move |session| {
+            sender.send(Instant::now()).expect("the test waits");
+            session.run_command("test.slow-chain")
+        })
         .expect("queued");
-    std::thread::sleep(Export::Opened.deadline());
+    let started = chain_started.recv_timeout(WAIT).expect("the chain started");
+    // One link of the chain busy-waits 300 ms in `views.opened`.
+    std::thread::sleep(Duration::from_millis(300));
     plugins
         .deactivate("test", StopReason::Shutdown)
         .expect("stopping");
@@ -546,12 +560,64 @@ fn a_stop_request_interrupts_a_chain_of_deferred_calls() {
         started.elapsed() < limits::JOB_BUDGET,
         "the stop waited for the budget"
     );
-    assert!(matches!(chain.wait(WAIT), Some(Err(_))));
+    assert!(
+        journal.count("opened") >= 1,
+        "the chain was running: {:?}",
+        journal.lines()
+    );
+    assert_eq!(
+        journal.count("deactivate"),
+        1,
+        "lifecycle.deactivate still ran"
+    );
+    assert_eq!(
+        chain.wait(WAIT),
+        Some(Ok(Ok(()))),
+        "the command itself had answered"
+    );
+}
+
+#[test]
+fn a_successor_stopped_while_its_predecessor_stops_never_activates() {
+    let journal = Journal::default();
+    let (mut plugins, events) = plugins_with("0.1.0-worker", TestServices::recording(&journal));
+    add(&mut plugins, "test", "");
+    let (sender, chain_started) = mpsc::channel();
+    let chain = plugins
+        .call("test", move |session| {
+            sender.send(()).expect("the test waits");
+            session.run_command("test.slow-chain")
+        })
+        .expect("queued");
+    chain_started.recv_timeout(WAIT).expect("the chain started");
+    plugins
+        .deactivate("test", StopReason::Uninstalled)
+        .expect("stopping");
+    let queued = plugins
+        .call("test", |session| session.run_command("test.fail"))
+        .expect("queued for the next instance");
+    plugins.shutdown();
+    assert_eq!(journal.count("activate"), 1, "{:?}", journal.lines());
+    assert!(matches!(
+        queued.wait(WAIT),
+        Some(Err(HostError::Unavailable(_)))
+    ));
+    assert!(chain.wait(WAIT).is_some());
+    let received: Vec<PluginEvent> = events.try_iter().collect();
+    assert_eq!(
+        received,
+        [PluginEvent::Deactivated {
+            plugin: "test".into(),
+            reason: StopReason::Uninstalled,
+        }],
+        "only the instance that ran reports"
+    );
 }
 
 #[test]
 fn host_cancel_reaches_the_service_after_the_host_forgot_the_request() {
-    let (mut plugins, _events) = plugins_with("0.1.0-worker", stalling::StallingHost::new);
+    let journal = Journal::default();
+    let (mut plugins, _events) = plugins_with("0.1.0-worker", TestServices::recording(&journal));
     add(&mut plugins, "test", "");
     let (request, result) = answer(plugins.call("test", |session| {
         session.submit("test.new-item", &[("name", "later")])
@@ -564,14 +630,13 @@ fn host_cancel_reaches_the_service_after_the_host_forgot_the_request() {
     );
     let cancelled = answer(plugins.call("test", |session| session.run_command("test.cancel")));
     assert_eq!(cancelled, Ok(Ok(())));
-    let (seen, in_flight) = answer(plugins.call("test", |session| {
-        Ok((
-            session.services().cancelled().to_vec(),
-            session.writes_in_flight(),
-        ))
-    }))
-    .expect("read");
-    assert_eq!(seen, [1], "the service saw the cancel");
+    let in_flight =
+        answer(plugins.call("test", |session| Ok(session.writes_in_flight()))).expect("read");
+    assert_eq!(journal.count("cancel"), 1, "{:?}", journal.lines());
+    assert!(
+        journal.lines().contains(&"cancel 1".to_owned()),
+        "the service saw the cancel"
+    );
     assert_eq!(
         in_flight,
         Vec::<u64>::new(),
@@ -581,6 +646,6 @@ fn host_cancel_reaches_the_service_after_the_host_forgot_the_request() {
         answer(plugins.complete("test", 1, Outcome::Done(None))),
         Ok(())
     );
-    let delivered = answer(plugins.call("test", |session| Ok(session.services().delivered())));
-    assert_eq!(delivered, Ok(false));
+    assert!(answer(plugins.call("test", |session| session.run_command("test.fail"))).is_ok());
+    assert_eq!(journal.count("deliver"), 0, "{:?}", journal.lines());
 }

@@ -227,9 +227,9 @@ impl<S: PluginHost> Plugins<S> {
     }
 
     /// Deactivate every plugin and wait for each worker to exit. The workers stop side by
-    /// side, each within one job budget (`limits::JOB_BUDGET`) plus `lifecycle.deactivate`'s
-    /// deadline, as long as its host services honour their deadlines. Dropping `Plugins`
-    /// does the same.
+    /// side, each within one job budget (`limits::JOB_BUDGET`), one deferred call's deadline
+    /// (the budget is checked between deferred calls) and `lifecycle.deactivate`'s deadline,
+    /// as long as its host services honour their deadlines. Dropping `Plugins` does the same.
     pub fn shutdown(mut self) {
         self.stop_all_and_join();
     }

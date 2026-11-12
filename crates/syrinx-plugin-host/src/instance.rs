@@ -44,9 +44,16 @@ pub struct LoadedPlugin<H: 'static> {
 }
 
 /// A call that stopped the instance: why, as the owner is shown it, and as the caller is told.
+/// Used everywhere inside the crate; public methods turn it into the `HostError` once.
 pub(crate) struct Stop {
     pub(crate) failure: Failure,
     pub(crate) error: HostError,
+}
+
+impl From<Stop> for HostError {
+    fn from(stop: Stop) -> Self {
+        stop.error
+    }
 }
 
 impl<H: PluginHost> LoadedPlugin<H> {
@@ -105,16 +112,7 @@ impl<H: PluginHost> LoadedPlugin<H> {
     }
 
     /// Call one export under its own deadline. A trap discards this instance.
-    pub fn call<R>(
-        &mut self,
-        export: Export,
-        call: impl FnOnce(&Plugin, &mut Store<StoreData<H>>) -> wasmtime::Result<R>,
-    ) -> Result<R, HostError> {
-        self.run(export, call).map_err(|stop| stop.error)
-    }
-
-    /// `call`, keeping both why the instance stopped and what the caller is told.
-    pub(crate) fn run<R>(
+    pub(crate) fn call<R>(
         &mut self,
         export: Export,
         call: impl FnOnce(&Plugin, &mut Store<StoreData<H>>) -> wasmtime::Result<R>,

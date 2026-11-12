@@ -25,7 +25,6 @@ pub type TestHost = Session<SyntheticHost>;
 impl Session<SyntheticHost> {
     /// Check the declarations and the component, then instantiate it.
     pub fn load(bytes: &[u8], declarations: Declarations) -> CallResult<Self> {
-        declarations.check()?;
         let runtime = Runtime::new()?;
         let prepared = Self::prepare(&runtime, bytes)?;
         Self::from_prepared(&runtime, &prepared, declarations)
