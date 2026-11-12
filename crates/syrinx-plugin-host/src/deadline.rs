@@ -84,7 +84,18 @@ pub struct CallDeadline(Instant);
 impl CallDeadline {
     /// The deadline of `export` starting now.
     pub fn starting_now(export: Export) -> Self {
-        Self(Instant::now() + export.deadline())
+        Self::after(export.deadline())
+    }
+
+    /// The deadline `time` from now.
+    pub(crate) fn after(time: Duration) -> Self {
+        Self(Instant::now() + time)
+    }
+
+    /// The epoch ticks left before the deadline, rounded up.
+    pub(crate) fn ticks_left(self) -> u64 {
+        let ticks = self.remaining().as_nanos().div_ceil(EPOCH_TICK.as_nanos());
+        u64::try_from(ticks).unwrap_or(u64::MAX)
     }
 
     /// Time left before the deadline; zero once it has passed.

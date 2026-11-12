@@ -1,6 +1,8 @@
 //! One instantiated plugin in its own store: every export call runs under a
 //! deadline, and a trap discards the store for good.
 
+use std::time::Duration;
+
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 
@@ -39,8 +41,8 @@ pub struct LoadedPlugin<H: 'static> {
     store: Store<StoreData<H>>,
     failure: Option<Failure>,
     export_calls: u64,
-    /// The one activation deadline instantiation started, until `lifecycle.activate` uses it.
-    activation: Option<CallDeadline>,
+    /// What instantiation left of the activation deadline, until `lifecycle.activate` uses it.
+    activation: Option<Duration>,
 }
 
 /// A call that stopped the instance: why, as the owner is shown it, and as the caller is told.
@@ -107,7 +109,7 @@ impl<H: PluginHost> LoadedPlugin<H> {
             store,
             failure: None,
             export_calls: 0,
-            activation: Some(activation),
+            activation: Some(activation.remaining()),
         })
     }
 
@@ -138,12 +140,15 @@ impl<H: PluginHost> LoadedPlugin<H> {
         })
     }
 
-    /// Arm the store's epoch deadline for `export`. `lifecycle.activate` keeps the deadline
-    /// instantiation started, so the two together get one activation deadline.
+    /// Arm the store's epoch deadline for `export`. `lifecycle.activate` gets what
+    /// instantiation left, so the two together get one activation deadline; time between
+    /// them, when other instances may advance the shared epoch, is not charged.
     fn start_deadline(&mut self, export: Export) -> CallDeadline {
         if export == Export::Activate
-            && let Some(activation) = self.activation.take()
+            && let Some(left) = self.activation.take()
         {
+            let activation = CallDeadline::after(left);
+            self.store.set_epoch_deadline(activation.ticks_left());
             return activation;
         }
         self.activation = None;

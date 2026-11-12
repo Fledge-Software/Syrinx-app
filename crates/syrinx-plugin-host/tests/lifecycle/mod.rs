@@ -827,3 +827,55 @@ fn a_deactivate_that_never_returns_is_stopped_at_its_deadline() {
     };
     assert_eq!(received, [uncertain(request), failed]);
 }
+
+#[test]
+fn a_plugin_added_again_after_uninstalling_waits_for_its_old_instance_to_stop() {
+    let journal = Journal::default();
+    let (mut plugins, _events) = plugins_with("0.1.0-worker", TestServices::recording(&journal));
+    add(&mut plugins, "test", "");
+    // The old instance's job holds it until the test releases it.
+    let (started, job_started) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let held = plugins
+        .call("test", move |session| {
+            started.send(()).expect("the test waits");
+            released
+                .recv_timeout(WAIT)
+                .expect("the test releases the job");
+            session.run_command("test.fail")
+        })
+        .expect("queued");
+    job_started.recv_timeout(WAIT).expect("the job started");
+    plugins.uninstall("test").expect("uninstalled");
+    add(&mut plugins, "test", "");
+    let queued = plugins
+        .call("test", |session| session.run_command("test.fail"))
+        .expect("queued for the new instance");
+    assert!(
+        queued.wait(Duration::from_secs(5)).is_none(),
+        "the new instance ran while the old one was still running: {:?}",
+        journal.lines()
+    );
+    release.send(()).expect("the job waits");
+    assert!(matches!(
+        held.wait(WAIT),
+        Some(Ok(Err(PluginError::InvalidInput(_))))
+    ));
+    assert!(matches!(
+        queued.wait(WAIT),
+        Some(Ok(Err(PluginError::InvalidInput(_))))
+    ));
+    plugins.shutdown();
+    let lines = journal.lines();
+    let deactivated = lines.iter().position(|line| line == "deactivate");
+    let reactivated = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("activate"))
+        .nth(1)
+        .map(|(index, _)| index);
+    assert!(
+        deactivated.is_some() && deactivated < reactivated,
+        "the old instance must deactivate before the new one activates: {lines:?}"
+    );
+}

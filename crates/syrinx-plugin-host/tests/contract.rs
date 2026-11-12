@@ -458,7 +458,35 @@ fn view_messages_run_in_order_a_cancelled_one_is_dropped_and_closed_comes_last()
     assert_eq!(logged(&host).last().map(String::as_str), Some("closed 1"));
 }
 
+#[test]
+fn a_full_queue_of_view_messages_is_delivered_without_flooding() {
+    let mut host = full();
+    host.run_command("test.open")
+        .expect("runs")
+        .expect("opened");
+    let queued: Vec<u64> = (0..limits::MAX_DEFERRED_QUEUED)
+        .map(|_| host.queue_view_message(1, "ping", "{}").expect("queued"))
+        .collect();
+    host.run_deferred().expect("delivered");
+    assert_eq!(host.failure(), None);
+    assert!(queued.iter().all(|&request| host.reply(request).is_some()));
+}
+
 // Deadlines, memory and traps.
+
+#[test]
+fn time_other_instances_spend_before_activation_is_not_charged_to_it() {
+    let runtime = Runtime::new().expect("engine");
+    let prepared = TestHost::prepare(&runtime, &support::bytes(FULL)).expect("compiles");
+    let instantiate =
+        || TestHost::from_prepared(&runtime, &prepared, full_declarations()).expect("loads");
+    let mut later = instantiate();
+    let mut busy = instantiate();
+    busy.activate().expect("runs").expect("activated");
+    // A spin runs the shared epoch past a whole activation deadline.
+    busy.run_command("test.spin").expect_err("trapped");
+    later.activate().expect("runs").expect("activated");
+}
 
 #[test]
 fn an_endless_loop_is_stopped_by_the_deadline_and_the_store_is_discarded() {

@@ -120,6 +120,10 @@ impl<S: PluginHost> Mediator<S> {
         self.deferred.clear();
     }
 
+    pub(crate) fn has_deferred(&self) -> bool {
+        !self.deferred.is_empty()
+    }
+
     /// Take every deferred call still queued, oldest first.
     pub(crate) fn take_deferred(&mut self) -> Vec<Deferred> {
         self.deferred.drain(..).collect()

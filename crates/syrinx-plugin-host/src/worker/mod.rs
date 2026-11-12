@@ -104,8 +104,9 @@ pub struct Plugins<S: PluginHost> {
     host_version: String,
     events: Sender<PluginEvent>,
     slots: BTreeMap<String, Slot<S>>,
-    /// Worker threads no slot owns any more, still stopping; joined at shutdown.
-    stopping: Vec<JoinHandle<()>>,
+    /// Worker threads no slot owns any more, still stopping, with their plugin's id; a
+    /// plugin added again waits for its own, and shutdown joins the rest.
+    stopping: Vec<(String, JoinHandle<()>)>,
 }
 
 struct Slot<S: 'static> {
@@ -215,8 +216,9 @@ impl<S: PluginHost> Plugins<S> {
         slot.stop(StopReason::Uninstalled);
         let worker = slot.worker.take();
         self.slots.remove(plugin);
-        self.stopping.retain(|thread| !thread.is_finished());
-        self.stopping.extend(worker.map(|worker| worker.thread));
+        self.stopping.retain(|(_, thread)| !thread.is_finished());
+        self.stopping
+            .extend(worker.map(|worker| (plugin.to_owned(), worker.thread)));
         Ok(())
     }
 
@@ -248,7 +250,8 @@ impl<S: PluginHost> Plugins<S> {
     }
 
     /// Start a worker for `plugin` unless one is running; this is the plugin's activation.
-    /// A previous worker still stopping is handed over, and the new one waits for it.
+    /// A previous worker still stopping, the slot's own or one an uninstall left behind, is
+    /// handed over, and the new one waits for it.
     fn ensure_running(&mut self, plugin: &str) -> CallResult<()> {
         if self.is_running(plugin) {
             return Ok(());
@@ -266,13 +269,21 @@ impl<S: PluginHost> Plugins<S> {
         // Only once the thread runs does it take over the slot: the previous worker's handle,
         // which it joins before activating, and the plugin's status.
         let slot = self.slot_mut(plugin)?;
-        let predecessor = slot.worker.take().map(|old| old.thread);
+        let previous = slot.worker.take().map(|old| old.thread);
         slot.shared = shared;
         slot.worker = Some(WorkerHandle { jobs, thread });
+        let predecessor = previous.or_else(|| self.take_stopping(plugin));
         if let Err(unsent) = handover.send(predecessor) {
-            self.stopping.extend(unsent.0);
+            self.stopping
+                .extend(unsent.0.map(|thread| (plugin.to_owned(), thread)));
         }
         Ok(())
+    }
+
+    /// The thread of an uninstalled instance of `plugin` that may still be stopping.
+    fn take_stopping(&mut self, plugin: &str) -> Option<JoinHandle<()>> {
+        let index = self.stopping.iter().position(|(id, _)| id == plugin)?;
+        Some(self.stopping.swap_remove(index).1)
     }
 
     /// Build a worker for `plugin`; nothing in the slot changes yet.
@@ -365,12 +376,12 @@ impl<S: 'static> Slot<S> {
 impl<S: PluginHost> Plugins<S> {
     /// Tell every worker to stop, then wait for each; a second call finds nothing to do.
     fn stop_all_and_join(&mut self) {
-        for slot in self.slots.values_mut() {
+        for (id, slot) in &mut self.slots {
             slot.stop(StopReason::Shutdown);
             self.stopping
-                .extend(slot.worker.take().map(|worker| worker.thread));
+                .extend(slot.worker.take().map(|worker| (id.clone(), worker.thread)));
         }
-        for thread in self.stopping.drain(..) {
+        for (_, thread) in self.stopping.drain(..) {
             if thread.join().is_err() {
                 eprintln!("a plugin worker thread panicked");
             }

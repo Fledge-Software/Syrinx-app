@@ -468,6 +468,9 @@ impl<S: PluginHost> Session<S> {
             }
             self.deliver(deferred)?;
         }
+        if !self.mediator().has_deferred() {
+            return Ok(());
+        }
         Err(self.stop_delivering(Failure::Flooded))
     }
 
