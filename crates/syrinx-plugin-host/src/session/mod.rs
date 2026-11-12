@@ -322,6 +322,8 @@ impl<S: PluginHost> Session<S> {
     }
 
     /// The owner closed a tab: undelivered messages are dropped, then `closed` comes last.
+    /// While the worker is stopping, the services still hear of it but the plugin does not:
+    /// it may never have been told the view opened, and the instance is retired next.
     pub fn close_view(&mut self, view: u64) -> CallResult<()> {
         if !self.mediator().is_open(view) {
             return Err(HostError::Refused(format!("no open view {view}")));
@@ -329,6 +331,9 @@ impl<S: PluginHost> Session<S> {
         self.mediator_mut().drop_view_messages(view);
         self.run_deferred()?;
         self.mediator_mut().view_closed(view);
+        if let Gate::Stopping = self.before_host_call()? {
+            return Ok(());
+        }
         self.call(Export::Closed, |plugin, store| {
             plugin.syrinx_plugin_views().call_closed(store, view)
         })?;

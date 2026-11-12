@@ -332,6 +332,8 @@ impl views::Guest for Plugin {
         ));
         match request.method.as_str() {
             "bad-json" => Ok("{not json".into()),
+            // Opening a view defers its `opened`, so delivery keeps finding more to do.
+            "open" => host::open_view("test.page", "syrinx-test:from-message").map(|_| "{}".into()),
             _ => Ok(format!("{{\"echo\":{}}}", request.json)),
         }
     }

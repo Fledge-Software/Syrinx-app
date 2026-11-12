@@ -879,3 +879,38 @@ fn a_plugin_added_again_after_uninstalling_waits_for_its_old_instance_to_stop() 
         "the old instance must deactivate before the new one activates: {lines:?}"
     );
 }
+
+#[test]
+fn a_view_closed_while_stopping_never_reaches_the_plugin() {
+    let journal = Journal::default();
+    let (mut plugins, _events) = plugins_with("0.1.0-worker", TestServices::recording(&journal));
+    add(&mut plugins, "test", "");
+    assert!(answer(plugins.call("test", |session| session.run_command("test.fail"))).is_ok());
+    let (started, job_started) = mpsc::channel();
+    let (stop_raised, wait_for_stop) = mpsc::channel::<()>();
+    let job = plugins
+        .call("test", move |session| {
+            started.send(()).expect("the test waits");
+            wait_for_stop
+                .recv_timeout(WAIT)
+                .expect("the test raised the stop");
+            // The export runs; the `opened` calls it deferred are dropped by the stop.
+            let opened = session.run_command("test.open")?;
+            for view in session.open_views() {
+                session.close_view(view)?;
+            }
+            Ok(opened)
+        })
+        .expect("queued");
+    job_started.recv_timeout(WAIT).expect("the job started");
+    plugins
+        .deactivate("test", StopReason::Shutdown)
+        .expect("stopping");
+    stop_raised.send(()).expect("the job waits");
+    assert_eq!(job.wait(WAIT), Some(Ok(Ok(()))));
+    plugins.shutdown();
+    let lines = journal.lines();
+    assert_eq!(journal.count("opened"), 0, "{lines:?}");
+    assert_eq!(journal.count("closed"), 0, "{lines:?}");
+    assert_eq!(journal.count("view-closed"), 2, "{lines:?}");
+}

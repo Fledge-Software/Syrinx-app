@@ -472,6 +472,20 @@ fn a_full_queue_of_view_messages_is_delivered_without_flooding() {
     assert!(queued.iter().all(|&request| host.reply(request).is_some()));
 }
 
+#[test]
+fn deferred_calls_that_keep_deferring_more_past_the_limit_are_a_flood() {
+    let mut host = full();
+    host.run_command("test.open")
+        .expect("runs")
+        .expect("opened");
+    // Each message opens a view, whose `opened` is deferred in turn.
+    for _ in 0..limits::MAX_DEFERRED_QUEUED {
+        host.queue_view_message(1, "open", "{}").expect("queued");
+    }
+    assert!(matches!(host.run_deferred(), Err(HostError::Refused(_))));
+    assert_eq!(host.failure(), Some(&Failure::Flooded));
+}
+
 // Deadlines, memory and traps.
 
 #[test]

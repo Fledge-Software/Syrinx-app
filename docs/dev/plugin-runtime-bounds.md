@@ -94,9 +94,12 @@ A deadline is not an expected duration. It is the ceiling past which a
 plugin is treated as stuck: its store is discarded, every write it had in
 flight is reported `uncertain`, and it is shown as failed until its next
 explicit use. So each deadline is set by how long the owner can wait on that
-kind of call, then checked against the workload: every export's slowest
-workload call must stay at least ten times inside its deadline
-(`HEADROOM` in the workload test). In the measurement above the closest is
+kind of call, then checked against the workload: every export's 99th
+percentile must stay at least ten times inside its deadline (`HEADROOM` in
+the workload test), and its slowest call inside the deadline itself, since
+one call preempted on a loaded machine can lose 10 ms or more of wall
+time. In the measurement above the slowest call of each export, the
+stricter figure, still stays far inside: the closest is
 activation, at about 1,700 times inside its deadline; `forms.validate`, with
 the shortest deadline, is about 2,400 times inside it.
 
