@@ -300,7 +300,7 @@ impl views::Guest for Plugin {
             panic!("synthetic panic while opening a view");
         }
         if address.ends_with("slow-chain") {
-            busy_wait(std::time::Duration::from_millis(300));
+            busy_wait(std::time::Duration::from_millis(100));
             return host::open_view("test.page", "syrinx-test:slow-chain").map(drop);
         }
         if address.ends_with("chain") {

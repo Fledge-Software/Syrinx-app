@@ -7,7 +7,7 @@
 
 mod mediator;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
@@ -120,6 +120,8 @@ pub struct Session<S: 'static> {
     refused_views: Vec<(u64, PluginError)>,
     /// The worker's limits on its current job; the test host runs without them.
     job: Option<JobLimits>,
+    /// Outcomes whose `events.deliver` a stop request dropped, until `complete` reports it.
+    undelivered: BTreeSet<u64>,
 }
 
 /// What bounds one worker job: its export and every call that export deferred.
@@ -130,12 +132,8 @@ pub(crate) struct JobLimits {
     pub(crate) until: Instant,
 }
 
-/// How deferred delivery ended without stopping the instance.
-enum Delivered {
-    All,
-    /// The worker was told to stop, so the rest was dropped; it deactivates the plugin next.
-    CutShortByStop,
-}
+/// What a view message or an outcome dropped by a stop request is answered with.
+const STOPPING: &str = "the plugin is stopping";
 
 impl<S: PluginHost> Session<S> {
     pub(crate) fn new(
@@ -150,6 +148,7 @@ impl<S: PluginHost> Session<S> {
             replies: BTreeMap::new(),
             refused_views: Vec::new(),
             job: None,
+            undelivered: BTreeSet::new(),
         }
     }
 
@@ -265,7 +264,13 @@ impl<S: PluginHost> Session<S> {
             )));
         }
         self.defer(Deferred::Deliver(request, outcome))?;
-        self.run_deferred()
+        self.run_deferred()?;
+        if self.undelivered.remove(&request) {
+            return Err(HostError::Unavailable(format!(
+                "{STOPPING}, so request {request} was not delivered"
+            )));
+        }
+        Ok(())
     }
 
     /// Queue a message from a view's interface; it is delivered by `run_deferred`.
@@ -431,16 +436,17 @@ impl<S: PluginHost> Session<S> {
         }
     }
 
-    /// Deliver every deferred call in order. A stop request drops the rest and keeps the
-    /// instance; the instance is stopped if it keeps queueing more or the job's budget is spent.
-    fn deliver_all(&mut self) -> Result<Delivered, Stop> {
+    /// Deliver every deferred call in order. A stop request drops the rest, telling each
+    /// caller, and keeps the instance; the instance is stopped if it keeps queueing more or
+    /// the job's budget is spent.
+    fn deliver_all(&mut self) -> Result<(), Stop> {
         for _ in 0..limits::MAX_DEFERRED_PER_EXPORT {
             let Some(deferred) = self.mediator_mut().pop_deferred() else {
-                return Ok(Delivered::All);
+                return Ok(());
             };
             if self.stop_requested() {
-                self.mediator_mut().clear_deferred();
-                return Ok(Delivered::CutShortByStop);
+                self.drop_for_stop(deferred);
+                return Ok(());
             }
             if self.budget_spent() {
                 return Err(self.stop_delivering(Failure::OverBudget));
@@ -448,6 +454,33 @@ impl<S: PluginHost> Session<S> {
             self.deliver(deferred)?;
         }
         Err(self.stop_delivering(Failure::Flooded))
+    }
+
+    /// Drop `first` and everything still deferred: a view message is answered `unavailable`
+    /// and an outcome is marked undelivered for `complete` to report. A view whose `opened`
+    /// is dropped stays open, and is closed with every open view at deactivation.
+    fn drop_for_stop(&mut self, first: Deferred) {
+        let mut dropped = vec![first];
+        dropped.extend(self.mediator_mut().take_deferred());
+        for deferred in dropped {
+            match deferred {
+                Deferred::Message(request) => {
+                    let stopping = PluginError::Unavailable(STOPPING.into());
+                    self.replies.insert(request.request_id, Err(stopping));
+                }
+                Deferred::Deliver(request, _) => {
+                    self.undelivered.insert(request);
+                }
+                Deferred::Opened(_) => {}
+            }
+        }
+    }
+
+    /// Tell the services every view still open is closed, before the store is dropped.
+    pub(crate) fn close_open_views(&mut self) {
+        for view in self.open_views() {
+            self.mediator_mut().view_closed(view);
+        }
     }
 
     fn stop_requested(&self) -> bool {

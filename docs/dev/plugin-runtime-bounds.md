@@ -146,7 +146,11 @@ deferred calls, not during one. A job can therefore end up to one deferred
 call's deadline (at most 500 ms, `views.opened` or `views.message`) after
 its budget runs out. A stop request is not a failure: the deferred calls
 still queued are dropped, the instance is kept, and the worker then runs
-`lifecycle.deactivate` under its own 250 ms deadline as usual. Shutdown
+`lifecycle.deactivate` under its own 250 ms deadline as usual. Each caller
+of a dropped call is told: a queued view message is answered `unavailable`,
+an outcome whose `events.deliver` was dropped makes `complete` answer
+`unavailable`, and every view still open is closed with the services
+before the store is dropped. Shutdown
 therefore waits, for each worker side by side, at most the job budget plus
 one deferred call's deadline plus `lifecycle.deactivate`'s deadline (about
 2.75 s), provided its host services honour their deadlines.

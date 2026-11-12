@@ -121,6 +121,11 @@ impl<S: PluginHost> Mediator<S> {
         self.deferred.clear();
     }
 
+    /// Take every deferred call still queued, oldest first.
+    pub(crate) fn take_deferred(&mut self) -> Vec<Deferred> {
+        self.deferred.drain(..).collect()
+    }
+
     /// Drop every message still queued for `view`.
     pub(crate) fn drop_view_messages(&mut self, view: u64) {
         self.deferred.retain(

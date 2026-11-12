@@ -546,8 +546,8 @@ fn a_stop_request_interrupts_a_chain_of_deferred_calls() {
         })
         .expect("queued");
     let started = chain_started.recv_timeout(WAIT).expect("the chain started");
-    // One link of the chain busy-waits 300 ms in `views.opened`.
-    std::thread::sleep(Duration::from_millis(300));
+    // One link of the chain busy-waits 100 ms in `views.opened`.
+    std::thread::sleep(Duration::from_millis(100));
     plugins
         .deactivate("test", StopReason::Shutdown)
         .expect("stopping");
@@ -602,7 +602,7 @@ fn a_successor_stopped_while_its_predecessor_stops_never_activates() {
         queued.wait(WAIT),
         Some(Err(HostError::Unavailable(_)))
     ));
-    assert!(chain.wait(WAIT).is_some());
+    assert_eq!(chain.wait(WAIT), Some(Ok(Ok(()))));
     let received: Vec<PluginEvent> = events.try_iter().collect();
     assert_eq!(
         received,
@@ -648,4 +648,49 @@ fn host_cancel_reaches_the_service_after_the_host_forgot_the_request() {
     );
     assert!(answer(plugins.call("test", |session| session.run_command("test.fail"))).is_ok());
     assert_eq!(journal.count("deliver"), 0, "{:?}", journal.lines());
+}
+
+#[test]
+fn an_outcome_a_stop_dropped_is_not_reported_delivered_and_open_views_are_closed() {
+    let journal = Journal::default();
+    let (mut plugins, events) = plugins_with("0.1.0-worker", TestServices::recording(&journal));
+    add(&mut plugins, "test", "");
+    let (request, _) = answer(plugins.call("test", |session| {
+        session.submit("test.new-item", &[("name", "later")])
+    }))
+    .expect("pending");
+    let (sender, job_started) = mpsc::channel();
+    let job = plugins
+        .call("test", move |session| {
+            sender.send(()).expect("the test waits");
+            let chain = session.run_command("test.slow-chain");
+            let completed = session.complete(request, Outcome::Done(None));
+            Ok((chain, completed))
+        })
+        .expect("queued");
+    job_started.recv_timeout(WAIT).expect("the job started");
+    // One link of the chain busy-waits 100 ms; the stop lands while the chain runs.
+    std::thread::sleep(Duration::from_millis(100));
+    plugins
+        .deactivate("test", StopReason::Shutdown)
+        .expect("stopping");
+    let (chain, completed) = job
+        .wait(WAIT)
+        .expect("answered in time")
+        .expect("the job ran");
+    assert_eq!(chain, Ok(Ok(())), "the command itself had answered");
+    assert!(
+        matches!(completed, Err(HostError::Unavailable(_))),
+        "a dropped delivery is not a success: {completed:?}"
+    );
+    assert!(matches!(
+        next_event(&events),
+        PluginEvent::Deactivated { .. }
+    ));
+    assert_eq!(journal.count("deliver"), 0, "{:?}", journal.lines());
+    assert!(
+        journal.count("view-closed") >= 1,
+        "views still open were closed: {:?}",
+        journal.lines()
+    );
 }

@@ -93,6 +93,7 @@ impl PluginHost for TestServices {
     }
 
     fn view_closed(&mut self, view: u64) {
+        self.journal.push(format!("view-closed {view}"));
         self.inner.view_closed(view);
     }
 }

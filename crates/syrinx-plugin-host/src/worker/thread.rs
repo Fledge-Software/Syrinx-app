@@ -184,7 +184,9 @@ impl<S: PluginHost> Worker<S> {
 
     /// Best effort `lifecycle.deactivate` under its own deadline, then exit.
     fn deactivate(&self, mut session: Session<S>) {
-        if let Err(failure) = session.deactivate() {
+        let deactivated = session.deactivate();
+        session.close_open_views();
+        if let Err(failure) = deactivated {
             return self.fail(&session.writes_in_flight(), failure);
         }
         self.finish(&session.writes_in_flight());
