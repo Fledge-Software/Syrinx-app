@@ -7,19 +7,19 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::PluginHost;
 use crate::bindings::exports::syrinx::plugin::views::ViewRequest;
 use crate::bindings::syrinx::plugin::host::{self, LogLevel};
-use crate::bindings::syrinx::plugin::types::{self, Outcome, PluginError, Timestamp};
+use crate::bindings::syrinx::plugin::types::{self, PluginError, Timestamp};
 use crate::deadline::CallDeadline;
 use crate::manifest::CapabilityKind;
 use crate::{limits, validate};
 
 use super::Declarations;
 
-/// A call the host defers until the current export returns.
+/// A call the host defers until the current export returns. An outcome is not deferred:
+/// `Session::complete` delivers it itself, after anything already deferred.
 #[derive(Debug, Clone)]
 pub(crate) enum Deferred {
     Opened(u64),
     Message(ViewRequest),
-    Deliver(u64, Outcome),
 }
 
 impl Deferred {
@@ -27,7 +27,6 @@ impl Deferred {
         match self {
             Self::Opened(_) => None,
             Self::Message(request) => Some(request.request_id),
-            Self::Deliver(request, _) => Some(*request),
         }
     }
 }

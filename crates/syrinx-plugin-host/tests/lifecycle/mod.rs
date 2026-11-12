@@ -694,3 +694,52 @@ fn an_outcome_a_stop_dropped_is_not_reported_delivered_and_open_views_are_closed
         journal.lines()
     );
 }
+
+#[test]
+fn a_view_message_a_stop_dropped_is_answered_unavailable() {
+    let journal = Journal::default();
+    let (mut plugins, _events) = plugins_with("0.1.0-worker", TestServices::recording(&journal));
+    add(&mut plugins, "test", "");
+    let opened = answer(plugins.call("test", |session| session.run_command("test.open")));
+    assert_eq!(opened, Ok(Ok(())));
+    let (started, job_started) = mpsc::channel();
+    let (stop_raised, wait_for_stop) = mpsc::channel::<()>();
+    let job = plugins
+        .call("test", move |session| {
+            started.send(()).expect("the test waits");
+            wait_for_stop
+                .recv_timeout(WAIT)
+                .expect("the test raised the stop");
+            let message = session.queue_view_message(1, "ping", "{}")?;
+            session.run_deferred()?;
+            Ok(session.reply(message).cloned())
+        })
+        .expect("queued");
+    job_started.recv_timeout(WAIT).expect("the job started");
+    plugins
+        .deactivate("test", StopReason::Shutdown)
+        .expect("stopping");
+    stop_raised.send(()).expect("the job waits");
+    let reply = job
+        .wait(WAIT)
+        .expect("answered in time")
+        .expect("the job ran");
+    assert!(
+        matches!(reply, Some(Err(PluginError::Unavailable(_)))),
+        "a dropped message is answered: {reply:?}"
+    );
+    assert_eq!(journal.count("message"), 0, "{:?}", journal.lines());
+}
+
+#[test]
+fn views_still_open_are_closed_with_the_services_after_a_trap() {
+    let journal = Journal::default();
+    let (mut plugins, events) = plugins_with("0.1.0-worker", TestServices::recording(&journal));
+    add(&mut plugins, "test", "");
+    let opened = answer(plugins.call("test", |session| session.run_command("test.open")));
+    assert_eq!(opened, Ok(Ok(())));
+    assert_eq!(journal.count("view-closed 1"), 0, "view 1 is open");
+    assert!(answer(plugins.call("test", |session| session.run_command("test.spin"))).is_err());
+    assert!(matches!(next_event(&events), PluginEvent::Failed { .. }));
+    assert_eq!(journal.count("view-closed 1"), 1, "{:?}", journal.lines());
+}

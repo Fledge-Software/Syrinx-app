@@ -103,15 +103,18 @@ impl<S: PluginHost> Worker<S> {
             // Stopped before it ever ran: nothing was instantiated, so nothing is reported.
             return self.shared.set_status(PluginStatus::Deactivated(reason));
         }
-        let mut session = match self.activate() {
+        let mut session = match self.instantiate() {
             Ok(session) => session,
-            Err(failure) => return self.fail(&[], failure),
+            Err(failure) => return self.fail(None, failure),
         };
+        if let Err(failure) = self.activate(&mut session) {
+            return self.fail(Some(session), failure);
+        }
         while let Some(call) = self.next_job() {
             session.begin_job(self.job_limits());
             call(&mut session);
             if let Some(failure) = session.failure().cloned() {
-                return self.fail(&session.writes_in_flight(), failure);
+                return self.fail(Some(session), failure);
             }
         }
         self.deactivate(session);
@@ -145,8 +148,8 @@ impl<S: PluginHost> Worker<S> {
         }
     }
 
-    /// Instantiate (compiling only the first time) and call `lifecycle.activate`.
-    fn activate(&self) -> Result<Session<S>, Failure> {
+    /// Instantiate the plugin, compiling it only the first time.
+    fn instantiate(&self) -> Result<Session<S>, Failure> {
         let prepared = self.prepared()?;
         let services = Mediator::new(
             (self.services)(&self.manifest),
@@ -155,16 +158,17 @@ impl<S: PluginHost> Worker<S> {
         );
         let plugin = LoadedPlugin::from_prepared(&self.runtime, &prepared, services)
             .map_err(Failure::from_instantiation)?;
-        let mut session = Session::new(
+        Ok(Session::new(
             plugin,
             self.host_version.clone(),
             Arc::clone(&self.requests),
-        );
+        ))
+    }
+
+    /// Call `lifecycle.activate`, under the job limits like any call.
+    fn activate(&self, session: &mut Session<S>) -> Result<(), Failure> {
         session.begin_job(self.job_limits());
-        match session.activate()? {
-            Ok(()) => Ok(session),
-            Err(refused) => Err(Failure::ActivationRefused(refused)),
-        }
+        session.activate()?.map_err(Failure::ActivationRefused)
     }
 
     /// The prepared component, compiling and linking it on the plugin's first activation.
@@ -184,18 +188,28 @@ impl<S: PluginHost> Worker<S> {
 
     /// Best effort `lifecycle.deactivate` under its own deadline, then exit.
     fn deactivate(&self, mut session: Session<S>) {
-        let deactivated = session.deactivate();
-        session.close_open_views();
-        if let Err(failure) = deactivated {
-            return self.fail(&session.writes_in_flight(), failure);
+        if let Err(failure) = session.deactivate() {
+            return self.fail(Some(session), failure);
         }
-        self.finish(&session.writes_in_flight());
+        self.finish(session);
     }
 
-    /// Settle the writes in flight as `uncertain`, show the plugin as failed, and exit; the
-    /// store is dropped with the session. Nothing is resubmitted.
-    fn fail(&self, writes_in_flight: &[u64], failure: Failure) {
-        self.settle_uncertain(writes_in_flight);
+    /// Every way out of the worker ends here with its instance: the services hear that each
+    /// view still open is closed, and the writes still in flight are returned for settling.
+    /// The store is dropped with the session.
+    fn retire(&self, mut session: Session<S>) -> Vec<u64> {
+        session.close_open_views();
+        session.writes_in_flight()
+    }
+
+    /// Retire the instance, if there was one, settle its writes in flight as `uncertain`,
+    /// and show the plugin as failed. Nothing is resubmitted.
+    fn fail(&self, session: Option<Session<S>>, failure: Failure) {
+        let writes_in_flight = match session {
+            Some(session) => self.retire(session),
+            None => Vec::new(),
+        };
+        self.settle_uncertain(&writes_in_flight);
         self.shared
             .set_status(PluginStatus::Failed(failure.clone()));
         self.send(PluginEvent::Failed {
@@ -204,11 +218,12 @@ impl<S: PluginHost> Worker<S> {
         });
     }
 
-    /// Settle the writes in flight and report the plugin deactivated; the store is dropped
-    /// with the session. Nothing is resubmitted.
-    fn finish(&self, writes_in_flight: &[u64]) {
+    /// Retire the instance, settle its writes in flight and report the plugin deactivated.
+    /// Nothing is resubmitted.
+    fn finish(&self, session: Session<S>) {
         let reason = self.shared.stop_requested().unwrap_or(StopReason::Shutdown);
-        self.settle_uncertain(writes_in_flight);
+        let writes_in_flight = self.retire(session);
+        self.settle_uncertain(&writes_in_flight);
         self.shared
             .set_status(PluginStatus::Deactivated(reason.clone()));
         self.send(PluginEvent::Deactivated {

@@ -130,8 +130,8 @@ would wait for ever.
 ## One job's total budget
 
 A job is one call the worker takes from the queue: its export and every
-call deferred from it (`views.opened`, `views.message`, `events.deliver`),
-which the host delivers after the export returns. Each of those has its own
+call deferred from it (`views.opened` and `views.message`), which the
+host delivers after the export returns. Each of those has its own
 deadline, but a plugin may chain them: each `views.opened` can open another
 view, up to 1,024 deferred calls (`MAX_DEFERRED_PER_EXPORT`). So a job also
 has a total budget, `JOB_BUDGET`, 2 s. The budget bounds the whole job, and
@@ -148,10 +148,11 @@ its budget runs out. A stop request is not a failure: the deferred calls
 still queued are dropped, the instance is kept, and the worker then runs
 `lifecycle.deactivate` under its own 250 ms deadline as usual. Each caller
 of a dropped call is told: a queued view message is answered `unavailable`,
-an outcome whose `events.deliver` was dropped makes `complete` answer
-`unavailable`, and every view still open is closed with the services
-before the store is dropped. Shutdown
-therefore waits, for each worker side by side, at most the job budget plus
+and `complete`, which delivers an outcome through `events.deliver` after
+anything already deferred, answers `unavailable` instead once a stop is
+requested. Whatever ends a worker, a stop, a trap, the budget or a flood of
+deferred calls, every view still open is closed with the services before
+the store is dropped. Shutdown therefore waits, for each worker side by side, at most the job budget plus
 one deferred call's deadline plus `lifecycle.deactivate`'s deadline (about
 2.75 s), provided its host services honour their deadlines.
 

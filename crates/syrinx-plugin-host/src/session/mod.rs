@@ -7,7 +7,7 @@
 
 mod mediator;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
@@ -120,8 +120,6 @@ pub struct Session<S: 'static> {
     refused_views: Vec<(u64, PluginError)>,
     /// The worker's limits on its current job; the test host runs without them.
     job: Option<JobLimits>,
-    /// Outcomes whose `events.deliver` a stop request dropped, until `complete` reports it.
-    undelivered: BTreeSet<u64>,
 }
 
 /// What bounds one worker job: its export and every call that export deferred.
@@ -148,7 +146,6 @@ impl<S: PluginHost> Session<S> {
             replies: BTreeMap::new(),
             refused_views: Vec::new(),
             job: None,
-            undelivered: BTreeSet::new(),
         }
     }
 
@@ -252,7 +249,9 @@ impl<S: PluginHost> Session<S> {
         Ok((request, result))
     }
 
-    /// The service behind an armed request finished; deliver its outcome.
+    /// The service behind an armed request finished; deliver its outcome after any calls
+    /// already deferred. If the worker is being stopped, the outcome is not delivered and
+    /// the answer is `unavailable`, never success.
     pub fn complete(&mut self, request: u64, outcome: Outcome) -> CallResult<()> {
         // The plugin gave up on it through `host.cancel`; nothing is delivered.
         if self.mediator_mut().take_cancelled(request) {
@@ -263,13 +262,17 @@ impl<S: PluginHost> Session<S> {
                 "request {request} is not armed"
             )));
         }
-        self.defer(Deferred::Deliver(request, outcome))?;
         self.run_deferred()?;
-        if self.undelivered.remove(&request) {
+        if self.stop_requested() {
             return Err(HostError::Unavailable(format!(
                 "{STOPPING}, so request {request} was not delivered"
             )));
         }
+        self.call(Export::Deliver, |plugin, store| {
+            plugin
+                .syrinx_plugin_events()
+                .call_deliver(store, request, &outcome)
+        })?;
         Ok(())
     }
 
@@ -456,9 +459,9 @@ impl<S: PluginHost> Session<S> {
         Err(self.stop_delivering(Failure::Flooded))
     }
 
-    /// Drop `first` and everything still deferred: a view message is answered `unavailable`
-    /// and an outcome is marked undelivered for `complete` to report. A view whose `opened`
-    /// is dropped stays open, and is closed with every open view at deactivation.
+    /// Drop `first` and everything still deferred: a view message is answered `unavailable`.
+    /// A view whose `opened` is dropped stays open, and is closed with every open view when
+    /// the worker retires the instance.
     fn drop_for_stop(&mut self, first: Deferred) {
         let mut dropped = vec![first];
         dropped.extend(self.mediator_mut().take_deferred());
@@ -467,9 +470,6 @@ impl<S: PluginHost> Session<S> {
                 Deferred::Message(request) => {
                     let stopping = PluginError::Unavailable(STOPPING.into());
                     self.replies.insert(request.request_id, Err(stopping));
-                }
-                Deferred::Deliver(request, _) => {
-                    self.undelivered.insert(request);
                 }
                 Deferred::Opened(_) => {}
             }
@@ -507,13 +507,6 @@ impl<S: PluginHost> Session<S> {
         match deferred {
             Deferred::Opened(view) => self.deliver_opened(view),
             Deferred::Message(request) => self.deliver_message(request),
-            Deferred::Deliver(request, outcome) => {
-                self.plugin.call(Export::Deliver, |plugin, store| {
-                    plugin
-                        .syrinx_plugin_events()
-                        .call_deliver(store, request, &outcome)
-                })
-            }
         }
     }
 
