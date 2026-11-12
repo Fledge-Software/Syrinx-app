@@ -36,6 +36,9 @@ impl lifecycle::Guest for Plugin {
             info.host_version,
             info.granted.len()
         ));
+        if info.host_version.ends_with("panic-on-activate") {
+            panic!("synthetic activation panic");
+        }
         Ok(())
     }
 

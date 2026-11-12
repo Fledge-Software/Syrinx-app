@@ -1,6 +1,7 @@
 //! Contract tests for `syrinx:plugin@0.1.0`: synthetic plugins loaded by the
 //! test host, without a window. Each negative test names how it must fail.
 
+mod lifecycle;
 mod package;
 mod support;
 

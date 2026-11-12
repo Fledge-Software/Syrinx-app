@@ -1,13 +1,11 @@
 //! The test host's answers to a plugin's `syrinx:plugin` imports, with
 //! synthetic state: in-memory settings, views as records, a fixed clock.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeMap;
 
-use crate::bindings::exports::syrinx::plugin::views::ViewRequest;
 use crate::bindings::syrinx::plugin::host::{self, LogLevel};
-use crate::bindings::syrinx::plugin::types::{self, Outcome, PluginError};
-use crate::limits;
-use crate::validate;
+use crate::bindings::syrinx::plugin::types::{self, PluginError};
+use crate::{PluginHost, limits, validate};
 
 use super::Declarations;
 
@@ -25,24 +23,6 @@ pub struct ViewRecord {
     pub events: Vec<String>,
 }
 
-/// A call the host defers until the current export returns.
-#[derive(Debug, Clone)]
-pub(super) enum Deferred {
-    Opened(u64),
-    Message(ViewRequest),
-    Deliver(u64, Outcome),
-}
-
-impl Deferred {
-    pub(super) fn request(&self) -> Option<u64> {
-        match self {
-            Self::Opened(_) => None,
-            Self::Message(request) => Some(request.request_id),
-            Self::Deliver(request, _) => Some(*request),
-        }
-    }
-}
-
 /// Everything the test host tracks for one plugin.
 pub struct SyntheticHost {
     pub(super) declarations: Declarations,
@@ -50,26 +30,18 @@ pub struct SyntheticHost {
     settings: BTreeMap<String, Vec<u8>>,
     pub(super) views: BTreeMap<u64, ViewRecord>,
     next_view: u64,
-    pub(super) deferred: VecDeque<Deferred>,
-    /// Requests a `pending` answer armed, waiting for `complete`.
-    pub(super) armed: BTreeSet<u64>,
-    /// Armed requests the plugin gave up on; never more than were armed.
-    pub(super) cancelled: BTreeSet<u64>,
     /// Feeds with a change to pull, each listed once however often it was signalled.
     pub(super) changed_feeds: Vec<String>,
 }
 
 impl SyntheticHost {
-    pub(super) fn new(declarations: Declarations) -> Self {
+    pub fn new(declarations: Declarations) -> Self {
         Self {
             declarations,
             logs: Vec::new(),
             settings: BTreeMap::new(),
             views: BTreeMap::new(),
             next_view: 1,
-            deferred: VecDeque::new(),
-            armed: BTreeSet::new(),
-            cancelled: BTreeSet::new(),
             changed_feeds: Vec::new(),
         }
     }
@@ -83,31 +55,6 @@ impl SyntheticHost {
         self.logs.push((level, bounded));
     }
 
-    /// The plugin gave up on a request: an armed one is never delivered, and
-    /// anything still queued for it is dropped.
-    pub(super) fn plugin_cancelled(&mut self, request: u64) {
-        if self.armed.remove(&request) {
-            self.cancelled.insert(request);
-        }
-        self.drop_queued(request);
-    }
-
-    pub(super) fn drop_queued(&mut self, request: u64) {
-        self.deferred
-            .retain(|deferred| deferred.request() != Some(request));
-    }
-
-    /// Queue a deferred call, unless the queue is full.
-    pub(super) fn defer(&mut self, deferred: Deferred) -> Result<(), PluginError> {
-        if self.deferred.len() >= limits::MAX_DEFERRED_QUEUED {
-            return Err(PluginError::Unavailable(
-                "too many calls are waiting for the plugin".into(),
-            ));
-        }
-        self.deferred.push_back(deferred);
-        Ok(())
-    }
-
     fn view_mut(&mut self, view: u64) -> Result<&mut ViewRecord, PluginError> {
         self.views
             .get_mut(&view)
@@ -118,6 +65,12 @@ impl SyntheticHost {
 fn check_settings_key(key: &str) -> Result<(), PluginError> {
     validate::bytes("settings key", key, limits::MAX_SETTINGS_KEY_BYTES)?;
     validate::id("settings key", key)
+}
+
+impl PluginHost for SyntheticHost {
+    fn view_closed(&mut self, view: u64) {
+        self.views.remove(&view);
+    }
 }
 
 impl types::Host for SyntheticHost {}
@@ -145,7 +98,7 @@ impl host::Host for SyntheticHost {
         Ok(())
     }
 
-    /// Open a declared view kind; `views.opened` follows once the current export returns.
+    /// Open a declared view kind.
     fn open_view(&mut self, kind: String, address: String) -> Result<u64, PluginError> {
         if !self.declarations.view_kinds.contains(&kind) {
             return Err(PluginError::InvalidInput(format!(
@@ -160,7 +113,6 @@ impl host::Host for SyntheticHost {
             )));
         }
         let view = self.next_view;
-        self.defer(Deferred::Opened(view))?;
         self.next_view += 1;
         let record = ViewRecord {
             title: kind.clone(),
@@ -228,9 +180,8 @@ impl host::Host for SyntheticHost {
     /// Gated `@unstable(feature = home-widgets)`; never linked for a plugin.
     fn widget_changed(&mut self, _widget: String) {}
 
-    fn cancel(&mut self, request: u64) {
-        self.plugin_cancelled(request);
-    }
+    /// Synthetic services start no work of their own, so there is nothing to abandon.
+    fn cancel(&mut self, _request: u64) {}
 
     fn now(&mut self) -> i64 {
         SYNTHETIC_NOW
