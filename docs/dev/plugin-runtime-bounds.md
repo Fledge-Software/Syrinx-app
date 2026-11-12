@@ -145,7 +145,7 @@ The session checks the budget, and the worker's stop signal, between
 deferred calls, not during one, and again before `complete` delivers an
 outcome. A job can therefore end up to one deferred call's deadline (at
 most 500 ms, `views.opened` or `views.message`) after its budget runs out.
-Shutdown therefore waits, for each worker side by side, at most the job
+So shutdown waits, for each worker side by side, at most the job
 budget plus one deferred call's deadline plus `lifecycle.deactivate`'s
 deadline (about 2.75 s), provided its host services honour their
 deadlines.

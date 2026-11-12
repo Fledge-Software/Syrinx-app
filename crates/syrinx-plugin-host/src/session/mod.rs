@@ -133,6 +133,13 @@ pub(crate) struct JobLimits {
 /// What a view message or an outcome dropped by a stop request is answered with.
 const STOPPING: &str = "the plugin is stopping";
 
+/// Whether the host may start a call of its own now.
+enum Gate {
+    Go,
+    /// The worker was told to stop; the instance is kept and deactivated next.
+    Stopping,
+}
+
 impl<S: PluginHost> Session<S> {
     pub(crate) fn new(
         plugin: LoadedPlugin<Mediator<S>>,
@@ -263,13 +270,17 @@ impl<S: PluginHost> Session<S> {
             )));
         }
         self.run_deferred()?;
-        if self.stop_requested() {
-            return Err(HostError::Unavailable(format!(
-                "{STOPPING}, so request {request} was not delivered"
-            )));
-        }
-        if self.budget_spent() {
-            return Err(self.stop_delivering(Failure::OverBudget).into());
+        let undelivered = HostError::Unavailable(format!(
+            "{STOPPING}, so request {request} was not delivered"
+        ));
+        match self.before_host_call() {
+            Ok(Gate::Go) => {}
+            Ok(Gate::Stopping) => return Err(undelivered),
+            // The budget is spent: the instance is stopped, and `failure()` says so.
+            Err(stop) => {
+                debug_assert_eq!(self.failure(), Some(&stop.failure));
+                return Err(undelivered);
+            }
         }
         self.call(Export::Deliver, |plugin, store| {
             plugin
@@ -450,12 +461,9 @@ impl<S: PluginHost> Session<S> {
             let Some(deferred) = self.mediator_mut().pop_deferred() else {
                 return Ok(());
             };
-            if self.stop_requested() {
+            if let Gate::Stopping = self.before_host_call()? {
                 self.drop_for_stop(deferred);
                 return Ok(());
-            }
-            if self.budget_spent() {
-                return Err(self.stop_delivering(Failure::OverBudget));
             }
             self.deliver(deferred)?;
         }
@@ -484,6 +492,18 @@ impl<S: PluginHost> Session<S> {
         for view in self.open_views() {
             self.mediator_mut().view_closed(view);
         }
+    }
+
+    /// Before the host starts a call of its own: a stop request means stopping, and a
+    /// spent job budget stops the instance (`Failure::OverBudget`).
+    fn before_host_call(&mut self) -> Result<Gate, Stop> {
+        if self.stop_requested() {
+            return Ok(Gate::Stopping);
+        }
+        if self.budget_spent() {
+            return Err(self.stop_delivering(Failure::OverBudget));
+        }
+        Ok(Gate::Go)
     }
 
     fn stop_requested(&self) -> bool {

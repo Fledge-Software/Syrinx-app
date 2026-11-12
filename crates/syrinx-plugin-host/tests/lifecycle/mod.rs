@@ -757,7 +757,7 @@ fn views_still_open_are_closed_with_the_services_after_a_trap() {
 }
 
 #[test]
-fn a_trap_while_delivering_an_outcome_fails_the_plugin_once_and_settles_nothing_twice() {
+fn a_trap_while_delivering_an_outcome_fails_the_plugin_once_and_reports_no_uncertain_outcome() {
     let (mut plugins, events) = synthetic("0.1.0-worker");
     add(&mut plugins, "test", "");
     let request = submit_pending(&mut plugins);
@@ -776,7 +776,7 @@ fn a_trap_while_delivering_an_outcome_fails_the_plugin_once_and_settles_nothing_
     assert_eq!(next_event(&events), failed);
     assert!(
         events.recv_timeout(Duration::from_millis(200)).is_err(),
-        "one failure, and no uncertain outcome for a request whose outcome the host knew"
+        "the first event was the only one: no second failure and no uncertain outcome"
     );
 }
 
@@ -795,7 +795,7 @@ fn an_outcome_completed_after_the_job_budget_is_not_delivered() {
         session.complete(request, Outcome::Done(None))
     }));
     assert!(
-        matches!(completed, Err(HostError::Refused(_))),
+        matches!(completed, Err(HostError::Unavailable(_))),
         "{completed:?}"
     );
     let failed = PluginEvent::Failed {
