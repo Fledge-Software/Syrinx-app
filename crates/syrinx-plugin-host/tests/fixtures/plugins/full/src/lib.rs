@@ -25,6 +25,10 @@ use bindings::syrinx::plugin::types::{Icon, Outcome, PluginError};
 
 struct Plugin;
 
+/// Set at activation when the host version asks `deactivate` to never return.
+static SPIN_ON_DEACTIVATE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn note(message: String) {
     host::log(LogLevel::Info, &message);
 }
@@ -36,11 +40,21 @@ impl lifecycle::Guest for Plugin {
             info.host_version,
             info.granted.len()
         ));
+        if info.host_version.ends_with("panic-on-activate") {
+            panic!("synthetic activation panic");
+        }
+        SPIN_ON_DEACTIVATE.store(
+            info.host_version.ends_with("spin-on-deactivate"),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         Ok(())
     }
 
     fn deactivate() {
         note("deactivate".into());
+        if SPIN_ON_DEACTIVATE.load(std::sync::atomic::Ordering::Relaxed) {
+            spin_forever();
+        }
     }
 }
 
@@ -64,6 +78,7 @@ impl commands::Guest for Plugin {
             "test.views" => many_views(),
             "test.events" => many_events(),
             "test.chain" => open_chain(),
+            "test.slow-chain" => host::open_view("test.page", "syrinx-test:slow-chain").map(drop),
             "test.long-error" => Err(PluginError::Internal("e".repeat(10_000))),
             "test.cancel" => {
                 host::cancel(1);
@@ -84,6 +99,12 @@ fn echo() -> Result<(), PluginError> {
 }
 
 fn spin() -> Result<(), PluginError> {
+    spin_forever()
+}
+
+/// Busy-loop until the host's deadline stops the call.
+fn spin_forever() -> ! {
+    note("spinning".into());
     let mut counter: u64 = 0;
     loop {
         counter = std::hint::black_box(counter.wrapping_add(1));
@@ -153,6 +174,14 @@ fn open_chain() -> Result<(), PluginError> {
     host::open_view("test.page", "syrinx-test:chain").map(|_| ())
 }
 
+/// Keep the CPU busy for `wait`, as a slow but well-behaved export would.
+fn busy_wait(wait: std::time::Duration) {
+    let started = Instant::now();
+    while started.elapsed() < wait {
+        std::hint::black_box(started);
+    }
+}
+
 fn print() -> Result<(), PluginError> {
     for line in 0..4001 {
         println!("synthetic output line {line}");
@@ -190,6 +219,9 @@ impl forms::Guest for Plugin {
 
     fn validate(_id: String, values: Vec<FieldValue>) -> Result<Vec<FieldError>, PluginError> {
         let name = values.iter().find(|value| value.name == "name");
+        if name.is_some_and(|value| value.value == "spin") {
+            return spin().map(|()| Vec::new());
+        }
         if name.is_some_and(|value| value.value == "boom") {
             return Err(PluginError::Internal("validation failed".into()));
         }
@@ -214,6 +246,11 @@ impl forms::Guest for Plugin {
                 message: "Required.".into(),
             }]),
             "later" => SubmitResult::Pending(request),
+            "panic" => panic!("synthetic submit panic"),
+            "open-then-done" => match host::open_view("test.page", "syrinx-test:panic") {
+                Ok(_) => SubmitResult::Finished(Outcome::Done(Some("opened".into()))),
+                Err(error) => SubmitResult::Finished(Outcome::Failed(error)),
+            },
             "wrong-id" => SubmitResult::Pending(request + 1),
             _ => SubmitResult::Finished(Outcome::Done(Some(format!("created {name}")))),
         }
@@ -275,6 +312,13 @@ impl views::Guest for Plugin {
         if address.ends_with("refuse") {
             return Err(PluginError::Denied("this view is refused".into()));
         }
+        if address.ends_with("panic") {
+            panic!("synthetic panic while opening a view");
+        }
+        if address.ends_with("slow-chain") {
+            busy_wait(std::time::Duration::from_millis(100));
+            return host::open_view("test.page", "syrinx-test:slow-chain").map(drop);
+        }
         if address.ends_with("chain") {
             return open_chain();
         }
@@ -288,6 +332,8 @@ impl views::Guest for Plugin {
         ));
         match request.method.as_str() {
             "bad-json" => Ok("{not json".into()),
+            // Opening a view defers its `opened`, so delivery keeps finding more to do.
+            "open" => host::open_view("test.page", "syrinx-test:from-message").map(|_| "{}".into()),
             _ => Ok(format!("{{\"echo\":{}}}", request.json)),
         }
     }
@@ -346,6 +392,9 @@ impl search_feed::Guest for Plugin {
 
 impl events::Guest for Plugin {
     fn deliver(request: u64, outcome: Outcome) {
+        if matches!(&outcome, Outcome::Done(Some(detail)) if detail == "trap") {
+            panic!("synthetic panic while delivering an outcome");
+        }
         let summary = match outcome {
             Outcome::Done(detail) => format!("done {detail:?}"),
             Outcome::Failed(error) => format!("failed {error:?}"),

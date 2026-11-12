@@ -107,6 +107,7 @@ pub fn full_declarations() -> Declarations {
         "test.views",
         "test.events",
         "test.chain",
+        "test.slow-chain",
         "test.long-error",
     ]
     .into_iter()

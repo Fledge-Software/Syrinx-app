@@ -2,6 +2,7 @@
 
 pub mod bindings;
 mod checks;
+pub mod deadline;
 mod engine;
 mod error;
 mod identity;
@@ -9,14 +10,17 @@ mod instance;
 pub mod limits;
 pub mod manifest;
 mod registry;
+pub mod session;
 pub mod test_host;
+mod ticker;
 mod validate;
 mod wasi;
+pub mod worker;
 
 pub use checks::{CONTRACT_TRACK, CONTRACT_VERSION};
 pub use engine::Runtime;
-pub use error::HostError;
+pub use error::{Failure, HostError};
 pub use identity::{IdentityMismatch, SignedIdentity, SignedManifest, check_signed};
-pub use instance::{LoadedPlugin, PluginHost, StoreData};
+pub use instance::{LoadedPlugin, PluginHost, PreparedPlugin, StoreData};
 pub use registry::{PluginRegistry, RegisteredPlugin, RegistrationError};
 pub use wasi::{OUTPUT_LIMIT_BYTES, OutputBuffer, PROVIDED_INTERFACES, WasiState};
