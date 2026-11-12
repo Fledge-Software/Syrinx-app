@@ -1,5 +1,7 @@
-//! The test host's answers to a plugin's `syrinx:plugin` imports, with
-//! synthetic state: in-memory settings, views as records, a fixed clock.
+//! The test host's services behind a plugin's `syrinx:plugin` imports, with
+//! synthetic state: in-memory settings, each view's title and events, a fixed clock.
+//! The contract's own rules (declared kinds and feeds, the open-view limit) are the
+//! `Mediator`'s, in front of these services.
 
 use std::collections::BTreeMap;
 
@@ -7,25 +9,21 @@ use crate::bindings::syrinx::plugin::host::{self, LogLevel};
 use crate::bindings::syrinx::plugin::types::{self, PluginError};
 use crate::{PluginHost, limits, validate};
 
-use super::Declarations;
-
 /// A fixed clock, so tests never depend on the real time.
 pub const SYNTHETIC_NOW: i64 = 1_700_000_000_000;
 
-/// One open plugin view, as Syrinx's tab model would hold it.
+/// What the tab model shows for one open plugin view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewRecord {
-    pub kind: String,
-    pub address: String,
     pub title: String,
     pub badge: Option<String>,
     /// Envelopes sent to the view's interface, oldest first.
     pub events: Vec<String>,
 }
 
-/// Everything the test host tracks for one plugin.
+/// Everything the test host's services keep for one plugin.
+#[derive(Default)]
 pub struct SyntheticHost {
-    pub(super) declarations: Declarations,
     pub(super) logs: Vec<(LogLevel, String)>,
     settings: BTreeMap<String, Vec<u8>>,
     pub(super) views: BTreeMap<u64, ViewRecord>,
@@ -35,19 +33,17 @@ pub struct SyntheticHost {
 }
 
 impl SyntheticHost {
-    pub fn new(declarations: Declarations) -> Self {
-        Self {
-            declarations,
-            logs: Vec::new(),
-            settings: BTreeMap::new(),
-            views: BTreeMap::new(),
-            next_view: 1,
-            changed_feeds: Vec::new(),
-        }
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// What the plugin and the host logged, oldest first.
+    pub fn logs(&self) -> &[(LogLevel, String)] {
+        &self.logs
     }
 
     /// The host's own notes go to the same bounded log as the plugin's.
-    pub(super) fn note(&mut self, level: LogLevel, message: String) {
+    fn note(&mut self, level: LogLevel, message: String) {
         if self.logs.len() == limits::MAX_LOG_LINES {
             return;
         }
@@ -98,26 +94,12 @@ impl host::Host for SyntheticHost {
         Ok(())
     }
 
-    /// Open a declared view kind.
-    fn open_view(&mut self, kind: String, address: String) -> Result<u64, PluginError> {
-        if !self.declarations.view_kinds.contains(&kind) {
-            return Err(PluginError::InvalidInput(format!(
-                "view kind {kind} is not declared"
-            )));
-        }
-        validate::bytes("view address", &address, limits::MAX_ADDRESS_BYTES)?;
-        if self.views.len() >= limits::MAX_OPEN_VIEWS {
-            return Err(PluginError::Unavailable(format!(
-                "a plugin may hold {} views open",
-                limits::MAX_OPEN_VIEWS
-            )));
-        }
-        let view = self.next_view;
+    /// A view the mediator already checked; it starts titled with its kind.
+    fn open_view(&mut self, kind: String, _address: String) -> Result<u64, PluginError> {
         self.next_view += 1;
+        let view = self.next_view;
         let record = ViewRecord {
-            title: kind.clone(),
-            kind,
-            address,
+            title: kind,
             badge: None,
             events: Vec::new(),
         };
@@ -164,17 +146,11 @@ impl host::Host for SyntheticHost {
         Ok(())
     }
 
+    /// A declared feed changed; each is listed once however often it was signalled.
     fn feed_changed(&mut self, feed: String) {
-        if self.declarations.feeds.contains(&feed) {
-            if !self.changed_feeds.contains(&feed) {
-                self.changed_feeds.push(feed);
-            }
-            return;
+        if !self.changed_feeds.contains(&feed) {
+            self.changed_feeds.push(feed);
         }
-        self.note(
-            LogLevel::Warn,
-            format!("feed-changed for undeclared feed {feed:?}"),
-        );
     }
 
     /// Gated `@unstable(feature = home-widgets)`; never linked for a plugin.

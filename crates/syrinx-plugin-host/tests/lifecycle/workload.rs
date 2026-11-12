@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use syrinx_plugin_host::bindings::syrinx::plugin::types::Outcome;
 use syrinx_plugin_host::deadline::Export;
-use syrinx_plugin_host::limits;
 use syrinx_plugin_host::test_host::TestHost;
+use syrinx_plugin_host::{Runtime, limits};
 
 use super::{add, answer, synthetic};
 use crate::support::{self, FULL, full_declarations};
@@ -44,12 +44,20 @@ fn time(mut call: impl FnMut()) -> Duration {
 /// One sample per call of `export`, as the workload makes them.
 fn measure(export: Export) -> Vec<Duration> {
     match export {
-        Export::Activate => (0..INSTANCES)
-            .map(|_| {
-                let mut host = loaded();
-                time(|| assert!(host.activate().expect("runs").is_ok()))
-            })
-            .collect(),
+        Export::Activate => {
+            let runtime = Runtime::new().expect("engine");
+            let prepared = TestHost::prepare(&runtime, &support::bytes(FULL)).expect("compiles");
+            (0..INSTANCES)
+                .map(|_| {
+                    time(|| {
+                        let mut host =
+                            TestHost::from_prepared(&runtime, &prepared, full_declarations())
+                                .expect("instantiates");
+                        assert!(host.activate().expect("runs").is_ok());
+                    })
+                })
+                .collect()
+        }
         Export::Deactivate => (0..INSTANCES)
             .map(|_| {
                 let mut host = activated();

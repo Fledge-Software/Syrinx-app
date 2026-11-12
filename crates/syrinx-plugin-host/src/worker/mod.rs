@@ -70,20 +70,25 @@ pub struct Pending<R>(Receiver<CallResult<R>>);
 impl<R> Pending<R> {
     /// The answer if it has arrived; never blocks, so the UI thread polls this.
     pub fn try_answer(&self) -> Option<CallResult<R>> {
-        match self.0.try_recv() {
-            Ok(answer) => Some(answer),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(Err(stopped_before_answering())),
-        }
+        let received = self.0.try_recv();
+        let worker_gone = matches!(received, Err(TryRecvError::Disconnected));
+        settle(received, worker_gone)
     }
 
     /// Wait at most `timeout` for the answer; for tests and shutdown, never the UI thread.
     pub fn wait(&self, timeout: Duration) -> Option<CallResult<R>> {
-        match self.0.recv_timeout(timeout) {
-            Ok(answer) => Some(answer),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => Some(Err(stopped_before_answering())),
-        }
+        let received = self.0.recv_timeout(timeout);
+        let worker_gone = matches!(received, Err(RecvTimeoutError::Disconnected));
+        settle(received, worker_gone)
+    }
+}
+
+/// An answer that arrived, or `unavailable` once the worker can no longer send one.
+fn settle<R, E>(received: Result<CallResult<R>, E>, worker_gone: bool) -> Option<CallResult<R>> {
+    match received {
+        Ok(answer) => Some(answer),
+        Err(_) if worker_gone => Some(Err(stopped_before_answering())),
+        Err(_) => None,
     }
 }
 
@@ -99,7 +104,7 @@ pub struct Plugins<S: PluginHost> {
     host_version: String,
     events: Sender<PluginEvent>,
     slots: BTreeMap<String, Slot<S>>,
-    /// Workers told to stop, joined at shutdown.
+    /// Workers of uninstalled plugins, still stopping; joined at shutdown.
     stopping: Vec<JoinHandle<()>>,
 }
 
@@ -110,6 +115,7 @@ struct Slot<S: 'static> {
     prepared: Prepared<S>,
     /// The current or last worker's status and stop flag.
     shared: Arc<Shared>,
+    /// The current or last worker, kept until its thread has finished.
     worker: Option<WorkerHandle<S>>,
 }
 
@@ -187,17 +193,21 @@ impl<S: PluginHost> Plugins<S> {
     }
 
     /// Stop `plugin`: `lifecycle.deactivate` runs under its own deadline after the current
-    /// call, queued calls are answered `unavailable`, and the worker exits.
+    /// call, queued calls are answered `unavailable`, and the worker exits. A later call
+    /// starts a new instance only once this worker has finished.
     pub fn deactivate(&mut self, plugin: &str, reason: StopReason) -> CallResult<()> {
-        let stopped = self.slot_mut(plugin)?.stop(reason);
-        self.stopping.extend(stopped);
+        self.slot_mut(plugin)?.stop(reason);
         Ok(())
     }
 
     /// Deactivate and forget `plugin`.
     pub fn uninstall(&mut self, plugin: &str) -> CallResult<()> {
-        self.deactivate(plugin, StopReason::Uninstalled)?;
+        let slot = self.slot_mut(plugin)?;
+        slot.stop(StopReason::Uninstalled);
+        let worker = slot.worker.take();
         self.slots.remove(plugin);
+        self.stopping.retain(|thread| !thread.is_finished());
+        self.stopping.extend(worker.map(|worker| worker.thread));
         Ok(())
     }
 
@@ -216,10 +226,12 @@ impl<S: PluginHost> Plugins<S> {
         self.deactivate(plugin, StopReason::CapabilityRevoked(kind))
     }
 
-    /// Deactivate every plugin and wait for each worker to exit; each waits at most for
-    /// its current call's deadline and then `lifecycle.deactivate`'s.
-    pub fn shutdown(self) {
-        drop(self);
+    /// Deactivate every plugin and wait for each worker to exit. The workers stop side by
+    /// side, each within one job budget (`limits::JOB_BUDGET`) plus `lifecycle.deactivate`'s
+    /// deadline, as long as its host services honour their deadlines. Dropping `Plugins`
+    /// does the same.
+    pub fn shutdown(mut self) {
+        self.stop_all_and_join();
     }
 
     fn is_running(&self, plugin: &str) -> bool {
@@ -227,18 +239,26 @@ impl<S: PluginHost> Plugins<S> {
     }
 
     /// Start a worker for `plugin` unless one is running; this is the plugin's activation.
+    /// A previous worker still stopping is handed over, and the new one waits for it.
     fn ensure_running(&mut self, plugin: &str) -> CallResult<()> {
         if self.is_running(plugin) {
             return Ok(());
         }
-        let worker = self.spawn(plugin)?;
-        let slot = self.slot_mut(plugin)?;
-        let finished = slot.worker.replace(worker);
-        self.stopping.extend(finished.map(|old| old.thread));
+        let predecessor = self
+            .slot_mut(plugin)?
+            .worker
+            .take()
+            .map(|worker| worker.thread);
+        let worker = self.spawn(plugin, predecessor)?;
+        self.slot_mut(plugin)?.worker = Some(worker);
         Ok(())
     }
 
-    fn spawn(&mut self, plugin: &str) -> CallResult<WorkerHandle<S>> {
+    fn spawn(
+        &mut self,
+        plugin: &str,
+        predecessor: Option<JoinHandle<()>>,
+    ) -> CallResult<WorkerHandle<S>> {
         let slot = self.slot_mut(plugin)?;
         let (jobs, queued) = mpsc::sync_channel(limits::PLUGIN_QUEUE_CAPACITY);
         let shared = Arc::new(Shared::new());
@@ -255,6 +275,7 @@ impl<S: PluginHost> Plugins<S> {
             shared,
             events: self.events.clone(),
             jobs: queued,
+            predecessor,
         };
         let thread = std::thread::Builder::new()
             .name(format!("syrinx-plugin-{plugin}"))
@@ -303,32 +324,44 @@ impl<S: 'static> Slot<S> {
         let Some(worker) = self.worker.as_ref() else {
             return false;
         };
-        !worker.thread.is_finished() && self.shared.status() == PluginStatus::Active
+        !worker.thread.is_finished()
+            && self.shared.stop_requested().is_none()
+            && self.shared.status() == PluginStatus::Active
     }
 
-    /// Tell the worker to stop after its current call, and hand back its thread to join.
-    fn stop(&mut self, reason: StopReason) -> Option<JoinHandle<()>> {
-        let worker = self.worker.take()?;
+    /// Tell the worker to stop after its current call; its handle stays until it finishes.
+    fn stop(&mut self, reason: StopReason) {
+        let Some(worker) = self.worker.as_ref() else {
+            return;
+        };
         self.shared.request_stop(reason);
         // A full queue cannot take the wake-up and an exited worker needs none: the stop
         // flag is checked before every call either way.
         match worker.jobs.try_send(Job::Stop) {
             Ok(()) | Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {}
         }
-        Some(worker.thread)
     }
 }
 
-impl<S: PluginHost> Drop for Plugins<S> {
-    fn drop(&mut self) {
+impl<S: PluginHost> Plugins<S> {
+    /// Tell every worker to stop, then wait for each; a second call finds nothing to do.
+    fn stop_all_and_join(&mut self) {
         for slot in self.slots.values_mut() {
-            self.stopping.extend(slot.stop(StopReason::Shutdown));
+            slot.stop(StopReason::Shutdown);
+            self.stopping
+                .extend(slot.worker.take().map(|worker| worker.thread));
         }
         for thread in self.stopping.drain(..) {
             if thread.join().is_err() {
                 eprintln!("a plugin worker thread panicked");
             }
         }
+    }
+}
+
+impl<S: PluginHost> Drop for Plugins<S> {
+    fn drop(&mut self) {
+        self.stop_all_and_join();
     }
 }
 

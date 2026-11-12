@@ -14,7 +14,7 @@ use crate::bindings::syrinx::plugin::host::LogLevel;
 use crate::manifest::CapabilityKind;
 pub use crate::session::{CallResult, Declarations, DeclaredCommand};
 use crate::session::{Mediator, RequestIds, Session};
-use crate::{LoadedPlugin, Runtime};
+use crate::{LoadedPlugin, PreparedPlugin, Runtime};
 
 /// The version the test host reports to `lifecycle.activate`.
 pub const HOST_VERSION: &str = "0.1.0-test-host";
@@ -23,20 +23,39 @@ pub const HOST_VERSION: &str = "0.1.0-test-host";
 pub type TestHost = Session<SyntheticHost>;
 
 impl Session<SyntheticHost> {
-    /// Check the declarations and the component, then instantiate it. The test host grants
-    /// `storage`, so a plugin's settings can be tested; the owner's grants arrive with #136.
+    /// Check the declarations and the component, then instantiate it.
     pub fn load(bytes: &[u8], declarations: Declarations) -> CallResult<Self> {
         declarations.check()?;
         let runtime = Runtime::new()?;
+        let prepared = Self::prepare(&runtime, bytes)?;
+        Self::from_prepared(&runtime, &prepared, declarations)
+    }
+
+    /// Compile a component and resolve its imports once, to instantiate it many times.
+    pub fn prepare(
+        runtime: &Runtime,
+        bytes: &[u8],
+    ) -> CallResult<PreparedPlugin<Mediator<SyntheticHost>>> {
         let component = runtime.compile(bytes)?;
+        LoadedPlugin::prepare(runtime, &component)
+    }
+
+    /// Instantiate a prepared component under checked declarations. The test host grants
+    /// `storage`, so a plugin's settings can be tested; the owner's grants arrive with #136.
+    pub fn from_prepared(
+        runtime: &Runtime,
+        prepared: &PreparedPlugin<Mediator<SyntheticHost>>,
+        declarations: Declarations,
+    ) -> CallResult<Self> {
+        declarations.check()?;
         let services = Mediator::new(
-            SyntheticHost::new(declarations.clone()),
+            SyntheticHost::new(),
+            declarations,
             vec![CapabilityKind::Storage],
         );
-        let plugin = LoadedPlugin::instantiate(&runtime, &component, services)?;
+        let plugin = LoadedPlugin::from_prepared(runtime, prepared, services)?;
         Ok(Session::new(
             plugin,
-            declarations,
             HOST_VERSION.into(),
             Arc::new(RequestIds::default()),
         ))
@@ -50,7 +69,7 @@ impl Session<SyntheticHost> {
     }
 
     pub fn logs(&self) -> &[(LogLevel, String)] {
-        &self.services().logs
+        self.services().logs()
     }
 
     pub fn view(&self, view: u64) -> Option<&ViewRecord> {

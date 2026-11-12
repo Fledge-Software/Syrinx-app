@@ -1,5 +1,6 @@
-//! Stands between a plugin's imports and the services behind them: it keeps the contract's
-//! delivery order and request bookkeeping, and refuses a service the owner has not granted.
+//! Stands between a plugin's imports and the services behind them. It alone keeps the
+//! contract's rules: what the manifest declares, which views are open, the delivery order,
+//! the request bookkeeping, and refusing a service the owner has not granted.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -8,8 +9,10 @@ use crate::bindings::exports::syrinx::plugin::views::ViewRequest;
 use crate::bindings::syrinx::plugin::host::{self, LogLevel};
 use crate::bindings::syrinx::plugin::types::{self, Outcome, PluginError, Timestamp};
 use crate::deadline::CallDeadline;
-use crate::limits;
 use crate::manifest::CapabilityKind;
+use crate::{limits, validate};
+
+use super::Declarations;
 
 /// A call the host defers until the current export returns.
 #[derive(Debug, Clone)]
@@ -32,21 +35,27 @@ impl Deferred {
 /// The plugin's imports as the store sees them, wrapping the services `S`.
 pub struct Mediator<S> {
     services: S,
+    declarations: Declarations,
     /// Capabilities the owner granted; every other gated service answers `denied`.
     granted: Vec<CapabilityKind>,
-    pub(crate) deferred: VecDeque<Deferred>,
+    deferred: VecDeque<Deferred>,
     /// Writes in flight: a submit still running, or one that answered `pending`.
-    pub(crate) armed: BTreeSet<u64>,
+    armed: BTreeSet<u64>,
     /// Armed requests the plugin gave up on; never more than were armed.
-    pub(crate) cancelled: BTreeSet<u64>,
+    cancelled: BTreeSet<u64>,
     /// Each open view's kind and address, as `views.opened` will be told them.
     open_views: BTreeMap<u64, (String, String)>,
 }
 
 impl<S: PluginHost> Mediator<S> {
-    pub(crate) fn new(services: S, granted: Vec<CapabilityKind>) -> Self {
+    pub(crate) fn new(
+        services: S,
+        declarations: Declarations,
+        granted: Vec<CapabilityKind>,
+    ) -> Self {
         Self {
             services,
+            declarations,
             granted,
             deferred: VecDeque::new(),
             armed: BTreeSet::new(),
@@ -61,6 +70,10 @@ impl<S: PluginHost> Mediator<S> {
 
     pub(crate) fn services_mut(&mut self) -> &mut S {
         &mut self.services
+    }
+
+    pub(crate) fn declarations(&self) -> &Declarations {
+        &self.declarations
     }
 
     pub(crate) fn granted(&self) -> &[CapabilityKind] {
@@ -80,15 +93,42 @@ impl<S: PluginHost> Mediator<S> {
         self.open_views.get(&view).cloned()
     }
 
-    /// The plugin gave up on a request: an armed one is never delivered, and
-    /// anything still queued for it is dropped.
-    fn plugin_cancelled(&mut self, request: u64) {
-        if self.armed.remove(&request) {
-            self.cancelled.insert(request);
-        }
-        self.drop_queued(request);
+    /// A write to `request` starts: it stays in flight until settled.
+    pub(crate) fn arm(&mut self, request: u64) {
+        self.armed.insert(request);
     }
 
+    /// The write's outcome is known, or the host gave up on it: it is no longer in flight.
+    /// Returns whether it was.
+    pub(crate) fn settle(&mut self, request: u64) -> bool {
+        self.armed.remove(&request)
+    }
+
+    /// Whether the plugin cancelled `request` itself, forgetting that it did.
+    pub(crate) fn take_cancelled(&mut self, request: u64) -> bool {
+        self.cancelled.remove(&request)
+    }
+
+    pub(crate) fn writes_in_flight(&self) -> Vec<u64> {
+        self.armed.iter().copied().collect()
+    }
+
+    pub(crate) fn pop_deferred(&mut self) -> Option<Deferred> {
+        self.deferred.pop_front()
+    }
+
+    pub(crate) fn clear_deferred(&mut self) {
+        self.deferred.clear();
+    }
+
+    /// Drop every message still queued for `view`.
+    pub(crate) fn drop_view_messages(&mut self, view: u64) {
+        self.deferred.retain(
+            |deferred| !matches!(deferred, Deferred::Message(request) if request.view == view),
+        );
+    }
+
+    /// Drop anything still queued for `request`.
     pub(crate) fn drop_queued(&mut self, request: u64) {
         self.deferred
             .retain(|deferred| deferred.request() != Some(request));
@@ -110,6 +150,15 @@ impl<S: PluginHost> Mediator<S> {
         ))
     }
 
+    /// The plugin gave up on a request: an armed one is never delivered, and
+    /// anything still queued for it is dropped.
+    fn plugin_cancelled(&mut self, request: u64) {
+        if self.armed.remove(&request) {
+            self.cancelled.insert(request);
+        }
+        self.drop_queued(request);
+    }
+
     /// Refuse a service whose capability the owner has not granted, naming it.
     fn require(&self, kind: CapabilityKind) -> Result<(), PluginError> {
         if self.granted.contains(&kind) {
@@ -119,6 +168,28 @@ impl<S: PluginHost> Mediator<S> {
             "the {} capability is not granted",
             kind.name()
         )))
+    }
+
+    /// A view may open only as a declared kind, within the open-view limit.
+    fn check_view(&self, kind: &str, address: &str) -> Result<(), PluginError> {
+        if !self
+            .declarations
+            .view_kinds
+            .iter()
+            .any(|declared| declared == kind)
+        {
+            return Err(PluginError::InvalidInput(format!(
+                "view kind {kind} is not declared"
+            )));
+        }
+        validate::bytes("view address", address, limits::MAX_ADDRESS_BYTES)?;
+        if self.open_views.len() >= limits::MAX_OPEN_VIEWS {
+            return Err(PluginError::Unavailable(format!(
+                "a plugin may hold {} views open",
+                limits::MAX_OPEN_VIEWS
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -151,13 +222,15 @@ impl<S: PluginHost> host::Host for Mediator<S> {
         self.services.settings_set(key, value)
     }
 
-    /// Open a view; `views.opened` follows once the current export returns.
+    /// Open a declared view kind; `views.opened` follows once the current export returns.
     fn open_view(&mut self, kind: String, address: String) -> Result<u64, PluginError> {
+        self.check_view(&kind, &address)?;
+        // Checked before the service opens anything, so the `defer` below cannot fail.
         self.check_room()?;
         let target = (kind.clone(), address.clone());
         let view = self.services.open_view(kind, address)?;
         self.open_views.insert(view, target);
-        self.deferred.push_back(Deferred::Opened(view));
+        self.defer(Deferred::Opened(view))?;
         Ok(view)
     }
 
@@ -179,15 +252,22 @@ impl<S: PluginHost> host::Host for Mediator<S> {
         self.services.post_view_event(view, topic, json)
     }
 
+    /// Only a declared feed reaches the services; any other is noted and ignored.
     fn feed_changed(&mut self, feed: String) {
-        self.services.feed_changed(feed);
+        if self.declarations.feeds.contains(&feed) {
+            return self.services.feed_changed(feed);
+        }
+        self.services.log(
+            LogLevel::Warn,
+            format!("feed-changed for undeclared feed {feed:?}"),
+        );
     }
 
     fn widget_changed(&mut self, widget: String) {
         self.services.widget_changed(widget);
     }
 
-    /// Forget the request here, then let the service abandon any work it started for it.
+    /// Forget the request here first, then let the service abandon any work it started for it.
     fn cancel(&mut self, request: u64) {
         self.plugin_cancelled(request);
         self.services.cancel(request);

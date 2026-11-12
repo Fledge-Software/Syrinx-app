@@ -8,7 +8,9 @@
 mod mediator;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Instant;
 
 use mediator::Deferred;
 pub use mediator::Mediator;
@@ -23,6 +25,7 @@ use crate::bindings::exports::syrinx::plugin::views::ViewRequest;
 use crate::bindings::syrinx::plugin::host::LogLevel;
 use crate::bindings::syrinx::plugin::types::{Outcome, PluginError};
 use crate::deadline::Export;
+use crate::instance::Stop;
 use crate::manifest::PluginManifest;
 use crate::{Failure, HostError, LoadedPlugin, PluginHost, StoreData, WasiState, limits, validate};
 
@@ -111,32 +114,46 @@ impl RequestIds {
 /// One plugin instance, with its services `S` behind the mediator.
 pub struct Session<S: 'static> {
     plugin: LoadedPlugin<Mediator<S>>,
-    declarations: Declarations,
     host_version: String,
-    requests: std::sync::Arc<RequestIds>,
+    requests: Arc<RequestIds>,
     replies: BTreeMap<u64, Result<String, PluginError>>,
     refused_views: Vec<(u64, PluginError)>,
+    /// When the worker's current job must be done by, deferred calls included.
+    job_until: Option<Instant>,
+    /// Raised by the worker's supervisor to stop this instance.
+    stop: Option<Arc<AtomicBool>>,
 }
 
 impl<S: PluginHost> Session<S> {
     pub(crate) fn new(
         plugin: LoadedPlugin<Mediator<S>>,
-        declarations: Declarations,
         host_version: String,
-        requests: std::sync::Arc<RequestIds>,
+        requests: Arc<RequestIds>,
     ) -> Self {
         Self {
             plugin,
-            declarations,
             host_version,
             requests,
             replies: BTreeMap::new(),
             refused_views: Vec::new(),
+            job_until: None,
+            stop: None,
         }
     }
 
+    /// Stop delivering deferred calls once `stop` is raised.
+    pub(crate) fn watch_stop(&mut self, stop: Arc<AtomicBool>) {
+        self.stop = Some(stop);
+    }
+
+    /// A worker job starts: it and every call it defers must be done by `until`.
+    pub(crate) fn begin_job(&mut self, until: Instant) {
+        self.job_until = Some(until);
+    }
+
     /// Call `lifecycle.activate` with the host's version and the granted capabilities.
-    pub fn activate(&mut self) -> CallResult<Result<(), PluginError>> {
+    /// An error says why the instance stopped.
+    pub fn activate(&mut self) -> Result<Result<(), PluginError>, Failure> {
         let info = Activation {
             host_version: self.host_version.clone(),
             granted: self
@@ -146,16 +163,20 @@ impl<S: PluginHost> Session<S> {
                 .map(|kind| kind.name().to_owned())
                 .collect(),
         };
-        let activated = self.call(Export::Activate, |plugin, store| {
-            plugin.syrinx_plugin_lifecycle().call_activate(store, &info)
-        })?;
+        let activated = self
+            .run_call(Export::Activate, |plugin, store| {
+                plugin.syrinx_plugin_lifecycle().call_activate(store, &info)
+            })
+            .map_err(|stop| stop.failure)?;
         Ok(activated.map_err(validate::bound_error))
     }
 
-    pub fn deactivate(&mut self) -> CallResult<()> {
-        self.call(Export::Deactivate, |plugin, store| {
+    /// Call `lifecycle.deactivate`; an error says why the instance stopped.
+    pub fn deactivate(&mut self) -> Result<(), Failure> {
+        self.run_call(Export::Deactivate, |plugin, store| {
             plugin.syrinx_plugin_lifecycle().call_deactivate(store)
         })
+        .map_err(|stop| stop.failure)
     }
 
     /// Run a declared command that has no form.
@@ -198,29 +219,40 @@ impl<S: PluginHost> Session<S> {
 
     /// Submit a form under a fresh request id. The write counts as in flight from the call
     /// until its outcome is known; a `pending` answer must return that id, and keeps it armed
-    /// for `complete`. The answer is checked before deferred calls run.
+    /// for `complete`. Once the plugin has answered, the answer is returned even if a deferred
+    /// call then stops the plugin; that stop shows in `failure()`. If the plugin stops during
+    /// the submit itself, the error names the request, whose outcome is then unknown.
     pub fn submit(&mut self, id: &str, values: &[(&str, &str)]) -> CallResult<(u64, SubmitResult)> {
         self.require_command(id, true)?;
+        if self.is_discarded() {
+            return Err(HostError::Discarded);
+        }
         let request = self.requests.allocate();
         let (id, values) = (id.to_owned(), field_values(values));
-        self.mediator_mut().armed.insert(request);
-        let result = self.plugin.call(Export::Submit, |plugin, store| {
-            plugin
-                .syrinx_plugin_forms()
-                .call_submit(store, &id, request, &values)
-        })?;
+        self.mediator_mut().arm(request);
+        let result = self
+            .plugin
+            .call(Export::Submit, |plugin, store| {
+                plugin
+                    .syrinx_plugin_forms()
+                    .call_submit(store, &id, request, &values)
+            })
+            .map_err(|cause| HostError::SubmitStopped {
+                request,
+                cause: Box::new(cause),
+            })?;
         let result = self.check_submit(request, result);
-        self.run_deferred()?;
+        self.deliver_after_answer();
         Ok((request, result))
     }
 
     /// The service behind an armed request finished; deliver its outcome.
     pub fn complete(&mut self, request: u64, outcome: Outcome) -> CallResult<()> {
         // The plugin gave up on it through `host.cancel`; nothing is delivered.
-        if self.mediator_mut().cancelled.remove(&request) {
+        if self.mediator_mut().take_cancelled(request) {
             return Ok(());
         }
-        if !self.mediator_mut().armed.remove(&request) {
+        if !self.mediator_mut().settle(request) {
             return Err(HostError::Refused(format!(
                 "request {request} is not armed"
             )));
@@ -250,7 +282,7 @@ impl<S: PluginHost> Session<S> {
     /// The view or the owner gave up on a request; anything still queued for it is dropped
     /// and a late completion is never delivered.
     pub fn cancel_request(&mut self, request: u64) {
-        self.mediator_mut().armed.remove(&request);
+        self.mediator_mut().settle(request);
         self.mediator_mut().drop_queued(request);
     }
 
@@ -264,9 +296,7 @@ impl<S: PluginHost> Session<S> {
         if !self.mediator().is_open(view) {
             return Err(HostError::Refused(format!("no open view {view}")));
         }
-        self.mediator_mut().deferred.retain(
-            |deferred| !matches!(deferred, Deferred::Message(request) if request.view == view),
-        );
+        self.mediator_mut().drop_view_messages(view);
         self.run_deferred()?;
         self.mediator_mut().view_closed(view);
         self.call(Export::Closed, |plugin, store| {
@@ -321,23 +351,13 @@ impl<S: PluginHost> Session<S> {
     /// Deliver every deferred call, first in, first out. A plugin that keeps
     /// queueing more is stopped, as a trap would stop it.
     pub fn run_deferred(&mut self) -> CallResult<()> {
-        for _ in 0..limits::MAX_DEFERRED_PER_EXPORT {
-            let Some(deferred) = self.mediator_mut().deferred.pop_front() else {
-                return Ok(());
-            };
-            self.deliver(deferred)?;
-        }
-        self.mediator_mut().deferred.clear();
-        self.plugin.discard(Failure::Flooded);
-        Err(HostError::Refused(
-            "the plugin kept queueing deferred calls, so it was stopped".into(),
-        ))
+        self.deliver_all().map_err(|stop| stop.error)
     }
 
     /// Writes whose outcome is not known yet: a submit that never returned, or one that
     /// answered `pending` and was not completed or cancelled.
     pub fn writes_in_flight(&self) -> Vec<u64> {
-        self.mediator().armed.iter().copied().collect()
+        self.mediator().writes_in_flight()
     }
 
     pub fn wasi(&self) -> &WasiState {
@@ -389,17 +409,72 @@ impl<S: PluginHost> Session<S> {
         export: Export,
         call: impl FnOnce(&Plugin, &mut wasmtime::Store<StoreData<Mediator<S>>>) -> wasmtime::Result<R>,
     ) -> CallResult<R> {
-        let result = self.plugin.call(export, call)?;
-        self.run_deferred()?;
+        self.run_call(export, call).map_err(|stop| stop.error)
+    }
+
+    /// `call`, keeping why the instance stopped as well as what the caller is told.
+    fn run_call<R>(
+        &mut self,
+        export: Export,
+        call: impl FnOnce(&Plugin, &mut wasmtime::Store<StoreData<Mediator<S>>>) -> wasmtime::Result<R>,
+    ) -> Result<R, Stop> {
+        let result = self.plugin.run(export, call)?;
+        self.deliver_all()?;
         Ok(result)
     }
 
-    fn deliver(&mut self, deferred: Deferred) -> CallResult<()> {
+    /// Deliver what an export deferred once its answer is known. A stop here is kept in
+    /// `failure()` and reported from there, never in place of that answer.
+    fn deliver_after_answer(&mut self) {
+        if let Err(stop) = self.deliver_all() {
+            debug_assert_eq!(self.failure(), Some(&stop.failure));
+        }
+    }
+
+    /// Deliver every deferred call in order. The instance is stopped if it keeps queueing
+    /// more, if the job's time is spent, or if the worker was told to stop.
+    fn deliver_all(&mut self) -> Result<(), Stop> {
+        for _ in 0..limits::MAX_DEFERRED_PER_EXPORT {
+            let Some(deferred) = self.mediator_mut().pop_deferred() else {
+                return Ok(());
+            };
+            if let Some(failure) = self.interruption() {
+                return Err(self.stop_delivering(failure));
+            }
+            self.deliver(deferred)?;
+        }
+        Err(self.stop_delivering(Failure::Flooded))
+    }
+
+    /// Why deferred delivery must stop now, if it must.
+    fn interruption(&self) -> Option<Failure> {
+        if self
+            .stop
+            .as_ref()
+            .is_some_and(|stop| stop.load(Ordering::Relaxed))
+        {
+            return Some(Failure::Interrupted);
+        }
+        if self.job_until.is_some_and(|until| Instant::now() >= until) {
+            return Some(Failure::OverBudget);
+        }
+        None
+    }
+
+    /// Drop what is still deferred and discard the instance.
+    fn stop_delivering(&mut self, failure: Failure) -> Stop {
+        self.mediator_mut().clear_deferred();
+        self.plugin.discard(failure.clone());
+        let error = HostError::Refused(format!("the plugin was stopped: {failure}"));
+        Stop { failure, error }
+    }
+
+    fn deliver(&mut self, deferred: Deferred) -> Result<(), Stop> {
         match deferred {
             Deferred::Opened(view) => self.deliver_opened(view),
             Deferred::Message(request) => self.deliver_message(request),
             Deferred::Deliver(request, outcome) => {
-                self.plugin.call(Export::Deliver, |plugin, store| {
+                self.plugin.run(Export::Deliver, |plugin, store| {
                     plugin
                         .syrinx_plugin_events()
                         .call_deliver(store, request, &outcome)
@@ -409,11 +484,11 @@ impl<S: PluginHost> Session<S> {
     }
 
     /// A view the plugin refuses to open is closed again and recorded.
-    fn deliver_opened(&mut self, view: u64) -> CallResult<()> {
+    fn deliver_opened(&mut self, view: u64) -> Result<(), Stop> {
         let Some((kind, address)) = self.mediator().view_target(view) else {
             return Ok(());
         };
-        let opened = self.plugin.call(Export::Opened, |plugin, store| {
+        let opened = self.plugin.run(Export::Opened, |plugin, store| {
             plugin
                 .syrinx_plugin_views()
                 .call_opened(store, view, &kind, &address)
@@ -425,7 +500,7 @@ impl<S: PluginHost> Session<S> {
         Ok(())
     }
 
-    fn deliver_message(&mut self, request: ViewRequest) -> CallResult<()> {
+    fn deliver_message(&mut self, request: ViewRequest) -> Result<(), Stop> {
         let request_id = request.request_id;
         // A view refused or closed since the message was queued never reaches the plugin.
         if !self.mediator().is_open(request.view) {
@@ -433,7 +508,7 @@ impl<S: PluginHost> Session<S> {
             self.replies.insert(request_id, Err(closed));
             return Ok(());
         }
-        let reply = self.plugin.call(Export::Message, |plugin, store| {
+        let reply = self.plugin.run(Export::Message, |plugin, store| {
             plugin.syrinx_plugin_views().call_message(store, &request)
         })?;
         let reply = reply
@@ -449,7 +524,7 @@ impl<S: PluginHost> Session<S> {
         if matches!(result, SubmitResult::Pending(returned) if returned == request) {
             return result;
         }
-        self.mediator_mut().armed.remove(&request);
+        self.mediator_mut().settle(request);
         match result {
             SubmitResult::Pending(returned) => {
                 SubmitResult::Finished(Outcome::Failed(PluginError::InvalidInput(format!(
@@ -475,7 +550,7 @@ impl<S: PluginHost> Session<S> {
 
     /// A declared command, with or without a form as the caller expects.
     fn require_command(&self, id: &str, form: bool) -> CallResult<()> {
-        let Some(command) = self.declarations.command(id) else {
+        let Some(command) = self.mediator().declarations().command(id) else {
             return Err(HostError::Refused(format!("command {id} is not declared")));
         };
         if command.form == form {
@@ -490,12 +565,8 @@ impl<S: PluginHost> Session<S> {
     }
 
     fn require_feed(&self, feed: &str) -> CallResult<()> {
-        if self
-            .declarations
-            .feeds
-            .iter()
-            .any(|declared| declared == feed)
-        {
+        let feeds = &self.mediator().declarations().feeds;
+        if feeds.iter().any(|declared| declared == feed) {
             return Ok(());
         }
         Err(HostError::Refused(format!("feed {feed} is not declared")))

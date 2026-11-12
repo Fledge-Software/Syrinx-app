@@ -32,6 +32,9 @@ pub enum HostError {
     Refused(String),
     /// The plugin cannot take the call now: its queue is full, or it stopped before answering.
     Unavailable(String),
+    /// The plugin stopped while `forms.submit` ran for `request`, so the write's outcome is
+    /// unknown; the worker reports it `uncertain` under the same id.
+    SubmitStopped { request: u64, cause: Box<HostError> },
 }
 
 impl fmt::Display for HostError {
@@ -48,6 +51,12 @@ impl fmt::Display for HostError {
             Self::Discarded => write!(formatter, "the plugin trapped earlier and was discarded"),
             Self::Refused(detail) => write!(formatter, "refused: {detail}"),
             Self::Unavailable(detail) => write!(formatter, "unavailable: {detail}"),
+            Self::SubmitStopped { request, cause } => {
+                write!(
+                    formatter,
+                    "the plugin stopped during submit {request}: {cause}"
+                )
+            }
         }
     }
 }
@@ -77,6 +86,10 @@ pub enum Failure {
     },
     /// The plugin kept queueing deferred calls after one export.
     Flooded,
+    /// One call and the calls it deferred ran past the job budget (`limits::JOB_BUDGET`).
+    OverBudget,
+    /// The host stopped it between deferred calls because it was being deactivated.
+    Interrupted,
     /// The component could not be compiled, linked or instantiated.
     Load(HostError),
     /// `lifecycle.activate` answered with an error.
@@ -84,6 +97,15 @@ pub enum Failure {
 }
 
 impl Failure {
+    /// The failure behind an instantiation error: a trap there is a trap in activation,
+    /// anything else means the component could not be started.
+    pub(crate) fn from_instantiation(error: HostError) -> Self {
+        if matches!(error, HostError::Trap { .. }) {
+            return Self::from_trap(Export::Activate, &error);
+        }
+        Self::Load(error)
+    }
+
     /// The failure behind a trap from `export`; an expired deadline is named as such.
     pub(crate) fn from_trap(export: Export, stopped: &HostError) -> Self {
         let code = match stopped {
@@ -111,6 +133,8 @@ impl fmt::Display for Failure {
                 write!(formatter, "{} trapped", export.name())
             }
             Self::Flooded => write!(formatter, "the plugin kept queueing deferred calls"),
+            Self::OverBudget => write!(formatter, "one call and its deferred calls took too long"),
+            Self::Interrupted => write!(formatter, "the plugin was stopped between calls"),
             Self::Load(error) => write!(formatter, "the plugin could not start: {error}"),
             Self::ActivationRefused(_) => write!(formatter, "the plugin refused to activate"),
         }

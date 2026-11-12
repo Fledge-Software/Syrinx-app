@@ -10,8 +10,9 @@ use syrinx_plugin_host::bindings::exports::syrinx::plugin::forms::{
 };
 use syrinx_plugin_host::bindings::exports::syrinx::plugin::search_feed::Change;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::{Icon, Outcome, PluginError};
+use syrinx_plugin_host::deadline::Export;
 use syrinx_plugin_host::test_host::{SYNTHETIC_NOW, TestHost};
-use syrinx_plugin_host::{HostError, OUTPUT_LIMIT_BYTES, Runtime, limits};
+use syrinx_plugin_host::{Failure, HostError, OUTPUT_LIMIT_BYTES, Runtime, limits};
 use wasmtime::Trap;
 
 use support::{FULL, MINIMAL, PLAIN_VARIANT, full_declarations, one_command, variant};
@@ -599,4 +600,65 @@ fn a_long_error_message_is_cut_not_refused() {
         panic!("{error:?}");
     };
     assert_eq!(text.chars().count(), limits::MAX_MESSAGE_CHARS);
+}
+
+// A stop after an answer, and the short deadlines.
+
+#[test]
+fn a_trap_in_a_deferred_call_after_submit_answered_keeps_the_answer() {
+    let mut host = full();
+    let (_, result) = host
+        .submit("test.new-item", &[("name", "open-then-done")])
+        .expect("the plugin answered before the trap");
+    assert_eq!(
+        result,
+        SubmitResult::Finished(Outcome::Done(Some("opened".into())))
+    );
+    assert!(host.is_discarded());
+    assert_eq!(
+        host.failure(),
+        Some(&Failure::Trapped {
+            export: Export::Opened,
+            code: Some(Trap::UnreachableCodeReached)
+        })
+    );
+    assert_eq!(host.writes_in_flight(), Vec::<u64>::new());
+}
+
+#[test]
+fn a_trap_inside_submit_names_the_request_left_in_flight() {
+    let mut host = full();
+    let stopped = host.submit("test.new-item", &[("name", "panic")]);
+    let Err(HostError::SubmitStopped { request, .. }) = stopped else {
+        panic!("expected the submit to stop, got {stopped:?}");
+    };
+    assert_eq!(host.writes_in_flight(), [request]);
+}
+
+#[test]
+fn a_spinning_validator_is_stopped_by_its_own_short_deadline() {
+    let mut host = full();
+    let started = std::time::Instant::now();
+    let error = host
+        .validate_form("test.new-item", &[("name", "spin")])
+        .expect_err("trapped");
+    assert!(
+        matches!(
+            error,
+            HostError::Trap {
+                code: Some(Trap::Interrupt),
+                ..
+            }
+        ),
+        "{error}"
+    );
+    assert!(
+        logged(&host).contains(&"spinning".to_owned()),
+        "the loop ran"
+    );
+    assert_eq!(
+        host.failure(),
+        Some(&Failure::DeadlineExpired(Export::Validate))
+    );
+    assert!(started.elapsed() < Export::Run.deadline());
 }

@@ -5,7 +5,7 @@ mod stalling;
 mod workload;
 
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use syrinx_core::CommandRegistry;
@@ -33,7 +33,7 @@ fn plugins_with<S: PluginHost>(
 }
 
 fn synthetic(host_version: &str) -> (Plugins<SyntheticHost>, Receiver<PluginEvent>) {
-    plugins_with(host_version, |manifest| SyntheticHost::new(manifest.into()))
+    plugins_with(host_version, |_manifest| SyntheticHost::new())
 }
 
 /// Register the full fixture as `id`, with `extra` appended to its manifest, and add it.
@@ -83,6 +83,22 @@ fn submit_pending(plugins: &mut Plugins<SyntheticHost>) -> u64 {
 
 fn next_event(events: &Receiver<PluginEvent>) -> PluginEvent {
     events.recv_timeout(WAIT).expect("an event")
+}
+
+/// The running instance's export calls so far, and its writes in flight.
+fn instance_state<S: PluginHost>(plugins: &mut Plugins<S>) -> (u64, Vec<u64>) {
+    answer(plugins.call("test", |session| {
+        Ok((session.export_calls(), session.writes_in_flight()))
+    }))
+    .expect("read")
+}
+
+fn uncertain(request: u64) -> PluginEvent {
+    PluginEvent::Outcome {
+        plugin: "test".into(),
+        request,
+        outcome: Outcome::Uncertain("the plugin stopped before the outcome was known".into()),
+    }
 }
 
 #[test]
@@ -196,12 +212,7 @@ fn a_trap_settles_an_armed_write_as_uncertain_once_and_never_resubmits_it() {
         ),
         "{spun:?}"
     );
-    let uncertain = PluginEvent::Outcome {
-        plugin: "test".into(),
-        request,
-        outcome: Outcome::Uncertain("the plugin stopped before the outcome was known".into()),
-    };
-    assert_eq!(next_event(&events), uncertain);
+    assert_eq!(next_event(&events), uncertain(request));
     let failed = PluginEvent::Failed {
         plugin: "test".into(),
         failure: Failure::DeadlineExpired(Export::Run),
@@ -233,6 +244,12 @@ fn a_trap_settles_an_armed_write_as_uncertain_once_and_never_resubmits_it() {
         events.try_recv().is_err(),
         "the write was settled exactly once"
     );
+    let (calls, in_flight) = instance_state(&mut plugins);
+    assert_eq!(
+        calls, 2,
+        "the new instance ran only lifecycle.activate and test.fail"
+    );
+    assert_eq!(in_flight, Vec::<u64>::new(), "nothing was carried over");
     let next = submit_pending(&mut plugins);
     assert!(
         next > request,
@@ -268,10 +285,13 @@ fn a_trap_during_activation_fails_the_plugin_and_answers_queued_calls() {
         plugins.status("test"),
         Some(PluginStatus::Failed(_))
     ));
-    // Only the next explicit use tries again.
+    // Only the next explicit use tries again. Its call is refused at once if it reaches the
+    // failing worker, or answered `unavailable` if it reaches the new one.
     assert!(events.recv_timeout(Duration::from_millis(200)).is_err());
-    let again = answer(plugins.call("test", |session| session.run_command("test.fail")));
-    assert!(matches!(again, Err(HostError::Unavailable(_))));
+    let again = plugins
+        .call("test", |session| session.run_command("test.fail"))
+        .and_then(|pending| pending.wait(WAIT).expect("answered in time"));
+    assert!(matches!(again, Err(HostError::Unavailable(_))), "{again:?}");
     assert!(matches!(next_event(&events), PluginEvent::Failed { .. }));
 }
 
@@ -313,10 +333,16 @@ fn a_full_queue_is_unavailable_at_once() {
     let (mut plugins, _events) = synthetic("0.1.0-worker");
     add(&mut plugins, "test", "");
     assert!(run(&mut plugins, "test.fail").is_ok());
+    let (started, spin_started) = mpsc::channel();
     let spinning = plugins
-        .call("test", |session| session.run_command("test.spin"))
+        .call("test", move |session| {
+            started.send(()).expect("the test waits");
+            session.run_command("test.spin")
+        })
         .expect("queued");
-    std::thread::sleep(Duration::from_millis(100));
+    spin_started
+        .recv_timeout(WAIT)
+        .expect("the worker took the spin");
     let waiting: Vec<_> = (0..limits::PLUGIN_QUEUE_CAPACITY)
         .map(|_| {
             plugins
@@ -343,7 +369,7 @@ fn the_epoch_does_not_tick_while_every_plugin_is_idle() {
     let (mut plugins, _events) = Plugins::new(
         runtime.clone(),
         "0.1.0-worker",
-        |manifest: &PluginManifest| SyntheticHost::new(manifest.into()),
+        |_manifest: &PluginManifest| SyntheticHost::new(),
     );
     add(&mut plugins, "test", "");
     add(&mut plugins, "other", "");
@@ -392,14 +418,23 @@ fn shutdown_deactivates_each_running_plugin_and_settles_its_writes() {
 
 #[test]
 fn revoking_a_required_capability_deactivates_and_an_optional_one_does_not() {
-    let required = "[[capabilities]]\nkind = \"storage\"\nreason = \"Keeps synthetic settings.\"\nrequired = true\n";
+    let capabilities = "[[capabilities]]\nkind = \"storage\"\nreason = \"Keeps synthetic settings.\"\nrequired = true\n\
+                        [[capabilities]]\nkind = \"open-external\"\nreason = \"Opens a synthetic link.\"\nrequired = false\n";
     let (mut plugins, events) = synthetic("0.1.0-worker");
-    add(&mut plugins, "test", required);
+    add(&mut plugins, "test", capabilities);
     assert!(run(&mut plugins, "test.fail").is_ok());
+    plugins
+        .revoke("test", CapabilityKind::OpenExternal)
+        .expect("optional");
     plugins
         .revoke("test", CapabilityKind::Folder)
         .expect("not requested");
+    assert!(
+        run(&mut plugins, "test.fail").is_ok(),
+        "the plugin still answers"
+    );
     assert_eq!(plugins.status("test"), Some(PluginStatus::Active));
+    assert!(events.try_recv().is_err(), "nothing was deactivated");
     plugins
         .revoke("test", CapabilityKind::Storage)
         .expect("revoked");
@@ -435,4 +470,117 @@ fn uninstalling_deactivates_and_forgets_the_plugin() {
             reason: StopReason::Uninstalled
         }
     );
+}
+
+#[test]
+fn a_trap_inside_submit_names_its_request_which_is_settled_uncertain_once() {
+    let (mut plugins, events) = synthetic("0.1.0-worker");
+    add(&mut plugins, "test", "");
+    let submitted = answer(plugins.call("test", |session| {
+        session.submit("test.new-item", &[("name", "panic")])
+    }));
+    let Err(HostError::SubmitStopped { request, cause }) = submitted else {
+        panic!("expected the submit to stop, got {submitted:?}");
+    };
+    assert!(matches!(*cause, HostError::Trap { .. }), "{cause:?}");
+    assert_eq!(next_event(&events), uncertain(request));
+    let failed = PluginEvent::Failed {
+        plugin: "test".into(),
+        failure: Failure::Trapped {
+            export: Export::Submit,
+            code: Some(Trap::UnreachableCodeReached),
+        },
+    };
+    assert_eq!(next_event(&events), failed);
+    assert!(run(&mut plugins, "test.fail").is_ok());
+    assert_eq!(
+        instance_state(&mut plugins),
+        (2, Vec::new()),
+        "nothing was resubmitted"
+    );
+    assert!(
+        events.try_recv().is_err(),
+        "the write was settled exactly once"
+    );
+}
+
+#[test]
+fn a_job_that_keeps_deferring_slow_calls_is_stopped_at_its_budget() {
+    let (mut plugins, events) = synthetic("0.1.0-worker");
+    add(&mut plugins, "test", "");
+    assert!(run(&mut plugins, "test.fail").is_ok());
+    let started = Instant::now();
+    assert!(run(&mut plugins, "test.slow-chain").is_err());
+    let failed = PluginEvent::Failed {
+        plugin: "test".into(),
+        failure: Failure::OverBudget,
+    };
+    assert_eq!(next_event(&events), failed);
+    let took = started.elapsed();
+    assert!(took >= limits::JOB_BUDGET, "stopped after {took:?}");
+    assert!(
+        took < limits::JOB_BUDGET + Export::Opened.deadline() * 2,
+        "stopped after {took:?}"
+    );
+}
+
+#[test]
+fn a_stop_request_interrupts_a_chain_of_deferred_calls() {
+    let (mut plugins, events) = synthetic("0.1.0-worker");
+    add(&mut plugins, "test", "");
+    assert!(run(&mut plugins, "test.fail").is_ok());
+    let started = Instant::now();
+    let chain = plugins
+        .call("test", |session| session.run_command("test.slow-chain"))
+        .expect("queued");
+    std::thread::sleep(Export::Opened.deadline());
+    plugins
+        .deactivate("test", StopReason::Shutdown)
+        .expect("stopping");
+    let deactivated = PluginEvent::Deactivated {
+        plugin: "test".into(),
+        reason: StopReason::Shutdown,
+    };
+    assert_eq!(next_event(&events), deactivated);
+    assert!(
+        started.elapsed() < limits::JOB_BUDGET,
+        "the stop waited for the budget"
+    );
+    assert!(matches!(chain.wait(WAIT), Some(Err(_))));
+}
+
+#[test]
+fn host_cancel_reaches_the_service_after_the_host_forgot_the_request() {
+    let (mut plugins, _events) = plugins_with("0.1.0-worker", stalling::StallingHost::new);
+    add(&mut plugins, "test", "");
+    let (request, result) = answer(plugins.call("test", |session| {
+        session.submit("test.new-item", &[("name", "later")])
+    }))
+    .expect("submitted");
+    assert_eq!(
+        (request, result),
+        (1, SubmitResult::Pending(1)),
+        "test.cancel cancels request 1"
+    );
+    let cancelled = answer(plugins.call("test", |session| session.run_command("test.cancel")));
+    assert_eq!(cancelled, Ok(Ok(())));
+    let (seen, in_flight) = answer(plugins.call("test", |session| {
+        Ok((
+            session.services().cancelled().to_vec(),
+            session.writes_in_flight(),
+        ))
+    }))
+    .expect("read");
+    assert_eq!(seen, [1], "the service saw the cancel");
+    assert_eq!(
+        in_flight,
+        Vec::<u64>::new(),
+        "the host had already dropped the request"
+    );
+    assert_eq!(
+        answer(plugins.complete("test", 1, Outcome::Done(None))),
+        Ok(())
+    );
+    let delivered = answer(plugins.call("test", |session| Ok(session.services().delivered())));
+    assert_eq!(delivered, Ok(false));
 }

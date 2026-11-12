@@ -87,11 +87,6 @@ impl CallDeadline {
         Self(Instant::now() + export.deadline())
     }
 
-    /// The instant the call must have finished by.
-    pub fn instant(self) -> Instant {
-        self.0
-    }
-
     /// Time left before the deadline; zero once it has passed.
     pub fn remaining(self) -> Duration {
         self.0.saturating_duration_since(Instant::now())
@@ -101,10 +96,6 @@ impl CallDeadline {
     /// still has time to handle the service's `unavailable` answer before its own deadline.
     pub fn service_budget(self) -> Duration {
         self.remaining() / 2
-    }
-
-    pub fn has_passed(self) -> bool {
-        Instant::now() >= self.0
     }
 }
 
@@ -124,10 +115,12 @@ mod tests {
     }
 
     #[test]
-    fn a_passed_deadline_has_nothing_remaining() {
+    fn a_passed_deadline_has_nothing_remaining_and_a_service_gets_half_of_what_is_left() {
         let deadline = CallDeadline(Instant::now());
-        assert!(deadline.has_passed());
         assert_eq!(deadline.remaining(), Duration::ZERO);
-        assert!(!CallDeadline::starting_now(Export::Run).has_passed());
+        assert_eq!(deadline.service_budget(), Duration::ZERO);
+        let running = CallDeadline::starting_now(Export::Run);
+        assert!(running.service_budget() <= Export::Run.deadline() / 2);
+        assert!(running.service_budget() > Export::Run.deadline() / 4);
     }
 }

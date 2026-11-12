@@ -21,6 +21,9 @@ pub const EPOCH_TICK: Duration = Duration::from_millis(10);
 
 /// Calls waiting for one plugin's worker; one more is refused as `unavailable` at once.
 pub const PLUGIN_QUEUE_CAPACITY: usize = 64;
+/// How long one worker job may take in all: its export and every call it deferred.
+/// Twice the longest export deadline, so it never cuts short one well-behaved call.
+pub const JOB_BUDGET: Duration = Duration::from_secs(2);
 
 /// Deferred calls drained after one export; a plugin that keeps queueing more is stopped.
 pub const MAX_DEFERRED_PER_EXPORT: usize = 1_024;

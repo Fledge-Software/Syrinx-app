@@ -17,17 +17,32 @@ pub struct StallingHost {
     /// The dependency's answers; its sender is held and never used.
     dependency: Receiver<u64>,
     _never_answers: Sender<u64>,
+    /// Requests the plugin cancelled, in the order the service was told.
+    cancelled: Vec<u64>,
 }
 
 impl StallingHost {
-    pub fn new(manifest: &PluginManifest) -> Self {
+    pub fn new(_manifest: &PluginManifest) -> Self {
         let (never_answers, dependency) = mpsc::channel();
         Self {
-            inner: SyntheticHost::new(manifest.into()),
+            inner: SyntheticHost::new(),
             deadline: None,
             dependency,
             _never_answers: never_answers,
+            cancelled: Vec::new(),
         }
+    }
+
+    pub fn cancelled(&self) -> &[u64] {
+        &self.cancelled
+    }
+
+    /// Whether the plugin's `events.deliver` ran, as its log line shows.
+    pub fn delivered(&self) -> bool {
+        self.inner
+            .logs()
+            .iter()
+            .any(|(_, line)| line.starts_with("deliver"))
     }
 }
 
@@ -92,6 +107,7 @@ impl host::Host for StallingHost {
     }
 
     fn cancel(&mut self, request: u64) {
+        self.cancelled.push(request);
         self.inner.cancel(request);
     }
 

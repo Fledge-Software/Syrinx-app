@@ -39,6 +39,14 @@ pub struct LoadedPlugin<H: 'static> {
     store: Store<StoreData<H>>,
     failure: Option<Failure>,
     export_calls: u64,
+    /// The one activation deadline instantiation started, until `lifecycle.activate` uses it.
+    activation: Option<CallDeadline>,
+}
+
+/// A call that stopped the instance: why, as the owner is shown it, and as the caller is told.
+pub(crate) struct Stop {
+    pub(crate) failure: Failure,
+    pub(crate) error: HostError,
 }
 
 impl<H: PluginHost> LoadedPlugin<H> {
@@ -63,7 +71,9 @@ impl<H: PluginHost> LoadedPlugin<H> {
         PluginPre::new(pre).map_err(instantiation)
     }
 
-    /// Instantiate a prepared component in a fresh store, under the activation deadline.
+    /// Instantiate a prepared component in a fresh store. Instantiation (the component's start
+    /// functions) and the `lifecycle.activate` that follows share one activation deadline; a
+    /// trap while instantiating is a trap in `Export::Activate`.
     pub fn from_prepared(
         runtime: &Runtime,
         prepared: &PreparedPlugin<H>,
@@ -76,18 +86,21 @@ impl<H: PluginHost> LoadedPlugin<H> {
         };
         let mut store = Store::new(runtime.engine(), data);
         store.limiter(|data| &mut data.limits);
+        let activation = CallDeadline::starting_now(Export::Activate);
         store.set_epoch_deadline(Export::Activate.deadline_ticks());
+        store.data_mut().host.begin_export(activation);
         let plugin = {
             let _in_flight = runtime.in_flight();
             prepared.instantiate(&mut store)
         }
-        .map_err(|error| HostError::Instantiation(format!("{error:#}")))?;
+        .map_err(|error| instantiation_error(&error))?;
         Ok(Self {
             runtime: runtime.clone(),
             plugin,
             store,
             failure: None,
             export_calls: 0,
+            activation: Some(activation),
         })
     }
 
@@ -97,24 +110,47 @@ impl<H: PluginHost> LoadedPlugin<H> {
         export: Export,
         call: impl FnOnce(&Plugin, &mut Store<StoreData<H>>) -> wasmtime::Result<R>,
     ) -> Result<R, HostError> {
-        if self.failure.is_some() {
-            return Err(HostError::Discarded);
+        self.run(export, call).map_err(|stop| stop.error)
+    }
+
+    /// `call`, keeping both why the instance stopped and what the caller is told.
+    pub(crate) fn run<R>(
+        &mut self,
+        export: Export,
+        call: impl FnOnce(&Plugin, &mut Store<StoreData<H>>) -> wasmtime::Result<R>,
+    ) -> Result<R, Stop> {
+        if let Some(failure) = &self.failure {
+            return Err(Stop {
+                failure: failure.clone(),
+                error: HostError::Discarded,
+            });
         }
         self.export_calls += 1;
-        self.store.set_epoch_deadline(export.deadline_ticks());
-        self.store
-            .data_mut()
-            .host
-            .begin_export(CallDeadline::starting_now(export));
+        let deadline = self.start_deadline(export);
+        self.store.data_mut().host.begin_export(deadline);
         let result = {
             let _in_flight = self.runtime.in_flight();
             call(&self.plugin, &mut self.store)
         };
         result.map_err(|error| {
-            let stopped = HostError::from_trap(&error);
-            self.failure = Some(Failure::from_trap(export, &stopped));
-            stopped
+            let error = HostError::from_trap(&error);
+            let failure = Failure::from_trap(export, &error);
+            self.failure = Some(failure.clone());
+            Stop { failure, error }
         })
+    }
+
+    /// Arm the store's epoch deadline for `export`. `lifecycle.activate` keeps the deadline
+    /// instantiation started, so the two together get one activation deadline.
+    fn start_deadline(&mut self, export: Export) -> CallDeadline {
+        if export == Export::Activate
+            && let Some(activation) = self.activation.take()
+        {
+            return activation;
+        }
+        self.activation = None;
+        self.store.set_epoch_deadline(export.deadline_ticks());
+        CallDeadline::starting_now(export)
     }
 
     pub fn host(&self) -> &H {
@@ -147,6 +183,14 @@ impl<H: PluginHost> LoadedPlugin<H> {
     pub fn export_calls(&self) -> u64 {
         self.export_calls
     }
+}
+
+/// A trap while instantiating is the plugin's own failure; anything else is the host refusing it.
+fn instantiation_error(error: &wasmtime::Error) -> HostError {
+    if error.downcast_ref::<wasmtime::Trap>().is_some() {
+        return HostError::from_trap(error);
+    }
+    HostError::Instantiation(format!("{error:#}"))
 }
 
 fn linker<H: PluginHost>(engine: &Engine) -> Result<Linker<StoreData<H>>, HostError> {

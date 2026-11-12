@@ -6,7 +6,9 @@ fixed before the runtime's behaviour is judged. This page is that record for
 export and the size of each plugin's queue that follow from it. The figures
 live in code in `crates/syrinx-plugin-host/src/deadline.rs`
 (`Export::deadline_ticks`) and `src/limits.rs` (`EPOCH_TICK`,
-`PLUGIN_QUEUE_CAPACITY`); change them here and there together.
+`PLUGIN_QUEUE_CAPACITY`, `JOB_BUDGET`); change them here and there together.
+The queue size and deadlines come from this workload, not from #28, whose
+Windows measurements covered start-up, memory and compile time.
 
 ## Terms
 
@@ -28,9 +30,9 @@ live in code in `crates/syrinx-plugin-host/src/deadline.rs`
 
 The workload is the full test fixture
 (`crates/syrinx-plugin-host/tests/fixtures/plugins/full`) under the test
-host, with synthetic in-memory services. It is the test
-`lifecycle::workload` in `crates/syrinx-plugin-host/tests/contract.rs`;
-run it with
+host, with synthetic in-memory services. It is
+`crates/syrinx-plugin-host/tests/lifecycle/workload.rs`, part of the
+`contract` test binary; run it with
 
 ```
 cargo test -p syrinx-plugin-host --test contract -- workload --nocapture --test-threads=1
@@ -41,7 +43,7 @@ the export queued:
 
 | Export | What one sample is | Samples |
 |---|---|---|
-| `lifecycle.activate` | activating a freshly instantiated plugin | 20 instances |
+| `lifecycle.activate` | instantiating a prepared component and activating it, which share one deadline | 20 instances |
 | `lifecycle.deactivate` | deactivating an activated one | 20 instances |
 | `commands.run` | `test.echo`: settings write and read, a feed signal, a log line | 200 |
 | `forms.form-for` | the form with every field kind | 200 |
@@ -66,18 +68,18 @@ Each figure is milliseconds.
 
 | Export | p99 | Slowest |
 |---|---|---|
-| `lifecycle.activate` | 0.129 | 0.129 |
-| `lifecycle.deactivate` | 0.019 | 0.019 |
-| `commands.run` | 0.060 | 0.087 |
-| `forms.form-for` | 0.052 | 0.074 |
-| `forms.validate` | 0.033 | 0.040 |
-| `forms.submit` | 0.035 | 0.049 |
-| `views.opened` | 0.114 | 0.153 |
-| `views.message` | 0.043 | 0.046 |
-| `views.closed` | 0.025 | 0.026 |
-| `search-feed.changes` | 0.058 | 0.080 |
-| `search-feed.resolve` | 0.026 | 0.031 |
-| `events.deliver` | 0.027 | 0.037 |
+| `lifecycle.activate` (with instantiation) | 0.576 | 0.576 |
+| `lifecycle.deactivate` | 0.020 | 0.020 |
+| `commands.run` | 0.073 | 0.099 |
+| `forms.form-for` | 0.054 | 0.073 |
+| `forms.validate` | 0.033 | 0.042 |
+| `forms.submit` | 0.036 | 0.054 |
+| `views.opened` | 0.118 | 0.152 |
+| `views.message` | 0.043 | 0.044 |
+| `views.closed` | 0.028 | 0.029 |
+| `search-feed.changes` | 0.058 | 0.081 |
+| `search-feed.resolve` | 0.026 | 0.041 |
+| `events.deliver` | 0.029 | 0.040 |
 
 A full queue of 64 validations drained in 1.9 ms.
 
@@ -94,12 +96,13 @@ flight is reported `uncertain`, and it is shown as failed until its next
 explicit use. So each deadline is set by how long the owner can wait on that
 kind of call, then checked against the workload: every export's slowest
 workload call must stay at least ten times inside its deadline
-(`HEADROOM` in the workload test), and in the measurement above every one
-stays more than six hundred times inside it.
+(`HEADROOM` in the workload test). In the measurement above the closest is
+activation, at about 1,700 times inside its deadline; `forms.validate`, with
+the shortest deadline, is about 2,400 times inside it.
 
 | Export | Ticks | Deadline | Why this ceiling |
 |---|---|---|---|
-| `lifecycle.activate` (and instantiation) | 100 | 1 s | Runs once, on first use; a plugin may read its settings and open views. |
+| `lifecycle.activate`, with instantiation | 100 | 1 s | Runs once, on first use; a plugin may read its settings and open views. Instantiation (the component's start functions) and `lifecycle.activate` share this one deadline, and a trap in either is a trap in activation. |
 | `commands.run`, `forms.submit` | 100 | 1 s | An owner-initiated action that may do real work through host services. |
 | `search-feed.changes` | 100 | 1 s | Up to 512 changes per batch (`MAX_BATCH_CHANGES`); runs in the background. |
 | `views.opened`, `views.message` | 50 | 500 ms | A plugin tab waits on these; half a second is the longest a tab should look frozen. |
@@ -124,16 +127,36 @@ request. The test `an_unavailable_host_service_answers_by_the_deadline_and_the_p
 uses a service whose dependency never answers; without the deadline it
 would wait for ever.
 
+## One job's total budget
+
+A job is one call the worker takes from the queue: its export and every
+call that export deferred (`views.opened`, `views.message`,
+`events.deliver`), which the host delivers after it returns. Each of those
+has its own deadline, but a plugin may chain them: each `views.opened` can
+open another view, up to 1,024 deferred calls (`MAX_DEFERRED_PER_EXPORT`).
+So a job also has a total budget, `JOB_BUDGET`, 2 s: twice the longest
+export deadline, so it never cuts short one well-behaved call. Between
+deferred calls the session checks the budget and the worker's stop flag.
+When the budget is spent the plugin is stopped as `Failure::OverBudget`. When
+the host is deactivating it, the plugin is stopped and reported as
+deactivated. Shutdown therefore waits, for each worker side by side, at
+most one job budget plus `lifecycle.deactivate`'s 250 ms, provided its host
+services honour their deadlines.
+
 ## The queue
 
 `PLUGIN_QUEUE_CAPACITY` is 64 calls per plugin. The workload shows a healthy
 plugin answers a full queue in about 2 ms, so a queue only fills when a
 plugin is slow or stuck. The size then decides two things:
 
-- **How much work can pile up behind a stuck plugin.** Not how long a
-  caller waits: when the stuck call reaches its deadline the plugin is
-  discarded and every queued call is answered `unavailable` at once, so the
-  longest wait is one deadline (1 s) whatever the queue's size.
+- **How much work can pile up behind a stuck plugin.** For a *stuck*
+  plugin, the queue's size does not change how long a caller waits: when
+  the stuck call reaches its deadline (or its job's budget), the plugin is
+  discarded and every queued call is answered `unavailable` at once. A
+  *slow* plugin is different. If every call finishes just inside its
+  deadline, none is stopped, and the last of 64 queued calls waits for the
+  63 before it. The queue bounds that wait; it does not make it short. The
+  UI never waits either way, because it polls `Pending::try_answer`.
 - **The largest legitimate burst it absorbs.** The workload's largest
   burst is a palette form being typed into (one validation per keystroke,
   about 30 for a long field) while a plugin tab sends its start-up
