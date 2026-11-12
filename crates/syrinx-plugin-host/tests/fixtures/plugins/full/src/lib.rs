@@ -374,6 +374,9 @@ impl search_feed::Guest for Plugin {
 
 impl events::Guest for Plugin {
     fn deliver(request: u64, outcome: Outcome) {
+        if matches!(&outcome, Outcome::Done(Some(detail)) if detail == "trap") {
+            panic!("synthetic panic while delivering an outcome");
+        }
         let summary = match outcome {
             Outcome::Done(detail) => format!("done {detail:?}"),
             Outcome::Failed(error) => format!("failed {error:?}"),

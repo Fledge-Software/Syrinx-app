@@ -268,6 +268,9 @@ impl<S: PluginHost> Session<S> {
                 "{STOPPING}, so request {request} was not delivered"
             )));
         }
+        if self.budget_spent() {
+            return Err(self.stop_delivering(Failure::OverBudget).into());
+        }
         self.call(Export::Deliver, |plugin, store| {
             plugin
                 .syrinx_plugin_events()

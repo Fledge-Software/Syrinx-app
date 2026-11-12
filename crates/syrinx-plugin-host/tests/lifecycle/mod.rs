@@ -582,27 +582,39 @@ fn a_successor_stopped_while_its_predecessor_stops_never_activates() {
     let journal = Journal::default();
     let (mut plugins, events) = plugins_with("0.1.0-worker", TestServices::recording(&journal));
     add(&mut plugins, "test", "");
-    let (sender, chain_started) = mpsc::channel();
-    let chain = plugins
+    // The predecessor's job holds it until the test releases it, so both stops land first.
+    let (started, job_started) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let held = plugins
         .call("test", move |session| {
-            sender.send(()).expect("the test waits");
-            session.run_command("test.slow-chain")
+            started.send(()).expect("the test waits");
+            released
+                .recv_timeout(WAIT)
+                .expect("the test releases the job");
+            session.run_command("test.fail")
         })
         .expect("queued");
-    chain_started.recv_timeout(WAIT).expect("the chain started");
+    job_started.recv_timeout(WAIT).expect("the job started");
     plugins
         .deactivate("test", StopReason::Uninstalled)
-        .expect("stopping");
+        .expect("stopping the predecessor");
     let queued = plugins
         .call("test", |session| session.run_command("test.fail"))
-        .expect("queued for the next instance");
+        .expect("queued for the successor");
+    plugins
+        .deactivate("test", StopReason::Shutdown)
+        .expect("stopping the successor");
+    release.send(()).expect("the job waits");
     plugins.shutdown();
     assert_eq!(journal.count("activate"), 1, "{:?}", journal.lines());
     assert!(matches!(
         queued.wait(WAIT),
         Some(Err(HostError::Unavailable(_)))
     ));
-    assert_eq!(chain.wait(WAIT), Some(Ok(Ok(()))));
+    assert!(matches!(
+        held.wait(WAIT),
+        Some(Ok(Err(PluginError::InvalidInput(_))))
+    ));
     let received: Vec<PluginEvent> = events.try_iter().collect();
     assert_eq!(
         received,
@@ -742,4 +754,54 @@ fn views_still_open_are_closed_with_the_services_after_a_trap() {
     assert!(answer(plugins.call("test", |session| session.run_command("test.spin"))).is_err());
     assert!(matches!(next_event(&events), PluginEvent::Failed { .. }));
     assert_eq!(journal.count("view-closed 1"), 1, "{:?}", journal.lines());
+}
+
+#[test]
+fn a_trap_while_delivering_an_outcome_fails_the_plugin_once_and_settles_nothing_twice() {
+    let (mut plugins, events) = synthetic("0.1.0-worker");
+    add(&mut plugins, "test", "");
+    let request = submit_pending(&mut plugins);
+    let completed = answer(plugins.complete("test", request, Outcome::Done(Some("trap".into()))));
+    assert!(
+        matches!(completed, Err(HostError::Trap { .. })),
+        "{completed:?}"
+    );
+    let failed = PluginEvent::Failed {
+        plugin: "test".into(),
+        failure: Failure::Trapped {
+            export: Export::Deliver,
+            code: Some(Trap::UnreachableCodeReached),
+        },
+    };
+    assert_eq!(next_event(&events), failed);
+    assert!(
+        events.recv_timeout(Duration::from_millis(200)).is_err(),
+        "one failure, and no uncertain outcome for a request whose outcome the host knew"
+    );
+}
+
+#[test]
+fn an_outcome_completed_after_the_job_budget_is_not_delivered() {
+    let journal = Journal::default();
+    let (mut plugins, events) = plugins_with("0.1.0-worker", TestServices::recording(&journal));
+    add(&mut plugins, "test", "");
+    let (request, _) = answer(plugins.call("test", |session| {
+        session.submit("test.new-item", &[("name", "later")])
+    }))
+    .expect("pending");
+    let completed = answer(plugins.call("test", move |session| {
+        // The job spends its whole budget before the outcome arrives.
+        std::thread::sleep(limits::JOB_BUDGET);
+        session.complete(request, Outcome::Done(None))
+    }));
+    assert!(
+        matches!(completed, Err(HostError::Refused(_))),
+        "{completed:?}"
+    );
+    let failed = PluginEvent::Failed {
+        plugin: "test".into(),
+        failure: Failure::OverBudget,
+    };
+    assert_eq!(next_event(&events), failed);
+    assert_eq!(journal.count("deliver"), 0, "{:?}", journal.lines());
 }
