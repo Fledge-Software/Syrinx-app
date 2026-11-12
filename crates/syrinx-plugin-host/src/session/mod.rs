@@ -130,7 +130,8 @@ pub(crate) struct JobLimits {
     pub(crate) until: Instant,
 }
 
-/// What a view message or an outcome dropped by a stop request is answered with.
+/// What a view message or an outcome is answered with when it was dropped because the
+/// instance is stopping: a stop request, or a spent job budget in `complete`.
 const STOPPING: &str = "the plugin is stopping";
 
 /// Whether the host may start a call of its own now.
