@@ -25,6 +25,10 @@ use bindings::syrinx::plugin::types::{Icon, Outcome, PluginError};
 
 struct Plugin;
 
+/// Set at activation when the host version asks `deactivate` to never return.
+static SPIN_ON_DEACTIVATE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn note(message: String) {
     host::log(LogLevel::Info, &message);
 }
@@ -39,11 +43,18 @@ impl lifecycle::Guest for Plugin {
         if info.host_version.ends_with("panic-on-activate") {
             panic!("synthetic activation panic");
         }
+        SPIN_ON_DEACTIVATE.store(
+            info.host_version.ends_with("spin-on-deactivate"),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         Ok(())
     }
 
     fn deactivate() {
         note("deactivate".into());
+        if SPIN_ON_DEACTIVATE.load(std::sync::atomic::Ordering::Relaxed) {
+            spin_forever();
+        }
     }
 }
 
@@ -88,6 +99,11 @@ fn echo() -> Result<(), PluginError> {
 }
 
 fn spin() -> Result<(), PluginError> {
+    spin_forever()
+}
+
+/// Busy-loop until the host's deadline stops the call.
+fn spin_forever() -> ! {
     note("spinning".into());
     let mut counter: u64 = 0;
     loop {

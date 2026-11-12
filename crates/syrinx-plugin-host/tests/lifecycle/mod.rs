@@ -805,3 +805,23 @@ fn an_outcome_completed_after_the_job_budget_is_not_delivered() {
     assert_eq!(next_event(&events), failed);
     assert_eq!(journal.count("deliver"), 0, "{:?}", journal.lines());
 }
+
+#[test]
+fn a_deactivate_that_never_returns_is_stopped_at_its_deadline() {
+    let (mut plugins, events) = synthetic("0.1.0-spin-on-deactivate");
+    add(&mut plugins, "test", "");
+    let request = submit_pending(&mut plugins);
+    let started = Instant::now();
+    plugins.shutdown();
+    let took = started.elapsed();
+    assert!(
+        took < Export::Deactivate.deadline() * 3,
+        "shutdown took {took:?}"
+    );
+    let received: Vec<PluginEvent> = events.try_iter().collect();
+    let failed = PluginEvent::Failed {
+        plugin: "test".into(),
+        failure: Failure::DeadlineExpired(Export::Deactivate),
+    };
+    assert_eq!(received, [uncertain(request), failed]);
+}

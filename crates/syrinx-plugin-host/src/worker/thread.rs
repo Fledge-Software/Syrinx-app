@@ -91,8 +91,9 @@ pub(super) struct Worker<S: 'static> {
     pub(super) shared: Arc<Shared>,
     pub(super) events: Sender<PluginEvent>,
     pub(super) jobs: Receiver<Job<S>>,
-    /// The plugin's previous worker, still stopping; two instances never run at once.
-    pub(super) predecessor: Option<JoinHandle<()>>,
+    /// Hands over the plugin's previous worker, possibly still stopping, once this thread
+    /// runs; two instances never run at once.
+    pub(super) predecessor: Receiver<Option<JoinHandle<()>>>,
 }
 
 impl<S: PluginHost> Worker<S> {
@@ -128,8 +129,9 @@ impl<S: PluginHost> Worker<S> {
         }
     }
 
+    /// Wait for the handover, then for the previous worker to finish.
     fn wait_for_predecessor(&mut self) {
-        let Some(predecessor) = self.predecessor.take() else {
+        let Ok(Some(predecessor)) = self.predecessor.recv() else {
             return;
         };
         if predecessor.join().is_err() {

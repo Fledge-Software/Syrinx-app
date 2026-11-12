@@ -119,6 +119,15 @@ struct Slot<S: 'static> {
     worker: Option<WorkerHandle<S>>,
 }
 
+/// What `new_worker` builds: the worker, its queue's sending end, its shared state, and the
+/// sending end that hands it the previous worker's handle.
+type NewWorker<S> = (
+    Worker<S>,
+    SyncSender<Job<S>>,
+    Arc<Shared>,
+    SyncSender<Option<JoinHandle<()>>>,
+);
+
 struct WorkerHandle<S: 'static> {
     jobs: SyncSender<Job<S>>,
     thread: JoinHandle<()>,
@@ -244,26 +253,31 @@ impl<S: PluginHost> Plugins<S> {
         if self.is_running(plugin) {
             return Ok(());
         }
-        let predecessor = self
-            .slot_mut(plugin)?
-            .worker
-            .take()
-            .map(|worker| worker.thread);
-        let worker = self.spawn(plugin, predecessor)?;
-        self.slot_mut(plugin)?.worker = Some(worker);
+        let (worker, jobs, shared, handover) = self.new_worker(plugin)?;
+        let thread = std::thread::Builder::new()
+            .name(format!("syrinx-plugin-{plugin}"))
+            .spawn(move || worker.run())
+            .map_err(|error| HostError::Unavailable(format!("no worker thread: {error}")))?;
+        // Only once the thread runs does it take over the slot: the previous worker's handle,
+        // which it joins before activating, and the plugin's status.
+        let slot = self.slot_mut(plugin)?;
+        let predecessor = slot.worker.take().map(|old| old.thread);
+        slot.shared = shared;
+        slot.worker = Some(WorkerHandle { jobs, thread });
+        if let Err(unsent) = handover.send(predecessor) {
+            self.stopping.extend(unsent.0);
+        }
         Ok(())
     }
 
-    fn spawn(
-        &mut self,
-        plugin: &str,
-        predecessor: Option<JoinHandle<()>>,
-    ) -> CallResult<WorkerHandle<S>> {
+    /// A worker for `plugin`, its queue, its shared state, and the channel that will hand
+    /// it the previous worker's handle. Nothing in the slot changes yet.
+    fn new_worker(&mut self, plugin: &str) -> CallResult<NewWorker<S>> {
         let slot = self.slot_mut(plugin)?;
         let (jobs, queued) = mpsc::sync_channel(limits::PLUGIN_QUEUE_CAPACITY);
+        let (handover, predecessor) = mpsc::sync_channel(1);
         let shared = Arc::new(Shared::new());
         shared.set_status(PluginStatus::Active);
-        slot.shared = Arc::clone(&shared);
         let worker = Worker {
             manifest: slot.manifest.clone(),
             component: Arc::clone(&slot.component),
@@ -272,16 +286,12 @@ impl<S: PluginHost> Plugins<S> {
             services: Arc::clone(&self.services),
             requests: Arc::clone(&self.requests),
             host_version: self.host_version.clone(),
-            shared,
+            shared: Arc::clone(&shared),
             events: self.events.clone(),
             jobs: queued,
             predecessor,
         };
-        let thread = std::thread::Builder::new()
-            .name(format!("syrinx-plugin-{plugin}"))
-            .spawn(move || worker.run())
-            .map_err(|error| HostError::Unavailable(format!("no worker thread: {error}")))?;
-        Ok(WorkerHandle { jobs, thread })
+        Ok((worker, jobs, shared, handover))
     }
 
     /// Hand one call to the running worker without waiting.
