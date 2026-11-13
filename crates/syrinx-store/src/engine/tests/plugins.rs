@@ -2,6 +2,8 @@
 //! their survival across a restart, each plugin's own namespace, and removal by cascade.
 
 use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
 
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
@@ -411,5 +413,83 @@ fn a_damaged_row_refuses_the_whole_list_and_a_folder_never_prints_its_path() {
         access: FolderAccess::Read,
     };
     assert!(!format!("{folder:?}").contains("private-name"));
+    directory.cleanup();
+}
+
+#[test]
+fn the_setting_table_checks_the_same_bounds_the_store_refuses_before_writing() {
+    let table = crate::plugins::SETTING_TABLE;
+    assert!(table.contains(&format!(
+        "length(key) BETWEEN 1 AND {MAX_PLUGIN_SETTING_KEY_BYTES}"
+    )));
+    assert!(table.contains(&format!(
+        "length(value) <= {MAX_PLUGIN_SETTING_VALUE_BYTES}"
+    )));
+}
+
+#[test]
+fn a_bounded_read_uses_a_free_reader_and_answers_busy_when_none_frees_in_time() {
+    let directory = TestDirectory::new();
+    let store = installed(&directory, &["notes"]);
+    store
+        .save_plugin_setting("notes".to_owned(), "notes.key".to_owned(), vec![1])
+        .expect("save a synthetic setting");
+    assert_eq!(
+        store.plugin_setting_within("notes", "notes.key", Duration::from_secs(1)),
+        Ok(Some(vec![1]))
+    );
+
+    let readers = store.readers.as_ref().expect("open readers");
+    let held: Vec<_> = readers
+        .iter()
+        .map(|reader| reader.lock().expect("hold a synthetic reader"))
+        .collect();
+    assert_eq!(
+        store.plugin_setting_within("notes", "notes.key", Duration::from_millis(10)),
+        Err(StoreError::Busy)
+    );
+    drop(held);
+    store.shutdown().expect("close synthetic store");
+    directory.cleanup();
+}
+
+#[test]
+fn bounded_writes_behind_a_held_lock_fail_and_never_land_later() {
+    let directory = TestDirectory::new();
+    let store = installed(&directory, &["notes"]);
+    let blocker = directory.connection();
+    blocker
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("hold the synthetic write lock");
+
+    thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            store.save_plugin_setting_within(
+                "notes".to_owned(),
+                "notes.first".to_owned(),
+                vec![1],
+                Duration::from_millis(200),
+            )
+        });
+        let second = store.save_plugin_setting_within(
+            "notes".to_owned(),
+            "notes.second".to_owned(),
+            vec![2],
+            Duration::from_millis(40),
+        );
+        assert!(second.is_err(), "{second:?}");
+        let first = first.join().expect("first write");
+        assert!(first.is_err(), "{first:?}");
+    });
+
+    blocker.execute_batch("COMMIT").expect("release the lock");
+    close(blocker);
+    // An ordinary write queues behind both, so once it returns the writer has seen them.
+    store
+        .save_plugin_setting("notes".to_owned(), "notes.after".to_owned(), vec![3])
+        .expect("an ordinary write");
+    assert_eq!(store.plugin_setting("notes", "notes.first"), Ok(None));
+    assert_eq!(store.plugin_setting("notes", "notes.second"), Ok(None));
+    store.shutdown().expect("close synthetic store");
     directory.cleanup();
 }

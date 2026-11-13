@@ -8,7 +8,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crate::bindings::syrinx::plugin::types::Outcome;
-use crate::grants::Grants;
+use crate::grants::GrantSet;
 use crate::manifest::PluginManifest;
 use crate::session::{JobLimits, Mediator, RequestIds, Session};
 use crate::{Failure, LoadedPlugin, PluginHost, PreparedPlugin, Runtime, limits};
@@ -86,7 +86,7 @@ pub(super) struct Worker<S: 'static> {
     pub(super) component: Arc<[u8]>,
     pub(super) prepared: Prepared<S>,
     pub(super) runtime: Runtime,
-    pub(super) grants: Arc<dyn Grants>,
+    pub(super) grants: GrantSet,
     pub(super) services: ServiceFactory<S>,
     pub(super) requests: Arc<RequestIds>,
     pub(super) host_version: String,
@@ -163,7 +163,7 @@ impl<S: PluginHost> Worker<S> {
         let services = Mediator::new(
             (self.services)(&self.manifest),
             (&self.manifest).into(),
-            Arc::clone(&self.grants),
+            self.grants.clone(),
         );
         let plugin = LoadedPlugin::from_prepared(&self.runtime, &prepared, services)
             .map_err(Failure::from_instantiation)?;

@@ -3,14 +3,13 @@
 //! the request bookkeeping, and refusing a service the owner has not granted or withdrew.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::Arc;
 
 use crate::PluginHost;
 use crate::bindings::exports::syrinx::plugin::views::ViewRequest;
 use crate::bindings::syrinx::plugin::host::{self, LogLevel};
 use crate::bindings::syrinx::plugin::types::{self, Outcome, PluginError, Timestamp};
 use crate::deadline::CallDeadline;
-use crate::grants::{self, Grants};
+use crate::grants::GrantSet;
 use crate::manifest::CapabilityKind;
 use crate::{limits, validate};
 
@@ -33,16 +32,23 @@ impl Deferred {
     }
 }
 
+/// Where this instance stands with a kind it has held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HoldState {
+    /// Granted when last looked at.
+    Held,
+    /// No longer granted, and the services have been told of it.
+    Withdrawn,
+}
+
 /// The plugin's imports as the store sees them, wrapping the services `S`.
 pub struct Mediator<S> {
     services: S,
     declarations: Declarations,
-    /// The owner's grants, asked on every gated call.
-    grants: Arc<dyn Grants>,
+    /// The owner's grants, read on every gated call.
+    grants: GrantSet,
     /// Kinds this instance has held: one no longer granted answers `revoked`, not `denied`.
-    held: BTreeSet<CapabilityKind>,
-    /// Held kinds whose revocation the services have already been told of.
-    withdrawn: BTreeSet<CapabilityKind>,
+    held: BTreeMap<CapabilityKind, HoldState>,
     deferred: VecDeque<Deferred>,
     /// Writes in flight: a submit still running, or one that answered `pending`.
     armed: BTreeSet<u64>,
@@ -53,13 +59,12 @@ pub struct Mediator<S> {
 }
 
 impl<S: PluginHost> Mediator<S> {
-    pub(crate) fn new(services: S, declarations: Declarations, grants: Arc<dyn Grants>) -> Self {
+    pub(crate) fn new(services: S, declarations: Declarations, grants: GrantSet) -> Self {
         Self {
             services,
             declarations,
             grants,
-            held: BTreeSet::new(),
-            withdrawn: BTreeSet::new(),
+            held: BTreeMap::new(),
             deferred: VecDeque::new(),
             armed: BTreeSet::new(),
             cancelled: BTreeSet::new(),
@@ -81,8 +86,10 @@ impl<S: PluginHost> Mediator<S> {
 
     /// The kinds granted now, which this instance then holds; for `lifecycle.activate`.
     pub(crate) fn take_granted(&mut self) -> Vec<CapabilityKind> {
-        let granted = grants::granted_kinds(self.grants.as_ref(), &self.declarations.plugin_id);
-        self.held.extend(granted.iter().copied());
+        let granted = self.grants.kinds(&self.declarations.plugin_id);
+        for kind in &granted {
+            self.held.insert(*kind, HoldState::Held);
+        }
         granted
     }
 
@@ -90,18 +97,18 @@ impl<S: PluginHost> Mediator<S> {
     /// what they opened under it and abandon its requests. Returns the outcome of each abandoned
     /// write still in flight, for the plugin to be told; nothing is resubmitted.
     pub(crate) fn apply_revocations(&mut self) -> Vec<(u64, Outcome)> {
-        let plugin = self.declarations.plugin_id.clone();
+        let plugin = &self.declarations.plugin_id;
         let newly_withdrawn: Vec<CapabilityKind> = self
             .held
             .iter()
-            .copied()
-            .filter(|kind| {
-                !self.withdrawn.contains(kind) && !self.grants.is_granted(&plugin, *kind)
+            .filter(|(kind, state)| {
+                **state == HoldState::Held && !self.grants.is_granted(plugin, **kind)
             })
+            .map(|(kind, _)| *kind)
             .collect();
         let mut abandoned = Vec::new();
         for kind in newly_withdrawn {
-            self.withdrawn.insert(kind);
+            self.held.insert(kind, HoldState::Withdrawn);
             abandoned.extend(self.services.capability_revoked(kind));
         }
         abandoned.retain(|(request, _)| {
@@ -202,11 +209,10 @@ impl<S: PluginHost> Mediator<S> {
     /// instance held it, `denied` if it never did.
     fn require(&mut self, kind: CapabilityKind) -> Result<(), PluginError> {
         if self.grants.is_granted(&self.declarations.plugin_id, kind) {
-            self.held.insert(kind);
-            self.withdrawn.remove(&kind);
+            self.held.insert(kind, HoldState::Held);
             return Ok(());
         }
-        if self.held.contains(&kind) {
+        if self.held.contains_key(&kind) {
             return Err(PluginError::Revoked(format!(
                 "the {} capability was revoked",
                 kind.name()
@@ -305,7 +311,13 @@ impl<S: PluginHost> host::Host for Mediator<S> {
     }
 
     /// Only a declared feed reaches the services; any other is noted and ignored.
+    /// Only a declared feed under a current `index` grant reaches the services; any other
+    /// signal is noted and dropped.
     fn feed_changed(&mut self, feed: String) {
+        if let Err(error) = self.require(CapabilityKind::Index) {
+            let note = format!("feed-changed for {feed:?} dropped: {error:?}");
+            return self.services.log(LogLevel::Warn, note);
+        }
         if self.declarations.feeds.contains(&feed) {
             return self.services.feed_changed(feed);
         }

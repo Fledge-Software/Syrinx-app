@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::bindings::syrinx::plugin::types::Outcome;
-use crate::grants::Grants;
+use crate::grants::GrantSet;
 use crate::manifest::{CapabilityKind, PluginManifest};
 use crate::registry::RegisteredPlugin;
 use crate::session::{CallResult, RequestIds, Session};
@@ -102,7 +102,7 @@ pub struct Plugins<S: PluginHost> {
     runtime: Runtime,
     requests: Arc<RequestIds>,
     /// The owner's grants, which every instance checks on each gated call.
-    grants: Arc<dyn Grants>,
+    grants: GrantSet,
     services: ServiceFactory<S>,
     host_version: String,
     events: Sender<PluginEvent>,
@@ -142,7 +142,7 @@ impl<S: PluginHost> Plugins<S> {
     pub fn new(
         runtime: Runtime,
         host_version: impl Into<String>,
-        grants: Arc<dyn Grants>,
+        grants: GrantSet,
         services: impl Fn(&PluginManifest) -> S + Send + Sync + 'static,
     ) -> (Self, Receiver<PluginEvent>) {
         let (events, received) = mpsc::channel();
@@ -239,8 +239,12 @@ impl<S: PluginHost> Plugins<S> {
         if !self.is_running(plugin) {
             return Ok(());
         }
-        // An empty job wakes an idle worker, whose job start applies the revocation. A full
-        // queue needs no wake-up: its next job applies it before running.
+        self.wake(plugin)
+    }
+
+    /// Queue an empty job, so an idle worker applies a revocation at the start of it. A full
+    /// queue needs no wake-up: its next job applies the revocation before running.
+    fn wake(&mut self, plugin: &str) -> CallResult<()> {
         match self.send(plugin, |_session| Ok(())) {
             Ok(_) | Err(HostError::Unavailable(_)) => Ok(()),
             Err(error) => Err(error),
@@ -295,7 +299,7 @@ impl<S: PluginHost> Plugins<S> {
 
     /// A plugin missing a capability its manifest requires is never activated.
     fn check_required_grants(&mut self, plugin: &str) -> CallResult<()> {
-        let grants = Arc::clone(&self.grants);
+        let grants = self.grants.clone();
         let missing = self
             .slot_mut(plugin)?
             .manifest
@@ -329,7 +333,7 @@ impl<S: PluginHost> Plugins<S> {
             component: Arc::clone(&slot.component),
             prepared: Arc::clone(&slot.prepared),
             runtime: self.runtime.clone(),
-            grants: Arc::clone(&self.grants),
+            grants: self.grants.clone(),
             services: Arc::clone(&self.services),
             requests: Arc::clone(&self.requests),
             host_version: self.host_version.clone(),

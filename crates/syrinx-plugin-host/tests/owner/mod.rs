@@ -8,11 +8,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use syrinx_core::CommandRegistry;
+use syrinx_plugin_host::PluginHost;
+use syrinx_plugin_host::bindings::syrinx::plugin::host::Host;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
+use syrinx_plugin_host::deadline::{CallDeadline, Export};
 use syrinx_plugin_host::grants::{DenyList, FolderRefusal, Protected};
 use syrinx_plugin_host::manifest::{CapabilityKind, DiscoveryOptions, PluginManifest};
 use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime, StoreServices};
 use syrinx_plugin_host::session::{CallResult, Session};
+use syrinx_plugin_host::worker::{PluginStatus, StopReason};
 use syrinx_plugin_host::{HostError, PluginRegistry};
 use syrinx_store::{
     DirectoryLease, EncodingField, FolderAccess, LocationError, PluginInstall, PluginState, Store,
@@ -27,9 +31,10 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 
 const STORAGE: &str = "[[capabilities]]\nkind = \"storage\"\nreason = \"Keeps synthetic settings.\"\nrequired = false\n";
 const FOLDER: &str = "[[capabilities]]\nkind = \"folder\"\naccess = \"read-write\"\nreason = \"Reads a synthetic vault.\"\nrequired = false\n";
+const READ_ONE_FOLDER: &str = "[[capabilities]]\nkind = \"folder\"\naccess = \"read\"\ncount = 1\nreason = \"Reads one synthetic vault.\"\nrequired = false\n";
+const REQUIRED_STORAGE: &str = "[[capabilities]]\nkind = \"storage\"\nreason = \"Keeps synthetic settings.\"\nrequired = true\n";
 
-/// A database in a fresh folder of its own, removed afterwards. Twin of the lease in
-/// `src/owner/tests.rs`, which this test binary cannot reach.
+/// A database in a fresh folder of its own, removed afterwards.
 struct TempStore {
     folder: PathBuf,
     database: PathBuf,
@@ -125,8 +130,8 @@ fn echo(runtime: &mut OwnerRuntime, plugin: &str) -> CallResult<Result<(), Plugi
     })
 }
 
-fn logged(runtime: &mut OwnerRuntime) -> Vec<String> {
-    let logs = call(runtime, "test", |session| {
+fn logged(runtime: &mut OwnerRuntime, plugin: &str) -> Vec<String> {
+    let logs = call(runtime, plugin, |session| {
         Ok(session.services().logs().to_vec())
     });
     logs.expect("read")
@@ -156,7 +161,7 @@ fn the_test_plugin_runs_through_activation_commands_views_and_a_restart() {
     // Activation is told the grant; the command's setting lands in the plugin's namespace.
     assert_eq!(echo(&mut runtime, "test"), Ok(Ok(())));
     assert_eq!(
-        logged(&mut runtime).first().map(String::as_str),
+        logged(&mut runtime, "test").first().map(String::as_str),
         Some("activate 0.1.0-owner granted=1")
     );
     assert_eq!(
@@ -202,7 +207,7 @@ fn the_test_plugin_runs_through_activation_commands_views_and_a_restart() {
     );
     assert_eq!(echo(&mut runtime, "test"), Ok(Ok(())));
     assert_eq!(
-        logged(&mut runtime).first().map(String::as_str),
+        logged(&mut runtime, "test").first().map(String::as_str),
         Some("activate 0.1.0-owner granted=1")
     );
     close(runtime, store);
@@ -344,4 +349,227 @@ fn a_folder_is_granted_only_under_the_folder_capability_and_outside_the_deny_lis
         "the grant keeps the manifest's scope"
     );
     close(runtime, store);
+}
+
+fn start(store: &Arc<Store>) -> OwnerRuntime {
+    OwnerRuntime::start(Arc::clone(store), "0.1.0-owner", DenyList::new()).expect("starts")
+}
+
+/// What `recall` read back, from `plugin`'s log.
+fn recalled(runtime: &mut OwnerRuntime, plugin: &str) -> String {
+    let command = format!("{plugin}.recall");
+    let ran = call(runtime, plugin, move |session| {
+        session.run_command(&command)
+    });
+    assert_eq!(ran, Ok(Ok(())));
+    logged(runtime, plugin)
+        .into_iter()
+        .rev()
+        .find(|line| line.starts_with("recall "))
+        .expect("recall reported")
+}
+
+#[test]
+fn two_granted_plugins_each_keep_and_read_only_their_own_settings() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut runtime = start(&store);
+    for plugin in ["test", "other"] {
+        install(&mut runtime, plugin, STORAGE);
+        runtime
+            .grant(plugin, CapabilityKind::Storage, 20)
+            .expect("granted");
+    }
+
+    assert_eq!(echo(&mut runtime, "test"), Ok(Ok(())));
+    assert_eq!(recalled(&mut runtime, "other"), "recall stored=None");
+    assert_eq!(store.plugin_setting("other", "test.greeting"), Ok(None));
+
+    store
+        .save_plugin_setting("other".into(), "test.greeting".into(), b"theirs".to_vec())
+        .expect("a synthetic value for the other plugin");
+    assert_eq!(
+        recalled(&mut runtime, "test"),
+        format!("recall stored={:?}", Some(b"hello".to_vec()))
+    );
+    assert_eq!(
+        recalled(&mut runtime, "other"),
+        format!("recall stored={:?}", Some(b"theirs".to_vec()))
+    );
+    close(runtime, store);
+}
+
+#[test]
+fn revoking_a_required_capability_stops_the_plugin_and_keeps_it_from_starting() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut runtime = start(&store);
+    install(&mut runtime, "test", REQUIRED_STORAGE);
+    runtime
+        .grant("test", CapabilityKind::Storage, 20)
+        .expect("granted");
+    assert_eq!(echo(&mut runtime, "test"), Ok(Ok(())));
+
+    runtime
+        .revoke("test", CapabilityKind::Storage)
+        .expect("revoked");
+    let reason = StopReason::CapabilityRevoked(CapabilityKind::Storage);
+    let started = std::time::Instant::now();
+    while runtime.status("test") != Some(PluginStatus::Deactivated(reason.clone())) {
+        assert!(started.elapsed() < crate::lifecycle::WAIT, "never stopped");
+        std::thread::yield_now();
+    }
+    assert!(matches!(
+        runtime.call("test", |session| session.run_command("test.echo")),
+        Err(HostError::NotGranted(CapabilityKind::Storage))
+    ));
+    close(runtime, store);
+}
+
+#[test]
+fn a_plugin_that_is_installed_but_not_running_can_be_revoked_and_removed() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut record = install_record("held");
+    record.state = PluginState::Disabled;
+    store
+        .save_plugin_install(record)
+        .expect("a disabled install");
+    let grant = syrinx_store::PluginGrant {
+        capability: "storage".into(),
+        scope_json: "{}".into(),
+        granted_at: 1,
+        granted_for_manifest: [2; 32],
+    };
+    store.grant_plugin("held".into(), grant).expect("granted");
+    store
+        .save_plugin_setting("held".into(), "held.key".into(), vec![1])
+        .expect("a setting");
+    let mut runtime = start(&store);
+
+    let registry = registry("held", STORAGE);
+    assert_eq!(
+        runtime.load(
+            registry.get("held").expect("registered"),
+            Arc::from(support::bytes(FULL))
+        ),
+        Err(OwnerError::NotInstalled("held".into())),
+        "a disabled plugin is not loaded"
+    );
+    runtime
+        .revoke("held", CapabilityKind::Storage)
+        .expect("revoked without a worker");
+    assert_eq!(store.plugin_grants(), Ok(Vec::new()));
+    runtime.remove("held").expect("removed without a worker");
+    assert_eq!(store.plugin_installs(), Ok(Vec::new()));
+    assert_eq!(store.plugin_setting("held", "held.key"), Ok(None));
+    assert_eq!(
+        runtime.remove("held"),
+        Err(OwnerError::NotInstalled("held".into()))
+    );
+    close(runtime, store);
+}
+
+#[test]
+fn installing_again_or_with_another_plugins_record_is_refused_before_writing() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut runtime = start(&store);
+    install(&mut runtime, "test", STORAGE);
+    let registry = registry("test", STORAGE);
+    let registered = registry.get("test").expect("registered");
+
+    let mut update = install_record("test");
+    update.version = "0.2.0".into();
+    assert_eq!(
+        runtime.install(registered, Arc::from(support::bytes(FULL)), update),
+        Err(OwnerError::AlreadyAdded("test".into()))
+    );
+    assert_eq!(store.plugin_installs(), Ok(vec![install_record("test")]));
+    assert_eq!(
+        runtime.install(
+            registered,
+            Arc::from(support::bytes(FULL)),
+            install_record("other")
+        ),
+        Err(OwnerError::RecordMismatch {
+            record: "other".into(),
+            plugin: "test".into()
+        })
+    );
+    close(runtime, store);
+}
+
+#[test]
+fn a_folder_grant_never_widens_past_what_the_manifest_asks() {
+    let temp = TempStore::new();
+    let first = temp.folder.join("first");
+    let second = temp.folder.join("second");
+    for folder in [&first, &second] {
+        fs::create_dir(folder).expect("a synthetic folder");
+    }
+    let store = temp.open();
+    let mut runtime = start(&store);
+    install(&mut runtime, "test", READ_ONE_FOLDER);
+    runtime
+        .grant("test", CapabilityKind::Folder, 20)
+        .expect("granted");
+
+    assert_eq!(
+        runtime.grant_folder("test", &first, FolderAccess::ReadWrite),
+        Err(OwnerError::ReadWriteNotRequested)
+    );
+    runtime
+        .grant_folder("test", &first, FolderAccess::Read)
+        .expect("one folder to read");
+    runtime
+        .grant_folder("test", &first, FolderAccess::Read)
+        .expect("the same folder again");
+    assert_eq!(
+        runtime.grant_folder("test", &second, FolderAccess::Read),
+        Err(OwnerError::TooManyFolders(1))
+    );
+    runtime
+        .revoke("test", CapabilityKind::Folder)
+        .expect("revoked");
+    assert_eq!(
+        runtime.grant_folder("test", &second, FolderAccess::Read),
+        Err(OwnerError::FolderNotGranted)
+    );
+    assert_eq!(store.plugin_folders("test"), Ok(Vec::new()));
+    close(runtime, store);
+}
+
+#[test]
+fn store_failures_reach_the_plugin_as_typed_errors() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let deadline = CallDeadline::starting_now(Export::Run);
+    let mut absent = StoreServices::new("absent", Arc::clone(&store));
+    absent.begin_export(deadline);
+    assert!(
+        matches!(
+            absent.settings_set("key".into(), Vec::new()),
+            Err(PluginError::Unavailable(_))
+        ),
+        "a plugin with no install record has no namespace"
+    );
+
+    store
+        .save_plugin_install(install_record("full"))
+        .expect("installed");
+    let mut full = StoreServices::new("full", Arc::clone(&store));
+    for number in 0..syrinx_plugin_host::limits::MAX_SETTINGS_KEYS {
+        full.begin_export(CallDeadline::starting_now(Export::Run));
+        full.settings_set(format!("key.n{number}"), Vec::new())
+            .expect("within the limit");
+    }
+    full.begin_export(CallDeadline::starting_now(Export::Run));
+    assert_eq!(
+        full.settings_set("one.more".into(), Vec::new()),
+        Err(PluginError::InvalidInput("too many settings keys".into()))
+    );
+    drop((absent, full));
+    let store = Arc::try_unwrap(store).expect("nothing else holds the store");
+    store.shutdown().expect("the store closes");
 }

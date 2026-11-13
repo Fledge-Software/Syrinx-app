@@ -1,7 +1,5 @@
 //! The mediator's settings rules, called as a plugin's import would call them.
 
-use std::sync::Arc;
-
 use super::Mediator;
 use crate::bindings::syrinx::plugin::host::Host;
 use crate::bindings::syrinx::plugin::types::PluginError;
@@ -15,7 +13,7 @@ fn mediator(plugin: &str, grants: &SyntheticGrants) -> Mediator<SyntheticHost> {
         plugin_id: plugin.to_owned(),
         ..Declarations::default()
     };
-    Mediator::new(SyntheticHost::new(), declarations, Arc::new(grants.clone()))
+    Mediator::new(SyntheticHost::new(), declarations, grants.clone())
 }
 
 fn invalid<T: std::fmt::Debug>(result: Result<T, PluginError>) -> bool {

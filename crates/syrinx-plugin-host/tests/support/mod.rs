@@ -86,14 +86,16 @@ fn build(fixture: Fixture) -> Vec<u8> {
     std::fs::read(&wasm).expect("the fixture's component was written")
 }
 
-/// What the full fixture's manifest would declare.
-/// Grants the full fixture, plugin `test`, its settings, as the owner would at install.
-pub fn storage_granted() -> SyntheticGrants {
+/// Grants the full fixture, plugin `test`, what its `echo` uses (its settings and its feed),
+/// as the owner would at install.
+pub fn fixture_grants() -> SyntheticGrants {
     let grants = SyntheticGrants::new();
     grants.grant("test", CapabilityKind::Storage);
+    grants.grant("test", CapabilityKind::Index);
     grants
 }
 
+/// What the full fixture's manifest would declare.
 pub fn full_declarations() -> Declarations {
     let command = |id: &str, form: bool| DeclaredCommand {
         id: id.into(),
@@ -101,6 +103,7 @@ pub fn full_declarations() -> Declarations {
     };
     let mut commands: Vec<DeclaredCommand> = [
         "test.echo",
+        "test.recall",
         "test.fail",
         "test.spin",
         "test.grow",

@@ -14,21 +14,18 @@ use syrinx_plugin_host::bindings::exports::syrinx::plugin::search_feed::Change;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::{Icon, Outcome, PluginError};
 use syrinx_plugin_host::deadline::Export;
 use syrinx_plugin_host::manifest::CapabilityKind;
-use syrinx_plugin_host::test_host::{SYNTHETIC_NOW, TestHost};
+use syrinx_plugin_host::test_host::{SYNTHETIC_NOW, SyntheticGrants, TestHost};
 use syrinx_plugin_host::{Failure, HostError, OUTPUT_LIMIT_BYTES, Runtime, limits};
 use wasmtime::Trap;
 
 use support::{
-    FULL, MINIMAL, PLAIN_VARIANT, full_declarations, one_command, storage_granted, variant,
+    FULL, MINIMAL, PLAIN_VARIANT, fixture_grants, full_declarations, one_command, variant,
 };
 
 fn full() -> TestHost {
-    let mut host = TestHost::load_with_grants(
-        &support::bytes(FULL),
-        full_declarations(),
-        storage_granted(),
-    )
-    .expect("the full fixture loads");
+    let mut host =
+        TestHost::load_with_grants(&support::bytes(FULL), full_declarations(), fixture_grants())
+            .expect("the full fixture loads");
     host.activate()
         .expect("activate runs")
         .expect("activate succeeds");
@@ -385,12 +382,12 @@ fn a_plugin_granted_nothing_is_told_so_and_denied_its_settings_by_name() {
 
 #[test]
 fn a_capability_revoked_while_in_use_answers_revoked_and_a_new_instance_denied() {
-    let grants = storage_granted();
+    let grants = fixture_grants();
     let mut host =
         TestHost::load_with_grants(&support::bytes(FULL), full_declarations(), grants.clone())
             .expect("loads");
     host.activate().expect("runs").expect("activates");
-    assert!(logged(&host).contains(&"activate 0.1.0-test-host granted=1".to_owned()));
+    assert!(logged(&host).contains(&"activate 0.1.0-test-host granted=2".to_owned()));
     assert_eq!(host.run_command("test.echo").expect("runs"), Ok(()));
 
     grants.revoke("test", CapabilityKind::Storage);
@@ -411,6 +408,23 @@ fn a_capability_revoked_while_in_use_answers_revoked_and_a_new_instance_denied()
         fresh.run_command("test.echo").expect("runs"),
         Err(PluginError::Denied(_))
     ));
+}
+
+#[test]
+fn a_feed_signal_without_the_index_grant_never_reaches_the_services() {
+    let grants = SyntheticGrants::new();
+    grants.grant("test", CapabilityKind::Storage);
+    let mut host = TestHost::load_with_grants(&support::bytes(FULL), full_declarations(), grants)
+        .expect("loads");
+    host.activate().expect("runs").expect("activates");
+    assert_eq!(host.run_command("test.echo").expect("runs"), Ok(()));
+    assert!(host.changed_feeds().is_empty(), "the signal was dropped");
+    assert!(
+        logged(&host)
+            .iter()
+            .any(|line| line.starts_with("feed-changed for \"test.items\" dropped")),
+        "and noted"
+    );
 }
 
 // The form rule and declarations.
@@ -546,7 +560,7 @@ fn time_other_instances_spend_before_activation_is_not_charged_to_it() {
     let runtime = Runtime::new().expect("engine");
     let prepared = TestHost::prepare(&runtime, &support::bytes(FULL)).expect("compiles");
     let instantiate = || {
-        TestHost::from_prepared(&runtime, &prepared, full_declarations(), storage_granted())
+        TestHost::from_prepared(&runtime, &prepared, full_declarations(), fixture_grants())
             .expect("loads")
     };
     let mut later = instantiate();

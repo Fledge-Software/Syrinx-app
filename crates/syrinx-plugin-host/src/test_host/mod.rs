@@ -4,13 +4,15 @@
 //! It is a `Session` over synthetic services, so it keeps exactly the delivery
 //! order and request rules the per-plugin workers keep.
 
-mod grants;
 mod synthetic;
 
 use std::sync::Arc;
 
-pub use grants::SyntheticGrants;
-pub use synthetic::{SYNTHETIC_NOW, SyntheticHost, ViewRecord};
+/// The test host's grant store: the host's own `GrantSet`, empty at first, so plugin
+/// repositories can test what their plugin does when a capability is `denied` or `revoked`.
+pub use crate::grants::GrantSet as SyntheticGrants;
+pub use crate::views::ViewRecord;
+pub use synthetic::{SYNTHETIC_NOW, SyntheticHost};
 
 use crate::bindings::syrinx::plugin::host::LogLevel;
 pub use crate::session::{CallResult, Declarations, DeclaredCommand};
@@ -58,7 +60,7 @@ impl Session<SyntheticHost> {
         grants: SyntheticGrants,
     ) -> CallResult<Self> {
         declarations.check()?;
-        let services = Mediator::new(SyntheticHost::new(), declarations, Arc::new(grants));
+        let services = Mediator::new(SyntheticHost::new(), declarations, grants);
         let plugin = LoadedPlugin::from_prepared(runtime, prepared, services)?;
         Ok(Session::new(
             plugin,
@@ -70,8 +72,7 @@ impl Session<SyntheticHost> {
     /// The view's interface reads what the plugin posted to it, oldest first;
     /// `None` when the view is not open.
     pub fn take_view_events(&mut self, view: u64) -> Option<Vec<String>> {
-        let record = self.services_mut().views.get_mut(&view)?;
-        Some(std::mem::take(&mut record.events))
+        self.services_mut().book.take_view_events(view)
     }
 
     pub fn logs(&self) -> &[(LogLevel, String)] {
@@ -79,10 +80,10 @@ impl Session<SyntheticHost> {
     }
 
     pub fn view(&self, view: u64) -> Option<&ViewRecord> {
-        self.services().views.get(&view)
+        self.services().book.view(view)
     }
 
     pub fn changed_feeds(&self) -> &[String] {
-        &self.services().changed_feeds
+        self.services().book.changed_feeds()
     }
 }

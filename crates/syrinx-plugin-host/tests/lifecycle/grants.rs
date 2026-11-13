@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
+use syrinx_plugin_host::bindings::syrinx::plugin::types::{Outcome, PluginError};
 use syrinx_plugin_host::manifest::CapabilityKind;
 use syrinx_plugin_host::session::CallResult;
 use syrinx_plugin_host::test_host::{SyntheticGrants, SyntheticHost};
@@ -99,7 +99,11 @@ fn revoking_an_optional_capability_abandons_its_work_once_and_tells_the_plugin()
     assert_eq!(echo(&mut plugins, "test"), Ok(Ok(())));
     let abandoned = submit_pending(&mut plugins);
     let kept = submit_pending(&mut plugins);
+    let settled = submit_pending(&mut plugins);
+    answer(plugins.complete("test", settled, Outcome::Done(None))).expect("delivered");
     journal.work_on(abandoned);
+    // The services also name a write already settled; the host must not deliver it twice.
+    journal.work_on(settled);
 
     grants.revoke("test", CapabilityKind::Storage);
     plugins
@@ -121,6 +125,12 @@ fn revoking_an_optional_capability_abandons_its_work_once_and_tells_the_plugin()
     ));
     let delivered = format!("deliver {abandoned} uncertain the capability was revoked");
     assert_eq!(journal.count(&delivered), 1, "told once, never resubmitted");
+    let settled_lines = format!("deliver {settled} ");
+    assert_eq!(
+        journal.count(&settled_lines),
+        1,
+        "a settled write is not told again"
+    );
     assert_eq!(journal.count("revoked storage"), 1, "abandoned once");
     let (_, in_flight) = instance_state(&mut plugins);
     assert_eq!(in_flight, [kept], "work the services kept is untouched");

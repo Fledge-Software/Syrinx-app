@@ -115,19 +115,64 @@ fn a_root_a_missing_folder_and_a_file_are_refused() {
     assert_eq!(refused(&list, &file), Some(FolderRefusal::NotAFolder));
 }
 
-#[cfg(unix)]
+/// Make `link` lead to the folder `target`: a symbolic link on Unix, a junction on Windows,
+/// which `mklink /J` creates without administrator rights.
+fn link_folder(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).expect("a synthetic link");
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .expect("cmd starts");
+        assert!(made.status.success(), "mklink /J made a synthetic junction");
+    }
+}
+
 #[test]
-fn a_link_into_a_protected_folder_is_judged_by_where_it_leads() {
+fn a_link_or_junction_into_a_protected_folder_is_judged_by_where_it_leads() {
     let tree = Tree::new();
     let data = tree.folder("local/Syrinx");
     let link = tree.0.join("innocent");
-    std::os::unix::fs::symlink(&data, &link).expect("a synthetic link");
+    link_folder(&data, &link);
     let mut list = DenyList::new();
     list.protect(Protected::SyrinxData, &data);
     assert_eq!(
         refused(&list, &link),
         Some(FolderRefusal::Protected(Protected::SyrinxData))
     );
+}
+
+#[test]
+fn a_folder_protected_through_a_linked_parent_is_refused_by_its_real_path() {
+    let tree = Tree::new();
+    let real = tree.folder("real");
+    let data = tree.folder("real/Syrinx");
+    let linked_parent = tree.0.join("linked");
+    link_folder(&real, &linked_parent);
+    let mut list = DenyList::new();
+    list.protect(Protected::SyrinxData, &linked_parent.join("Syrinx"));
+    assert_eq!(
+        refused(&list, &data),
+        Some(FolderRefusal::Protected(Protected::SyrinxData))
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn this_computers_shares_and_device_paths_are_refused_as_aliases() {
+    let alias = |path: &str| super::is_local_alias(Path::new(path));
+    assert!(alias(r"\\?\UNC\localhost\C$\Users"));
+    assert!(alias(r"\\localhost\notes"));
+    assert!(alias(r"\\127.0.0.1\notes"));
+    assert!(alias(r"\\?\UNC\files.example.test\ADMIN$"));
+    assert!(alias(r"\\?\GLOBALROOT\Device\HarddiskVolume1\Users"));
+    assert!(alias(r"\\.\C:\Users"));
+    assert!(!alias(r"\\?\C:\Users\owner\vault"));
+    assert!(!alias(r"\\?\UNC\files.example.test\notes"));
 }
 
 #[test]

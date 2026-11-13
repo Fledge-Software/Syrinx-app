@@ -2,8 +2,6 @@
 //! grants kept in Syrinx's store, each plugin's settings in its own namespace there, and
 //! the per-plugin workers behind them. Built only with the `store` feature, for `syrinx-app`.
 
-mod grants;
-mod records;
 mod services;
 
 use std::collections::BTreeMap;
@@ -14,35 +12,55 @@ use std::sync::mpsc::Receiver;
 
 use syrinx_store::{
     FolderAccess, PluginFolder, PluginGrant, PluginInstall, PluginState, Store, StoreError,
+    StoredGrant,
 };
 
-pub use grants::OwnerGrants;
 pub use services::StoreServices;
 
-use crate::grants::{DenyList, FolderRefusal};
+use crate::grants::{DenyList, FolderRefusal, GrantSet};
 use crate::manifest::{CapabilityKind, FolderCount, PluginManifest, Scope};
 use crate::registry::RegisteredPlugin;
 use crate::session::{CallResult, Session};
-use crate::worker::{Pending, PluginEvent, Plugins};
-use crate::{HostError, Runtime};
-use records::PluginRecords;
+use crate::worker::{Pending, PluginEvent, PluginStatus, Plugins};
+use crate::{HostError, Runtime, limits};
+
+// The plugin contract's settings bounds (`limits`) are the source; the store keeps the same.
+const _: () = assert!(limits::MAX_SETTINGS_KEY_BYTES == syrinx_store::MAX_PLUGIN_SETTING_KEY_BYTES);
+const _: () =
+    assert!(limits::MAX_SETTINGS_VALUE_BYTES == syrinx_store::MAX_PLUGIN_SETTING_VALUE_BYTES);
+const _: () = assert!(limits::MAX_SETTINGS_KEYS == syrinx_store::MAX_PLUGIN_SETTINGS);
 
 /// Why the runtime refused or could not finish an owner's action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnerError {
     Store(StoreError),
     Host(HostError),
-    /// The plugin is not installed, or its install record does not match it.
+    /// The store has no install record for the plugin, or none enabled where one must be.
     NotInstalled(String),
+    /// The install record names a different plugin from the package it came with.
+    RecordMismatch {
+        record: String,
+        plugin: String,
+    },
+    /// The plugin is already added this session; an update is the install flow's (2d).
+    AlreadyAdded(String),
     /// The plugin's manifest does not ask for this capability.
     NotRequested(CapabilityKind),
     /// No plugin may hold a full-trust capability until Forge's slices.
     FullTrust(CapabilityKind),
-    /// A folder may be added only under a granted `folder` capability.
+    /// A folder may be added only while the `folder` capability is granted.
     FolderNotGranted,
+    /// The manifest asks to read folders, not to write them.
+    ReadWriteNotRequested,
+    /// The manifest asks for at most this many folders, and that many are granted.
+    TooManyFolders(u32),
     Folder(FolderRefusal),
-    /// A thread the runtime needs could not start.
-    Thread(String),
+    /// A revoke or remove whose steps did not all succeed: the first failure, and whether
+    /// the store kept the change. In memory the change has taken effect either way.
+    Incomplete {
+        first: Box<OwnerError>,
+        persisted: bool,
+    },
 }
 
 impl fmt::Display for OwnerError {
@@ -51,11 +69,29 @@ impl fmt::Display for OwnerError {
             Self::Store(error) => write!(formatter, "{error}"),
             Self::Host(error) => write!(formatter, "{error}"),
             Self::NotInstalled(plugin) => write!(formatter, "{plugin} is not installed"),
+            Self::RecordMismatch { record, plugin } => write!(
+                formatter,
+                "the install record is for {record}, but the package is {plugin}"
+            ),
+            Self::AlreadyAdded(plugin) => write!(formatter, "{plugin} is already installed"),
             Self::NotRequested(kind) => write!(formatter, "the plugin does not ask for {kind}"),
             Self::FullTrust(kind) => write!(formatter, "{kind} is full trust and not offered yet"),
             Self::FolderNotGranted => write!(formatter, "the folder capability is not granted"),
+            Self::ReadWriteNotRequested => {
+                write!(formatter, "the plugin asks only to read its folders")
+            }
+            Self::TooManyFolders(limit) => {
+                write!(formatter, "the plugin asks for at most {limit} folders")
+            }
             Self::Folder(refusal) => write!(formatter, "the folder was refused: {refusal}"),
-            Self::Thread(detail) => write!(formatter, "a plugin thread did not start: {detail}"),
+            Self::Incomplete { first, persisted } => {
+                let saved = if *persisted {
+                    "the change was saved"
+                } else {
+                    "the change was not saved and returns at the next start"
+                };
+                write!(formatter, "{first}; {saved}")
+            }
         }
     }
 }
@@ -74,26 +110,25 @@ impl From<HostError> for OwnerError {
     }
 }
 
-/// An installed plugin the runtime knows the manifest of.
-struct Installed {
+/// A plugin added this session, with the manifest that says what it may ask for.
+struct Added {
     manifest: PluginManifest,
     manifest_sha256: [u8; 32],
 }
 
-/// The workers and the records thread, started with the first plugin added.
+/// The workers, started with the first plugin added.
 struct Running {
     plugins: Plugins<StoreServices>,
     events: Receiver<PluginEvent>,
-    records: PluginRecords,
 }
 
 /// Every installed plugin and the owner's grants, as one Syrinx session holds them.
 pub struct OwnerRuntime {
     store: Arc<Store>,
     host_version: String,
-    grants: Arc<OwnerGrants>,
+    grants: GrantSet,
     deny: DenyList,
-    installed: BTreeMap<String, Installed>,
+    added: BTreeMap<String, Added>,
     running: Option<Running>,
 }
 
@@ -105,102 +140,114 @@ impl OwnerRuntime {
         host_version: impl Into<String>,
         deny: DenyList,
     ) -> Result<Self, OwnerError> {
-        let grants = OwnerGrants::from_stored(&store.plugin_grants()?);
+        let grants = from_stored(&store.plugin_grants()?);
         Ok(Self {
             store,
             host_version: host_version.into(),
-            grants: Arc::new(grants),
+            grants,
             deny,
-            installed: BTreeMap::new(),
+            added: BTreeMap::new(),
             running: None,
         })
     }
 
-    /// Record a newly installed or updated plugin, then add it. Its grants are kept.
+    /// Record a newly installed plugin, then add it. A plugin already added is refused before
+    /// anything is written: updating one is the install flow's (2d).
     pub fn install(
         &mut self,
         plugin: &RegisteredPlugin,
         component: Arc<[u8]>,
         install: PluginInstall,
     ) -> Result<(), OwnerError> {
-        if install.plugin_id != plugin.manifest().id() {
-            return Err(OwnerError::NotInstalled(install.plugin_id));
+        let id = plugin.manifest().id();
+        if install.plugin_id != id {
+            return Err(OwnerError::RecordMismatch {
+                record: install.plugin_id,
+                plugin: id.to_owned(),
+            });
+        }
+        if self.added.contains_key(id) {
+            return Err(OwnerError::AlreadyAdded(id.to_owned()));
         }
         self.store.save_plugin_install(install)?;
         self.load(plugin, component)
     }
 
-    /// Add a plugin the store records as installed and enabled, as at each start-up.
+    /// Add a plugin the store records as installed and enabled, as at each start-up. The
+    /// record's hashes and signer are not checked against the package here: the package is
+    /// verified when it is installed (2d, #140).
     pub fn load(
         &mut self,
         plugin: &RegisteredPlugin,
         component: Arc<[u8]>,
     ) -> Result<(), OwnerError> {
         let id = plugin.manifest().id().to_owned();
+        if self.added.contains_key(&id) {
+            return Err(OwnerError::AlreadyAdded(id));
+        }
         let record = self
-            .store
-            .plugin_installs()?
-            .into_iter()
-            .find(|install| install.plugin_id == id && install.state == PluginState::Enabled)
+            .record(&id)?
+            .filter(|install| install.state == PluginState::Enabled)
             .ok_or_else(|| OwnerError::NotInstalled(id.clone()))?;
         self.running()?.plugins.add(plugin, component)?;
-        let installed = Installed {
+        let added = Added {
             manifest: plugin.manifest().clone(),
             manifest_sha256: record.manifest_sha256,
         };
-        self.installed.insert(id, installed);
+        self.added.insert(id, added);
         Ok(())
     }
 
     /// Grant a capability the plugin's manifest asks for, with the scope it asks for. The
-    /// store keeps it first; only then may the plugin use it.
+    /// store keeps it first; only then may the plugin use it. The plugin must be added, since
+    /// its manifest says what it may ask for.
     pub fn grant(
         &mut self,
         plugin: &str,
         kind: CapabilityKind,
         granted_at: i64,
     ) -> Result<(), OwnerError> {
-        let installed = self.installed(plugin)?;
-        let request = installed
-            .manifest
-            .capabilities()
-            .iter()
-            .find(|request| request.kind == kind)
-            .ok_or(OwnerError::NotRequested(kind))?;
+        let added = self.added(plugin)?;
+        let scope = requested_scope(&added.manifest, kind)?;
         if kind.is_full_trust() {
             return Err(OwnerError::FullTrust(kind));
         }
         let grant = PluginGrant {
             capability: kind.name().to_owned(),
-            scope_json: scope_json(&request.scope),
+            scope_json: scope_json(scope),
             granted_at,
-            granted_for_manifest: installed.manifest_sha256,
+            granted_for_manifest: added.manifest_sha256,
         };
         self.store.grant_plugin(plugin.to_owned(), grant)?;
-        self.grants.insert(plugin, kind);
+        self.grants.grant(plugin, kind);
         Ok(())
     }
 
-    /// Grant a folder under the plugin's `folder` capability, once the deny list allows its
-    /// canonical form. The folder picker and the folder service are #36's.
+    /// Grant a folder under the plugin's `folder` capability, no wider than its manifest
+    /// asks, once the deny list allows its canonical form. The picker is #36's.
     pub fn grant_folder(
         &mut self,
         plugin: &str,
         folder: &Path,
         access: FolderAccess,
     ) -> Result<(), OwnerError> {
-        self.installed(plugin)?;
-        let grant_id = self
-            .store
-            .plugin_grants()?
-            .into_iter()
-            .find(|stored| {
-                stored.plugin_id == plugin
-                    && stored.grant.capability == CapabilityKind::Folder.name()
-            })
-            .map(|stored| stored.grant_id)
-            .ok_or(OwnerError::FolderNotGranted)?;
+        let added = self.added(plugin)?;
+        let Scope::Folder {
+            writable, count, ..
+        } = requested_scope(&added.manifest, CapabilityKind::Folder)?
+        else {
+            return Err(OwnerError::NotRequested(CapabilityKind::Folder));
+        };
+        let (writable, count) = (*writable, *count);
+        if !self.grants.is_granted(plugin, CapabilityKind::Folder) {
+            return Err(OwnerError::FolderNotGranted);
+        }
+        if access == FolderAccess::ReadWrite && !writable {
+            return Err(OwnerError::ReadWriteNotRequested);
+        }
+        let grant_id = self.folder_grant_id(plugin)?;
         let path = self.deny.check(folder).map_err(OwnerError::Folder)?;
+        self.check_folder_count(plugin, grant_id, &path, count)?;
         let folder = PluginFolder {
             grant_id,
             path,
@@ -210,31 +257,34 @@ impl OwnerRuntime {
         Ok(())
     }
 
-    /// Withdraw a capability. It stops working at once, before the store is written: a
-    /// failed write is reported, and the capability stays withdrawn for this session.
+    /// Withdraw a capability from any installed plugin, added this session or not. It stops
+    /// working at once; the worker and the store are then each told, and a failure of either
+    /// is reported with whether the store kept the change.
     pub fn revoke(&mut self, plugin: &str, kind: CapabilityKind) -> Result<(), OwnerError> {
-        self.installed(plugin)?;
-        self.grants.remove(plugin, kind);
-        if let Some(running) = self.running.as_mut() {
-            running.plugins.revoke(plugin, kind)?;
-        }
-        self.store
-            .revoke_plugin_grant(plugin.to_owned(), kind.name().to_owned())?;
-        Ok(())
+        self.require_record(plugin)?;
+        self.grants.revoke(plugin, kind);
+        let workers = match (self.added.contains_key(plugin), self.running.as_mut()) {
+            (true, Some(running)) => running.plugins.revoke(plugin, kind),
+            _ => Ok(()),
+        };
+        let stored = self
+            .store
+            .revoke_plugin_grant(plugin.to_owned(), kind.name().to_owned());
+        both_steps(workers, stored)
     }
 
-    /// Remove a plugin and everything keyed to it: it stops, then its install record, grants,
-    /// folders and settings are deleted together. The search index (2e) and recovery drafts
-    /// (#37) keep nothing per plugin yet; their owners join this when they do.
+    /// Remove any installed plugin and everything keyed to it: it stops, then its install
+    /// record, grants, folders and settings are deleted together. The search index (#141) and
+    /// recovery drafts (#37) keep nothing per plugin yet; their owners join this when they do.
     pub fn remove(&mut self, plugin: &str) -> Result<(), OwnerError> {
-        self.installed(plugin)?;
-        if let Some(running) = self.running.as_mut() {
-            running.plugins.uninstall(plugin)?;
-        }
-        self.installed.remove(plugin);
+        self.require_record(plugin)?;
+        let workers = match (self.added.remove(plugin), self.running.as_mut()) {
+            (Some(_), Some(running)) => running.plugins.uninstall(plugin),
+            _ => Ok(()),
+        };
         self.grants.forget(plugin);
-        self.store.remove_plugin(plugin.to_owned())?;
-        Ok(())
+        let stored = self.store.remove_plugin(plugin.to_owned());
+        both_steps(workers, stored)
     }
 
     /// Queue a call for an added plugin; see `Plugins::call`.
@@ -249,6 +299,11 @@ impl OwnerRuntime {
         running.plugins.call(plugin, call)
     }
 
+    /// Where an added plugin is in its life; `None` for one not added this session.
+    pub fn status(&self, plugin: &str) -> Option<PluginStatus> {
+        self.running.as_ref()?.plugins.status(plugin)
+    }
+
     /// What the workers reported since the last look.
     pub fn take_events(&self) -> Vec<PluginEvent> {
         self.running
@@ -257,22 +312,69 @@ impl OwnerRuntime {
             .unwrap_or_default()
     }
 
-    /// Stop every plugin, then the records thread, so nothing holds the store any more.
+    /// Stop every plugin, so nothing but the caller holds the store any more.
     pub fn shutdown(mut self) {
-        let Some(mut running) = self.running.take() else {
-            return;
-        };
-        running.plugins.shutdown();
-        running.records.stop();
+        if let Some(running) = self.running.take() {
+            running.plugins.shutdown();
+        }
     }
 
-    fn installed(&self, plugin: &str) -> Result<&Installed, OwnerError> {
-        self.installed
+    fn added(&self, plugin: &str) -> Result<&Added, OwnerError> {
+        self.added
             .get(plugin)
             .ok_or_else(|| OwnerError::NotInstalled(plugin.to_owned()))
     }
 
-    /// The workers and records thread, started on first use.
+    /// The store's install record for `plugin`, in any state.
+    fn record(&self, plugin: &str) -> Result<Option<PluginInstall>, OwnerError> {
+        let installs = self.store.plugin_installs()?;
+        Ok(installs
+            .into_iter()
+            .find(|install| install.plugin_id == plugin))
+    }
+
+    fn require_record(&self, plugin: &str) -> Result<(), OwnerError> {
+        match self.record(plugin)? {
+            Some(_) => Ok(()),
+            None => Err(OwnerError::NotInstalled(plugin.to_owned())),
+        }
+    }
+
+    fn folder_grant_id(&self, plugin: &str) -> Result<i64, OwnerError> {
+        let folder = CapabilityKind::Folder.name();
+        self.store
+            .plugin_grants()?
+            .into_iter()
+            .find(|stored| stored.plugin_id == plugin && stored.grant.capability == folder)
+            .map(|stored| stored.grant_id)
+            .ok_or(OwnerError::FolderNotGranted)
+    }
+
+    /// A folder past the manifest's count is refused; granting one already held again is not.
+    fn check_folder_count(
+        &self,
+        plugin: &str,
+        grant_id: i64,
+        path: &Path,
+        count: FolderCount,
+    ) -> Result<(), OwnerError> {
+        let FolderCount::Limited(limit) = count else {
+            return Ok(());
+        };
+        let held: Vec<PluginFolder> = self
+            .store
+            .plugin_folders(plugin)?
+            .into_iter()
+            .filter(|folder| folder.grant_id == grant_id)
+            .collect();
+        let again = held.iter().any(|folder| folder.path == path);
+        if again || held.len() < limit as usize {
+            return Ok(());
+        }
+        Err(OwnerError::TooManyFolders(limit))
+    }
+
+    /// The workers, started on first use.
     fn running(&mut self) -> Result<&mut Running, OwnerError> {
         let running = match self.running.take() {
             Some(running) => running,
@@ -282,21 +384,53 @@ impl OwnerRuntime {
     }
 
     fn start_running(&self) -> Result<Running, OwnerError> {
-        let records = PluginRecords::start(Arc::clone(&self.store))
-            .map_err(|error| OwnerError::Thread(error.to_string()))?;
-        let handle = records
-            .handle()
-            .ok_or_else(|| OwnerError::Thread("the records thread stopped".into()))?;
+        let store = Arc::clone(&self.store);
         let factory =
-            move |manifest: &PluginManifest| StoreServices::new(manifest.id(), handle.clone());
-        let grants: Arc<dyn crate::grants::Grants> = self.grants.clone();
-        let (plugins, events) =
-            Plugins::new(Runtime::new()?, self.host_version.clone(), grants, factory);
-        Ok(Running {
-            plugins,
-            events,
-            records,
-        })
+            move |manifest: &PluginManifest| StoreServices::new(manifest.id(), Arc::clone(&store));
+        let (plugins, events) = Plugins::new(
+            Runtime::new()?,
+            self.host_version.clone(),
+            self.grants.clone(),
+            factory,
+        );
+        Ok(Running { plugins, events })
+    }
+}
+
+/// The grants the store holds. A row naming a kind this Syrinx does not know grants nothing.
+fn from_stored(rows: &[StoredGrant]) -> GrantSet {
+    let grants = GrantSet::new();
+    for row in rows {
+        if let Some(kind) = CapabilityKind::from_name(&row.grant.capability) {
+            grants.grant(&row.plugin_id, kind);
+        }
+    }
+    grants
+}
+
+/// The scope `manifest` asks `kind` with, if it asks for it at all.
+fn requested_scope(manifest: &PluginManifest, kind: CapabilityKind) -> Result<&Scope, OwnerError> {
+    manifest
+        .capabilities()
+        .iter()
+        .find(|request| request.kind == kind)
+        .map(|request| &request.scope)
+        .ok_or(OwnerError::NotRequested(kind))
+}
+
+/// A revoke's or remove's result: the worker step's failure first, then the store's, and
+/// whether the store kept the change.
+fn both_steps(workers: CallResult<()>, stored: Result<bool, StoreError>) -> Result<(), OwnerError> {
+    match (workers, stored) {
+        (Ok(()), Ok(_)) => Ok(()),
+        (Err(error), stored) => Err(OwnerError::Incomplete {
+            first: Box::new(OwnerError::Host(error)),
+            persisted: stored.is_ok(),
+        }),
+        (Ok(()), Err(error)) => Err(OwnerError::Incomplete {
+            first: Box::new(OwnerError::Store(error)),
+            persisted: false,
+        }),
     }
 }
 
@@ -321,4 +455,53 @@ fn scope_json(scope: &Scope) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    fn stored(plugin: &str, capability: &str) -> StoredGrant {
+        StoredGrant {
+            grant_id: 1,
+            plugin_id: plugin.to_owned(),
+            grant: PluginGrant {
+                capability: capability.to_owned(),
+                scope_json: "{}".to_owned(),
+                granted_at: 1,
+                granted_for_manifest: [2; 32],
+            },
+        }
+    }
+
+    #[test]
+    fn stored_grants_are_read_by_kind_and_unknown_kinds_grant_nothing() {
+        let grants = from_stored(&[stored("test", "storage"), stored("test", "teleport")]);
+        assert_eq!(grants.kinds("test"), [CapabilityKind::Storage]);
+        assert!(grants.kinds("other").is_empty());
+    }
+
+    #[test]
+    fn a_failed_step_is_reported_with_whether_the_store_kept_the_change() {
+        let host = || HostError::Unavailable("synthetic".into());
+        assert_eq!(both_steps(Ok(()), Ok(true)), Ok(()));
+        assert_eq!(
+            both_steps(Err(host()), Ok(true)),
+            Err(OwnerError::Incomplete {
+                first: Box::new(OwnerError::Host(host())),
+                persisted: true
+            })
+        );
+        assert_eq!(
+            both_steps(Err(host()), Err(StoreError::Busy)),
+            Err(OwnerError::Incomplete {
+                first: Box::new(OwnerError::Host(host())),
+                persisted: false
+            })
+        );
+        assert_eq!(
+            both_steps(Ok(()), Err(StoreError::Busy)),
+            Err(OwnerError::Incomplete {
+                first: Box::new(OwnerError::Store(StoreError::Busy)),
+                persisted: false
+            })
+        );
+    }
+}

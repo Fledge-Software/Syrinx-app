@@ -9,7 +9,7 @@ use syrinx_plugin_host::test_host::TestHost;
 use syrinx_plugin_host::{Runtime, limits};
 
 use super::{add, answer, synthetic};
-use crate::support::{self, FULL, full_declarations, storage_granted};
+use crate::support::{self, FULL, fixture_grants, full_declarations};
 
 /// Calls of each export the workload makes; activation and deactivation take a fresh instance.
 const CALLS: usize = 200;
@@ -19,12 +19,8 @@ const INSTANCES: usize = 20;
 const HEADROOM: u32 = 10;
 
 fn loaded() -> TestHost {
-    TestHost::load_with_grants(
-        &support::bytes(FULL),
-        full_declarations(),
-        storage_granted(),
-    )
-    .expect("the full fixture loads")
+    TestHost::load_with_grants(&support::bytes(FULL), full_declarations(), fixture_grants())
+        .expect("the full fixture loads")
 }
 
 fn activated() -> TestHost {
@@ -59,7 +55,7 @@ fn measure(export: Export) -> Vec<Duration> {
                             &runtime,
                             &prepared,
                             full_declarations(),
-                            storage_granted(),
+                            fixture_grants(),
                         )
                         .expect("instantiates");
                         assert!(host.activate().expect("runs").is_ok());

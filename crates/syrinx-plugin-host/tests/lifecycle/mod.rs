@@ -32,7 +32,7 @@ fn granted_plugins<S: PluginHost>(
     grants: &SyntheticGrants,
     services: impl Fn(&PluginManifest) -> S + Send + Sync + 'static,
 ) -> (Plugins<S>, Receiver<PluginEvent>) {
-    let grants = Arc::new(grants.clone());
+    let grants = grants.clone();
     Plugins::new(
         Runtime::new().expect("engine"),
         "0.1.0-worker",
@@ -46,7 +46,7 @@ fn plugins_with<S: PluginHost>(
     host_version: &str,
     services: impl Fn(&PluginManifest) -> S + Send + Sync + 'static,
 ) -> (Plugins<S>, Receiver<PluginEvent>) {
-    let grants = Arc::new(SyntheticGrants::new());
+    let grants = SyntheticGrants::new();
     Plugins::new(
         Runtime::new().expect("engine"),
         host_version,
@@ -399,7 +399,7 @@ fn the_epoch_does_not_tick_while_every_plugin_is_idle() {
     let (mut plugins, _events) = Plugins::new(
         runtime.clone(),
         "0.1.0-worker",
-        Arc::new(SyntheticGrants::new()),
+        SyntheticGrants::new(),
         |_manifest: &PluginManifest| SyntheticHost::new(),
     );
     add(&mut plugins, "test", "");

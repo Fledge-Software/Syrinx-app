@@ -24,6 +24,10 @@ id = "test.echo"
 title = "Synthetic test.echo"
 
 [[contributes.commands]]
+id = "test.recall"
+title = "Synthetic test.recall"
+
+[[contributes.commands]]
 id = "test.fail"
 title = "Synthetic test.fail"
 

@@ -131,15 +131,20 @@ uses a service whose dependency never answers; without the deadline it
 would wait for ever.
 
 The application's settings service (#136, `owner/services.rs`) follows the
-same rule. Syrinx's store can wait up to SQLite's 5 s busy timeout, so a
-plugin's settings reads and writes go to one records thread of their own
-(`owner/records.rs`), and the service waits for the answer only its budget.
-Past that, or when 16 pieces of work are already queued, it answers
-`unavailable`. Work already queued still runs, so a write answered
-`unavailable` may still land; settings writes overwrite, so a retry is
-harmless. `a_busy_store_answers_unavailable_within_the_call_budget` holds
-the records thread and checks the answer comes inside the call's deadline.
-The 16 is not measured; it only keeps a stuck store from collecting work.
+same rule. Syrinx's store can wait up to SQLite's 5 s busy timeout, so the
+service calls the store's bounded variants, `Store::plugin_setting_within`
+and `Store::save_plugin_setting_within`, with the call's service budget
+(`CallDeadline::service_budget`, at most half the call's remaining time).
+A read waits that long for a free reader and for SQLite's lock. A write is
+refused unstarted if the store's writer reaches it after half the budget,
+so a write queued behind a backup never lands after its caller was told
+`unavailable`; once started, SQLite's busy wait is cut to the budget's end.
+Only a write that starts in time and then overruns its last moments can
+land after the caller gave up. Past the budget the store answers
+`StoreError::Busy`, which the plugin sees as `unavailable`. The store tests
+`a_bounded_read_uses_a_free_reader_and_answers_busy_when_none_frees_in_time`
+and `bounded_writes_behind_a_held_lock_fail_and_never_land_later` hold a
+reader or SQLite's write lock and check both.
 
 ## One job's total budget
 

@@ -1,9 +1,11 @@
 //! The fixed deny list (note 10, section 3): no folder grant may equal or contain Syrinx's own
-//! folders, the system's, a drive root or the user-profile root. One check serves grant time
-//! and every later open, and runs on canonical paths that Syrinx resolved itself.
+//! folders, the system's, a drive root or the user-profile root, or lie inside any of them
+//! except the profile. One check serves grant time and every later open, and runs on
+//! canonical paths that Syrinx resolved itself.
 
+use std::ffi::OsStr;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 /// A folder the deny list protects. Folder paths are owner data, so only the kind is ever shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +24,19 @@ pub enum Protected {
     UserProfile,
 }
 
+impl fmt::Display for Protected {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::SyrinxData => "Syrinx's data folder",
+            Self::Snapshots => "Syrinx's snapshot folder",
+            Self::WebViewData => "the web engine's profile folder",
+            Self::System => "the Windows folder",
+            Self::ProgramFiles => "the Program Files folder",
+            Self::UserProfile => "your user folder",
+        })
+    }
+}
+
 impl Protected {
     /// Whether a folder inside this one is refused too. Only the profile's insides are the
     /// owner's own folders, such as a vault under Documents.
@@ -38,6 +53,9 @@ pub enum FolderRefusal {
     NotAFolder,
     /// A drive root, or the file system's root.
     Root,
+    /// A name for this computer's own drives that a path comparison cannot see through: a
+    /// share on this computer, an administrative share, or a device path.
+    LocalAlias,
     Protected(Protected),
 }
 
@@ -47,7 +65,11 @@ impl fmt::Display for FolderRefusal {
             Self::Unresolved => write!(formatter, "the folder could not be found"),
             Self::NotAFolder => write!(formatter, "it is not a folder"),
             Self::Root => write!(formatter, "a whole drive cannot be granted"),
-            Self::Protected(kind) => write!(formatter, "it overlaps a protected folder ({kind:?})"),
+            Self::LocalAlias => write!(
+                formatter,
+                "it reaches this computer's drives by a network name"
+            ),
+            Self::Protected(kind) => write!(formatter, "it overlaps {kind}"),
         }
     }
 }
@@ -94,6 +116,9 @@ impl DenyList {
         if canonical.parent().is_none() {
             return Err(FolderRefusal::Root);
         }
+        if is_local_alias(&canonical) {
+            return Err(FolderRefusal::LocalAlias);
+        }
         if let Some(kind) = self.overlap(&canonical) {
             return Err(FolderRefusal::Protected(kind));
         }
@@ -111,6 +136,34 @@ impl DenyList {
             })
             .map(|(_, kind)| *kind)
     }
+}
+
+/// Whether a canonical path reaches this computer's drives under a name that never
+/// `starts_with` the protected `C:\` forms: a share on this computer (`\\localhost\…`, its
+/// own name or a loopback address), any administrative share (`C$`, `ADMIN$`), or a device
+/// path (`\\?\GLOBALROOT\…`, `\\.\…`). Only Windows paths carry these prefixes. A share on
+/// another computer is left to the owner.
+fn is_local_alias(canonical: &Path) -> bool {
+    let Some(Component::Prefix(prefix)) = canonical.components().next() else {
+        return false;
+    };
+    match prefix.kind() {
+        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+            is_this_computer(server) || share.to_string_lossy().ends_with('$')
+        }
+        Prefix::Verbatim(_) | Prefix::DeviceNS(_) => true,
+        Prefix::VerbatimDisk(_) | Prefix::Disk(_) => false,
+    }
+}
+
+/// A server name that is this computer: a loopback name or address, or its own name.
+fn is_this_computer(server: &OsStr) -> bool {
+    let server = server.to_string_lossy().to_ascii_lowercase();
+    let own_name = std::env::var("COMPUTERNAME").map(|name| name.to_ascii_lowercase());
+    matches!(server.as_str(), "localhost" | "." | "?" | "::1" | "[::1]")
+        || server.starts_with("127.")
+        || server.starts_with("0--1.ipv6-literal.net")
+        || own_name.is_ok_and(|name| name == server)
 }
 
 /// `path` with its deepest existing ancestor canonicalized and the missing rest appended.

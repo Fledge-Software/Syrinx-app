@@ -17,6 +17,7 @@ pub mod session;
 pub mod test_host;
 mod ticker;
 mod validate;
+pub mod views;
 mod wasi;
 pub mod worker;
 

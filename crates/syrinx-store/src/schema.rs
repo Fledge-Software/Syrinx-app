@@ -176,10 +176,13 @@ const STATE_TABLE: &str = "CREATE TABLE session_state (
     last_saved_page_id BLOB NOT NULL CHECK(length(last_saved_page_id) = 8)
 ) STRICT";
 
+/// How long SQLite waits for another connection's lock before reporting it busy.
+pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub(crate) fn configure_connection(connection: &Connection) -> Result<(), StoreError> {
     // These connection-local settings do not modify a foreign database's schema or journal mode.
     connection
-        .busy_timeout(Duration::from_secs(5))
+        .busy_timeout(BUSY_TIMEOUT)
         .map_err(|error| database_error(StoreOperation::Configure, error))?;
     connection
         .execute_batch("PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF;")
