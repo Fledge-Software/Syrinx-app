@@ -10,6 +10,8 @@ mod identity;
 mod instance;
 pub mod limits;
 pub mod manifest;
+#[cfg(feature = "store")]
+pub mod owner;
 mod registry;
 pub mod session;
 pub mod test_host;

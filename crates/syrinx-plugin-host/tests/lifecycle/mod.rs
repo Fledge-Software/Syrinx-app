@@ -25,7 +25,7 @@ use crate::support::{self, FULL};
 use services::{Journal, TestServices};
 
 /// Long enough for the first activation to compile the fixture in a debug build.
-const WAIT: Duration = Duration::from_secs(60);
+pub(crate) const WAIT: Duration = Duration::from_secs(60);
 
 /// Workers under `grants`, which the test keeps to grant and revoke.
 fn granted_plugins<S: PluginHost>(
@@ -72,7 +72,7 @@ fn add<S: PluginHost>(plugins: &mut Plugins<S>, id: &str, extra: &str) {
         .expect("added");
 }
 
-fn answer<R>(queued: CallResult<Pending<R>>) -> CallResult<R> {
+pub(crate) fn answer<R>(queued: CallResult<Pending<R>>) -> CallResult<R> {
     queued
         .expect("queued")
         .wait(WAIT)

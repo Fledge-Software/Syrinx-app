@@ -115,6 +115,7 @@ pub(super) fn survivable(error: &SessionError) -> bool {
         | SessionError::Destination(_)
         | SessionError::Deletion(_)
         | SessionError::Usage(_)
+        | SessionError::Plugins(_)
         | SessionError::NoActiveTab
         | SessionError::HistoryUnavailable
         | SessionError::ClockUnavailable => true,

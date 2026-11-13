@@ -2,6 +2,8 @@
 //! test host, without a window. Each negative test names how it must fail.
 
 mod lifecycle;
+#[cfg(feature = "store")]
+mod owner;
 mod package;
 mod support;
 

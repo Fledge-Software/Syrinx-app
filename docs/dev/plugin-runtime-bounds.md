@@ -130,6 +130,17 @@ request. The test `an_unavailable_host_service_answers_by_the_deadline_and_the_p
 uses a service whose dependency never answers; without the deadline it
 would wait for ever.
 
+The application's settings service (#136, `owner/services.rs`) follows the
+same rule. Syrinx's store can wait up to SQLite's 5 s busy timeout, so a
+plugin's settings reads and writes go to one records thread of their own
+(`owner/records.rs`), and the service waits for the answer only its budget.
+Past that, or when 16 pieces of work are already queued, it answers
+`unavailable`. Work already queued still runs, so a write answered
+`unavailable` may still land; settings writes overwrite, so a retry is
+harmless. `a_busy_store_answers_unavailable_within_the_call_budget` holds
+the records thread and checks the answer comes inside the call's deadline.
+The 16 is not measured; it only keeps a stuck store from collecting work.
+
 ## One job's total budget
 
 A job is one call the worker takes from the queue: its export and every
