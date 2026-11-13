@@ -19,6 +19,7 @@ use syrinx_store::{
 
 use super::*;
 
+mod plugin_tests;
 mod survival_tests;
 mod usage_tests;
 

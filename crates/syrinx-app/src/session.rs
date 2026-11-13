@@ -7,6 +7,7 @@ mod history;
 mod history_repair;
 mod page_text;
 mod page_text_setting;
+mod plugins;
 mod preferences;
 mod recovery;
 mod retention;
@@ -399,6 +400,8 @@ pub enum SessionError {
     Deletion(JournalError),
     /// The usage file could not be read, written or deleted (AN-01); never fatal.
     Usage(UsageError),
+    /// The plugin runtime could not start; browsing goes on without plugins (#136).
+    Plugins(syrinx_plugin_host::owner::OwnerError),
     NoActiveTab,
     /// The session worker could not take a request, or stopped before answering it.
     StorageUnavailable,
@@ -466,6 +469,7 @@ impl fmt::Display for SessionError {
             Self::Destination(error) => write!(formatter, "Cannot change this tile: {error}"),
             Self::Deletion(error) => write!(formatter, "Cannot clear history safely: {error}"),
             Self::Usage(error) => write!(formatter, "{error}"),
+            Self::Plugins(error) => write!(formatter, "Plugins are unavailable: {error}"),
             Self::NoActiveTab => formatter.write_str("There is no active page to save"),
             Self::StorageUnavailable => formatter.write_str("Local storage is unavailable"),
             Self::HistoryUnavailable => {
@@ -637,21 +641,29 @@ fn serve_accepted(
     data_dir: &std::path::Path,
 ) -> Result<(), SessionError> {
     worker.survival.keep_in(data_dir.to_path_buf());
-    let result = serve_counted(
-        &usage,
-        startup,
-        &store,
-        &mut worker,
-        commands,
-        events,
-        data_dir,
-    );
+    // The session owns the plugin runtime, which shares its store; plugins never stop browsing.
+    let store = Arc::new(store);
+    let (plugins, started) = match plugins::start(&store, data_dir) {
+        Ok(plugins) => (Some(plugins), Ok(())),
+        Err(error) => (None, emit_recoverable(events, SessionError::Plugins(error))),
+    };
+    let result = started.and_then(|()| {
+        serve_counted(
+            &usage,
+            startup,
+            &store,
+            &mut worker,
+            commands,
+            events,
+            data_dir,
+        )
+    });
     worker.survival.finish();
     if let Err(error) = &result {
         stop::keep_stop(data_dir, error);
     }
     // A shutdown failure after the line is written goes to the window and stderr only.
-    finish_store(result, store.shutdown())
+    finish_store(result, plugins::close(plugins, store))
 }
 
 /// Loads usage counting, serves until the loop ends and saves the counts.

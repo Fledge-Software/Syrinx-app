@@ -5,15 +5,19 @@ mod checks;
 pub mod deadline;
 mod engine;
 mod error;
+pub mod grants;
 mod identity;
 mod instance;
 pub mod limits;
 pub mod manifest;
+#[cfg(feature = "store")]
+pub mod owner;
 mod registry;
 pub mod session;
 pub mod test_host;
 mod ticker;
 mod validate;
+pub mod views;
 mod wasi;
 pub mod worker;
 

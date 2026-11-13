@@ -168,8 +168,8 @@ impl<S: PluginHost> Session<S> {
         let info = Activation {
             host_version: self.host_version.clone(),
             granted: self
-                .mediator()
-                .granted()
+                .mediator_mut()
+                .take_granted()
                 .iter()
                 .map(|kind| kind.name().to_owned())
                 .collect(),
@@ -288,6 +288,17 @@ impl<S: PluginHost> Session<S> {
                 .syrinx_plugin_events()
                 .call_deliver(store, request, &outcome)
         })?;
+        Ok(())
+    }
+
+    /// Make the owner's revocations take effect: the services close what they opened under
+    /// each capability withdrawn since the last call and abandon its requests, and the plugin
+    /// is told each abandoned write's outcome. Later calls to the service answer `revoked`.
+    /// The workers call this before every job; under the test host, call it after a revoke.
+    pub fn apply_revocations(&mut self) -> CallResult<()> {
+        for (request, outcome) in self.mediator_mut().apply_revocations() {
+            self.complete(request, outcome)?;
+        }
         Ok(())
     }
 

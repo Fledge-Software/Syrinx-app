@@ -20,11 +20,13 @@ use crate::error::{
 use crate::history::{
     self, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit, HistoryWrite, RecordedVisit,
 };
+use crate::plugins::{PluginWrite, PluginWritten};
 use crate::preferences::{self, PreferenceWrite, StoredPreferences};
 use crate::replay::{self, AppliedDeletions};
 use crate::{BackupOutcome, DirectoryLease, ShutdownState};
 use crate::{backup, records, schema};
 
+mod plugins;
 mod session;
 
 use session::HeldSession;
@@ -467,6 +469,12 @@ enum WriterRequest {
         modified_at: i64,
         reply: mpsc::SyncSender<Result<(), StoreError>>,
     },
+    Plugin {
+        write: PluginWrite,
+        /// A plugin's own write must start and finish in time; the owner's waits as usual.
+        limit: Option<plugins::WriteLimit>,
+        reply: mpsc::SyncSender<Result<PluginWritten, StoreError>>,
+    },
     /// D47 journal requests to apply in one transaction, whatever their categories.
     Deletions {
         requests: Vec<DeletionRequest>,
@@ -598,6 +606,17 @@ fn serve_writes(
                 let result =
                     crate::site_zoom::write(&writer.connection, &host, factor, modified_at);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::Plugin {
+                write,
+                limit,
+                reply,
+            } => {
+                let result = plugins::write_within(&writer.connection, &write, limit);
+                // A caller that gave up on a bounded write no longer listens; nothing is lost.
+                if reply.send(result).is_err() && limit.is_none() {
+                    return Err(StoreError::ReplyAbandoned);
+                }
             }
             WriterRequest::Deletions { requests, reply } => {
                 let result = replay::apply_live(&mut writer.connection, &requests);

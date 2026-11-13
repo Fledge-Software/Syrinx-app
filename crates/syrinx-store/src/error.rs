@@ -50,6 +50,7 @@ pub enum EncodingField {
     History,
     Permission,
     SiteZoom,
+    Plugin,
 }
 
 /// All diagnostic fields are structural; SQLite's message strings are discarded.
@@ -86,6 +87,8 @@ pub enum StoreError {
     RevisionExhausted,
     TooManyRecords,
     WorkerUnavailable,
+    /// A bounded call ran out of time waiting for a reader, the writer or SQLite's lock.
+    Busy,
     WorkerPanicked,
     ReplyAbandoned,
     ReaderPoisoned,

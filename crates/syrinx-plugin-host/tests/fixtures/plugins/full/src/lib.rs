@@ -60,8 +60,14 @@ impl lifecycle::Guest for Plugin {
 
 impl commands::Guest for Plugin {
     fn run(id: String) -> Result<(), PluginError> {
+        // Tests register this fixture under several plugin ids; its commands answer to any.
+        let id = match id.split_once('.') {
+            Some((_, name)) => format!("test.{name}"),
+            None => id,
+        };
         match id.as_str() {
             "test.echo" => echo(),
+            "test.recall" => recall(),
             "test.fail" => Err(PluginError::InvalidInput("synthetic failure".into())),
             "test.spin" => spin(),
             "test.grow" => grow(),
@@ -95,6 +101,13 @@ fn echo() -> Result<(), PluginError> {
     let stored = host::settings_get("test.greeting")?;
     host::feed_changed("test.items");
     note(format!("echo now={} stored={:?}", host::now(), stored));
+    Ok(())
+}
+
+/// Read the setting `echo` writes, without writing it, and report what came back.
+fn recall() -> Result<(), PluginError> {
+    let stored = host::settings_get("test.greeting")?;
+    note(format!("recall stored={stored:?}"));
     Ok(())
 }
 

@@ -130,6 +130,23 @@ request. The test `an_unavailable_host_service_answers_by_the_deadline_and_the_p
 uses a service whose dependency never answers; without the deadline it
 would wait for ever.
 
+The application's settings service (#136, `owner/services.rs`) follows the
+same rule. Syrinx's store can wait up to SQLite's 5 s busy timeout, so the
+service calls the store's bounded variants, `Store::plugin_setting_within`
+and `Store::save_plugin_setting_within`, with the call's service budget
+(`CallDeadline::service_budget`, at most half the call's remaining time).
+A read waits that long for a free reader and for SQLite's lock. A write is
+refused unstarted if the store's writer reaches it after half the budget,
+so a write queued behind a backup never lands after its caller was told
+`unavailable`. A started write runs in its own transaction with SQLite's
+busy wait cut to the budget's end, and the deadline is checked again after
+the write and before COMMIT: a write that overran is rolled back. Only the
+COMMIT's own disk write can still end after the deadline. Past the budget the store answers
+`StoreError::Busy`, which the plugin sees as `unavailable`. The store tests
+`a_bounded_read_uses_a_free_reader_and_answers_busy_when_none_frees_in_time`,
+`a_bounded_write_ready_after_its_deadline_is_rolled_back_not_committed` and
+`bounded_writes_behind_a_held_lock_fail_and_never_land_later` check each.
+
 ## One job's total budget
 
 A job is one call the worker takes from the queue: its export and every

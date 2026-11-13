@@ -8,6 +8,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crate::bindings::syrinx::plugin::types::Outcome;
+use crate::grants::GrantSet;
 use crate::manifest::PluginManifest;
 use crate::session::{JobLimits, Mediator, RequestIds, Session};
 use crate::{Failure, LoadedPlugin, PluginHost, PreparedPlugin, Runtime, limits};
@@ -85,6 +86,7 @@ pub(super) struct Worker<S: 'static> {
     pub(super) component: Arc<[u8]>,
     pub(super) prepared: Prepared<S>,
     pub(super) runtime: Runtime,
+    pub(super) grants: GrantSet,
     pub(super) services: ServiceFactory<S>,
     pub(super) requests: Arc<RequestIds>,
     pub(super) host_version: String,
@@ -113,7 +115,12 @@ impl<S: PluginHost> Worker<S> {
         }
         while let Some(call) = self.next_job() {
             session.begin_job(self.job_limits());
-            call(&mut session);
+            // Revocations take effect before the plugin runs again. One that stops the
+            // instance shows in `failure()` or the stop flag; the call is then not run and
+            // its caller is answered `unavailable`.
+            if session.apply_revocations().is_ok() {
+                call(&mut session);
+            }
             if let Some(failure) = session.failure().cloned() {
                 return self.fail(Some(session), failure);
             }
@@ -156,7 +163,7 @@ impl<S: PluginHost> Worker<S> {
         let services = Mediator::new(
             (self.services)(&self.manifest),
             (&self.manifest).into(),
-            Vec::new(),
+            self.grants.clone(),
         );
         let plugin = LoadedPlugin::from_prepared(&self.runtime, &prepared, services)
             .map_err(Failure::from_instantiation)?;
