@@ -138,13 +138,14 @@ and `Store::save_plugin_setting_within`, with the call's service budget
 A read waits that long for a free reader and for SQLite's lock. A write is
 refused unstarted if the store's writer reaches it after half the budget,
 so a write queued behind a backup never lands after its caller was told
-`unavailable`; once started, SQLite's busy wait is cut to the budget's end.
-Only a write that starts in time and then overruns its last moments can
-land after the caller gave up. Past the budget the store answers
+`unavailable`. A started write runs in its own transaction with SQLite's
+busy wait cut to the budget's end, and the deadline is checked again after
+the write and before COMMIT: a write that overran is rolled back. Only the
+COMMIT's own disk write can still end after the deadline. Past the budget the store answers
 `StoreError::Busy`, which the plugin sees as `unavailable`. The store tests
-`a_bounded_read_uses_a_free_reader_and_answers_busy_when_none_frees_in_time`
-and `bounded_writes_behind_a_held_lock_fail_and_never_land_later` hold a
-reader or SQLite's write lock and check both.
+`a_bounded_read_uses_a_free_reader_and_answers_busy_when_none_frees_in_time`,
+`a_bounded_write_ready_after_its_deadline_is_rolled_back_not_committed` and
+`bounded_writes_behind_a_held_lock_fail_and_never_land_later` check each.
 
 ## One job's total budget
 

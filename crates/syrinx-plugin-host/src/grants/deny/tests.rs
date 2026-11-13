@@ -89,10 +89,10 @@ fn a_protected_folder_that_does_not_exist_yet_is_still_protected() {
     let tree = Tree::new();
     let parent = tree.folder("local");
     let mut list = DenyList::new();
-    list.protect(Protected::Snapshots, &parent.join("Syrinx").join("backups"));
+    list.protect(Protected::SyrinxData, &parent.join("Syrinx").join("state"));
     assert_eq!(
         refused(&list, &parent),
-        Some(FolderRefusal::Protected(Protected::Snapshots))
+        Some(FolderRefusal::Protected(Protected::SyrinxData))
     );
 }
 
@@ -161,6 +161,29 @@ fn a_folder_protected_through_a_linked_parent_is_refused_by_its_real_path() {
     );
 }
 
+#[test]
+fn loopback_addresses_are_recognised_in_every_spelling() {
+    for server in [
+        "127.0.0.1",
+        "127.1.2.3",
+        "::1",
+        "[::1]",
+        "0--1.ipv6-literal.net",
+        "0-0-0-0-0-0-0-1.ipv6-literal.net",
+        "--ffff-7f00-1.ipv6-literal.net",
+        "0--1s4.ipv6-literal.net",
+    ] {
+        assert!(super::loopback_address(server), "{server}");
+    }
+    for server in [
+        "192.0.2.1",
+        "2001-db8--1.ipv6-literal.net",
+        "files.example.test",
+    ] {
+        assert!(!super::loopback_address(server), "{server}");
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn this_computers_shares_and_device_paths_are_refused_as_aliases() {
@@ -171,6 +194,8 @@ fn this_computers_shares_and_device_paths_are_refused_as_aliases() {
     assert!(alias(r"\\?\UNC\files.example.test\ADMIN$"));
     assert!(alias(r"\\?\GLOBALROOT\Device\HarddiskVolume1\Users"));
     assert!(alias(r"\\.\C:\Users"));
+    assert!(alias(r"\\0-0-0-0-0-0-0-1.ipv6-literal.net\notes"));
+    assert!(alias(r"\\--ffff-7f00-1.ipv6-literal.net\notes"));
     assert!(!alias(r"\\?\C:\Users\owner\vault"));
     assert!(!alias(r"\\?\UNC\files.example.test\notes"));
 }

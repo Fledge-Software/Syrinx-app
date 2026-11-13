@@ -456,6 +456,14 @@ fn a_plugin_that_is_installed_but_not_running_can_be_revoked_and_removed() {
         Err(OwnerError::NotInstalled("held".into())),
         "a disabled plugin is not loaded"
     );
+    assert_eq!(
+        runtime.grant("held", CapabilityKind::Storage, 2),
+        Err(OwnerError::NotLoaded("held".into()))
+    );
+    assert!(matches!(
+        runtime.call("held", |session| session.run_command("held.echo")),
+        Err(HostError::Refused(ref reason)) if reason == "held is not loaded this session"
+    ));
     runtime
         .revoke("held", CapabilityKind::Storage)
         .expect("revoked without a worker");
@@ -570,6 +578,37 @@ fn store_failures_reach_the_plugin_as_typed_errors() {
         Err(PluginError::InvalidInput("too many settings keys".into()))
     );
     drop((absent, full));
+    let store = Arc::try_unwrap(store).expect("nothing else holds the store");
+    store.shutdown().expect("the store closes");
+}
+
+#[test]
+fn a_store_call_past_its_budget_reaches_the_plugin_as_unavailable() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    store
+        .save_plugin_install(install_record("test"))
+        .expect("installed");
+    let mut services = StoreServices::new("test", Arc::clone(&store));
+    // The shortest export deadline, already over: the service's budget is nothing.
+    let spent = CallDeadline::starting_now(Export::Validate);
+    std::thread::sleep(Export::Validate.deadline());
+    services.begin_export(spent);
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        services.settings_get("test.key".into()),
+        Err(PluginError::Unavailable(_))
+    ));
+    assert!(matches!(
+        services.settings_set("test.key".into(), vec![1]),
+        Err(PluginError::Unavailable(_))
+    ));
+    assert!(
+        started.elapsed() < Export::Validate.deadline(),
+        "neither waited for the store"
+    );
+    assert_eq!(store.plugin_setting("test", "test.key"), Ok(None));
+    drop(services);
     let store = Arc::try_unwrap(store).expect("nothing else holds the store");
     store.shutdown().expect("the store closes");
 }

@@ -3,8 +3,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
 
 use syrinx_core::CommandRegistry;
 use syrinx_plugin_host::manifest::{DiscoveryOptions, MANIFEST_FILE, PluginManifest};
@@ -21,32 +19,14 @@ const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
 const MODULE_FILE: &str = "plugin.wasm";
 const READ_LIMIT: usize = 64 * 1024 * 1024;
 
-/// The fixture workspace that `syrinx-plugin-host`'s contract tests also build.
-fn fixture_workspace() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../syrinx-plugin-host/tests/fixtures/plugins")
-}
+#[path = "support/plugin_fixture.rs"]
+mod plugin_fixture;
 
-/// The full fixture's component, built once per run, offline and locked.
-/// Its twin is `build` in crates/syrinx-plugin-host/tests/support/mod.rs; change both.
+use plugin_fixture::fixture_workspace;
+
+/// The full fixture's component, built once per run under this test's own target folder.
 fn full_component() -> &'static [u8] {
-    static BUILT: OnceLock<Vec<u8>> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let target_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("plugin-fixtures");
-        let output = Command::new(env!("CARGO"))
-            .current_dir(fixture_workspace())
-            .args(["build", "--release", "--offline", "--locked"])
-            .args(["--target", "wasm32-wasip2", "--package", "full"])
-            .arg("--target-dir")
-            .arg(&target_dir)
-            .output()
-            .expect("cargo starts");
-        assert!(
-            output.status.success(),
-            "building the full fixture failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        fs::read(target_dir.join("wasm32-wasip2/release/full.wasm")).expect("the component")
-    })
+    plugin_fixture::full_component(&Path::new(env!("CARGO_TARGET_TMPDIR")).join("plugin-fixtures"))
 }
 
 /// The full fixture's real `syrinx-plugin.toml`, with its id replaced when a test needs to.

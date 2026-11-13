@@ -310,7 +310,6 @@ impl<S: PluginHost> host::Host for Mediator<S> {
         self.services.post_view_event(view, topic, json)
     }
 
-    /// Only a declared feed reaches the services; any other is noted and ignored.
     /// Only a declared feed under a current `index` grant reaches the services; any other
     /// signal is noted and dropped.
     fn feed_changed(&mut self, feed: String) {

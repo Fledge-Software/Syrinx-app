@@ -2,9 +2,6 @@
 //! grant it cannot read never stops browsing, and that the test plugin runs through the
 //! session's own route: activation, a command, a view opened and closed, and shutdown.
 
-use std::process::Command;
-use std::sync::OnceLock;
-
 use syrinx_core::CommandRegistry;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
 use syrinx_plugin_host::manifest::{
@@ -18,41 +15,17 @@ use super::*;
 
 const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
 
-/// The fixture workspace that `syrinx-plugin-host`'s contract tests also build.
-fn fixture_workspace() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../syrinx-plugin-host/tests/fixtures/plugins")
-}
+#[path = "../../tests/support/plugin_fixture.rs"]
+mod plugin_fixture;
 
-/// The full fixture's component, built once per run, offline and locked, into the same
-/// folder the integration tests use (`<target>/tmp/plugin-fixtures`). Its twins are `build`
-/// in crates/syrinx-plugin-host/tests/support/mod.rs and `full_component` in
-/// crates/syrinx-app/tests/plugin_package_load.rs; a unit test cannot share either.
+use plugin_fixture::fixture_workspace;
+
+/// The full fixture's component, built into the folder the integration tests use
+/// (`<target>/tmp/plugin-fixtures`); this test binary is `<target>/<profile>/deps/<name>`.
 fn full_component() -> &'static [u8] {
-    static BUILT: OnceLock<Vec<u8>> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        // This test binary is `<target>/<profile>/deps/<name>`.
-        let executable = std::env::current_exe().expect("the test binary's path");
-        let target = executable
-            .ancestors()
-            .nth(3)
-            .expect("the target folder")
-            .to_path_buf();
-        let target_dir = target.join("tmp").join("plugin-fixtures");
-        let output = Command::new(env!("CARGO"))
-            .current_dir(fixture_workspace())
-            .args(["build", "--release", "--offline", "--locked"])
-            .args(["--target", "wasm32-wasip2", "--package", "full"])
-            .arg("--target-dir")
-            .arg(&target_dir)
-            .output()
-            .expect("cargo starts");
-        assert!(
-            output.status.success(),
-            "building the full fixture failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        fs::read(target_dir.join("wasm32-wasip2/release/full.wasm")).expect("the component")
-    })
+    let executable = std::env::current_exe().expect("the test binary's path");
+    let target = executable.ancestors().nth(3).expect("the target folder");
+    plugin_fixture::full_component(&target.join("tmp").join("plugin-fixtures"))
 }
 
 /// The full fixture's real manifest, asking for `storage`, registered with matching lines.

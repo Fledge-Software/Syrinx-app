@@ -42,8 +42,10 @@ pub enum OwnerError {
         record: String,
         plugin: String,
     },
-    /// The plugin is already added this session; an update is the install flow's (2d).
+    /// The plugin is already loaded this session; an update is the install flow's (2d).
     AlreadyAdded(String),
+    /// The plugin is installed but was not loaded this session, so its manifest is unknown.
+    NotLoaded(String),
     /// The plugin's manifest does not ask for this capability.
     NotRequested(CapabilityKind),
     /// No plugin may hold a full-trust capability until Forge's slices.
@@ -73,7 +75,15 @@ impl fmt::Display for OwnerError {
                 formatter,
                 "the install record is for {record}, but the package is {plugin}"
             ),
-            Self::AlreadyAdded(plugin) => write!(formatter, "{plugin} is already installed"),
+            Self::AlreadyAdded(plugin) => {
+                write!(formatter, "{plugin} is already loaded this session")
+            }
+            Self::NotLoaded(plugin) => {
+                write!(
+                    formatter,
+                    "{plugin} is installed but not loaded this session"
+                )
+            }
             Self::NotRequested(kind) => write!(formatter, "the plugin does not ask for {kind}"),
             Self::FullTrust(kind) => write!(formatter, "{kind} is full trust and not offered yet"),
             Self::FolderNotGranted => write!(formatter, "the folder capability is not granted"),
@@ -293,8 +303,11 @@ impl OwnerRuntime {
         plugin: &str,
         call: impl FnOnce(&mut Session<StoreServices>) -> CallResult<R> + Send + 'static,
     ) -> CallResult<Pending<R>> {
-        let Some(running) = self.running.as_mut() else {
-            return Err(HostError::Refused(format!("{plugin} is not installed")));
+        let loaded = self.added.contains_key(plugin);
+        let Some(running) = self.running.as_mut().filter(|_| loaded) else {
+            return Err(HostError::Refused(format!(
+                "{plugin} is not loaded this session"
+            )));
         };
         running.plugins.call(plugin, call)
     }
@@ -322,7 +335,7 @@ impl OwnerRuntime {
     fn added(&self, plugin: &str) -> Result<&Added, OwnerError> {
         self.added
             .get(plugin)
-            .ok_or_else(|| OwnerError::NotInstalled(plugin.to_owned()))
+            .ok_or_else(|| OwnerError::NotLoaded(plugin.to_owned()))
     }
 
     /// The store's install record for `plugin`, in any state.

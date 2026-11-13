@@ -3,13 +3,14 @@
 
 use std::path::PathBuf;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 use rusqlite_migration::{M, Migrations};
 
 use super::site_zoom::{VersionSixScripts, permissions_database};
 use super::{TestDirectory, close, fixture};
+use crate::plugins::PluginWrite;
 use crate::{
     EncodingField, FolderAccess, MAX_PLUGIN_SETTING_KEY_BYTES, MAX_PLUGIN_SETTING_VALUE_BYTES,
     MAX_PLUGIN_SETTINGS, PluginFolder, PluginGrant, PluginInstall, PluginState, Store, StoreError,
@@ -454,6 +455,44 @@ fn a_bounded_read_uses_a_free_reader_and_answers_busy_when_none_frees_in_time() 
 }
 
 #[test]
+fn a_bounded_write_ready_after_its_deadline_is_rolled_back_not_committed() {
+    let directory = TestDirectory::new();
+    installed(&directory, &["notes"])
+        .shutdown()
+        .expect("close synthetic store");
+    let connection = directory.connection();
+    schema::configure_connection(&connection).expect("configure synthetic connection");
+    let now = Instant::now();
+    for (key, deadline, expected) in [
+        ("notes.late", now, Err(StoreError::Busy)),
+        ("notes.early", now + Duration::from_secs(60), Ok(())),
+    ] {
+        let transaction = Transaction::new_unchecked(&connection, TransactionBehavior::Immediate)
+            .expect("begin a synthetic write");
+        let write = PluginWrite::Setting {
+            plugin_id: "notes".to_owned(),
+            key: key.to_owned(),
+            value: vec![1],
+        };
+        crate::plugins::write(&transaction, &write).expect("written inside the transaction");
+        assert_eq!(
+            crate::engine::plugins::commit_by(transaction, deadline),
+            expected
+        );
+    }
+    assert_eq!(
+        crate::plugins::setting(&connection, "notes", "notes.late"),
+        Ok(None)
+    );
+    assert_eq!(
+        crate::plugins::setting(&connection, "notes", "notes.early"),
+        Ok(Some(vec![1]))
+    );
+    close(connection);
+    directory.cleanup();
+}
+
+#[test]
 fn bounded_writes_behind_a_held_lock_fail_and_never_land_later() {
     let directory = TestDirectory::new();
     let store = installed(&directory, &["notes"]);
@@ -477,9 +516,10 @@ fn bounded_writes_behind_a_held_lock_fail_and_never_land_later() {
             vec![2],
             Duration::from_millis(40),
         );
-        assert!(second.is_err(), "{second:?}");
-        let first = first.join().expect("first write");
-        assert!(first.is_err(), "{first:?}");
+        assert_eq!(second, Err(StoreError::Busy));
+        // The lock is held until both callers have been told `Busy`, so the writer can only
+        // reach either write's COMMIT after its deadline, and must roll it back.
+        assert_eq!(first.join().expect("first write"), Err(StoreError::Busy));
     });
 
     blocker.execute_batch("COMMIT").expect("release the lock");

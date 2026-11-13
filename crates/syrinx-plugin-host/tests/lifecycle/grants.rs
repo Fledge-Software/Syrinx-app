@@ -140,3 +140,28 @@ fn revoking_an_optional_capability_abandons_its_work_once_and_tells_the_plugin()
         "the plugin was told; the host settled nothing itself"
     );
 }
+
+#[test]
+fn a_revocation_naming_a_request_not_in_flight_still_lets_the_next_command_run() {
+    let journal = Journal::default();
+    let grants = SyntheticGrants::new();
+    grants.grant("test", CapabilityKind::Storage);
+    let (mut plugins, _events) = granted_plugins(&grants, TestServices::recording(&journal));
+    add(&mut plugins, "test", OPTIONAL_STORAGE);
+    assert_eq!(echo(&mut plugins, "test"), Ok(Ok(())));
+
+    // The services abandon a request the host never armed; the revocation reaches the worker
+    // only at the start of the next real command, with no wake job before it.
+    journal.work_on(999_999);
+    grants.revoke("test", CapabilityKind::Storage);
+    assert!(matches!(
+        echo(&mut plugins, "test"),
+        Ok(Err(PluginError::Revoked(_)))
+    ));
+    assert_eq!(journal.count("revoked storage"), 1);
+    assert_eq!(
+        journal.count("deliver 999999"),
+        0,
+        "nothing was delivered for it"
+    );
+}

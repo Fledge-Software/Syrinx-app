@@ -189,4 +189,20 @@ mod tests {
             "the owner's own folders"
         );
     }
+
+    #[test]
+    fn the_real_deny_list_refuses_the_profile_this_process_is_given() {
+        // The test only reads the profile's path; it creates nothing there and prints nothing.
+        let profile = ["USERPROFILE", "HOME"]
+            .into_iter()
+            .find_map(std::env::var_os)
+            .map(PathBuf::from)
+            .filter(|profile| profile.is_dir())
+            .expect("the test process has a profile folder");
+        // A relative state folder protects nothing, so only the environment's folders count.
+        assert_eq!(
+            refused(&deny_list(Path::new("state")), &profile),
+            Some(FolderRefusal::Protected(Protected::UserProfile))
+        );
+    }
 }

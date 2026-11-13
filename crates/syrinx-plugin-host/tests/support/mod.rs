@@ -54,7 +54,7 @@ fn fixture_workspace() -> PathBuf {
 }
 
 /// Build one fixture with the workspace's pinned toolchain, offline and locked.
-/// Its twin is `full_component` in crates/syrinx-app/tests/plugin_package_load.rs; change both.
+/// Its twin is crates/syrinx-app/tests/support/plugin_fixture.rs; change both.
 fn build(fixture: Fixture) -> Vec<u8> {
     let target_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("plugin-fixtures");
     let mut command = Command::new(env!("CARGO"));
